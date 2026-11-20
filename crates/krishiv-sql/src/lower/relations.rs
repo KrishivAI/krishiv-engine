@@ -597,18 +597,19 @@ impl Lowerer {
                 temporal,
                 options,
             } => {
-                if let Some(t) = temporal {
-                    // No table of the session catalog reads an older version yet; Spark names the
-                    // relation as resolved, here it is as written.
-                    let parts: Vec<String> = name.parts.iter().map(|p| p.value.clone()).collect();
-                    return Err(err(
-                        krishiv_common::error::UnsupportedFeatureTimeTravel {
-                            relation_id: krishiv_common::names::quote_parts(&parts),
-                        },
-                        t.span,
-                    ));
-                }
                 let mut opts = BTreeMap::new();
+                if let Some(t) = temporal {
+                    // No table reads an older version yet. Spark raises the error where the
+                    // relation resolves (a missing table is `TABLE_OR_VIEW_NOT_FOUND` first), so
+                    // the clause rides on the read for the session to refuse then.
+                    opts.insert(
+                        krishiv_plan::TIME_TRAVEL_OPTION.to_owned(),
+                        OptionValue::from_user(
+                            krishiv_plan::TIME_TRAVEL_OPTION,
+                            format!("{:?}", t.kind),
+                        ),
+                    );
+                }
                 for o in options {
                     let key: Vec<&str> = o.key.parts.iter().map(|p| p.value.as_str()).collect();
                     let key = key.join(".");

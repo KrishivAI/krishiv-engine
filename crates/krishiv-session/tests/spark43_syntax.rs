@@ -1,0 +1,233 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Spark 4.3 syntax with a session behind it: the `@` time travel suffix of a table name
+//! (`spark.sql.timeTravel.atSyntax.enabled`), `COMMENT ON COLUMN`, `REPLACE` and `WITH` options on DML
+//! targets, beside the cases `spark43_coverage.rs` takes from a real Spark 4.3.0 run.
+#![cfg(test)]
+
+use futures::executor::block_on;
+use krishiv_session::Session;
+
+fn run(session: &Session, sql: &str) -> Result<(), String> {
+    block_on(async { session.sql(sql).await?.collect().await })
+        .map(|_| ())
+        .map_err(|e| e.error_class().name().to_owned())
+}
+
+/// The error's message, for what the class alone does not say.
+fn message(session: &Session, sql: &str) -> String {
+    match block_on(async { session.sql(sql).await?.collect().await }) {
+        Ok(_) => "no error".to_owned(),
+        Err(e) => e.to_string(),
+    }
+}
+
+fn describe(session: &Session) -> String {
+    let rows =
+        block_on(async { session.sql("describe tbl").await?.collect().await }).expect("describe");
+    format!("{rows:?}")
+}
+
+fn session_with_table() -> Session {
+    let s = Session::new().expect("session");
+    run(&s, "create table tbl (id int, name string) using parquet").expect("create");
+    s
+}
+
+#[test]
+fn a_suffix_reads_like_the_clause_it_stands_for() {
+    let s = session_with_table();
+    for sql in [
+        "select * from tbl@v1",
+        "select * from tbl@V12",
+        "select * from tbl@20240101000000000",
+        "select * from tbl version as of 1",
+        "select * from tbl@v 1",
+        "select * from tbl@v'abc'",
+        "select * from tbl@ 20240101000000000",
+    ] {
+        assert_eq!(
+            run(&s, sql),
+            Err("UNSUPPORTED_FEATURE.TIME_TRAVEL".to_owned()),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn the_error_names_the_resolved_table_and_a_missing_table_comes_first() {
+    let s = session_with_table();
+    let text = message(&s, "select * from tbl@v1");
+    assert!(text.contains("`spark_catalog`.`default`.`tbl`"), "{text}");
+    assert_eq!(
+        run(&s, "select * from nope@v1"),
+        Err("TABLE_OR_VIEW_NOT_FOUND".to_owned())
+    );
+    assert_eq!(
+        run(&s, "select * from nope version as of 1"),
+        Err("TABLE_OR_VIEW_NOT_FOUND".to_owned())
+    );
+}
+
+#[test]
+fn a_suffix_and_a_clause_are_one_too_many() {
+    let s = session_with_table();
+    assert_eq!(
+        run(&s, "select * from tbl@v1 timestamp as of '2024-01-01'"),
+        Err("MULTIPLE_TIME_TRAVEL_SPEC".to_owned())
+    );
+}
+
+#[test]
+fn a_malformed_suffix_is_a_syntax_error() {
+    let s = session_with_table();
+    for sql in [
+        "select * from tbl@",
+        "select * from tbl@x1",
+        "select * from tbl@v",
+        "select * from tbl@ v1",
+    ] {
+        assert_eq!(run(&s, sql), Err("PARSE_SYNTAX_ERROR".to_owned()), "{sql}");
+    }
+}
+
+#[test]
+fn a_timestamp_suffix_is_checked_as_spark_checks_it() {
+    let s = session_with_table();
+    // Any digits parse; the length and the date-time are checked (`parseAtSyntaxTimestamp`).
+    for sql in [
+        "select * from tbl@123",
+        "select * from tbl@2024",
+        "select * from tbl@20190129",
+        "select * from tbl@20190129003758",
+        "select * from tbl@20191301000000000",
+        "select * from tbl@20190230000000000",
+    ] {
+        assert_eq!(
+            run(&s, sql),
+            Err("INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT".to_owned()),
+            "{sql}"
+        );
+    }
+    // The format error comes before the clause conflict.
+    assert_eq!(
+        run(&s, "select * from tbl@123 version as of 2"),
+        Err("INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT".to_owned())
+    );
+}
+
+#[test]
+fn the_suffix_is_off_with_its_config() {
+    let s = session_with_table();
+    run(&s, "set spark.sql.timeTravel.atSyntax.enabled=false").expect("set");
+    assert_eq!(
+        run(&s, "select * from tbl@v1"),
+        Err("UNSUPPORTED_FEATURE.TIME_TRAVEL_AT_SYNTAX".to_owned())
+    );
+    // The clause is not the suffix: it still parses.
+    assert_eq!(
+        run(&s, "select * from tbl version as of 1"),
+        Err("UNSUPPORTED_FEATURE.TIME_TRAVEL".to_owned())
+    );
+}
+
+#[test]
+fn comment_on_column_sets_and_removes_the_comment() {
+    let s = session_with_table();
+    run(&s, "comment on column tbl.name is 'the name'").expect("comment");
+    assert!(describe(&s).contains("the name"));
+    // `IS NULL` removes it (the DESCRIBE cell is NULL); `IS ''` sets the empty one.
+    run(&s, "comment on column tbl.name is null").expect("clear");
+    assert!(!describe(&s).contains("the name"));
+    let cleared = describe(&s);
+    run(&s, "comment on column tbl.name is ''").expect("empty");
+    assert_ne!(
+        describe(&s),
+        cleared,
+        "an empty comment is not a missing one"
+    );
+    assert_eq!(
+        run(&s, "comment on column name is 'x'"),
+        Err("INVALID_SQL_SYNTAX.COMMENT_ON_COLUMN_INCORRECT_IDENTIFIER".to_owned())
+    );
+    assert_eq!(
+        run(&s, "comment on column tbl.nope is 'x'"),
+        Err("UNRESOLVED_COLUMN.WITH_SUGGESTION".to_owned())
+    );
+}
+
+#[test]
+fn comment_on_table_column_changes_several_columns() {
+    let s = session_with_table();
+    run(&s, "comment on table tbl column (id is 'a', name is 'b')").expect("comments");
+    let text = describe(&s);
+    assert!(text.contains('a') && text.contains('b'), "{text}");
+    run(&s, "comment on table tbl column (id is null)").expect("clear");
+    assert_eq!(
+        run(&s, "comment on table tbl column (id is 'a', ID is 'b')"),
+        Err("NOT_SUPPORTED_CHANGE_SAME_COLUMN".to_owned())
+    );
+}
+
+#[test]
+fn comment_on_column_names_its_own_command_for_a_view() {
+    let s = session_with_table();
+    run(&s, "create view v as select 1 as a").expect("view");
+    run(&s, "create temporary view tv as select 1 as a").expect("temp view");
+    for sql in [
+        "comment on column v.a is 'x'",
+        "comment on column tv.a is 'x'",
+    ] {
+        assert_eq!(
+            run(&s, sql),
+            Err("EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE".to_owned()),
+            "{sql}"
+        );
+        assert!(message(&s, sql).contains("COMMENT ON COLUMN"), "{sql}");
+    }
+}
+
+#[test]
+fn replace_where_and_target_options_are_refused_by_the_table() {
+    let s = session_with_table();
+    for sql in [
+        "insert into tbl (id, name) replace where id = 1 values (1, 'a')",
+        "insert into tbl replace on tbl.id = 1 values (1, 'a')",
+        "insert into tbl as x with ('k' = 'v') (id, name) replace on x.id = 1 values (1, 'a')",
+        "update tbl with ('k' = 'v') set name = 'x'",
+        "update tbl t with ('k' = 'v') set name = 'x'",
+        "delete from tbl with ('k' = 'v')",
+        "delete from tbl as t with ('k' = 'v') where t.id = 1",
+        "merge into tbl t with ('k' = 'v') using tbl s on t.id = s.id when matched then delete",
+        "merge into tbl using tbl with ('k' = 'v') s on tbl.id = s.id when matched then delete",
+    ] {
+        assert_eq!(
+            run(&s, sql),
+            Err("UNSUPPORTED_FEATURE.TABLE_OPERATION".to_owned()),
+            "{sql}"
+        );
+    }
+    // The operation is the statement's, as without options.
+    for (sql, operation) in [
+        ("update tbl with ('k' = 'v') set name = 'x'", "UPDATE TABLE"),
+        ("delete from tbl with ('k' = 'v')", "DELETE"),
+        (
+            "merge into tbl with ('k' = 'v') using tbl s on tbl.id = s.id when matched then delete",
+            "MERGE INTO TABLE",
+        ),
+    ] {
+        let text = message(&s, sql);
+        assert!(
+            text.contains(operation) && !text.contains("WITH options"),
+            "{text}"
+        );
+    }
+    // The table is resolved, and the assignments analysed, before the table refuses.
+    assert_eq!(
+        run(&s, "delete from nope with ('k' = 'v')"),
+        Err("TABLE_OR_VIEW_NOT_FOUND".to_owned())
+    );
+    assert_eq!(
+        run(&s, "update tbl with ('k' = 'v') set nope = 1"),
+        Err("UNRESOLVED_COLUMN.WITH_SUGGESTION".to_owned())
+    );
+}

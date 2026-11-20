@@ -678,23 +678,23 @@ impl Session {
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
             Statement::Delete(d) => {
-                self.refuse_target_options(&d.table, &d.options, "DELETE")?;
                 let changes = crate::table_commands::RowChanges {
                     targets: &[],
                     values: &[],
                     condition: d.where_clause.as_ref(),
+                    options: &d.options,
                 };
                 self.exec_row_level_change(&d.table, d.alias.as_ref(), "DELETE", &changes, query)
                     .await
             }
             Statement::Update(u) => {
-                self.refuse_target_options(&u.table, &u.options, "UPDATE TABLE")?;
                 let targets: Vec<_> = u.assignments.iter().map(|a| &a.target).collect();
                 let values: Vec<_> = u.assignments.iter().map(|a| &a.value).collect();
                 let changes = crate::table_commands::RowChanges {
                     targets: &targets,
                     values: &values,
                     condition: u.where_clause.as_ref(),
+                    options: &u.options,
                 };
                 self.exec_row_level_change(
                     &u.table,
@@ -706,11 +706,11 @@ impl Session {
                 .await
             }
             Statement::Merge(m) => {
-                self.refuse_target_options(&m.target, &m.options, "MERGE INTO TABLE")?;
                 let changes = crate::table_commands::RowChanges {
                     targets: &[],
                     values: &[],
                     condition: None,
+                    options: &m.options,
                 };
                 self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
                     .await

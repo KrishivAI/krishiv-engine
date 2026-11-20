@@ -20,7 +20,7 @@ use krishiv_session::Session;
 use serde_json::Value;
 
 /// Cases that differ from Spark today: `(id, how)`. They are the 4.3 work the golden tail (plan row GT) takes, by area:
-/// new functions (`fn_*`), the nanosecond and TIME(p) types, `@` time travel, `WITH` options on DML,
+/// new functions (`fn_*`), the nanosecond and TIME(p) types,
 /// `SHOW ... AS JSON`, and `counter_diff` (the window function of P3-T031, PR #898).
 const PENDING: &[(&str, &str)] = &[
     ("fn_localtime", "UNRESOLVED_ROUTINE"),

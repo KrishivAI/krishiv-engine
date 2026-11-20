@@ -138,7 +138,10 @@ impl<'s> Parser<'s> {
         // Spark's `tableAlias` takes any identifier but the clause keyword
         // that follows (`UPDATE t c1 = 2` names `t` `c1`, then wants
         // `SET`).
-        if self.is_ident_at(0, true) && !self.kw_at(0, terminator) {
+        if self.is_ident_at(0, true)
+            && !self.kw_at(0, terminator)
+            && !(self.kw_at(0, "WITH") && self.sym_at(1, Sym::LParen))
+        {
             return self.any_ident().map(Some);
         }
         Ok(None)
@@ -202,11 +205,12 @@ impl<'s> Parser<'s> {
             if p.eat_kw("COLUMN") {
                 // `COMMENT ON COLUMN table.column IS ...` (Spark 4.3): the last part is the column.
                 let written = p.ddl_name()?;
+                let name_span = written.span();
                 let DdlName::Parts(mut parts) = written else {
                     return p.fail();
                 };
                 if parts.parts.len() < 2 {
-                    return p.fail();
+                    return Self::fatal(error::comment_on_column_incorrect_identifier(name_span));
                 }
                 let Some(column) = parts.parts.pop() else {
                     return p.fail();
@@ -215,22 +219,36 @@ impl<'s> Parser<'s> {
                     parts.span.end = last.span.end;
                 }
                 p.expect_kw("IS")?;
-                // `IS NULL` sets the empty comment (`AstBuilder.visitComment`).
-                let comment = p.comment_value()?.unwrap_or_default();
+                // `IS NULL` removes the comment; `IS ''` sets the empty one.
+                let comment = p.comment_value()?;
                 let span = p.span_from(start);
                 p.command_end()?;
                 return Ok(Statement::AlterTable(Box::new(AlterTable {
                     table: DdlName::Parts(parts),
-                    action: AlterTableAction::AlterColumn {
-                        name: ColumnName::Ident(column),
-                        action: AlterColumnAction::Comment(comment),
-                        span,
-                    },
+                    action: AlterTableAction::CommentOnColumns(vec![(
+                        ColumnName::Ident(column),
+                        comment,
+                    )]),
                     span,
                 })));
             }
             p.expect_kw("TABLE")?;
             let table = p.ddl_name()?;
+            if p.eat_kw("COLUMN") {
+                // `COMMENT ON TABLE t COLUMN (c1 IS 'x', c2 IS NULL, ...)` (Spark 4.3).
+                let columns = p.paren_list(|p| {
+                    let column = p.column_name()?;
+                    p.expect_kw("IS")?;
+                    Ok((column, p.comment_value()?))
+                })?;
+                let span = p.span_from(start);
+                p.command_end()?;
+                return Ok(Statement::AlterTable(Box::new(AlterTable {
+                    table,
+                    action: AlterTableAction::CommentOnColumns(columns),
+                    span,
+                })));
+            }
             p.expect_kw("IS")?;
             let comment = p.comment_value()?;
             let span = p.span_from(start);

@@ -153,6 +153,24 @@ impl QueryCatalog {
             let ReadSource::Table { name, options } = &scan.source else {
                 continue;
             };
+            if options.contains_key(krishiv_plan::TIME_TRAVEL_OPTION) {
+                // The relation resolved (a missing one failed in analysis): Spark's
+                // `V2SessionCatalog.failTimeTravel` names it in full.
+                let (namespace, table) = match &name[..] {
+                    [table] => (
+                        self.namespace()
+                            .first()
+                            .map_or_else(|| "default".to_owned(), |n| n.to_lowercase()),
+                        table.to_lowercase(),
+                    ),
+                    [.., namespace, table] => (namespace.to_lowercase(), table.to_lowercase()),
+                    [] => continue,
+                };
+                return Err(krishiv_common::error::UnsupportedFeatureTimeTravel {
+                    relation_id: format!("`spark_catalog`.`{namespace}`.`{table}`"),
+                }
+                .into());
+            }
             let Some((_, table)) = self.entry_of(name) else {
                 continue;
             };

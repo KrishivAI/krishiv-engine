@@ -919,7 +919,10 @@ impl Session {
             .analyze_variable_query(&sql)
             .await?;
         // A table whose provider offers a row-level table runs the statement (PR-DML).
+        // The target's `WITH (...)` options reach the table's scan builder, and no table of the
+        // session catalog takes them: the statement is refused as Spark refuses it for such a table.
         let op = match operation {
+            _ if !changes.options.is_empty() => None,
             "DELETE" => Some(krishiv_exec::planner::RowLevelOperation::Delete),
             "UPDATE TABLE" => Some(krishiv_exec::planner::RowLevelOperation::Update),
             _ => None,

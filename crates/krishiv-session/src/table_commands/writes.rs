@@ -110,24 +110,6 @@ impl Session {
         self.empty_frame().await
     }
 
-    /// `DELETE|UPDATE|MERGE INTO t WITH (...)` (Spark 4.3): the target's options reach the table's
-    /// scan builder, and no table of the session catalog takes them, so the statement is refused
-    /// by the table (after the table resolved) as Spark does for such a table.
-    pub(crate) fn refuse_target_options(
-        &self,
-        table: &krishiv_sql::ast::DdlName,
-        options: &[krishiv_sql::ast::TableOption],
-        operation: &str,
-    ) -> Result<(), KrishivError> {
-        if options.is_empty() {
-            return Ok(());
-        }
-        let env = self.query_env();
-        let name = self.table_name(table, &env)?;
-        self.table_for_write(&name, operation, &env)?;
-        Err(table_operation(&name, "WITH options"))
-    }
-
     /// `c` checked through to the rows it would write (`dry`), or written.
     pub(super) async fn insert_clause(
         &self,

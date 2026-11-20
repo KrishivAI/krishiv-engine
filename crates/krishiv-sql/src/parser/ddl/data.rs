@@ -301,19 +301,6 @@ impl Parser<'_> {
         // `INTO`: try a `REPLACE` variant first (an alias, `WITH (...)`
         // options and `BY NAME` may precede `REPLACE`).
         let save = self.checkpoint();
-        // `INTO t (a, b) REPLACE ...` (Spark 4.3): a column list before the replace head.
-        let mut replace_columns: Vec<ColumnName> = Vec::new();
-        if self.sym_at(0, Sym::LParen) {
-            let at = self.checkpoint();
-            let listed = self.paren_list(Self::column_name);
-            match listed {
-                Ok(cols) if self.kw_at(0, "REPLACE") => {
-                    self.commit(at);
-                    replace_columns = cols;
-                }
-                _ => self.restore(at),
-            }
-        }
         let target_alias: Option<Ident> = if self.eat_kw("AS") {
             Some(self.any_ident()?)
         } else if self.is_ident_at(0, true)
@@ -332,6 +319,20 @@ impl Parser<'_> {
         } else {
             false
         };
+        // `INTO t [alias] [WITH (..)] (a, b) REPLACE WHERE|ON ...` (Spark 4.3): the column list
+        // goes where `BY NAME` goes, and not before `REPLACE USING`.
+        let mut replace_columns: Vec<ColumnName> = Vec::new();
+        if !by_name_before && self.sym_at(0, Sym::LParen) {
+            let at = self.checkpoint();
+            let listed = self.paren_list(Self::column_name);
+            match listed {
+                Ok(cols) if self.kw_at(0, "REPLACE") && !self.kw_at(1, "USING") => {
+                    self.commit(at);
+                    replace_columns = cols;
+                }
+                _ => self.restore(at),
+            }
+        }
         if self.kw_at(0, "REPLACE") {
             let replace_kw_at = self.pos;
             self.pos += 1;
@@ -529,8 +530,8 @@ impl Parser<'_> {
             let follows = p.name_here();
             p.expect_kw_or_missing("FROM", "'FROM'", follows)?;
             let table = p.ddl_name()?;
-            let options = p.table_options()?;
             let alias = p.stmt_alias("WHERE")?;
+            let options = p.table_options()?;
             let where_clause = p.opt_clause("WHERE")?;
             let span = p.span_from(start);
             p.command_end()?;
@@ -550,8 +551,8 @@ impl Parser<'_> {
             let start = p.start();
             p.expect_kw("UPDATE")?;
             let table = p.ddl_name()?;
-            let options = p.table_options()?;
             let alias = p.stmt_alias("SET")?;
+            let options = p.table_options()?;
             p.expect_kw("SET")?;
             let mut assignments = vec![p.update_assignment()?];
             while p.eat_sym(Sym::Comma) {
@@ -591,8 +592,8 @@ impl Parser<'_> {
             p.expect_kw("MERGE")?;
             p.expect_kw("INTO")?;
             let target = p.ddl_name()?;
-            let options = p.table_options()?;
             let target_alias = p.stmt_alias("USING")?;
+            let options = p.table_options()?;
             p.expect_kw("USING")?;
             let source = p.merge_source()?;
             p.expect_kw("ON")?;
@@ -636,9 +637,11 @@ impl Parser<'_> {
             })
         } else {
             let name = self.ddl_name()?;
+            let options = self.table_options()?;
             let alias = self.stmt_alias("ON")?;
             Ok(MergeSource::Table {
                 name,
+                options,
                 alias,
                 span: self.span_from(start),
             })

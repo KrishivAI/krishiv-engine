@@ -790,6 +790,9 @@ pub enum AlterTableAction {
     SetTblProperties(Vec<TableOption>),
     /// `COMMENT ON TABLE name IS 'comment'` (`None` for `IS NULL`).
     SetComment(Option<String>),
+    /// `COMMENT ON COLUMN table.column IS 'comment'` or `COMMENT ON TABLE name COLUMN (c IS
+    /// 'comment', ...)`: each column with its comment (`None` for `IS NULL`: the comment is removed).
+    CommentOnColumns(Vec<(ColumnName, Option<String>)>),
     /// `UNSET TBLPROPERTIES [IF EXISTS] (...)`.
     UnsetTblProperties {
         /// `IF EXISTS`.
@@ -1115,6 +1118,8 @@ pub enum MergeSource {
     Table {
         /// The table name.
         name: DdlName,
+        /// Its `WITH (...)` options (before the alias).
+        options: Vec<TableOption>,
         /// Its alias, if written.
         alias: Option<Ident>,
         /// Source text.

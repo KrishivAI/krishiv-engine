@@ -1721,11 +1721,27 @@ fn insert_replace_takes_a_column_list() {
     for sql in [
         "INSERT INTO t (a) REPLACE WHERE a = 1 SELECT 1",
         "INSERT INTO t (a, b) REPLACE ON t.a = s.a SELECT 1, 2",
+        "INSERT INTO t WITH ('k' = 'v') (a, b) REPLACE WHERE a = 1 SELECT 1, 2",
+        "INSERT INTO t AS x (a, b) REPLACE ON x.a = 1 SELECT 1, 2",
     ] {
         let ast::Statement::Insert(insert) = checked(sql) else {
             panic!("{sql}: not an insert");
         };
         assert!(!insert.clauses[0].columns.is_empty(), "{sql}");
+    }
+}
+
+/// A column list is not taken before `REPLACE USING`, nor after `BY NAME`.
+#[test]
+fn insert_replace_using_takes_no_column_list() {
+    for sql in [
+        "INSERT INTO t (a) REPLACE USING (a) SELECT 1",
+        "INSERT INTO t BY NAME (a) REPLACE WHERE a = 1 SELECT 1",
+    ] {
+        assert!(
+            parse_statement(sql, &ParserOptions::default()).is_err(),
+            "{sql}"
+        );
     }
 }
 
@@ -1746,4 +1762,54 @@ fn dml_targets_keep_their_options() {
         panic!("not a merge");
     };
     assert_eq!(m.options.len(), 1);
+}
+
+/// The alias comes before the options (Spark: `tableAlias optionsClause?`), and `MERGE`'s source
+/// takes options before its alias.
+#[test]
+fn dml_option_clauses_follow_the_alias() {
+    let ast::Statement::Delete(d) = checked("DELETE FROM t AS x WITH ('k' = 'v') WHERE x.a = 1")
+    else {
+        panic!("not a delete");
+    };
+    assert!(d.alias.is_some() && d.options.len() == 1);
+    let ast::Statement::Update(u) = checked("UPDATE t x WITH ('k' = 'v') SET a = 1") else {
+        panic!("not an update");
+    };
+    assert!(u.alias.is_some() && u.options.len() == 1);
+    let ast::Statement::Merge(m) = checked(
+        "MERGE INTO t x WITH ('k' = 'v') USING s WITH ('j' = 'w') y ON x.a = y.a WHEN MATCHED THEN DELETE",
+    ) else {
+        panic!("not a merge");
+    };
+    assert!(m.target_alias.is_some() && m.options.len() == 1);
+    let ast::MergeSource::Table { options, alias, .. } = &m.source else {
+        panic!("not a table source");
+    };
+    assert!(alias.is_some() && options.len() == 1);
+    for sql in [
+        "UPDATE t WITH ('k' = 'v') x SET a = 1",
+        "DELETE FROM t WITH ('k' = 'v') AS x",
+    ] {
+        assert!(
+            parse_statement(sql, &ParserOptions::default()).is_err(),
+            "{sql}"
+        );
+    }
+}
+
+/// The query context of the `@` suffix errors is Spark's (`PlanParserSuite`): the clause alone for
+/// `MULTIPLE_TIME_TRAVEL_SPEC`, the name and the suffix for the other two.
+#[test]
+fn time_travel_suffix_errors_point_at_spark_s_fragments() {
+    let e = err("SELECT * FROM t@20190129003758000 VERSION AS OF 2");
+    assert_eq!((e.span.start, e.span.end), (34, 49));
+    let e = err("SELECT * FROM t@123");
+    assert_eq!((e.span.start, e.span.end), (14, 19));
+    let off = ParserOptions {
+        time_travel_at_syntax: false,
+        ..ParserOptions::default()
+    };
+    let e = parse_statement("SELECT * FROM t@v1", &off).unwrap_err();
+    assert_eq!((e.span.start, e.span.end), (14, 18));
 }
