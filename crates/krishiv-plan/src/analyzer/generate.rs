@@ -449,6 +449,15 @@ impl Resolver<'_> {
             return Ok(Arc::clone(arg));
         };
         let origin = arg.origin;
+        // `UNNEST` in `FROM` is Spark 4.3 grammar: before it the name is an unknown table function.
+        if self.ctx.profile < super::SparkProfile::V4_3 {
+            return Err(AnalysisError::new(
+                krishiv_common::error::UnresolvableTableValuedFunction {
+                    name: "`unnest`".to_owned(),
+                },
+                origin,
+            ));
+        }
         let bound = f
             .args
             .iter()
