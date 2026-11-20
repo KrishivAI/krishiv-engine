@@ -763,7 +763,7 @@ fn a_delta_target_is_compared_by_its_root_not_its_spelling() {
             &dir.path().join("wh").display().to_string(),
         )
         .unwrap();
-    for (name, path) in [("dt", &root), ("ot", &other)] {
+    for (name, path) in [("dt", &root), ("other_t", &other)] {
         let create = format!(
             "CREATE TABLE {name} USING delta LOCATION '{}' AS SELECT 1 AS p, 2 AS v",
             path.display()
@@ -804,7 +804,7 @@ fn a_delta_target_is_compared_by_its_root_not_its_spelling() {
     }
     for different in [
         format!("SELECT max(v) FROM delta.`{}`", other.display()),
-        "SELECT max(v) FROM ot".to_owned(),
+        "SELECT max(v) FROM other_t".to_owned(),
         "SELECT 2".to_owned(),
     ] {
         assert!(!rereads(&different), "{different}");
