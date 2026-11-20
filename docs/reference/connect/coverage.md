@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 15 done, 17 partial, 26 missing, 4 out of scope.
+62 arms: 16 done, 18 partial, 24 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -66,8 +66,8 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 100 | summary | missing |  | lowering as Spark's StatFunctions.summary: Aggregate then a stack to rows | P3-T012 | 5 |
 | 101 | crosstab | missing |  | lowering: Aggregate count + Pivot | P3-T012 | 5 |
 | 102 | describe | missing |  | as summary with the fixed statistic list | P3-T012 | 5 |
-| 103 | cov | missing |  | Aggregate covar_samp, a one-row result | P3-T012 | 5 |
-| 104 | corr | missing |  | Aggregate corr (Pearson only, as Spark) | P3-T012 | 5 |
+| 103 | cov | done |  | Aggregate of coalesce(covar_samp over NULL-as-0.0 doubles, 0.0), as StatFunctions.calculateCov (a Spark 4.0 run); recorded difference: a non-numeric column is not refused | P3-T012 | 5 |
+| 104 | corr | partial | method other than pearson | Aggregate of coalesce(corr over NULL-as-0.0 doubles, NaN); recorded differences: a non-numeric column is not refused, zero variance is NaN (Spark 4.0 ANSI: DIVIDE_BY_ZERO) | P3-T012 | 5 |
 | 105 | approx_quantile | missing |  | Aggregate approx_percentile with relative error | P3-T012 | 5 |
 | 106 | freq_items | missing |  | new aggregate (Spark's frequent-items sketch, support) | P3-T012 | 5 |
 | 107 | sample_by | missing |  | lowering: Filter with a seeded rand() against the per-stratum fraction | P3-T012 | 5 |

@@ -1388,6 +1388,51 @@ fn na_fill_and_na_drop_translate_and_check_their_values() {
 }
 
 #[test]
+fn cov_and_corr_plan_as_one_row_aggregates_named_for_the_statistic() {
+    for (rel, expected) in [
+        (
+            relation(RelType::Cov(Box::new(pb::StatCov {
+                input: input(),
+                col1: "a".into(),
+                col2: "b".into(),
+            }))),
+            "cov",
+        ),
+        (
+            relation(RelType::Corr(Box::new(pb::StatCorr {
+                input: input(),
+                col1: "a".into(),
+                col2: "b".into(),
+                method: Some("pearson".into()),
+            }))),
+            "corr",
+        ),
+    ] {
+        let PlanNode::Aggregate {
+            grouping,
+            aggregates,
+            ..
+        } = node(&rel)
+        else {
+            panic!("not an Aggregate node")
+        };
+        assert!(matches!(grouping, Grouping::GroupBy(k) if k.is_empty()));
+        assert!(matches!(&aggregates[0].node, ExprNode::Alias { name, .. } if name == expected));
+    }
+}
+
+#[test]
+fn corr_refuses_a_method_other_than_pearson() {
+    let rel = relation(RelType::Corr(Box::new(pb::StatCorr {
+        input: input(),
+        col1: "a".into(),
+        col2: "b".into(),
+        method: Some("spearman".into()),
+    })));
+    assert_eq!(code(&rel), ErrorClass::KrishivUnsupportedFeature);
+}
+
+#[test]
 fn unpivot_plans_as_unpivot_include_nulls() {
     let rel = relation(RelType::Unpivot(Box::new(pb::Unpivot {
         input: input(),

@@ -121,6 +121,21 @@ impl Translator<'_> {
                 name: h.name.clone(),
                 params: self.expressions(&h.parameters)?,
             },
+            RelType::Cov(c) => {
+                self.stat_pair("StatCov", c.input.as_deref(), &c.col1, &c.col2, "cov")?
+            }
+            RelType::Corr(c) => {
+                if let Some(m) = c.method.as_deref()
+                    && m != "pearson"
+                {
+                    return Err(unsupported_field(
+                        "StatCorr",
+                        "method",
+                        "a correlation method other than pearson",
+                    ));
+                }
+                self.stat_pair("StatCorr", c.input.as_deref(), &c.col1, &c.col2, "corr")?
+            }
             RelType::FillNa(n) => self.na_fill(n)?,
             RelType::DropNa(n) => {
                 let min = n.min_non_nulls.map(|m| u32::try_from(m).unwrap_or(0));
@@ -207,6 +222,50 @@ impl Translator<'_> {
                 upper: s.upper_bound,
             },
             seed: s.seed,
+        })
+    }
+
+    /// `StatCov` and `StatCorr`: Spark's `StatFunctions.calculateCov` / `pearsonCorrelation`, which
+    /// read each NULL as 0.0 (a Spark 4.0 run: `(1,2),(NULL,3),(3,7),(4,NULL)` gives cov -1/3), and
+    /// answer one never-NULL double row: `cov` 0.0 and `corr` NaN below two rows. Lowered to
+    /// `coalesce(covar_samp | corr (coalesce(cast(c as double), 0.0)), 0.0 | NaN)`. Recorded
+    /// differences: a non-numeric column is not refused (the translator sees no types), and a
+    /// zero-variance `corr` is NaN where Spark 4.0 under ANSI raises DIVIDE_BY_ZERO.
+    fn stat_pair(
+        &mut self,
+        message: &str,
+        input: Option<&Relation>,
+        col1: &str,
+        col2: &str,
+        name: &str,
+    ) -> Result<PlanNode> {
+        let input = self.input(message, input)?;
+        let zero_filled = |c: &str| {
+            Expr::function(
+                "coalesce",
+                vec![
+                    Expr::column([c]).cast(krishiv_types::DataType::Double),
+                    Expr::literal(Literal::Double(0.0)),
+                ],
+            )
+        };
+        let (func, default) = if name == "cov" {
+            ("covar_samp", 0.0)
+        } else {
+            ("corr", f64::NAN)
+        };
+        let value = Expr::function(
+            "coalesce",
+            vec![
+                Expr::function(func, vec![zero_filled(col1), zero_filled(col2)]),
+                Expr::literal(Literal::Double(default)),
+            ],
+        )
+        .alias(name);
+        Ok(PlanNode::Aggregate {
+            input,
+            grouping: Grouping::GroupBy(Vec::new()),
+            aggregates: vec![Arc::new(value)],
         })
     }
 
