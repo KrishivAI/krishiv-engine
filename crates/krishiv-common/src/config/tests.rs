@@ -6,6 +6,8 @@ use std::time::Duration;
 use super::*;
 use crate::error::ErrorClass;
 
+mod readiness;
+
 #[test]
 fn defaults_are_returned_when_unset() {
     let c = Config::new();

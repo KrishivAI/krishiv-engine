@@ -11,11 +11,11 @@
 pub(crate) mod ffi;
 mod query;
 
-pub(crate) use self::query::{ErrorSlot, QueryReader, wait_for};
+pub(crate) use self::query::{ErrorSlot, Interrupt, QueryReader, SIGNAL_POLL, Waiter};
 
 use std::ffi::CStr;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use arrow_array::RecordBatchReader;
 use arrow_array::ffi::FFI_ArrowArray;
@@ -156,6 +156,19 @@ pub struct ArrowStream {
     placeholders: AtomicBool,
     /// Set when the stream is a query's result: where its reader leaves the engine error.
     error: Option<ErrorSlot>,
+    /// Where the reader leaves the Python error (`KeyboardInterrupt`) of the signal that ended the query.
+    interrupted: Option<InterruptSlot>,
+}
+
+/// The Python error a reader's signal check raised, for [`ArrowStream::check_error`] to raise.
+pub(crate) type InterruptSlot = Arc<Mutex<Option<PyErr>>>;
+
+/// Sets the interpreter's pending SIGINT again (`PyErr_SetInterruptEx`), so its next signal check raises
+/// `KeyboardInterrupt`.
+pub(crate) fn rearm_interrupt() {
+    // SAFETY: `PyErr_SetInterruptEx` only sets the interpreter's pending-signal flag; it may be called
+    // from any thread, with or without the GIL.
+    unsafe { pyo3::ffi::PyErr_SetInterruptEx(2) };
 }
 
 impl std::fmt::Debug for ArrowStream {
@@ -174,7 +187,14 @@ impl ArrowStream {
             reader: Mutex::new(Some(reader)),
             placeholders: AtomicBool::new(false),
             error: None,
+            interrupted: None,
         }
+    }
+
+    /// This stream, raising the error in `slot` first (see [`Self::check_error`]).
+    pub(crate) fn with_interrupt_slot(mut self, slot: InterruptSlot) -> Self {
+        self.interrupted = Some(slot);
+        self
     }
 
     /// This stream, reporting engine errors through `slot` (see [`Self::check_error`]).
@@ -329,6 +349,15 @@ impl ArrowStream {
     /// Raises the engine error that ended the stream, with its Spark error class
     /// (the C stream carries only an Arrow error message); does nothing if there was none.
     fn check_error(&self, py: Python<'_>) -> PyResult<()> {
+        let raised = self
+            .interrupted
+            .as_ref()
+            .and_then(|slot| slot.lock().ok()?.take());
+        if let Some(err) = raised {
+            // Consume the signal `rearm_interrupt` set for consumers that do not come here.
+            let _ = py.check_signals();
+            return Err(err);
+        }
         let taken = self
             .error
             .as_ref()

@@ -14,4 +14,10 @@ pub mod plan;
 
 pub use iceberg_v0::provider::IcebergTableProvider;
 pub use iceberg_v0::storage::StorageRegistration;
-pub use iceberg_v0::table::IcebergTable;
+pub use iceberg_v0::table::{IcebergMetadata, IcebergTable};
+
+/// Test tables for other crates' tests (feature `testing`; never in a product build).
+#[cfg(feature = "testing")]
+pub mod testing {
+    pub use crate::iceberg_v0::testing::{WrittenTable, write_table};
+}

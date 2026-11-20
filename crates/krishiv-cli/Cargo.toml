@@ -44,6 +44,7 @@ mimalloc = { workspace = true, optional = true }
 [dev-dependencies]
 arrow-array.workspace = true
 arrow-flight = { workspace = true, features = ["flight-sql"] }
+arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
 tonic = { workspace = true, features = ["channel"] }
 rustls = { workspace = true, features = ["aws_lc_rs", "std", "tls12"] }
@@ -107,4 +108,4 @@ telemetry-otlp = ["krishiv/telemetry-otlp", "dep:krishiv-session"]
 # Cloud object stores (S3, GCS, Azure). Opt-in so the default build stays
 # inside the dependency and binary-size budgets.
 cloud = ["krishiv/cloud"]
-full = ["krishiv/full"]
+full = ["krishiv/full", "catalog-iceberg-rest"]

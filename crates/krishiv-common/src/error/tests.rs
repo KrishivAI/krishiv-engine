@@ -722,3 +722,71 @@ fn iceberg_commit_classes_match_java_exceptions() {
         assert!(unknown.message().contains(java), "{unknown}");
     }
 }
+
+#[test]
+fn a_redacted_value_leaves_every_parameter_and_the_message() {
+    let e: KrishivError = InvalidConfValueTimeZone {
+        conf_name: "spark.sql.session.timeZone".to_owned(),
+        conf_value: "pw-1/pw-1".to_owned(),
+    }
+    .into();
+    let hidden = e
+        .clone()
+        .with_value_redacted("pw-1", "spark.sql.session.timeZone");
+    assert_eq!(hidden.error_class(), ErrorClass::InvalidConfValueTimeZone);
+    assert!(!hidden.to_string().contains("pw-1"), "{hidden}");
+    assert!(
+        hidden
+            .to_string()
+            .contains("*********(redacted)/*********(redacted)"),
+        "{hidden}"
+    );
+    assert!(hidden.to_string().contains("spark.sql.session.timeZone"));
+    // An empty value changes nothing (replacing "" would mark every character).
+    assert_eq!(
+        e.clone().with_value_redacted("", "k").to_string(),
+        e.to_string()
+    );
+}
+
+#[test]
+fn a_redacted_value_inside_the_key_keeps_the_key() {
+    // `SET krishiv.foo.token = o`: the value is part of the key, which stays readable.
+    let key = "krishiv.foo.token";
+    let e: KrishivError = InvalidConfValueTimeZone {
+        conf_name: key.to_owned(),
+        conf_value: "o".to_owned(),
+    }
+    .into();
+    let hidden = e.with_value_redacted("o", key);
+    assert_eq!(
+        hidden.message_parameters(),
+        [
+            ("confValue", "*********(redacted)".to_owned()),
+            ("confName", key.to_owned())
+        ]
+    );
+}
+
+#[test]
+fn a_value_that_holds_or_straddles_the_key_is_hidden_everywhere() {
+    for (key, value, text) in [
+        // The value contains the key.
+        ("k.a", "x-k.a-y", "x-k.a-y"),
+        // The value starts inside the key and runs past it: keeping the key would show it.
+        ("k.ab", "abX", "k.abX"),
+        // Overlapping occurrences, non-ASCII text.
+        ("k", "éé", "kéééx"),
+    ] {
+        let e: KrishivError = InvalidConfValueTimeZone {
+            conf_name: key.to_owned(),
+            conf_value: text.to_owned(),
+        }
+        .into();
+        let hidden = e.with_value_redacted(value, key);
+        for (_, shown) in hidden.message_parameters() {
+            assert!(!shown.contains(value), "{key} {value}: {shown}");
+        }
+        assert!(!hidden.to_string().contains(value), "{hidden}");
+    }
+}
