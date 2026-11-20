@@ -776,7 +776,7 @@ impl Lowerer {
                 krishiv_common::error::DatatypeMismatchInvalidJsonTablePath {
                     sql_expr: format!("\"{call_text}\""),
                     location,
-                    path: format!("'{path}'"),
+                    path: sql_string_value(path),
                 },
                 at,
             )
@@ -1026,7 +1026,7 @@ fn json_table_path_ok(path: &str, row: bool) -> bool {
     while !rest.is_empty() {
         if let Some(r) = rest.strip_prefix('.') {
             let end = r.find(['.', '[']).unwrap_or(r.len());
-            if end == 0 || &r[..end] == "*" || r[..end].contains(['"', '\'']) {
+            if end == 0 || &r[..end] == "*" {
                 return false;
             }
             rest = &r[end..];
@@ -1057,27 +1057,28 @@ fn json_table_path_ok(path: &str, row: bool) -> bool {
     true
 }
 
-/// The path of a column written without one: `$.name`, quoted when the name has path punctuation.
+/// The path of a column written without one, as Spark builds it: `$['name']` (a name holding `'` makes it invalid).
 fn json_table_default_path(name: &str) -> String {
-    if name.contains(['.', '[', ']', '*', '\'', '"']) {
-        format!("$['{}']", name.replace('\'', "\\'"))
-    } else {
-        format!("$.{name}")
-    }
+    format!("$['{name}']")
 }
 
-/// `JSON_TABLE(...)` as Spark prints the call in an error: the input as written when it is a literal or a column,
-/// the paths and the columns with upper-case types.
+/// A value as Spark's `toSQLValue` prints a string: quoted, `\` and `'` escaped.
+fn sql_string_value(s: &str) -> String {
+    format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// `JSON_TABLE(...)` as Spark prints the call in an error: the paths as written and the columns with their SQL
+/// types. **Named divergence:** Spark prints the input text; here it is elided as `...` because an error message
+/// must not repeat a document (pinned by `the_error_does_not_repeat_the_input_document`).
 fn json_table_text(t: &crate::ast::JsonTable) -> String {
     use crate::ast::JsonTableColumnKind as Kind;
-    // The input is never copied into the message: a literal can be a whole document.
-    let input = "...".to_owned();
+    let input = "...";
     let columns: Vec<String> = t
         .columns
         .iter()
         .map(|c| match &c.kind {
             Kind::Ordinality => format!("{} FOR ORDINALITY", c.name.value),
-            Kind::Value { path, .. } | Kind::Exists { path, .. } => {
+            Kind::Value { data_type, path } | Kind::Exists { data_type, path } => {
                 let exists = if matches!(c.kind, Kind::Exists { .. }) {
                     " EXISTS"
                 } else {
@@ -1087,7 +1088,11 @@ fn json_table_text(t: &crate::ast::JsonTable) -> String {
                     || json_table_default_path(&c.name.value),
                     |(p, _)| p.clone(),
                 );
-                format!("{} ...{exists} PATH '{path}'", c.name.value)
+                let ty = data_type
+                    .without_char_varchar()
+                    .to_data_type()
+                    .map_or_else(|_| "...".to_owned(), |d| d.sql());
+                format!("{} {ty}{exists} PATH '{path}'", c.name.value)
             }
         })
         .collect();

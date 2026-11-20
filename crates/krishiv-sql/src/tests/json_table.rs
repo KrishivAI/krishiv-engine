@@ -124,7 +124,6 @@ fn unsupported_paths_and_duplicate_columns_fail_when_lowered() {
         "SELECT * FROM json_table('{}', '$[*][*]' COLUMNS (a INT PATH '$'))",
         "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$..a'))",
         "SELECT * FROM json_table('{}', 'lax $' COLUMNS (a INT PATH '$.a'))",
-        "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$.\"a\"'))",
         "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$[\"a\"]'))",
         "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH 'a'))",
         "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$[\\'a'))",
@@ -159,6 +158,9 @@ fn the_allowed_paths_lower() {
         "$[0]",
         "$.a[1].b",
         "$['a b'].c",
+        "$.c'd",
+        "$.a b",
+        "$.a]b",
     ] {
         let path = path.replace('\'', "''");
         let sql = format!("SELECT * FROM json_table('{{}}', '$' COLUMNS (a INT PATH '{path}'))");
@@ -191,4 +193,19 @@ fn collect_union_takes_one_argument() {
             "{sql}"
         );
     }
+}
+
+#[test]
+fn the_invalid_path_message_prints_the_call_as_spark_does() {
+    let message = |sql: &str| lowered(sql).unwrap_err().error.to_string();
+    let m = message("SELECT * FROM json_table('{\"a\":1}', '$' COLUMNS (v STRING PATH '$[*]'))");
+    assert!(
+        m.contains(r#"JSON_TABLE(..., '$' COLUMNS (v STRING PATH '$[*]') NULL ON ERROR)"#),
+        "{m}"
+    );
+    // A column written without a path reads `$['name']`; a name holding a quote makes it invalid, the path
+    // printed as `toSQLValue` does (quote and backslash escaped).
+    let m = message("SELECT * FROM json_table('{}', '$' COLUMNS (`it's` INT))");
+    assert!(m.contains("COLUMNS (it's INT PATH '$['it's']')"), "{m}");
+    assert!(m.contains(r"'$[\'it\'s\']'"), "{m}");
 }
