@@ -200,7 +200,8 @@ const DELTA_JSON: &str = include_str!("../../vendored/delta-error-classes.json")
 
 /// P3-T021: the registry holds exactly the classes of the vendored Delta subset
 /// (delta-spark 4.4.1), each with that file's SQLSTATE and template (a sub-class
-/// joins its parent's text with a space, as for Spark's classes).
+/// joins its parent's text with a space, as for Spark's classes; a parent with
+/// sub-classes is a class too, as delta-spark raises it bare).
 #[test]
 fn delta_classes_equal_the_vendored_subset() {
     let doc = json(DELTA_JSON);
@@ -223,6 +224,8 @@ fn delta_classes_equal_the_vendored_subset() {
         match info.get("subClass").and_then(|s| s.as_object()) {
             None => want.push((name.clone(), state, main)),
             Some(subs) => {
+                // The parent is raised bare as well (`DELTA_METADATA_MISMATCH`).
+                want.push((name.clone(), state, main.clone()));
                 for (sub, sub_info) in subs {
                     want.push((
                         format!("{name}.{sub}"),

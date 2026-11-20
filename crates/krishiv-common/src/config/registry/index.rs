@@ -115,6 +115,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.server.shutdownTimeout", &SERVER_SHUTDOWN_TIMEOUT),
     ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     (
+        "krishiv.delta.maxCommitAttempts",
+        &DELTA_MAX_COMMIT_ATTEMPTS,
+    ),
+    (
         "krishiv.io.coalesceWasteDivisor",
         &IO_COALESCE_WASTE_DIVISOR,
     ),
@@ -164,6 +168,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
     ("krishiv.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     ("krishiv.sql.files.commitProtocol", &FILES_COMMIT_PROTOCOL),
+    (
+        "krishiv.write.commitRetryTimeout",
+        &WRITE_COMMIT_RETRY_TIMEOUT,
+    ),
     ("spark.sql.avro.compression.codec", &AVRO_COMPRESSION_CODEC),
     (
         "spark.sql.cteRecursionLevelLimit",
@@ -581,6 +589,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.connect.grpc.maxInboundMessageSize",
         &CONNECT_MAX_INBOUND_MESSAGE_SIZE,
+    ),
+    (
+        "spark.databricks.delta.maxCommitAttempts",
+        &DELTA_MAX_COMMIT_ATTEMPTS,
     ),
     (
         "spark.sql.sources.partitionOverwriteMode",

@@ -3155,6 +3155,7 @@ dependencies = [
  "arrow-data 60.1.0",
  "arrow-json",
  "arrow-ord 60.1.0",
+ "arrow-row",
  "arrow-schema 60.1.0",
  "arrow-select 60.1.0",
  "async-trait",
@@ -3168,11 +3169,13 @@ dependencies = [
  "krishiv-io",
  "krishiv-memory",
  "krishiv-optimizer",
+ "krishiv-plan",
  "krishiv-types",
  "object_store",
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
  "url",
 ]
 
