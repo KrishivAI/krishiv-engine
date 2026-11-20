@@ -850,6 +850,7 @@ impl Session {
                 mode: CommitMode::Overwrite,
                 add,
                 remove,
+                idempotency_key: None,
             };
             match log.commit(snapshot.version, &entry).await {
                 Ok(_) => return Ok(removed),
@@ -893,6 +894,7 @@ impl Session {
             mode: CommitMode::Append,
             add: files,
             remove: Vec::new(),
+            idempotency_key: None,
         };
         let mut races = 0;
         loop {

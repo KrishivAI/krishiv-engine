@@ -65,6 +65,18 @@ pub struct LogEntry {
     pub add: Vec<AddedFile>,
     /// Paths (relative to the root) no longer visible.
     pub remove: Vec<String>,
+    /// The caller's idempotency key (`krishiv.write.idempotencyKey`, E34): a commit whose key a
+    /// log version already carries is not made again. Absent in logs of writers before E34.
+    pub idempotency_key: Option<String>,
+}
+
+/// How [`CommitLog::commit_keyed`] ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Keyed {
+    /// The entry was written as this version.
+    Committed(u64),
+    /// The entry's key was already in the log at this version; nothing was written.
+    Replayed(u64),
 }
 
 /// The files visible at a log version.
@@ -74,6 +86,9 @@ pub struct Snapshot {
     pub version: Option<u64>,
     /// Visible files by relative path.
     pub files: BTreeMap<String, AddedFile>,
+    /// The idempotency keys of the commits so far, each with the version that carries it (kept
+    /// through checkpoints).
+    pub idempotency_keys: BTreeMap<String, u64>,
 }
 
 /// The log of the data root `root` in `store`.
@@ -250,7 +265,20 @@ impl<'a> CommitLog<'a> {
         let mut snap = Snapshot {
             version: Some(version),
             files: BTreeMap::new(),
+            idempotency_keys: BTreeMap::new(),
         };
+        // Optional: a checkpoint of a writer before E34 has none.
+        if let Some(keys) = v["idempotency_keys"].as_array() {
+            for k in keys {
+                let pair = k
+                    .as_array()
+                    .and_then(|p| Some((p.first()?.as_str()?, p.get(1)?.as_u64()?)));
+                let (key, at) = pair.ok_or_else(|| {
+                    self.corrupt(&format!("checkpoint {version}: bad idempotency key"))
+                })?;
+                snap.idempotency_keys.insert(key.to_owned(), at);
+            }
+        }
         for f in files {
             let f = decode_file(f)
                 .ok_or_else(|| self.corrupt(&format!("checkpoint {version}: bad file entry")))?;
@@ -309,6 +337,46 @@ impl<'a> CommitLog<'a> {
         Err(self.conflict(version))
     }
 
+    /// [`Self::commit`] for an entry that may carry an idempotency key: when the log already has a
+    /// commit with the key (before the first try, and again after every lost race), nothing is
+    /// written and the version that has it is returned. An entry without a key commits as usual.
+    ///
+    /// # Errors
+    /// As [`Self::commit`].
+    pub async fn commit_keyed(&self, base: Option<u64>, entry: &LogEntry) -> Result<Keyed> {
+        let Some(key) = &entry.idempotency_key else {
+            return self.commit(base, entry).await.map(Keyed::Committed);
+        };
+        for _ in 0..=MAX_RACES {
+            if let Some(v) = self.key_version(key).await? {
+                return Ok(Keyed::Replayed(v));
+            }
+            match self.commit(base, entry).await {
+                Ok(v) => return Ok(Keyed::Committed(v)),
+                // An overwrite that lost a race may have lost it to the same statement: look again
+                // before reporting the conflict.
+                Err(e) => {
+                    if self.key_version(key).await?.is_some() {
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        Err(self.conflict(0))
+    }
+
+    /// The log version of the commit that carries `key`, if any.
+    ///
+    /// # Errors
+    /// As [`Self::snapshot_if_exists`].
+    pub async fn key_version(&self, key: &str) -> Result<Option<u64>> {
+        Ok(self
+            .snapshot_if_exists()
+            .await?
+            .and_then(|s| s.idempotency_keys.get(key).copied()))
+    }
+
     /// Creates version 0 with `entry` and nothing else: `true` if this call created it, `false` if another
     /// writer already had. Unlike [`Self::commit`] it never retries on a later version, so a writer that
     /// lost the race can drop the files it listed and read the winner's snapshot instead.
@@ -346,7 +414,15 @@ impl<'a> CommitLog<'a> {
     async fn write_checkpoint(&self, version: u64) -> Result<()> {
         let snap = self.snapshot_to(version).await?;
         let files: Vec<Value> = snap.files.values().map(encode_file).collect();
-        let doc = json!({ "format": FORMAT, "version": version, "files": files });
+        let keys: Vec<Value> = snap
+            .idempotency_keys
+            .iter()
+            .map(|(k, v)| json!([k, v]))
+            .collect();
+        let mut doc = json!({ "format": FORMAT, "version": version, "files": files });
+        if !keys.is_empty() {
+            doc["idempotency_keys"] = Value::Array(keys);
+        }
         let bytes = serde_json::to_vec(&doc).map_err(|e| internal(e.to_string()))?;
         // Exists: another writer made the same checkpoint.
         self.io
@@ -405,7 +481,7 @@ impl<'a> CommitLog<'a> {
             let read =
                 futures::future::try_join_all(chunk.iter().map(|v| self.read_entry(*v))).await?;
             for (v, (entry, _)) in chunk.iter().zip(read) {
-                apply(&mut snap, &entry);
+                apply(&mut snap, &entry, *v);
                 snap.version = Some(*v);
             }
         }
@@ -413,7 +489,10 @@ impl<'a> CommitLog<'a> {
     }
 }
 
-fn apply(snap: &mut Snapshot, entry: &LogEntry) {
+fn apply(snap: &mut Snapshot, entry: &LogEntry, version: u64) {
+    if let Some(k) = &entry.idempotency_key {
+        snap.idempotency_keys.entry(k.clone()).or_insert(version);
+    }
     for r in &entry.remove {
         snap.files.remove(r);
     }
@@ -460,6 +539,10 @@ fn encode_entry(e: &LogEntry) -> Vec<u8> {
         "add": e.add.iter().map(encode_file).collect::<Vec<_>>(),
         "remove": e.remove,
     });
+    let mut doc = doc;
+    if let Some(k) = &e.idempotency_key {
+        doc["idempotency_key"] = Value::String(k.clone());
+    }
     // A `Value` of strings and numbers always serializes.
     serde_json::to_vec(&doc).unwrap_or_default()
 }
@@ -502,6 +585,7 @@ fn decode_entry(bytes: &[u8]) -> std::result::Result<LogEntry, String> {
         mode,
         add,
         remove,
+        idempotency_key: v["idempotency_key"].as_str().map(str::to_owned),
     })
 }
 

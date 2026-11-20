@@ -68,6 +68,23 @@ pub static WRITE_COMMIT_RETRY_TIMEOUT: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// The caller's key that makes a retried write commit once (E34).
+pub static WRITE_IDEMPOTENCY_KEY: ConfigEntry = ConfigEntry {
+    key: "krishiv.write.idempotencyKey",
+    value_type: ValueType::String,
+    default: None,
+    doc: "A key the caller chooses for one logical write. A write whose key is already recorded \
+          in the target table's commits (a Delta `txn` action, an Iceberg snapshot summary \
+          property, a commit-log entry) writes nothing and succeeds, so a job that retries a \
+          statement appends once. The key is scoped to the table. The per-write option of the \
+          same name wins over this setting. An empty key is invalid. When unset, writes are not \
+          deduplicated across statements.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
 /// Largest catalog metadata a lakehouse connector parses.
 pub static CATALOG_MAX_METADATA_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.catalog.maxMetadataBytes",
