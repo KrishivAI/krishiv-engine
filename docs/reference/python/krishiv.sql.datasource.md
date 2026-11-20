@@ -12,7 +12,7 @@ A user subclasses `DataSource` (and `DataSourceReader`, `DataSourceWriter` or
 `DataSourceArrowWriter`), registers the class with `spark.dataSource.register(cls)` and then
 reads with `spark.read.format(name)` and writes with `df.write.format(name)`.
 
-How it runs here (design P3-T040):
+How it runs here:
 
 * The schema is fixed when `load` is called (Spark's `create_data_source` step).
 * The reader's `partitions()` and `read()` run when the query is *planned*, once per physical plan, so
@@ -25,7 +25,7 @@ How it runs here (design P3-T040):
 * Filter pushdown: `spark.sql.python.filterPushdown.enabled` is off by default, as in Spark 4.3.0; a
   reader that overrides `pushFilters` then fails with `DATA_SOURCE_PUSHDOWN_DISABLED`. With the
   switch on, `pushFilters` is **not called** yet (the engine applies every filter itself); the pushdown
-  acceptance of P3-T040 stays open.
+  acceptance of this API stays open.
 * Interim embedded path: the read is materialised in memory when a query is planned (capped by
   `KRISHIV_PYTHON_DATA_SOURCE_LIMIT`), not streamed per partition as the design's read operator will.
 * The `DataSource` instance is created once by `load` and reused by every plan of the DataFrame (Spark
