@@ -64,7 +64,7 @@ Spark's distance (`AsOfMergeSpec::distance`, planned only when `may_raise`; `AsO
 a narrow batch of the columns it reads, `isnotnull` so no rule folds it) is evaluated where Spark evaluates it: SQL,
 forward only, on a row's match and its next passing row (one row per run matched at one right row); Connect
 (`distance_on_every_pair`, Spark's `RewriteAsOfJoin`), every passing pair in both directions, by the key's farthest pair
-without a residual (`as_of_finish` reads to the group's end forward); so an ANSI overflow raises where Spark's does; `planner/join/asof.rs` plans `PlanNode::AsOfJoin` onto it (no key: one constant key; runtime-filter
+without a residual (`as_of_finish` reads to the group's end forward); so an ANSI overflow raises where Spark's does; without ANSI a Connect distance that may overflow is `KRISHIV_UNSUPPORTED_FEATURE` (it would wrap, and Spark's `min_by` then picks by the wrapped order); `planner/join/asof.rs` plans `PlanNode::AsOfJoin` onto it (no key: one constant key; runtime-filter
 sites on the left only; nearest and tolerance are `KRISHIV_UNSUPPORTED_FEATURE`).
 `values/` (P2-T177) `ValueService` + `LocalValues`: runtime filters, subquery results and broadcast builds as
 versioned values (`ValueId`, `Version` are plan data), published as one partial per producer partition and visible

@@ -104,6 +104,20 @@ impl Planner<'_> {
         };
         let (probe, build) = self.co_partition(probe, &probe_keys, build, &build_keys)?;
         let filter = residual_of(&probe, &build, &residual);
+        // The Connect form picks the row of the smallest distance (Spark's `min_by`). Without
+        // ANSI a distance that could overflow wraps (or, decimal, is NULL), so its order need not
+        // be the as-of values' order, which the merge walks: refuse rather than pick another row.
+        if as_of.distance_on_every_pair
+            && !self.env.ansi
+            && as_of
+                .distance
+                .as_deref()
+                .is_some_and(|d| krishiv_plan::may_raise(d, true))
+        {
+            return Err(unsupported(
+                "a Connect as-of join whose distance can overflow without ANSI mode",
+            ));
+        }
         // Only a distance that can raise is evaluated: its value is never used.
         let distance = as_of
             .distance

@@ -371,3 +371,60 @@ async fn as_of_join_distances_overflow_where_sparks_do() {
         }
     }
 }
+
+/// Without ANSI an integral distance wraps, so Spark's `min_by` over the distances can pick
+/// another row than the nearest as-of value (left `2147483647`, right `-2` and `2147483646`:
+/// Spark picks `-2`). The merge walks the values' order, so the Connect form refuses there.
+#[tokio::test]
+async fn as_of_join_distance_that_can_wrap_without_ansi_is_refused() {
+    use pb::config_request::operation::OpType as ConfOp;
+    let s = start().await;
+    let request = pb::ConfigRequest {
+        session_id: SESSION.to_owned(),
+        user_context: Some(pb::UserContext {
+            user_id: "someone".to_owned(),
+            ..Default::default()
+        }),
+        operation: Some(pb::config_request::Operation {
+            op_type: Some(ConfOp::Set(pb::config_request::Set {
+                pairs: vec![pb::KeyValue {
+                    key: "spark.sql.ansi.enabled".to_owned(),
+                    value: Some("false".to_owned()),
+                }],
+                silent: None,
+            })),
+        }),
+        ..Default::default()
+    };
+    let mut grpc = tonic::client::Grpc::new(s.channel.clone());
+    grpc.ready().await.expect("ready");
+    grpc.unary(
+        tonic::Request::new(request),
+        "/spark.connect.SparkConnectService/Config"
+            .parse()
+            .expect("path"),
+        tonic_prost::ProstCodec::<pb::ConfigRequest, pb::ConfigResponse>::default(),
+    )
+    .await
+    .expect("config set");
+    let side = |values: &[i32], column: &str| {
+        let rows: Vec<serde_json::Value> = values.iter().map(|v| serde_json::json!([v])).collect();
+        serde_json::json!({ "columns": [column], "rows": rows })
+    };
+    let rel = relation(RelType::AsOfJoin(Box::new(pb::AsOfJoin {
+        left: Some(Box::new(values(&side(&[i32::MAX], "lt"), "l"))),
+        right: Some(Box::new(values(&side(&[-2, i32::MAX - 1], "rt"), "r"))),
+        left_as_of: Some(attr("lt")),
+        right_as_of: Some(attr("rt")),
+        join_expr: None,
+        using_columns: Vec::new(),
+        join_type: "inner".to_owned(),
+        tolerance: None,
+        allow_exact_matches: true,
+        direction: "backward".to_owned(),
+    })));
+    let Err(e) = execute(&s.channel, rel).await else {
+        panic!("a wrapping distance ran without ANSI");
+    };
+    assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE");
+}
