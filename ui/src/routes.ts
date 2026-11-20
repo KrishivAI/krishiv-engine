@@ -17,10 +17,11 @@ export const ROUTES = [
   "/environment",
 ] as const;
 
-/** The route of a path (`/queries/q1/profile`) or of a hash (`#/queries/q1`); the path wins unless it is `/`. */
+/** The route of a path (`/queries/q1/profile`) or of a hash (`#/queries/q1`); an explicit hash (a navigation inside the page) wins over the path the page was opened at. */
 export function parseRoute(pathname: string, hash: string): Route {
   const fromPath = pathname.replace(/^\/+|\/+$/g, "");
-  const raw = fromPath !== "" ? fromPath : hash.replace(/^#\/?/, "");
+  const fromHash = hash.replace(/^#\/?/, "");
+  const raw = fromHash !== "" ? fromHash : fromPath;
   const parts = raw.split("/").filter((p) => p !== "");
   const safe = (s: string | undefined) => {
     if (s === undefined) return undefined;

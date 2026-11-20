@@ -64,9 +64,19 @@ export function embedLink(search: string): EmbedLink | null {
 
 /** Takes theme messages from the embedding page: only from an allowed origin, only valid ones; the rest is logged. */
 export function listenForTheme(allowedOrigins: string[], parentWindow: Window = window): () => void {
+  // The browser reports an origin without a default port; serialize the configured ones the same way.
+  const allowed = new Set(
+    allowedOrigins.map((o) => {
+      try {
+        return new URL(o).origin;
+      } catch {
+        return o;
+      }
+    }),
+  );
   const on = (e: MessageEvent) => {
     if (e.source !== parentWindow.parent) return;
-    if (!allowedOrigins.includes(e.origin)) {
+    if (!allowed.has(e.origin)) {
       console.warn(`krishiv: ignored a theme message from ${e.origin} (not in krishiv.ui.allowedOrigins)`);
       return;
     }
