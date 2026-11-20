@@ -212,7 +212,7 @@ impl LateFetch {
                 self.metrics
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .add(&s.metrics(), s.overcommitted());
+                    .add(&s.metrics(), s.overcommitted(), s.gate_wait_ns());
             }
             l.stream = None;
             return Ok(false);
