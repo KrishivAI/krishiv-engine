@@ -270,8 +270,19 @@ pub(super) fn specs() -> Vec<Spec> {
         string,
     ));
     out.extend(scalar(
-        &["instr", "find_in_set", "__find_in_set_lcase"],
+        &["find_in_set", "__find_in_set_lcase"],
         &Inputs::Expects(vec![text.clone(), text.clone()]),
+        int,
+    ));
+    // `instr(str, substr[, pos[, occurrence]])`: the two optional arguments are Spark 4.3's.
+    out.extend(scalar(
+        &["instr"],
+        &Inputs::Expects(vec![
+            text.clone(),
+            text.clone(),
+            int_arg.clone(),
+            int_arg.clone(),
+        ]),
         int,
     ));
     // `locate` over `UTF8_LCASE` operands: the analyzer rewrites `instr`/`locate`/`position` to it.

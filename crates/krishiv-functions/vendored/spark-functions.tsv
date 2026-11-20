@@ -115,6 +115,7 @@ cot	function	3.5	true	scalar	0100000	1
 count	function	3.5	true	aggregate	0111111	 >= 1
 count_if	function	3.5	true	aggregate	0100000	1
 count_min_sketch	function	3.5	true	aggregate	1111100	4
+counter_diff	function	4.2	true	window	0110000	[1, 2]
 covar_pop	function	3.5	true	aggregate	0010000	2
 covar_samp	function	3.5	true	aggregate	0010000	2
 crc32	function	3.5	true	scalar	0100000	1
@@ -197,6 +198,7 @@ hll_sketch_agg	function	3.5	true	aggregate	0110000	[1, 2]
 hll_sketch_estimate	function	3.5	true	aggregate	0100000	1
 hll_union	function	3.5	true	aggregate	0011000	[2, 3]
 hll_union_agg	function	3.5	true	aggregate	0110000	[1, 2]
+hmac	function	4.2	true	scalar	0011000	[2, 3]
 hour	function	3.5	true	scalar	0111111	> 0
 hypot	function	3.5	true	scalar	0010000	2
 if	function	3.5	true	scalar	0001000	3
@@ -209,7 +211,7 @@ inline_outer	table_function	3.5	true	generator	1100000	1
 input_file_block_length	function	3.5	false	scalar	1000000	0
 input_file_block_start	function	3.5	false	scalar	1000000	0
 input_file_name	function	3.5	false	scalar	1000000	0
-instr	function	3.5	true	scalar	0010000	2
+instr	function	3.5	true	scalar	0011100	[2, 3, 4]
 int	function	3.5	true	scalar	0100000	1
 is_valid_utf8	function	4.0	true	scalar	0100000	1
 is_valid_variant	function	4.2	true	scalar	0100000	1

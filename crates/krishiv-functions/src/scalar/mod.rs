@@ -54,6 +54,7 @@ mod mersenne;
 mod misc;
 mod number;
 mod predicate;
+mod protobuf;
 mod random;
 mod regex;
 mod session;
@@ -514,6 +515,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (hll::NAMES, hll::bind),
     (interval::NAMES, interval::bind),
     (avro::NAMES, avro::bind),
+    (protobuf::NAMES, protobuf::bind),
     (json::NAMES, json::bind),
     (map::NAMES, map::bind),
     (json_tuple::NAMES, json_tuple::bind),

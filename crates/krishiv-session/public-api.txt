@@ -1205,6 +1205,7 @@ pub async fn krishiv_session::spark_catalog::Catalog<'_>::is_cached(&self, &str)
 pub fn krishiv_session::spark_catalog::Catalog<'_>::list_catalogs(&self) -> alloc::vec::Vec<alloc::string::String>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_columns(&self, &str) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Column>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_databases(&self, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Database>, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_embedded_databases(&self) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Database>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_functions(&self, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Function>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_tables(&self, core::option::Option<&str>, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Table>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::recover_partitions(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>

@@ -42,9 +42,11 @@ pub(super) fn hll_default(name: &str, n: usize, origin: Origin) -> Option<Bound>
     }
 }
 
-/// The position of the options argument of the CSV and JSON functions.
-pub(super) fn options_index(name: &str) -> Option<usize> {
+/// The position of the options argument of the CSV and JSON functions (`n` arguments in the call: `from_protobuf` and `to_protobuf`
+/// take the options third in a three-argument call and fourth otherwise).
+pub(super) fn options_index(name: &str, n: usize) -> Option<usize> {
     match name {
+        "from_protobuf" | "to_protobuf" => Some(if n == 3 { 2 } else { 3 }),
         "from_csv" | "from_json" | "from_xml" | "from_avro" => Some(2),
         "to_csv" | "schema_of_csv" | "to_json" | "schema_of_json" | "to_xml" | "schema_of_xml" => {
             Some(1)
@@ -125,10 +127,37 @@ impl Resolver<'_> {
             .then(|| self.pad_char_comparison(kids))
             .flatten();
         let kids = padded.as_deref().unwrap_or(kids);
-        let constants: Vec<Option<Constant>> = kids
+        let mut constants: Vec<Option<Constant>> = kids
             .iter()
             .map(|k| self.fold(&k.expr, self.ctx.conf.ansi))
             .collect();
+        if is_builtin_entry(entry) && matches!(entry.id.name(), "from_protobuf" | "to_protobuf") {
+            // A binary literal is the descriptor set and the rewritten options `map(..)` of string literals the options: values the
+            // result type reads (Spark folds both). Other functions keep seeing neither as a constant.
+            for (c, k) in constants.iter_mut().zip(kids) {
+                match &k.expr.node {
+                    ExprNode::Literal(Literal::Binary(b)) => *c = Some(Constant::Binary(b.clone())),
+                    ExprNode::Literal(Literal::Map(pairs)) => {
+                        *c = Some(Constant::StringMap(
+                            pairs
+                                .iter()
+                                .map(|(k, v)| (k.clone(), Some(v.clone())))
+                                .collect(),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            // A descriptor path Bind read under the access policy: the file's bytes, or why it could not be read.
+            if let Some(path) = Self::descriptor_literal(kids)
+                && let Some(read) = self.b.descriptors.get(path)
+            {
+                constants[2] = Some(match read {
+                    Ok(bytes) => Constant::Binary(bytes.clone()),
+                    Err(e) => Constant::Error(e.clone()),
+                });
+            }
+        }
         let literals: Vec<bool> = kids.iter().map(|k| fold::is_literal(&k.expr)).collect();
         let foldable: Vec<bool> = kids
             .iter()
@@ -180,7 +209,34 @@ impl Resolver<'_> {
                 .unwrap_or(e.origin);
             AnalysisError::new(err, origin)
         })?;
+        let mut call_kids = call_kids;
+        if is_builtin_entry(entry)
+            && matches!(entry.id.name(), "from_protobuf" | "to_protobuf")
+            && Self::descriptor_literal(kids).is_some()
+            && let Some(Some(Constant::Binary(bytes))) = constants.get(2)
+            && let Some(k) = call_kids.get_mut(2)
+        {
+            // The call binds from the bytes read here, never from the path (shown as written).
+            k.shown = Some(Arc::clone(&k.expr));
+            k.expr = Arc::new(
+                Expr::new(ExprNode::Literal(Literal::Binary(bytes.clone())))
+                    .with_origin(k.expr.origin),
+            );
+            k.ty = arg_type(DataType::Binary, false);
+        }
         Ok((Self::folded_ntile(entry, &constants, call_kids), ty))
+    }
+
+    /// The non-empty string literal path in the descriptor position of a `from_protobuf` / `to_protobuf` call (the third of three
+    /// or four arguments), as Bind found it (`bind/descriptors.rs`).
+    fn descriptor_literal(kids: &[Bound]) -> Option<&str> {
+        if !matches!(kids.len(), 3 | 4) {
+            return None;
+        }
+        match &kids[2].expr.node {
+            ExprNode::Literal(Literal::String(s)) if !s.is_empty() => Some(s),
+            _ => None,
+        }
     }
 
     /// `count()` with no arguments: `WRONG_NUM_ARGS.WITH_SUGGESTION`,

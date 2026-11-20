@@ -39,6 +39,7 @@ mod math;
 mod misc;
 mod number;
 mod predicate;
+mod protobuf;
 mod r#struct;
 mod text;
 mod time;
@@ -408,10 +409,11 @@ impl Registry {
                     // Spark run accepts it inside `count(DISTINCT ...)`);
                     // the engine still draws an IV per row.
                     // `from_avro` and `to_avro` are deterministic in Spark (their catalog row says `unknown` only because
-                    // the probe image had no `spark-avro` module): `count(from_avro(..))` must analyze.
-                    deterministic: row
-                        .deterministic
-                        .unwrap_or(matches!(spec.name, "from_avro" | "to_avro")),
+                    // the probe image had no `spark-avro` module; likewise `from_protobuf` and `to_protobuf`): `count(from_avro(..))` must analyze.
+                    deterministic: row.deterministic.unwrap_or(matches!(
+                        spec.name,
+                        "from_avro" | "to_avro" | "from_protobuf" | "to_protobuf"
+                    )),
                     since: row.since,
                     arity: row.arity.clone(),
                     inputs: spec.inputs,
