@@ -44,7 +44,7 @@
   const allColumns: Column[] = [
     { key: "query", label: "Query", title: true },
     { key: "state", label: "State" },
-    { key: "principal", label: "Principal" },
+    { key: "principal", label: "Principal", wrap: true },
     { key: "running", label: "Running for", num: true },
     { key: "rows", label: "Rows read", num: true },
     { key: "bytes", label: "Bytes read", num: true },
@@ -63,7 +63,7 @@
 <ResponsiveTable {columns} rows={queries} rowKey={(q) => q.query_id} empty={consoleInfo.mode === "embedded" ? "No query of this session is running." : "No query is running."}>
   {#snippet cell(q, c)}
     {#if c.key === "query"}
-      <a class="block min-h-10 py-2 underline underline-offset-4" href={`#/queries/${encodeURIComponent(q.query_id)}`}>{oneLine(q.query_text, 80)}</a>
+      <a class="flex min-h-11 items-center underline underline-offset-4" href={`#/queries/${encodeURIComponent(q.query_id)}`}>{oneLine(q.query_text, 80)}</a>
       <div><Id id={q.query_id} /></div>
     {:else if c.key === "state"}
       <Badge variant={stateVariant(q.state)}>{q.state}</Badge>

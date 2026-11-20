@@ -7,7 +7,9 @@ embedded and the profiles console show, and of TPC-H Q9's profile in the console
 Serves the built UI from the fixture server and fails when a page: scrolls sideways, loads anything from another
 origin, logs a console error, lacks the self-hosted Red Hat fonts, loses its key text, or has a navigation target
 under 40 px on a phone. With SHOT_DIR it also writes a PNG per page and view (the visual record; the assertions
-are the check, since pixels differ between machines).
+are the check, since pixels differ between machines). It ends with the responsive and device checks of
+`check_responsive.py` (13 screen sizes from a phone to an ultrawide monitor, touch targets, the SQL editor on a
+phone, text size, motion), whose pictures go to SHOT_DIR/responsive.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from playwright.sync_api import expect, sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
 import fixture_server
+from check_responsive import responsive_checks
 
 # "small" is the narrowest width the spec names (360 px); it is checked but not photographed.
 VIEWPORTS = [
@@ -62,6 +65,13 @@ SMALL_TARGETS = """
   .map(e => [e, (e.tagName === 'INPUT' && e.closest('label') ? e.closest('label') : e).getBoundingClientRect()])
   .filter(([e, r]) => (r.height < 40 || r.width < 40) && !(e.tagName === 'A' && e.closest('main') && e.closest('p, td')))
   .map(([e, r]) => `${e.tagName.toLowerCase()} "${(e.textContent || e.getAttribute('aria-label') || '').trim().slice(0, 30)}" ${Math.round(r.width)}x${Math.round(r.height)}`)
+"""
+
+# At desktop width a table shows all its columns: its box scrolls sideways only on a narrower screen.
+CUT_TABLES = """
+() => [...document.querySelectorAll('[data-table-box]')]
+  .filter(e => e.offsetParent !== null && e.scrollWidth > e.clientWidth)
+  .map(e => e.scrollWidth - e.clientWidth)
 """
 
 
@@ -110,6 +120,11 @@ def check(shots: Path | None) -> list[str]:
                         problems.append(
                             f"{view}: the page scrolls sideways ({wide}px too wide)"
                         )
+                    if label == "desktop":
+                        problems += [
+                            f"{view}: a table is {w}px wider than its box, so its last columns are cut"
+                            for w in page.evaluate(CUT_TABLES)
+                        ]
                     body = page.inner_text("body")
                     if name == "query-detail":
                         hints = page.get_by_test_id("advisor-hints").all_inner_texts()
@@ -627,10 +642,12 @@ if __name__ == "__main__":
     found += role_checks()
     found += filter_checks()
     found += q9_checks(shots)
+    found += responsive_checks(shots / "responsive" if shots is not None else None)
     print(
         "\n".join(found)
         if found
         else "ui pages: ok (8 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, "
-        "embedded and profiles consoles, operator, history filters, TPC-H Q9's profile)"
+        "embedded and profiles consoles, operator, history filters, TPC-H Q9's profile, "
+        "responsive: 3 consoles x 13 screen sizes, touch targets, SQL editor on a phone, text size, motion)"
     )
     sys.exit(1 if found else 0)

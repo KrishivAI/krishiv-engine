@@ -50,10 +50,10 @@
 
 <p class="mb-3 flex flex-wrap gap-4">
   {#if consoleInfo.mode === "profiles"}
-    <a class="py-2.5 underline underline-offset-4" href="#/history">← History</a>
+    <a class="inline-flex min-h-11 min-w-11 items-center underline underline-offset-4" href="#/history">← History</a>
   {:else}
-    <a class="py-2.5 underline underline-offset-4" href="#/queries">← Queries</a>
-    <a class="py-2.5 underline underline-offset-4" href="#/history">History</a>
+    <a class="inline-flex min-h-11 min-w-11 items-center underline underline-offset-4" href="#/queries">← Queries</a>
+    <a class="inline-flex min-h-11 min-w-11 items-center underline underline-offset-4" href="#/history">History</a>
   {/if}
 </p>
 {#if q.isPending}

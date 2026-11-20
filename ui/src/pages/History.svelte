@@ -59,7 +59,7 @@
   const allColumns: Column[] = [
     { key: "query", label: "Query", title: true },
     { key: "state", label: "State" },
-    { key: "principal", label: "Principal" },
+    { key: "principal", label: "Principal", wrap: true },
     { key: "submitted", label: "Submitted" },
     { key: "wall", label: "Wall time", num: true },
     { key: "memory", label: "Peak memory", num: true },
@@ -105,7 +105,7 @@
 
 {#if compared}
   <h2 class="mb-2">Comparison</h2>
-  <div class="mb-4 max-w-full overflow-x-auto rounded-lg border border-border bg-card">
+  <div data-table-box class="mb-4 max-w-full overflow-x-auto rounded-lg border border-border bg-card">
     <table class="w-full border-collapse">
       <thead>
         <tr class="text-xs font-bold tracking-[0.06em] text-muted-foreground uppercase">
@@ -140,10 +140,10 @@
   <ResponsiveTable {columns} rows={q.data.queries} rowKey={(r) => r.query_id} empty="No finished queries match.">
     {#snippet cell(r, c)}
       {#if c.key === "query"}
-        <label class="mr-2 inline-flex min-h-10 min-w-10 items-center justify-center align-middle">
+        <label class="mr-2 inline-flex min-h-11 min-w-11 items-center justify-center align-middle">
           <input class="size-5 accent-[var(--k-silver)]" type="checkbox" checked={picked.includes(r.query_id)} onchange={() => toggle(r.query_id)} aria-label={`Select ${oneLine(r.query_text, 40)} (${r.query_id.slice(-8)}) for comparison`} />
         </label>
-        <a class="inline-block min-h-10 py-2 align-middle underline underline-offset-4" href={`#/queries/${encodeURIComponent(r.query_id)}`}>{oneLine(r.query_text, 90)}</a>
+        <a class="inline-flex min-h-11 min-w-11 items-center align-middle underline underline-offset-4" href={`#/queries/${encodeURIComponent(r.query_id)}`}>{oneLine(r.query_text, 90)}</a>
         <div><Id id={r.query_id} /></div>
         {#if tagsOf(r).length}
           <div class="mono text-xs break-all text-muted-foreground">{tagsOf(r).join(" · ")}</div>
@@ -151,7 +151,7 @@
       {:else if c.key === "state"}
         <Badge variant={stateVariant(r.state)}>{r.state}</Badge>{#if r.error_class} <span class="mono text-muted-foreground">{r.error_class}</span>{/if}
       {:else if c.key === "principal"}{r.principal ?? "–"}
-        {#if r.client_type}<div class="ml-auto max-w-48 truncate text-xs text-muted-foreground md:ml-0" title={r.client_type}>{r.client_type}</div>{/if}
+        {#if r.client_type}<div class="ml-auto max-w-[min(12rem,100%)] truncate text-xs text-muted-foreground md:ml-0" title={r.client_type}>{r.client_type}</div>{/if}
       {:else if c.key === "submitted"}{when(r.submitted_at)}
       {:else if c.key === "wall"}{nanos(r.wall_ns)}
       {:else}{bytes(r.peak_memory_bytes)}{/if}

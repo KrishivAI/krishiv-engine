@@ -56,14 +56,17 @@
   const linkClass = (id: string, wide: boolean) =>
     cn(
       "rounded-md px-3 text-sm font-medium text-text-2 no-underline hover:bg-accent",
-      wide ? "py-2.5" : "flex min-h-12 items-center",
+      wide ? "flex min-h-11 items-center" : "flex min-h-12 items-center",
       // The active link: the surface fill, plus the gold accent as an inset underline (no layout change).
       page === id && "bg-accent text-foreground shadow-[inset_0_-2px_0_var(--k-accent)]",
     );
 </script>
 
 <QueryClientProvider {client}>
-  <header class="sticky top-0 z-30 flex items-center gap-4 border-b border-border bg-card px-4 py-1.5">
+  <!-- The bar's items sit in the same centred box as the content, so on a very wide screen they line up with it
+       instead of going to the screen's corners. -->
+  <header class="sticky top-0 z-30 border-b border-border bg-card">
+   <div data-shell class="mx-auto flex h-14 max-w-[120rem] items-center gap-4 px-3 md:px-4">
     <picture class="flex shrink-0">
       <source media="(prefers-color-scheme: dark)" srcset={markDark} />
       <img class="h-6 w-auto" src={markLight} alt="Krishiv" />
@@ -78,7 +81,7 @@
       <p class="m-0 ml-auto flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground" data-console-mode={consoleInfo.mode}>
         {#if consoleInfo.mode === "embedded"}
           <Badge>This session</Badge>
-          {#if consoleInfo.sessionId}<span class="hidden sm:inline"><Id id={consoleInfo.sessionId} /></span>{/if}
+          {#if consoleInfo.sessionId}<span class="hidden sm:max-md:inline lg:inline"><Id id={consoleInfo.sessionId} /></span>{/if}
         {:else}
           <Badge>Saved profiles</Badge>
         {/if}
@@ -111,8 +114,9 @@
         </SheetContent>
       </Sheet>
     </div>
+   </div>
   </header>
-  <main class="mx-auto max-w-7xl px-3 py-4 md:px-4 md:py-6">
+  <main class="mx-auto max-w-[120rem] px-3 py-4 md:px-4 md:py-6">
     {#if session === "checking"}
       <p class="text-muted-foreground">Opening the session…</p>
     {:else if session === "no"}

@@ -320,6 +320,20 @@ class Handler(BaseHTTPRequestHandler):
                     "error": f"cannot parse {XSS}",
                     "error_class": "PARSE_SYNTAX_ERROR",
                 }
+            elif "wide" in sql:
+                # A result wider and longer than a phone's screen, with one value far longer than a line.
+                RUNS[run_id] = {
+                    "state": "finished",
+                    "columns": [f"a_long_column_name_{i}" for i in range(12)],
+                    "rows": [
+                        [
+                            "lorem ipsum " * 50 if (r, c) == (0, 1) else r * 1000 + c
+                            for c in range(12)
+                        ]
+                        for r in range(40)
+                    ],
+                    "truncated": False,
+                }
             else:
                 RUNS[run_id] = {
                     "state": "finished",

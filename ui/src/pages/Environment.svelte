@@ -4,6 +4,7 @@
   import { consoleInfo } from "../console.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { fieldClass } from "$lib/components/ui/input";
+  import { cn } from "$lib/utils";
   import ResponsiveTable, { type Column } from "$lib/components/responsive-table.svelte";
 
   const q = createQuery<Environment>(() => ({
@@ -29,7 +30,7 @@
   </p>
   <label class="mb-3 block">
     <span class="mb-1 block text-sm font-medium">Filter settings</span>
-    <input class={fieldClass} type="search" bind:value={filter} placeholder="spark.sql" />
+    <input class={cn(fieldClass, "w-full")} type="search" bind:value={filter} placeholder="spark.sql" />
   </label>
   <ResponsiveTable {columns} rows={rows} rowKey={(s) => s.key} empty="No setting matches.">
     {#snippet cell(s, c)}
