@@ -70,7 +70,7 @@ impl Session {
             }
             .into());
         }
-        Err(name.not_found())
+        Err(name.not_found(&self.state.catalog.current_namespace()))
     }
 
     /// `INSERT INTO|OVERWRITE [TABLE] name [(columns)] [BY NAME] query`, or the multi-table
