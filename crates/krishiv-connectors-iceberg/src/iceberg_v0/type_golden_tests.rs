@@ -43,6 +43,9 @@ fn every_iceberg_type_maps_as_spark_maps_it() {
     assert_eq!(goldens["iceberg"], "1.12.0");
     let cases = goldens["cases"].as_array().expect("cases");
     assert!(cases.len() >= 60, "{} cases", cases.len());
+    // A floor on the cases compared with Spark's schema, so a too-wide `NOT_PARSED_BY_ICEBERG_RUST`
+    // prefix cannot skip them unnoticed.
+    let mut compared = 0;
     for case in cases {
         let name = case["case"].as_str().expect("case name");
         assert!(
@@ -56,6 +59,7 @@ fn every_iceberg_type_maps_as_spark_maps_it() {
         }
         let schema = parsed.unwrap_or_else(|e| panic!("{name}: {e}"));
         let ours = spark_schema(&schema);
+        compared += 1;
         if REFUSED_BY_KRISHIV.contains(&name) {
             let e = ours.expect_err(name);
             assert!(
@@ -90,4 +94,8 @@ fn every_iceberg_type_maps_as_spark_maps_it() {
             other => panic!("{name}: neither a schema nor an error: {other:?}"),
         }
     }
+    assert!(
+        compared >= 48,
+        "{compared} cases compared with spark_schema"
+    );
 }

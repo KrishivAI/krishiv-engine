@@ -3,11 +3,12 @@
 
 For each case, an Iceberg schema (Iceberg's JSON form) is parsed by Iceberg's own ``SchemaParser`` and converted by
 ``SparkSchemaUtil.convert``, the conversion Spark's Iceberg integration applies to every table it loads
-(``TypeToSparkType``). The output records the Spark schema's ``json()`` or, when the conversion refuses, the Java
-exception class and message. Iceberg types Spark cannot write (``fixed``, ``uuid``, ``time``, the nanosecond
-timestamps, ``unknown``) are covered too, since the schema is built directly, not by Spark DDL. A column with a
-format v3 default value is recorded as well: Spark shows it as ``EXISTS_DEFAULT``/``CURRENT_DEFAULT`` metadata,
-which Krishiv refuses until it fills missing columns from it.
+(``TypeToSparkType``). The output records the Spark schema's ``json()`` or, when the conversion refuses, the exception
+class PySpark raises for it (PySpark converts the Py4J error, so this is PySpark's class name, e.g.
+``UnsupportedOperationException``) and the message. Iceberg types Spark cannot write (``fixed``, ``uuid``, ``time``,
+the nanosecond timestamps, ``unknown``) are covered too, since the schema is built directly, not by Spark DDL. A
+column with a format v3 default value is recorded as well: Spark shows it as ``EXISTS_DEFAULT``/``CURRENT_DEFAULT``
+metadata, which Krishiv refuses until it fills missing columns from it.
 
 Run it from the repository root:
 

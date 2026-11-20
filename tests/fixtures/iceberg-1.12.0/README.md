@@ -11,4 +11,4 @@ Tables: `basic`, `partitioned`, `pos_deletes` (position delete files), `dvs` (fo
 
 `types.json` (not a table): the Spark schema Iceberg's `SparkSchemaUtil.convert` gives for each Iceberg type, or the
 refusal, from the same Spark 4.1.0 + Iceberg 1.12.0 pair. Regenerate with `tests/scripts/gen_iceberg_type_goldens.py`
-(command in its docstring; the image's `spark` user needs a writable output directory).
+(command in its docstring; it runs as your user, `--user "$(id -u)"`, so the output directory must be writable by you).
