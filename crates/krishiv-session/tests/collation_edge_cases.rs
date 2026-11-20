@@ -205,10 +205,16 @@ fn nvl2_name_and_cast_to_string_end_the_collation() {
 fn comparing_two_implicit_collations_is_indeterminate() {
     let s = Session::new().unwrap();
     let with = "WITH t AS (SELECT 'a' COLLATE utf8_lcase AS c), u AS (SELECT 'A' AS k) ";
-    for q in [
-        "SELECT 1 FROM t JOIN u ON t.c = u.k",
-        "SELECT 1 FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.k = t.c)",
-        "SELECT CAST(c AS STRING) = c FROM t",
+    for (q, shown) in [
+        ("SELECT 1 FROM t JOIN u ON t.c = u.k", "\"(c = k)\""),
+        (
+            "SELECT 1 FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.k = t.c)",
+            "\"(k = c)\"",
+        ),
+        (
+            "SELECT CAST(c AS STRING) = c FROM t",
+            "\"(CAST(c AS STRING) = c)\"",
+        ),
     ] {
         let err = match block_on(s.sql(&format!("{with}{q}"))) {
             Err(e) => e.to_string(),
@@ -221,6 +227,8 @@ fn comparing_two_implicit_collations_is_indeterminate() {
             err.contains("INDETERMINATE_COLLATION_IN_EXPRESSION"),
             "{q}: {err}"
         );
+        assert!(err.contains(shown), "{q}: {err}");
+        assert!(err.contains("42P22"), "{q}: {err}");
     }
 }
 
