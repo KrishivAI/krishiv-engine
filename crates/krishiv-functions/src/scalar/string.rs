@@ -57,6 +57,8 @@ pub(super) fn shape(args: &[BindArg]) -> String {
             } else if t == DataType::Int64 {
                 'L'
             } else if matches!(t, DataType::List(_)) {
+                // Any list; `concat_ws` reads its elements as strings (the
+                // analyzer casts non-string element types before binding).
                 'A'
             } else {
                 '?'

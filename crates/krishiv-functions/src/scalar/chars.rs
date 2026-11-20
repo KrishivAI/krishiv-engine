@@ -315,17 +315,20 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
 /// the non-NULL strings and the non-NULL elements of the non-NULL arrays,
 /// joined by `sep`; NULL only when `sep` is.
 fn concat_ws_arrays(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivError> {
-    enum Part {
+    enum Part<'a> {
         Text(StringArray),
-        List(ArrayRef, StringArray),
+        List(&'a arrow_array::ListArray, StringArray),
     }
+    let columns = (1..count)
+        .map(|i| x.column(i))
+        .collect::<Result<Vec<_>, _>>()?;
     let seps = x.strings(0)?;
     let mut parts = Vec::with_capacity(count);
-    for i in 1..count {
-        let c = x.column(i)?;
+    for c in &columns {
         parts.push(if matches!(c.data_type(), DataType::List(_)) {
-            let values = to_utf8(list_of(&c, "concat_ws")?.values().as_ref())?;
-            Part::List(c, values)
+            let list = list_of(c, "concat_ws")?;
+            let values = to_utf8(list.values().as_ref())?;
+            Part::List(list, values)
         } else {
             Part::Text(to_utf8(c.as_ref())?)
         });
@@ -338,7 +341,7 @@ fn concat_ws_arrays(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivErr
             continue;
         }
         let sep = seps.value(row);
-        let mut text = String::new();
+        let mut text = String::with_capacity(32);
         let mut first = true;
         let mut push = |piece: &str| {
             if !first {
@@ -354,8 +357,7 @@ fn concat_ws_arrays(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivErr
                         push(a.value(row));
                     }
                 }
-                Part::List(c, values) => {
-                    let list = list_of(c, "concat_ws")?;
+                Part::List(list, values) => {
                     if list.is_valid(row) {
                         let (start, len) = span(list, row);
                         for at in start..start + len {
