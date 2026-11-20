@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
-assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -16,30 +15,29 @@ Limit 100
       :              :- Project [c_customer_sk#892 AS c_customer_sk#276] (shared #2)
       :              :  +- Shift +721
       :              :     +- Project [c_customer_sk#171]
-      :              :        +- Filter (CAST(ssales#190 AS DECIMAL(38,8)) > ((50 / 100.0) * max(tpcds_cmax)#191))
-      :              :           +- Aggregate [c_customer_sk#171], [c_customer_sk#171, sum((CAST(ss_quantity#158 AS DECIMAL(10,0)) * ss_sales_price#161)) AS ssales#190, max(tpcds_cmax#189) AS max(tpcds_cmax)#191]
-      :              :              +- Join Inner
-      :              :                 :- Project [ss_quantity#158, ss_sales_price#161, c_customer_sk#171]
-      :              :                 :  +- Join Inner, (ss_customer_sk#151 == c_customer_sk#171)
-      :              :                 :     :- Filter isnotnull(ss_customer_sk#151)
-      :              :                 :     :  +- Scan spark_catalog.default.store_sales [ss_customer_sk#151, ss_quantity#158, ss_sales_price#161]
-      :              :                 :     +- Filter isnotnull(c_customer_sk#171)
-      :              :                 :        +- Scan spark_catalog.default.customer [c_customer_sk#171]
-      :              :                 +- Project [tpcds_cmax#720 AS tpcds_cmax#189]
-      :              :                    +- Shift +573
-      :              :                       +- Aggregate [], [max(csales#146) AS tpcds_cmax#147]
-      :              :                          +- Aggregate [c_customer_sk#100], [sum((CAST(ss_quantity#87 AS DECIMAL(10,0)) * ss_sales_price#90)) AS csales#146]
-      :              :                             +- Project [c_customer_sk#100, ss_quantity#87, ss_sales_price#90]
-      :              :                                +- Join Inner, (ss_customer_sk#80 == c_customer_sk#100)
-      :              :                                   :- Filter isnotnull(c_customer_sk#100)
-      :              :                                   :  +- Scan spark_catalog.default.customer [c_customer_sk#100]
-      :              :                                   +- Project [ss_customer_sk#80, ss_quantity#87, ss_sales_price#90]
-      :              :                                      +- Join Inner, (ss_sold_date_sk#77 == d_date_sk#118)
-      :              :                                         :- Filter (isnotnull(ss_customer_sk#80) and isnotnull(ss_sold_date_sk#77))
-      :              :                                         :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#77, ss_customer_sk#80, ss_quantity#87, ss_sales_price#90]
-      :              :                                         +- Project [d_date_sk#118]
-      :              :                                            +- Filter ((d_year#124 IN (2000, 2001, 2002, 2003)) and isnotnull(d_date_sk#118))
-      :              :                                               +- Scan spark_catalog.default.date_dim [d_date_sk#118, d_year#124]
+      :              :        +- Join Inner, (CAST(ssales#190 AS DECIMAL(38,8)) > ((50 / 100.0) * tpcds_cmax#189))
+      :              :           :- Aggregate [c_customer_sk#171], [c_customer_sk#171, sum((CAST(ss_quantity#158 AS DECIMAL(10,0)) * ss_sales_price#161)) AS ssales#190]
+      :              :           :  +- Project [ss_quantity#158, ss_sales_price#161, c_customer_sk#171]
+      :              :           :     +- Join Inner, (ss_customer_sk#151 == c_customer_sk#171)
+      :              :           :        :- Filter isnotnull(ss_customer_sk#151)
+      :              :           :        :  +- Scan spark_catalog.default.store_sales [ss_customer_sk#151, ss_quantity#158, ss_sales_price#161]
+      :              :           :        +- Filter isnotnull(c_customer_sk#171)
+      :              :           :           +- Scan spark_catalog.default.customer [c_customer_sk#171]
+      :              :           +- Project [tpcds_cmax#720 AS tpcds_cmax#189]
+      :              :              +- Shift +573
+      :              :                 +- Aggregate [], [max(csales#146) AS tpcds_cmax#147]
+      :              :                    +- Aggregate [c_customer_sk#100], [sum((CAST(ss_quantity#87 AS DECIMAL(10,0)) * ss_sales_price#90)) AS csales#146]
+      :              :                       +- Project [c_customer_sk#100, ss_quantity#87, ss_sales_price#90]
+      :              :                          +- Join Inner, (ss_customer_sk#80 == c_customer_sk#100)
+      :              :                             :- Filter isnotnull(c_customer_sk#100)
+      :              :                             :  +- Scan spark_catalog.default.customer [c_customer_sk#100]
+      :              :                             +- Project [ss_customer_sk#80, ss_quantity#87, ss_sales_price#90]
+      :              :                                +- Join Inner, (ss_sold_date_sk#77 == d_date_sk#118)
+      :              :                                   :- Filter (isnotnull(ss_customer_sk#80) and isnotnull(ss_sold_date_sk#77))
+      :              :                                   :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#77, ss_customer_sk#80, ss_quantity#87, ss_sales_price#90]
+      :              :                                   +- Project [d_date_sk#118]
+      :              :                                      +- Filter ((d_year#124 IN (2000, 2001, 2002, 2003)) and isnotnull(d_date_sk#118))
+      :              :                                         +- Scan spark_catalog.default.date_dim [d_date_sk#118, d_year#124]
       :              +- Project [cs_bill_customer_sk#195, cs_quantity#210, cs_list_price#212]
       :                 +- Join Inner, (cs_item_sk#207 == item_sk#273)
       :                    :- Project [item_sk#570 AS item_sk#273] (shared #3)
