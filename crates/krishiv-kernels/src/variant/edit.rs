@@ -253,6 +253,10 @@ fn rec(
             if *index >= n
                 && let Some(val) = created(edit)
             {
+                // Each filler null costs bytes, so an index past the size limit is refused before any is written.
+                if *index >= VARIANT_SIZE_LIMIT / 5 {
+                    return Err(size_limit());
+                }
                 for _ in n..*index {
                     offsets.push(w.position().saturating_sub(start));
                     w.null();
