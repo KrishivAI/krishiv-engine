@@ -282,7 +282,8 @@ impl Resolver<'_> {
     /// column's type), a collated pivot column before 4.2 (Spark keys it by
     /// bytes, not by collation), and, with ANSI off and several aggregates,
     /// duplicates whose last index is past the slots (Spark writes that
-    /// value into another aggregate's slots).
+    /// value into another aggregate's slots; 4.3 answers duplicates with
+    /// ANSI on, and this case stays refused there until it has a 4.3 golden).
     #[expect(clippy::too_many_arguments, reason = "the resolved parts of one PIVOT")]
     fn pivot_first(
         &mut self,
@@ -383,7 +384,10 @@ impl Resolver<'_> {
                 }
             }
         }
-        if !fixed && !ansi && items.len() > 1 && last.iter().any(|&l| l >= slots) {
+        // 4.3 answers duplicates with ANSI on (golden `fix_pivot_duplicate_values`); ANSI off with
+        // several aggregates has no 4.3.0 golden yet, so it stays refused under 4.3 too.
+        let dup_slots = (0..keys.len()).filter(|&k| last[k] == k).count();
+        if !ansi && items.len() > 1 && last.iter().any(|&l| l >= dup_slots) {
             return Err(unsupported(
                 "duplicate PIVOT values with several aggregates and spark.sql.ansi.enabled=false",
                 origin,
