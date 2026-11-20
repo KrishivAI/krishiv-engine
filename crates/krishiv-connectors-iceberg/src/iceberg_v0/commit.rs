@@ -459,15 +459,18 @@ impl Loop<'_> {
         mut current: TableMetadata,
         new: &mut NewManifests,
     ) -> Result<TableMetadata, End> {
+        // A replayed write (the same key) whose first run already landed on this base is final:
+        // sending it again would publish its rows twice. Checked before validation, which has no
+        // exemption for the write's own first run. No request was sent and the found snapshot is
+        // another write's, so nothing this run produced can be in the table: delete it.
+        if self.found(&current)?.is_some() {
+            delete_all(self.cx.io, new, &[]).await;
+            return Ok(current);
+        }
         // An explicit start validates the first attempt too (Java's
         // `validate` runs on every `apply`); S0 itself has nothing between.
         if self.validation.start.is_some() {
             self.validate(&current).await?;
-        }
-        // A replayed write (the same key) whose first run already landed on this base is final:
-        // sending it again would publish its rows twice.
-        if self.found(&current)?.is_some() {
-            return Ok(current);
         }
         'attempts: loop {
             self.before_request().await?;

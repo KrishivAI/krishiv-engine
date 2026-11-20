@@ -423,7 +423,9 @@ impl MergeOnReadWrite {
         let live: BTreeSet<&str> = kept.iter().map(|d| d.file.file_path()).collect();
         for f in task_files {
             if f.ends_with(".puffin") && !live.contains(f.as_str()) {
-                // A failed delete leaves the path on the list, so the commit's cleanup retries it.
+                // A failed delete leaves the path on the list, so the commit's cleanup retries it, but only
+                // while `written` is armed (before the commit loop); after a commit, or a failure inside
+                // the loop, the file stays an orphan.
                 if t.file_io.delete(f).await.is_ok() {
                     written.data.retain(|p| p != f);
                 }

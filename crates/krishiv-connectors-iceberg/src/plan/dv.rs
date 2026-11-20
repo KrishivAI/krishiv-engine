@@ -241,7 +241,7 @@ pub fn encode_dv(positions: &RoaringTreemap) -> Result<Vec<u8>, KrishivError> {
         .bitmaps()
         .next_back()
         .map_or(0, |(k, _)| u64::from(k) + 1);
-    if keys.saturating_mul(12) > u64::from(i32::MAX.unsigned_abs()) - 16 {
+    if keys.saturating_mul(12) > u64::from(i32::MAX.unsigned_abs()) - 8 - 12 {
         return Err(invalid("Can't serialize index > 2GB".to_owned()));
     }
     let mut body = MAGIC.to_vec();

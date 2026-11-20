@@ -1061,6 +1061,11 @@ fn foreign_overwrite(env: &Env, catalog: &Arc<Catalog>) {
     assert!(matches!(out, CommitOutcome::Committed(_)), "{out:?}");
 }
 
+fn sorted(mut v: Vec<String>) -> Vec<String> {
+    v.sort();
+    v
+}
+
 /// A statement replayed with the key of one that already landed on the base it opened at
 /// publishes nothing again.
 #[test]
@@ -1082,6 +1087,7 @@ fn a_replayed_write_on_a_head_holding_it_commits_nothing() {
         .unwrap();
     env.rt.block_on(w.commit(outputs, Some("q"))).unwrap();
     let snapshots = catalog.metadata().snapshots().count();
+    let files = sorted(files_ending(&env, ""));
     let replay = Mor::open(&env, &catalog, RowLevelOperation::Update);
     let w = MergeOnReadWrite::new(&replay.p, replay.op, None, Some("replayed".to_owned())).unwrap();
     let outputs = replay
@@ -1096,6 +1102,8 @@ fn a_replayed_write_on_a_head_holding_it_commits_nothing() {
     env.rt.block_on(w.commit(outputs, Some("q"))).unwrap();
     assert_eq!(catalog.metadata().snapshots().count(), snapshots);
     assert_eq!(read_back(&env, &catalog), expected((0..3).chain(10..12)));
+    // The replay's own data files are deleted, not orphaned.
+    assert_eq!(sorted(files_ending(&env, "")), files);
 }
 
 /// A v2 statement whose table is upgraded to v3 and moved on before it
