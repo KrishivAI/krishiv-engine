@@ -1114,6 +1114,8 @@ pub enum MergeSource {
     Table {
         /// The table name.
         name: DdlName,
+        /// `WITH (...)` options of the source relation (Spark 4.3), written before the alias.
+        options: Vec<TableOption>,
         /// Its alias, if written.
         alias: Option<Ident>,
         /// Source text.

@@ -624,9 +624,12 @@ impl Parser<'_> {
             })
         } else {
             let name = self.ddl_name()?;
+            // Spark 4.3: `USING identifierReference optionsClause? tableAlias`; the options come before the alias.
+            let options = self.table_options()?;
             let alias = self.stmt_alias("ON")?;
             Ok(MergeSource::Table {
                 name,
+                options,
                 alias,
                 span: self.span_from(start),
             })

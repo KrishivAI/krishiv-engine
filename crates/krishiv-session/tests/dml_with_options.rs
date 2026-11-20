@@ -47,6 +47,14 @@ fn with_options_parse_after_the_alias_and_match_spark() {
             table_op,
         ),
         (
+            "merge into tbl using src with ('k'='v') s on tbl.id=s.id when matched then delete",
+            table_op,
+        ),
+        (
+            "merge into tbl using src s with ('k'='v') on tbl.id=s.id when matched then delete",
+            "PARSE_SYNTAX_ERROR",
+        ),
+        (
             "merge into tbl with ('k'='v') t using src s on t.id=s.id when matched then delete",
             "PARSE_SYNTAX_ERROR",
         ),
