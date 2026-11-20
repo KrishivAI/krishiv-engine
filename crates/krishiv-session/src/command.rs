@@ -483,10 +483,7 @@ impl Session {
                 if let Some(key) = self.cache_key(&parts)? {
                     self.uncache_table(&key);
                 } else if !if_exists {
-                    return Err(table_not_found(
-                        &parts,
-                        &self.state.catalog.current_namespace(),
-                    ));
+                    return Err(table_not_found(&parts, self.search_path()));
                 }
             }
             CacheKind::Cache {
@@ -507,10 +504,7 @@ impl Session {
                 // `CACHE TABLE t AS query` first makes the temporary view `t`.
                 if let Some(q) = query {
                     let [view] = parts.as_slice() else {
-                        return Err(table_not_found(
-                            &parts,
-                            &self.state.catalog.current_namespace(),
-                        ));
+                        return Err(table_not_found(&parts, self.search_path()));
                     };
                     let body = original.get(q.span.start..q.span.end).unwrap_or_default();
                     let prefix = format!("CREATE TEMPORARY VIEW `{}` AS ", view.replace('`', "``"));
@@ -584,18 +578,12 @@ impl Session {
                         name: parts[parts.len() - 1].clone(),
                     };
                     if !built.refresh(&caller, &id).await? {
-                        return Err(table_not_found(
-                            &parts,
-                            &self.state.catalog.current_namespace(),
-                        ));
+                        return Err(table_not_found(&parts, self.search_path()));
                     }
                     return self.empty_frame().await;
                 }
                 let Some(key) = self.cache_key(&parts)? else {
-                    return Err(table_not_found(
-                        &parts,
-                        &self.state.catalog.current_namespace(),
-                    ));
+                    return Err(table_not_found(&parts, self.search_path()));
                 };
                 self.refresh_table(&key);
             }
@@ -1682,10 +1670,10 @@ fn ddl_table_parts(name: &DdlName) -> Option<Vec<String>> {
 }
 
 /// `TABLE_OR_VIEW_NOT_FOUND` quoting the whole multipart name, as Spark does.
-fn table_not_found(parts: &[String], current: &str) -> KrishivError {
+fn table_not_found(parts: &[String], search_path: String) -> KrishivError {
     TableOrViewNotFound {
         relation_name: parts.iter().map(|p| quote(p)).collect::<Vec<_>>().join("."),
-        search_path: crate::catalog::search_path_in(current),
+        search_path,
     }
     .into()
 }

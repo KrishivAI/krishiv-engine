@@ -654,7 +654,7 @@ impl Catalog<'_> {
     fn table_not_found(&self, name: &str) -> KrishivError {
         krishiv_common::error::TableOrViewNotFound {
             relation_name: quoted(name),
-            search_path: crate::catalog::search_path_in(&self.current_database()),
+            search_path: self.session.search_path(),
         }
         .into()
     }
@@ -763,7 +763,7 @@ impl Catalog<'_> {
             .ok_or_else(|| -> KrishivError {
                 krishiv_common::error::TableOrViewNotFound {
                     relation_name: quoted(name),
-                    search_path: crate::catalog::search_path_in(&self.current_database()),
+                    search_path: self.session.search_path(),
                 }
                 .into()
             })?;
@@ -926,7 +926,7 @@ impl Catalog<'_> {
         let not_found = || -> KrishivError {
             krishiv_common::error::UnresolvedRoutine {
                 routine_name: quoted(name),
-                search_path: crate::catalog::search_path_in(&self.current_database()),
+                search_path: self.session.search_path(),
             }
             .into()
         };

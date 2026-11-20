@@ -940,9 +940,9 @@ impl Session {
             .catalog
             .store
             .table(&name.namespace, &name.name)
-            .ok_or_else(|| name.not_found(&self.state.catalog.current_namespace()))?;
+            .ok_or_else(|| name.not_found(self.search_path()))?;
         if self.hidden(&Self::relation_securable(&table)) {
-            return Err(name.not_found(&self.state.catalog.current_namespace()));
+            return Err(name.not_found(self.search_path()));
         }
         Ok(table)
     }

@@ -462,6 +462,28 @@ fn metrics_enabled(config: &Config) -> bool {
 }
 
 impl Session {
+    /// The search path a missing table or routine names in its error: the SQL path (`SET PATH`, else the
+    /// `spark.sql.path` default) resolved at the current catalog and namespace, as the analyzer reports it.
+    pub(crate) fn search_path(&self) -> String {
+        let (config, _) = self.state.conf.query_snapshot();
+        let default = config
+            .get(&krishiv_common::config::SQL_DEFAULT_PATH)
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        let (catalog, namespace) = self.state.catalog.position_pair();
+        let namespace = if crate::system::is_system(&catalog) {
+            Vec::new()
+        } else {
+            vec![namespace]
+        };
+        crate::catalog::render_search_path(
+            &self
+                .state
+                .catalog
+                .sql_path_in(&default, &catalog, &namespace),
+        )
+    }
+
     /// A builder with the defaults.
     ///
     /// ```
