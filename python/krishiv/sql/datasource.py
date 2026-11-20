@@ -8,7 +8,8 @@ reads with ``spark.read.format(name)`` and writes with ``df.write.format(name)``
 How it runs here:
 
 * The schema is fixed when ``load`` is called (Spark's ``create_data_source`` step).
-* The reader's ``partitions()`` and ``read()`` run when the query's scan runs (planning and ``EXPLAIN`` read nothing), once per scan, so
+* The reader's ``partitions()`` and ``read()`` run when the query's scan runs (planning and ``EXPLAIN`` read nothing),
+  once per scan, so
   a source that lists files sees new ones on the next action (Spark plans the read per execution).
   Partitions run one after the other in this process (the process pool's parallel partitions are T014).
 * ``read`` may yield tuples, ``Row`` objects, lists or ``pyarrow.RecordBatch`` objects; they are cast to
