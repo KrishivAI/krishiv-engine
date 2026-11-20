@@ -56,12 +56,25 @@ pub(crate) fn proven_empty(plan: &LogicalPlan) -> bool {
     }
 }
 
+/// The most nodes `observes` looks at below one relation. The rule runs at every relation of a
+/// plan, so an unbounded walk would cost the square of the plan's size (and, over shared
+/// subtrees, more) on every query; a plan this deep that holds an observation is left as it is.
+const OBSERVES_BUDGET: usize = 512;
+
 fn observes(plan: &LogicalPlan) -> bool {
-    matches!(plan.node, PlanNode::CollectMetrics { .. }) || {
+    fn walk(plan: &LogicalPlan, budget: &mut usize) -> bool {
+        if *budget == 0 {
+            return false;
+        }
+        *budget -= 1;
+        if matches!(plan.node, PlanNode::CollectMetrics { .. }) {
+            return true;
+        }
         let mut found = false;
-        plan.for_each_child(&mut |i| found = found || observes(i));
+        plan.for_each_child(&mut |i| found = found || walk(i, budget));
         found
     }
+    walk(plan, &mut { OBSERVES_BUDGET })
 }
 
 /// The rule at any relation: when it is proven empty, its observed nodes are dropped.
