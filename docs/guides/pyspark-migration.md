@@ -152,6 +152,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [A declared schema on a Delta read](../concepts/known-differences.md#a-declared-schema-on-a-delta-read) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
 | [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
+| [Delta Lake writes](../concepts/known-differences.md#delta-lake-writes) |
 | [HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)](../concepts/known-differences.md#hll-sketches-the-compact-form-hll_sketch_agg-hll_union_agg-hll_union) |
 
 ## Where it runs
