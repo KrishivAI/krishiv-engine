@@ -184,11 +184,14 @@ pub static ICEBERG_COMMIT_MAX_INTERVENING: ConfigEntry = ConfigEntry {
     value_type: ValueType::PositiveInt,
     default: Some(ConfigValue::Int(1000)),
     doc: "Most snapshots committed to a branch between the snapshot an Iceberg write (an \
-          overwrite, delete, update or merge) started from and the branch's current head that \
-          its commit validates for conflicts. A commit that finds more fails with \
+          INSERT OVERWRITE, delete, update or merge) started from and the branch's current head \
+          that its commit validates for conflicts. An INSERT OVERWRITE validates only under the \
+          write option isolation-level, and without validate-from-snapshot-id it validates the \
+          whole history, which counts here. A commit that finds more fails with \
           KRISHIV_ICEBERG_COMMIT_CONFLICT rather than validating part of the history; appends \
-          validate nothing and ignore it. Read when the write is planned. Krishiv does not run \
-          Iceberg overwrites, deletes, updates or merges yet, so until it does this has no effect.",
+          validate nothing and ignore it. Read when the write is planned. Krishiv has no catalog \
+          that commits Iceberg overwrites, deletes, updates or merges yet, so until it runs them \
+          this has no effect.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.0",
