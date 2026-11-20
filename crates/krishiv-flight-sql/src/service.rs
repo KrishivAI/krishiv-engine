@@ -42,7 +42,9 @@ type HandshakeStream = Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Statu
 
 impl FlightSqlServer {
     /// The caller of a call that works on something that already exists: a fetch of a ticket
-    /// issued before a drain, a cancel (design P3-T066 §5.1: these are allowed while draining).
+    /// issued before a drain, a cancel, `ClosePreparedStatement` (design P3-T066 §5.1: these are
+    /// allowed while draining). Binding rows to a prepared handle starts an execution, so it is
+    /// refused (`admit_new`).
     fn admit<T>(&self, request: &Request<T>) -> Result<Authenticated, Status> {
         self.inner.auth.caller(request)
     }

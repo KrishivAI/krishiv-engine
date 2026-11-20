@@ -614,6 +614,9 @@ async fn flight_sql_refuses_new_work_while_draining_and_serves_held_tickets() {
     let (stored, _) = info(&mut h, OPS, cookie.as_deref(), "SHOW TABLES")
         .await
         .expect("a command before the drain");
+    let (doomed, _) = info(&mut h, OPS, cookie.as_deref(), "SELECT 4 AS x")
+        .await
+        .expect("a third ticket before the drain");
     let sessions_before = (h.flight.session_count(), h.manager.counts().live);
     h.runtime.set_draining(true);
     h.draining.store(true, Release);
@@ -634,8 +637,41 @@ async fn flight_sql_refuses_new_work_while_draining_and_serves_held_tickets() {
         sessions_before,
         "no session is created while draining"
     );
-    // Both held tickets are work the server accepted: the drain waits for them.
-    assert_eq!(h.flight.held(), 2);
+    // A handshake is new work too.
+    let e = h
+        .client
+        .handshake(authed(
+            futures::stream::iter([HandshakeRequest::default()]),
+            OPS,
+            None,
+        ))
+        .await
+        .expect_err("a handshake while draining");
+    assert_eq!(e.code(), Code::FailedPrecondition, "{e:?}");
+    assert_eq!(
+        e.metadata().get("x-krishiv-error-class").unwrap(),
+        "KRISHIV_SERVER_DRAINING"
+    );
+    // The unfetched tickets are work the server accepted: the drain waits for them.
+    assert_eq!(h.flight.held(), 3);
+    // A cancel is served while draining and releases its ticket.
+    let body = CancelFlightInfoRequest::new(doomed).encode_to_vec();
+    let mut results = h
+        .client
+        .do_action(authed(
+            Action::new("CancelFlightInfo", body),
+            OPS,
+            cookie.as_deref(),
+        ))
+        .await
+        .expect("a cancel while draining")
+        .into_inner();
+    let result = results.next().await.expect("one result").expect("ok");
+    let status = CancelFlightInfoResult::decode(result.body)
+        .expect("decode")
+        .status;
+    assert_eq!(status, CancelStatus::Cancelled as i32);
+    assert_eq!(h.flight.held(), 2, "a cancelled ticket is no longer held");
     let batches = fetch(&mut h, OPS, cookie.as_deref(), ticket(&held))
         .await
         .expect("a held query ticket is fetched while the runtime drains");
