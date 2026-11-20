@@ -817,6 +817,42 @@ impl Encoder {
                 self.plan(left, bias);
                 self.plan(right, bias);
             }
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => {
+                self.tag("AsOfJoin");
+                self.debug(kind);
+                match condition {
+                    JoinCondition::None => self.tag("no-cond"),
+                    JoinCondition::On(e) => {
+                        self.tag("on");
+                        self.expr(e, bias);
+                    }
+                    JoinCondition::Using(cols) => {
+                        self.tag("using");
+                        self.num(cols.len() as u64);
+                        for c in cols {
+                            self.text(c);
+                        }
+                    }
+                    JoinCondition::Natural => self.tag("natural"),
+                }
+                self.expr(&as_of.left, bias);
+                self.expr(&as_of.right, bias);
+                self.debug(&as_of.direction);
+                self.flag(as_of.allow_exact);
+                self.flag(as_of.as_written);
+                match &as_of.tolerance {
+                    None => self.tag("no-tolerance"),
+                    Some(t) => self.expr(t, bias),
+                }
+                self.plan(left, bias);
+                self.plan(right, bias);
+            }
             PlanNode::Sort {
                 input,
                 order,

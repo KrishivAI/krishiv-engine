@@ -12,6 +12,9 @@ use crate::dag::{self, Memo};
 use crate::walk::{self, Node};
 use crate::{AttrId, BoundColumn, Expr, Origin, PythonUdfRef, SortOrder};
 
+mod asof;
+pub use asof::{AsOfDirection, AsOfMatch};
+
 /// The IR version a [`Plan`] is written in. It changes when a node changes
 /// meaning; adding a node or field does not change it before 1.0.
 pub const IR_VERSION: u32 = 1;
@@ -169,6 +172,22 @@ pub enum PlanNode {
         kind: JoinKind,
         /// Join condition.
         condition: JoinCondition,
+    },
+    /// An as-of join (Spark 4.3's `AsOfJoin`): each left row with the one right row
+    /// nearest to it by `as_of` among those `condition` keeps. `kind` is
+    /// [`JoinKind::Inner`] or [`JoinKind::LeftOuter`]; the output is the left columns,
+    /// then the right ones. The optimizer never reorders it.
+    AsOfJoin {
+        /// Left input.
+        left: Arc<LogicalPlan>,
+        /// Right input.
+        right: Arc<LogicalPlan>,
+        /// Join type.
+        kind: JoinKind,
+        /// The `ON` condition or `USING` columns (resolved: `On` or `None`).
+        condition: JoinCondition,
+        /// The match.
+        as_of: Arc<AsOfMatch>,
     },
     /// `ORDER BY` (global) or `SORT BY` / `sortWithinPartitions`.
     Sort {
@@ -1106,6 +1125,24 @@ impl LogicalPlan {
         })
     }
 
+    /// `self kind ASOF JOIN right` matching by `as_of` among the rows `condition` keeps.
+    #[must_use]
+    pub fn as_of_join(
+        self,
+        right: Self,
+        kind: JoinKind,
+        condition: JoinCondition,
+        as_of: AsOfMatch,
+    ) -> Self {
+        Self::new(PlanNode::AsOfJoin {
+            left: Arc::new(self),
+            right: Arc::new(right),
+            kind,
+            condition,
+            as_of: Arc::new(as_of),
+        })
+    }
+
     /// `self ORDER BY order` (a global sort).
     #[must_use]
     pub fn sort(self, order: Vec<SortOrder>) -> Self {
@@ -1189,6 +1226,7 @@ impl LogicalPlan {
             | PlanNode::MapPartitions { input, .. }
             | PlanNode::GroupMap { input, .. } => f(input),
             PlanNode::Join { left, right, .. }
+            | PlanNode::AsOfJoin { left, right, .. }
             | PlanNode::SetOp { left, right, .. }
             | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
@@ -1255,6 +1293,7 @@ impl LogicalPlan {
             | PlanNode::MapPartitions { input, .. }
             | PlanNode::GroupMap { input, .. } => f(input),
             PlanNode::Join { left, right, .. }
+            | PlanNode::AsOfJoin { left, right, .. }
             | PlanNode::SetOp { left, right, .. }
             | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
@@ -1339,6 +1378,14 @@ impl LogicalPlan {
                 JoinCondition::On(e) => f(e),
                 JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
             },
+            PlanNode::AsOfJoin {
+                condition, as_of, ..
+            } => {
+                as_of.exprs().for_each(&mut *f);
+                if let JoinCondition::On(e) = condition {
+                    f(e);
+                }
+            }
             PlanNode::Sort { order, .. } => order.iter().for_each(|o| f(&o.expr)),
             PlanNode::Expand { projections, .. } => projections.iter().flatten().for_each(f),
             PlanNode::Generate { arg, .. } => f(arg),
@@ -1448,6 +1495,14 @@ impl LogicalPlan {
                 JoinCondition::On(e) => f(e),
                 JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
             },
+            PlanNode::AsOfJoin {
+                condition, as_of, ..
+            } => {
+                Arc::make_mut(as_of).exprs_mut().for_each(&mut *f);
+                if let JoinCondition::On(e) = condition {
+                    f(e);
+                }
+            }
             PlanNode::Sort { order, .. } => order.iter_mut().for_each(|o| f(&mut o.expr)),
             PlanNode::Generate { arg, .. } => f(arg),
             PlanNode::Expand { projections, .. } => {
@@ -1648,6 +1703,9 @@ impl LogicalPlan {
                     return Some(out);
                 }
                 PlanNode::Join {
+                    left, right, kind, ..
+                }
+                | PlanNode::AsOfJoin {
                     left, right, kind, ..
                 } => {
                     let nullable = |v: Vec<BoundColumn>, yes: bool| {

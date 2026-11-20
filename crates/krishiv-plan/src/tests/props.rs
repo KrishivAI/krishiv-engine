@@ -437,7 +437,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 33 };
+        let kinds = if depth == 0 { 4 } else { 34 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -529,6 +529,28 @@ impl Gen<'_> {
                     1 => JoinCondition::On(Arc::new(self.expr(2))),
                     _ => JoinCondition::Using(self.many(1, 2, Gen::name)),
                 },
+            },
+            33 => PlanNode::AsOfJoin {
+                left: self.input(d),
+                right: self.input(d),
+                kind: [JoinKind::Inner, JoinKind::LeftOuter][usize::from(self.pick(2))],
+                condition: match self.pick(3) {
+                    0 => JoinCondition::None,
+                    1 => JoinCondition::On(Arc::new(self.expr(2))),
+                    _ => JoinCondition::Using(self.many(1, 2, Gen::name)),
+                },
+                as_of: Arc::new(crate::AsOfMatch {
+                    left: Arc::new(self.expr(1)),
+                    right: Arc::new(self.expr(1)),
+                    direction: [
+                        crate::AsOfDirection::Backward,
+                        crate::AsOfDirection::Forward,
+                        crate::AsOfDirection::Nearest,
+                    ][usize::from(self.pick(3))],
+                    allow_exact: self.flag(),
+                    tolerance: self.flag().then(|| Arc::new(self.expr(1))),
+                    as_written: self.flag(),
+                }),
             },
             8 => PlanNode::Sort {
                 input: self.input(d),
@@ -1508,6 +1530,28 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
                 JoinCondition::None | JoinCondition::Natural => false,
             };
             inside || m_plan(left, w) || m_plan(right, w)
+        }
+        PlanNode::AsOfJoin {
+            left,
+            right,
+            kind,
+            condition,
+            as_of,
+        } => {
+            site!(w, flip(kind, JoinKind::Inner, JoinKind::LeftOuter));
+            let m = Arc::make_mut(as_of);
+            site!(w, m.allow_exact = !m.allow_exact);
+            site!(w, m.as_written = !m.as_written);
+            let inside = match condition {
+                JoinCondition::On(e) => m_expr(e, w),
+                JoinCondition::Using(cols) => m_strings(cols, w),
+                JoinCondition::None | JoinCondition::Natural => false,
+            };
+            inside
+                || m_expr(&mut m.left, w)
+                || m_expr(&mut m.right, w)
+                || m_plan(left, w)
+                || m_plan(right, w)
         }
         PlanNode::Sort {
             input,

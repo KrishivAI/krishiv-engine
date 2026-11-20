@@ -119,6 +119,7 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::CoGroupMap { .. } => 39,
         PlanNode::PythonTableFunction { .. } => 40,
         PlanNode::CollectMetrics { .. } => 41,
+        PlanNode::AsOfJoin { .. } => 42,
     }
 }
 
@@ -894,6 +895,9 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             PlanNode::Join {
                 kind, condition, ..
+            }
+            | PlanNode::AsOfJoin {
+                kind, condition, ..
             } => {
                 let tag: u8 = match kind {
                     JoinKind::Inner => 1,
@@ -923,6 +927,24 @@ impl<'k, 'a> Encoder<'k, 'a> {
                         self.strs(cols);
                     }
                     JoinCondition::Natural => self.u8(3),
+                }
+                if let PlanNode::AsOfJoin { as_of, .. } = &p.node {
+                    self.expr(&as_of.left);
+                    self.expr(&as_of.right);
+                    self.u8(match as_of.direction {
+                        crate::AsOfDirection::Backward => 1,
+                        crate::AsOfDirection::Forward => 2,
+                        crate::AsOfDirection::Nearest => 3,
+                    });
+                    self.bool(as_of.allow_exact);
+                    self.bool(as_of.as_written);
+                    match &as_of.tolerance {
+                        None => self.u8(0),
+                        Some(t) => {
+                            self.u8(1);
+                            self.expr(t);
+                        }
+                    }
                 }
             }
             PlanNode::Sort { order, global, .. } => {

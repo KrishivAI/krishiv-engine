@@ -418,6 +418,14 @@ impl<'a> Estimator<'a> {
                 let (l, r) = (self.plan(left), self.plan(right));
                 self.join(p, &l, &r, *kind, condition)
             }
+            // At most one right row per left row (a left join: exactly one): the left rows, the
+            // right columns as the right input left them.
+            PlanNode::AsOfJoin { left, right, .. } => {
+                let (l, r) = (self.plan(left), self.plan(right));
+                let mut out = RelStats::clone(&l);
+                out.cols.extend(r.cols.clone());
+                out
+            }
             PlanNode::Sort { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::JoinHint { input, .. }
