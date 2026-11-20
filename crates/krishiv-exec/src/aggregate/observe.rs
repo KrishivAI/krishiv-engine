@@ -29,6 +29,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use krishiv_common::error::ErrorClass;
 use krishiv_memory::Reservation;
 
 use arrow_array::RecordBatch;
@@ -93,27 +94,55 @@ impl Finalizer {
         self.instance
     }
 
-    /// The metrics' row over `partials`, the states of every driver of the
+    /// The metrics' row over `partials`, the `(partition, states)` of every driver of the
     /// instance: the aggregates' zero state if there are none.
     ///
+    /// Spark merges each task's buffer into the driver's in task-completion order, and a merge
+    /// that overflows (`sum` of a long under ANSI) throws inside the scheduler, which logs it and
+    /// drops *that task's whole buffer* (`DAGScheduler.updateAccumulators`); the action still
+    /// succeeds. Here `partials` arrive in `(partition, lane)` order (deterministic where Spark's
+    /// order is not) and a state whose merge raises `ARITHMETIC_OVERFLOW` is dropped the same way.
+    /// Overflow in a metric's result (a decimal sum, `max(v) + 2`) raises here, at `get`.
     /// The merge table is charged to `reservation` as it grows.
     pub(crate) fn finalize(
         &self,
         partials: &[RecordBatch],
         reservation: &mut Reservation,
     ) -> Result<RecordBatch> {
+        let mut kept: Vec<&RecordBatch> = Vec::new();
         let mut table = AggTable::new(&self.core, &HashSeed::new(None))?;
         for states in partials {
-            let p = table.prepare(&Batch::new(states.clone()), true)?;
-            let want = table.projected(&p);
-            reservation.try_grow(want.saturating_sub(reservation.size()))?;
-            table.apply(&p)?;
-            let over = table.memory_size().saturating_sub(reservation.size());
-            reservation.try_grow(over)?;
+            match self.merge(&mut table, states, reservation) {
+                Ok(()) => kept.push(states),
+                Err(e) if e.error_class() == ErrorClass::ArithmeticOverflow => {
+                    // The failed merge may have changed some of the buffer: rebuild it from
+                    // the states that merged.
+                    table = AggTable::new(&self.core, &HashSeed::new(None))?;
+                    for k in &kept {
+                        self.merge(&mut table, k, reservation)?;
+                    }
+                }
+                Err(e) => return Err(e),
+            }
         }
         let results = table.output_batch(&[0])?;
         let out = self.post.project(&Batch::new(results), 0)?;
         Ok(out.data().clone())
+    }
+
+    fn merge(
+        &self,
+        table: &mut AggTable,
+        states: &RecordBatch,
+        reservation: &mut Reservation,
+    ) -> Result<()> {
+        let p = table.prepare(&Batch::new(states.clone()), true)?;
+        let want = table.projected(&p);
+        reservation.try_grow(want.saturating_sub(reservation.size()))?;
+        table.apply(&p)?;
+        let over = table.memory_size().saturating_sub(reservation.size());
+        reservation.try_grow(over)?;
+        Ok(())
     }
 }
 

@@ -656,7 +656,11 @@ fn read_restrictions_and_server_side_planning_are_refused() {
         let e = client_with(config_for(&server))
             .load_table(&ns(&["db"]), "t")
             .unwrap_err();
-        assert_eq!(class(&e), ErrorClass::KrishivUnsupportedFeature, "{extra}");
+        assert_eq!(
+            class(&e),
+            ErrorClass::KrishivCatalogTableUnsupported,
+            "{extra}"
+        );
         assert!(e.to_string().contains("`db`.`t`"), "{e}");
     }
 }

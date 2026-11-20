@@ -448,17 +448,12 @@ impl FlightService for FlightGate {
         }
     }
 
-    /// Served without a session, for every role (§9: arrow-rs's blanket impl needs none either);
-    /// while the server drains it answers `UNAVAILABLE`, as every Flight RPC does (§2 "Drain").
+    /// Served without a session, for every role (§9: arrow-rs's blanket impl needs none either),
+    /// and while the server drains: it starts no work (design P3-T066 §5.1).
     async fn list_actions(
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<Self::ListActionsStream>, Status> {
-        if self.0.draining() {
-            return self
-                .0
-                .counted(Command::ListActions, Err(crate::call::shutting_down()));
-        }
         let actions = futures::stream::iter(served_actions().into_iter().map(Ok));
         let stream: Self::ListActionsStream = Box::pin(actions);
         self.0
