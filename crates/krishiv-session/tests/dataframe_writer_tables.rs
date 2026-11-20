@@ -762,3 +762,28 @@ fn an_empty_bucketed_write_leaves_no_file_with_the_helper_column() {
     let schema = block_on(s.table("eb").schema()).unwrap();
     assert_eq!(schema.fields().len(), 2, "no bucket id column: {schema:?}");
 }
+
+#[test]
+fn an_append_of_other_columns_is_refused_by_count() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("t")).unwrap();
+    let one = s.table("people").select(["id"]);
+    assert_eq!(
+        class(block_on(one.write().mode("append").save_as_table("t"))),
+        "_LEGACY_ERROR_TEMP_1161"
+    );
+    assert_eq!(count(&s, "t"), 3);
+}
+
+#[test]
+fn saving_into_a_view_is_refused() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("base")).unwrap();
+    block_on(s.sql("CREATE VIEW v AS SELECT * FROM base")).unwrap();
+    assert_eq!(
+        class(block_on(
+            s.table("people").write().mode("append").save_as_table("v")
+        )),
+        "_LEGACY_ERROR_TEMP_1158"
+    );
+}
