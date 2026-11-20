@@ -68,6 +68,10 @@ impl Resolver<'_> {
         } else {
             self.child(right, env)?
         };
+        // `JOIN LATERAL f(..)` of a Python UDTF: a generator over the left side.
+        if lateral && let Some(g) = self.lateral_udtf(p.origin, &l, &r, kind, condition, env)? {
+            return Ok(g);
+        }
         if let (Some(a), Some(b)) = (l.ids, r.ids)
             && a.0 <= b.1
             && b.0 <= a.1

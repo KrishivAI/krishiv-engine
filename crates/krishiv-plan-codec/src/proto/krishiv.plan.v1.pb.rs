@@ -145,7 +145,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -238,6 +238,9 @@ pub mod node {
         /// feature: observe
         #[prost(message, tag = "33")]
         CollectMetrics(super::CollectMetricsNode),
+        /// feature: python_udtf
+        #[prost(message, tag = "34")]
+        PythonUdtf(super::PythonUdtfNode),
     }
 }
 /// feature: table_write
@@ -366,6 +369,49 @@ pub struct PythonMapNode {
     #[prost(message, optional, tag = "2")]
     pub udf: ::core::option::Option<PythonRelation>,
 }
+/// feature: python_udtf
+/// A Python table function (eval types 300-302) over `input`: one task per
+/// partition; `udf`'s one side holds the scalar argument columns, its output
+/// the carried columns then the UDTF's.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonUdtfNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(message, optional, tag = "2")]
+    pub udf: ::core::option::Option<PythonRelation>,
+    /// Per argument, in call order: its name (unset for a positional one).
+    #[prost(message, repeated, tag = "3")]
+    pub arg_names: ::prost::alloc::vec::Vec<PythonUdtfArgName>,
+    /// The `TABLE` argument, if any.
+    #[prost(message, optional, tag = "4")]
+    pub table: ::core::option::Option<PythonUdtfTable>,
+    /// The input columns each result row leads with (a `LATERAL` call).
+    #[prost(uint64, repeated, tag = "5")]
+    pub carried: ::prost::alloc::vec::Vec<u64>,
+    /// `analyze`'s pickled `AnalyzeResult`, if any.
+    #[prost(bytes = "vec", optional, tag = "6")]
+    pub analyzed: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+/// feature: python_udtf
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PythonUdtfArgName {
+    #[prost(string, optional, tag = "1")]
+    pub name: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// feature: python_udtf
+/// The `TABLE` argument's row struct: its fields as input columns, their
+/// names, and the fields that are `PARTITION BY` values.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PythonUdtfTable {
+    #[prost(uint64, tag = "1")]
+    pub position: u64,
+    #[prost(uint64, repeated, tag = "2")]
+    pub columns: ::prost::alloc::vec::Vec<u64>,
+    #[prost(string, repeated, tag = "3")]
+    pub names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(uint64, repeated, tag = "4")]
+    pub partition_child_indexes: ::prost::alloc::vec::Vec<u64>,
+}
 /// feature: python_udf_relations
 /// A grouped map over `input` clustered and sorted by the key columns.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -407,6 +453,19 @@ pub struct PythonAggregateNode {
     pub calls: ::prost::alloc::vec::Vec<PythonCall>,
     #[prost(uint64, repeated, tag = "5")]
     pub key_values: ::prost::alloc::vec::Vec<u64>,
+    /// feature: python_udf_windows
+    #[prost(message, optional, tag = "6")]
+    pub window: ::core::option::Option<PythonWindow>,
+}
+/// feature: python_udf_windows
+/// A `PythonAggregateNode` in window form (Spark's `ArrowWindowPythonExec`):
+/// `keys` are the window's partitioning, the output every input row with one
+/// value per call; per call, whether its frame is bounded (its first two
+/// arguments are each row's frame start and end).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PythonWindow {
+    #[prost(bool, repeated, tag = "1")]
+    pub bounded: ::prost::alloc::vec::Vec<bool>,
 }
 /// feature: python_udf_relations
 /// The Python UDF of a relation node: by name and version, the columns of its
@@ -959,6 +1018,10 @@ pub struct AggregateExpr {
     /// feature: rust_udaf (`AGGREGATE_FUNCTION_UDF` only: the call).
     #[prost(message, optional, boxed, tag = "18")]
     pub udaf: ::core::option::Option<::prost::alloc::boxed::Box<UdafCall>>,
+    /// feature: histogram_numeric (`histogram_numeric` only: the folded number of
+    /// bins, at least 2).
+    #[prost(int32, tag = "19")]
+    pub histogram_bins: i32,
 }
 /// The call of a session aggregate UDF: its implementation by name and
 /// version, and the columns the planner fixed for it. A worker must hold
@@ -2293,6 +2356,23 @@ pub enum AggregateFunction {
     /// `min` of a collated string, as `MAX_BY_KEY_FIRST`.
     /// feature: collated_min_max
     MinByKeyFirst = 48,
+    /// feature: histogram_numeric
+    HistogramNumeric = 49,
+    /// `bitmap_construct_agg(position)`: a 4,096-byte bitmap of the positions.
+    /// feature: bitmap_aggregates
+    BitmapConstructAgg = 50,
+    /// `bitmap_or_agg(bitmap)`.
+    /// feature: bitmap_aggregates
+    BitmapOrAgg = 51,
+    /// `bitmap_and_agg(bitmap)`.
+    /// feature: bitmap_aggregates
+    BitmapAndAgg = 52,
+    /// `hll_sketch_agg(x, lgConfigK)`: the folded lgConfigK is `hll_precision`.
+    /// feature: hll_sketch_aggregates
+    HllSketchAgg = 53,
+    /// `hll_union_agg(sketch, allowDifferentLgConfigK)`: the folded flag is `hll_precision` (0 or 1).
+    /// feature: hll_sketch_aggregates
+    HllUnionAgg = 54,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2350,6 +2430,12 @@ impl AggregateFunction {
             Self::Udf => "AGGREGATE_FUNCTION_UDF",
             Self::MaxByKeyFirst => "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST",
             Self::MinByKeyFirst => "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST",
+            Self::HistogramNumeric => "AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC",
+            Self::BitmapConstructAgg => "AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG",
+            Self::BitmapOrAgg => "AGGREGATE_FUNCTION_BITMAP_OR_AGG",
+            Self::BitmapAndAgg => "AGGREGATE_FUNCTION_BITMAP_AND_AGG",
+            Self::HllSketchAgg => "AGGREGATE_FUNCTION_HLL_SKETCH_AGG",
+            Self::HllUnionAgg => "AGGREGATE_FUNCTION_HLL_UNION_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2404,6 +2490,12 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_UDF" => Some(Self::Udf),
             "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST" => Some(Self::MaxByKeyFirst),
             "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST" => Some(Self::MinByKeyFirst),
+            "AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC" => Some(Self::HistogramNumeric),
+            "AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG" => Some(Self::BitmapConstructAgg),
+            "AGGREGATE_FUNCTION_BITMAP_OR_AGG" => Some(Self::BitmapOrAgg),
+            "AGGREGATE_FUNCTION_BITMAP_AND_AGG" => Some(Self::BitmapAndAgg),
+            "AGGREGATE_FUNCTION_HLL_SKETCH_AGG" => Some(Self::HllSketchAgg),
+            "AGGREGATE_FUNCTION_HLL_UNION_AGG" => Some(Self::HllUnionAgg),
             _ => None,
         }
     }

@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 10 done, 6 partial, 42 missing, 4 out of scope.
+62 arms: 11 done, 9 partial, 38 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -39,20 +39,20 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 25 | unpivot | missing |  | Unpivot | P3-T012 | 2 |
 | 26 | to_schema | missing |  | lowering: Project of by-name Cast and reorder (Spark's Dataset.to) | P3-T012 | 4 |
 | 27 | repartition_by_expression | missing |  | Repartition (hash or range) | P3-T012 | 3 |
-| 28 | map_partitions | missing |  | new MapPartitions (Python, T014) | P3-T014 | 6 |
+| 28 | map_partitions | partial | is_barrier = true, profile_id, Scala/Java functions (56K00), eval types other than 205/207 (FUNCTION_EVAL_TYPE_NOT_SUPPORTED), additional_includes | MapPartitions (mapInPandas 205, mapInArrow 207) over the PythonUdfRef the server's UdfHost names (Usage on System(udf), as for inline UDFs); runs on the session's Python workers | P3-T014 | 6 |
 | 29 | collect_metrics | done |  | CollectMetrics (observe); the server returns ObservedMetrics after the action | P3-T084 | 6 |
 | 30 | parse | missing |  | lowering: Project of from_json / from_csv over a string relation | P3-T012 | 4 |
-| 31 | group_map | missing |  | new GroupMap (applyInPandas, T014) | P3-T014 | 6 |
-| 32 | co_group_map | missing |  | new CoGroupMap (T014) | P3-T014 | 6 |
+| 31 | group_map | partial | sorting_expressions, initial_input and the other stateful fields, transformWithState eval types 211-214, Scala/Java functions (56K00), additional_includes | GroupMap (applyInPandas 201/216, applyInArrow 209/215) over the PythonUdfRef the server's UdfHost names (Usage on System(udf), as for inline UDFs); nondeterministic UDF refused at analysis; runs on the session's Python workers | P3-T014 | 6 |
+| 32 | co_group_map | partial | input_sorting_expressions, other_sorting_expressions, unequal key counts, Scala/Java functions (56K00), additional_includes | CoGroupMap (cogroup applyInPandas 206, applyInArrow 210) over the PythonUdfRef the server's UdfHost names (Usage on System(udf), as for inline UDFs); nondeterministic UDF refused at analysis; runs on the session's Python workers | P3-T014 | 6 |
 | 33 | with_watermark | out of scope |  | P4 |  | 0 |
 | 34 | apply_in_pandas_with_state | out of scope |  | P4 |  | 0 |
 | 35 | html_string | missing |  | as show_string, HTML form | P3-T012 | 4 |
 | 36 | cached_local_relation | partial | hashes in the artifact store (AddArtifacts cache/<hash> is not stored yet: every hash is NOT_FOUND_CACHED_LOCAL_RELATION) | Read(ReadSource::Local) through the same host request as local_relation; the artifact lookup is the host's | P3-T083 | 7 |
-| 37 | cached_remote_relation | missing |  | the session's cached-DataFrame registry (T083) | P3-T083 | 7 |
+| 37 | cached_remote_relation | done |  | a read of the reserved table `__krishiv_cached_remote.<id>`; the server resolves the id in its session (DATAFRAME_NOT_FOUND when absent) and splices the frame's plan in (`Session::from_plan_over`); a lazy checkpoint's rows are taken by the first analysis that reads it, AnalyzePlan included (Spark runs no job on analysis: a recorded difference); tests/cache.rs | P3-T083 | 7 |
 | 38 | common_inline_user_defined_table_function | missing |  | TableFunction with a Python UDTF (T014) | P3-T014 | 6 |
 | 39 | as_of_join | missing |  | new AsOfJoin, shared with the ASOF JOIN SQL syntax | P3-T012 | 8 |
 | 40 | common_inline_user_defined_data_source | missing |  | the Python data source scan (T040) | P3-T040 | 6 |
-| 41 | with_relations | missing |  | Sql with DataFrame references → WithCte/CteRef; errors INVALID_WITH_RELATION_REFERENCE, INVALID_SQL_WITH_REFERENCES | P3-T012 | 4 |
+| 41 | with_relations | missing |  | Sql with DataFrame references → WithCte/CteRef; errors INVALID_WITH_RELATION_REFERENCE, INVALID_SQL_WITH_REFERENCES; a cached_remote_relation inside a subquery or with_relations is recorded by the translator but not spliced by Session::from_plan_over (it walks plan nodes, not expression subqueries): T012 must splice it | P3-T012 | 4 |
 | 42 | transpose | missing |  | new Transpose (output schema depends on data; Spark resolves it in the analyzer) | P3-T012 | 3 |
 | 43 | unresolved_table_valued_function | missing |  | TableFunction | P3-T012 | 4 |
 | 44 | lateral_join | missing |  | Join with a lateral right side; the IR has no lateral flag, so this is new | P3-T012 | 8 |
@@ -107,14 +107,14 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Command.command_type
 
-20 arms: 0 done, 2 partial, 12 missing, 6 out of scope.
+20 arms: 2 done, 4 partial, 8 missing, 6 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
 | 1 | register_function | partial | scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes | Session::register_python_udf plus the payload on the session's UDF workers (translate_command; run by the server) | P3-T014 | 6 |
-| 2 | write_operation | missing |  | DataFrameWriter V1: krishiv-session save/save_as_table/insert_into (dataframe.rs), semantics T023 | P3-T023 | 11 |
+| 2 | write_operation | partial | clustering_columns, with_schema_evolution | krishiv-session's DataFrameWriter (write_to_with: save; write_table_with: saveAsTable, insertInto), the facade's path; save() without a path takes the path option (_LEGACY_ERROR_TEMP_2050 without one); run by the server after the Write class check | P3-T012 | 11 |
 | 3 | create_dataframe_view | missing |  | create_or_replace_temp_view (exists), global temp views | P3-T012 | 4 |
-| 4 | write_operation_v2 | missing |  | DataFrameWriterV2 (create/replace/append/overwrite/overwrite_partitions exist in dataframe.rs), T023 | P3-T023 | 11 |
+| 4 | write_operation_v2 | partial | with_schema_evolution, partition transforms (partitioning_columns other than a column), overwrite_condition (overwrite is refused by the session) | krishiv-session's DataFrameWriterV2 (write_to_table_with), the facade's path; run by the server after the Write class check | P3-T012 | 11 |
 | 5 | sql_command | partial | input of WithRelations form (group 4; the plain SQL input is supported); named and positional arguments (the analyzer refuses SQL parameters) | spark.sql() sends this. Run commands at once; for queries return sql_command_result.relation (Spark returns a SQL or LocalRelation relation the client re-sends). Translated here as the SQL relation of a query; the server runs commands (execute.rs) | P3-T012 | 1 |
 | 6 | write_stream_operation_start | out of scope |  | P4 |  | 0 |
 | 7 | streaming_query_command | out of scope |  | P4 |  | 0 |
@@ -124,8 +124,8 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 11 | streaming_query_listener_bus_command | out of scope |  | P4 |  | 0 |
 | 12 | register_data_source | missing |  | T040 | P3-T040 | 6 |
 | 13 | create_resource_profile_command | missing |  | refusal: Krishiv has no stage-level resource profiles (an unsupported row; no IR) | P3-T012 | 4 |
-| 14 | checkpoint_command | missing |  | T083 | P3-T083 | 7 |
-| 15 | remove_cached_remote_relation_command | missing |  | T083 | P3-T083 | 7 |
+| 14 | checkpoint_command | done |  | `DataFrame::checkpoint` / `local_checkpoint` (translate_command reads the flags; the server runs it and answers `checkpoint_command_result` with the id it holds the frame under; the operator floor of ADR 0046 §3b applies; the query carries no operation id or tags: an interrupt by operation id ends the command, one by tag does not reach it); tests/cache.rs, tests/auth.rs | P3-T083 | 7 |
+| 15 | remove_cached_remote_relation_command | done |  | drops the session's frame under the id (an unknown id is not an error); tests/cache.rs | P3-T083 | 7 |
 | 16 | merge_into_table_command | missing |  | DataFrame.mergeInto → MERGE (T023 for Parquet/Hive refusals, T021 Delta, T027 Iceberg) | P3-T023 | 11 |
 | 17 | ml_command | out of scope |  | machine learning is out of scope; a client may send it for cache cleanup when a session ends |  | 0 |
 | 18 | execute_external_command | missing |  | refusal: runs a command on an external JDBC source (executeExternal); no JDBC connector in P3 | P3-T012 | 4 |

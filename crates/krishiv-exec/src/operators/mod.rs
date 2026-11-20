@@ -33,6 +33,7 @@ mod filter;
 mod generate;
 mod late_fetch;
 mod limit;
+mod partition_prune;
 mod project;
 mod range;
 mod replicate;
@@ -48,7 +49,7 @@ mod union;
 pub use expand::{Expand, NullOf};
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
 pub use file_scan::{
-    FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN, ROW_FILE_COLUMN,
+    FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN, PathRoots, ROW_FILE_COLUMN,
     ROW_POSITION_COLUMN,
 };
 pub use file_write::{FileWrite, FileWriteSink};
@@ -63,7 +64,7 @@ pub use replicate::ReplicateRows;
 #[cfg(test)]
 pub(crate) use runtime_filter::RowStage;
 pub(crate) use runtime_filter::ScanRows;
-pub use runtime_filter::{RowStageSettings, RuntimeFilters};
+pub use runtime_filter::{RowStageSettings, RuntimeFilters, SourceRows};
 pub use sample::Sample;
 pub(crate) use scan::scan_metadata;
 pub use scan::{

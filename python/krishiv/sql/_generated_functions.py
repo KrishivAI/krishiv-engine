@@ -492,20 +492,8 @@ __all__ = [
 ]
 
 _ENGINE_UNSUPPORTED = (
-    "bitmap_and_agg",
-    "bitmap_bit_position",
-    "bitmap_bucket_number",
-    "bitmap_construct_agg",
-    "bitmap_count",
-    "bitmap_or_agg",
     "collate",
     "count_min_sketch",
-    "histogram_numeric",
-    "hll_sketch_agg",
-    "hll_sketch_estimate",
-    "hll_union",
-    "hll_union_agg",
-    "is_valid_variant",
     "java_method",
     "kll_merge_agg_bigint",
     "kll_merge_agg_double",
@@ -849,33 +837,33 @@ def bit_xor(col: ColumnOrName) -> Column:
 
 
 def bitmap_and_agg(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("bitmap_and_agg")
+    """Calls the registry function ``bitmap_and_agg``."""
+    return _call("bitmap_and_agg", _named(col, "col"))
 
 
 def bitmap_bit_position(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("bitmap_bit_position")
+    """Calls the registry function ``bitmap_bit_position``."""
+    return _call("bitmap_bit_position", _named(col, "col"))
 
 
 def bitmap_bucket_number(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("bitmap_bucket_number")
+    """Calls the registry function ``bitmap_bucket_number``."""
+    return _call("bitmap_bucket_number", _named(col, "col"))
 
 
 def bitmap_construct_agg(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("bitmap_construct_agg")
+    """Calls the registry function ``bitmap_construct_agg``."""
+    return _call("bitmap_construct_agg", _named(col, "col"))
 
 
 def bitmap_count(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("bitmap_count")
+    """Calls the registry function ``bitmap_count``."""
+    return _call("bitmap_count", _named(col, "col"))
 
 
 def bitmap_or_agg(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("bitmap_or_agg")
+    """Calls the registry function ``bitmap_or_agg``."""
+    return _call("bitmap_or_agg", _named(col, "col"))
 
 
 def bitwiseNOT(col: ColumnOrName) -> Column:
@@ -1343,28 +1331,33 @@ def hex(col: ColumnOrName) -> Column:
 
 
 def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("histogram_numeric")
+    """Calls the registry function ``histogram_numeric``."""
+    return _call("histogram_numeric", _named(col, "col"), _named(nBins, "nBins"))
 
 
 def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("hll_sketch_agg")
+    """Calls the registry function ``hll_sketch_agg``."""
+    return _call("hll_sketch_agg", _named(col, "col"), *_opt(_lit, lgConfigK, "lgConfigK"))
 
 
 def hll_sketch_estimate(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("hll_sketch_estimate")
+    """Calls the registry function ``hll_sketch_estimate``."""
+    return _call("hll_sketch_estimate", _named(col, "col"))
 
 
 def hll_union(col1: ColumnOrName, col2: ColumnOrName, allowDifferentLgConfigK: bool | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("hll_union")
+    """Calls the registry function ``hll_union``."""
+    return _call(
+        "hll_union",
+        _named(col1, "col1"),
+        _named(col2, "col2"),
+        *_opt(_lit, allowDifferentLgConfigK, "allowDifferentLgConfigK"),
+    )
 
 
 def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("hll_union_agg")
+    """Calls the registry function ``hll_union_agg``."""
+    return _call("hll_union_agg", _named(col, "col"), *_opt(_lit, allowDifferentLgConfigK, "allowDifferentLgConfigK"))
 
 
 def hour(col: ColumnOrName) -> Column:
@@ -1418,8 +1411,8 @@ def is_valid_utf8(str: ColumnOrName) -> Column:
 
 
 def is_valid_variant(v: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("is_valid_variant")
+    """Calls the registry function ``is_valid_variant``."""
+    return _call("is_valid_variant", _named(v, "v"))
 
 
 def is_variant_null(v: ColumnOrName) -> Column:

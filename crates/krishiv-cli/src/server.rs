@@ -18,6 +18,14 @@
 //! `krishiv.server.shutdownTimeout`, closes every session, and returns; the
 //! engine runtime is dropped before `main` exits, which removes the spill
 //! directory. A second signal exits at once with 130.
+//!
+//! Declared catalogs (design P3-T067 §2.2, §2.3): the `krishiv.catalog.<name>.*` and
+//! `spark.sql.catalog.*` settings are read here, never stored as engine configuration, and handed
+//! to the runtime in server mode with the factories this build carries (`iceberg-rest` with the
+//! `catalog-iceberg-rest` feature). The runtime parses and checks them before either listener
+//! binds (types without a factory, literal secrets, endpoint addresses the egress rule refuses,
+//! unresolved references): any refusal stops startup with its error. Sessions can never declare
+//! or change one.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -26,7 +34,7 @@ use std::time::Duration;
 
 use krishiv_common::config::{
     CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
-    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, UI_ENABLED,
+    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, UI_ALLOWED_HOSTS, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -35,9 +43,11 @@ use krishiv_connect_server::{
 use krishiv_server::guard::{Guard, TokenGuard};
 use krishiv_server::session_guard::SessionGuard;
 use krishiv_session::auth::{
-    AuthConfig, ServerAuth, ServerTls, TlsConfig, check_listener, is_auth_key,
+    AuthConfig, Authenticated, ServerAuth, ServerTls, TlsConfig, check_listener, is_auth_key,
 };
-use krishiv_session::{EngineRuntime, Session};
+use krishiv_session::catalog_decl::{DeclMode, is_declaration_key};
+use krishiv_session::catalog_registry::CatalogSetup;
+use krishiv_session::{EngineRuntime, Session, Transport};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -88,10 +98,25 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     };
     let auth_config = AuthConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
     let tls_config = TlsConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
+    let mut catalogs = catalog_setup();
     for (k, v) in &args.conf {
         if is_listener_key(k) {
             continue;
         }
+        // Declarations (they may hold secret references) are the registry's, not configuration.
+        if is_declaration_key(k) {
+            catalogs = catalogs.setting(k, v);
+            continue;
+        }
+        // Spark's default-catalog key in any letter case, like the declaration keys (review
+        // 58a2 N3): it names the default to the registry and stays engine configuration under
+        // its one spelling.
+        let k = if k.eq_ignore_ascii_case(SPARK_DEFAULT_CATALOG) {
+            catalogs = catalogs.setting(k, v);
+            SPARK_DEFAULT_CATALOG
+        } else {
+            k.as_str()
+        };
         let warning = config.set(k, v).map_err(|e| e.to_string())?;
         // A Spark Connect setting Krishiv does not read would be ignored
         // silently: refuse it, naming the replacement where there is one.
@@ -105,6 +130,7 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
         }
         builder = builder.config(k, v);
     }
+    builder = builder.catalogs(catalogs);
     // The egress policy (design P3-T067 §5.1): a server allows only globally routable
     // destinations unless the admin chose otherwise.
     if !args
@@ -171,10 +197,81 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     result
 }
 
+/// The declared catalogs' setup in server mode, with the factories this build compiles in.
+fn catalog_setup() -> CatalogSetup {
+    let setup = CatalogSetup::new(DeclMode::Server);
+    #[cfg(feature = "catalog-iceberg-rest")]
+    let setup = setup.factory(Arc::new(krishiv_catalogs::declared::IcebergRestFactory));
+    setup
+}
+
 /// A setting `krishiv server` reads itself: authentication (`krishiv.auth.*`, Spark's token key)
 /// and the listeners' TLS (`krishiv.server.tls.*`).
 fn is_listener_key(key: &str) -> bool {
     is_auth_key(key) || key.starts_with("krishiv.server.tls.")
+}
+
+/// `GetSqlInfo`'s server facts (design P3-T101 §5): the version, the parser's keywords and the
+/// functions Krishiv implements of Spark's math (numeric), string, datetime and misc (system)
+/// documentation groups.
+#[cfg(feature = "flight-sql")]
+fn flight_server_info() -> krishiv_flight_sql::ServerInfo {
+    use krishiv_functions::registry::{FunctionGroup, builtins, spark_function_groups};
+    let implemented: std::collections::HashSet<&str> =
+        builtins().functions().iter().map(|d| d.name).collect();
+    let mut info = krishiv_flight_sql::ServerInfo {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        keywords: krishiv_sql::SQL_KEYWORDS
+            .iter()
+            .map(|(k, _)| (*k).to_owned())
+            .collect(),
+        ..krishiv_flight_sql::ServerInfo::default()
+    };
+    for (name, group) in spark_function_groups().filter(|(n, _)| implemented.contains(n)) {
+        let list = match group {
+            FunctionGroup::Math => &mut info.numeric_functions,
+            FunctionGroup::String => &mut info.string_functions,
+            FunctionGroup::Datetime => &mut info.datetime_functions,
+            FunctionGroup::Misc => &mut info.system_functions,
+            _ => continue,
+        };
+        list.push(name.to_owned());
+    }
+    info
+}
+
+/// The Flight SQL service for `connect`'s listener and its sweep task, unless
+/// `krishiv.flightSql.enabled` is off (design P3-T101 §2, owner item 6: on by default when
+/// compiled in).
+#[cfg(feature = "flight-sql")]
+fn flight_sql(
+    config: &Config,
+    manager: &Arc<SessionManager>,
+    connect: &ConnectServer,
+    auth: ConnectAuth,
+) -> Result<
+    Option<(
+        krishiv_flight_sql::FlightSqlServer,
+        krishiv_flight_sql::SweepGuard,
+    )>,
+    String,
+> {
+    if !flag(config, &krishiv_common::config::FLIGHT_SQL_ENABLED, true) {
+        return Ok(None);
+    }
+    let info = flight_server_info();
+    let flight = krishiv_flight_sql::FlightSqlServer::new(
+        Arc::clone(manager),
+        Arc::new(auth),
+        connect.draining(),
+        connect.response_budget().clone(),
+        &info,
+        krishiv_flight_sql::FlightSqlConfig::from_config(config),
+    )
+    .map_err(|e| e.to_string())?;
+    let interval = ConnectServerConfig::from_config(config).maintenance_interval;
+    let sweeper = flight.spawn_sweeper(interval);
+    Ok(Some((flight, sweeper)))
 }
 
 fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: bool) -> bool {
@@ -244,6 +341,7 @@ async fn run_listeners(
         Arc::new(TokenGuard::new(&token))
     };
     let ready = Arc::new(AtomicBool::new(false));
+    let late_metrics = LateMetrics::default();
     let app = admin_router(
         &runtime,
         config,
@@ -251,16 +349,37 @@ async fn run_listeners(
         authenticated.then(|| Arc::clone(&auth)),
         Arc::clone(&ready),
         admin_bound,
+        tls.is_some(),
+        Arc::clone(&late_metrics),
     )?;
     let mut connect = ConnectServer::new(
         Arc::clone(&manager),
         ConnectServerConfig::from_config(config),
     );
+    // One `ConnectAuth` per service on the listener, over the one `ServerAuth` (P3-T101 §2).
+    let connect_auth = || {
+        if authenticated {
+            ConnectAuth::new(Arc::clone(&auth) as Arc<_>)
+                .with_denials(Arc::clone(&denials))
+                .with_impersonation(Arc::clone(&auth))
+        } else {
+            ConnectAuth::off()
+        }
+    };
     if authenticated {
-        connect = connect.with_auth(ConnectAuth::new(auth).with_denials(denials));
+        connect = connect.with_auth(connect_auth());
     }
     if let Some(tls) = &tls {
         connect = connect.with_tls(&tls.server_config());
+    }
+    #[cfg(feature = "flight-sql")]
+    let flight = flight_sql(config, &manager, &connect, connect_auth())?;
+    #[cfg(feature = "flight-sql")]
+    if let Some((flight, _)) = &flight {
+        connect = connect.with_routes(flight.routes());
+        // `krishiv.flight_sql.requests` in the scrape (design §7, review m6).
+        let counted = flight.clone();
+        let _ = late_metrics.set(Box::new(move || counted.metrics()));
     }
 
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -306,6 +425,10 @@ async fn run_listeners(
         ("", "http")
     };
     println!("krishiv server: Spark Connect on sc://{connect_bound}{sc_suffix}");
+    #[cfg(feature = "flight-sql")]
+    if flight.is_some() {
+        println!("krishiv server: Arrow Flight SQL on the same port");
+    }
     println!("krishiv server: admin on {http}://{admin_bound}");
     let ui = flag(config, &UI_ENABLED, true) && cfg!(feature = "ui");
     if authenticated {
@@ -325,6 +448,13 @@ async fn run_listeners(
         .await
         .map_err(|e| e.to_string());
     ready.store(false, Ordering::Release);
+    // `serve` closed every session: Flight's table and handles go too (design §16 m7); the sweep
+    // task ends with its guard.
+    #[cfg(feature = "flight-sql")]
+    if let Some((flight, sweeper)) = flight {
+        flight.close_all();
+        drop(sweeper);
+    }
     signals.abort();
     if let Some(reloads) = reloads {
         reloads.abort();
@@ -342,6 +472,15 @@ async fn run_listeners(
     served
 }
 
+/// Samples another service adds to `/metrics` once it exists (the Flight SQL service is built
+/// after the admin router).
+type LateMetrics =
+    Arc<std::sync::OnceLock<Box<dyn Fn() -> krishiv_session::MetricsSnapshot + Send + Sync>>>;
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the admin listener's parts, each built by `run`"
+)]
 fn admin_router(
     runtime: &Arc<EngineRuntime>,
     config: &Config,
@@ -349,12 +488,20 @@ fn admin_router(
     auth: Option<Arc<ServerAuth>>,
     ready: Arc<AtomicBool>,
     bound: SocketAddr,
+    tls: bool,
+    late: LateMetrics,
 ) -> Result<axum::Router, String> {
     let authenticated = auth.is_some();
+    let denials = auth.as_ref().map(|a| a.denials());
     let metrics_on = flag(config, &METRICS_ENABLED, false);
     // With authentication configured every scrape authenticates (ADR 0046 §3c: a viewer
     // service principal); `krishiv.server.metrics.public` opens it only without.
     let public = metrics_on && !authenticated && !metrics_need_token(config, bound);
+    // Denials of the admin API count into the same counters as every other surface.
+    let admin_denials = auth.as_ref().map_or_else(
+        || Arc::new(krishiv_session::auth::DeniedCounts::default()),
+        |a| a.denials(),
+    );
     let snapshot_runtime = Arc::clone(runtime);
     let metrics = krishiv_server::metrics::metrics_route_guarded(
         metrics_on,
@@ -363,6 +510,9 @@ fn admin_router(
             let mut snapshot = snapshot_runtime.metrics();
             if let Some(auth) = &auth {
                 snapshot.merge(&auth.metrics());
+            }
+            if let Some(more) = late.get() {
+                snapshot.merge(&more());
             }
             snapshot
         }),
@@ -383,14 +533,49 @@ fn admin_router(
         .unwrap_or_default();
     let alias_guard = Arc::clone(&guard);
     let admin_v1 = krishiv_server::admin_v1::router(
-        Arc::new(krishiv_server::admin_v1::SessionAdmin::new()),
+        Arc::new(
+            krishiv_server::admin_v1::SessionAdmin::new(Arc::clone(runtime))
+                .with_denials(admin_denials),
+        ),
         Arc::clone(&guard),
         krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
     );
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {
-        let source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
+        let mut source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
             .map_err(|e| e.to_string())?;
-        krishiv_server::internal::router_with_ui_guard(Arc::new(source), guard)
+        if let Some(denials) = denials {
+            // The editor runs a statement as the authenticated caller, in the session a Spark Connect session of
+            // that caller gets: the same role matrix and path confinement.
+            let base = Session::builder()
+                .runtime(Arc::clone(runtime))
+                .build()
+                .map_err(|e| e.to_string())?;
+            // The editor's sessions are UI sessions: their denials count under the `ui` surface, where the
+            // statement arrived (P3-T101 §2 H3).
+            let factory = role_sessions(base, config, denials).map_err(|e| e.to_string())?;
+            source = source.with_caller_sessions(Arc::new(move |caller: &Authenticated| {
+                let session = factory(caller, Transport::Ui)?;
+                // `system.sessions` shows the transport the denials count under.
+                session.set_client_info(Transport::Ui, None, None, None);
+                Ok(session)
+            }));
+        }
+        // The `Host` allowlist (DNS rebinding, T-W5): on a loopback address the loopback names and
+        // `krishiv.ui.allowedHosts`; on another address only when names are configured. The environment variable
+        // `KRISHIV_UI_ALLOWED_HOSTS` adds names to either.
+        let configured = config
+            .get(&UI_ALLOWED_HOSTS)
+            .and_then(ConfigValue::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let from_env = std::env::var("KRISHIV_UI_ALLOWED_HOSTS").unwrap_or_default();
+        let policy = krishiv_server::pages::UiPolicy::for_listener(
+            bound.ip().is_loopback(),
+            configured.split(',').chain(from_env.split(',')),
+        )
+        // The session cookie holds the bearer token: over TLS it never travels in the clear.
+        .secure_cookie(tls);
+        krishiv_server::internal::router_with_ui_policy(Arc::new(source), guard, policy)
     } else {
         krishiv_server::api_router()
     };
@@ -417,6 +602,9 @@ fn metrics_need_token(config: &Config, bound: SocketAddr) -> bool {
     flag(config, &METRICS_ENABLED, false)
         && !(flag(config, &SERVER_METRICS_PUBLIC, false) && bound.ip().is_loopback())
 }
+
+/// Spark's default-catalog key (`krishiv.catalog.default` is a declaration key).
+const SPARK_DEFAULT_CATALOG: &str = "spark.sql.defaultCatalog";
 
 /// How long admin requests in flight may take once the server stops.
 const ADMIN_DRAIN: Duration = Duration::from_secs(2);
@@ -535,6 +723,22 @@ mod tests {
             c.set(k, v).unwrap();
         }
         c
+    }
+
+    /// `GetSqlInfo` lists the parser's keywords and the implemented functions by group (review m9).
+    #[cfg(feature = "flight-sql")]
+    #[test]
+    fn flight_server_info_lists_keywords_and_functions() {
+        let info = flight_server_info();
+        assert!(info.keywords.iter().any(|k| k == "SELECT"));
+        for (list, name) in [
+            (&info.numeric_functions, "abs"),
+            (&info.string_functions, "upper"),
+            (&info.datetime_functions, "date_add"),
+            (&info.system_functions, "current_user"),
+        ] {
+            assert!(list.iter().any(|f| f == name), "{name} in {list:?}");
+        }
     }
 
     #[test]

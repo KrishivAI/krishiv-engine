@@ -15,6 +15,7 @@ pub(crate) use self::query::{ErrorSlot, QueryReader, wait_for};
 
 use std::ffi::CStr;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use arrow_array::RecordBatchReader;
 use arrow_array::ffi::FFI_ArrowArray;
@@ -27,7 +28,7 @@ use pyo3::prelude::*;
 use pyo3::sync::critical_section::with_critical_section;
 use pyo3::types::{PyCapsule, PyCapsuleMethods, PyTuple};
 
-use self::ffi::{ARRAY_CAPSULE, MemoryReader, SCHEMA_CAPSULE, STREAM_CAPSULE};
+use self::ffi::{ARRAY_CAPSULE, MemoryReader, Requested, SCHEMA_CAPSULE, STREAM_CAPSULE};
 
 /// `KRISHIV_INVALID_ARROW_DATA` and other bridge errors surface as
 /// `ValueError` carrying the Spark-style message (`[CLASS] … SQLSTATE: …`).
@@ -150,6 +151,9 @@ pub struct ArrowStream {
     schema: SchemaRef,
     /// Taken by the first `__arrow_c_stream__` call.
     reader: Mutex<Option<Box<dyn RecordBatchReader + Send>>>,
+    /// Set by [`ArrowStream::use_placeholder_names`]: the consumer renames columns back, so a NUL in a column
+    /// name may be exported under a placeholder.
+    placeholders: AtomicBool,
     /// Set when the stream is a query's result: where its reader leaves the engine error.
     error: Option<ErrorSlot>,
 }
@@ -168,6 +172,7 @@ impl ArrowStream {
         Self {
             schema: reader.schema(),
             reader: Mutex::new(Some(reader)),
+            placeholders: AtomicBool::new(false),
             error: None,
         }
     }
@@ -262,7 +267,10 @@ impl ArrowStream {
 
     /// The schema as an `arrow_schema` capsule; does not consume the stream.
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyCapsule>> {
-        let schema = FFI_ArrowSchema::try_from(self.schema.as_ref())
+        // As `__arrow_c_stream__`: a NUL in a field name cannot cross the C data interface.
+        let safe = ffi::nul_safe_schema(&self.schema, self.placeholders.load(Ordering::Relaxed))
+            .map_err(|e| crate::errors::to_py(py, &e))?;
+        let schema = FFI_ArrowSchema::try_from(safe.as_deref().unwrap_or(self.schema.as_ref()))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         PyCapsule::new_with_value(py, schema, SCHEMA_CAPSULE)
     }
@@ -299,6 +307,16 @@ impl ArrowStream {
                 )
             }
         };
+        // A NUL in a column name cannot cross the C data interface: such columns are exported under placeholder
+        // names (`names` has the true ones); a NUL in a nested name is refused with a Krishiv error.
+        let requested = match (
+            requested,
+            ffi::nul_safe_schema(&self.schema, self.placeholders.load(Ordering::Relaxed)),
+        ) {
+            (_, Err(e)) => return Err(crate::errors::to_py(py, &e)),
+            (Some(Requested::Use(schema)), Ok(_)) => Some(Requested::Use(schema)),
+            (other, Ok(safe)) => safe.map(Requested::Use).or(other),
+        };
         let reader = self
             .reader
             .lock()
@@ -316,6 +334,23 @@ impl ArrowStream {
             .as_ref()
             .and_then(|slot| slot.lock().ok()?.take());
         taken.map_or(Ok(()), |e| Err(crate::errors::to_py(py, &e)))
+    }
+
+    /// Lets `__arrow_c_stream__` export a column name with a NUL under a placeholder name: for a consumer that
+    /// renames its columns back to [`Self::names`] (the DataFrame's own pyarrow import). Without it, such a name
+    /// is refused with `KRISHIV_UNSUPPORTED_FEATURE` (Polars and DuckDB cannot rename).
+    fn use_placeholder_names(&self) {
+        self.placeholders.store(true, Ordering::Relaxed);
+    }
+
+    /// The top-level column names, as they are (a name with a NUL is exported under a placeholder by
+    /// `__arrow_c_stream__`; a consumer that imports by pyarrow renames its columns back to these).
+    fn names(&self) -> Vec<String> {
+        self.schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
     }
 
     /// Whether the stream was already handed out by `__arrow_c_stream__`.

@@ -851,3 +851,240 @@ async fn config_refusals_are_counted_like_sql_set() {
     );
     assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 5)]);
 }
+
+/// A silent set that fails never sends the value back when the redaction rules match it: an
+/// operator's refused store endpoint with URL credentials comes back as
+/// `Some(*********(redacted))` (a difference toward safety: Spark echoes the value).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_silent_set_warning_hides_a_secret_value() {
+    use krishiv_connect::proto::v4_3::config_request::{self as creq, operation::OpType as Op};
+    let run = start().await;
+    let quiet = config_as(
+        &run,
+        OPERATOR,
+        Op::Set(creq::Set {
+            pairs: vec![pb::KeyValue {
+                key: "fs.s3a.endpoint".to_owned(),
+                value: Some("http://u:canary-pw-7f3@minio.local:9000".to_owned()),
+            }],
+            silent: Some(true),
+        }),
+    )
+    .await
+    .expect("silent");
+    assert_eq!(quiet.warnings.len(), 1, "{:?}", quiet.warnings);
+    let w = &quiet.warnings[0];
+    assert!(
+        w.starts_with("Failed to set fs.s3a.endpoint to Some(*********(redacted)) due to "),
+        "{w}"
+    );
+    assert!(!w.contains("canary-pw-7f3"), "{w}");
+    assert!(w.contains("KRISHIV_INSUFFICIENT_PERMISSIONS"), "{w}");
+}
+
+// ---------------------------------------------------- cache rows (P3-T083, ADR 0046 §3b)
+
+fn rel_range(end: i64) -> pb::Relation {
+    match range(end).op_type {
+        Some(OpType::Root(r)) => *r,
+        _ => unreachable!("range is a root relation"),
+    }
+}
+
+async fn analyze_with(
+    run: &Running,
+    analyze: pb::analyze_plan_request::Analyze,
+    token: &str,
+) -> Result<pb::AnalyzePlanResponse, tonic::Status> {
+    unary(
+        &run.channel,
+        "AnalyzePlan",
+        pb::AnalyzePlanRequest {
+            session_id: SESSION.to_owned(),
+            analyze: Some(analyze),
+            ..Default::default()
+        },
+        Some(token),
+    )
+    .await
+}
+
+fn checkpoint(eager: bool, local: bool) -> pb::Plan {
+    command(CommandType::CheckpointCommand(Box::new(
+        pb::CheckpointCommand {
+            relation: Some(rel_range(3)),
+            local,
+            eager,
+            storage_level: None,
+        },
+    )))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_cache_rows_need_the_operator_floor_except_the_reads() {
+    use pb::analyze_plan_request::{self as areq, Analyze};
+    // A session id belongs to its caller: the viewer and the operator get a server each.
+    let run = start().await;
+    let op = start().await;
+    for (r, token) in [(&run, VIEWER), (&op, OPERATOR)] {
+        // `AnalyzePlan` needs the caller's session: each caller runs a plan first.
+        execute(&r.channel, range(1), Some(token))
+            .await
+            .expect("opens the session");
+    }
+    let persist = || {
+        Analyze::Persist(Box::new(areq::Persist {
+            relation: Some(rel_range(3)),
+            storage_level: None,
+        }))
+    };
+    let unpersist = || {
+        Analyze::Unpersist(Box::new(areq::Unpersist {
+            relation: Some(rel_range(3)),
+            blocking: None,
+        }))
+    };
+    // A viewer: refused with 42501, and nothing is registered or held.
+    let s = analyze_with(&run, persist(), VIEWER).await.unwrap_err();
+    assert_eq!(s.code(), Code::PermissionDenied, "{s:?}");
+    assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    let s = analyze_with(&run, unpersist(), VIEWER).await.unwrap_err();
+    assert_eq!(s.code(), Code::PermissionDenied, "{s:?}");
+    for (eager, local) in [(true, true), (false, true), (false, false)] {
+        let s = execute(&run.channel, checkpoint(eager, local), Some(VIEWER))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            s.code(),
+            Code::PermissionDenied,
+            "eager={eager} local={local}: {s:?}"
+        );
+        assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    }
+    // The viewer's refused persist registered nothing.
+    let level = |r: pb::AnalyzePlanResponse| match r.result {
+        Some(pb::analyze_plan_response::Result::GetStorageLevel(l)) => l.storage_level,
+        other => unreachable!("{other:?}"),
+    };
+    let get = || {
+        Analyze::GetStorageLevel(Box::new(areq::GetStorageLevel {
+            relation: Some(rel_range(3)),
+        }))
+    };
+    // `get_storage_level` is a read: a viewer may ask, and sees NONE.
+    let l = level(
+        analyze_with(&run, get(), VIEWER)
+            .await
+            .expect("viewer reads"),
+    )
+    .expect("level");
+    assert!(!l.use_disk && !l.use_memory);
+    // An operator persists, reads, unpersists and checkpoints.
+    analyze_with(&op, persist(), OPERATOR)
+        .await
+        .expect("operator persists");
+    let l = level(analyze_with(&op, get(), OPERATOR).await.expect("reads")).expect("level");
+    assert!(l.use_memory);
+    analyze_with(&op, unpersist(), OPERATOR)
+        .await
+        .expect("operator unpersists");
+    for (eager, local) in [(true, true), (false, true)] {
+        execute(&op.channel, checkpoint(eager, local), Some(OPERATOR))
+            .await
+            .expect("operator checkpoints");
+    }
+    // Removing an id forgets what the session holds: no floor (own session).
+    let removal = command(CommandType::RemoveCachedRemoteRelationCommand(Box::new(
+        pb::RemoveCachedRemoteRelationCommand {
+            relation: Some(pb::CachedRemoteRelation {
+                relation_id: "x".to_owned(),
+            }),
+        },
+    )));
+    execute(&run.channel, removal, Some(VIEWER))
+        .await
+        .expect("a viewer removes an id");
+}
+
+/// One `AddArtifacts` stream of `artifacts` (name, bytes) on `SESSION` as `token`.
+async fn add_artifacts_as(
+    channel: &Channel,
+    artifacts: &[(&str, &[u8])],
+    token: &str,
+) -> Result<pb::AddArtifactsResponse, tonic::Status> {
+    use krishiv_connect::proto::v4_3::add_artifacts_request::{
+        ArtifactChunk, Batch, Payload, SingleChunkArtifact,
+    };
+    let artifacts = artifacts
+        .iter()
+        .map(|(name, data)| SingleChunkArtifact {
+            name: (*name).to_owned(),
+            data: Some(ArtifactChunk {
+                data: data.to_vec(),
+                crc: i64::from(krishiv_connect_server::artifacts::crc32(data)),
+            }),
+        })
+        .collect();
+    let request = pb::AddArtifactsRequest {
+        session_id: SESSION.to_owned(),
+        payload: Some(Payload::Batch(Batch { artifacts })),
+        ..Default::default()
+    };
+    let mut grpc = tonic::client::Grpc::new(channel.clone());
+    grpc.ready().await.expect("ready");
+    grpc.client_streaming(
+        with_token(futures::stream::iter([request]), Some(token)),
+        path("AddArtifacts"),
+        tonic_prost::ProstCodec::<pb::AddArtifactsRequest, pb::AddArtifactsResponse>::default(),
+    )
+    .await
+    .map(tonic::Response::into_inner)
+}
+
+/// ADR 0046 §3b: `AddArtifacts` is client code, `Usage` on `System("udf")` (admin only until
+/// T014b), checked on the session before anything is staged, for every name, `cache/`
+/// included; a refusal is counted like every other denial.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn adding_artifacts_needs_the_udf_privilege() {
+    let run = start().await;
+    let cache: &[(&str, &[u8])] = &[("cache/abc123", b"rows")];
+    let code: &[(&str, &[u8])] = &[("pyfiles/util.py", b"def f(): return 1\n")];
+    for token in [VIEWER, OPERATOR] {
+        for artifacts in [cache, code] {
+            let s = add_artifacts_as(&run.channel, artifacts, token)
+                .await
+                .expect_err("only an admin sends artifacts");
+            assert_eq!(s.code(), Code::PermissionDenied, "{s:?}");
+            assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        }
+        release_as(&run, token).await;
+    }
+    assert_eq!(
+        denied(&run),
+        [(Surface::Connect, Privilege::Usage, 4)],
+        "each refusal is counted once"
+    );
+    let added = add_artifacts_as(&run.channel, &[cache[0], code[0]], ADMIN)
+        .await
+        .expect("an admin adds artifacts");
+    let names: Vec<&str> = added.artifacts.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["cache/abc123", "pyfiles/util.py"]);
+    assert!(added.artifacts.iter().all(|a| a.is_crc_successful));
+}
+
+/// PySpark's exit-time `ml_command.clean_cache` is `OwnSession` (ADR 0046 §3b): it succeeds for
+/// every role, a viewer included, and is no denial.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ml_clean_cache_succeeds_for_a_viewer() {
+    let run = start().await;
+    let clean = command(CommandType::MlCommand(Box::new(pb::MlCommand {
+        command: Some(pb::ml_command::Command::CleanCache(
+            pb::ml_command::CleanCache {},
+        )),
+    })));
+    let responses = execute(&run.channel, clean, Some(VIEWER))
+        .await
+        .expect("nothing to clean, for any role");
+    assert!(responses.is_empty(), "{} responses", responses.len());
+    assert!(denied(&run).is_empty(), "{:?}", denied(&run));
+}

@@ -1,4 +1,4 @@
 -- query 0: nope(1)
-SELECT vector_cosine_similarity(a, b) AS c1 FROM t0 WHERE x IN (1, 2) AND y = 'x(vector_cosine_similarity)';
-SELECT count_min_sketch(a, b) AS c2 FROM t0 WHERE x IN (1, 2) AND y = 'x(count_min_sketch)';
-SELECT reflect(a, b) AS c3 FROM t0 WHERE x IN (1, 2) AND y = 'x(reflect)';
+SELECT unix_seconds(a, b) AS c1 FROM t0 WHERE x IN (1, 2) AND y = 'x(unix_seconds)';
+SELECT kll_sketch_agg_bigint(a, b) AS c2 FROM t0 WHERE x IN (1, 2) AND y = 'x(kll_sketch_agg_bigint)';
+SELECT tuple_difference_double(a, b) AS c3 FROM t0 WHERE x IN (1, 2) AND y = 'x(tuple_difference_double)';

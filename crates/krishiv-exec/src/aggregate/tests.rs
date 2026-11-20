@@ -546,6 +546,7 @@ mod collect;
 mod disk;
 mod distinct_count;
 mod misc;
+mod output_filter;
 mod simple;
 mod spill_writers;
 mod structs;

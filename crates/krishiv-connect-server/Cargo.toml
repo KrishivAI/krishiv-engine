@@ -1,11 +1,14 @@
 [package]
 name = "krishiv-connect-server"
 description = "Spark Connect gRPC server: the service, session manager and limits"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [lints]
@@ -17,14 +20,14 @@ arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
-krishiv-connect = { path = "../krishiv-connect", version = "=0.2.0" }
-krishiv-exec = { path = "../krishiv-exec", version = "=0.2.0" }
-krishiv-memory = { path = "../krishiv-memory", version = "=0.2.0" }
-krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0" }
-krishiv-session = { path = "../krishiv-session", version = "=0.2.0", features = ["unstable-ir", "tls"] }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
-krishiv-udf-pool = { path = "../krishiv-udf-pool", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-connect = { path = "../krishiv-connect", version = "=0.2.1" }
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1" }
+krishiv-session = { path = "../krishiv-session", version = "=0.2.1", features = ["unstable-ir", "tls"] }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
+krishiv-udf-pool = { path = "../krishiv-udf-pool", version = "=0.2.1" }
 getrandom.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }
 prost-types = { workspace = true, features = ["std"] }
@@ -39,6 +42,10 @@ tracing.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
+# The declared Iceberg REST catalog of `tests/delegated_catalog.rs` (P3-T067 §3.3).
+krishiv-catalogs = { path = "../krishiv-catalogs", features = ["session"] }
+# Signs act-as assertions in `tests/impersonation.rs` (feature `oidc`).
+aws-lc-rs.workspace = true
 hyper-util = { workspace = true, features = ["tokio"] }
 tower = { workspace = true, features = ["util"] }
 tempfile.workspace = true
@@ -46,3 +53,7 @@ krishiv-udf-sandbox = { path = "../krishiv-udf-sandbox" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
 tonic = { workspace = true, features = ["channel", "server", "router", "codegen"] }
 tonic-prost.workspace = true
+
+[features]
+# Signed act-as assertions (`x-krishiv-act-as-token`, P3-T061 I3): `krishiv-session`'s verifier.
+oidc = ["krishiv-session/oidc"]

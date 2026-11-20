@@ -39,8 +39,11 @@ use krishiv_kernels::compare::CompareKind;
 use krishiv_kernels::decimal::DecimalNative;
 use krishiv_types::batch::Weights;
 
+use super::bitmap::{BitmapAcc, BitmapOp};
 use super::collect::{CollectAcc, VectorAcc};
+use super::histogram::HistAcc;
 use super::hll::{self, HllAcc};
+use super::hll_sketch::{HllSketchAcc, HllSketchOp};
 use super::listagg::ListAggAcc;
 use super::mode::ModeAcc;
 use super::moments::Moments;
@@ -315,6 +318,12 @@ enum Kind {
     Approx(GkAcc),
     /// `approx_count_distinct`: HyperLogLog++ registers (see `hll`).
     Hll(HllAcc),
+    /// `histogram_numeric`: Spark's numeric histograms (see `histogram`).
+    Hist(HistAcc),
+    /// The bitmap aggregates: one 4,096-byte buffer per group (see `bitmap`).
+    Bitmap(BitmapAcc),
+    /// `hll_sketch_agg` and `hll_union_agg`: DataSketches HLL sketches per group (see `hll_sketch`).
+    HllSketch(HllSketchAcc),
 }
 
 /// A bitwise aggregate operation.
@@ -488,6 +497,16 @@ impl Accumulator {
             }
             (F::PercentileApprox { .. }, _) => Kind::Approx(GkAcc::default()),
             (F::ApproxCountDistinct { p }, _) => Kind::Hll(HllAcc::new(*p)),
+            (F::HistogramNumeric { nb }, _) => Kind::Hist(HistAcc::new(*nb)),
+            (F::BitmapConstructAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::Construct)),
+            (F::BitmapOrAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::Or)),
+            (F::BitmapAndAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::And)),
+            (F::HllSketchAgg { lg_k }, _) => {
+                Kind::HllSketch(HllSketchAcc::new(HllSketchOp::Sketch(*lg_k))?)
+            }
+            (F::HllUnionAgg { allow_different }, _) => {
+                Kind::HllSketch(HllSketchAcc::new(HllSketchOp::Union(*allow_different))?)
+            }
             (F::CollectList, _) => Kind::Collect(CollectAcc::new(expr.arg_type.clone(), false)?),
             // `CollectAcc::new` refuses the element types the shared key
             // encoding does not order, as `result_type` does.
@@ -629,7 +648,13 @@ impl Accumulator {
             Kind::ListAgg(l) => l.vecs(),
             // The quantile and HLL states are maps and buffers, not
             // plain vectors; `size` counts them exactly.
-            Kind::Exact(_) | Kind::Approx(_) | Kind::Hll(_) | Kind::Udf(_) => Vec::new(),
+            Kind::Exact(_)
+            | Kind::Approx(_)
+            | Kind::Hll(_)
+            | Kind::Hist(_)
+            | Kind::Bitmap(_)
+            | Kind::HllSketch(_)
+            | Kind::Udf(_) => Vec::new(),
         }
     }
 
@@ -643,6 +668,9 @@ impl Accumulator {
             Kind::Exact(e) => e.size(),
             Kind::Approx(g) => g.size(),
             Kind::Hll(h) => h.size(),
+            Kind::Hist(h) => h.size(),
+            Kind::Bitmap(b) => b.size(),
+            Kind::HllSketch(h) => h.size(),
             Kind::Udf(u) => u.size(),
             _ => {
                 let heap = match &self.kind {
@@ -657,15 +685,33 @@ impl Accumulator {
         }
     }
 
+    /// [`projected`](Self::projected) for one partition of a row table that gets `rows` of a batch (an upper bound
+    /// on the groups it adds too), no columns at hand: the HLL sketch accumulators bound their growth by those rows,
+    /// the room this partition's groups have left, and (raw values) its largest sketch; from partial states every
+    /// row is charged a whole sketch (`states`). The other accumulators read the whole batch's columns instead
+    /// (`projected`).
+    pub(crate) fn projected_part(&self, rows: usize, states: bool) -> usize {
+        match &self.kind {
+            Kind::HllSketch(h) => h.projected(rows, rows, states),
+            _ => self.projected(rows, None, None, false),
+        }
+    }
+
+    /// Whether [`projected_part`](Self::projected_part) already covers the rows of a batch (the HLL sketches).
+    pub(crate) fn projects_by_partition(&self) -> bool {
+        matches!(self.kind, Kind::HllSketch(_))
+    }
+
     /// [`size`](Self::size) after [`resize`](Self::resize) to `new` more
     /// groups and an update with `input` (string values it may keep).
     /// `arg` is the value column the update reads (raw or state); `key` the
-    /// ordering key column of `max_by`/`min_by`.
+    /// ordering key column of `max_by`/`min_by`; `states` says `arg` holds partial states, not raw values.
     pub(crate) fn projected(
         &self,
         new: usize,
         arg: Option<&ArrayRef>,
         key: Option<&ArrayRef>,
+        states: bool,
     ) -> usize {
         // The collect, vector, mode and listagg accumulators account
         // their variable-width growth themselves (see `collect`, `mode`
@@ -729,6 +775,9 @@ impl Accumulator {
             Kind::Exact(e) => e.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Approx(g) => g.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Hll(h) => h.projected(new),
+            Kind::Hist(h) => h.projected(new, arg),
+            Kind::Bitmap(b) => b.projected(new),
+            Kind::HllSketch(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len), states),
             _ => 0,
         };
         vecs + heap
@@ -800,6 +849,9 @@ impl Accumulator {
             Kind::Exact(e) => e.resize(n),
             Kind::Approx(g) => g.resize(n),
             Kind::Hll(h) => h.resize(n),
+            Kind::Hist(h) => h.resize(n),
+            Kind::Bitmap(b) => b.resize(n),
+            Kind::HllSketch(h) => h.resize(n),
             Kind::Udf(u) => u.resize(n),
             Kind::By {
                 values,
@@ -882,6 +934,9 @@ impl Accumulator {
             Kind::Exact(e) => e.reserve(new),
             Kind::Approx(g) => g.reserve(new),
             Kind::Hll(h) => h.reserve(new),
+            Kind::Hist(h) => h.reserve(new),
+            Kind::Bitmap(b) => b.reserve(new),
+            Kind::HllSketch(h) => h.reserve(new),
             Kind::Udf(_) => {}
             Kind::By {
                 values,
@@ -1063,7 +1118,10 @@ impl Accumulator {
             | Kind::MinMaxStruct { .. }
             | Kind::Collect(_)
             | Kind::Approx(_)
-            | Kind::Hll(_) => 1,
+            | Kind::Hist(_)
+            | Kind::Hll(_)
+            | Kind::Bitmap(_)
+            | Kind::HllSketch(_) => 1,
             Kind::TrySumInt { .. }
             | Kind::SumInterval { .. }
             | Kind::SumDec { .. }
@@ -1116,6 +1174,7 @@ mod struct_extremum_tests;
 
 mod results;
 use results::*;
+pub(crate) use results::{decimal_unscaled_in, narrow};
 
 mod output;
 

@@ -2,55 +2,61 @@
 //! The config entries. Add new entries here and to [`REGISTRY`].
 
 use super::registry_join::{
-    EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT,
+    EXEC_COALESCE_INPUT, EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER,
+    EXEC_JOIN_ROW_LAYOUT,
 };
 use std::borrow::Cow;
 use std::time::Duration;
 
 use super::{
     ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
-    build_projection::EXEC_JOIN_BUILD_PROJECTION, direct_keys::EXEC_AGG_DIRECT_KEYS,
-    distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE, join_cost::JOIN_COST,
-    partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    agg_output_filter::EXEC_AGG_OUTPUT_FILTER, build_projection::EXEC_JOIN_BUILD_PROJECTION,
+    direct_keys::EXEC_AGG_DIRECT_KEYS, distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
+    join_cost::JOIN_COST, partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    scan_instance::EXEC_SCAN_INSTANCE_PROJECTION,
 };
 
 mod python;
 pub use python::{
-    ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS,
-    PYTHON_WORKER_ALLOW_FORK, PYTHON_WORKER_EXECUTABLES, PYTHON_WORKER_IDLE_TIMEOUT,
-    PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT,
-    UDF_SANDBOX,
+    ARROW_MAX_RECORDS_PER_BATCH, ARROW_PYSPARK_VALIDATE_SCHEMA, PYTHON_UDF_ARROW_ENABLED,
+    PYTHON_UDF_THREADS, PYTHON_UDTF_ARROW_ENABLED, PYTHON_WORKER_ALLOW_FORK,
+    PYTHON_WORKER_EXECUTABLES, PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION,
+    PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT, UDF_SANDBOX,
 };
 mod access;
 mod lakehouse;
 mod optimizer;
 mod result_cache;
+mod runtime_filter;
+mod runtime_filter_bloom;
 mod server;
 pub use access::{
     ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
 };
 pub use lakehouse::{
-    CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
-    ICEBERG_MANIFEST_CACHE_BYTES,
+    CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
+    CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE, CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES,
+    CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS, DELTA_SNAPSHOT_CACHE_MAX_BYTES,
+    ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_MANIFEST_CACHE_BYTES, ICEBERG_WRITE_MAX_OPEN_FILES,
+    ICEBERG_WRITE_STATISTICS_ENABLED,
 };
 pub use optimizer::{
-    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, SEMI_ANTI_JOIN_ORDER,
+    DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
+    GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER,
     SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
-pub use server::{
-    CONNECT_ADDRESS, CONNECT_EXECUTE_ABANDONED_TOMBSTONES, CONNECT_EXECUTE_AHEAD_BYTES,
-    CONNECT_EXECUTE_DETACHED_TIMEOUT, CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
-    CONNECT_EXECUTE_RETRY_BUFFER_SIZE, CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
-    CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE, CONNECT_HANDSHAKE_TIMEOUT,
-    CONNECT_HTTP2_MAX_CONCURRENT_STREAMS, CONNECT_HTTP2_MAX_HEADER_LIST_BYTES,
-    CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS, CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME,
-    CONNECT_KEEPALIVE_TIMEOUT, CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE,
-    CONNECT_MAX_OPERATIONS_PER_SESSION, CONNECT_MAX_RESPONSE_BYTES, CONNECT_MAX_SESSIONS,
-    CONNECT_MAX_SESSIONS_PER_PRINCIPAL, CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT,
-    CONNECT_SESSION_MAINTENANCE_INTERVAL, CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS,
-    SERVER_ALLOWED_HOSTS, SERVER_METRICS_PUBLIC, SERVER_SHUTDOWN_TIMEOUT,
+pub use runtime_filter::{
+    RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT, RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
+    RUNTIME_FILTER_BLOOM_ENABLED, RUNTIME_FILTER_BLOOM_MAX_BYTES, RUNTIME_FILTER_BLOOM_MAX_ITEMS,
+    RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS, RUNTIME_FILTER_ENABLED,
+    RUNTIME_FILTER_EXACT_SET_MAX_VALUES, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
 };
+pub use runtime_filter_bloom::{
+    RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_MEMORY_TIER, RUNTIME_FILTER_EQUATED_SITES,
+};
+// Every public item of `server` is a config entry (Connect, Flight SQL, server).
+pub use server::*;
 
 const MIB: u64 = 1024 * 1024;
 
@@ -70,15 +76,18 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_AGG_ROW_LAYOUT,
     &EXEC_AGG_DIRECT_KEYS,
     &EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
+    &EXEC_AGG_OUTPUT_FILTER,
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
     &EXEC_JOIN_BUILD_PROJECTION,
+    &EXEC_SCAN_INSTANCE_PROJECTION,
     &EXEC_JOIN_RADIX_BITS,
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     &EXEC_JOIN_FUSE_PROBE_SELECT,
+    &EXEC_COALESCE_INPUT,
     &EXEC_JOIN_IDLE_SPILL_AFTER,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
@@ -96,6 +105,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &HISTORY_LITERALS,
     &HISTORY_MAX_BYTES,
     &UI_ENABLED,
+    &UI_ALLOWED_HOSTS,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
     &QUERY_MAX_EXECUTION_TIME,
@@ -109,7 +119,11 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RESULT_CACHE_MAX_BYTES,
     &SUBQUERY_AS_WINDOW,
     &LATE_PAYLOAD_JOIN,
+    &PAYLOAD_ABOVE_AGGREGATE,
+    &DISCOVER_KEYS,
+    &DISCOVER_KEYS_TIMEOUT,
     &GROUP_KEY_CODE,
+    &DERIVED_KEYS_ABOVE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
     &SEMI_ANTI_JOIN_ORDER,
@@ -122,6 +136,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
     &RUNTIME_FILTER_BLOOM_AT_SCALE,
+    &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
+    &RUNTIME_FILTER_EQUATED_SITES,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -134,10 +150,16 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_MAX_CONCURRENT_REQUESTS,
     &IO_BLOCKING_THREADS,
     &DELTA_LOG_THREADS,
+    &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
     &CATALOG_MAX_METADATA_BYTES,
     &ICEBERG_MANIFEST_CACHE_BYTES,
+    &ICEBERG_WRITE_MAX_OPEN_FILES,
+    &ICEBERG_COMMIT_MAX_INTERVENING,
+    &ICEBERG_WRITE_STATISTICS_ENABLED,
     &CATALOG_MAX_COLUMNS,
     &CATALOG_REQUEST_TIMEOUT,
+    &CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE,
+    &CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
     &IO_COALESCE_BYTES,
     &IO_COALESCE_WASTE_BYTES,
     &IO_COALESCE_WASTE_DIVISOR,
@@ -194,7 +216,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SHARE_CTE_INSTANCES,
     &EAGER_AGGREGATION,
     &ARROW_MAX_RECORDS_PER_BATCH,
+    &ARROW_PYSPARK_VALIDATE_SCHEMA,
     &PYTHON_UDF_ARROW_ENABLED,
+    &PYTHON_UDTF_ARROW_ENABLED,
     &PYTHON_UDF_THREADS,
     &UDF_SANDBOX,
     &PYTHON_WORKER_EXECUTABLES,
@@ -229,6 +253,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
     &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
     &CONNECT_MAX_RESPONSE_BYTES,
+    &CONNECT_ARTIFACTS_MAX_BYTES,
+    &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES,
+    &CONNECT_ARTIFACTS_MAX_TOTAL_BYTES,
     &CONNECT_MAX_CONNECTIONS,
     &CONNECT_HANDSHAKE_TIMEOUT,
     &CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
@@ -238,6 +265,18 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SERVER_ALLOW_CORE_DUMPS,
     &SERVER_METRICS_PUBLIC,
     &SERVER_ALLOWED_HOSTS,
+    &FLIGHT_SQL_ENABLED,
+    &FLIGHT_SQL_HANDLE_TTL,
+    &FLIGHT_SQL_MAX_HANDLES_PER_SESSION,
+    &FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL,
+    &FLIGHT_SQL_MAX_BATCH_ROWS,
+    &FLIGHT_SQL_MAX_SCHEMA_TABLES,
+    &FLIGHT_SQL_METADATA_TIMEOUT,
+    &FLIGHT_SQL_PROVISIONAL_TTL,
+    &FLIGHT_SQL_FETCH_IDLE_TIMEOUT,
+    &FLIGHT_SQL_MAX_STATEMENT_BYTES,
+    &FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES,
+    &FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
 ];
 
 /// ANSI SQL mode (Spark 4 default: on).
@@ -706,6 +745,24 @@ pub static HISTORY_MAX_BYTES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// The names the web UI answers to (P3-T050, threat model T-W5, DNS rebinding).
+pub static UI_ALLOWED_HOSTS: ConfigEntry = ConfigEntry {
+    key: "krishiv.ui.allowedHosts",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Comma-separated host names (no ports; an IPv6 address in brackets) the web UI's \
+          `/api/internal` routes answer to, by the request's `Host` header, so a page on \
+          another name that resolves to this server cannot read it (DNS rebinding). A server \
+          bound to a loopback address always also answers to `localhost`, `127.0.0.1` and \
+          `[::1]`. A server bound to another address checks the `Host` header only when this is \
+          set (it already requires authentication, and TLS for bearer methods). The \
+          environment variable `KRISHIV_UI_ALLOWED_HOSTS` adds names to the list.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
 /// Whether `krishiv server` serves the web UI backend (design T133).
 pub static UI_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.ui.enabled",
@@ -974,21 +1031,6 @@ pub static EXPERIMENTAL_UNALIGNED_CHECKPOINTS: ConfigEntry = ConfigEntry {
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.bloom.atScale`: larger runtime Bloom filters for scans far larger than the build.
-pub static RUNTIME_FILTER_BLOOM_AT_SCALE: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.bloom.atScale",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(true)),
-    doc: "A join whose probe-side scan is estimated at least 20 times its build plans its runtime Bloom filter with \
-          caps of 20,000,000 keys and 32 MiB instead of `krishiv.runtimeFilter.bloom.maxItems` and \
-          `krishiv.runtimeFilter.bloom.maxBytes`, when those are lower. A cap set explicitly still binds unless \
-          this key is also set explicitly to true. Results do not change.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.3.0",
     spark_alias: None,
 };
 
@@ -1421,128 +1463,6 @@ pub static IO_CREDENTIALS_REFRESH_SKEW: ConfigEntry = ConfigEntry {
           expiry.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.enabled`.
-pub static RUNTIME_FILTER_ENABLED: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.enabled",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(true)),
-    doc: "Plan runtime filters: the build side of an inner or left semi hash join \
-          publishes the min/max, a small value set or a Bloom filter of its keys to the scans \
-          feeding the probe side, which skip splits, row groups and rows no build key can match. \
-          Results are the same either way.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.sql.optimizer.runtime.bloomFilter.enabled`.
-pub static RUNTIME_FILTER_BLOOM_ENABLED: ConfigEntry = ConfigEntry {
-    key: "krishiv.sql.optimizer.runtime.bloomFilter.enabled",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(true)),
-    doc: "Allow Bloom filters among the runtime filters a join build publishes (min/max and value \
-          sets are not affected). Krishiv's cost model decides when one is built; Spark's creation \
-          and application size thresholds are not used.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: Some("spark.sql.optimizer.runtime.bloomFilter.enabled"),
-};
-
-/// `krishiv.runtimeFilter.inList.maxValues`.
-pub static RUNTIME_FILTER_IN_LIST_MAX_VALUES: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.inList.maxValues",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(50)),
-    doc: "Most distinct build keys a runtime filter keeps as a value set; with more, a Bloom \
-          filter (when planned) or only the min/max range is published.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.exactSet.maxValues`.
-pub static RUNTIME_FILTER_EXACT_SET_MAX_VALUES: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.exactSet.maxValues",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(4096)),
-    doc: "Most distinct build keys a runtime filter tests rows against exactly (a small set or \
-          a hash set); with more, a Bloom filter (when planned) or only the min/max range is \
-          used on rows.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.bloom.maxItems`.
-pub static RUNTIME_FILTER_BLOOM_MAX_ITEMS: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.bloom.maxItems",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(4_000_000)),
-    doc: "Most build keys a runtime Bloom filter is built for: a build estimated larger plans \
-          none, and one that turns out larger publishes none. Left at its default, it is raised to \
-          20,000,000 for a scan estimated at least 20 times its build (`krishiv.runtimeFilter.bloom.atScale`).",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.bloom.maxBytes`.
-pub static RUNTIME_FILTER_BLOOM_MAX_BYTES: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.bloom.maxBytes",
-    value_type: ValueType::Size,
-    default: Some(ConfigValue::Size(8 * MIB)),
-    doc: "Largest runtime Bloom filter. A filter capped below its 1% false-positive size is still \
-          built unless its expected false-positive rate exceeds 5%. Left at its default, it is raised to 32 MiB \
-          for a scan estimated at least 20 times its build (`krishiv.runtimeFilter.bloom.atScale`).",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.bloom.minApplicationRows`.
-pub static RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.bloom.minApplicationRows",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(1_000_000)),
-    doc: "A runtime Bloom filter is planned only for a scan estimated at this many rows or more \
-          (and at least four times the build).",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.adaptive.maxPassPercent`.
-pub static RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.adaptive.maxPassPercent",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(90)),
-    doc: "A scan driver stops evaluating a runtime filter on rows once it passes more than this \
-          percentage of a measurement window (pruning splits and row groups with it continues).",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.adaptive.minRows`.
-pub static RUNTIME_FILTER_ADAPTIVE_MIN_ROWS: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.adaptive.minRows",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(65_536)),
-    doc: "Rows per window over which a scan driver measures a runtime filter's pass rate.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };

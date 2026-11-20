@@ -321,37 +321,45 @@ fn a_view_does_not_fall_back_to_its_namespace_for_a_routine_gone_from_its_path()
     assert!(read.is_err(), "{read:?}");
 }
 
+/// A view on a session-only path could only call a temporary function, which a permanent view
+/// may not (review r5 Z2; Spark v4.2.0 `views.scala` lines 628-650).
 #[test]
-fn a_view_on_a_session_only_path_does_not_fall_back_to_its_namespace() {
+fn a_view_on_a_session_only_path_cannot_call_its_temporary_function() {
     let s = session();
     for sql in [
         "CREATE TEMPORARY FUNCTION pick() RETURNS INT RETURN 1",
         "CREATE FUNCTION default.pick() RETURNS INT RETURN 2",
         "SET PATH = system.session, system.builtin",
-        "CREATE VIEW default.so_view AS SELECT pick() AS x",
-        "DROP TEMPORARY FUNCTION pick",
     ] {
         run(&s, sql);
     }
-    let read = block_on(async {
-        s.sql("SELECT x FROM default.so_view")
+    let created = block_on(async {
+        s.sql("CREATE VIEW default.so_view AS SELECT pick() AS x")
             .await?
             .collect()
             .await
     });
-    assert!(read.is_err(), "{read:?}");
+    let e = created.unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_TEMP_OBJ_REFERENCE", "{e}");
 }
 
+/// Review r5 Z2: a permanent view may not call a temporary function (Spark v4.2.0 `views.scala`
+/// lines 628-650): `INVALID_TEMP_OBJ_REFERENCE` at create.
 #[test]
-fn a_view_over_a_temporary_function_keeps_calling_it() {
+fn a_view_over_a_temporary_function_is_refused() {
     let s = session();
-    for sql in [
+    run(
+        &s,
         "CREATE TEMPORARY FUNCTION tmp_pick() RETURNS INT RETURN 7",
-        "CREATE VIEW default.tmp_view AS SELECT tmp_pick() AS x",
-    ] {
-        run(&s, sql);
-    }
-    assert_eq!(first(&s, "SELECT x FROM default.tmp_view"), "7");
+    );
+    let created = block_on(async {
+        s.sql("CREATE VIEW default.tmp_view AS SELECT tmp_pick() AS x")
+            .await?
+            .collect()
+            .await
+    });
+    let e = created.unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_TEMP_OBJ_REFERENCE", "{e}");
 }
 
 #[test]

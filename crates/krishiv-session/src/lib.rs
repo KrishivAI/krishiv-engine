@@ -43,6 +43,7 @@
 
 mod access;
 mod action;
+mod admin_view;
 mod admission;
 mod analyze;
 mod arrow_values;
@@ -52,6 +53,7 @@ mod cancel;
 mod carrier;
 mod catalog;
 pub mod catalog_decl;
+pub mod catalog_registry;
 mod char_write;
 mod collation_defaults;
 mod column;
@@ -59,6 +61,7 @@ mod column_stats;
 mod command;
 mod conf;
 mod dataframe;
+mod delta;
 pub mod egress;
 mod execute_immediate;
 mod explain;
@@ -81,11 +84,13 @@ mod nested_value;
 mod observation;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
+mod partition_advice;
 mod partition_keys;
 mod partitions;
 mod plan_round_trip;
 mod profile;
 mod profile_history;
+pub use profile_history::{StoredProfile, read_history as read_profile_history};
 mod python_udfs;
 mod query_fold;
 mod recursion;
@@ -102,6 +107,7 @@ mod sql_path;
 mod store;
 mod store_catalog;
 mod system;
+mod system_catalogs;
 mod system_groups;
 mod table_commands;
 mod telemetry;
@@ -110,9 +116,11 @@ mod udfs;
 mod variable_substitution;
 mod variables;
 mod view_schema;
+mod view_session_refs;
 mod window;
 
 pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};
+pub use admin_view::{QueryInfo, SessionInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
 pub use sessions::Transport;
@@ -148,13 +156,16 @@ pub use krishiv_udf_sdk::{
 };
 pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
+pub use python_udfs::{
+    ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary, PythonUdtfDef,
+    PythonUdtfEntry,
+};
 #[cfg(feature = "unstable-ir")]
-pub use python_udfs::python_udf_call_name;
-pub use python_udfs::{ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
+pub use python_udfs::{python_udf_call_name, python_udtf_call_name};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
-#[cfg(feature = "unstable-ir")]
-pub use session::SqlOutcome;
 pub use session::{RecordBatchStream, Session, SessionBuilder};
+#[cfg(feature = "unstable-ir")]
+pub use session::{SqlOutcome, SqlQuery};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
 /// for [`Session::register_udf`].
 pub use udfs::SessionFunctions;

@@ -21,6 +21,7 @@ from krishiv.errors import (
     PySparkTypeError,
     PySparkValueError,
     not_expected_type,
+    unsupported_attribute,
     unsupported_feature,
 )
 from krishiv.sql import _convert
@@ -169,6 +170,11 @@ class DataFrame:
         raise not_expected_type("item", "int, str, Column, list or tuple", item)
 
     def __getattr__(self, name: str) -> Column:
+        # As in Spark, `rdd` is the RDD even when a column has that name. It is answered here, not by
+        # a property: a property that raises `AttributeError` falls through to this method, which
+        # would then hide the message.
+        if name == "rdd":
+            raise unsupported_attribute("DataFrame.rdd (RDDs; use the DataFrame API)")
         if name.startswith("_") or name not in self.columns:
             raise PySparkAttributeError(f"'DataFrame' object has no attribute '{name}'")
         return Column(self._df.col(name))
@@ -1871,8 +1877,12 @@ class DataFrame:
         """The result as a ``pyarrow.Table``, whatever its types."""
         pa = _convert.require_pyarrow("toArrow")
         stream = self._df.execute()
+        stream.use_placeholder_names()
         try:
             table = pa.table(stream)
+            # A column name with a NUL cannot cross the C data interface: the stream exports a placeholder name.
+            if table.column_names != (names := stream.names()):
+                table = table.rename_columns(names)
         except Exception:
             # The C stream carries only an Arrow error message: raise the engine's own error if that was the cause.
             stream.check_error()

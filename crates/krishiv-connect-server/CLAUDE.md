@@ -17,13 +17,33 @@ Paths are relative to this crate.
 - `src/service.rs` `ConnectService`, Krishiv's implementation: `ExecutePlan`, `ReattachExecute` / `ReleaseExecute`
   (design P3-T011a §3.8: resume after `last_response_id`, `release_until` trims, `release_all` closes; the server's
   `ResponseBudget`), `ReleaseSession`, `AnalyzePlan`, `Config`,
-  `Interrupt` (each looks the session up and `observe`s the request: `client_type`, user and the Connect transport go to `system.sessions`; `ExecutePlan` also passes the request's tags (`QueryOptions::tags`: they reach `system.queries`, resource-group `clientTags` selectors and cancel by tag) and its `traceparent`/`baggage` metadata (`QueryOptions::inbound_trace`, per request, baggage included via the statement's `Session::baggage`: concurrent requests of one session keep their own trace, a malformed header means no trace and never fails the request, P3-T068; the T068 acceptance, a client span and the engine span sharing one trace id in an OTLP collector, is not tested yet)); the other RPCs are `UNIMPLEMENTED` until PR-15; a draining server answers `UNAVAILABLE` ("server
-  shutting down")
+  `Interrupt`, `AddArtifacts`, `ArtifactStatus`, `FetchErrorDetails`, `CloneSession`, `GetStatus` (all twelve RPCs;
+  each looks the session up and `observe`s the request: `client_type`, user and the Connect transport go to `system.sessions`; `ExecutePlan` also passes the request's tags (`QueryOptions::tags`: they reach `system.queries`, resource-group `clientTags` selectors and cancel by tag) and its `traceparent`/`baggage` metadata (`QueryOptions::inbound_trace`, per request, baggage included via the statement's `Session::baggage`: concurrent requests of one session keep their own trace, a malformed header means no trace and never fails the request, P3-T068; the T068 acceptance, a client span and the engine span sharing one trace id in an OTLP collector, is not tested yet));
+  `AddArtifacts` applies its class itself (`caller_checked`, then `auth::enforce` on the session before any artifact is staged);
+  `ExecutePlan` (until its encoder starts), `AnalyzePlan` and `Config` hold the session's statement gate shared; a
+  draining server answers `UNAVAILABLE` ("server shutting down"); an error after the
+  session is known goes through `entry.errors().status` (it gets an `errorId`), one before it through `status_of`
+- `src/artifacts.rs` `AddArtifacts` / `ArtifactStatus` (design §3.9): the chunk protocol and CRC-32 (`crc32`), names
+  from `krishiv_connect::artifact` checked before any file (who may add any artifact, `cache/` included, is the RPC's
+  class: client code, `Usage` on `System("udf")`), the
+  per-session quota (`krishiv.connect.artifacts.maxBytes`, `maxArtifactBytes`, `ARTIFACT_OVERHEAD` per name segment)
+  and the server-wide one (`maxTotalBytes`, checked `>= maxArtifactBytes` at startup)
+  counted before each write, `Transfer` (runs on the blocking pool; dropping it removes what it staged and returns its
+  quota), `SessionArtifacts` (per session: directory, `cache/<hash>` blobs in the pool as `connect_artifacts`,
+  `cached(hash)` for T012; a blob's pool reservation covers its whole capacity; the installed files are indexed, and
+  `snapshot` / `copy_from` copy them to a clone, counted against its quota and `maxTotalBytes` first; `python_artifacts`: the installed `pyfiles/` and `archives/` files as absolute paths (each archive with its `#fragment`, `PythonArchive`), which `SessionPython::sync_artifacts` hands to the session's UDF runtime, the whole set when it changed, after every transfer (a failed one too: it may have installed some) and after a clone's copy, never after the session's release; `tests/artifacts.rs` `python_artifacts_reach_the_sessions_udf_runtime_and_its_clones`, `a_transfer_that_fails_still_hands_over_what_it_installed`), `ArtifactStore` (the server's root,
+  created on first use, removed by the awaited `shutdown` that `serve` calls after closing the sessions); `src/artifacts/dir.rs` the
+  private root and session directories, `O_EXCL | O_NOFOLLOW` staging, `linkat` install (never replaces), every name
+  resolved per segment from a directory descriptor without following links; removal on the blocking pool
+- `src/errors.rs` `SessionErrors` (design §3.10): `errorId` on every status sent on a session unless
+  `spark.sql.connect.enrichError.enabled=false`, the per-session cache (20, 60 s after last access, given out once),
+  `details` (cause chain ≤ 5, each error in its client-safe form, query contexts, no stack trace)
 - `src/analyze.rs` `AnalyzePlan` (design §3.5): every arm over the translated, analyzed plan (never run);
   `same_semantics`/`semantic_hash` from `krishiv_plan::semantic_plan_hash` (names and subquery aliases erased) of
-  the analyzed plan; the cache arms are 56K00 until PR-47; access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`, `semantic_hash`, `same_semantics` analyze for metadata (`Browse` on catalog tables and views; reads by path keep `Select`, inference reads file contents), `input_files` keeps `Select`; `explain` is `DataFrame::explain_for_metadata` (P3 PR-14d: the ordinary text when the `Select` check passes, else the plan with statistics withheld; `cost` keeps `Select`; `tests/analyze_access.rs`); `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
+  the analyzed plan; `persist`, `unpersist` and `get_storage_level` are the frame's own (`src/cache.rs` converts the protocol's `StorageLevel` both ways); access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`, `semantic_hash`, `same_semantics` analyze for metadata (`Browse` on catalog tables and views; reads by path keep `Select`, inference reads file contents), `input_files` keeps `Select`; `explain` is `DataFrame::explain_for_metadata` (P3 PR-14d: the ordinary text when the `Select` check passes, else the plan with statistics withheld; `cost` keeps `Select`; `tests/analyze_access.rs`); `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
   `parseDatatypeString`
-- `src/config.rs` `Config` (design §3.6) over `RuntimeConf`: the seven operations, `silent`, Spark's per-key
+- `src/config.rs` `Config` (design §3.6) over `RuntimeConf`: the seven operations, `silent` (a failed pair's warning
+  shows a redacted value as `Some(*********(redacted))`, `failed_to_set`; Spark echoes it), Spark's per-key
   warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL
   credentials), who may `set`/`unset` a key (a `Startup` key is `CANNOT_MODIFY_STATIC_CONFIG` for everyone, `check_static`; any other key asks the session's policy as SQL `SET` does, `Session::authorize_set_key`: admin keys and server-scoped store keys need `Manage`, refusals audited and counted; no listener-local role check, ADR 0046)
 - `src/interrupt.rs` `Interrupt` (design §3.7): `ALL` and `OPERATION_ID` through the session's operations and
@@ -36,13 +56,25 @@ Paths are relative to this crate.
   are malformed) and the peer address; failures `UNAUTHENTICATED` with Spark's messages, throttled or unavailable
   `UNAVAILABLE`, no peer address refused, a caller with no role `PERMISSION_DENIED` (42501, audited) before any
   session; the result rides in the request extensions (`ConnectAuth::caller` fails closed without it); auth off =
-  the local user. `role_sessions` is the production session factory (`PathPrefixPolicy(RolePolicy(role))`; each session counts its denials into the server's `DeniedCounts` under `connect`, as does the no-role refusal with `ConnectAuth::with_denials`). `SessionOwner` (method, kind, tenant, name,
-  no groups) is the session key. `check_rpc` / `check_command`: the §3b class of every RPC and `Command` arm,
+  the local user. The layer takes the request's `Surface` from its path (`surface_of_path`: `/arrow.flight.protocol.FlightService/` is
+  `FlightSql`, anything else `Connect`; P3-T101 §2 H2) and passes it to `ConnectAuth::authenticate` (credentials and failure counter,
+  no-role record and denial, act-as records) and into the extensions (`request_surface`, read by `caller`'s refusal log);
+  `tests/flight_surface.rs` checks each site per surface. `role_sessions` is the production session factory (`PathPrefixPolicy(RolePolicy(role))`; each session counts its denials into the server's `DeniedCounts` under its transport's surface (`connect`, `flight-sql`, or `ui` for the UI editor's sessions, which `krishiv-cli` builds with `Transport::Ui`; they counted under `connect` before P3-T101), as does the no-role refusal with `ConnectAuth::with_denials`). `SessionOwner` (method, kind, tenant, name,
+  `delegated_by`; no groups, except an impersonated principal's, which pin its act-as identity) is the session key.
+  `src/auth/act_as.rs` (P3-T061 I2/I3, note amendment A12) trusted impersonation, per RPC in the layer: only
+  `x-krishiv-act-as-user` (+ `-groups`, `-tenant`, URL-encoded) or `x-krishiv-act-as-token` asks, never
+  `UserContext.user_id`; decided by `ServerAuth::impersonate` / `impersonate_signed` from the connection's own peer
+  (`ConnectAuth::with_impersonation`; without it, or with authentication off, act-as is refused); unreadable metadata,
+  or plain metadata that disagrees with the assertion beside it, is refused through `refuse_impersonation`; every
+  refusal `KRISHIV_AUTH_IMPERSONATION_DENIED`, `PERMISSION_DENIED`; `tests/impersonation.rs` (its `signed` module, feature `oidc`: assertions against a loopback JWK set, metadata beside them that disagrees refused). `check_rpc` / `check_command`: the §3b class of every RPC and `Command` arm,
   no wildcard arm (a new proto arm fails to compile); `enforce` asks the session's policy for a
   `Check::Privilege` (`Session::authorize_privilege`, one `krishiv::audit` record per denial); `tests/auth.rs`
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, its `Replay`, one
-  atomic state: running, then finished or cancelled by compare-and-swap; `close` = Spark's `ExecuteHolder.close`)
-  and `Operations`, the per-session map in `SessionEntry` (`krishiv.connect.maxOperationsPerSession`,
+  atomic state: running, then finished, failed or cancelled by compare-and-swap, plus `ended` once its encoder
+  stopped; `state()` for GetStatus: cancelled and not ended is `Terminating`; `close` = Spark's `ExecuteHolder.close`)
+  and `Operations`, the per-session map in `SessionEntry` (an operation that leaves it is remembered with its final
+  state: LRU, `ENDED_OPERATIONS_KEPT` 1,000, `ENDED_OPERATION_WINDOW` 30 min after the last lookup; recorded under the
+  live lock, so a lookup always finds it in one of the two) (`krishiv.connect.maxOperationsPerSession`,
   `KRISHIV_OPERATION_LIMIT`; the same plan under a live id is `Admitted::Existing`); `ExecuteLimits` (`aheadBytes`,
   plan and batch sizes, retry buffer, sender caps, detach timeout, maintenance interval, `maxResponseBytes`); tag
   checks (`KRISHIV_INVALID_OPERATION_TAG`)
@@ -60,10 +92,14 @@ Paths are relative to this crate.
   `aheadBytes` + retry buffer, reserved before the first response, held until close), then pushing into the
   operation's `Replay` under the ahead budget (`krishiv.connect.execute.aheadBytes`) and memory consumer
   `connect_responses` (the Arrow payload is `Bytes`, shared with the copy sent), the
-  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), `register_function` with a Python UDF runs (no response but the end), other commands are 56K00 until T012;
+  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), `register_function` with a Python UDF runs (no response but the end), `checkpoint_command` (`src/execute/cache_command.rs`: `DataFrame::checkpoint` / `local_checkpoint`, the result held under a UUID in `SessionEntry`'s map and answered as `checkpoint_command_result`) and `remove_cached_remote_relation_command` (drops the id, an unknown one is fine) run; a `cached_remote_relation` is looked up at translation (`Requested::bind`, `CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND` when absent) and spliced in by `Session::from_plan_over` (the new frame owns what the held frames own; a read inside a subquery expression is not replaced; a lazy checkpoint's rows are taken by the first analysis that reads it, `AnalyzePlan` included, a recorded difference from Spark pinned by `tests/cache.rs`); `persist`, `unpersist` and `checkpoint_command` need the operator floor (`Check::SideEffect`: `Operate` on `System("cache")`, `tests/auth.rs`); `write_operation` and `write_operation_v2` (`src/execute/write_command.rs`, PR-24: the session's `write_to_with` / `write_table_with` / `write_to_table_with`, the same calls the Python facade makes; `save()` without a path takes the `path` option, else `_LEGACY_ERROR_TEMP_2050`; the writers' own checks apply; `tests/write.rs`) run; `SessionEntry::close` drops the held frames; other commands are 56K00 until T012;
   `request_plan` (shared with `AnalyzePlan`) translates twice when the plan holds local relations: the first pass records
   them, `Session::local_relation` builds them (cached ones are `NOT_FOUND_CACHED_LOCAL_RELATION` until the artifact
-  store lands), the second pass resolves them (`krishiv-connect` CLAUDE.md);
+  store lands), the second pass resolves them (`krishiv-connect` CLAUDE.md); `clean_cache` (PySpark's exit cleanup) and a `register_function` that ran end
+  through `Work::NoResult` (only `ResultComplete`); a drop guard (`Unsettled`) settles an operation whose encoder
+  task unwinds (`INTERNAL_ERROR`, or `OPERATION_CANCELED` after an interrupt), so no stream waits on an orphan;
+  `src/execute/hooks.rs` (cfg(test) only) injects an encoder panic or a held preparation per operation id, used by
+  `src/execute/fault_tests.rs`;
   `src/execute/arrow.rs` Spark's Arrow shapes, batch limits, IPC streams, codecs and chunks;
   `src/execute/schema.rs` the `schema` response (`DataTypeProtoConverter.toConnectProtoType`)
 - `src/udf.rs` (P3-T014, PR-26d part 1) Python UDFs: `UdfHost` (the server's one pool, `krishiv_udf_pool::Pool` on
@@ -72,32 +108,52 @@ Paths are relative to this crate.
   the first passed `Usage` check on `System("udf")` (`register_function`'s command class; a plan with an inline UDF
   checked in `execute::execution_plan` after translation, before anything is registered), released with the session;
   `InlineUdfs` is the translator's host (inline UDFs as the session's encoded unregistered-UDF names, one version per
-  distinct definition by digest; `AnalyzePlan` types them, registers nothing, needs no privilege); `copy_for` gives a
-  `CloneSession` clone a runtime of its own (to be called by PR-15's CloneSession); `tests/udf.rs` (real workers with
+  distinct definition by digest; `AnalyzePlan` types them, registers nothing, needs no privilege; the UDFs of
+  `mapInPandas`/`applyInPandas`/cogroup relations (PR-26d part 2, `relation_python_udf`) take a version the same way
+  under the same check and run on the session's workers (the pool's `prepare_relation`); `tests/udf.rs`
+  `a_relation_udf_is_client_code_and_is_typed_without_a_privilege`, `admin_runs_map_in_pandas_on_the_pool`,
+  `admin_runs_map_in_arrow`, `admin_runs_each_grouped_map_kind_per_group`, `admin_runs_each_cogrouped_map_kind`); `copy_for` gives a
+  `CloneSession` clone a runtime of its own (`manager/clone.rs`); `SessionUdfRuntime::set_artifacts` takes the session's Python artifacts (default: ignored; the pool's `SessionUdfs::set_artifacts` arrives with PR-26c-3); `tests/udf.rs` (real workers with
   `KRISHIV_TEST_UDF_PYTHON`)
 - `src/codec.rs` `WireCodec`: requests decode only through `wire::decode_request` (bounded size, count, depth, fields)
 - `src/status.rs` `status_of`: a `KrishivError` as Spark's gRPC status (`INTERNAL`, `google.rpc.ErrorInfo` with
   `classes`, `sqlState`, `errorClass`, `messageParameters`; `ErrorUtils.buildStatusFromThrowable`, v4.3.0;
   `KRISHIV_INSUFFICIENT_PERMISSIONS` is `PERMISSION_DENIED`, ADR 0046 §8; `PYTHON_EXCEPTION` carries Spark's `PythonException` classes, `KRISHIV_PYTHON_WORKER_EXITED` `SparkException`);
   `exception_classes` picks the Java class list PySpark's `convert_exception` reads (Spark's own for the Connect
-  classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT` and `KRISHIV_OPERATION_LIMIT`
+  classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT`, `KRISHIV_OPERATION_LIMIT`, `KRISHIV_ARTIFACT_LIMIT`
   are `RESOURCE_EXHAUSTED`
 - `src/manager.rs` `SessionManager` (Spark's `SparkConnectSessionManager`; its factory gets the `Authenticated`
-  caller; a new session records transport `connect`, the client's `user_id` (unverified, ADR 0046 §5) and its
+  caller and the `Transport`; a new session records transport `connect` (`get_or_create_with` / `get_with` take the
+  transport / surface for Flight SQL, P3-T101 §2 H3: `system.sessions`, the factory's denial surface, the foreign-id
+  record), `is_live` / `release_owned` (H5: owner-keyed, no access stamp, no foreign-id record, abandoned tombstones only
+  for reattachable operations), `SessionOwner::cap_key` public (H6), the client's `user_id` (unverified, ADR 0046 §5) and its
   server-side id for `system.sessions`): get-or-create / lookup / release, tombstones
   (LRU, no expiry), abandoned-operation tombstones and `abandon_detached` (Spark's execution maintenance),
   `SESSION_CHANGED` on a changed server-side id, a `krishiv::audit` record (not counted) for a
   session or operation id another owner holds (ADR 0046 §3b; `audit_foreign_operation`, `tests/foreign_handles_audit.rs`), the idle sweep (skips a session running a query or
   holding a live operation; `busy()` is what shutdown waits for), `krishiv.connect.maxSessions` /
   `maxSessionsPerPrincipal`
-- `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper and abandon tasks, shutdown order; `with_tls` (P3-T002 §3.5): the TLS handshake (ALPN `h2`) on the connection's own task within `handshakeTimeout`, `PeerInfo` (address and verified client leaf) as the connection's `ConnectInfo`, which `AuthLayer` passes to the authenticator; `tests/tls.rs`
+- `src/manager/clone.rs` `SessionManager::clone_session` (design §3.11): target checks (`INVALID_CLONE_SESSION_REQUEST.*`,
+  42K04, sent as `SparkSQLException`; another principal's id `SESSION_NOT_FOUND`; the session caps), the source's
+  gate held exclusively around `Session::clone_session` and the artifact snapshot, the artifact copy on the blocking
+  pool without the gate, the clone published only when complete (`Unpublished` closes it otherwise)
+- `src/get_status.rs` `GetStatus` (design §3.12): absent → none, empty → live ∪ ended, ids deduplicated in order,
+  unknown → `UNKNOWN`; extensions ignored
+- `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper and abandon tasks, shutdown order; `with_routes` (P3-T101 §2 H1) adds further tonic services (Flight SQL, composed by `krishiv-cli`; Connect never depends on Flight) under the same builder limits, TLS, `AuthLayer` and shutdown; `with_tls` (P3-T002 §3.5): the TLS handshake (ALPN `h2`) on the connection's own task within `handshakeTimeout`, `PeerInfo` (address and verified client leaf) as the connection's `ConnectInfo`, which `AuthLayer` passes to the authenticator; `tests/tls.rs`
+- `src/local.rs` `LocalServer` (P3-T016, `krishiv.start_local()`; no failure throttle: every local client is peer 127.0.0.1, so wrong tokens from another process would lock the owner out): a Connect server on `127.0.0.1:0` and `[::1]` (same port; skipped without IPv6: `localhost` may mean `::1`, which no other process may hold) on a thread of its own (current-thread runtime), authenticated by a token made for each start (`spark.connect.authenticate.token`, 64 hex digits, SHA-256 digest compared in constant time by `ServerAuth`), sessions from the base session (`SessionManager::from_base`, no path confinement: the embedded API's rights); `connection_string()` is `sc://localhost:<port>/;token=<token>` (`localhost`, not the IP: pyspark-client sends a token over a plain channel only to that host name); `stop()`/`Drop` drain, join the thread and drop the engine runtime (its compute/I/O pool threads leave just after, `shutdown_background`); `tests/local.rs`
 - `tests/server.rs`, `tests/execute.rs`, `tests/rpcs.rs` (AnalyzePlan, Config, Interrupt), `tests/analyze_access.rs` (AnalyzePlan under `RolePolicy` viewer/operator), `tests/reattach.rs`
-  (replay, reattach, caps, detach, races), `tests/auth.rs`, `tests/tls.rs` end to end over a raw tonic client
+  (replay, reattach, caps, detach, races), `tests/auth.rs`, `tests/tls.rs`, `tests/artifacts.rs` (AddArtifacts,
+  ArtifactStatus, FetchErrorDetails, quotas, links, client drops, T-C8), `tests/clone_status.rs` (CloneSession,
+  GetStatus, the clone vs concurrent statements race) end to end over a raw tonic client; `src/execute/fault_tests.rs`
+  the same with the test-only fault points (encoder panic, cancel or release during plan preparation)
 
 ## Invariants
 - **Sessions are keyed by the authenticated caller's `SessionOwner`**, never by `UserContext.user_id` (ADR 0046
   §5, threat model T-A8); a session id another owner holds is `INVALID_HANDLE.SESSION_NOT_FOUND`, the same answer
   as unknown. Groups are not in the key; the method is (a token and an OIDC subject of one name are two owners).
+  An impersonated principal's key also holds its delegator and its groups (P3-T061 A4, rule 5): alice through a
+  front end, alice herself and alice through another front end are three owners, and a changed act-as identity
+  finds no session.
 - **A session's policy is its caller's role at creation, for life**: a caller whose role differs never gets that
   session; it is closed without a tombstone and the lookup goes on as for a free id (a create builds a new one,
   a client that saw the old id gets `INVALID_HANDLE.SESSION_CHANGED`, an RPC that creates nothing
@@ -106,7 +162,21 @@ Paths are relative to this crate.
   outlive them); a class `check_rpc` gives that needs more than the session lookup or the analyzer is refused
   until its RPC applies it (fail closed).
 - **No lock across an `await`**, and none while a session is built or closed: the manager's mutex guards map
-  lookups and inserts only. A racing create of the same key keeps the first and closes the loser.
+  lookups and inserts only. Lock order: the manager's, then a session's `Operations` (never the reverse). A racing create of the same key keeps the first and closes the loser. The one exception
+  is each session's statement gate (`SessionEntry::shared`, a tokio `RwLock`): an RPC holds only its own session's
+  gate and takes no other lock while waiting for it; `CloneSession` holds the source's exclusively only around the
+  synchronous copy (never across the artifact copy or a stream), so it cannot deadlock and never waits on a client.
+  The gate is fair (write-preferring): a clone queued behind a slow `ExecutePlan` setup (`df.schema()` listing many
+  files) holds back every later `Config`, `AnalyzePlan` and `ExecutePlan` of that session until that setup ends:
+  head-of-line blocking, not a deadlock. Commands (T012) that change session state must run under the shared gate,
+  and their side effects must not run in the encoder (after the gate is dropped).
+- **Cached artifact blobs copied to a clone are reserved twice in the pool** while both sessions hold them (the
+  `Bytes` are shared): deliberate, conservative accounting (review L4); a tight pool can refuse such a clone.
+- **GetStatus and the operation states follow design §3.12, not Spark's handler** (unverified, not in the vendored
+  sources): a setup failure is `FAILED`, a setup whose RPC was dropped is `CANCELLED`, an interrupt whose encoder still
+  runs is `TERMINATING`. An operation's final state is decided (interrupted) before it is recorded; one known window
+  remains: a release that records `SUCCEEDED` between a failed last response and `fail_finished` (the record says
+  `SUCCEEDED`, the removed operation `FAILED`; needs a pool refusal on the last response).
 - **Decode only through `wire`** (`#![deny(clippy::disallowed_methods)]`): the codec is the one decode path.
 - Shutdown: draining flag (new RPCs `UNAVAILABLE`, `/readyz` 503), stop accepting, queries get
   `krishiv.server.shutdownTimeout`, then every session is closed (queries cancelled). The engine runtime is dropped
@@ -122,6 +192,10 @@ Paths are relative to this crate.
   `detachedTimeout` (then tombstoned: `OPERATION_ABANDONED`). Live operations, detached or finished but unreleased,
   keep a session from the idle sweep; shutdown waits only for operations still running or read by an attached
   client (`Operation::is_active`).
+- **Artifacts never leave their session's directory**: names are validated before any file exists, every path is
+  resolved segment by segment from a directory descriptor with `O_NOFOLLOW`, installs use `linkat` (no replace), and
+  every byte is counted against the quota before it is written. A released, swept or shut-down session removes its
+  directory; the root goes with the service.
 - **Client code runs only after its `Usage` check on `System("udf")`** (ADR 0046 §3b, N1): a session that never
   passed one has no Python UDF runtime, so no plan of it starts a worker.
 - `#![forbid(unsafe_code)]`; no `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
@@ -130,5 +204,5 @@ Paths are relative to this crate.
 0003, 0026, 0046
 
 ## Tests
-`cargo nextest run -p krishiv-connect-server` · `cargo clippy -p krishiv-connect-server --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connect-server` · `cargo clippy -p krishiv-connect-server --all-targets -- -D warnings` · feature `oidc` (signed act-as assertions): `--features oidc`
 · the generated stub: `cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check`

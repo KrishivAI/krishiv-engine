@@ -23,7 +23,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef};
-use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    InternalError, KrishivError, KrishivUnsupportedFeature,
+    UnsupportedFeatureQueryOnlyCorruptRecordColumn,
+};
 use krishiv_io::{ColumnPath, FilterId, MetadataCols};
 use krishiv_optimizer::PlanStats;
 use krishiv_plan::{
@@ -322,6 +325,17 @@ pub(crate) struct Planner<'a> {
     pub(super) observers: u32,
     /// Which shared plans each read of one is under (live, or a `LIMIT 0`'s).
     shared_reads: super::observe::SharedReads,
+    /// The attributes the whole plan reads (`util::referenced_attrs`), for the corrupt-record-only check.
+    referenced: HashSet<AttrId>,
+    /// The columns the parent of the relation planned next reads from it, when that parent
+    /// says (a projection or an aggregate, through filters, aliases and self-join shifts):
+    /// a scan reached that way reads only these. [`Self::plan`] takes it on entry, so every
+    /// other node plans its children without one. A table read several times shares one
+    /// logical scan whose columns are the union over its readers (`krishiv_optimizer`'s
+    /// pruning); each instance is planned once per parent, so each can read only its own.
+    pub(super) demand: Option<HashSet<AttrId>>,
+    /// `krishiv.exec.scan.instanceProjection`: whether a scan reads only its `demand`.
+    instance_projection: bool,
 }
 
 impl<'a> Planner<'a> {
@@ -360,6 +374,13 @@ impl<'a> Planner<'a> {
             unobserved: 0,
             observers: 0,
             shared_reads: super::observe::SharedReads::default(),
+            referenced: referenced_attrs(root),
+            demand: None,
+            instance_projection: cx
+                .config
+                .get(&krishiv_common::config::EXEC_SCAN_INSTANCE_PROJECTION)
+                .and_then(krishiv_common::config::ConfigValue::as_bool)
+                .unwrap_or(true),
         }
     }
 
@@ -398,8 +419,9 @@ impl<'a> Planner<'a> {
     }
 
     pub(crate) fn plan(&mut self, p: &Arc<LogicalPlan>) -> Result<Planned> {
+        let demand = self.demand.take();
         match &p.node {
-            PlanNode::Scan(scan) => self.scan(p, scan, None),
+            PlanNode::Scan(scan) => self.scan(p, scan, None, demand.as_ref()),
             PlanNode::Filter { input, predicate } if has_python_udf(predicate) => {
                 self.python_filter(input, predicate)
             }
@@ -409,7 +431,8 @@ impl<'a> Planner<'a> {
                     // The scan evaluates pushed filters over the table's columns.
                     && scan.metadata_column().is_none()
                 {
-                    return self.scan(p, scan, Some(predicate));
+                    let demand = with_columns_of(demand, predicate);
+                    return self.scan(p, scan, Some(predicate), demand.as_ref());
                 }
                 if let PlanNode::Window {
                     input: below,
@@ -425,9 +448,11 @@ impl<'a> Planner<'a> {
                         self.window_group_limit_threshold(),
                     );
                     let below = self.plan(below)?;
-                    let window = self.window(below, exprs, partition_by, order_by, limit)?;
+                    let window =
+                        self.window_relation(below, exprs, partition_by, order_by, limit)?;
                     return self.filter(window, predicate);
                 }
+                self.demand = with_columns_of(demand, predicate);
                 let mut input = self.plan(input)?;
                 if matches!(input.node, PhysNode::Scan(_)) {
                     self.no_runtime_filters_before(&mut input, predicate);
@@ -454,10 +479,19 @@ impl<'a> Planner<'a> {
                 right,
                 kind,
                 condition,
-            } => self.join(left, right, *kind, condition),
-            PlanNode::SubqueryAlias { input, .. } => self.plan(input),
+            } => self.join(left, right, *kind, condition, demand),
+            PlanNode::SubqueryAlias { input, .. } => {
+                self.demand = demand;
+                self.plan(input)
+            }
             PlanNode::Repartition { input, exprs } => self.repartition(input, exprs),
             PlanNode::Shift { input, offset } => {
+                // Every id above is an id below plus `offset`.
+                self.demand = demand.map(|d| {
+                    d.iter()
+                        .filter_map(|id| id.0.checked_sub(*offset).map(AttrId))
+                        .collect()
+                });
                 let mut planned = self.plan(input)?;
                 for id in &mut planned.layout {
                     id.0 =
@@ -631,16 +665,8 @@ impl<'a> Planner<'a> {
                 partition_by,
                 order_by,
             } => {
-                if exprs
-                    .iter()
-                    .any(|e| super::python_udf::has_python_aggregate_udf(e))
-                {
-                    return Err(super::python_relation::later_kind(
-                        "a Python aggregate UDF over a window",
-                    ));
-                }
                 let input = self.plan(input)?;
-                self.window(input, exprs, partition_by, order_by, None)
+                self.window_relation(input, exprs, partition_by, order_by, None)
             }
             PlanNode::UnionLoop {
                 id,
@@ -685,9 +711,21 @@ impl<'a> Planner<'a> {
                 krishiv_plan::check_python_relation_determinism(&p.node)?;
                 self.cogroup_map(left, right, left_keys, right_keys, udf, output)
             }
-            PlanNode::PythonTableFunction { .. } => Err(super::python_relation::later_kind(
-                "a Python table function",
-            )),
+            PlanNode::PythonTableFunction {
+                args,
+                table_arg,
+                udf,
+                output,
+                lateral,
+                analyzed,
+            } => self.python_table_function(
+                args,
+                table_arg.as_ref(),
+                udf,
+                output,
+                lateral.as_ref(),
+                analyzed.as_ref(),
+            ),
             _ => {
                 let text = p.to_string();
                 let name = text.split_whitespace().next().unwrap_or_default();
@@ -1185,18 +1223,21 @@ impl<'a> Planner<'a> {
         plan: &Arc<LogicalPlan>,
         scan: &krishiv_plan::Scan,
         filter: Option<&Arc<Expr>>,
+        demand: Option<&HashSet<AttrId>>,
     ) -> Result<Planned> {
-        self.scan_reading(plan, scan, filter, false)
+        self.scan_reading(plan, scan, filter, false, demand)
     }
 
     /// A scan; with `row_id`, its output ends in the row id, in two columns
-    /// the plan above doesn't name.
+    /// the plan above doesn't name. With `demand`, it reads only the columns in
+    /// it (and those of `filter`, which the caller adds), when that leaves at least one.
     pub(super) fn scan_reading(
         &mut self,
         plan: &Arc<LogicalPlan>,
         scan: &krishiv_plan::Scan,
         filter: Option<&Arc<Expr>>,
         row_id: bool,
+        demand: Option<&HashSet<AttrId>>,
     ) -> Result<Planned> {
         // Table metadata only: the scan itself is built when the plan is
         // instantiated.
@@ -1205,6 +1246,30 @@ impl<'a> Planner<'a> {
         let table = factory.table_schema();
         let metadata = crate::operators::scan_metadata(scan);
         let hidden = usize::from(metadata != MetadataCols::default());
+        // Spark refuses a JSON/CSV read of only the corrupt-record column when it plans the scan. A
+        // column the scan keeps only to count rows is not referenced by the plan above it.
+        let referenced: Vec<&str> = scan.output[..scan.output.len() - hidden]
+            .iter()
+            .filter(|c| self.referenced.contains(&c.id))
+            .map(|c| c.name.as_str())
+            .collect();
+        if !self.cx.inspect && factory.only_reads_corrupt_record(&referenced) {
+            return Err(UnsupportedFeatureQueryOnlyCorruptRecordColumn {}.into());
+        }
+        // Narrowed after the check above, which keeps judging the shared scan.
+        let narrowed = if row_id || hidden > 0 || !self.instance_projection {
+            None
+        } else {
+            demand
+                .and_then(|d| narrow_scan(scan, d))
+                // A JSON/CSV instance left with only the corrupt-record column would parse
+                // nothing else; it keeps the shared scan's columns.
+                .filter(|n| {
+                    let names: Vec<&str> = n.output.iter().map(|c| c.name.as_str()).collect();
+                    !factory.only_reads_corrupt_record(&names)
+                })
+        };
+        let scan = narrowed.as_ref().unwrap_or(scan);
         let mut projection = Vec::with_capacity(scan.output.len());
         for c in &scan.output[..scan.output.len() - hidden] {
             let field = table
@@ -1598,7 +1663,7 @@ impl<'a> Planner<'a> {
 
     /// `input` with a column for each sort key that is not one already, and
     /// the keys.
-    fn sort_keys(
+    pub(crate) fn sort_keys(
         &mut self,
         input: Planned,
         order: &[SortOrder],

@@ -3,12 +3,14 @@ resolver = "3"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 # MSRV = latest stable (1.99) minus two minor releases.
 rust-version = "1.97"
-license = "Apache-2.0"                                     # ADR 0033
+license = "Apache-2.0"                                              # ADR 0033
 repository = "https://github.com/KrishivAI/krishiv-engine"
+keywords = ["spark", "pyspark", "sql", "dataframe", "query-engine"]
+categories = ["database-implementations", "database"]
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -139,6 +141,8 @@ turmoil = { version = "0.7.2", default-features = false }
 pyo3 = { version = "0.30.1", default-features = false }
 hashbrown = { version = "0.17", default-features = false }
 foldhash = { version = "0.2", default-features = false }
+# Theta sketches of Iceberg Puffin NDV (P3-T024) and the T086 sketch functions; owner approved 0.6.0 pinned exactly (needs-owner, 2026-11-12). Features are additive per crate.
+datasketches = { version = "=0.6.0", default-features = false, features = ["theta"] }
 # Digests of the md5/sha1/sha2 SQL functions (kernels); sha2 also checksums interoperability fixtures.
 md5 = { package = "md-5", version = "0.11", default-features = false }
 sha1 = { version = "0.11", default-features = false }

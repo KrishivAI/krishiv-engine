@@ -73,6 +73,16 @@ struct Task {
     need: usize,
     /// Groups to presize the index for on the first start (0 once done).
     presize: usize,
+    /// Groups per partition of `parts` to presize the row pages and
+    /// accumulators for on the first start (empty once done, or when the
+    /// pool refused `pages`).
+    part_groups: Vec<usize>,
+    /// The bytes `part_groups` adds, reserved with `need` when the pool
+    /// grants both at once; otherwise the task grows as it merges.
+    pages: usize,
+    /// Set by [`Task::run`] once presizing grew the row pages; the
+    /// scheduler counts it (`row_final_presized`) and clears it.
+    presized_pages: bool,
 }
 
 impl Task {
@@ -81,6 +91,17 @@ impl Task {
     fn run(&mut self, query: &QueryContext) -> Result<Option<usize>> {
         if self.presize > 0 {
             self.table.presize(std::mem::take(&mut self.presize))?;
+            // Non-empty only when the scheduler granted `pages` with `need`
+            // (it clears them otherwise), so these bytes are reserved.
+            let groups = std::mem::take(&mut self.part_groups);
+            if !groups.is_empty() {
+                let before = self.table.memory_size();
+                self.table.presize_parts(self.parts.start, &groups, CHUNK);
+                let after = self.table.memory_size();
+                shrink_to(&mut self.reservation, after);
+                // Counted by what the table grew, not by the call.
+                self.presized_pages = after > before;
+            }
         }
         let Self {
             parts,
@@ -214,6 +235,13 @@ impl HashAggregate {
         };
         publish(&queue, &[], &spare);
         let limit = ctx.executor().parallelism().max(1);
+        // Every input byte the tasks hold at the start: presized pages are
+        // granted only beside all of them (see the grant below).
+        let inputs_held: usize = queue
+            .iter()
+            .flat_map(|t| &t.inputs)
+            .map(|(_, r)| r.size())
+            .sum();
         let mut running: Running<'_> = FuturesUnordered::new();
         let mut done: Vec<Task> = Vec::new();
         let mut out: Option<SpillWriter> = None;
@@ -231,6 +259,38 @@ impl HashAggregate {
                     queue.push_front(task);
                     stalled = running.is_empty();
                     break;
+                }
+                // A task without per-partition estimates (the one-wide
+                // fallback) has no pages to presize.
+                debug_assert!(task.pages == 0 || !task.part_groups.is_empty());
+                if task.pages > 0 {
+                    // Presized pages only when the pool grants them now;
+                    // never a reason to wait. They take a task's whole
+                    // output before its inputs are freed, where the merge
+                    // they replace grows as it frees them, and the tasks
+                    // start together; so they are taken only while the pool
+                    // also has every input byte of the phase free beside
+                    // them. Under pressure the tasks grow as they merge:
+                    // with a task's own inputs as the margin, TPC-H q16
+                    // (every pair new) still spilled 2.3x the bytes at a
+                    // limit the merge fits (SF1000: 53 s -> 100 s). Checked,
+                    // then reserved, without a lock (as the spill writers'
+                    // optional memory): only `want` is ever reserved, and a
+                    // race either makes `try_grow` fail or, when another
+                    // consumer grows in between, grants the pages with less
+                    // than `inputs_held` free beside them; both are harmless.
+                    let pages = std::mem::take(&mut task.pages);
+                    let want = task.need + pages;
+                    let room = ctx
+                        .query()
+                        .pool()
+                        .available()
+                        .is_none_or(|free| free >= want.saturating_add(inputs_held));
+                    if room && task.reservation.try_grow(want).is_ok() {
+                        task.need = 0;
+                    } else {
+                        task.part_groups.clear();
+                    }
                 }
                 if task.need > 0 {
                     if task.reservation.try_grow(task.need).is_err() {
@@ -301,6 +361,11 @@ impl HashAggregate {
                 break;
             };
             let (mut task, stall) = next?;
+            // Counted where the pages were presized, not where the pool
+            // granted them, so a task that skips presizing is seen.
+            if std::mem::take(&mut task.presized_pages) {
+                bump(&self.counters.row_final_presized, 1);
+            }
             match stall {
                 None => {
                     finished += 1;
@@ -473,6 +538,7 @@ impl HashAggregate {
             vec![FinalTask {
                 parts: 0..wide,
                 groups: inputs.iter().map(RowTable::len).max().unwrap_or(0),
+                part_groups: Vec::new(),
             }]
         };
         let ranges: Vec<Range<usize>> = plan.iter().map(|t| t.parts.clone()).collect();
@@ -499,6 +565,9 @@ impl HashAggregate {
                 .with_probes(g.probes.clone());
             queue.push_back(Task {
                 need: table.projected_presize(t.groups),
+                pages: table.projected_parts(&t.part_groups, CHUNK),
+                part_groups: t.part_groups,
+                presized_pages: false,
                 presize: t.groups.max(1),
                 at: (0, t.parts.start, 0),
                 parts: t.parts,

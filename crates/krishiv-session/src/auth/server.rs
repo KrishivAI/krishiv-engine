@@ -19,7 +19,9 @@ use krishiv_common::error::KrishivError;
 use krishiv_common::principal::Principal;
 
 use super::config::{AuthConfig, RoleLists, SPARK_TOKEN_NAME};
-use super::impersonation::{self, ActAs, Channel, Decision, Denial, ImpersonationConfig};
+use super::impersonation::{
+    self, ActAs, ActAsHint, Channel, Decision, Denial, ImpersonationConfig,
+};
 #[cfg(feature = "oidc")]
 use super::jose::{self, Identity};
 use super::mtls::{ClientCertificates, MtlsConfig};
@@ -165,7 +167,11 @@ impl ServerAuth {
         #[cfg(feature = "oidc")] oidc: Option<Oidc>,
         #[cfg(feature = "oidc")] assertions: Option<Oidc>,
     ) -> Result<Self, KrishivError> {
-        let tokens = StaticTokens::build(&config.tokens)?;
+        // A token's own expiry and its principal's are one rule: the earlier applies.
+        let tokens = StaticTokens::build(&super::tokens::with_principal_expiry(
+            &config.tokens,
+            &config.principals,
+        ))?;
         if config.tokens.iter().any(|t| t.name == SPARK_TOKEN_NAME) {
             tracing::warn!(
                 target: "krishiv::auth",
@@ -236,7 +242,7 @@ impl ServerAuth {
             && self.oidc.is_some()
             && jose::looks_like_jws(t)
         {
-            return self.finish_oidc(credentials, self.verify_oidc(t, now, false), now);
+            return self.finish_oidc(credentials, t, self.verify_oidc(t, now, false), now);
         }
         self.authenticate_static(credentials, token, now)
     }
@@ -438,8 +444,9 @@ impl ServerAuth {
     /// inside `act`; then the rules of [`ServerAuth::impersonate`] apply as for a trusted
     /// channel, from any peer. A key not cached yet waits for one JWK set fetch. The returned
     /// [`ActAs`] is what the transport pins for the session (rule 5): a later call may bring a
-    /// fresh assertion, which must name the same end user, groups and tenant. The transport
-    /// refuses plain act-as metadata that disagrees with an assertion sent beside it.
+    /// fresh assertion, which must name the same end user, groups and tenant. `beside` is the
+    /// plain act-as metadata the transport received with the assertion: a part that disagrees
+    /// with it is refused (`MetadataMismatch`), audited once with the assertion's `jti`.
     ///
     /// # Errors
     /// `KRISHIV_AUTH_IMPERSONATION_DENIED` (42501) for every refusal, `signedAssertion` off
@@ -450,6 +457,7 @@ impl ServerAuth {
         surface: Surface,
         peer: std::net::SocketAddr,
         assertion: &str,
+        beside: &ActAsHint,
     ) -> Result<(ActAs, Authenticated), KrishivError> {
         // The caller's own standing first (review m3): a caller that may not impersonate never
         // makes the server verify an assertion or fetch its keys.
@@ -461,20 +469,25 @@ impl ServerAuth {
             Ok(()) => self.verify_assertion(caller, assertion).await,
             Err(denial) => Err(denial),
         };
-        let (act_as, assertion_id) = match checked {
+        let (act_as, assertion_id, subject) = match checked {
             Ok(found) => found,
             Err(denial) => {
                 return Err(self.refuse(caller, surface, peer, denial));
             }
         };
-        let decision = impersonation::decide(
-            &self.principals,
-            &self.impersonation,
-            caller,
-            Channel::Signed,
-            &act_as,
-            std::time::SystemTime::now(),
-        );
+        // One decision, one audit record (review M3): a disagreeing hint is that decision.
+        let decision = if beside.disagrees_with(&act_as, &caller.principal) {
+            Decision::Denied(Denial::MetadataMismatch)
+        } else {
+            impersonation::decide(
+                &self.principals,
+                &self.impersonation,
+                caller,
+                Channel::Signed,
+                &act_as,
+                std::time::SystemTime::now(),
+            )
+        };
         let end_user = self.audit(
             caller,
             surface,
@@ -483,7 +496,29 @@ impl ServerAuth {
             assertion_id.as_deref(),
             decision,
         )?;
+        // The assertion is the end user's subject token for delegated catalogs (P3-T067 §3.3),
+        // marked as an assertion so it is never forwarded. Kept only for someone else: acting
+        // as oneself leaves the caller's own credential.
+        let end_user = if end_user.principal.delegated_by.is_some() {
+            end_user.with_credential(subject)
+        } else {
+            end_user
+        };
         Ok((act_as, end_user))
+    }
+
+    /// Audits and counts a refusal the transport makes itself (act-as metadata it cannot read,
+    /// or plain metadata that disagrees with the assertion beside it): one `krishiv::audit`
+    /// record and one denied count, as [`ServerAuth::impersonate`]'s refusals.
+    #[must_use]
+    pub fn refuse_impersonation(
+        &self,
+        caller: &Authenticated,
+        surface: Surface,
+        peer: std::net::SocketAddr,
+        denial: Denial,
+    ) -> KrishivError {
+        self.refuse(caller, surface, peer, denial)
     }
 
     /// Audits and counts a refusal that came before any [`ActAs`] was known; the error.
@@ -506,7 +541,7 @@ impl ServerAuth {
         &self,
         caller: &Authenticated,
         assertion: &str,
-    ) -> Result<(ActAs, Option<String>), Denial> {
+    ) -> Result<(ActAs, Option<String>, Option<super::InboundCredential>), Denial> {
         let Some(verifier) = &self.assertions else {
             return Err(Denial::AssertionOff);
         };
@@ -534,9 +569,16 @@ impl ServerAuth {
         if actor.subject.as_deref() != Some(caller.principal.name.as_str()) {
             return Err(Denial::ActorMismatch);
         }
+        let subject = super::InboundCredential::from_exp(
+            super::CredentialKind::SignedAssertion,
+            assertion,
+            identity.claims,
+            identity.exp,
+        );
         Ok((
             ActAs::new(identity.principal).with_groups(identity.groups),
             identity.token_id,
+            Some(subject),
         ))
     }
 
@@ -550,7 +592,7 @@ impl ServerAuth {
         &self,
         _caller: &Authenticated,
         _assertion: &str,
-    ) -> Result<(ActAs, Option<String>), Denial> {
+    ) -> Result<(ActAs, Option<String>, Option<super::InboundCredential>), Denial> {
         Err(Denial::AssertionOff)
     }
 
@@ -643,7 +685,7 @@ impl Authenticator for ServerAuth {
                     }
                     v => v,
                 };
-                return self.finish_oidc(credentials, verdict, Instant::now());
+                return self.finish_oidc(credentials, token, verdict, Instant::now());
             }
             self.authenticate_at(credentials, Instant::now())
         })
@@ -675,6 +717,7 @@ impl ServerAuth {
     fn finish_oidc(
         &self,
         credentials: &Credentials<'_>,
+        token: &str,
         verdict: Result<Option<Identity>, AuthFailure>,
         now: Instant,
     ) -> Result<Authenticated, AuthFailure> {
@@ -686,7 +729,7 @@ impl ServerAuth {
                 self.record_failure(credentials, now);
                 Err(self.fail(credentials, Method::Oidc, AuthFailure::Invalid))
             }
-            Ok(Some(identity)) => Ok(self.oidc_principal(identity)),
+            Ok(Some(identity)) => Ok(self.oidc_principal(identity, token)),
             // Only `authenticate` asks to wait; reaching here without waiting is a refusal.
             Ok(None) => Err(self.fail(credentials, Method::Oidc, AuthFailure::Unavailable)),
             Err(failure) => {
@@ -704,7 +747,7 @@ impl ServerAuth {
     /// An OIDC principal: a user, with its groups; the role is the highest any role-claim value
     /// has in `krishiv.auth.oidc.roles.*` (the lists are disjoint, so this is "the first list,
     /// in order admin, operator, viewer, holding any of the values").
-    fn oidc_principal(&self, identity: Identity) -> Authenticated {
+    fn oidc_principal(&self, identity: Identity, token: &str) -> Authenticated {
         let role = identity
             .groups
             .iter()
@@ -715,7 +758,16 @@ impl ServerAuth {
             krishiv_common::principal::PrincipalKind::User,
         );
         principal.groups = identity.groups;
-        Authenticated::new(principal, role, Method::Oidc).with_token_id(identity.token_id)
+        // The token itself is kept for delegated catalogs (P3-T067 §3.3), secret-typed.
+        let credential = super::InboundCredential::from_exp(
+            super::CredentialKind::Oidc,
+            token,
+            identity.claims,
+            identity.exp,
+        );
+        Authenticated::new(principal, role, Method::Oidc)
+            .with_token_id(identity.token_id)
+            .with_credential(Some(credential))
     }
 
     /// The bearer token of a request that goes to OIDC without a client certificate: the one

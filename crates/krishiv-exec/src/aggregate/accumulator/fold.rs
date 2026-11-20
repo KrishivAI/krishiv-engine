@@ -56,7 +56,10 @@ impl Accumulator {
                     | Kind::ListAgg(_)
                     | Kind::Exact(_)
                     | Kind::Approx(_)
+                    | Kind::Hist(_)
                     | Kind::Hll(_)
+                    | Kind::Bitmap(_)
+                    | Kind::HllSketch(_)
             ))
             && !is_unit(w)
         {
@@ -97,7 +100,10 @@ impl Accumulator {
                     | Kind::AvgDec { .. }
                     | Kind::Exact(_)
                     | Kind::Approx(_)
+                    | Kind::Hist(_)
                     | Kind::Hll(_)
+                    | Kind::Bitmap(_)
+                    | Kind::HllSketch(_)
                     | Kind::MinMax {
                         values: Values::Bytes(_),
                         ..
@@ -863,6 +869,63 @@ impl Accumulator {
                         h.add(g as usize, x);
                     }
                 }
+            }
+            (Kind::Hist(h), false) => {
+                let a = args[0];
+                if a.len() != groups.len() {
+                    return Err(internal(
+                        "a histogram value column of another length than the group ids".to_owned(),
+                    ));
+                }
+                for (i, &g) in groups.iter().enumerate() {
+                    if !valid(i) {
+                        continue;
+                    }
+                    if let Some(v) = quantile::double_of(a, i)? {
+                        h.add(g as usize, v);
+                    }
+                }
+            }
+            (Kind::Hist(h), true) => {
+                let [states] = args else {
+                    return Err(internal(
+                        "a histogram state of another column than its histogram".to_owned(),
+                    ));
+                };
+                let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
+                    return Err(internal(
+                        "a histogram state of another type than binary".to_owned(),
+                    ));
+                };
+                h.merge(groups, states)?;
+            }
+            (Kind::HllSketch(h), false) => h.update(groups, args[0], valid)?,
+            (Kind::HllSketch(h), true) => {
+                let [states] = args else {
+                    return Err(internal(
+                        "an HLL sketch state of another column than its bytes".to_owned(),
+                    ));
+                };
+                let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
+                    return Err(internal(
+                        "an HLL sketch state of another type than binary".to_owned(),
+                    ));
+                };
+                h.merge(groups, states)?;
+            }
+            (Kind::Bitmap(b), false) => b.update(groups, args[0], valid)?,
+            (Kind::Bitmap(b), true) => {
+                let [states] = args else {
+                    return Err(internal(
+                        "a bitmap state of another column than its bytes".to_owned(),
+                    ));
+                };
+                let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
+                    return Err(internal(
+                        "a bitmap state of another type than binary".to_owned(),
+                    ));
+                };
+                b.merge(groups, states)?;
             }
             (Kind::Hll(h), true) => {
                 let [states] = args else {

@@ -288,6 +288,26 @@ fn catalog_limit_exceeded_names_the_limit() {
     );
 }
 
+/// P3-T067 §3.3: a delegated catalog without a usable user token is 42501 and names the catalog.
+#[test]
+fn catalog_delegation_unavailable_is_42501_and_names_the_catalog() {
+    let e: KrishivError = KrishivCatalogDelegationUnavailable {
+        catalog: "`lake`".to_owned(),
+        reason: "this session authenticated with `token`".to_owned(),
+    }
+    .into();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogDelegationUnavailable
+    );
+    assert_eq!(e.error_class().sql_state(), Some("42501"));
+    let text = e.to_string();
+    assert!(
+        text.contains("`lake`") && text.contains("authenticated with `token`"),
+        "{text}"
+    );
+}
+
 /// One release's leaf classes: name -> (SQLSTATE, template), as Spark joins a
 /// main message and its sub-class message.
 fn release_leaves(
@@ -645,4 +665,57 @@ fn python_exception_renders_message_and_traceback() {
             .contains("An exception was thrown from the Python worker: ValueError: boom"),
         "{e}"
     );
+}
+
+/// The three Iceberg commit classes (design note P3-T026-T027 §7.2.1, §7.3),
+/// one per Java exception: `ValidationException` (conflict, 40001),
+/// `CommitFailedException` (a lost race, 40001) and
+/// `CommitStateUnknownException` (40003, "statement completion unknown", so no
+/// generic client retries it), whose text the unknown class carries
+/// (apache-iceberg 1.12.0 `CommitStateUnknownException.COMMON_INFO`).
+#[test]
+fn iceberg_commit_classes_match_java_exceptions() {
+    let conflict = KrishivError::from(KrishivIcebergCommitConflict {
+        table: "db.t".to_owned(),
+        snapshot_id: "7".to_owned(),
+        conflicting_snapshot_id: "5".to_owned(),
+        check: "format version".to_owned(),
+        message: "the table's format version changed from 1 to 2.".to_owned(),
+        files: "the written files were removed where possible".to_owned(),
+    });
+    assert_eq!(conflict.sql_state(), Some("40001"));
+    assert_eq!(conflict.audience(), Audience::User);
+    assert!(conflict.message().contains("snapshot 7"), "{conflict}");
+
+    let failed = KrishivError::from(KrishivIcebergCommitFailed {
+        table: "db.t".to_owned(),
+        snapshot_id: "7".to_owned(),
+        write_id: "w".to_owned(),
+        attempts: "5".to_owned(),
+        reason: "409".to_owned(),
+        files: "the written files were removed where possible".to_owned(),
+    });
+    assert_eq!(failed.sql_state(), Some("40001"));
+    assert!(
+        failed.message().contains("commit.retry.num-retries"),
+        "{failed}"
+    );
+
+    let unknown = KrishivError::from(KrishivIcebergCommitStateUnknown {
+        table: "db.t".to_owned(),
+        snapshot_id: "7".to_owned(),
+        write_id: "w".to_owned(),
+        reason: "504".to_owned(),
+    });
+    assert_eq!(unknown.sql_state(), Some("40003"));
+    assert_eq!(
+        unknown.error_class().name(),
+        "KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN"
+    );
+    for java in [
+        "Cannot determine whether the commit was successful or not",
+        "At this time no files will be deleted including possibly unused manifest lists.",
+    ] {
+        assert!(unknown.message().contains(java), "{unknown}");
+    }
 }

@@ -135,7 +135,14 @@ impl Decompressor {
         let io = |e: std::io::Error| corrupt(codec, e);
         match dec {
             Dec::Gzip(d) => {
-                d.write_all(input).map_err(io)?;
+                // `flush` hands over what the decoder inflated but still
+                // holds, so a stream that breaks later keeps it.
+                let written = d.write_all(input).and_then(|()| d.flush());
+                if let Err(e) = written {
+                    // The bytes inflated before the error are the file's too.
+                    out.append(d.get_mut());
+                    return Err(io(e));
+                }
                 if d.get_ref().len() > MAX_PUSH_OUTPUT {
                     return Err(corrupt(codec, "a chunk inflates past the size limit"));
                 }

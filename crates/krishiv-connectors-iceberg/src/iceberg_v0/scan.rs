@@ -13,8 +13,8 @@ use futures::{StreamExt, TryStreamExt};
 use iceberg::io::{FileIO, FileRead};
 use iceberg::spec::{
     DataContentType, DataFileFormat, FormatVersion, Literal, Manifest, ManifestContentType,
-    ManifestList, ManifestStatus, NestedField, PrimitiveLiteral, PrimitiveType, Schema,
-    SnapshotReference, SnapshotRetention, TableMetadata, Type,
+    ManifestFile, ManifestList, ManifestStatus, NestedField, PrimitiveLiteral, PrimitiveType,
+    Schema, SnapshotReference, SnapshotRetention, TableMetadata, Type,
 };
 use krishiv_common::error::{
     ErrorClass, InternalError, KrishivCatalogLimitExceeded, KrishivError, KrishivUnsupportedFeature,
@@ -72,6 +72,21 @@ pub(crate) fn iceberg_type(p: &PrimitiveType) -> IcebergType {
     }
 }
 
+/// The Krishiv form of an iceberg partition transform.
+pub(crate) fn plan_transform(t: iceberg::spec::Transform) -> Transform {
+    match t {
+        iceberg::spec::Transform::Identity => Transform::Identity,
+        iceberg::spec::Transform::Bucket(n) => Transform::Bucket(n),
+        iceberg::spec::Transform::Truncate(w) => Transform::Truncate(w),
+        iceberg::spec::Transform::Year => Transform::Year,
+        iceberg::spec::Transform::Month => Transform::Month,
+        iceberg::spec::Transform::Day => Transform::Day,
+        iceberg::spec::Transform::Hour => Transform::Hour,
+        iceberg::spec::Transform::Void => Transform::Void,
+        iceberg::spec::Transform::Unknown => Transform::Unknown,
+    }
+}
+
 /// The primitive columns of `schema` reachable through structs.
 pub(crate) fn schema_fields(schema: &Schema) -> Vec<SchemaField> {
     fn walk(fields: &[Arc<NestedField>], prefix: &[String], out: &mut Vec<SchemaField>) {
@@ -112,17 +127,7 @@ pub(crate) fn partition_specs(metadata: &TableMetadata, read: &Schema) -> Partit
                 .fields()
                 .iter()
                 .map(|f| {
-                    let transform = match f.transform {
-                        iceberg::spec::Transform::Identity => Transform::Identity,
-                        iceberg::spec::Transform::Bucket(n) => Transform::Bucket(n),
-                        iceberg::spec::Transform::Truncate(w) => Transform::Truncate(w),
-                        iceberg::spec::Transform::Year => Transform::Year,
-                        iceberg::spec::Transform::Month => Transform::Month,
-                        iceberg::spec::Transform::Day => Transform::Day,
-                        iceberg::spec::Transform::Hour => Transform::Hour,
-                        iceberg::spec::Transform::Void => Transform::Void,
-                        iceberg::spec::Transform::Unknown => Transform::Unknown,
-                    };
+                    let transform = plan_transform(f.transform);
                     PartitionFieldInfo::new(
                         f.field_id,
                         f.source_id,
@@ -147,14 +152,7 @@ pub(crate) fn partition_specs(metadata: &TableMetadata, read: &Schema) -> Partit
 /// `snapshot_for_ref`, which panics on a dangling ref), so they are read from
 /// the metadata's own serialisation.
 fn refs(metadata: &TableMetadata) -> Result<BTreeMap<String, RefInfo>, KrishivError> {
-    let mut json = serde_json::to_value(metadata)
-        .map_err(|e| internal(format!("iceberg-rust: serialising table metadata: {e}")))?;
-    let refs: HashMap<String, SnapshotReference> = match json.get_mut("refs") {
-        Some(refs) => serde_json::from_value(refs.take())
-            .map_err(|e| internal(format!("iceberg-rust: table metadata refs: {e}")))?,
-        None => HashMap::new(),
-    };
-    let mut out: BTreeMap<String, RefInfo> = refs
+    let mut out: BTreeMap<String, RefInfo> = snapshot_refs(metadata)?
         .into_iter()
         .map(|(name, r)| {
             let kind = match r.retention {
@@ -179,6 +177,23 @@ fn refs(metadata: &TableMetadata) -> Result<BTreeMap<String, RefInfo>, KrishivEr
         });
     }
     Ok(out)
+}
+
+/// The refs `metadata` holds, as serialised (none synthesised: a v1 table's
+/// `main` is not in it; see [`refs`]).
+///
+/// # Errors
+/// An internal error when iceberg-rust's serialisation cannot be read back.
+pub(crate) fn snapshot_refs(
+    metadata: &TableMetadata,
+) -> Result<HashMap<String, SnapshotReference>, KrishivError> {
+    let mut json = serde_json::to_value(metadata)
+        .map_err(|e| internal(format!("iceberg-rust: serialising table metadata: {e}")))?;
+    Ok(match json.get_mut("refs") {
+        Some(refs) => serde_json::from_value(refs.take())
+            .map_err(|e| internal(format!("iceberg-rust: table metadata refs: {e}")))?,
+        None => HashMap::new(),
+    })
 }
 
 /// What resolution needs of `metadata` (refs only when `with_refs`).
@@ -290,7 +305,7 @@ pub(crate) fn check_size(
 /// byte past the size reads (the reader refuses that range locally, without a
 /// request, when the file ends there), and a manifest cut at an Avro block
 /// boundary would otherwise parse with entries missing.
-pub(super) async fn read_capped(
+pub(crate) async fn read_capped(
     io: &FileIO,
     what: &str,
     location: &str,
@@ -376,12 +391,8 @@ pub(crate) async fn read_manifest_list(
     version: u8,
     max_bytes: u64,
 ) -> Result<Vec<ManifestFileEntry>, KrishivError> {
-    let bytes = read_capped(io, "manifest list", location, None, max_bytes).await?;
-    let version = avro_format_version(&bytes).unwrap_or(version);
-    let list =
-        ManifestList::parse_with_version(&bytes, format_version(version)?).map_err(from_iceberg)?;
-    Ok(list
-        .consume_entries()
+    Ok(read_manifest_files(io, location, version, max_bytes)
+        .await?
         .into_iter()
         .map(|m| ManifestFileEntry {
             content: match m.content {
@@ -413,6 +424,26 @@ pub(crate) async fn read_manifest_list(
         .collect())
 }
 
+/// The manifests of the manifest list at `location`, as iceberg-rust parses
+/// them (see [`read_manifest_list`]); a commit carries a base snapshot's
+/// manifests into its own list unchanged.
+///
+/// # Errors
+/// `KRISHIV_CATALOG_LIMIT_EXCEEDED` for a list over `max_bytes`; iceberg-rust's
+/// read and parse failures.
+pub(crate) async fn read_manifest_files(
+    io: &FileIO,
+    location: &str,
+    version: u8,
+    max_bytes: u64,
+) -> Result<Vec<ManifestFile>, KrishivError> {
+    let bytes = read_capped(io, "manifest list", location, None, max_bytes).await?;
+    let version = avro_format_version(&bytes).unwrap_or(version);
+    let list =
+        ManifestList::parse_with_version(&bytes, format_version(version)?).map_err(from_iceberg)?;
+    Ok(list.consume_entries().into_iter().collect())
+}
+
 /// A partition value in the spec's single-value serialisation.
 fn primitive_bytes(p: &PrimitiveLiteral) -> Option<Vec<u8>> {
     Some(match p {
@@ -438,66 +469,70 @@ pub(crate) fn parse_manifest(bytes: &[u8], spec_id: i32) -> Result<Vec<ParsedEnt
     let (entries, _) = manifest.into_parts();
     Ok(entries
         .iter()
-        .map(|e| {
-            let f = e.data_file();
-            let bounds = |m: &HashMap<i32, iceberg::spec::Datum>| {
-                m.iter()
-                    .filter_map(|(id, d)| d.to_bytes().ok().map(|b| (*id, b.into_vec())))
-                    .collect()
-            };
-            let counts = |m: &HashMap<i32, u64>| m.iter().map(|(k, v)| (*k, *v)).collect();
-            ParsedEntry {
-                status: match e.status() {
-                    ManifestStatus::Existing => EntryStatus::Existing,
-                    ManifestStatus::Added => EntryStatus::Added,
-                    ManifestStatus::Deleted => EntryStatus::Deleted,
-                },
-                snapshot_id: e.snapshot_id(),
-                sequence_number: e.sequence_number(),
-                file_sequence_number: e.file_sequence_number,
-                file: ContentFile {
-                    content: match f.content_type() {
-                        DataContentType::Data => ContentKind::Data,
-                        DataContentType::PositionDeletes => ContentKind::PositionDeletes,
-                        DataContentType::EqualityDeletes => ContentKind::EqualityDeletes,
-                    },
-                    path: f.file_path().to_owned(),
-                    format: match f.file_format() {
-                        DataFileFormat::Parquet => FileFormatKind::Parquet,
-                        DataFileFormat::Orc => FileFormatKind::Orc,
-                        DataFileFormat::Avro => FileFormatKind::Avro,
-                        DataFileFormat::Puffin => FileFormatKind::Puffin,
-                    },
-                    spec_id,
-                    partition: f
-                        .partition()
-                        .iter()
-                        .map(|v| match v {
-                            None => PartitionValue::Null,
-                            Some(Literal::Primitive(p)) => primitive_bytes(p)
-                                .map_or(PartitionValue::Unreadable, PartitionValue::Value),
-                            Some(_) => PartitionValue::Unreadable,
-                        })
-                        .collect(),
-                    record_count: f.record_count(),
-                    size: f.file_size_in_bytes(),
-                    column_sizes: counts(f.column_sizes()),
-                    value_counts: counts(f.value_counts()),
-                    null_counts: counts(f.null_value_counts()),
-                    nan_counts: counts(f.nan_value_counts()),
-                    lower_bounds: bounds(f.lower_bounds()),
-                    upper_bounds: bounds(f.upper_bounds()),
-                    split_offsets: f.split_offsets().map(<[i64]>::to_vec),
-                    sort_order_id: f.sort_order_id(),
-                    first_row_id: f.first_row_id(),
-                    equality_ids: f.equality_ids(),
-                    referenced_data_file: f.referenced_data_file(),
-                    content_offset: f.content_offset(),
-                    content_size_in_bytes: f.content_size_in_bytes(),
-                },
-            }
+        .map(|e| ParsedEntry {
+            status: match e.status() {
+                ManifestStatus::Existing => EntryStatus::Existing,
+                ManifestStatus::Added => EntryStatus::Added,
+                ManifestStatus::Deleted => EntryStatus::Deleted,
+            },
+            snapshot_id: e.snapshot_id(),
+            sequence_number: e.sequence_number(),
+            file_sequence_number: e.file_sequence_number,
+            file: content_file(e.data_file(), spec_id),
         })
         .collect())
+}
+
+/// `f` (a manifest entry's file of the spec `spec_id`) as Krishiv's
+/// [`ContentFile`].
+pub(crate) fn content_file(f: &iceberg::spec::DataFile, spec_id: i32) -> ContentFile {
+    let bounds = |m: &HashMap<i32, iceberg::spec::Datum>| {
+        m.iter()
+            .filter_map(|(id, d)| d.to_bytes().ok().map(|b| (*id, b.into_vec())))
+            .collect()
+    };
+    let counts = |m: &HashMap<i32, u64>| m.iter().map(|(k, v)| (*k, *v)).collect();
+    ContentFile {
+        content: match f.content_type() {
+            DataContentType::Data => ContentKind::Data,
+            DataContentType::PositionDeletes => ContentKind::PositionDeletes,
+            DataContentType::EqualityDeletes => ContentKind::EqualityDeletes,
+        },
+        path: f.file_path().to_owned(),
+        format: match f.file_format() {
+            DataFileFormat::Parquet => FileFormatKind::Parquet,
+            DataFileFormat::Orc => FileFormatKind::Orc,
+            DataFileFormat::Avro => FileFormatKind::Avro,
+            DataFileFormat::Puffin => FileFormatKind::Puffin,
+        },
+        spec_id,
+        partition: f
+            .partition()
+            .iter()
+            .map(|v| match v {
+                None => PartitionValue::Null,
+                Some(Literal::Primitive(p)) => {
+                    primitive_bytes(p).map_or(PartitionValue::Unreadable, PartitionValue::Value)
+                }
+                Some(_) => PartitionValue::Unreadable,
+            })
+            .collect(),
+        record_count: f.record_count(),
+        size: f.file_size_in_bytes(),
+        column_sizes: counts(f.column_sizes()),
+        value_counts: counts(f.value_counts()),
+        null_counts: counts(f.null_value_counts()),
+        nan_counts: counts(f.nan_value_counts()),
+        lower_bounds: bounds(f.lower_bounds()),
+        upper_bounds: bounds(f.upper_bounds()),
+        split_offsets: f.split_offsets().map(<[i64]>::to_vec),
+        sort_order_id: f.sort_order_id(),
+        first_row_id: f.first_row_id(),
+        equality_ids: f.equality_ids(),
+        referenced_data_file: f.referenced_data_file(),
+        content_offset: f.content_offset(),
+        content_size_in_bytes: f.content_size_in_bytes(),
+    }
 }
 
 /// The live entries of one manifest, read, parsed and inherited, or from the

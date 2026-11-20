@@ -73,20 +73,27 @@
 //! string, byte string or map (`crate::proto`), and a decoded plan wipes its
 //! option values and paths when it is dropped ([`crate::proto::Scrub`]).
 
+mod cached;
 mod errors;
 mod expression;
 mod literal;
 mod local;
 mod names;
 mod relation;
+mod relation_udf;
 mod schema;
 mod types;
 mod udf;
+mod write;
 
 pub use udf::{
-    Command, PythonUdf, SQL_BATCHED_UDF, UdfCallName, UdfHost, python_udf, translate_command,
+    CheckpointSpec, Command, PythonUdf, SQL_BATCHED_UDF, UdfCallName, UdfHost, python_udf,
+    translate_command,
 };
 
+pub use write::{WriteSpec, WriteTarget, WriteV2Spec, write_spec, write_v2_spec};
+
+pub use cached::{CACHED_REMOTE_NAMESPACE, CachedRemoteIds, cached_remote_table};
 pub use local::{LocalRelations, LocalRequest};
 pub use schema::{parse_datatype_string, parse_local_schema, parse_table_schema};
 
@@ -112,6 +119,8 @@ pub struct TranslateConf {
     pub parser: krishiv_sql::ParserOptions,
     /// The local relations of the plan (`createDataFrame`), built by the host.
     pub local_relations: LocalRelations,
+    /// Where the ids of the plan's cached remote relations are recorded (the host resolves them).
+    pub cached_remote: CachedRemoteIds,
 }
 
 impl Default for TranslateConf {
@@ -121,6 +130,7 @@ impl Default for TranslateConf {
             default_data_source: "parquet".to_owned(),
             parser: krishiv_sql::ParserOptions::default(),
             local_relations: LocalRelations::default(),
+            cached_remote: CachedRemoteIds::default(),
         }
     }
 }
@@ -267,11 +277,13 @@ pub fn translate_relation(relation: &pb::Relation, conf: &TranslateConf) -> Resu
     Plan::try_new(root)
 }
 
-/// [`translate_relation`] with the inline Python UDFs of the plan sent to `udfs` (a server's session),
-/// which names the function each call resolves to.
+/// [`translate_relation`] with the Python UDFs of the plan, inline calls and relations (`MapPartitions`,
+/// `GroupMap`, `CoGroupMap`), sent to `udfs` (a server's session), which names the function each call
+/// resolves to and the reference each relation runs.
 ///
 /// # Errors
-/// As [`translate_relation`], plus what `udfs` refuses and the errors of [`python_udf`].
+/// As [`translate_relation`], plus what `udfs` refuses, the errors of [`python_udf`] and the refusals of the
+/// relation arms (`relation_udf`).
 pub fn translate_relation_with(
     relation: &pb::Relation,
     conf: &TranslateConf,
@@ -295,7 +307,7 @@ pub fn translate_expression(
 /// The state of one translation.
 pub(crate) struct Translator<'c> {
     conf: &'c TranslateConf,
-    /// Where inline Python UDFs go; `None` refuses them.
+    /// Where Python UDFs (inline calls and relations) go; `None` refuses them.
     udfs: Option<&'c mut dyn UdfHost>,
     /// Relations and expressions being translated above the current one.
     depth: usize,
@@ -337,6 +349,14 @@ impl<'c> Translator<'c> {
     fn inline_python_udf(&mut self, udf: &PythonUdf) -> Result<UdfCallName> {
         match self.udfs.as_deref_mut() {
             Some(host) => host.inline_python_udf(udf),
+            None => Err(udf::no_host()),
+        }
+    }
+
+    /// The reference the Python UDF `udf` of a relation runs as.
+    fn relation_python_udf(&mut self, udf: &PythonUdf) -> Result<krishiv_plan::PythonUdfRef> {
+        match self.udfs.as_deref_mut() {
+            Some(host) => host.relation_python_udf(udf),
             None => Err(udf::no_host()),
         }
     }

@@ -40,6 +40,9 @@ pub(super) struct PrefixEntry {
     declared: HashMap<AttrId, Arc<str>>,
     comments: HashMap<AttrId, Arc<str>>,
     pass_exprs: HashMap<AttrId, Arc<crate::Expr>>,
+    /// The front-end ids the root kept (`Resolver::built_id`): a later node with one of them gets a
+    /// fresh id, warm as cold.
+    built_ids: HashSet<AttrId>,
     /// The securables Bind found, in order, and the columns the root read of each.
     securables: Vec<(Securable, Privilege)>,
     columns: Vec<BTreeSet<String>>,
@@ -61,6 +64,7 @@ impl Resolver<'_> {
         if self.uncacheable
             || self.b.reads_files
             || !self.ctx.variables.locals.is_empty()
+            || !self.view_nodes.is_empty()
             || self.pending_nondeterministic.is_some()
             || self.sql_calls != 0
         {
@@ -98,6 +102,7 @@ impl Resolver<'_> {
             declared: self.declared.clone(),
             comments: self.comments.clone(),
             pass_exprs: self.pass_exprs.clone(),
+            built_ids: self.built_ids.clone(),
             securables: self.b.securables.clone(),
             columns: self.columns.clone(),
             tables,
@@ -134,6 +139,7 @@ impl Resolver<'_> {
             || self.uncacheable
             || b.reads_files
             || !self.ctx.variables.locals.is_empty()
+            || !self.view_nodes.is_empty()
             || !self.loops.is_empty()
             || !self.lambdas.is_empty()
             || self.frame.is_some()
@@ -180,6 +186,7 @@ impl Resolver<'_> {
         self.declared = entry.declared.clone();
         self.comments = entry.comments.clone();
         self.pass_exprs = entry.pass_exprs.clone();
+        self.built_ids = entry.built_ids.clone();
         self.sql_calls += entry.sql_calls;
         for (mine, theirs) in self.columns.iter_mut().zip(&entry.columns) {
             mine.clone_from(theirs);

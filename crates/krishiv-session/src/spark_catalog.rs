@@ -3,8 +3,7 @@
 //! catalog API every surface shares. Listings and lookups read the session catalog and the permanent store
 //! directly and return Spark's structs (`Database`, `Table`, `Column`, `Function`); the mutating calls run
 //! the SQL statement Spark's `CatalogImpl` runs, so the access checks, errors and cache invalidation are
-//! those of the statement. Spark Connect lowers its `Catalog` relation arms to these functions
-//! (`design/P3-connect-mapping.md` section 2.1).
+//! those of the statement. Spark Connect lowers its `Catalog` relation arms to these functions.
 
 use krishiv_common::error::KrishivError;
 
@@ -230,32 +229,41 @@ impl Catalog<'_> {
         self.session.state.catalog.current_catalog()
     }
 
-    /// Makes `name` the current catalog. `spark_catalog` is the only catalog here, and it matches whatever its case, in either
-    /// `spark.sql.caseSensitive` mode, as Spark's `CatalogManager` and the SQL `USE` do. (Divergence: Spark 4.2 resets
-    /// the namespace to `default` when the name differs from the current catalog's only in case; here the current
-    /// namespace is kept.) The `system` catalog is Krishiv's own (ADR 0023) and is reached with `USE system`, not here:
-    /// Spark has no such catalog, so it is `CATALOG_NOT_FOUND` like any other name.
+    /// Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees.
+    ///
+    /// A catalog's name matches whatever its case, in either `spark.sql.caseSensitive` mode, as Spark's
+    /// `CatalogManager` and the SQL `USE` do. (Divergence: Spark 4.2 resets the namespace to `default` when the name
+    /// differs from the current catalog's only in case; here the current namespace is kept.) The `system` catalog is
+    /// Krishiv's own and is reached with `USE system`, not here: Spark has no such catalog, so it is
+    /// `CATALOG_NOT_FOUND` like any other name.
     ///
     /// # Errors
     /// `CATALOG_NOT_FOUND` for any other name (a namespace's name is not a catalog).
     pub async fn set_current_catalog(&self, name: &str) -> Result<(), KrishivError> {
         // `USE <name>` would switch the namespace for a namespace's name: the catalog is checked first.
-        if !name.eq_ignore_ascii_case(crate::catalog::CATALOG) {
+        let Some(known) = self
+            .list_catalogs()
+            .into_iter()
+            .find(|c| c.eq_ignore_ascii_case(name))
+        else {
             return Err(krishiv_common::error::CatalogNotFound {
                 catalog_name: krishiv_common::names::to_sql_id(name)?,
                 config: format!("\"spark.sql.catalog.{name}\""),
             }
             .into());
-        }
-        self.run(&format!("USE {}", quoted(crate::catalog::CATALOG)))
-            .await
+        };
+        self.run(&format!("USE {}", quoted(&known))).await
     }
 
-    /// The catalogs: `spark_catalog` (Spark returns the loaded catalogs and `spark_catalog`; Krishiv loads no others,
-    /// and its `system` catalog is not listed, see [`Catalog::set_current_catalog`]).
+    /// The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees.
+    ///
+    /// Spark returns the loaded catalogs and `spark_catalog`. The `system` catalog is not listed, see
+    /// [`Catalog::set_current_catalog`].
     #[must_use]
     pub fn list_catalogs(&self) -> Vec<String> {
-        vec![crate::catalog::CATALOG.to_owned()]
+        let mut names = self.session.catalog_names();
+        names.retain(|c| c != crate::system::SYSTEM);
+        names
     }
 
     /// The current namespace.
@@ -272,10 +280,44 @@ impl Catalog<'_> {
         self.run(&format!("USE NAMESPACE {}", quoted(name))).await
     }
 
+    /// Whether `catalog` names a declared catalog this principal sees: not `spark_catalog`, not
+    /// `system`.
+    fn is_declared(&self, catalog: &str) -> bool {
+        !catalog.eq_ignore_ascii_case(crate::catalog::CATALOG)
+            && !crate::system::is_system(catalog)
+            && self
+                .list_catalogs()
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(catalog))
+    }
+
+    /// Refuses a call about the namespaces or tables of the declared catalog `catalog`: a declared
+    /// catalog resolves names in queries only for now (design P3-T067 PR-58a), and the embedded
+    /// catalog's namespaces are never answered in its name.
+    fn refuse_declared(catalog: &str) -> KrishivError {
+        krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!(
+                "the namespaces and tables of the declared catalog {} through the Catalog API",
+                quote(catalog)
+            ),
+        }
+        .into()
+    }
+
+    /// [`Self::refuse_declared`] when the current catalog is a declared one.
+    fn check_current(&self) -> Result<(), KrishivError> {
+        let current = self.current_catalog();
+        if self.is_declared(&current) {
+            return Err(Self::refuse_declared(&current));
+        }
+        Ok(())
+    }
+
+    /// The namespaces are always the embedded catalog's, so `spark_catalog` names them.
     fn database_of(&self, name: &str, meta: &crate::store::NamespaceMeta) -> Database {
         Database {
             name: name.to_owned(),
-            catalog: self.current_catalog(),
+            catalog: crate::catalog::CATALOG.to_owned(),
             description: meta.comment.clone(),
             location_uri: meta.location.clone().unwrap_or_else(|| {
                 let wh = self.session.warehouse_dir().unwrap_or_default();
@@ -289,6 +331,8 @@ impl Catalog<'_> {
         }
     }
 
+    /// The namespaces of the current catalog, sorted by name.
+    ///
     /// The namespaces of the current catalog, sorted by name, optionally only those matching the
     /// `*`/`|` pattern.
     ///
@@ -299,7 +343,15 @@ impl Catalog<'_> {
         pattern: Option<&str>,
     ) -> Result<Vec<Database>, KrishivError> {
         self.authorize_as("SHOW NAMESPACES").await?;
-        Ok(self.databases(pattern))
+        self.check_current()?;
+        // Only what the principal may see, as `SHOW NAMESPACES` lists (P3-T062 §2.4).
+        let mut out = Vec::new();
+        for d in self.databases(pattern) {
+            if self.session.may_list_namespace(&d.name).await {
+                out.push(d);
+            }
+        }
+        Ok(out)
     }
 
     fn databases(&self, pattern: Option<&str>) -> Vec<Database> {
@@ -324,17 +376,46 @@ impl Catalog<'_> {
     pub async fn get_database(&self, name: &str) -> Result<Database, KrishivError> {
         self.authorize_as(&format!("DESCRIBE NAMESPACE {}", quoted(name)))
             .await?;
-        self.lookup_database(name)
+        self.visible_database(name).await
     }
 
-    fn lookup_database(&self, name: &str) -> Result<Database, KrishivError> {
-        // `db` or `spark_catalog.db`, as Spark's `resolveNamespace` accepts it.
+    /// [`Self::lookup_database`], with a namespace the principal may not list reading as missing
+    /// (review B3; `Session::namespace_hidden`, the predicate of the SQL namespace lookups): every
+    /// by-namespace entry point of this API resolves its namespace here.
+    async fn visible_database(&self, name: &str) -> Result<Database, KrishivError> {
+        let found = self.lookup_database(name)?;
+        if self.session.namespace_hidden(&found.name).await {
+            return Err(Self::database_not_found(name));
+        }
+        Ok(found)
+    }
+
+    /// `db` or `spark_catalog.db`, as Spark's `resolveNamespace` accepts it: the namespace's name.
+    fn bare_database(name: &str) -> String {
         let p = parts(name);
-        let bare = match p.as_slice() {
+        match p.as_slice() {
             [db] => db.clone(),
             [cat, db] if cat.eq_ignore_ascii_case(crate::catalog::CATALOG) => db.clone(),
             _ => name.to_owned(),
-        };
+        }
+    }
+
+    /// `SCHEMA_NOT_FOUND` for the namespace `name`.
+    fn database_not_found(name: &str) -> KrishivError {
+        krishiv_common::error::SchemaNotFound {
+            schema_name: quote(&Self::bare_database(name)),
+        }
+        .into()
+    }
+
+    fn lookup_database(&self, name: &str) -> Result<Database, KrishivError> {
+        // A bare name is the current catalog's; a declared catalog's namespaces are not answered here.
+        match parts(name).as_slice() {
+            [_] => self.check_current()?,
+            [cat, _] if self.is_declared(cat) => return Err(Self::refuse_declared(cat)),
+            _ => {}
+        }
+        let bare = Self::bare_database(name);
         let name = bare.as_str();
         let want = self.fold(name);
         self.session
@@ -345,12 +426,7 @@ impl Catalog<'_> {
             .iter()
             .find(|(n, _)| self.fold(n) == want)
             .map(|(n, m)| self.database_of(n, m))
-            .ok_or_else(|| {
-                krishiv_common::error::SchemaNotFound {
-                    schema_name: quote(name),
-                }
-                .into()
-            })
+            .ok_or_else(|| Self::database_not_found(name))
     }
 
     /// Whether the namespace exists.
@@ -448,13 +524,20 @@ impl Catalog<'_> {
             }
         } else {
             let db = match database {
-                Some(d) => self.lookup_database(d)?.name,
-                None => self.current_database(),
+                // As `SHOW TABLES IN`: one the principal may not list reads as missing (review r3 X1).
+                Some(d) => self.visible_database(d).await?.name,
+                None => {
+                    self.check_current()?;
+                    self.current_database()
+                }
             };
+            // Only what the principal may see, as `SHOW TABLES` lists (P3-T062 §2.4).
+            let listed = self
+                .session
+                .listed_relations(catalog.store.tables_in(&db))
+                .await;
             permanent.extend(
-                catalog
-                    .store
-                    .tables_in(&db)
+                listed
                     .iter()
                     .filter(|t| keep(&t.name))
                     .map(|t| Self::table_of(t)),
@@ -478,17 +561,34 @@ impl Catalog<'_> {
     pub async fn get_table(&self, name: &str) -> Result<Table, KrishivError> {
         self.authorize_as(&format!("DESCRIBE TABLE {}", quoted(name)))
             .await?;
-        self.lookup_table(name)
+        self.visible_table(name).await
+    }
+
+    /// [`Self::lookup_table`], with a stored table or view the principal may not list reading as
+    /// missing (review B3: the rule of the listings, so no existence oracle).
+    async fn visible_table(&self, name: &str) -> Result<Table, KrishivError> {
+        let table = self.lookup_table(name)?;
+        if !table.is_temporary
+            && let Some(ns) = table.namespace.as_ref().and_then(|n| n.first())
+            && let Some(stored) = self.session.state.catalog.store.table(ns, &table.name)
+            && self.session.hidden(&Session::relation_securable(&stored))
+        {
+            return Err(Self::table_not_found(name));
+        }
+        Ok(table)
+    }
+
+    /// `TABLE_OR_VIEW_NOT_FOUND` for `name`.
+    fn table_not_found(name: &str) -> KrishivError {
+        krishiv_common::error::TableOrViewNotFound {
+            relation_name: quoted(name),
+            search_path: crate::catalog::search_path(),
+        }
+        .into()
     }
 
     fn lookup_table(&self, name: &str) -> Result<Table, KrishivError> {
-        let not_found = || -> KrishivError {
-            krishiv_common::error::TableOrViewNotFound {
-                relation_name: quoted(name),
-                search_path: crate::catalog::search_path(),
-            }
-            .into()
-        };
+        let not_found = || Self::table_not_found(name);
         let catalog = &self.session.state.catalog;
         let cs = self.case_sensitive();
         let p = parts(name);
@@ -501,6 +601,7 @@ impl Catalog<'_> {
                 {
                     return Ok(Self::temp_table(&n, false));
                 }
+                self.check_current()?;
                 catalog
                     .store
                     .table(&self.current_database(), &self.fold(only))
@@ -513,11 +614,17 @@ impl Catalog<'_> {
             {
                 Ok(Self::temp_table(t, true))
             }
-            [db, t] => catalog
-                .store
-                .table(&self.fold(db), &self.fold(t))
-                .map(|t| Self::table_of(&t))
-                .ok_or_else(not_found),
+            [db, t] => {
+                if !db.eq_ignore_ascii_case(GLOBAL_NAMESPACE) {
+                    self.check_current()?;
+                }
+                catalog
+                    .store
+                    .table(&self.fold(db), &self.fold(t))
+                    .map(|t| Self::table_of(&t))
+                    .ok_or_else(not_found)
+            }
+            [cat, _, _] if self.is_declared(cat) => Err(Self::refuse_declared(cat)),
             [cat, db, t] if cat.eq_ignore_ascii_case(crate::catalog::CATALOG) => catalog
                 .store
                 .table(&self.fold(db), &self.fold(t))
@@ -547,7 +654,7 @@ impl Catalog<'_> {
     pub async fn list_columns(&self, name: &str) -> Result<Vec<Column>, KrishivError> {
         self.authorize_as(&format!("DESCRIBE TABLE {}", quoted(name)))
             .await?;
-        let table = self.lookup_table(name)?;
+        let table = self.visible_table(name).await?;
         if table.is_temporary {
             let df = self
                 .session
@@ -618,6 +725,8 @@ impl Catalog<'_> {
             .collect())
     }
 
+    /// The functions visible to the session, sorted by name.
+    ///
     /// The functions: the built-ins, the session's temporary functions and the current namespace's
     /// stored ones, sorted by name.
     ///
@@ -628,7 +737,31 @@ impl Catalog<'_> {
         pattern: Option<&str>,
     ) -> Result<Vec<Function>, KrishivError> {
         self.authorize_as("SHOW FUNCTIONS").await?;
-        Ok(self.functions(pattern))
+        // A stored function is listed only to a principal that may see it (P3-T062 §2.4).
+        let mut out = Vec::new();
+        for f in self.functions(pattern) {
+            if self.function_listed(&f).await {
+                out.push(f);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether the principal may see the function `f` (`Session::may_list`; built-in and
+    /// temporary functions are not securables): what `list_functions` lists, and what
+    /// `get_function` / `function_exists` find (review B3).
+    async fn function_listed(&self, f: &Function) -> bool {
+        match (&f.catalog, &f.namespace) {
+            (Some(catalog), Some(namespace)) => {
+                let mut parts = vec![catalog.clone()];
+                parts.extend(namespace.iter().cloned());
+                parts.push(f.name.clone());
+                self.session
+                    .may_list(&krishiv_plan::analyzer::Securable::Function(parts))
+                    .await
+            }
+            _ => true,
+        }
     }
 
     fn functions(&self, pattern: Option<&str>) -> Vec<Function> {
@@ -720,31 +853,38 @@ impl Catalog<'_> {
             }
             _ => return Err(not_found()),
         };
-        let Some(db) = database else {
-            return self
-                .functions(None)
-                .into_iter()
-                .find(|f| f.name == last)
-                .ok_or_else(not_found);
+        let found = match database {
+            None => self.functions(None).into_iter().find(|f| f.name == last),
+            Some(db) => {
+                let db = self.lookup_database(db).map_err(|_| not_found())?.name;
+                self.stored_function(&db, &last)
+            }
         };
-        let db = self.lookup_database(db).map_err(|_| not_found())?.name;
+        // One the principal may not list reads as missing (review B3).
+        match found {
+            Some(f) if self.function_listed(&f).await => Ok(f),
+            _ => Err(not_found()),
+        }
+    }
+
+    /// The stored function `last` (lower case) of the namespace `db`.
+    fn stored_function(&self, db: &str, last: &str) -> Option<Function> {
         self.session
             .state
             .catalog
             .store
             .functions()
-            .in_namespace(&db)
+            .in_namespace(db)
             .into_iter()
             .find(|f| f.to_lowercase() == last)
             .map(|f| Function {
                 name: f,
                 catalog: Some(crate::catalog::CATALOG.to_owned()),
-                namespace: Some(vec![db.clone()]),
+                namespace: Some(vec![db.to_owned()]),
                 description: None,
                 class_name: String::new(),
                 is_temporary: false,
             })
-            .ok_or_else(not_found)
     }
 
     /// Whether the function exists.

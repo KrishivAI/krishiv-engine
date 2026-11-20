@@ -286,7 +286,7 @@ impl Rewriter {
             .zip(&key_cols)
             .map(|(o, k)| {
                 let k = renumber.inner(&col_expr(k, Origin::UNKNOWN));
-                boolean(op, vec![renumber.inner(o), k])
+                keyed_eq(op, renumber.inner(o), k)
             })
             .collect();
         let join = PlanNode::Join {
@@ -389,7 +389,7 @@ impl Rewriter {
             .zip(&key_cols)
             .map(|(o, k)| {
                 let k = renumber.inner(&col_expr(k, Origin::UNKNOWN));
-                boolean(op, vec![renumber.inner(o), k])
+                keyed_eq(op, renumber.inner(o), k)
             })
             .collect();
         let join = PlanNode::Join {

@@ -64,15 +64,19 @@
 //! once it received a row.
 
 mod accumulator;
+mod bitmap;
 mod collect;
 mod distinct;
+mod histogram;
 mod hll;
+mod hll_sketch;
 mod listagg;
 mod merge_index;
 mod mode;
 mod moments;
 mod node;
 mod observe;
+mod output_filter;
 mod partial;
 mod quantile;
 mod rowtable;
@@ -105,6 +109,7 @@ pub(crate) use moments::arity;
 pub(crate) use node::distinct_count_at_merge;
 pub use node::{AggregateNode, PartialNode, distinct_plan, distinct_plan_with, union_distinct};
 pub(crate) use observe::{CollectMetrics, Finalizer};
+pub(crate) use output_filter::OutputFilter;
 pub use partial::{BypassPolicy, PartialAggregate};
 pub(crate) use quantile::decimal_to_double;
 #[cfg(test)]
@@ -322,6 +327,37 @@ pub enum AggregateFunction {
     ApproxCountDistinct {
         /// The addressing bits `p`.
         p: u32,
+    },
+    /// `histogram_numeric(x, nb)`: Spark's `NumericHistogram` of `nb` bins
+    /// (the analyzer-folded `nb >= 2`), `array<struct<x, y>>` with `x` of the
+    /// input's type. An empty group is NULL.
+    HistogramNumeric {
+        /// The number of bins.
+        nb: i32,
+    },
+    /// `bitmap_construct_agg(position)`: a 4,096-byte bitmap with bit `p % 8` of byte `p / 8`
+    /// set for each non-NULL position `p` (`INVALID_BITMAP_POSITION` outside `0..32768`).
+    /// `binary`, 4,096 zero bytes for no value, never NULL. The argument is a `bigint`.
+    BitmapConstructAgg,
+    /// `bitmap_or_agg(bitmap)`: the OR of the non-NULL bitmaps over the shorter length; as
+    /// [`Self::BitmapConstructAgg`] otherwise. The argument is a `binary`.
+    BitmapOrAgg,
+    /// `bitmap_and_agg(bitmap)` (Spark 4.1): the AND of the non-NULL bitmaps, starting from
+    /// 4,096 `0xFF` bytes and zeroing the bytes past a shorter input; 4,096 `0xFF` bytes
+    /// for no value, never NULL. The argument is a `binary`.
+    BitmapAndAgg,
+    /// `hll_sketch_agg(x[, lgConfigK])`: an `HLL_8` sketch (Apache DataSketches) of the non-NULL values of an
+    /// `int`, `bigint`, `string` or `binary` (empty strings and binaries skipped); `binary`, never NULL, the
+    /// empty sketch for no value. `lg_k` is in `4..=21`.
+    HllSketchAgg {
+        /// The log-base-2 of the register count.
+        lg_k: u8,
+    },
+    /// `hll_union_agg(sketch[, allowDifferentLgConfigK])`: the union of the non-NULL sketches, at the lgK of
+    /// the first; `binary`, never NULL. The argument is a `binary`.
+    HllUnionAgg {
+        /// Whether sketches of different lgK may be mixed (else `HLL_UNION_DIFFERENT_LG_K`).
+        allow_different: bool,
     },
     /// A session aggregate UDF (ADR 0045), by name and version: the worker
     /// runs the implementation its library holds under both, or refuses
@@ -623,8 +659,29 @@ impl AggregateExpr {
             (F::PercentileApprox { array, .. }, t) if accumulator::quantile_supported(t, true) => {
                 quantile_approx_result(t, *array)?
             }
+            // `histogram_numeric`: `array<struct<x: input type, y: double>>`.
+            (F::HistogramNumeric { .. }, t) if histogram::histogram_supported(t) => {
+                histogram_result(t)?
+            }
             // `approx_count_distinct` is `bigint`.
             (F::ApproxCountDistinct { .. }, t) if accumulator::hll_supported(t) => DataType::Int64,
+            // The bitmap and HLL sketch aggregates are a `binary`, on the engine's view carrier (see `bitmap`);
+            // the HLL values are `int`, `bigint`, `string` or `binary`.
+            (F::BitmapConstructAgg, DataType::Int64)
+            | (
+                F::BitmapOrAgg | F::BitmapAndAgg | F::HllUnionAgg { .. },
+                DataType::Binary | DataType::BinaryView,
+            )
+            | (
+                F::HllSketchAgg { .. },
+                DataType::Int32
+                | DataType::Int64
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::BinaryView,
+            ) => DataType::BinaryView,
             (F::MaxBy | F::MinBy | F::MaxByKeyFirst | F::MinByKeyFirst, _) => match self.by_types()
             {
                 Some((v, k))
@@ -778,8 +835,17 @@ impl AggregateExpr {
             (F::PercentileApprox { .. }, _) => {
                 vec![Field::new(n("summary"), DataType::Binary, true)]
             }
+            (F::HistogramNumeric { .. }, _) => {
+                vec![Field::new(n("histogram"), DataType::Binary, true)]
+            }
             (F::ApproxCountDistinct { .. }, _) => {
                 vec![Field::new(n("registers"), DataType::Binary, true)]
+            }
+            (F::BitmapConstructAgg | F::BitmapOrAgg | F::BitmapAndAgg, _) => {
+                vec![Field::new(n("bitmap"), DataType::Binary, false)]
+            }
+            (F::HllSketchAgg { .. } | F::HllUnionAgg { .. }, _) => {
+                vec![Field::new(n("sketch"), DataType::Binary, false)]
             }
         })
     }
@@ -948,6 +1014,21 @@ fn quantile_approx_result(t: &DataType, array: bool) -> Result<DataType> {
     let child = PlanDataType::from_arrow(t)
         .map_err(|e| internal(format!("an approximate percentile of {e}")))?;
     Ok(PlanDataType::Array(ArrayType::new(child, false).into()).to_arrow())
+}
+
+/// Spark's `HistogramNumeric.dataType` for an Arrow input type `t`:
+/// `array<struct<x: t, y: double>>`, every field nullable.
+fn histogram_result(t: &DataType) -> Result<DataType> {
+    use krishiv_types::{ArrayType, DataType as PlanDataType, StructField, StructType};
+    let x = PlanDataType::from_arrow(t).map_err(|e| internal(format!("a histogram of {e}")))?;
+    let fields = vec![
+        StructField::new("x".to_owned(), x, true),
+        StructField::new("y".to_owned(), PlanDataType::Double, true),
+    ];
+    Ok(PlanDataType::Array(
+        ArrayType::new(PlanDataType::Struct(StructType::new(fields)), true).into(),
+    )
+    .to_arrow())
 }
 
 /// A hash aggregation: grouping columns, aggregates and the output kind.

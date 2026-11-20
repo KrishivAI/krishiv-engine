@@ -110,6 +110,8 @@ const RUNTIME_INDETERMINATE: &[&str] = &["str_to_map", "split_part"];
 /// matchers). Their collation-aware kernels belong to unit 5, so until then they refuse a
 /// non-binary collation instead of matching bytes.
 const DEPENDS: &[&str] = &[
+    // Spark hashes the collation key (`HllSketchAgg.update`); Krishiv has no key hashing yet.
+    "hll_sketch_agg",
     "contains",
     "startswith",
     "endswith",
@@ -265,7 +267,7 @@ pub(super) fn string_of(c: Collation) -> DataType {
 
 /// Whether every collated leaf of `t` has a key here (`UTF8_LCASE`, `_RTRIM`, and ICU with the
 /// `collations-icu` feature).
-fn has_key(t: &DataType) -> bool {
+pub(in crate::analyzer) fn has_key(t: &DataType) -> bool {
     !t.any_type(&|x| {
         matches!(x, DataType::CollatedString(c) if !matches!(
             c.family(),
@@ -1796,7 +1798,9 @@ impl Resolver<'_> {
                     e.origin,
                 ));
             }
-            Err(Conflict::Indeterminate) if !FAILS_INDETERMINATE.contains(&name) => {
+            Err(Conflict::Indeterminate)
+                if !FAILS_INDETERMINATE.contains(&name) && !KEYED.contains(&name) =>
+            {
                 indeterminate = true;
                 None
             }

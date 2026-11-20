@@ -5,6 +5,7 @@
 
 mod analyzer;
 mod dag;
+mod definer_sources;
 mod depth;
 mod display;
 mod display_more;
@@ -13,6 +14,7 @@ mod e2_planning_speed;
 mod encode;
 mod files;
 mod function_call_forms;
+mod input_file;
 mod inventory;
 mod json_tuple;
 mod lineage;
@@ -24,9 +26,11 @@ mod observe;
 mod pivot;
 mod prefix_cache;
 mod props;
+mod python_relation_analysis;
 mod python_relations;
 mod rewrite;
 mod secrets;
 mod setops;
 mod sqlfn;
+mod time_window;
 mod tpch;

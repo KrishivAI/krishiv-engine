@@ -2,18 +2,15 @@
 source: crates/krishiv-session/tests/analyze.rs
 expression: differences
 ---
-DropTable: DROP TABLE IF EXISTS t
+Explain::Json: EXPLAIN FORMAT JSON INSERT INTO t SELECT 1
   analyze only: []
-  run only: [("MODIFY", "path 'file:<warehouse>/t'")]
-DropTable: DROP TABLE IDENTIFIER('t')
+  run only: [("MODIFY", "table `spark_catalog`.`default`.`t`")]
+Explain::Json: EXPLAIN FORMAT JSON DROP TABLE t
   analyze only: []
-  run only: [("MODIFY", "path 'file:<warehouse>/t'")]
-Insert: INSERT INTO t SELECT * FROM s
+  run only: [("DROP", "table `spark_catalog`.`default`.`t`")]
+DirAddPartition: ALTER TABLE p ADD PARTITION (k = 1)
   analyze only: []
-  run only: [("CREATE", "path 'file:<warehouse>/t'"), ("MODIFY", "path 'file:<warehouse>/t'")]
-Truncate: TRUNCATE TABLE t
+  run only: [("CREATE", "path 'file:<warehouse>/p/k=1'")]
+DirDropPartition: ALTER TABLE p DROP PARTITION (k = 1)
   analyze only: []
-  run only: [("MODIFY", "path 'file:<warehouse>/t'")]
-ExecuteImmediate: EXECUTE IMMEDIATE 'DROP TABLE t'
-  analyze only: []
-  run only: [("MODIFY", "path 'file:<warehouse>/t'")]
+  run only: [("MODIFY", "path 'file:<warehouse>/p/k=1'")]

@@ -186,6 +186,8 @@ message Node {
     TableWriteNode table_write = 32;
     // feature: observe
     CollectMetricsNode collect_metrics = 33;
+    // feature: python_udtf
+    PythonUdtfNode python_udtf = 34;
   }
 }
 
@@ -295,6 +297,38 @@ message PythonMapNode {
   PythonRelation udf = 2;
 }
 
+// feature: python_udtf
+// A Python table function (eval types 300-302) over `input`: one task per
+// partition; `udf`'s one side holds the scalar argument columns, its output
+// the carried columns then the UDTF's.
+message PythonUdtfNode {
+  uint32 input = 1;
+  PythonRelation udf = 2;
+  // Per argument, in call order: its name (unset for a positional one).
+  repeated PythonUdtfArgName arg_names = 3;
+  // The `TABLE` argument, if any.
+  PythonUdtfTable table = 4;
+  // The input columns each result row leads with (a `LATERAL` call).
+  repeated uint64 carried = 5;
+  // `analyze`'s pickled `AnalyzeResult`, if any.
+  optional bytes analyzed = 6;
+}
+
+// feature: python_udtf
+message PythonUdtfArgName {
+  optional string name = 1;
+}
+
+// feature: python_udtf
+// The `TABLE` argument's row struct: its fields as input columns, their
+// names, and the fields that are `PARTITION BY` values.
+message PythonUdtfTable {
+  uint64 position = 1;
+  repeated uint64 columns = 2;
+  repeated string names = 3;
+  repeated uint64 partition_child_indexes = 4;
+}
+
 // feature: python_udf_relations
 // A grouped map over `input` clustered and sorted by the key columns.
 message PythonGroupMapNode {
@@ -323,6 +357,17 @@ message PythonAggregateNode {
   repeated uint64 keys = 3;
   repeated PythonCall calls = 4;
   repeated uint64 key_values = 5;
+  // feature: python_udf_windows
+  PythonWindow window = 6;
+}
+
+// feature: python_udf_windows
+// A `PythonAggregateNode` in window form (Spark's `ArrowWindowPythonExec`):
+// `keys` are the window's partitioning, the output every input row with one
+// value per call; per call, whether its frame is bounded (its first two
+// arguments are each row's frame start and end).
+message PythonWindow {
+  repeated bool bounded = 1;
 }
 
 // feature: python_udf_relations
@@ -804,6 +849,23 @@ enum AggregateFunction {
   // `min` of a collated string, as `MAX_BY_KEY_FIRST`.
   // feature: collated_min_max
   AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST = 48;
+  // feature: histogram_numeric
+  AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC = 49;
+  // `bitmap_construct_agg(position)`: a 4,096-byte bitmap of the positions.
+  // feature: bitmap_aggregates
+  AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG = 50;
+  // `bitmap_or_agg(bitmap)`.
+  // feature: bitmap_aggregates
+  AGGREGATE_FUNCTION_BITMAP_OR_AGG = 51;
+  // `bitmap_and_agg(bitmap)`.
+  // feature: bitmap_aggregates
+  AGGREGATE_FUNCTION_BITMAP_AND_AGG = 52;
+  // `hll_sketch_agg(x, lgConfigK)`: the folded lgConfigK is `hll_precision`.
+  // feature: hll_sketch_aggregates
+  AGGREGATE_FUNCTION_HLL_SKETCH_AGG = 53;
+  // `hll_union_agg(sketch, allowDifferentLgConfigK)`: the folded flag is `hll_precision` (0 or 1).
+  // feature: hll_sketch_aggregates
+  AGGREGATE_FUNCTION_HLL_UNION_AGG = 54;
 }
 
 enum AggregateInput {
@@ -858,6 +920,9 @@ message AggregateExpr {
   bytes result_element = 17;
   // feature: rust_udaf (`AGGREGATE_FUNCTION_UDF` only: the call).
   UdafCall udaf = 18;
+  // feature: histogram_numeric (`histogram_numeric` only: the folded number of
+  // bins, at least 2).
+  int32 histogram_bins = 19;
 }
 
 // The call of a session aggregate UDF: its implementation by name and

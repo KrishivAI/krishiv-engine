@@ -65,6 +65,38 @@
     ],
     "sqlState" : "2D521"
   },
+  "DELTA_CREATE_TABLE_SCHEME_MISMATCH" : {
+    "message" : [
+      "The specified schema does not match the existing schema at <path>.",
+      "",
+      "== Specified ==",
+      "<specifiedSchema>",
+      "",
+      "== Existing ==",
+      "<existingSchema>",
+      "",
+      "== Differences ==",
+      "<schemaDifferences>",
+      "",
+      "If your intention is to keep the existing schema, you can omit the",
+      "schema from the create table command. Otherwise please ensure that",
+      "the schema matches."
+    ],
+    "sqlState" : "42KD7"
+  },
+  "DELTA_CREATE_TABLE_WITH_DIFFERENT_PARTITIONING" : {
+    "message" : [
+      "The specified partitioning does not match the existing partitioning at <path>.",
+      "",
+      "== Specified ==",
+      "<specifiedColumns>",
+      "",
+      "== Existing ==",
+      "<existingColumns>",
+      ""
+    ],
+    "sqlState" : "42KD7"
+  },
   "DELTA_FAILED_TO_MERGE_FIELDS" : {
     "message" : [
       "Failed to merge fields '<currentField>' and '<updateField>'"

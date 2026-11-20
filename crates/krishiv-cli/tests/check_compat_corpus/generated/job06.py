@@ -2,8 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.user("a"), F.col("b"))
-df = df.select(F.kll_sketch_agg_double("a"), F.col("b"))
-df = df.select(F.array_agg("a"), F.col("b"))
-df = spark.sql("SELECT to_protobuf(a) FROM t6")
-df = spark.sql("SELECT tuple_sketch_estimate_integer(a) FROM t6")
+df = spark.sql("SELECT hour(a) FROM t6")
+df = spark.sql("SELECT st_geogfromwkb(a) FROM t6")
+df = spark.sql("SELECT url_encode(a) FROM t6")
+df = df.select(F.decimal("a"), F.col("b"))
+df = df.select(F.legacy_fn_1("a"), F.col("b"))

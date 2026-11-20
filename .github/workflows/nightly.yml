@@ -9,8 +9,6 @@ on:
   schedule:
     # Off the hour: the top of the hour is when scheduled runs are delayed or dropped most.
     - cron: "23 22 * * *"
-    # One-off extra runs on 2026-11-13 for the v0.2.0 release (binaries.yml and release.yml still need a green scheduled nightly; publishing no longer does); remove after.
-    - cron: "17 8,10 13 11 *"
   workflow_dispatch:
 
 permissions:
@@ -451,6 +449,111 @@ jobs:
         env:
           ICEBERG_REST_IMAGE: apache/iceberg-rest-fixture@sha256:df2e9dd421928b7aab01557678ce8e2bb73064d0e253baebd72adad3439ffc2e # 1.10.0
         run: tests/scripts/iceberg_rest_fixture.sh
+
+  # Iceberg write conformance (P3-T028b, PR-53b): Krishiv's append sink writes tables, Spark 4.1.0 + Iceberg 1.12.0
+  # (Docker, apache/spark:4.1.0; the runtime jar from Maven Central) reads them and appends on top, Krishiv reads
+  # the result. The Rust steps are `#[ignore]`d tests, so the PR gate never needs Docker.
+  iceberg-write-conformance:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (nextest)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Krishiv writes, Spark reads and appends, Krishiv reads back
+        env:
+          OUT: ${{ runner.temp }}/iceberg-write-conformance
+        run: |
+          mkdir -p "$OUT"
+          tests/scripts/iceberg_write_conformance.sh
+      - name: Keep the tables and both JSON files of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iceberg-write-conformance
+          path: ${{ runner.temp }}/iceberg-write-conformance
+          retention-days: 7
+
+  # Iceberg round trip (P3-T028b, PR-53b): Spark 4.1.0 + Iceberg 1.12.0 makes tables with position deletes, a DV and an
+  # evolved schema and spec; Krishiv appends and runs copy-on-write DELETE/UPDATE; Spark reads, time travels and runs
+  # merge-on-read DML on top; Krishiv reads the result. The Rust steps are `#[ignore]`d tests.
+  iceberg-roundtrip:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (nextest)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Spark makes, Krishiv writes, Spark writes on top, Krishiv reads
+        env:
+          OUT: ${{ runner.temp }}/iceberg-roundtrip
+        run: |
+          mkdir -p "$OUT"
+          tests/scripts/iceberg_roundtrip.sh
+      - name: Keep the tables and the JSON records of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iceberg-roundtrip
+          path: ${{ runner.temp }}/iceberg-roundtrip
+          retention-days: 7
+
+  # Delta round trip (P3-T028b, PR-53b): Spark 4.2.0 + delta-spark 4.4.1 makes tables (partitioned, DVs, CDF); Krishiv
+  # commits appends and a whole-file DELETE; Spark reads history, time travel and the change feed and runs DML on
+  # top; Krishiv reads the result. The Rust steps are `#[ignore]`d tests.
+  delta-roundtrip:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (nextest)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Spark makes, Krishiv commits, Spark writes on top, Krishiv reads
+        env:
+          OUT: ${{ runner.temp }}/delta-roundtrip
+        run: |
+          mkdir -p "$OUT"
+          tests/scripts/delta_roundtrip.sh
+      - name: Keep the tables and the JSON records of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: delta-roundtrip
+          path: ${{ runner.temp }}/delta-roundtrip
+          retention-days: 7
 
   # The Spark golden ratchet for other Spark versions (P3-T090): the upstream goldens of the tag are fetched
   # here (they are not committed, only v4.2.0 is), the baseline of failing statements is committed under

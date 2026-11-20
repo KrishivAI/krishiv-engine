@@ -236,6 +236,43 @@ pub static CONNECT_MAX_RESPONSE_BYTES: ConfigEntry = startup(
     None,
 );
 
+/// Bytes of artifacts one Connect session may hold.
+pub static CONNECT_ARTIFACTS_MAX_BYTES: ConfigEntry = startup(
+    "krishiv.connect.artifacts.maxBytes",
+    ValueType::Size,
+    ConfigValue::Size(1024 * MIB),
+    "Most bytes of artifacts (`AddArtifacts`: Python files, archives, files and cached local \
+     relations) one Spark Connect session may hold, on disk and in memory together. A chunk \
+     that would pass it is refused before it is written (`KRISHIV_ARTIFACT_LIMIT`, \
+     `RESOURCE_EXHAUSTED`) and the artifact it belongs to is discarded. Released with the \
+     session.",
+    None,
+);
+
+/// Bytes of one artifact.
+pub static CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES: ConfigEntry = startup(
+    "krishiv.connect.artifacts.maxArtifactBytes",
+    ValueType::Size,
+    ConfigValue::Size(256 * MIB),
+    "Most bytes of one Spark Connect artifact (`AddArtifacts`). A larger artifact is refused \
+     (`KRISHIV_ARTIFACT_LIMIT`, `RESOURCE_EXHAUSTED`) before its bytes past the cap are \
+     written; what was written is removed.",
+    None,
+);
+
+/// Bytes of artifacts all Connect sessions together may hold.
+pub static CONNECT_ARTIFACTS_MAX_TOTAL_BYTES: ConfigEntry = startup(
+    "krishiv.connect.artifacts.maxTotalBytes",
+    ValueType::Size,
+    ConfigValue::Size(16 * 1024 * MIB),
+    "Most bytes of artifacts all Spark Connect sessions of the server may hold together, on \
+     disk and in memory (each session is also capped by `krishiv.connect.artifacts.maxBytes`). \
+     A chunk that would pass it is refused before it is written (`KRISHIV_ARTIFACT_LIMIT`, \
+     `RESOURCE_EXHAUSTED`). Must be at least `krishiv.connect.artifacts.maxArtifactBytes` \
+     (checked at startup).",
+    None,
+);
+
 /// Open Connect connections.
 pub static CONNECT_MAX_CONNECTIONS: ConfigEntry = startup(
     "krishiv.connect.maxConnections",
@@ -324,5 +361,113 @@ pub static SERVER_ALLOWED_HOSTS: ConfigEntry = startup(
      when it is bound to a loopback address, besides `localhost`, `127.0.0.1` and `[::1]`. A \
      request with any other `Host` is refused with 421, which stops a web page from reaching the \
      admin API through DNS rebinding. Unset: only the loopback names.",
+    None,
+);
+
+/// `krishiv.flightSql.enabled` (P3-T101).
+pub static FLIGHT_SQL_ENABLED: ConfigEntry = startup(
+    "krishiv.flightSql.enabled",
+    ValueType::Bool,
+    ConfigValue::Bool(true),
+    "Whether `krishiv server` serves Arrow Flight SQL on its Spark Connect port, when the binary is built with the `flight-sql` feature. Off: the Flight SQL paths answer `UNIMPLEMENTED`.",
+    None,
+);
+
+/// `krishiv.flightSql.handleTtl` (P3-T101).
+pub static FLIGHT_SQL_HANDLE_TTL: ConfigEntry = startup(
+    "krishiv.flightSql.handleTtl",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(600)),
+    "How long an Arrow Flight SQL statement or prepared-statement handle stays fetchable after its last use; its session's release ends it sooner.",
+    None,
+);
+
+/// `krishiv.flightSql.maxHandlesPerSession` (P3-T101).
+pub static FLIGHT_SQL_MAX_HANDLES_PER_SESSION: ConfigEntry = startup(
+    "krishiv.flightSql.maxHandlesPerSession",
+    ValueType::PositiveInt,
+    ConfigValue::Int(64),
+    "The most Arrow Flight SQL handles (statements and prepared statements) one session holds; past it a new one is `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT`.",
+    None,
+);
+
+/// `krishiv.flightSql.maxHandlesPerPrincipal` (P3-T101).
+pub static FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL: ConfigEntry = startup(
+    "krishiv.flightSql.maxHandlesPerPrincipal",
+    ValueType::PositiveInt,
+    ConfigValue::Int(1024),
+    "The most Arrow Flight SQL handles one principal holds across its sessions; past it a new one is `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT`.",
+    None,
+);
+
+/// `krishiv.flightSql.maxBatchRows` (P3-T101).
+pub static FLIGHT_SQL_MAX_BATCH_ROWS: ConfigEntry = startup(
+    "krishiv.flightSql.maxBatchRows",
+    ValueType::PositiveInt,
+    ConfigValue::Int(10000),
+    "The most parameter rows one Arrow Flight SQL prepared update binds; more is `INVALID_ARGUMENT`.",
+    None,
+);
+
+/// `krishiv.flightSql.maxSchemaTables` (P3-T101).
+pub static FLIGHT_SQL_MAX_SCHEMA_TABLES: ConfigEntry = startup(
+    "krishiv.flightSql.maxSchemaTables",
+    ValueType::PositiveInt,
+    ConfigValue::Int(1000),
+    "The most tables an Arrow Flight SQL `GetTables` with `include_schema` loads schemas for; a listing over it is `INVALID_ARGUMENT` (narrow the pattern).",
+    None,
+);
+
+/// `krishiv.flightSql.metadataTimeout` (P3-T101).
+pub static FLIGHT_SQL_METADATA_TIMEOUT: ConfigEntry = startup(
+    "krishiv.flightSql.metadataTimeout",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(60)),
+    "The time limit of one Arrow Flight SQL metadata listing (`GetTables` and the others); past it the call is `DEADLINE_EXCEEDED`.",
+    None,
+);
+
+/// `krishiv.flightSql.provisionalTtl` (P3-T101).
+pub static FLIGHT_SQL_PROVISIONAL_TTL: ConfigEntry = startup(
+    "krishiv.flightSql.provisionalTtl",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(60)),
+    "How long an Arrow Flight SQL session made for a call without a session cookie lives after its last call, unless a later call depends on its state (`SetSessionOptions`, a prepared statement, a `SET`/`USE`-class statement), in which case it lives as a cookie session does. A fetched cookie-less ticket ends its session at once.",
+    None,
+);
+
+/// `krishiv.flightSql.fetchIdleTimeout` (P3-T101).
+pub static FLIGHT_SQL_FETCH_IDLE_TIMEOUT: ConfigEntry = startup(
+    "krishiv.flightSql.fetchIdleTimeout",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(300)),
+    "How long an Arrow Flight SQL result stream may wait for its client to read the next message; past it the query is cancelled and the stream ends `DEADLINE_EXCEEDED` (`KRISHIV_FLIGHT_SQL_FETCH_IDLE`). Time the engine spends computing the next batch does not count.",
+    None,
+);
+
+/// `krishiv.flightSql.maxStatementBytes` (P3-T101).
+pub static FLIGHT_SQL_MAX_STATEMENT_BYTES: ConfigEntry = startup(
+    "krishiv.flightSql.maxStatementBytes",
+    ValueType::Size,
+    ConfigValue::Size(MIB),
+    "The longest SQL text an Arrow Flight SQL statement may have; a longer one is `INVALID_ARGUMENT` (`KRISHIV_FLIGHT_SQL_STATEMENT_TOO_LARGE`) before it is parsed.",
+    None,
+);
+
+/// `krishiv.flightSql.maxCommandResultBytes` (P3-T101).
+pub static FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES: ConfigEntry = startup(
+    "krishiv.flightSql.maxCommandResultBytes",
+    ValueType::Size,
+    ConfigValue::Size(16 * MIB),
+    "The largest result an Arrow Flight SQL command (a statement that is not a query, such as `SHOW TABLES`) may store for its ticket. The command runs once, at `GetFlightInfo`; a larger result is `KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED`, which says the statement ran.",
+    None,
+);
+
+/// `krishiv.flightSql.maxHandleBytesPerPrincipal` (P3-T101).
+pub static FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL: ConfigEntry = startup(
+    "krishiv.flightSql.maxHandleBytesPerPrincipal",
+    ValueType::Size,
+    ConfigValue::Size(64 * MIB),
+    "The most bytes (SQL text, bound literals, schemas and stored command results) one principal's Arrow Flight SQL handles hold; past it the principal's oldest idle statement tickets are released, and a new handle is `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT` when none is idle.",
     None,
 );

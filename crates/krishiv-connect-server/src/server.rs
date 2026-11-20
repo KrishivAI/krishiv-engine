@@ -37,9 +37,11 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::ServerConfig;
 use tokio_rustls::server::TlsStream;
+use tonic::service::Routes;
 use tonic::transport::Server;
 use tonic::transport::server::Connected;
 
+use crate::artifacts::ArtifactLimits;
 use crate::auth::{AuthLayer, ConnectAuth};
 use crate::execute::ResponseBudget;
 use crate::manager::SessionManager;
@@ -85,6 +87,8 @@ pub struct ConnectServerConfig {
     pub shutdown_timeout: Duration,
     /// The limits of `ExecutePlan`.
     pub execute: ExecuteLimits,
+    /// The artifact quotas (`krishiv.connect.artifacts.*`).
+    pub artifacts: ArtifactLimits,
 }
 
 impl Default for ConnectServerConfig {
@@ -101,6 +105,7 @@ impl Default for ConnectServerConfig {
             maintenance_interval: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             execute: ExecuteLimits::default(),
+            artifacts: ArtifactLimits::default(),
         }
     }
 }
@@ -152,6 +157,7 @@ impl ConnectServerConfig {
                 .unwrap_or(d.maintenance_interval),
             shutdown_timeout: duration(&SERVER_SHUTDOWN_TIMEOUT).unwrap_or(d.shutdown_timeout),
             execute: ExecuteLimits::from_config(config),
+            artifacts: ArtifactLimits::from_config(config),
         }
     }
 }
@@ -180,6 +186,7 @@ pub struct ConnectServer {
     auth: Arc<ConnectAuth>,
     tls: Option<Arc<ServerConfig>>,
     budget: ResponseBudget,
+    routes: Option<Routes>,
 }
 
 impl ConnectServer {
@@ -194,6 +201,7 @@ impl ConnectServer {
             config,
             auth: Arc::new(ConnectAuth::off()),
             tls: None,
+            routes: None,
         }
     }
 
@@ -213,6 +221,21 @@ impl ConnectServer {
     #[must_use]
     pub fn with_auth(mut self, auth: ConnectAuth) -> Self {
         self.auth = Arc::new(auth);
+        self
+    }
+
+    /// This server also serving `routes` on its listener (P3-T101 §2 H1: `krishiv server` adds
+    /// the Flight SQL service; Connect itself never depends on Flight). They get the same HTTP/2
+    /// limits, connection cap, TLS, [`AuthLayer`] and shutdown as the Connect service; each
+    /// service keeps its own message-size limits. A later call replaces the earlier routes.
+    /// `routes` must not contain the Spark Connect service: `serve` adds it, and a second copy of
+    /// its path is an overlapping route. Shutdown waits `krishiv.server.shutdownTimeout` only for
+    /// the work the session manager tracks (running queries, live operations); a response of an
+    /// added service that registers no operation gets the listener's 5 s close wait, as Connect's
+    /// own non-operation RPCs do. Flight SQL registers an operation per fetch and per command.
+    #[must_use]
+    pub fn with_routes(mut self, routes: Routes) -> Self {
+        self.routes = Some(routes);
         self
     }
 
@@ -245,7 +268,8 @@ impl ConnectServer {
     ///
     /// # Errors
     /// `KRISHIV_INVALID_CONFIG_VALUE` before serving when the `ExecutePlan`
-    /// limits do not fit together ([`ExecuteLimits::validate`]);
+    /// limits do not fit together ([`ExecuteLimits::validate`]) or the
+    /// artifact limits do not ([`ArtifactLimits::validate`]);
     /// `INTERNAL_ERROR` for a transport failure.
     pub async fn serve(
         self,
@@ -259,12 +283,16 @@ impl ConnectServer {
             auth,
             tls,
             budget,
+            routes,
         } = self;
         config.execute.validate()?;
+        config.artifacts.validate()?;
         let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining))
             .with_auth(Arc::clone(&auth))
             .with_limits(config.execute.clone())
-            .with_budget(budget);
+            .with_budget(budget)
+            .with_artifacts(config.artifacts.clone());
+        let artifacts = Arc::clone(service.artifacts());
         let service = SparkConnectServiceServer::from_arc(Arc::new(service))
             .max_decoding_message_size(config.max_inbound_message_size)
             .max_encoding_message_size(config.max_inbound_message_size);
@@ -282,7 +310,7 @@ impl ConnectServer {
             .tcp_nodelay(true)
             // Authentication runs on the headers, before the body is decoded.
             .layer(AuthLayer::new(Arc::clone(&auth)))
-            .add_service(service);
+            .add_routes(routes.unwrap_or_default().add_service(service));
 
         // Aborted on drop, so a caller that cancels `serve` leaves no task
         // holding the manager (and through it the engine runtime).
@@ -351,6 +379,9 @@ impl ConnectServer {
             }
         };
         manager.close_all();
+        // The artifact root goes before `serve` returns: a removal queued on
+        // the blocking pool may never run once the runtime is dropped.
+        artifacts.shutdown().await;
         result.map_err(|e| transport_error(&e))
     }
 }

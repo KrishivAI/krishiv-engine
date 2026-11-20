@@ -521,6 +521,12 @@ fn reference(
                         | AggregateFunction::PercentileApprox { .. }
                         | AggregateFunction::PercentileDisc { .. }
                         | AggregateFunction::ApproxCountDistinct { .. }
+                        | AggregateFunction::HistogramNumeric { .. }
+                        | AggregateFunction::BitmapConstructAgg
+                        | AggregateFunction::BitmapOrAgg
+                        | AggregateFunction::BitmapAndAgg
+                        | AggregateFunction::HllSketchAgg { .. }
+                        | AggregateFunction::HllUnionAgg { .. }
                         | AggregateFunction::Udf(_) => {
                             unreachable!("no window test aggregates with this function")
                         }

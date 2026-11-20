@@ -11,12 +11,22 @@
 //! partition values and statistics.
 //!
 //! # Snapshot cache
-//! ADR 0037's snapshot cache is not here yet (PR-08b part 2): `open` builds a snapshot per
-//! call. Its key must include the store's credential scope (the `StoreId` and the resolved
-//! credential identity) besides the table root and version, so a snapshot built under one
-//! principal's `IoContext` is never served under another's; table authorization runs before
-//! the lookup.
+//! [`DeltaTable::open_with`] reads through a [`SnapshotCache`] when it is given one (ADR 0037):
+//! the latest snapshot of a table is kept across queries under its root, store and credential
+//! identity, brought up to date by each new query (only the log after the cached version is
+//! listed) and its file listing reused while the version is unchanged. Before that, one `head`
+//! of the cached last commit file confirms the table at the root is still the one cached (same
+//! size and modification time); a mismatch, a missing file or any error on the cached path
+//! drops the entry and the table is built afresh. Table authorization runs before the lookup,
+//! in the session's analysis.
+//!
+//! The stamp misses two narrow cases. A store whose modification times have 1-second
+//! precision (S3's `LastModified`) does not notice a table recreated within the same second
+//! with a last commit of the same size; an ETag would close this, but the kernel's `FileMeta`
+//! carries none. A table recreated between that `head` and the listing of the newer log is
+//! combined with the cached segment.
 
+pub mod cache;
 pub mod predicate;
 pub mod scan;
 
@@ -41,7 +51,70 @@ use crate::engine::schema::{scalar_to_array, to_arrow_field};
 use crate::error::from_kernel;
 use crate::features::{ReadProtocol, check_read, snapshot_error};
 
+pub use self::cache::{CacheKey, SnapshotCache, listing_bytes};
 pub use self::scan::{DeltaScan, DeltaScanSource};
+
+/// How [`DeltaTable::open_with`] opens a table.
+#[derive(Debug, Clone, Default)]
+pub struct OpenOptions {
+    /// The version to read; the latest when `None`.
+    pub version: Option<u64>,
+    /// The table as errors name it (delta-spark's `tableNameOrPath`): a catalog table's
+    /// `namespace.table`; the Hadoop form of the root ([`hadoop_path`]) when `None`.
+    pub name: Option<String>,
+    /// The cross-query snapshot cache and this table's key in it. Used for the latest version
+    /// only.
+    pub cache: Option<(Arc<SnapshotCache>, CacheKey)>,
+}
+
+/// The Hadoop `Path` form of the table root `url`, as delta-spark names a table read by path:
+/// `file:/abs/dir` for a local root (no authority, decoded, no trailing `/`), the URL without its
+/// trailing `/` otherwise (`s3://bucket/key`).
+#[must_use]
+pub fn hadoop_path(url: &url::Url) -> String {
+    if url.scheme() == "file"
+        && url.host_str().is_none_or(str::is_empty)
+        && let Ok(path) = url.to_file_path()
+    {
+        let text = path.to_string_lossy();
+        let trimmed = text.trim_end_matches('/');
+        return format!("file:{}", if trimmed.is_empty() { "/" } else { trimmed });
+    }
+    url.as_str().trim_end_matches('/').to_owned()
+}
+
+/// Whether `engine`'s root holds a Delta table: a commit or checkpoint file under `_delta_log/`.
+///
+/// # Errors
+/// Storage errors listing the log; `OPERATION_CANCELED`.
+pub async fn has_delta_log(engine: &DeltaEngine) -> Result<bool, KrishivError> {
+    let log = engine
+        .table_root()
+        .join("_delta_log/")
+        .map_err(|e| internal(format!("the log of {}: {e}", engine.table_root())))?;
+    let root = engine.table_root().as_str().to_owned();
+    engine
+        .delta_blocking(move |e| -> Result<bool, KrishivError> {
+            use delta_kernel::StorageHandler as _;
+            let listed = e
+                .storage()
+                .list_from(&log)
+                .map_err(|err| from_kernel(&err, &root))?;
+            for meta in listed {
+                let meta = meta.map_err(|err| from_kernel(&err, &root))?;
+                let name = meta.location.path().rsplit('/').next().unwrap_or("");
+                let versioned = name
+                    .split('.')
+                    .next()
+                    .is_some_and(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()));
+                if versioned && (name.ends_with(".json") || name.ends_with(".parquet")) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })
+        .await?
+}
 
 /// One live data file of the snapshot: one scan unit.
 #[derive(Debug, Clone)]
@@ -92,21 +165,64 @@ pub struct DeltaTable {
 
 impl DeltaTable {
     /// Opens the table at `engine`'s root at `version` (the latest when `None`) and lists its
-    /// live files. Scan settings follow `config`.
+    /// live files. Scan settings follow `config`. As [`Self::open_with`] without a cache, the
+    /// table named by its root's Hadoop form.
     ///
     /// # Errors
-    /// The allow-list's refusals ([`crate::features`]), before any file of the table's data is
-    /// read; `DELTA_INVALID_PROTOCOL_VERSION`; the kernel's errors otherwise
-    /// ([`crate::error`]).
+    /// As [`Self::open_with`].
     pub async fn open(
         engine: DeltaEngine,
         version: Option<u64>,
         config: &Config,
     ) -> Result<Self, KrishivError> {
-        let name = engine.table_root().as_str().to_owned();
-        let root = name.clone();
-        let (snapshot, units) = engine
-            .delta_blocking(move |e| -> Result<_, KrishivError> {
+        let options = OpenOptions {
+            version,
+            ..OpenOptions::default()
+        };
+        Self::open_with(engine, options, config).await
+    }
+
+    /// Opens the table at `engine`'s root as `options` say and lists its live files (or reuses
+    /// the cached listing of an unchanged version). Scan settings follow `config`.
+    ///
+    /// # Errors
+    /// The allow-list's refusals ([`crate::features`]), before any file of the table's data is
+    /// read; `DELTA_INVALID_PROTOCOL_VERSION`; the kernel's errors otherwise
+    /// ([`crate::error`]), each naming the table as `options.name` (or the root's Hadoop form).
+    pub async fn open_with(
+        engine: DeltaEngine,
+        options: OpenOptions,
+        config: &Config,
+    ) -> Result<Self, KrishivError> {
+        let OpenOptions {
+            version,
+            name,
+            cache,
+        } = options;
+        let name = name.unwrap_or_else(|| hadoop_path(engine.table_root()));
+        let root = engine.table_root().as_str().to_owned();
+        let cache = cache.filter(|_| version.is_none());
+        let cached = cache.as_ref().and_then(|(c, k)| c.lookup(k));
+        let label = name.clone();
+        let entry = cache.clone();
+        let opened = engine
+            .delta_blocking(move |e| -> Result<Opened, KrishivError> {
+                if let Some(c) = cached {
+                    if let Some(opened) = refresh(e, &c, &label) {
+                        return Ok(opened);
+                    }
+                    // A refresh cut short by the query's cancellation says nothing about the
+                    // entry: it stays, and the query ends with its cancellation.
+                    if e.kernel_cancellation().is_cancelled() {
+                        return Err(from_kernel(&KernelError::Cancelled, &label));
+                    }
+                    // Stale or broken: dropped (unless another query has meanwhile stored a
+                    // newer entry), and the table is built afresh (a lower version than the
+                    // dropped one may then be cached).
+                    if let Some((cache, key)) = &entry {
+                        cache.invalidate_if(key, c.snapshot.version(), c.last);
+                    }
+                }
                 let mut builder =
                     Snapshot::builder_for(&root).with_cancellation_token(e.kernel_cancellation());
                 if let Some(v) = version {
@@ -114,14 +230,40 @@ impl DeltaTable {
                 }
                 let snapshot = builder
                     .build(e)
-                    .map_err(|err| snapshot_error(&err, &root))?;
+                    .map_err(|err| snapshot_error(&err, &label))?;
                 // The allow-list before the file listing: a refused table reads no more.
-                check_read(&root, &ReadProtocol::of(&snapshot))?;
-                let units =
-                    list_units(e, &snapshot, None).map_err(|err| from_kernel(&err, &root))?;
-                Ok((snapshot, units))
+                check_read(&label, &ReadProtocol::of(&snapshot))?;
+                let units: Arc<[ScanUnit]> = list_units(e, &snapshot, None)
+                    .map_err(|err| from_kernel(&err, &label))?
+                    .into();
+                let stamp = entry.as_ref().and_then(|_| listed_commit(e, &snapshot));
+                Ok(Opened {
+                    snapshot,
+                    units,
+                    stamp,
+                })
             })
             .await??;
+        let Opened {
+            snapshot,
+            units,
+            stamp,
+        } = opened;
+        if let Some((cache, key)) = cache {
+            match stamp {
+                Some(last) => cache.store(
+                    key,
+                    cache::Cached {
+                        snapshot: Arc::clone(&snapshot),
+                        units: Some(Arc::clone(&units)),
+                        last,
+                    },
+                ),
+                // A version whose commit file cannot be stamped is not cached: a later query
+                // could not tell it is still current.
+                None => cache.invalidate(&key),
+            }
+        }
         let tc = snapshot.table_configuration();
         let mode = tc.column_mapping_mode();
         let logical = snapshot.schema();
@@ -164,7 +306,7 @@ impl DeltaTable {
                 schema,
                 partitions,
                 mapping,
-                units: units.into(),
+                units,
                 scan_options: ScanOptions::from_config(config),
             }),
         })
@@ -186,6 +328,16 @@ impl DeltaTable {
     #[must_use]
     pub fn snapshot(&self) -> &SnapshotRef {
         &self.inner.snapshot
+    }
+
+    /// The partition columns, in the log's order (`metaData.partitionColumns`).
+    #[must_use]
+    pub fn partition_columns(&self) -> Vec<String> {
+        self.inner
+            .partitions
+            .iter()
+            .map(|p| p.field.name().clone())
+            .collect()
     }
 
     /// The live files, in the kernel's order.
@@ -224,6 +376,83 @@ impl TableProvider for DeltaTable {
     fn scan_units(&self) -> Option<u64> {
         u64::try_from(self.inner.units.len()).ok()
     }
+}
+
+/// What an open read on the log pool.
+struct Opened {
+    snapshot: SnapshotRef,
+    units: Arc<[ScanUnit]>,
+    /// The snapshot's last commit file, when it is to be cached.
+    stamp: Option<cache::CommitStamp>,
+}
+
+/// The snapshot's last commit file (`_delta_log/<version>.json`) as the store reports it now,
+/// if it has one. Log cleanup never removes the latest commit, so a cached snapshot whose last
+/// commit no longer matches belongs to a table that was removed or recreated.
+fn last_commit(engine: &DeltaEngine, snapshot: &SnapshotRef) -> Option<cache::CommitStamp> {
+    use delta_kernel::StorageHandler as _;
+    let url = engine
+        .table_root()
+        .join(&format!("_delta_log/{:020}.json", snapshot.version()))
+        .ok()?;
+    let meta = engine.storage().head(&url).ok()?;
+    Some(cache::CommitStamp {
+        size: meta.size,
+        last_modified: meta.last_modified,
+    })
+}
+
+/// The snapshot's last commit file as the listing that built the snapshot returned it: the
+/// stamp a cache entry is stored with, bound to the files the snapshot read (a `head` after the
+/// build could see a table recreated at the root meanwhile). `None` when that listing did not
+/// return it (the entry is then not stored).
+fn listed_commit(engine: &DeltaEngine, snapshot: &SnapshotRef) -> Option<cache::CommitStamp> {
+    let url = engine
+        .table_root()
+        .join(&format!("_delta_log/{:020}.json", snapshot.version()))
+        .ok()?;
+    let (size, last_modified) = engine.listed_commit(&url)?;
+    Some(cache::CommitStamp {
+        size,
+        last_modified,
+    })
+}
+
+/// The cached table `c` brought up to date (ADR 0037 `per_query`): `None` when its last commit
+/// is gone or rewritten (the table was removed or recreated at its root) or when anything on
+/// the way fails, so the caller builds the table afresh.
+fn refresh(engine: &DeltaEngine, c: &cache::Cached, label: &str) -> Option<Opened> {
+    if last_commit(engine, &c.snapshot) != Some(c.last) {
+        return None;
+    }
+    // Only the log after the cached version is listed.
+    let snapshot = Snapshot::builder_from(Arc::clone(&c.snapshot))
+        .with_cancellation_token(engine.kernel_cancellation())
+        .build(engine)
+        .ok()?;
+    check_read(label, &ReadProtocol::of(&snapshot)).ok()?;
+    if snapshot.version() == c.snapshot.version()
+        && let Some(units) = &c.units
+    {
+        return Some(Opened {
+            snapshot,
+            units: Arc::clone(units),
+            stamp: Some(c.last),
+        });
+    }
+    // The cached commit checked again after the newer log was read: a table removed and
+    // recreated at the root meanwhile no longer has it, and its commits must not be replayed
+    // onto the cached snapshot.
+    if last_commit(engine, &c.snapshot) != Some(c.last) {
+        return None;
+    }
+    let units: Arc<[ScanUnit]> = list_units(engine, &snapshot, None).ok()?.into();
+    let stamp = listed_commit(engine, &snapshot);
+    Some(Opened {
+        snapshot,
+        units,
+        stamp,
+    })
 }
 
 /// The live files of `snapshot`, pruned by `predicate`. Drains the kernel's lazy iterator, so
@@ -348,6 +577,10 @@ fn internal(message: String) -> KrishivError {
 }
 
 #[cfg(test)]
+mod cache_tests;
+#[cfg(test)]
 mod oracle_tests;
+#[cfg(test)]
+mod roundtrip_tests;
 #[cfg(test)]
 mod tests;

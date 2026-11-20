@@ -82,13 +82,45 @@ pub async fn authorize_reported(
     }
 }
 
+/// Whether `policy` allows `principal` `privilege` on `securable`, asked as [`authorize`] asks it
+/// (fail closed: a denial, a policy error or a filter on a change is `false`) but quietly: the
+/// policy is not told of a refusal and nothing is traced. For what a listing shows
+/// (`SHOW TABLES` lists only what the principal may `Browse`, P3-T062 §2.4): leaving an entry
+/// out is not a refusal.
+pub async fn allowed(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    securable: &Securable,
+    privilege: Privilege,
+) -> bool {
+    decide_quietly(policy, principal, securable, privilege)
+        .await
+        .is_ok()
+}
+
+/// [`authorize`] as a trial: the same questions, in the same order, and the same answer
+/// (the `Browse`-to-`Select` fallback and the filtered-reader rule included), but a refusal
+/// is not told to [`AccessPolicy::denied`], so the policy writes no audit record and counts
+/// nothing. For checks whose refusal is an answer to the engine, not a refusal of the caller:
+/// the analyze API's trial of a run's target checks (P3-T063 review R2-1).
+///
+/// # Errors
+/// As [`authorize`].
+pub async fn authorize_quietly(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    securable: &Securable,
+    privilege: Privilege,
+) -> Result<(), KrishivError> {
+    decide(policy, principal, securable, privilege).await
+}
+
 async fn decide(
     policy: &dyn AccessPolicy,
     principal: &Principal,
     securable: &Securable,
     privilege: Privilege,
 ) -> Result<(), KrishivError> {
-    let denied = || insufficient_permissions(principal, securable, privilege);
     // What is asked, before any answer: the analyze API's securables are checked against these
     // events (P3-T063 m3). The securable prints as the denial text does (redacted, ADR 0038).
     tracing::trace!(
@@ -98,6 +130,16 @@ async fn decide(
         securable = %securable,
         "authorize"
     );
+    decide_quietly(policy, principal, securable, privilege).await
+}
+
+async fn decide_quietly(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    securable: &Securable,
+    privilege: Privilege,
+) -> Result<(), KrishivError> {
+    let denied = || insufficient_permissions(principal, securable, privilege);
     if privilege.changes() {
         match policy.check(principal, securable, Privilege::Select).await {
             // A write-only principal (reads denied) may still write.
@@ -141,7 +183,14 @@ async fn decide(
 /// `reads::column_reads`), and on the table itself when some appearance reads whole rows
 /// (`count(*)`, a view, or a plan the walk cannot prove). Bind asked only `Browse` on them, so
 /// this is the read check; a policy that does not decide columns was asked `Select` on the table
-/// at Bind and is not asked again.
+/// at Bind and is not asked again. The uses in `definer_only` (read only under a definer view's
+/// text, authorized for the view's owner) are not asked.
+///
+/// A refused column is named only when the statement wrote a reference to it (`wrote`, given the
+/// use's index and the column, asked only then; ADR 0048 §3 Denials, review r3 M1, r4 N1): a
+/// column reached through `*`, `* EXCEPT`, a whole-table read or a view's text, or whose name the
+/// statement wrote only for something else, is refused as a read of its table, so a refusal never
+/// lists a table's columns.
 ///
 /// # Errors
 /// As [`authorize`], at `origin`, for the first column (or table) denied.
@@ -149,12 +198,17 @@ pub(super) async fn authorize_columns(
     ctx: &super::AnalysisContext,
     uses: &[super::SecurableUse],
     reads: &[super::reads::Reads],
+    definer_only: &std::collections::BTreeSet<usize>,
+    wrote: impl Fn(usize, &str) -> bool,
     origin: crate::Origin,
 ) -> Result<(), super::AnalysisError> {
     if !ctx.policy.column_level() {
         return Ok(());
     }
     for (i, used) in uses.iter().enumerate() {
+        if definer_only.contains(&i) {
+            continue;
+        }
         let (Securable::Table(table) | Securable::View(table)) = &used.securable else {
             continue;
         };
@@ -181,7 +235,17 @@ pub(super) async fn authorize_columns(
             };
             authorize(&*ctx.policy, &ctx.principal, &securable, Privilege::Select)
                 .await
-                .map_err(at)?;
+                .map_err(|e| {
+                    if wrote(i, column) {
+                        at(e)
+                    } else {
+                        at(insufficient_permissions(
+                            &ctx.principal,
+                            &used.securable,
+                            Privilege::Select,
+                        ))
+                    }
+                })?;
         }
     }
     Ok(())
@@ -429,6 +493,58 @@ mod tests {
             column: "a".to_owned(),
         };
         assert_eq!(column.to_string(), "column `a` of table `c`.`s`.`t`");
+    }
+
+    /// T063 review R2-1: a quiet trial decides exactly as [`authorize`] does and tells the policy of
+    /// no refusal.
+    #[test]
+    fn a_quiet_check_decides_as_authorize_and_tells_the_policy_nothing() {
+        let principal = Principal::new("ana", PrincipalKind::User);
+        let table = Securable::Table(TableIdent {
+            catalog: "spark_catalog".to_owned(),
+            namespace: vec!["default".to_owned()],
+            name: "t".to_owned(),
+        });
+        let cases: [&[(Privilege, Option<AccessDecision>)]; 6] = [
+            &[
+                (Privilege::Browse, deny()),
+                (Privilege::Select, Some(AccessDecision::Allow)),
+            ],
+            &[(Privilege::Browse, deny()), (Privilege::Select, deny())],
+            &[
+                (Privilege::Select, deny()),
+                (Privilege::Modify, Some(AccessDecision::Allow)),
+            ],
+            &[(Privilege::Select, None)],
+            &[(Privilege::Select, filtered())],
+            &[
+                (Privilege::Select, filtered()),
+                (Privilege::Drop, Some(AccessDecision::Allow)),
+            ],
+        ];
+        for answers in cases {
+            for p in ALL {
+                let loud = Counting(fixed(answers), std::sync::atomic::AtomicUsize::new(0));
+                let quiet = Counting(fixed(answers), std::sync::atomic::AtomicUsize::new(0));
+                let a = block_on(authorize(&loud, &principal, &table, p));
+                let q = block_on(authorize_quietly(&quiet, &principal, &table, p));
+                assert_eq!(
+                    a.as_ref().map_err(KrishivError::to_string),
+                    q.as_ref().map_err(KrishivError::to_string),
+                    "{p} {answers:?}"
+                );
+                assert_eq!(quiet.1.load(std::sync::atomic::Ordering::Relaxed), 0);
+                // `authorize` itself tells the policy once of each permission refusal.
+                let refused = a
+                    .as_ref()
+                    .is_err_and(|e| e.error_class() == ErrorClass::KrishivInsufficientPermissions);
+                assert_eq!(
+                    loud.1.load(std::sync::atomic::Ordering::Relaxed),
+                    usize::from(refused),
+                    "{p} {answers:?}"
+                );
+            }
+        }
     }
 
     #[test]

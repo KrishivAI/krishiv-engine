@@ -102,6 +102,9 @@ impl Accumulator {
                 gk.state(ids, 1.0 / *accuracy as f64)
             }
             Kind::Hll(h) => h.state(ids),
+            Kind::Hist(h) => h.state(ids)?,
+            Kind::Bitmap(b) => b.state(ids)?,
+            Kind::HllSketch(h) => h.state(ids)?,
             Kind::Udf(u) => u.state(ids)?,
             Kind::By {
                 values,
@@ -358,9 +361,12 @@ impl Accumulator {
                 };
                 approx_results(gk, ids, &self.expr, 1.0 / *accuracy as f64, &self.result)?
             }
+            Kind::Hist(h) => h.evaluate(ids, &self.result)?,
             Kind::Hll(h) => Arc::new(Int64Array::from_iter_values(
                 ids.iter().map(|i| h.estimate(at(i))),
             )) as ArrayRef,
+            Kind::Bitmap(b) => b.evaluate(ids)?,
+            Kind::HllSketch(h) => h.evaluate(ids)?,
             Kind::Udf(u) => u.evaluate(ids)?,
             // Only the value: the ordering key is state, not a result.
             Kind::By {

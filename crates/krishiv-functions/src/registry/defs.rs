@@ -1450,10 +1450,13 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::conditional::specs());
     out.extend(super::generator::specs());
     out.extend(super::json::specs());
+    out.extend(super::avro::specs());
     out.extend(super::map::specs());
     out.extend(super::math::specs());
     out.extend(super::hashing::specs());
     out.extend(super::crypto::specs());
+    out.extend(super::bitmap::specs());
+    out.extend(super::hll::specs());
     out.extend(super::bitwise::specs());
     out.extend(super::predicate::specs());
     out.extend(super::number::specs());
@@ -1464,6 +1467,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::xml::specs());
     out.extend(super::vector::specs());
     out.extend(super::element::specs());
+    out.extend(super::time_window::specs());
     out.extend(super::array_edit::specs());
     out.extend(super::array_scan::specs());
     out.extend(super::array_set::specs());

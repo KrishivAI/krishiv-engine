@@ -599,56 +599,82 @@
     ]
   },
   "bitmap_and_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "300000"
+    ]
   },
   "bitmap_and_agg#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "FF0000"
+    ]
   },
   "bitmap_bit_position#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "0"
+    ]
   },
   "bitmap_bit_position#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "122"
+    ]
   },
   "bitmap_bucket_number#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "1"
+    ]
   },
   "bitmap_bucket_number#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "0"
+    ]
   },
   "bitmap_construct_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "070000"
+    ]
   },
   "bitmap_construct_agg#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "010000"
+    ]
   },
   "bitmap_count#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2"
+    ]
   },
   "bitmap_count#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "16"
+    ]
   },
   "bitmap_count#3": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "0"
+    ]
   },
   "bitmap_or_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "700000"
+    ]
   },
   "bitmap_or_agg#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "100000"
+    ]
   },
   "bool_and#1": {
     "ok": true,
@@ -1776,7 +1802,7 @@
     ]
   },
   "from_avro#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
     "ok": false
   },
   "from_csv#1": {
@@ -1942,24 +1968,34 @@
     ]
   },
   "histogram_numeric#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "[{\"x\":0,\"y\":1.0},{\"x\":1,\"y\":1.0},{\"x\":2,\"y\":1.0},{\"x\":10,\"y\":1.0}]"
+    ]
   },
   "hll_sketch_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "3"
+    ]
   },
   "hll_sketch_estimate#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "3"
+    ]
   },
   "hll_union#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6"
+    ]
   },
   "hll_union_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "1"
+    ]
   },
   "hour#1": {
     "ok": true,
@@ -2135,12 +2171,16 @@
     ]
   },
   "is_valid_variant#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "is_valid_variant#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "is_variant_null#1": {
     "ok": true,
@@ -4641,12 +4681,21 @@
     "volatile": true
   },
   "session_window#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "A1\t2021-01-01 00:00:00\t2021-01-01 00:09:30\t2",
+      "A1\t2021-01-01 00:10:00\t2021-01-01 00:15:00\t1",
+      "A2\t2021-01-01 00:01:00\t2021-01-01 00:06:00\t1"
+    ]
   },
   "session_window#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "A1\t2021-01-01 00:00:00\t2021-01-01 00:09:30\t2",
+      "A1\t2021-01-01 00:10:00\t2021-01-01 00:15:00\t1",
+      "A2\t2021-01-01 00:01:00\t2021-01-01 00:02:00\t1",
+      "A2\t2021-01-01 00:04:30\t2021-01-01 00:05:30\t1"
+    ]
   },
   "sha#1": {
     "ok": true,
@@ -6855,16 +6904,30 @@
     ]
   },
   "window#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "A1\t2021-01-01 00:00:00\t2021-01-01 00:05:00\t2",
+      "A1\t2021-01-01 00:05:00\t2021-01-01 00:10:00\t1",
+      "A2\t2021-01-01 00:00:00\t2021-01-01 00:05:00\t1"
+    ]
   },
   "window#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "A1\t2020-12-31 23:55:00\t2021-01-01 00:05:00\t2",
+      "A1\t2021-01-01 00:00:00\t2021-01-01 00:10:00\t3",
+      "A1\t2021-01-01 00:05:00\t2021-01-01 00:15:00\t1",
+      "A2\t2020-12-31 23:55:00\t2021-01-01 00:05:00\t1",
+      "A2\t2021-01-01 00:00:00\t2021-01-01 00:10:00\t1"
+    ]
   },
   "window_time#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "A1\t2021-01-01 00:00:00\t2021-01-01 00:05:00\t2021-01-01 00:04:59.999999\t2",
+      "A1\t2021-01-01 00:05:00\t2021-01-01 00:10:00\t2021-01-01 00:09:59.999999\t1",
+      "A2\t2021-01-01 00:00:00\t2021-01-01 00:05:00\t2021-01-01 00:04:59.999999\t1"
+    ]
   },
   "xpath#1": {
     "class": "KRISHIV_UNSUPPORTED_FEATURE",

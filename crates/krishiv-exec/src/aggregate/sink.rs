@@ -109,6 +109,10 @@ struct Counters {
     resizes: Arc<AtomicU64>,
     /// Partition tasks of the row tables' final phase.
     row_final_tasks: AtomicU64,
+    /// Final-phase tasks whose presizing from the estimate grew their row
+    /// pages or accumulators (counted once per task, even when the task stalls
+    /// and runs again).
+    row_final_presized: AtomicU64,
     /// Final phases that moved to disk (out of memory, or a spill request).
     row_final_spills: AtomicU64,
     /// Times the final phase wrote its finished partitions' groups to the
@@ -173,7 +177,7 @@ pub(super) fn writer_panicked(p: &(dyn std::any::Any + Send)) -> KrishivError {
 /// A hash-aggregation pipeline breaker (see the [module docs](super)).
 #[derive(Debug)]
 pub struct HashAggregate {
-    core: Arc<AggCore>,
+    pub(super) core: Arc<AggCore>,
     counters: Arc<Counters>,
     /// Overrides the thread-local row tables' index mode (tests force
     /// abandons).
@@ -1406,6 +1410,12 @@ impl HashAggregate {
 }
 
 impl Sink for HashAggregate {
+    // Groups and their states do not depend on the input's batches, only
+    // on its rows in order (J1).
+    fn coalesce_input(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "HashAggregate"
     }
@@ -1781,6 +1791,10 @@ impl Sink for HashAggregate {
                 (
                     "row_final_tasks",
                     c.row_final_tasks.load(AtomicOrdering::Relaxed),
+                ),
+                (
+                    "row_final_presized",
+                    c.row_final_presized.load(AtomicOrdering::Relaxed),
                 ),
                 (
                     "row_final_spills",

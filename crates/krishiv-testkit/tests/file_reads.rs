@@ -109,6 +109,47 @@ fn class<T: std::fmt::Debug>(r: Result<T, KrishivError>) -> (ErrorClass, String)
     (e.error_class(), first)
 }
 
+/// `hf://` / `HF://` paths placed in the harness's in-memory store.
+#[derive(Debug)]
+struct HfPaths;
+
+impl PathLocator for HfPaths {
+    fn locate(&self, path: &str) -> krishiv_exec::Result<LocatedPath> {
+        let rest = path.get(5..).unwrap_or(path);
+        Ok(LocatedPath {
+            store: StoreId::new("memory://suite"),
+            path: Path::from(rest),
+            display: path.to_owned(),
+        })
+    }
+}
+
+/// KN-7: an `hf://` path that names no file is `PATH_NOT_FOUND` whatever the case of the scheme; the
+/// store has no listing, so it is never probed as a directory (here `d.parquet` is one in the store).
+#[test]
+fn an_hf_path_that_is_not_a_file_is_not_found_in_any_case() {
+    let env = Env::new(None).unwrap();
+    let fx = MockFixture::default();
+    let a = schema(&[("a", ArrowType::Int32)]);
+    env.write(&fx, "datasets/o/n/d.parquet/part-0", &a, &[ints(&a)], &[])
+        .unwrap();
+    env.write(&fx, "datasets/o/n/ok.parquet", &a, &[ints(&a)], &[])
+        .unwrap();
+    let r = reads(&env, vec![Arc::new(MockFormat)], Arc::new(HfPaths));
+    let none = BTreeMap::new();
+    for path in [
+        "hf://datasets/o/n/d.parquet",
+        "HF://datasets/o/n/d.parquet",
+        "hf://datasets/o/n/missing.parquet",
+        "HF://datasets/o/n/missing.parquet",
+    ] {
+        let got = env.block_on(r.listing("mock", &paths(&[path]), &none));
+        assert_eq!(class(got), (ErrorClass::PathNotFound, path.to_owned()));
+    }
+    let got = env.block_on(r.listing("mock", &paths(&["HF://datasets/o/n/ok.parquet"]), &none));
+    assert!(got.is_ok());
+}
+
 #[test]
 fn directories_list_like_spark() {
     let env = Env::new(None).unwrap();
@@ -169,6 +210,13 @@ fn directories_list_like_spark() {
     // Credentials in paths (globs are expanded: see `partition_discovery` in krishiv-session).
     let got = env.block_on(r.infer("mock", &paths(&["s3://user:secret@bucket/k"]), &none));
     assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
+    // KN-7: `hf://` has no listing, so a directory or a glob is refused before any request.
+    for path in ["hf://datasets/o/n/dir/", "hf://datasets/o/n/dir/*.parquet"] {
+        let got = env.block_on(r.infer("json", &paths(&[path]), &none));
+        let (kind, param) = class(got);
+        assert_eq!(kind, ErrorClass::KrishivUnsupportedFeature, "{path}");
+        assert!(param.contains("only named files"), "{path}: {param}");
+    }
     // Paths come before the format: a missing path of a format without a
     // reader here is PATH_NOT_FOUND, an existing one of a Spark built-in
     // source without an implementation is unsupported.
@@ -566,5 +614,74 @@ fn concurrent_reads_keep_one_listing() {
     assert!(
         shown.contains("FileReads") && shown.contains("MemPaths"),
         "{shown}"
+    );
+}
+
+/// Cloud paths (`s3a://bucket/a/b`) placed in the harness's in-memory store, displayed as the
+/// URL parser displays them (scheme and authority as written).
+#[derive(Debug, Default)]
+struct CloudPaths;
+
+impl PathLocator for CloudPaths {
+    fn locate(&self, path: &str) -> krishiv_exec::Result<LocatedPath> {
+        let url = krishiv_io::parse_object_url(path)?;
+        Ok(LocatedPath {
+            store: StoreId::new("memory://suite"),
+            path: url.key,
+            display: url.display,
+        })
+    }
+}
+
+#[test]
+fn a_listing_keeps_the_root_each_read_path_was_written_with() {
+    let env = Env::new(None).unwrap();
+    let fx = MockFixture::default();
+    let a = schema(&[("a", ArrowType::Int32)]);
+    env.write(&fx, "d/part-0", &a, &[ints(&a)], &[]).unwrap();
+    env.write(&fx, "e/part-0", &a, &[ints(&a)], &[]).unwrap();
+    let r = reads(&env, vec![Arc::new(MockFormat)], Arc::new(CloudPaths));
+    let none = BTreeMap::new();
+    let store = StoreId::new("memory://suite");
+    // Each file prints under the spelling of the read path that listed it: a Spark 4.2.0 run
+    // keeps the scheme written (`S3A://bucket/dir` prints `s3a://bucket/dir/...`; `s3://` with
+    // `fs.s3.impl` set prints `s3://`), and a glob's directory gives its files' root.
+    for (read, want) in [
+        (&["S3A://bucket/d"][..], &[("d/part-0", "s3a://bucket")][..]),
+        (
+            &["s3a://bucket/e*"][..],
+            &[("e/part-0", "s3a://bucket")][..],
+        ),
+        (
+            &["s3://bucket/d", "s3a://bucket/e"][..],
+            &[("d/part-0", "s3://bucket"), ("e/part-0", "s3a://bucket")][..],
+        ),
+    ] {
+        let listing = env
+            .block_on(r.listing("mock", &paths(read), &none))
+            .unwrap();
+        let got: Vec<(String, Option<&str>)> = listing
+            .files
+            .iter()
+            .map(|f| (f.path.to_string(), listing.path_roots.root(&store, &f.path)))
+            .collect();
+        let want: Vec<(String, Option<&str>)> = want
+            .iter()
+            .map(|(p, r)| ((*p).to_owned(), Some(*r)))
+            .collect();
+        assert_eq!(got, want, "{read:?}");
+    }
+    // A local read has no root: its files print under the store id (`file:`).
+    let local = reads(
+        &env,
+        vec![Arc::new(MockFormat)],
+        Arc::new(MemPaths::default()),
+    );
+    let listing = env
+        .block_on(local.listing("mock", &paths(&["/d"]), &none))
+        .unwrap();
+    assert_eq!(
+        listing.path_roots.root(&store, &Path::from("d/part-0")),
+        None
     );
 }

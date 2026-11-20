@@ -464,6 +464,27 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         Some(Feature::PercentileAggregates)
     );
+    for f in [
+        krishiv_exec::aggregate::AggregateFunction::BitmapConstructAgg,
+        krishiv_exec::aggregate::AggregateFunction::BitmapOrAgg,
+        krishiv_exec::aggregate::AggregateFunction::BitmapAndAgg,
+    ] {
+        assert_eq!(
+            feature_of(Construct::AggregateFunction(&f)),
+            Some(Feature::BitmapAggregates)
+        );
+    }
+    for f in [
+        krishiv_exec::aggregate::AggregateFunction::HllSketchAgg { lg_k: 12 },
+        krishiv_exec::aggregate::AggregateFunction::HllUnionAgg {
+            allow_different: false,
+        },
+    ] {
+        assert_eq!(
+            feature_of(Construct::AggregateFunction(&f)),
+            Some(Feature::HllSketchAggregates)
+        );
+    }
     assert_eq!(
         feature_of(Construct::AggregateFunction(
             &krishiv_exec::aggregate::AggregateFunction::CovarPop
@@ -875,6 +896,9 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
     );
     // Likewise the moment and the `any_value`/`max_by`/`min_by` plans.
     for (case, feature) in [
+        ("aggregate_histogram_numeric", "histogram_numeric"),
+        ("aggregate_bitmaps", "bitmap_aggregates"),
+        ("aggregate_hll_sketches", "hll_sketch_aggregates"),
         ("aggregate_moments", "moment_aggregates"),
         ("aggregate_any_value", "any_value_by_aggregates"),
         ("aggregate_max_min_by", "any_value_by_aggregates"),
@@ -2219,6 +2243,37 @@ fn the_python_udf_relation_kinds_need_their_feature() {
     }
 }
 
+/// A Python window aggregate lists `python_udf_windows` (semantic: an older
+/// reader would run the node as a grouped aggregate, one row per partition),
+/// and a reader without it refuses the plan; the grouped form does not list
+/// it.
+#[test]
+fn a_python_window_aggregate_needs_its_feature() {
+    assert_eq!(Feature::PythonUdfWindows.kind(), FeatureKind::Semantic);
+    assert_eq!(
+        message("python_window").features,
+        ["python_udf", "python_udf_relations", "python_udf_windows"]
+    );
+    assert!(
+        !message("python_aggregate")
+            .features
+            .contains(&"python_udf_windows".to_owned())
+    );
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::PythonUdfWindows),
+    );
+    let bytes = message("python_window").encode_to_vec();
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["python_udf_windows".to_owned()]
+        }
+    );
+}
+
 /// A `TABLESAMPLE` plan lists `sample` (a semantic feature: no plan without
 /// the node keeps the same rows), and a reader without it refuses the plan
 /// naming the feature.
@@ -2584,4 +2639,57 @@ fn a_table_write_never_carries_an_inline_secret() {
     let err = encode(&plan_of(root)).unwrap_err();
     assert!(matches!(err, CodecError::Unsupported(_)), "{err:?}");
     assert!(!err.to_string().contains("abc"), "{err}");
+}
+
+/// A Python table function lists `python_udtf` (semantic: no other node runs a UDTF) beside the relation
+/// kinds' eval types, and a reader without it refuses the plan naming it.
+#[test]
+fn a_python_udtf_needs_its_feature() {
+    assert_eq!(Feature::PythonUdtf.kind(), FeatureKind::Semantic);
+    let features = message("python_udtf").features;
+    assert!(features.contains(&"python_udtf".to_owned()), "{features:?}");
+    assert!(
+        features.contains(&"python_udf_relations".to_owned()),
+        "{features:?}"
+    );
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::PythonUdtf),
+    );
+    let bytes = message("python_udtf").encode_to_vec();
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["python_udtf".to_owned()]
+        }
+    );
+}
+
+/// A `PythonUdtfNode` whose `TABLE` argument is not one struct of named input columns at an argument's place
+/// is corrupt (review R1-8).
+#[test]
+fn a_python_udtf_table_of_uneven_shape_is_corrupt() {
+    fn udtf(m: &mut pb::PhysicalPlan) -> &mut pb::PythonUdtfNode {
+        m.nodes
+            .iter_mut()
+            .find_map(|n| match &mut n.kind {
+                Some(pb::node::Kind::PythonUdtf(u)) => Some(u),
+                _ => None,
+            })
+            .unwrap()
+    }
+    let edits: [fn(&mut pb::PythonUdtfNode); 3] = [
+        |u| {
+            u.table.as_mut().unwrap().names.pop();
+        },
+        |u| u.table.as_mut().unwrap().position = 2,
+        |u| u.table.as_mut().unwrap().partition_child_indexes = vec![2],
+    ];
+    for edit in edits {
+        let mut m = message("python_udtf");
+        edit(udtf(&mut m));
+        corrupt(&m, "a Python UDTF TABLE argument of uneven shape");
+    }
 }

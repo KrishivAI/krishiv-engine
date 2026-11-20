@@ -44,6 +44,39 @@ pub enum SqlOutcome {
     Command(DataFrame),
 }
 
+/// What [`Session::sql_query_with`] found: a query, analyzed and not run, or the class of a
+/// statement that is not one, which was neither authorized nor run.
+#[cfg(feature = "unstable-ir")]
+#[expect(
+    missing_debug_implementations,
+    reason = "a `DataFrame` has no `Debug`; neither has what holds one"
+)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a return value matched at once, as `SqlOutcome`; boxing the frame buys nothing"
+)]
+#[non_exhaustive]
+pub enum SqlQuery {
+    /// A query: analyzed (the policy asked), not run.
+    Query(DataFrame),
+    /// A statement that is not a query (a command, `SHOW`, `EXPLAIN`, ...), with its class.
+    NotAQuery(crate::StatementClass),
+}
+
+#[cfg(feature = "unstable-ir")]
+impl SqlQuery {
+    /// The query's frame.
+    ///
+    /// # Errors
+    /// `KRISHIV_FLIGHT_SQL_NOT_A_QUERY` (55000) for a statement that is not a query.
+    pub fn into_query(self) -> Result<DataFrame, KrishivError> {
+        match self {
+            Self::Query(df) => Ok(df),
+            Self::NotAQuery(class) => Err(super::ran::not_a_query(class)),
+        }
+    }
+}
+
 impl Session {
     /// A session on `runtime` with configuration `config`.
     pub(super) fn on_runtime(
@@ -55,8 +88,18 @@ impl Session {
             Arc::clone(&runtime.catalog_store),
             Arc::clone(&runtime.warehouse),
         );
+        // `krishiv.catalog.default` (Spark's `spark.sql.defaultCatalog`): a new session starts in
+        // it when its principal sees it (design P3-T067 §2.4), else in `spark_catalog`.
+        if let Some(default) = runtime.catalogs.default_catalog()
+            && runtime
+                .catalogs
+                .catalog(default, parts.principal.tenant.as_deref())
+                .is_some()
+        {
+            catalog.use_catalog(default);
+        }
         let seed = Seed {
-            conf: ConfStore::new(config),
+            conf: ConfStore::new(config).with_profile(parts.profile),
             catalog,
             variables: SessionVariables::default(),
             udfs: Arc::new(UdfLibrary::new()),
@@ -74,7 +117,10 @@ impl Session {
     }
 
     /// A session of `parts` on `runtime` starting from `seed`'s state.
-    fn seeded(runtime: Arc<EngineRuntime>, parts: SessionParts, seed: Seed) -> Self {
+    fn seeded(runtime: Arc<EngineRuntime>, parts: SessionParts, mut seed: Seed) -> Self {
+        // A server runtime's catalogs are declared at startup only (design P3-T067 §2.2).
+        seed.conf.static_catalogs =
+            runtime.catalogs.mode() == crate::catalog_decl::DeclMode::Server;
         let config = seed.conf.snapshot();
         let runtime_admission = runtime.admission.clone();
         let queries = Arc::new(crate::system::QueryLog::new(
@@ -125,9 +171,11 @@ impl Session {
             locals: Arc::from([]),
             operation: None,
             deadline: None,
+            query_start: None,
             request_tags: Arc::from([]),
             inbound_trace: None,
             inbound_baggage: Arc::from([]),
+            request_inbound: None,
             state: Arc::new(SessionState {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
@@ -165,6 +213,7 @@ impl Session {
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(seed.sql_sources),
                 denials: std::sync::OnceLock::new(),
+                inbound: Mutex::new(None),
             }),
         };
         if let Some(grants) = &session.state.grants {
@@ -515,6 +564,39 @@ impl Session {
         self.with_options(options)?.sql_command(query).await
     }
 
+    /// `query` if it is a query, analyzed under `options` (as [`Self::sql_command_with`]) and not
+    /// run; a statement that is not a query is neither authorized nor run and gives its class
+    /// ([`SqlQuery::NotAQuery`]). One call, so `${...}` substitution, which reads the session's
+    /// conf, is applied once: the text cannot change kind between a check and a run (Arrow Flight
+    /// SQL, P3-T101 note §2, v4 review M1). A refused statement records no `system.queries` row:
+    /// nothing ran.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// use krishiv_session::{QueryOptions, SqlQuery, StatementClass};
+    /// let q = futures::executor::block_on(session.sql_query_with("SELECT 1", QueryOptions::default()))?;
+    /// assert!(matches!(q, SqlQuery::Query(_)));
+    /// let c = futures::executor::block_on(session.sql_query_with("SET a.b = 1", QueryOptions::default()))?;
+    /// assert!(matches!(c, SqlQuery::NotAQuery(StatementClass::Session)));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As [`Self::sql_with`] (parse, analysis, access errors of a query).
+    #[cfg(feature = "unstable-ir")]
+    pub async fn sql_query_with(
+        &self,
+        query: &str,
+        options: crate::QueryOptions,
+    ) -> Result<SqlQuery, KrishivError> {
+        Ok(
+            match self.with_options(options)?.sql_ran(query, true).await? {
+                super::Ran::Frame(df, _) => SqlQuery::Query(df),
+                super::Ran::NotAQuery(class) => SqlQuery::NotAQuery(class),
+            },
+        )
+    }
+
     /// A handle of this session that runs its queries under `options` (the
     /// operation id taken now, held while the handle or a clone lives).
     pub(crate) fn with_options(
@@ -555,9 +637,16 @@ impl Session {
             locals: Arc::clone(&self.locals),
             operation,
             deadline: options.deadline.or(self.deadline),
+            query_start: options.query_start_micros.or(self.query_start),
             request_tags: options.request_tags.into(),
             inbound_trace,
             inbound_baggage,
+            request_inbound: options
+                .inbound_credential
+                .map(|(method, credential)| {
+                    crate::catalog_registry::Inbound::new(method, credential)
+                })
+                .or_else(|| self.request_inbound.clone()),
         };
         Ok(handle)
     }

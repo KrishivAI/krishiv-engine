@@ -53,6 +53,7 @@ impl Planner<'_> {
         right: &Arc<LogicalPlan>,
         kind: JoinKind,
         condition: &JoinCondition,
+        demand: Option<HashSet<AttrId>>,
     ) -> Result<Planned> {
         // Taken first: every path below either uses it or drops it.
         let request = self.take_request(left, right);
@@ -67,7 +68,17 @@ impl Planner<'_> {
             return self.join_with_python_udfs(left, right, kind, on);
         }
         let hints = (self.side_hint(left), self.side_hint(right));
-        let planned = (self.plan(left)?, self.plan(right)?);
+        // Each side is asked for what the parent reads plus what the condition reads (study 38
+        // lever A). The other side's ids in it can only keep a column here (a superset of what is
+        // read), never drop one.
+        let demand = match on {
+            Some(on) => super::build::with_columns_of(demand, on),
+            None => demand,
+        };
+        self.demand.clone_from(&demand);
+        let planned_left = self.plan(left)?;
+        self.demand = demand;
+        let planned = (planned_left, self.plan(right)?);
         self.join_planned((left, right), planned, hints, kind, on, request)
     }
 
@@ -345,6 +356,20 @@ impl Planner<'_> {
         }
         if join_type == JoinType::Inner {
             sites.extend(build.sites.iter().cloned());
+            if self.rf.equated_sites {
+                for s in
+                    super::runtime_filter::equated_sites(&probe, &probe_exprs, &build, &build_exprs)
+                {
+                    // One site per (column, scan column): a key equated
+                    // twice targets its scan once (review NIT-3).
+                    if !sites
+                        .iter()
+                        .any(|t| t.attr == s.attr && t.scan == s.scan && t.column == s.column)
+                    {
+                        sites.push(s);
+                    }
+                }
+            }
         }
         if join_type.builds_preserved() {
             // The rows the join returns are build rows (a right outer

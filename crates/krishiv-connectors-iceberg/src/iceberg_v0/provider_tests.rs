@@ -66,12 +66,20 @@ pub(super) fn env_on(
     store: Arc<dyn object_store::ObjectStore>,
     config: krishiv_io::IoConfig,
 ) -> Env {
+    env_in(tempfile::tempdir().unwrap(), store, config)
+}
+
+/// [`env_on`] with the warehouse in `dir` (the write conformance fixes its path).
+pub(super) fn env_in(
+    dir: tempfile::TempDir,
+    store: Arc<dyn object_store::ObjectStore>,
+    config: krishiv_io::IoConfig,
+) -> Env {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()
         .unwrap();
-    let dir = tempfile::tempdir().unwrap();
     let (sched, reg) = {
         let _entered = rt.enter();
         local_on(dir.path(), store, config)
@@ -241,6 +249,14 @@ pub(super) fn session(tables: Vec<(&str, StructType, Arc<dyn TableProvider>)>) -
 impl Session {
     /// Runs `sql` (joins in the optimizer's default order) to completion.
     pub(super) fn run(&self, sql: &str) -> Result<Vec<RecordBatch>, KrishivError> {
+        Ok(self.run_metrics(sql)?.0)
+    }
+
+    /// [`Self::run`] with the query's metrics.
+    pub(super) fn run_metrics(
+        &self,
+        sql: &str,
+    ) -> Result<(Vec<RecordBatch>, krishiv_exec::QueryMetrics), KrishivError> {
         let plan =
             krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
                 .map_err(KrishivError::from)?;
@@ -271,7 +287,7 @@ impl Session {
                 out.push(b?.into_parts().0);
             }
             query.finished().await;
-            Ok(out)
+            Ok((out, query.metrics()))
         })
     }
 

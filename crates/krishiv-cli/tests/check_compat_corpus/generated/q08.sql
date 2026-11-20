@@ -1,4 +1,6 @@
 -- query 8: nope(1)
-SELECT legacy_fn_32(a, b) AS c1 FROM t8 WHERE x IN (1, 2) AND y = 'x(legacy_fn_32)';
-SELECT is_valid_variant(a, b) AS c2 FROM t8 WHERE x IN (1, 2) AND y = 'x(is_valid_variant)';
-SELECT months_between(a, b) AS c3 FROM t8 WHERE x IN (1, 2) AND y = 'x(months_between)';
+SELECT array_compact(a, b) AS c1 FROM t8 WHERE x IN (1, 2) AND y = 'x(array_compact)';
+SELECT schema_of_avro(a, b) AS c2 FROM t8 WHERE x IN (1, 2) AND y = 'x(schema_of_avro)';
+SELECT ceil(a, b) AS c3 FROM t8 WHERE x IN (1, 2) AND y = 'x(ceil)';
+SELECT to_avro(a, b) AS c4 FROM t8 WHERE x IN (1, 2) AND y = 'x(to_avro)';
+SELECT array_except(a, b) AS c5 FROM t8 WHERE x IN (1, 2) AND y = 'x(array_except)';

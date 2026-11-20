@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Declared catalogs (design P3-T067 §2; ADR 0036 R11, R14): the `krishiv.catalog.<name>.*` keys
+//! Declared catalogs: the `krishiv.catalog.<name>.*` keys
 //! and Spark's `spark.sql.catalog.<name>` alias, parsed and validated by one pure function, the
-//! same for the server at startup and for an embedded session builder (R11). Validation never
+//! same for the server at startup and for an embedded session builder. Validation never
 //! connects: a catalog that is down does not stop the server.
 //!
 //! ```text
 //! krishiv.catalog.<name>.type            = iceberg-rest | hive | unity | glue | sqlite | memory
 //! krishiv.catalog.<name>.uri             = https://catalog.example.com/api/catalog
 //! krishiv.catalog.<name>.warehouse       = analytics
-//! krishiv.catalog.<name>.auth            = none | token | client-credentials   (default none)
+//! krishiv.catalog.<name>.auth            = none | token | client-credentials | delegated (default none)
 //! krishiv.catalog.<name>.token           = env:NAME | file:/path               (auth=token)
 //! krishiv.catalog.<name>.clientId        = krishiv                              (client-credentials)
 //! krishiv.catalog.<name>.clientSecret    = env:NAME | file:/path
 //! krishiv.catalog.<name>.tokenEndpoint   = https://idp.example.com/oauth2/token (required)
 //! krishiv.catalog.<name>.scope / .audience
+//! krishiv.catalog.<name>.delegation      = exchange | forward                    (delegated; default exchange)
+//! krishiv.catalog.<name>.actorToken      = client-credentials | none             (exchange; default client-credentials)
 //! krishiv.catalog.<name>.storage         = vended | allowed-prefixes
 //! krishiv.catalog.<name>.tenants         = acme, globex                         (absent: every tenant)
 //! krishiv.catalog.<name>.allowConfigKeys = s3.endpoint
@@ -22,13 +24,17 @@
 //! krishiv.catalog.default                = <name>
 //! ```
 //!
-//! `auth = delegated` (and `.delegation`, `.actorToken`) is PR-58b's: refused here as not in this
-//! build, never accepted and ignored.
+//! `auth = delegated` needs `.audience`; `exchange` needs `.tokenEndpoint`, and
+//! with `actorToken = client-credentials` also `.clientId` and `.clientSecret` (the server's own
+//! client, the exchange's actor). `forward` takes no token endpoint, client or actor setting. The
+//! names `delegation` and `vended` are reserved: `krishiv.catalog.delegation.*` and
+//! `krishiv.catalog.vended.*` are engine settings, never a catalog.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use krishiv_common::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnsupportedFeature};
-use krishiv_io::egress::EgressScope;
+use krishiv_io::egress::EgressPolicy;
 
 use crate::auth::SecretRef;
 
@@ -39,18 +45,39 @@ pub const SPARK_CATALOG_PREFIX: &str = "spark.sql.catalog.";
 /// `krishiv.catalog.default` (Spark's `spark.sql.defaultCatalog`).
 pub const DEFAULT_CATALOG_KEY: &str = "krishiv.catalog.default";
 
-/// Whether `key` declares a catalog: a `krishiv.catalog.*` or `spark.sql.catalog.*` key. In
-/// server mode such keys are startup only, for every role (§2.2, decision 1).
+/// `key` after `prefix`, the prefix matched in any ASCII letter case: the one prefix match of
+/// [`is_catalog_key`] and [`CatalogDeclarations::parse`], so no key one routes to the
+/// declarations is missed by the other (review 58a2 B1).
+fn strip_prefix_ci<'a>(key: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = key.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
+        .then(|| key.get(prefix.len()..))
+        .flatten()
+}
+
+/// Whether `key` declares a catalog: a `krishiv.catalog.*` or `spark.sql.catalog.*` key, the
+/// prefix in any letter case. In server mode such keys are startup only, for every role (§2.2,
+/// decision 1).
 #[must_use]
 pub fn is_catalog_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    lower.starts_with(CATALOG_PREFIX) || lower.starts_with(SPARK_CATALOG_PREFIX)
+    strip_prefix_ci(key, CATALOG_PREFIX).is_some()
+        || strip_prefix_ci(key, SPARK_CATALOG_PREFIX).is_some()
+}
+
+/// Whether `key` is part of a catalog declaration: a catalog key ([`is_catalog_key`]) that is
+/// not a registered engine setting (`krishiv.catalog.requestTimeout`, `maxMetadataBytes`, ...
+/// configure every catalog client and stay engine configuration). The server reads these at
+/// startup and never stores them as configuration; a session in server mode cannot set them.
+#[must_use]
+pub fn is_declaration_key(key: &str) -> bool {
+    is_catalog_key(key) && krishiv_common::config::lookup(key).is_none()
 }
 
 /// Where the declarations come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclMode {
-    /// `krishiv server`: references only, `https` only unless `allowInsecure`.
+    /// `krishiv server`: references only; an HTTP catalog uri must be `https` unless `allowInsecure`,
+    /// and a Hive catalog takes a `thrift://` uri.
     Server,
     /// An embedded session (no principal boundary).
     Embedded,
@@ -114,8 +141,47 @@ impl CatalogType {
     }
 }
 
-/// How the server authenticates to the catalog (§3.1; `delegated` is PR-58b's). `Debug` shows
-/// the token endpoint without its userinfo.
+/// How a delegated catalog receives the end user's identity (§3.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delegation {
+    /// RFC 8693 token exchange at the declared token endpoint.
+    Exchange,
+    /// The user's own token, when its audience names the catalog.
+    Forward,
+}
+
+impl Delegation {
+    /// The mode name (`system.catalogs.delegation`).
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Exchange => "exchange",
+            Self::Forward => "forward",
+        }
+    }
+}
+
+/// The actor token of a token exchange: the server's own client credentials at the declared
+/// token endpoint.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ActorClient {
+    /// `clientId`.
+    pub client_id: String,
+    /// `clientSecret`.
+    pub client_secret: SecretRef,
+}
+
+impl std::fmt::Debug for ActorClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActorClient")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &self.client_secret)
+            .finish()
+    }
+}
+
+/// How the server authenticates to the catalog (§3.1). `Debug` shows the token endpoint without
+/// its userinfo.
 #[derive(Clone, PartialEq, Eq)]
 pub enum CatalogAuth {
     /// Anonymous.
@@ -134,6 +200,19 @@ pub enum CatalogAuth {
         scope: Option<String>,
         /// `audience`.
         audience: Option<String>,
+    },
+    /// The end user's identity (§3.3): never the server's.
+    Delegated {
+        /// `delegation`.
+        delegation: Delegation,
+        /// `audience` (required): the catalog's audience.
+        audience: String,
+        /// `tokenEndpoint` (required for `exchange`).
+        token_endpoint: Option<String>,
+        /// `scope`.
+        scope: Option<String>,
+        /// The actor of an exchange (`actorToken = client-credentials`); `None` sends none.
+        actor: Option<ActorClient>,
     },
 }
 
@@ -156,6 +235,20 @@ impl std::fmt::Debug for CatalogAuth {
                 .field("scope", scope)
                 .field("audience", audience)
                 .finish(),
+            Self::Delegated {
+                delegation,
+                audience,
+                token_endpoint,
+                scope,
+                actor,
+            } => f
+                .debug_struct("Delegated")
+                .field("delegation", delegation)
+                .field("audience", audience)
+                .field("token_endpoint", &token_endpoint.as_deref().map(shown_uri))
+                .field("scope", scope)
+                .field("actor", actor)
+                .finish(),
         }
     }
 }
@@ -168,6 +261,26 @@ impl CatalogAuth {
             Self::None => "none",
             Self::Token(_) => "token",
             Self::ClientCredentials { .. } => "client-credentials",
+            Self::Delegated { .. } => "delegated",
+        }
+    }
+
+    /// The delegation form of a `delegated` catalog.
+    #[must_use]
+    pub fn delegation(&self) -> Option<Delegation> {
+        match self {
+            Self::Delegated { delegation, .. } => Some(*delegation),
+            _ => None,
+        }
+    }
+
+    /// The declared token endpoint, if any.
+    #[must_use]
+    pub fn token_endpoint(&self) -> Option<&str> {
+        match self {
+            Self::ClientCredentials { token_endpoint, .. } => Some(token_endpoint),
+            Self::Delegated { token_endpoint, .. } => token_endpoint.as_deref(),
+            _ => None,
         }
     }
 }
@@ -267,18 +380,18 @@ impl CatalogDecl {
         }
     }
 
-    /// The hosts this catalog's own clients may reach at private addresses by name (§5.1): its
+    /// The hosts this catalog's own clients may reach at private addresses by name.
+    ///
+    /// The hosts this catalog's own clients may reach at private addresses by name: its
     /// `uri` and token endpoint, and nothing a catalog response names.
     #[must_use]
     pub fn declared_hosts(&self) -> Vec<String> {
         let mut hosts: Vec<String> = self
             .uri
             .iter()
-            .chain(match &self.auth {
-                CatalogAuth::ClientCredentials { token_endpoint, .. } => Some(token_endpoint),
-                _ => None,
-            })
-            .filter_map(|u| krishiv_io::egress::host_of(u))
+            .map(String::as_str)
+            .chain(self.auth.token_endpoint())
+            .filter_map(krishiv_io::egress::host_of)
             .collect();
         if self.kind == CatalogType::Glue
             && let Some(endpoint) = self.options.get("endpoint")
@@ -311,6 +424,20 @@ fn invalid(key: &str, shown: &str, reason: &str) -> KrishivError {
     .into()
 }
 
+/// Refuses `key` when `earlier`, another spelling of the same field, already set it: the two
+/// would merge with the last one winning silently (review 58a2 N4). The same key given twice
+/// keeps its meaning, the last value.
+fn once(earlier: Option<&str>, key: &str) -> Result<(), KrishivError> {
+    match earlier {
+        Some(earlier) if earlier != key => Err(invalid(
+            key,
+            krishiv_common::secret::REDACTED,
+            &format!("set twice: also as {earlier}"),
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn unsupported(feature: String) -> KrishivError {
     KrishivUnsupportedFeature { feature }.into()
 }
@@ -337,33 +464,43 @@ struct Raw {
 }
 
 impl CatalogDeclarations {
-    /// Parses every catalog key of `settings` (other keys are ignored). `compiled` lists the
-    /// catalog types this build carries; `glue_scope`, when given, checks a Glue `endpoint`
-    /// (N3: Glue's AWS SDK client is not a policy client, so its admin-set endpoint is checked
-    /// here, by the address rule with the by-name exemption).
+    /// Parses every catalog declaration key of `settings`.
+    ///
+    /// Parses every catalog declaration key of `settings` (other keys, registered
+    /// `krishiv.catalog.*` settings included, are ignored). `compiled` lists the catalog types
+    /// this build carries; `egress`, when given, checks every declared endpoint whose host is an
+    /// address literal by the address rule, with the catalog's own by-name exemption: the `uri`,
+    /// the `tokenEndpoint` and a Glue `endpoint` (N3: Glue's AWS SDK client is not a policy
+    /// client, so its endpoint is checked only here). A name is checked when it resolves.
     ///
     /// # Errors
     /// `KRISHIV_INVALID_CONFIG_VALUE` naming the key for every startup refusal of §2.3 (unknown
     /// type, option or class, missing key, literal secret, reserved or malformed name, empty
-    /// `tenants`, an `http://` uri in server mode without `allowInsecure`, a refused endpoint);
+    /// `tenants`, an `http://` uri in server mode without `allowInsecure`, an endpoint the egress
+    /// rule refuses, named by its key and never by its address);
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a type compiled out, `delegated`, an S3 Tables warehouse
     /// or remote signing.
     pub fn parse<'a>(
         settings: impl IntoIterator<Item = (&'a str, &'a str)>,
         mode: DeclMode,
         compiled: &[CatalogType],
-        glue_scope: Option<&EgressScope>,
+        egress: Option<&Arc<EgressPolicy>>,
     ) -> Result<Self, KrishivError> {
         let mut raw: BTreeMap<String, Raw> = BTreeMap::new();
-        let mut default = None;
+        let mut default: Option<(String, String)> = None;
         for (key, value) in settings {
-            if key == DEFAULT_CATALOG_KEY || key == "spark.sql.defaultCatalog" {
-                default = Some(value.trim().to_owned());
-            } else if let Some(rest) = key.strip_prefix(CATALOG_PREFIX) {
+            if key.eq_ignore_ascii_case(DEFAULT_CATALOG_KEY)
+                || key.eq_ignore_ascii_case("spark.sql.defaultCatalog")
+            {
+                once(default.as_ref().map(|(k, _)| k.as_str()), key)?;
+                default = Some((key.to_owned(), value.trim().to_owned()));
+            } else if !is_declaration_key(key) {
+                // A registered engine setting (`krishiv.catalog.requestTimeout`) or no catalog key.
+            } else if let Some(rest) = strip_prefix_ci(key, CATALOG_PREFIX) {
                 let Some((name, field)) = rest.split_once('.') else {
                     return Err(invalid(
                         key,
-                        value,
+                        krishiv_common::secret::REDACTED,
                         "expected krishiv.catalog.<name>.<setting>",
                     ));
                 };
@@ -377,41 +514,44 @@ impl CatalogDeclarations {
                     ));
                 }
                 let entry = raw.entry(name.to_owned()).or_default();
+                once(entry.fields.get(field).map(|(k, _)| k.as_str()), key)?;
                 entry
                     .fields
                     .insert(field.to_owned(), (key.to_owned(), value.to_owned()));
-            } else if let Some(rest) = key.strip_prefix(SPARK_CATALOG_PREFIX) {
+            } else if let Some(rest) = strip_prefix_ci(key, SPARK_CATALOG_PREFIX) {
                 match rest.split_once('.') {
                     None => {
-                        raw.entry(rest.to_owned()).or_default().spark_class =
-                            Some((key.to_owned(), value.trim().to_owned()));
+                        let entry = raw.entry(rest.to_owned()).or_default();
+                        once(entry.spark_class.as_ref().map(|(k, _)| k.as_str()), key)?;
+                        entry.spark_class = Some((key.to_owned(), value.trim().to_owned()));
                     }
                     Some((name, opt)) => {
-                        raw.entry(name.to_owned())
-                            .or_default()
+                        let entry = raw.entry(name.to_owned()).or_default();
+                        let field = format!("spark:{opt}");
+                        once(entry.fields.get(&field).map(|(k, _)| k.as_str()), key)?;
+                        entry
                             .fields
-                            .insert(format!("spark:{opt}"), (key.to_owned(), value.to_owned()));
+                            .insert(field, (key.to_owned(), value.to_owned()));
                     }
                 }
+            } else {
+                // `is_declaration_key` routed it here, so it must not be dropped: a dropped
+                // `tenants` would widen the catalog (review 58a2 B1).
+                return Err(invalid(
+                    key,
+                    krishiv_common::secret::REDACTED,
+                    "not a catalog declaration key",
+                ));
             }
         }
         let mut out = Self {
-            default,
+            default: default.map(|(_, v)| v),
             ..Self::default()
         };
         for (name, entry) in raw {
             let decl = decl(&name, entry, mode, compiled, &mut out.warnings)?;
-            if decl.kind == CatalogType::Glue
-                && let (Some(scope), Some(endpoint)) = (glue_scope, decl.options.get("endpoint"))
-            {
-                let exempt = scope.clone();
-                if exempt.check_endpoint(endpoint).is_err() {
-                    return Err(invalid(
-                        &format!("{CATALOG_PREFIX}{name}.option.endpoint"),
-                        "<endpoint>",
-                        "the egress policy refuses this endpoint's address (private address)",
-                    ));
-                }
+            if let Some(policy) = egress {
+                check_endpoints(&decl, policy)?;
             }
             out.catalogs.push(decl);
         }
@@ -423,6 +563,34 @@ impl CatalogDeclarations {
         }
         Ok(out)
     }
+}
+
+/// The declared endpoints of `decl` checked by the address rule under the catalog's own scope
+/// (its declared hosts exempt by name, so an on-premises catalog at a private address passes;
+/// link-local and special-purpose addresses never do, in any spelling).
+fn check_endpoints(decl: &CatalogDecl, policy: &Arc<EgressPolicy>) -> Result<(), KrishivError> {
+    let scope = policy.scope(decl.declared_hosts());
+    let token_endpoint = decl.auth.token_endpoint();
+    let glue_endpoint = (decl.kind == CatalogType::Glue)
+        .then(|| decl.options.get("endpoint").map(String::as_str))
+        .flatten();
+    for (field, endpoint) in [
+        ("uri", decl.uri.as_deref()),
+        ("tokenEndpoint", token_endpoint),
+        ("option.endpoint", glue_endpoint),
+    ] {
+        if let Some(endpoint) = endpoint
+            && scope.check_endpoint(endpoint).is_err()
+        {
+            return Err(invalid(
+                &format!("{CATALOG_PREFIX}{}.{field}", decl.name),
+                "<endpoint>",
+                "the egress policy refuses this endpoint's address (private address); list its \
+                 network in krishiv.io.egress.allowedCidrs if it is meant",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn valid_name(name: &str) -> bool {
@@ -458,7 +626,17 @@ fn map_spark(
         ));
     };
     let mut auth_set = entry.fields.contains_key("auth");
+    // A field a `krishiv.catalog.` key also sets is one field under two spellings (review 58a2
+    // N4); the alias's own options may set one field together (`token` and `rest.auth.type` both
+    // set `auth`).
+    let mut clash = None;
     let mut put = |field: &str, key: &str, value: &str| {
+        if let Some((earlier, _)) = entry.fields.get(field)
+            && strip_prefix_ci(earlier, CATALOG_PREFIX).is_some()
+            && clash.is_none()
+        {
+            clash = Some((key.to_owned(), earlier.clone()));
+        }
         entry
             .fields
             .insert(field.to_owned(), (key.to_owned(), value.to_owned()));
@@ -572,6 +750,13 @@ fn map_spark(
             put("auth", &key, "client-credentials");
         }
     }
+    if let Some((key, earlier)) = clash {
+        return Err(invalid(
+            &key,
+            krishiv_common::secret::REDACTED,
+            &format!("set twice: also as {earlier}"),
+        ));
+    }
     entry.fields.retain(|k, _| !k.starts_with("spark:"));
     Ok(())
 }
@@ -590,7 +775,9 @@ fn decl(
         .chain(entry.spark_class.iter().map(|(k, _)| k.clone()))
         .next()
         .unwrap_or_default();
-    if name == "spark_catalog" || name == "system" {
+    // `delegation` and `vended` are the engine settings `krishiv.catalog.delegation.*` and
+    // `krishiv.catalog.vended.*`: a mistyped one must not declare a catalog.
+    if matches!(name, "spark_catalog" | "system" | "delegation" | "vended") {
         return Err(invalid(&first_key, name, "the catalog name is reserved"));
     }
     if !valid_name(name) {
@@ -624,7 +811,7 @@ fn decl(
             kind.name()
         )));
     }
-    const KNOWN: [&str; 15] = [
+    const KNOWN: [&str; 17] = [
         "type",
         "uri",
         "warehouse",
@@ -640,6 +827,8 @@ fn decl(
         "tenants",
         "allowConfigKeys",
         "allowInsecure",
+        "delegation",
+        "actorToken",
     ];
     let mut options = BTreeMap::new();
     for (field, (key, value)) in &fields {
@@ -652,10 +841,6 @@ fn decl(
                 ));
             }
             options.insert(opt.to_owned(), value.trim().to_owned());
-        } else if matches!(field.as_str(), "delegation" | "actorToken") {
-            return Err(unsupported(format!(
-                "delegated catalog authentication (catalog `{name}`, {key}) in this build"
-            )));
         } else if !KNOWN.contains(&field.as_str()) {
             return Err(invalid(
                 key,
@@ -726,8 +911,8 @@ fn decl(
             None => Ok(None),
             Some((k, v)) => {
                 // Spark's `token` option may be inline in embedded mode; Krishiv's keys never.
-                let spark_inline =
-                    mode == DeclMode::Embedded && k.starts_with(SPARK_CATALOG_PREFIX);
+                let spark_inline = mode == DeclMode::Embedded
+                    && strip_prefix_ci(k, SPARK_CATALOG_PREFIX).is_some();
                 SecretRef::parse(k, v, spark_inline).map(Some)
             }
         }
@@ -775,13 +960,26 @@ fn decl(
                 audience: get("audience").map(|(_, v)| v.to_owned()),
             }
         }
-        Some((_, v)) if v == "delegated" => {
-            return Err(unsupported(format!(
-                "delegated catalog authentication (catalog `{name}`) in this build"
-            )));
+        Some((_, v)) if v == "delegated" => delegated(&fields, &key_of, allow_insecure, &secret)?,
+        Some((k, v)) => {
+            return Err(invalid(
+                k,
+                &v,
+                "expected none, token, client-credentials or delegated",
+            ));
         }
-        Some((k, v)) => return Err(invalid(k, &v, "expected none, token or client-credentials")),
     };
+    if auth.delegation().is_none() {
+        for f in ["delegation", "actorToken"] {
+            if let Some((k, _)) = get(f) {
+                return Err(invalid(
+                    k,
+                    "",
+                    "this setting applies to auth = delegated only",
+                ));
+            }
+        }
+    }
     let storage = match get("storage") {
         None if matches!(kind, CatalogType::IcebergRest | CatalogType::Unity) => {
             CatalogStorage::Vended
@@ -830,6 +1028,89 @@ fn decl(
             .unwrap_or_default(),
         allow_insecure,
         options,
+    })
+}
+
+/// The `auth = delegated` fields (§3.3).
+fn delegated(
+    fields: &BTreeMap<String, (String, String)>,
+    key_of: &dyn Fn(&str) -> String,
+    allow_insecure: bool,
+    secret: &dyn Fn(&str) -> Result<Option<SecretRef>, KrishivError>,
+) -> Result<CatalogAuth, KrishivError> {
+    let get = |f: &str| fields.get(f).map(|(k, v)| (k.as_str(), v.trim()));
+    let need = |f: &str, why: &str| {
+        get(f)
+            .map(|(_, v)| v.to_owned())
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| invalid(&key_of(f), "", why))
+    };
+    let delegation = match get("delegation") {
+        None | Some((_, "exchange")) => Delegation::Exchange,
+        Some((_, "forward")) => Delegation::Forward,
+        Some((k, v)) => return Err(invalid(k, v, "expected exchange or forward")),
+    };
+    let audience = need("audience", "auth = delegated needs the catalog's audience")?;
+    let scope = get("scope").map(|(_, v)| v.to_owned());
+    if delegation == Delegation::Forward {
+        // Nothing of an exchange applies: a forwarded token is the user's own.
+        for f in ["tokenEndpoint", "actorToken", "clientId", "clientSecret"] {
+            if let Some((k, _)) = get(f) {
+                return Err(invalid(
+                    k,
+                    "",
+                    "delegation = forward sends the user's own token; this setting applies to \
+                     delegation = exchange",
+                ));
+            }
+        }
+        return Ok(CatalogAuth::Delegated {
+            delegation,
+            audience,
+            token_endpoint: None,
+            scope,
+            actor: None,
+        });
+    }
+    let token_endpoint = need(
+        "tokenEndpoint",
+        "delegation = exchange needs the token endpoint",
+    )?;
+    let te = token_endpoint.to_ascii_lowercase();
+    if !(te.starts_with("https://") || (te.starts_with("http://") && allow_insecure)) {
+        return Err(invalid(
+            &key_of("tokenEndpoint"),
+            &shown_uri(&token_endpoint),
+            "the token endpoint must be https (or http with allowInsecure)",
+        ));
+    }
+    let actor = match get("actorToken") {
+        None | Some((_, "client-credentials")) => Some(ActorClient {
+            client_id: need("clientId", "actorToken = client-credentials needs clientId")?,
+            client_secret: secret("clientSecret")?.ok_or_else(|| {
+                invalid(
+                    &key_of("clientSecret"),
+                    "",
+                    "actorToken = client-credentials needs clientSecret",
+                )
+            })?,
+        }),
+        Some((_, "none")) => {
+            for f in ["clientId", "clientSecret"] {
+                if let Some((k, _)) = get(f) {
+                    return Err(invalid(k, "", "actorToken = none sends no client"));
+                }
+            }
+            None
+        }
+        Some((k, v)) => return Err(invalid(k, v, "expected client-credentials or none")),
+    };
+    Ok(CatalogAuth::Delegated {
+        delegation,
+        audience,
+        token_endpoint: Some(token_endpoint),
+        scope,
+        actor,
     })
 }
 

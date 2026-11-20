@@ -304,6 +304,9 @@ struct Settings {
     /// `krishiv.sql.unionOutputPartitioning`; absent: the default.
     #[prost(bool, optional, tag = "17")]
     union_output_partitioning: Option<bool>,
+    /// `krishiv.exec.coalesceInput`; absent: the default.
+    #[prost(bool, optional, tag = "18")]
+    coalesce_input: Option<bool>,
 }
 
 fn wide(v: usize) -> u64 {
@@ -335,6 +338,7 @@ impl Settings {
             join_idle_spill_after,
             deterministic_order,
             union_output_partitioning,
+            coalesce_input,
         } = c.clone();
         Self {
             batch_size: wide(batch_size),
@@ -356,6 +360,7 @@ impl Settings {
             deterministic_order,
             agg_direct_keys: Some(agg_direct_keys),
             union_output_partitioning: Some(union_output_partitioning),
+            coalesce_input: Some(coalesce_input),
         }
     }
 
@@ -388,6 +393,9 @@ impl Settings {
             union_output_partitioning: self
                 .union_output_partitioning
                 .unwrap_or(ExecConfig::default().union_output_partitioning),
+            coalesce_input: self
+                .coalesce_input
+                .unwrap_or(ExecConfig::default().coalesce_input),
         })
     }
 }
@@ -590,6 +598,20 @@ mod tests {
         let mut old = Settings::of(&off);
         old.union_output_partitioning = None;
         assert!(old.config().unwrap().union_output_partitioning);
+    }
+
+    #[test]
+    fn coalesce_input_round_trips_and_defaults_when_absent() {
+        let off = ExecConfig {
+            coalesce_input: false,
+            ..ExecConfig::default()
+        };
+        let (_, got) = decode_task(&encode_task(&TaskSpec::whole(), &off).unwrap()).unwrap();
+        assert!(!got.coalesce_input);
+        // A descriptor written before tag 18 existed.
+        let mut old = Settings::of(&off);
+        old.coalesce_input = None;
+        assert!(old.config().unwrap().coalesce_input);
     }
 
     #[test]

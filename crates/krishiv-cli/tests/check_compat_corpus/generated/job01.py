@@ -2,7 +2,6 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.string_agg("a"), F.col("b"))
-df = spark.sql("SELECT levenshtein(a) FROM t1")
-df = df.select(F.try_make_timestamp_ltz("a"), F.col("b"))
-df = spark.sql("SELECT exists(a) FROM t1")
+df = spark.sql("SELECT to_avro(a) FROM t1")
+df = df.select(F.map_zip_with("a"), F.col("b"))
+df = spark.sql("SELECT kll_sketch_merge_bigint(a) FROM t1")

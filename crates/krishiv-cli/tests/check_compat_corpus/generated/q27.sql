@@ -1,4 +1,4 @@
 -- query 27: nope(1)
-SELECT slice(a, b) AS c1 FROM t27 WHERE x IN (1, 2) AND y = 'x(slice)';
-SELECT legacy_fn_11(a, b) AS c2 FROM t27 WHERE x IN (1, 2) AND y = 'x(legacy_fn_11)';
-SELECT try_to_binary(a, b) AS c3 FROM t27 WHERE x IN (1, 2) AND y = 'x(try_to_binary)';
+SELECT percentile_cont(a, b) AS c1 FROM t27 WHERE x IN (1, 2) AND y = 'x(percentile_cont)';
+SELECT tuple_sketch_agg_double(a, b) AS c2 FROM t27 WHERE x IN (1, 2) AND y = 'x(tuple_sketch_agg_double)';
+SELECT xpath_string(a, b) AS c3 FROM t27 WHERE x IN (1, 2) AND y = 'x(xpath_string)';

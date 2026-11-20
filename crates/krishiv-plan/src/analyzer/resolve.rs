@@ -229,6 +229,12 @@ pub(super) struct Resolver<'a> {
     pub(super) frame: Option<Arc<super::sqlfn::Frame>>,
     /// The SQL functions open, outermost first, to catch recursion.
     pub(super) fn_path: Vec<String>,
+    /// The relations (by address, each with its representative) of the permanent views' texts
+    /// ([`AnalysisContext::stored_view_texts`]); gathered only when the query has variables.
+    pub(super) view_nodes: HashSet<usize>,
+    /// The relation being resolved, or one around it, is in a permanent view's text: no session
+    /// variable resolves (review r5 Z2).
+    pub(super) in_stored_view: bool,
     /// SQL function calls inlined so far in this analysis (a budget).
     pub(super) sql_calls: usize,
     /// The first aggregate over a nondeterministic argument: Spark checks
@@ -236,8 +242,9 @@ pub(super) struct Resolver<'a> {
     pub(super) pending_nondeterministic: Option<AnalysisError>,
     /// Binding the metrics of an `observe` (Spark checks them in `CheckAnalysis`, not as an aggregate).
     pub(super) observing: bool,
-    /// The ids of the `Range` leaves resolved so far: a later one with the same id gets a fresh one.
-    range_ids: std::collections::HashSet<AttrId>,
+    /// The ids front ends chose that this analysis kept so far (`Range` leaves, the Python relations'
+    /// declared columns): a later one with the same id gets a fresh one (`built_id`).
+    pub(super) built_ids: std::collections::HashSet<AttrId>,
     /// The attributes that hold a `CHAR(n)` / `VARCHAR(n)` column, by id, with the catalog string they were
     /// declared with (see `char_varchar`).
     pub(super) declared: HashMap<AttrId, Arc<str>>,
@@ -294,9 +301,11 @@ pub(super) fn resolve(
         lambdas: Vec::new(),
         frame: None,
         fn_path: Vec::new(),
+        view_nodes: HashSet::new(),
+        in_stored_view: false,
         sql_calls: 0,
         pending_nondeterministic: None,
-        range_ids: std::collections::HashSet::new(),
+        built_ids: std::collections::HashSet::new(),
         declared: HashMap::new(),
         comments: HashMap::new(),
     };
@@ -307,6 +316,7 @@ pub(super) fn resolve(
     let env = r.env(Vec::new(), 0, Vec::new());
     r.root_env = Some(Arc::clone(&env));
     r.canonicalize(plan.root());
+    r.gather_view_nodes();
     if let Some(entry) = warm {
         r.seed_prefix(entry, plan.root(), &env);
     }
@@ -372,7 +382,7 @@ pub(super) fn resolve(
 
 /// One past the largest attribute id in `root` (a `Shift` counted at its
 /// offset).
-fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
+pub(super) fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
     use crate::walk::{Node, visit_distinct};
     use crate::{ExprNode, ResolvedExpr};
     let mut top = 0_u64;
@@ -383,6 +393,10 @@ fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
             Node::Plan(p) => match &p.node {
                 PlanNode::Scan(s) => s.output.iter().for_each(&mut bump),
                 PlanNode::Range { output, .. } => bump(output),
+                PlanNode::MapPartitions { output, .. }
+                | PlanNode::GroupMap { output, .. }
+                | PlanNode::CoGroupMap { output, .. }
+                | PlanNode::PythonTableFunction { output, .. } => output.iter().for_each(&mut bump),
                 PlanNode::CteRef(r) => r.output.iter().for_each(&mut bump),
                 PlanNode::Shift { offset, .. } => shifts = shifts.saturating_add(*offset),
                 // The `exists` column is defined by the join alone: an
@@ -529,6 +543,32 @@ impl Resolver<'_> {
         }
     }
 
+    /// Fills [`Self::view_nodes`] when anything a permanent view's text must not read is there to
+    /// read (a session variable or script local): every relation under one of the texts, and its
+    /// representative, so a relation equal to one of them is resolved as view text too (which only
+    /// ever hides a variable).
+    fn gather_view_nodes(&mut self) {
+        let vars = &self.ctx.variables;
+        if self.ctx.stored_view_texts.is_empty()
+            || (vars.variables.is_empty() && vars.locals.is_empty())
+        {
+            return;
+        }
+        let mut nodes = Vec::new();
+        for root in self.ctx.stored_view_texts.roots() {
+            let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(root), |node| {
+                if let crate::walk::Node::Plan(p) = node {
+                    nodes.push(addr(p));
+                    if let Some(rep) = self.canon.get(&addr(p)) {
+                        nodes.push(addr(&**rep));
+                    }
+                }
+                std::ops::ControlFlow::<()>::Continue(())
+            });
+        }
+        self.view_nodes.extend(nodes);
+    }
+
     pub(super) fn rep(&self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         self.canon
             .get(&addr(&**p))
@@ -604,7 +644,15 @@ impl Resolver<'_> {
                 continue;
             }
             let (lo, saved) = (self.next_id, self.op_outer.take());
-            let mut r = match self.node(&p, env) {
+            // A view text's relation, and everything resolved while it is (its expressions'
+            // subqueries, the plans it is rewritten to), reads no session variable.
+            let outside_view = !self.in_stored_view;
+            self.in_stored_view |= self.view_nodes.contains(&key.0);
+            let resolved = self.node(&p, env);
+            if outside_view {
+                self.in_stored_view = false;
+            }
+            let mut r = match resolved {
                 Ok(r) => r,
                 // A select-list generator runs below its projection: see
                 // `generator_over_lateral_alias`.
@@ -976,11 +1024,28 @@ impl Resolver<'_> {
             | PlanNode::Sample { .. }
             | PlanNode::Expand { .. }
             | PlanNode::Range { .. }
-            | PlanNode::MapPartitions { .. }
-            | PlanNode::GroupMap { .. }
-            | PlanNode::CoGroupMap { .. }
             | PlanNode::PythonTableFunction { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
+            PlanNode::MapPartitions {
+                input,
+                udf,
+                output,
+                barrier,
+            } => self.map_partitions(o, input, udf, output, *barrier, env),
+            PlanNode::GroupMap {
+                input,
+                keys,
+                udf,
+                output,
+            } => self.group_map(o, input, keys, udf, output, env),
+            PlanNode::CoGroupMap {
+                left,
+                right,
+                left_keys,
+                right_keys,
+                udf,
+                output,
+            } => self.cogroup_map(o, left, right, left_keys, right_keys, udf, output, env),
         }
     }
 
@@ -1130,13 +1195,7 @@ impl Resolver<'_> {
                 // before and stored, as a temporary view's, still names it
                 // above the leaf, SQL-25), a later one with the same id gets
                 // this analysis's own fresh id (past every id the plan holds).
-                let id = if self.range_ids.insert(output.id) {
-                    output.id
-                } else {
-                    let id = self.fresh();
-                    self.range_ids.insert(id);
-                    id
-                };
+                let id = self.built_id(output.id);
                 let col = BoundColumn {
                     id,
                     ..output.clone()
@@ -1186,13 +1245,13 @@ impl Resolver<'_> {
             | PlanNode::Generate { .. }
             | PlanNode::UnionLoop { .. }
             | PlanNode::UnionLoopRef { .. }
-            | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
-            // Resolved-only nodes: the front ends that build them (Connect,
-            // design P3-T014 PR-26d) resolve their inputs first.
-            PlanNode::MapPartitions { .. }
+            | PlanNode::Window { .. }
+            // `python_relations`.
+            | PlanNode::MapPartitions { .. }
             | PlanNode::GroupMap { .. }
-            | PlanNode::CoGroupMap { .. }
-            | PlanNode::PythonTableFunction { .. } => Err(unsupported(
+            | PlanNode::CoGroupMap { .. } => Err(unsupported("a plan shape", o)),
+            // Built by no front end yet (UDTFs, P3-T014).
+            PlanNode::PythonTableFunction { .. } => Err(unsupported(
                 "a Python UDF relation in an unresolved plan",
                 o,
             )),
@@ -1496,5 +1555,22 @@ impl Resolver<'_> {
             }
         }
         out
+    }
+}
+
+impl<'a> Resolver<'a> {
+    /// The session variables a name may read where resolution is: none in a permanent view's text.
+    pub(super) fn variables(&self) -> &'a super::VariableSnapshot {
+        static NONE: super::VariableSnapshot = super::VariableSnapshot {
+            variables: BTreeMap::new(),
+            version: 0,
+            locals: Vec::new(),
+        };
+        let ctx: &'a AnalysisContext = self.ctx;
+        if self.in_stored_view {
+            &NONE
+        } else {
+            &ctx.variables
+        }
     }
 }

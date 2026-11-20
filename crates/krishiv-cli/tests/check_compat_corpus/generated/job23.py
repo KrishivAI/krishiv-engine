@@ -2,8 +2,7 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.string_agg("a"), F.col("b"))
-df = df.select(F.xpath_int("a"), F.col("b"))
-df = df.select(F.string("a"), F.col("b"))
-df = df.select(F.legacy_fn_24("a"), F.col("b"))
-df = df.select(F.substring("a"), F.col("b"))
+df = df.select(F.shiftright("a"), F.col("b"))
+df = spark.sql("SELECT kll_sketch_merge_float(a) FROM t23")
+df = spark.sql("SELECT exp(a) FROM t23")
+df = spark.sql("SELECT try_reflect(a) FROM t23")

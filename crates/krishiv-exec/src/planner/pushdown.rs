@@ -14,6 +14,17 @@ pub(crate) fn translate(e: &Expr, scan: &[BoundColumn]) -> Option<PushdownExpr> 
     tr(e, scan, false)
 }
 
+/// The typed form of `e` keeping exactly the rows `e` keeps (TRUE where `e`
+/// is TRUE, FALSE elsewhere), or `None` when any part of it does not
+/// translate: for a filter that decides what a write removes, where a
+/// superset would remove rows the filter keeps.
+pub(crate) fn translate_exact(e: &Expr, scan: &[BoundColumn]) -> Option<PushdownExpr> {
+    if let ExprNode::Literal(Literal::Boolean(b)) = &e.node {
+        return Some(PushdownExpr::Constant(*b));
+    }
+    tr(e, scan, true)
+}
+
 /// What a scan may drop rows by before the filter `e` sees them, under
 /// `spark.sql.ansi.enabled = ansi`.
 ///
@@ -42,6 +53,24 @@ pub(crate) fn row_level(e: &Expr, scan: &[BoundColumn], ansi: bool) -> RowLevel 
         0 | 1 => prefix.pop(),
         _ => Some(PushdownExpr::And(prefix)),
     })
+}
+
+/// The typed form of the top-level conjuncts of `e` that cannot raise under `spark.sql.ansi.enabled = ansi`
+/// ([`krishiv_plan::may_raise`]), each translated alone; untranslatable ones are left out (fewer rows dropped).
+pub(crate) fn never_raising(e: &Expr, scan: &[BoundColumn], ansi: bool) -> Option<PushdownExpr> {
+    let conjuncts = krishiv_plan::conjuncts(e);
+    if !conjuncts.iter().any(|c| krishiv_plan::may_raise(c, ansi)) {
+        return translate(e, scan);
+    }
+    let mut parts: Vec<PushdownExpr> = conjuncts
+        .iter()
+        .filter(|c| !krishiv_plan::may_raise(c, ansi))
+        .filter_map(|c| translate(c, scan))
+        .collect();
+    match parts.len() {
+        0 | 1 => parts.pop(),
+        _ => Some(PushdownExpr::And(parts)),
+    }
 }
 
 /// A typed predicate TRUE on every row `c` is not FALSE on, and never NULL.
@@ -107,6 +136,22 @@ fn tr(e: &Expr, scan: &[BoundColumn], exact: bool) -> Option<PushdownExpr> {
                 let (c, v) = (column(r, scan)?, value(l)?);
                 Some(PushdownExpr::cmp(c, flip(op), v))
             }
+        }
+        // `x <=> v` is `x IS NOT NULL AND x = v` for a non-null `v` (FALSE,
+        // never NULL, on a null `x`, so exact under a negation too), and
+        // `x IS NULL` for a NULL `v`.
+        (Builtin::EqNullSafe, [l, r]) => {
+            let (c, v) = match (column(l, scan), value_or_null(r)) {
+                (Some(c), Some(v)) => (c, v),
+                _ => (column(r, scan)?, value_or_null(l)?),
+            };
+            Some(match v {
+                Some(v) => PushdownExpr::And(vec![
+                    PushdownExpr::IsNotNull(c.clone()),
+                    PushdownExpr::cmp(c, CmpOp::Eq, v),
+                ]),
+                None => PushdownExpr::IsNull(c),
+            })
         }
         (Builtin::In, [x, list @ ..]) => {
             let c = column(x, scan)?;
@@ -424,5 +469,36 @@ mod tests {
             row_level(&and(&in_null, &a_is_1), &scan, true),
             RowLevel::Full
         );
+    }
+
+    #[test]
+    fn partitions_are_pruned_only_by_the_conjuncts_that_cannot_raise() {
+        let (a, mut scan) = col();
+        let (cast, s) = cast_gt0(krishiv_plan::CastMode::Ansi);
+        scan.push(s);
+        let a_is_1 = call(
+            Builtin::Eq,
+            vec![a, Expr::new(ExprNode::Literal(Literal::Integer(1)))],
+        );
+        let and = |l: &Expr, r: &Expr| call(Builtin::And, vec![l.clone(), r.clone()]);
+        let a1 = PushdownExpr::cmp(ColumnPath::new("a"), CmpOp::Eq, ScalarValue::Int32(1));
+        // In either order: Spark prunes by the partition filter before any other conjunct runs.
+        assert_eq!(
+            never_raising(&and(&cast, &a_is_1), &scan, true),
+            Some(a1.clone())
+        );
+        assert_eq!(
+            never_raising(&and(&a_is_1, &cast), &scan, true),
+            Some(a1.clone())
+        );
+        // A disjunction holding the cast may raise as a whole: it prunes nothing.
+        let or = call(Builtin::Or, vec![and(&cast, &a_is_1), a_is_1.clone()]);
+        assert_eq!(never_raising(&or, &scan, true), None);
+        // Nothing may raise: the whole translation.
+        assert_eq!(
+            never_raising(&a_is_1, &scan, true),
+            translate(&a_is_1, &scan)
+        );
+        assert_eq!(never_raising(&a_is_1, &scan, true), Some(a1));
     }
 }
