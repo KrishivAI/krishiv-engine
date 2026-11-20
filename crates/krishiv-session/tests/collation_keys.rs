@@ -84,6 +84,22 @@ fn grouping_outputs_the_first_value_of_each_key() {
     );
 }
 
+/// `DISTINCT` and `UNION` over a collated column that is not a plain projection (a union's
+/// output) dedupe on the collation key too (collations #531 follow-up).
+#[test]
+fn distinct_over_a_union_dedupes_on_the_key() {
+    let u = "SELECT c COLLATE utf8_lcase AS c FROM VALUES ('a'),('B') t(c) \
+             UNION ALL SELECT c COLLATE utf8_lcase FROM VALUES ('A'),('b'),('c') t(c)";
+    assert_eq!(
+        sorted(&format!("SELECT DISTINCT lower(c) FROM ({u})")),
+        ["a", "b", "c"]
+    );
+    assert_eq!(
+        rows(&format!("SELECT count(*) FROM (SELECT DISTINCT c FROM ({u}))")),
+        ["3"]
+    );
+}
+
 #[test]
 fn grouping_sets_group_by_key() {
     for g in ["ROLLUP(c)", "CUBE(c)", "GROUPING SETS ((c), ())"] {
