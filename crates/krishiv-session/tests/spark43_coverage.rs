@@ -52,7 +52,6 @@ const PENDING: &[(&str, &str)] = &[
         "fix_insert_struct_by_position_legacy",
         "setup: INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
     ),
-    ("syn_insert_replace_where_columns", "PARSE_SYNTAX_ERROR"),
 ];
 
 fn fixture() -> Value {
