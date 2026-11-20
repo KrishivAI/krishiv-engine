@@ -13,7 +13,8 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use krishiv_common::error::{
-    ConnectInvalidPlanSchemaRequiredForLocalRelation, KrishivError, KrishivUnsupportedFeature,
+    ConnectInvalidPlanCannotParse, ConnectInvalidPlanSchemaRequiredForLocalRelation, KrishivError,
+    KrishivUnsupportedFeature,
 };
 use krishiv_plan::LocalRelation;
 use krishiv_types::StructType;
@@ -156,6 +157,30 @@ pub(super) fn inline_request(l: &pb::LocalRelation) -> Result<LocalRequest, Kris
         data: l.data.clone(),
         schema,
     })
+}
+
+/// The request of a `CachedLocalRelation` whose `cache/<hash>` artifact holds `bytes`: a
+/// serialized `LocalRelation`, read as an inline one (Spark's `transformCachedLocalRelation`
+/// parses the block and calls `transformLocalRelation`). The host takes the bytes only from the
+/// requesting session's own artifacts, never from the relation store (design P3-T012a §1,
+/// "Security: a client hash never reaches the relation store").
+///
+/// # Errors
+/// `CONNECT_INVALID_PLAN.CANNOT_PARSE` for bytes that are not a `LocalRelation` (Spark raises an
+/// unclassed protobuf parse error there), and the errors of an inline relation.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a flat message (bytes and string fields), checked by `flat_message` first"
+)]
+pub fn cached_request(bytes: &[u8]) -> Result<LocalRequest, KrishivError> {
+    use prost::Message as _;
+    crate::wire::flat_message(bytes)?;
+    let relation = pb::LocalRelation::decode(bytes).map_err(|e| {
+        KrishivError::from(ConnectInvalidPlanCannotParse {
+            error_msg: format!("the cached local relation does not decode: {e}"),
+        })
+    })?;
+    inline_request(&relation)
 }
 
 #[cfg(test)]

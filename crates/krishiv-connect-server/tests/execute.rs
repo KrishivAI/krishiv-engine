@@ -1169,7 +1169,7 @@ async fn a_local_relation_applies_its_schema_eagerly() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_cached_local_relation_without_its_artifact_is_not_found() {
+async fn a_cached_local_relation_without_its_artifact_cannot_be_found() {
     let run = start().await;
     let cached = relation(RelType::CachedLocalRelation(pb::CachedLocalRelation {
         hash: "0123abcd".to_owned(),
@@ -1179,7 +1179,7 @@ async fn a_cached_local_relation_without_its_artifact_is_not_found() {
         .unwrap_err();
     assert_eq!(
         error_class(&e),
-        "CONNECT_INVALID_PLAN.NOT_FOUND_CACHED_LOCAL_RELATION"
+        "CONNECT_INVALID_PLAN.CANNOT_FIND_CACHED_LOCAL_RELATION"
     );
 }
 

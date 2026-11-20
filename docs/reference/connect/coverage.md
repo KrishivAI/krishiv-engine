@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 12 done, 14 partial, 32 missing, 4 out of scope.
+62 arms: 13 done, 13 partial, 32 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -47,7 +47,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 33 | with_watermark | out of scope |  | P4 |  | 0 |
 | 34 | apply_in_pandas_with_state | out of scope |  | P4 |  | 0 |
 | 35 | html_string | missing |  | as show_string, HTML form | P3-T012 | 4 |
-| 36 | cached_local_relation | partial | hashes in the artifact store (AddArtifacts cache/<hash> is not stored yet: every hash is NOT_FOUND_CACHED_LOCAL_RELATION) | Read(ReadSource::Local) through the same host request as local_relation; the artifact lookup is the host's | P3-T083 | 7 |
+| 36 | cached_local_relation | done |  | Read(ReadSource::Local) through the same host request as local_relation; the host reads the session's own cache/<hash> artifact (CANNOT_FIND_CACHED_LOCAL_RELATION without one) and builds it as an inline local_relation | P3-T012 | 7 |
 | 37 | cached_remote_relation | done |  | a read of the reserved table `__krishiv_cached_remote.<id>`; the server resolves the id in its session (DATAFRAME_NOT_FOUND when absent) and splices the frame's plan in (`Session::from_plan_over`); a lazy checkpoint's rows are taken by the first analysis that reads it, AnalyzePlan included (Spark runs no job on analysis: a recorded difference); tests/cache.rs | P3-T083 | 7 |
 | 38 | common_inline_user_defined_table_function | missing |  | TableFunction with a Python UDTF (T014) | P3-T014 | 6 |
 | 39 | as_of_join | missing |  | new AsOfJoin, shared with the ASOF JOIN SQL syntax | P3-T012 | 8 |
