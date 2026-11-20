@@ -28,7 +28,7 @@ cargo run -p krishiv-cli --features tokio-console -- sql -e 'SELECT ...'
 From a crates.io install (no engine checkout needed), build the CLI with the feature and the cfg:
 
 ```sh
-RUSTFLAGS="--cfg tokio_unstable" cargo install krishiv-cli --features tokio-console
+RUSTFLAGS="--cfg tokio_unstable" cargo install --path crates/krishiv-cli --features tokio-console
 KRISHIV_TOKIO_CONSOLE=1 krishiv sql -e 'SELECT ...'
 ```
 

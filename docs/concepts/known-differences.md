@@ -99,6 +99,8 @@ Pinned by `crates/krishiv-session/tests/tablesample_goldens.rs` against a Spark 
 
 ## `histogram_numeric` bins depend on where partial histograms merge
 
+> Not part of 0.2.0: `histogram_numeric` does not exist in 0.2.0. This section describes later builds.
+
 `histogram_numeric(col, nb)` is Spark's `NumericHistogram` (add, merge, trim, the `java.util.Random(31183)`
 tie-break, the same serialized partial state). Its bins depend on the order rows are added and on where partial
 histograms merge, as Spark's do. The results equal Spark's when both engines split the input the same way, and
@@ -116,6 +118,8 @@ Pinned by `crates/krishiv-session/tests/aggregate_histogram_numeric.rs` and the 
 
 ## `SELECT *` next to `window(..)` or `session_window(..)`
 
+> Not part of 0.2.0: `window(..)` and `session_window(..)` time-window functions do not exist in 0.2.0. This section describes later builds.
+
 `SELECT *, window(ts, '5 minutes') FROM t` returns the window column once, as Spark does, also with a
 `QUALIFY` over a window. Krishiv adds the window column to the input before the star expands, where Spark
 expands the star first, so it leaves the added column out of a bare `*`. Three cases differ:
@@ -128,6 +132,8 @@ expands the star first, so it leaves the added column out of a bare `*`. Three c
   Spark run; the star may include a trailing `window` column.
 
 ## `session_window` over a string time column
+
+> Not part of 0.2.0: `session_window` does not exist in 0.2.0. This section describes later builds.
 
 `session_window(s, '5 minutes')` over a string column returns `start` and `end` as strings, with the
 right values. Spark casts the column to `TIMESTAMP` first, so its fields are timestamps. Pinned (ignored) by
@@ -162,6 +168,8 @@ and differs from it, and so from Krishiv, in these cases (checked on PySpark 4.2
 
 ## `mapInPandas` and `mapInArrow` results unlike the declared schema
 
+> Not part of 0.2.0: `mapInPandas`, `mapInArrow` and `applyInPandas` do not exist in the 0.2.0 Python package. This section describes later builds.
+
 With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set (Spark 4.1 and later), Krishiv checks each
 result batch as Spark does and raises `ARROW_TYPE_MISMATCH` with Spark's message. With it off (the default, and on
 Spark 3.5 and 4.0, which have no such setting), Spark does not check the result's types and reads the batch as if it
@@ -174,6 +182,8 @@ setting it still turns the check on.
 
 ## Python UDF workers per session (server mode)
 
+> Not part of 0.2.0: the server and its Python UDF workers, their per-session limits and iterator UDFs (eval type 204, rejected with `NOT_IMPLEMENTED`) are not in 0.2.0. This section describes later builds.
+
 In server mode each running Python relation UDF (`mapInPandas`, `applyInPandas`, a `pandas_udf` aggregate, ...)
 holds one of its session's `krishiv.python.worker.maxPerSession` workers for as long as the operator runs, and one
 worker is kept for scalar Python UDFs. An operator that needs more workers at once than that leaves (for example
@@ -182,7 +192,6 @@ setting at 1, a scalar Python UDF call while a relation UDF of the same session 
 way. All sessions' relation UDFs together hold at most `krishiv.python.worker.maxTotal` minus one workers; one
 waits for another to finish when they would hold more, in arrival order. Spark runs such calls in one worker and has no such limit.
 
-(Not part of 0.2.0: iterator UDFs (`Iterator` hints, eval type 204) are rejected with `NOT_IMPLEMENTED` in 0.2.0.)
 A scalar iterator UDF (`pandas_udf` or `arrow_udf` with `Iterator` hints) and a Python UDF over a window hold a
 worker the same way, one per UDF of the operator.
 
@@ -196,6 +205,8 @@ operator also reads all its input and keeps all its output before the next opera
 it does not stop it early.
 
 ## Python artifacts in server mode
+
+> Not part of 0.2.0: the Spark Connect server is not in 0.2.0. This section describes later builds.
 
 The Spark Connect server does not hand a session's Python artifacts to its UDF workers yet: pyfiles and archives a
 Connect client adds (`addArtifacts(..., pyfile=True)`, `archive=True`) do not reach the workers, so a UDF that
@@ -216,6 +227,8 @@ bytes) or `/`-containing alias with `INVALID_ARTIFACT_PATH`, and two artifacts o
 past the server's size limit fail the session's UDF calls with `KRISHIV_PYTHON_ARTIFACT_REFUSED`.
 
 ## Python table functions (UDTFs)
+
+> Not part of 0.2.0: Python table functions (`@udtf`) do not exist in the 0.2.0 Python package. This section describes later builds.
 
 Python UDTFs (`@udtf`, `@udtf(useArrow=True)`, `@arrow_udtf`) run on the server's worker pool from SQL (`FROM f(..)`,
 `TABLE(t)` arguments with `PARTITION BY` / `ORDER BY` / `WITH SINGLE PARTITION`, `LATERAL f(..)`), with `analyze` at
