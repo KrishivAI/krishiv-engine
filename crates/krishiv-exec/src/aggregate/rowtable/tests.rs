@@ -1266,6 +1266,67 @@ fn clustered_new_keys_turn_append_only() {
     assert!(t.values().all(|&c| c == 4), "{t:?}");
 }
 
+/// Feeds `rows` rows of `key(i)` in batches of 8,190.
+fn feed(t: &mut RowTable, core: &AggCore, rows: usize, key: impl Fn(i64) -> i64) {
+    let step = 8190_usize;
+    let mut start = 0;
+    while start < rows {
+        let s = i64::try_from(start).unwrap();
+        let e = i64::try_from((start + step).min(rows)).unwrap();
+        apply(t, &batch(core, (s..e).map(&key)));
+        start += step;
+    }
+}
+
+/// An input clustered by the key whose runs are all new at the first
+/// decision but whose keys then come back (TPC-DS q22: inventory by item
+/// within a week, the same items every week) turns append-only, then
+/// returns to its fixed index at the next decision: its rows stay about
+/// the runs before that decision, not one per run to the end.
+#[test]
+fn recurring_clustered_keys_return_to_the_index() {
+    let core = core();
+    let seed = HashSeed::new(Some(3));
+    let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    // 50,000 keys in runs of 4: a cycle (200,000 rows) outlasts the first
+    // decision's FIRST_ADAPT_ROWS.
+    let keys = 50_000_i64;
+    // The decision is taken by the first apply past FIRST_ADAPT_ROWS.
+    let first = FIRST_ADAPT_ROWS + 2 * 8190;
+    feed(&mut t, &core, first, |i| (i / 4) % keys);
+    assert_eq!(t.mode, Mode::Append);
+    let rows = 3 * ADAPT_ROWS;
+    let off = i64::try_from(first).unwrap();
+    feed(&mut t, &core, rows - first, |i| ((i + off) / 4) % keys);
+    assert!(matches!(t.mode, Mode::Fixed { .. }), "{:?}", t.mode);
+    // Append-only until the decision at ADAPT_ROWS: at most a row per run
+    // of those rows (plus batch-crossing runs), then the index.
+    assert!(
+        t.groups < ADAPT_ROWS / 4 + 2 * usize::try_from(keys).unwrap(),
+        "{}",
+        t.groups
+    );
+    let mut merged = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS).unwrap();
+    for p in 0..t.parts.len() {
+        let c = t.merge_chunk(p, 0..t.part_len(p)).unwrap();
+        merged.apply_merge(&t, &c).unwrap();
+    }
+    assert_eq!(merged.groups, usize::try_from(keys).unwrap());
+    let total: i64 = totals(&merged).values().sum();
+    assert_eq!(total, i64::try_from(rows).unwrap());
+}
+
+/// Runs of keys that never come back (TPC-H q18's `l_orderkey`) stay
+/// append-only through every later decision.
+#[test]
+fn clustered_new_keys_stay_append_only() {
+    let core = core();
+    let seed = HashSeed::new(Some(3));
+    let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    feed(&mut t, &core, 3 * ADAPT_ROWS, |i| i / 4);
+    assert_eq!(t.mode, Mode::Append);
+}
+
 /// A table grouping by `k` with `hll_sketch_agg(v)` at lgK 12, raw or final.
 fn hll_core(output: AggregateOutput) -> Arc<AggCore> {
     let s = Arc::new(Schema::new(vec![
