@@ -489,6 +489,21 @@ the table, and the first action fails.
   remembered after it ends, so the same id may be reused (Spark refuses a reused id with `OPERATION_ABANDONED`;
   clients send fresh ids). Every other `ml_command` fails with SQLSTATE 56K00.
 
+## Declared catalogs (`krishiv.catalog.<name>.*`, `spark.sql.catalog.<name>`)
+
+- **`SHOW CATALOGS` and `spark.catalog.listCatalogs()` list every declared catalog the principal sees, used or
+  not.** Spark lists `spark_catalog` and only the catalogs the session has already loaded. Spark loads a catalog when
+  a multi-part name first names it, even in a lookup that then fails, or with `SHOW NAMESPACES IN <catalog>`.
+  Setting `spark.sql.defaultCatalog` to it does not load it by itself. So a fresh Spark session answers
+  `spark_catalog` only, and Krishiv answers `spark_catalog` plus its declared catalogs. A catalog declared for other
+  tenants is never listed. The `system` catalog is not listed either.
+- **In `krishiv server`, a session cannot declare or change a catalog.** `SET`, `RESET` and `spark.conf.set` of
+  `spark.sql.catalog.<name>`, `spark.sql.catalog.<name>.*` or `krishiv.catalog.<name>.*` fail with
+  `CANNOT_MODIFY_STATIC_CONFIG` for every role. So does a session builder that sets one. Declare catalogs in the
+  server's configuration instead. Spark lets a session set `spark.sql.catalog.<name>` at runtime and loads the
+  catalog when it is first used. In server mode that would mean fetching from an endpoint the client chose. Embedded
+  sessions are unchanged. Registered settings such as `krishiv.catalog.default` are not declaration keys.
+
 ## `Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)
 
 `DataFrame::observe` / PySpark `Observation` match Spark 4.2.0 on every case of
