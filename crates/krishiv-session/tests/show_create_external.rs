@@ -167,7 +167,12 @@ fn comment_on_column_sets_and_clears_the_column_comment() {
     assert!(shown.contains("b INT COMMENT 'the b'"), "{shown}");
     block_on(s.sql("COMMENT ON COLUMN cc.b IS NULL")).unwrap();
     assert!(!show_create(&s, "cc").contains("COMMENT"));
-    assert!(block_on(s.sql("COMMENT ON COLUMN cc.nope IS 'x'")).is_err());
+    let missing = block_on(s.sql("COMMENT ON COLUMN cc.nope IS 'x'")).unwrap_err();
+    assert_eq!(
+        missing.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+
     // A column name alone is not a table and a column; Spark names the command in the view errors.
     let class = |q: &str| {
         block_on(async { s.sql(q).await?.collect().await })
@@ -193,15 +198,22 @@ fn comment_on_column_sets_and_clears_the_column_comment() {
         "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
     );
     // Spark 4.3.0's text: the permanent view is qualified, the temporary one as written.
-    assert!(message("COMMENT ON COLUMN cv.a IS 'x'").contains(
-        "'COMMENT ON COLUMN' expects a table but `spark_catalog`.`default`.`cv` is a view."
-    ));
+    assert_eq!(
+        message("COMMENT ON COLUMN cv.a IS 'x'"),
+        "'COMMENT ON COLUMN' expects a table but `spark_catalog`.`default`.`cv` is a view. "
+    );
     assert_eq!(
         class("COMMENT ON COLUMN ctv.a IS 'x'"),
         "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
     );
-    assert!(
-        message("COMMENT ON COLUMN ctv.a IS 'x'")
-            .contains("'COMMENT ON COLUMN' expects a table but `ctv` is a view.")
+    assert_eq!(
+        message("COMMENT ON COLUMN ctv.a IS 'x'"),
+        "'COMMENT ON COLUMN' expects a table but `ctv` is a view. "
+    );
+    // The syntax errors win over the specialized ones when the statement does not end where it should.
+    assert_eq!(class("COMMENT ON COLUMN b"), "PARSE_SYNTAX_ERROR");
+    assert_eq!(
+        class("SHOW TABLE EXTENDED LIKE 't' PARTITION (p=1) AS JSON garbage"),
+        "PARSE_SYNTAX_ERROR"
     );
 }

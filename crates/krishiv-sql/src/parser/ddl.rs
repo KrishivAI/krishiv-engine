@@ -205,16 +205,16 @@ impl<'s> Parser<'s> {
                 // Spark 4.3: `COMMENT ON COLUMN [catalog.][db.]table.column IS 'comment' | NULL`.
                 let at = p.start();
                 let mut name = p.table_name()?;
-                let Some(last) = name.parts.pop().filter(|_| !name.parts.is_empty()) else {
-                    return Self::fatal(error::comment_on_column_incorrect_identifier(
-                        p.span_from(start),
-                    ));
-                };
+                let last = name.parts.pop().filter(|_| !name.parts.is_empty());
                 name.span = p.span_from(at);
                 p.expect_kw("IS")?;
                 let comment = p.comment_value()?;
                 let span = p.span_from(start);
                 p.command_end()?;
+                // Spark's AstBuilder checks the name's length after the whole statement parsed.
+                let Some(last) = last else {
+                    return Self::fatal(error::comment_on_column_incorrect_identifier(span));
+                };
                 let action = AlterColumnAction::CommentOn(comment);
                 return Ok(Statement::AlterTable(Box::new(AlterTable {
                     table: DdlName::Parts(name),
@@ -883,9 +883,10 @@ impl<'s> Parser<'s> {
                         ..
                     }
                 ) {
-                    return Self::fatal(error::show_table_extended_json_with_partition(
-                        p.span_from(start),
-                    ));
+                    // Raised once the statement parsed to its end (a stray token is a syntax error).
+                    let span = p.span_from(start);
+                    p.command_end()?;
+                    return Self::fatal(error::show_table_extended_json_with_partition(span));
                 }
             }
             let span = p.span_from(start);
