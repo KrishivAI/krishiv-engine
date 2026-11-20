@@ -693,16 +693,19 @@ fn schema_matches_the_writer() {
     );
     let schema: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_default())
         .unwrap_or_default();
-    let mut profile = QueryProfile::new(&plan(matching()), metrics(), true);
+    let mut profile = QueryProfile::new(&plan(with_facts()), metrics(), true);
+    profile.hints = vec![Hint {
+        code: HintCode::Spill,
+        node: Some(0),
+        operator: Some(OperatorId(1)),
+        message: "m".to_owned(),
+        evidence: vec![("n".to_owned(), 1)],
+    }];
     profile.planning = Some(
         serde_json::json!({"parsed": "p", "analyzed": "a", "steps": [],
         "optimized": "o", "physical": "x"}),
     );
     profile.trace = Some(serde_json::json!({"trace_id": "t", "session_id": "s"}));
-    profile.plan.estimate = Some(RowEstimate {
-        rows: 7,
-        source: RowEstimate::STATISTICS.to_owned(),
-    });
     profile.identity = Some(ProfileIdentity {
         principal: "user:a".into(),
         tags: [("team".to_owned(), "x".to_owned())].into(),
@@ -764,6 +767,8 @@ fn schema_matches_the_writer() {
     );
     check(&schema["$defs"]["planning"], &doc["planning"]);
     check(&props["trace"], &doc["trace"]);
+    check(&schema["$defs"]["facts"], &doc["plan"][0]["facts"]);
+    check(&schema["$defs"]["hint"], &doc["hints"][0]);
     check(&props["environment"], &doc["environment"]);
     check(&props["usage"], &doc["usage"]);
     check(
@@ -773,10 +778,6 @@ fn schema_matches_the_writer() {
     check(&props["usage"]["properties"]["scan"], &doc["usage"]["scan"]);
     check(&props["pipelines"]["items"], &doc["pipelines"][0]);
     check(&props["plan"]["items"], &doc["plan"][0]);
-    check(
-        &props["plan"]["items"]["properties"]["estimate"],
-        &doc["plan"][0]["estimate"],
-    );
     let op = &props["operators"]["items"];
     check(op, &doc["operators"][0]);
     check(
@@ -1148,69 +1149,91 @@ fn a_scanned_table_keeps_the_boundaries_of_its_name() {
     );
 }
 
-/// The planner's estimate rides from the explain tree to the profile and
-/// through its JSON; a node without one writes no member; an unknown
-/// source string is kept (minor 7).
-#[test]
-fn plan_estimates_round_trip_and_unknown_sources_are_kept() {
-    let mut explain = matching();
-    explain.estimate = Some(RowEstimate {
-        rows: 42,
-        source: RowEstimate::DEFAULT.to_owned(),
-    });
-    let profile = QueryProfile::new(&plan(explain), metrics(), false);
-    assert_eq!(
-        profile.plan.estimate,
-        Some(RowEstimate {
-            rows: 42,
-            source: "default".to_owned()
-        })
-    );
-    let mut doc = profile.to_json_value();
-    assert_eq!(doc["minor"], 7);
-    assert_eq!(doc["plan"][0]["estimate"]["rows"], 42);
-    assert!(doc["plan"][1].get("estimate").is_none(), "{doc}");
-    doc["plan"][0]["estimate"]["source"] = "analyze".into();
-    let back = QueryProfile::from_json(&doc.to_string()).expect("reads");
-    assert_eq!(
-        back.plan.estimate,
-        Some(RowEstimate {
-            rows: 42,
-            source: "analyze".to_owned()
-        })
-    );
-    assert_eq!(back.plan.children[0].estimate, None);
-    // A malformed estimate is refused, not dropped.
-    doc["plan"][0]["estimate"] = serde_json::json!({"rows": "many", "source": "x"});
-    assert!(QueryProfile::from_json(&doc.to_string()).is_err());
+fn with_facts() -> ExplainNode {
+    use crate::planner::{FilterGap, FilterGapReason, InputFacts, NodeFacts};
+    let mut e = matching();
+    e.facts = Some(Arc::new(NodeFacts {
+        estimated_rows: Some(12.5),
+        inputs: vec![InputFacts {
+            estimated_rows: 1.0e6,
+            statistics: false,
+            tables_without_stats: vec!["t".to_owned()],
+        }],
+        filter_gaps: vec![FilterGap {
+            key: 0,
+            probe_key: "(a#1 + 0)".to_owned(),
+            reason: FilterGapReason::NoScanColumn,
+        }],
+        tables_without_stats: vec!["t".to_owned()],
+    }));
+    e
 }
 
-/// The estimate is not printed, so explain trees that differ only in it
-/// are equal (a codec round trip drops it).
+/// Facts and hints round trip; equality and `merge` ignore facts, so a worker's profile from the plan codec
+/// (no facts) merges with the coordinator's; a minor-5 document (neither member) still loads.
 #[test]
-fn explain_equality_ignores_the_estimate() {
-    let mut a = matching();
-    a.estimate = Some(RowEstimate {
-        rows: 1,
-        source: RowEstimate::STATISTICS.to_owned(),
-    });
-    assert_eq!(a, matching());
-    assert_ne!(ExplainNode::leaf("A", ""), ExplainNode::leaf("B", ""));
+fn facts_and_hints_round_trip_and_do_not_affect_equality() {
+    let mut p = QueryProfile::new(&plan(with_facts()), metrics(), true);
+    assert!(p.plan.facts.is_some());
+    p.hints = vec![Hint {
+        code: HintCode::Skew,
+        node: Some(0),
+        operator: Some(OperatorId(2)),
+        message: "m".to_owned(),
+        evidence: vec![("drivers".to_owned(), 4)],
+    }];
+    let text = p.to_json();
+    let back = QueryProfile::from_json(&text).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(back.plan.facts, p.plan.facts);
+    assert_eq!(back.hints, p.hints);
+    assert_eq!(back.to_json(), text);
+    // Equality ignores facts.
+    let bare = QueryProfile::new(&plan(matching()), metrics(), true);
+    assert_eq!(bare.plan, p.plan);
+    let mut merged = QueryProfile::new(&plan(with_facts()), metrics(), true);
+    merged.merge(&bare).unwrap_or_else(|e| panic!("{e}"));
+    // A minor-5 document has neither member.
+    let mut v = p.to_json_value();
+    v["minor"] = 5.into();
+    v.as_object_mut().expect("object").remove("hints");
+    v["plan"][0]
+        .as_object_mut()
+        .expect("object")
+        .remove("facts");
+    let old = QueryProfile::from_json(&v.to_string()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(old.hints.is_empty());
+    assert!(old.plan.facts.is_none());
 }
 
-/// A worker's profile, whose plan came through the codec without
-/// estimates, merges with the driver's and the merged plan keeps them.
 #[test]
-fn profiles_merge_whatever_their_estimates() {
-    let mut explain = matching();
-    explain.estimate = Some(RowEstimate::new(9, RowEstimate::STATISTICS));
-    let mut driver = QueryProfile::new(&plan(matching()), metrics(), false);
-    let worker = QueryProfile::new(&plan(explain), metrics(), false);
-    driver.merge(&worker).expect("same plan");
-    assert_eq!(
-        driver.plan.estimate,
-        Some(RowEstimate::new(9, RowEstimate::STATISTICS))
+fn text_lists_hints_only_when_there_are_some() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), true);
+    assert!(!p.to_text(TextOptions::masked()).contains("== Hints =="));
+    p.hints = vec![Hint {
+        code: HintCode::Spill,
+        node: Some(0),
+        operator: None,
+        message: "Limit spilled".to_owned(),
+        evidence: Vec::new(),
+    }];
+    let text = p.to_text(TextOptions::masked());
+    assert!(
+        text.contains("== Hints ==\n[SPILL] node 0 Limit: Limit spilled\n"),
+        "{text}"
     );
-    let other = QueryProfile::new(&plan(ExplainNode::leaf("Other", "")), metrics(), false);
-    assert!(driver.merge(&other).is_err());
+}
+
+/// Join inputs are positional (probe, build): one malformed element drops them all instead of shifting the rest,
+/// which would attribute the build input's facts to the probe.
+#[test]
+fn a_malformed_join_input_drops_all_inputs_rather_than_shifting_them() {
+    let good = serde_json::json!({"estimated_rows": 10, "statistics": false, "tables_without_stats": ["t"]});
+    let bad = serde_json::json!({"estimated_rows": "x", "statistics": true});
+    let both = serde_json::json!({"inputs": [good, good]});
+    let facts = super::facts_json::facts_of(&both).expect("facts");
+    assert_eq!(facts.inputs.len(), 2);
+    assert_eq!(facts.inputs[1].tables_without_stats, vec!["t".to_owned()]);
+    let mixed = serde_json::json!({"inputs": [bad, good]});
+    let facts = super::facts_json::facts_of(&mixed).expect("facts");
+    assert!(facts.inputs.is_empty());
 }

@@ -40,7 +40,7 @@ use arrow_array::{Array, ArrowPrimitiveType, Int32Array, Int64Array};
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 
-pub use digest::{crc32, md5, sha1, sha2};
+pub use digest::{crc32, hmac, md5, sha1, sha2};
 
 use crate::error::KernelError;
 use murmur3::Murmur3;

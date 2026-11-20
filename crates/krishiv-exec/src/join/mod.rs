@@ -146,7 +146,11 @@
 //! value to the scans' cells once every producer partition published.
 //!
 //! # Metrics (`EXPLAIN ANALYZE`, [`OperatorEntry::extra`](crate::OperatorEntry::extra))
-//! Build sink: `build_rows`, `spilled_partitions`, `spill_file_bytes`. Probe:
+//! Build sink: `build_rows`, `spilled_partitions`, `spill_file_bytes`;
+//! with a fixed Bloom planned, `fixed_bloom` (what it did: `planned`,
+//! `reserved`, `active`, `refused`, `full`, `lost`, then `bloom` or
+//! `no-bloom`) and
+//! `fixed_bloom_keys`. Probe:
 //! `probe_rows`, `probe_spilled_rows`, `spill_file_bytes`,
 //! `grace_partitions` (spilled partitions joined), `repartitions`,
 //! `recursion_depth` (deepest level joined), `merge_fallbacks` (partitions
@@ -404,6 +408,11 @@ pub(crate) enum Counter {
     IdleSpills,
     /// The bytes of their spill files.
     IdleSpilledBytes,
+    /// What the build's fixed Blooms did (`KeyFilterOptions::bloom_spill_bytes`),
+    /// as `build/spilled.rs` event bits; reported only when one was planned.
+    FixedBloom,
+    /// The build's non-null keys counted for its fixed Blooms.
+    FixedBloomKeys,
 }
 
 /// The build sink's counters, by name.
@@ -447,7 +456,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 33]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 35]);
 
 impl Default for Counters {
     fn default() -> Self {
@@ -500,6 +509,15 @@ impl Counters {
                 std::borrow::Cow::Borrowed("hash_index"),
                 Metric::Text(table::IndexKind::names(kinds)),
             ));
+        }
+        // Only a build whose plan gave a filter a fixed Bloom reports it.
+        let fixed = self.get(Counter::FixedBloom);
+        if fixed != 0 {
+            out.push((
+                std::borrow::Cow::Borrowed("fixed_bloom"),
+                Metric::Text(build::fixed_bloom_names(fixed)),
+            ));
+            out.extend(self.report(&[(Counter::FixedBloomKeys, "fixed_bloom_keys")]));
         }
         out
     }

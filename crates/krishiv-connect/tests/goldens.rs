@@ -25,10 +25,6 @@ const UNSUPPORTED: &[(&str, ErrorClass)] = &[
     ("alias_multi", ErrorClass::KrishivUnsupportedFeature),
     ("aggregate_pivot", ErrorClass::KrishivUnsupportedFeature),
     (
-        "distinct",
-        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
-    ),
-    (
         "show_string",
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
     ),

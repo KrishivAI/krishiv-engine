@@ -46,7 +46,10 @@ impl DataFrame {
                 // A cached relation in the plan makes the rows depend on this session's state:
                 // neither served from nor stored into the shared cache.
                 .filter(|_| !self.session.state.cache.would_substitute(&a.analyzed));
+            // While draining nothing is replayed: the run path refuses a query that reads more than
+            // `system.*` (design P3-T066 §5.1), and a cached answer must not get around that.
             if let Some((settings, key)) = &result
+                && !self.session.state.runtime.is_draining()
                 && let Some((batches, _age)) =
                     self.session.state.runtime.results.lookup(key, settings.ttl)
             {
@@ -145,6 +148,11 @@ impl DataFrame {
             .on_executor(
                 async move {
                     let a = df.action_analysis().await?;
+                    // Its operator metrics show the plan of its definer views, as a profile does
+                    // (review r2 R3).
+                    df.session
+                        .authorize_shown_definer_reads(&a.analyzed)
+                        .await?;
                     let (physical, fill) = df.physical_cached(&a).await?;
                     let (stream, query) = df.session.run_with_query(&physical, &a.env).await?;
                     let mut stream = fill.fill(stream, &df.session.state.cache);

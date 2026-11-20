@@ -360,19 +360,6 @@ fn a_file_scan_reports_its_read_costs() {
         "{} > {size}",
         get("scan_read_bytes")
     );
-    // The filter the Parquet scan runs inexactly stays above it; both
-    // carry the planner's estimate (the scan the table's rows).
-    fn scans(n: &krishiv_exec::profile::ProfileNode, out: &mut Vec<bool>) {
-        if n.name == "Scan" {
-            out.push(n.estimate.is_some());
-        }
-        for c in &n.children {
-            scans(c, out);
-        }
-    }
-    let mut found = Vec::new();
-    scans(&profile.plan, &mut found);
-    assert_eq!(found, [true], "{:?}", profile.plan);
 }
 
 /// A limit that stops the scan before a split ends still reports the reads that
@@ -475,51 +462,4 @@ fn a_recursive_cte_reports_its_rounds() {
     };
     assert!(has("rounds=6"), "{text}");
     assert!(has("rows=5"), "{text}");
-}
-
-/// Each plan node that produces a relation's rows carries the planner's
-/// estimate next to what its operators counted (profile minor 7): the
-/// in-memory tables report their row counts, so the scans' estimates are
-/// exact and come from statistics.
-#[test]
-fn profile_nodes_carry_the_planners_row_estimates() {
-    let s = session(2);
-    let df = block_on(s.sql("SELECT cust FROM orders WHERE amount >= 0")).unwrap();
-    let (got, profile) = block_on(df.collect_with_profile()).unwrap();
-    assert_eq!(rows(&got), 2_000);
-    let doc = profile.to_json_value();
-    assert_eq!(doc["minor"], 7);
-    let plan = doc["plan"].as_array().cloned().unwrap_or_default();
-    let estimated: Vec<_> = plan.iter().filter_map(|n| n.get("estimate")).collect();
-    assert!(!estimated.is_empty(), "{doc}");
-    for e in &estimated {
-        assert_eq!(e["source"], "statistics", "{doc}");
-    }
-    let scan = plan
-        .iter()
-        .find(|n| n["name"].as_str().is_some_and(|n| n.contains("Scan")))
-        .unwrap_or_else(|| panic!("no scan in {doc}"));
-    assert!(scan["estimate"]["rows"].as_u64().is_some(), "{doc}");
-
-    // A join and an aggregate are estimated too; the JSON reads back.
-    let df = block_on(s.sql(QUERY)).unwrap();
-    let (_, profile) = block_on(df.collect_with_profile()).unwrap();
-    let doc = profile.to_json_value();
-    let named = |name: &str| {
-        doc["plan"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|n| n["name"] == name)
-            .filter(|n| n.get("estimate").is_some())
-            .count()
-    };
-    assert!(named("HashJoin") >= 1, "{doc}");
-    assert!(named("HashAggregate") >= 1, "{doc}");
-    // Nodes the planner adds below a relation's node have none.
-    for name in ["PartialHashAggregate", "Exchange", "BroadcastExchange"] {
-        assert_eq!(named(name), 0, "{name}: {doc}");
-    }
-    let back = QueryProfile::from_json(&profile.to_json()).unwrap();
-    assert_eq!(back.plan, profile.plan);
 }

@@ -536,7 +536,7 @@ pub fn check_command(command: &pb::Command) -> Check {
         | CommandType::StreamingQueryListenerBusCommand(_) => {
             Check::Unsupported("streaming commands")
         }
-        // No extension is registered until P3-T015; one without a declared class is refused.
+        // No command extension is registered (P3-T015 registers Echo for relations and expressions only); a command extension has no declared class and is refused.
         CommandType::Extension(_) => Check::Unsupported("extension"),
     }
 }

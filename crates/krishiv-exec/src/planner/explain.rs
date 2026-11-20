@@ -2,16 +2,60 @@
 //! The printable tree of a physical plan (`EXPLAIN`'s physical section).
 
 use std::fmt;
+use std::sync::Arc;
+
+/// What the planner knew about a node when it planned it, kept for the advisor (P3-T073): data about the
+/// plan, never printed in `EXPLAIN` text and never sent through the plan codec (a decoded plan has none).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NodeFacts {
+    /// The planner's estimate of the node's output rows, where it computed one.
+    pub estimated_rows: Option<f64>,
+    /// A join's inputs, probe first, build second.
+    pub inputs: Vec<InputFacts>,
+    /// Hash-join keys that got no runtime filter, with the reason.
+    pub filter_gaps: Vec<FilterGap>,
+    /// A scan: the table it reads when the provider reports no statistics.
+    pub tables_without_stats: Vec<String>,
+}
+
+/// One join input's planner facts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputFacts {
+    /// Estimated rows.
+    pub estimated_rows: f64,
+    /// Whether every table below has statistics.
+    pub statistics: bool,
+    /// The tables below with none.
+    pub tables_without_stats: Vec<String>,
+}
+
+/// A hash-join key that publishes no runtime filter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FilterGap {
+    /// The key's index.
+    pub key: usize,
+    /// The probe key expression, as `EXPLAIN` prints it.
+    pub probe_key: String,
+    /// Why there is no filter.
+    pub reason: FilterGapReason,
+}
+
+/// Why a join key has no runtime filter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FilterGapReason {
+    /// `krishiv.runtimeFilter.enabled` is false.
+    Disabled,
+    /// The key is computed: no scan column is its source.
+    NoScanColumn,
+    /// The key is a scan column, but an operator between the join and the scan stops the filter.
+    Blocked,
+}
 
 /// One node of a physical plan as `EXPLAIN` prints it: a name, its
 /// details and its inputs. Printed in the style of the logical plan
 /// (Spark's `treeString`): the first inputs under `:- `, the last under
 /// `+- `.
-///
-/// Two nodes are equal when they print the same: the planner's
-/// [`estimate`](Self::estimate) is not printed, so it is not compared (a
-/// plan decoded from the plan codec, which does not carry it, still equals
-/// the plan it was encoded from).
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ExplainNode {
@@ -21,50 +65,17 @@ pub struct ExplainNode {
     pub detail: String,
     /// Its inputs.
     pub children: Vec<ExplainNode>,
-    /// The planner's estimate of the node's output rows: set on the node
-    /// that produces a logical relation's rows, `None` on nodes the
-    /// planner adds below it (exchanges, a partial aggregate) and on a plan
-    /// decoded from the plan codec. The profile's `plan[].estimate`.
-    pub estimate: Option<RowEstimate>,
+    /// What the planner knew (ignored by equality: a decoded plan has none).
+    pub facts: Option<Arc<NodeFacts>>,
 }
 
 impl PartialEq for ExplainNode {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.detail == other.detail && self.children == other.children
+    fn eq(&self, o: &Self) -> bool {
+        self.name == o.name && self.detail == o.detail && self.children == o.children
     }
 }
 
 impl Eq for ExplainNode {}
-
-/// The planner's estimate of a node's output rows (T164's statistics, as
-/// join ordering and the runtime-filter cost read them).
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct RowEstimate {
-    /// Estimated output rows, rounded.
-    pub rows: u64,
-    /// Where the estimate comes from: [`RowEstimate::STATISTICS`] when every
-    /// table under the node reports statistics, [`RowEstimate::DEFAULT`]
-    /// when some table's row count is a default. A profile read from JSON
-    /// keeps a string it does not know.
-    pub source: String,
-}
-
-impl RowEstimate {
-    /// An estimate of `rows` from `source`.
-    pub fn new(rows: u64, source: impl Into<String>) -> Self {
-        Self {
-            rows,
-            source: source.into(),
-        }
-    }
-
-    /// Every table below the node reports statistics.
-    pub const STATISTICS: &'static str = "statistics";
-    /// Some table below the node has no statistics: its row count is a
-    /// default.
-    pub const DEFAULT: &'static str = "default";
-}
 
 impl ExplainNode {
     /// A node without inputs.
@@ -73,8 +84,15 @@ impl ExplainNode {
             name: name.into(),
             detail: detail.into(),
             children: Vec::new(),
-            estimate: None,
+            facts: None,
         }
+    }
+
+    /// This node with planner `facts`.
+    #[must_use]
+    pub fn with_facts(mut self, facts: NodeFacts) -> Self {
+        self.facts = Some(Arc::new(facts));
+        self
     }
 
     /// A node over `children`.
@@ -87,7 +105,7 @@ impl ExplainNode {
             name: name.into(),
             detail: detail.into(),
             children,
-            estimate: None,
+            facts: None,
         }
     }
 

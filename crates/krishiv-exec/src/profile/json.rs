@@ -24,7 +24,6 @@ use crate::metrics::{
     DriverStats, Metric, OperatorEntry, OperatorMetrics, OperatorRole, PipelineMetrics,
     QueryMemory, QueryMetrics,
 };
-use crate::planner::RowEstimate;
 
 type R<T> = Result<T, ProfileError>;
 
@@ -69,6 +68,7 @@ impl QueryProfile {
                 "stalls": p.stalls,
             })).collect::<Vec<_>>(),
             "plan": plan_json(&self.plan),
+            "hints": super::facts_json::hints_json(&self.hints),
             "operators": m.operators.iter().map(|(id, e)| operator_json(*id, e)).collect::<Vec<_>>(),
             "usage": usage_json(&QueryUsage::of(m), self.identity.as_ref()),
             "environment": {
@@ -198,6 +198,11 @@ impl QueryProfile {
             trace,
             identity,
             scans,
+            // Minor 7; a document without it has none.
+            hints: o
+                .get("hints")
+                .map(super::facts_json::hints_of)
+                .unwrap_or_default(),
         })
     }
 }
@@ -272,19 +277,16 @@ fn plan_json(root: &ProfileNode) -> Value {
         out.iter()
             .zip(children)
             .map(|(n, c)| {
-                let mut v = json!({
+                let mut node = json!({
                     "id": n.id,
                     "name": n.name,
                     "detail": n.detail,
                     "children": c,
                 });
-                if let (Some(e), Some(o)) = (&n.estimate, v.as_object_mut()) {
-                    o.insert(
-                        "estimate".to_owned(),
-                        json!({ "rows": e.rows, "source": e.source }),
-                    );
+                if let (Some(f), Some(o)) = (&n.facts, node.as_object_mut()) {
+                    o.insert("facts".to_owned(), super::facts_json::facts_json(f));
                 }
-                v
+                node
             })
             .collect(),
     )
@@ -386,22 +388,15 @@ fn plan_of(v: &Value) -> R<ProfileNode> {
             }
             mine.push(c);
         }
-        let estimate = match o.get("estimate") {
-            None => None,
-            Some(e) => {
-                let e = obj(e, "estimate")?;
-                Some(RowEstimate {
-                    rows: u64_of(e, "rows")?,
-                    source: str_of(e, "source")?.to_owned(),
-                })
-            }
-        };
         nodes.push(Some(ProfileNode {
             id,
             name: str_of(o, "name")?.to_owned(),
             detail: str_of(o, "detail")?.to_owned(),
             children: Vec::new(),
-            estimate,
+            facts: o
+                .get("facts")
+                .and_then(super::facts_json::facts_of)
+                .map(std::sync::Arc::new),
         }));
         inputs.push(mine);
     }

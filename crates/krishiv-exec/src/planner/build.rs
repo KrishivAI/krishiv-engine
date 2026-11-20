@@ -35,7 +35,7 @@ use krishiv_plan::{
 };
 
 use super::eval::{self, EvalEnv, PhysExpr};
-use super::explain::{ExplainNode, RowEstimate};
+use super::explain::ExplainNode;
 use super::probe_select::attach_runtime_filters;
 use super::properties::{Distribution, Placement, range_keys};
 use super::python_udf::has_python_udf;
@@ -414,49 +414,7 @@ impl<'a> Planner<'a> {
         Ok(Arc::new(values))
     }
 
-    /// The physical plan of `p`. Its top node carries the estimate of
-    /// `p`'s rows, unless lowering `p` returned a node that already has one
-    /// (a relation that adds no node of its own keeps its input's).
     pub(crate) fn plan(&mut self, p: &Arc<LogicalPlan>) -> Result<Planned> {
-        let mut planned = self.plan_relation(p)?;
-        if planned.explain.estimate.is_none() {
-            let estimate = self.estimate(p);
-            // A projection the lowering put on top (an aggregate's output
-            // columns) keeps its input's rows: the node under it that has
-            // no estimate of its own makes the same rows. An exchange is
-            // not given one (`DISTRIBUTE BY`: project, exchange, project).
-            let mut node = &mut planned.explain;
-            while node.name == "Project"
-                && let [only] = node.children.as_mut_slice()
-                && only.estimate.is_none()
-                && !only.name.ends_with("Exchange")
-            {
-                node.estimate.clone_from(&estimate);
-                node = only;
-            }
-            node.estimate = estimate;
-        }
-        Ok(planned)
-    }
-
-    /// The estimate of `p`'s rows, when the statistics table holds `p`.
-    fn estimate(&self, p: &Arc<LogicalPlan>) -> Option<RowEstimate> {
-        let e = self.stats.get(p)?;
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "an estimate: rounded and saturated, never negative"
-        )]
-        let rows = e.rows.max(0.0).round() as u64;
-        let source = if e.from_statistics {
-            RowEstimate::STATISTICS
-        } else {
-            RowEstimate::DEFAULT
-        };
-        Some(RowEstimate::new(rows, source))
-    }
-
-    fn plan_relation(&mut self, p: &Arc<LogicalPlan>) -> Result<Planned> {
         let demand = self.demand.take();
         match &p.node {
             PlanNode::Scan(scan) => self.scan(p, scan, None, demand.as_ref()),
@@ -470,16 +428,7 @@ impl<'a> Planner<'a> {
                     && scan.metadata_column().is_none()
                 {
                     let demand = with_columns_of(demand, predicate);
-                    let mut planned = self.scan(p, scan, Some(predicate), demand.as_ref())?;
-                    // A filter the scan cannot run exactly stays above it: the
-                    // scan makes the table's rows.
-                    if planned.explain.name == "Filter"
-                        && let [scan] = planned.explain.children.as_mut_slice()
-                        && scan.estimate.is_none()
-                    {
-                        scan.estimate = self.estimate(input);
-                    }
-                    return Ok(planned);
+                    return self.scan(p, scan, Some(predicate), demand.as_ref());
                 }
                 if let PlanNode::Window {
                     input: below,
@@ -495,9 +444,8 @@ impl<'a> Planner<'a> {
                         self.window_group_limit_threshold(),
                     );
                     let below = self.plan(below)?;
-                    let mut window =
+                    let window =
                         self.window_relation(below, exprs, partition_by, order_by, limit)?;
-                    window.explain.estimate = self.estimate(input);
                     return self.filter(window, predicate);
                 }
                 self.demand = with_columns_of(demand, predicate);
@@ -1392,7 +1340,11 @@ impl<'a> Planner<'a> {
                 row_id,
             }),
             layout,
-            explain: ExplainNode::leaf("Scan", detail),
+            explain: ExplainNode::leaf("Scan", detail).with_facts(super::scan_facts::of(
+                scan,
+                self.has_statistics(plan),
+                self.estimated_rows(plan),
+            )),
             sites,
             placement: Placement::Unknown,
         };
@@ -1971,7 +1923,7 @@ impl<'a> Planner<'a> {
 #[cfg(test)]
 mod attach_tests;
 
-mod util;
+pub(super) mod util;
 pub(crate) use util::*;
 
 /// `TABLESAMPLE` over `input` (Spark's `SampleExec`) with its resolved

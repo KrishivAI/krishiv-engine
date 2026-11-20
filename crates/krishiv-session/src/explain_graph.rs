@@ -168,7 +168,7 @@ pub fn dot_of_plan(root: &ExplainNode) -> String {
 ///         name: "Scan".to_owned(),
 ///         detail: "t".to_owned(),
 ///         children: Vec::new(),
-///         estimate: None,
+///         facts: None,
 ///     },
 ///     metrics: QueryMetrics::default(),
 ///     detailed: false,
@@ -176,6 +176,7 @@ pub fn dot_of_plan(root: &ExplainNode) -> String {
 ///     trace: None,
 ///     identity: None,
 ///     scans: Vec::new(),
+///     hints: Vec::new(),
 /// };
 /// let text = mermaid_of_profile(&profile);
 /// assert!(text.starts_with("flowchart TD\n"));
@@ -760,7 +761,7 @@ mod tests {
                 name: "Scan".to_owned(),
                 detail: "t".to_owned(),
                 children: Vec::new(),
-                estimate: None,
+                facts: None,
             },
             metrics,
             detailed: false,
@@ -768,6 +769,7 @@ mod tests {
             trace: None,
             identity: None,
             scans: Vec::new(),
+            hints: Vec::new(),
         };
         let text = mermaid_of_profile(&profile);
         assert!(text.contains("Scan t"), "{text}");
@@ -811,7 +813,7 @@ mod tests {
                 name: "Scan".to_owned(),
                 detail: String::new(),
                 children: Vec::new(),
-                estimate: None,
+                facts: None,
             },
             metrics: sink_metrics,
             detailed: false,
@@ -819,6 +821,7 @@ mod tests {
             trace: None,
             identity: None,
             scans: Vec::new(),
+            hints: Vec::new(),
         };
         let text = dot_of_profile(&with_sink);
         assert!(text.contains("Result:"), "{text}");
@@ -841,9 +844,9 @@ mod tests {
                     name: "Scan".to_owned(),
                     detail: "t".to_owned(),
                     children: Vec::new(),
-                    estimate: None,
+                    facts: None,
                 }],
-                estimate: None,
+                facts: None,
             },
             metrics: QueryMetrics::default(),
             detailed: true,
@@ -851,6 +854,7 @@ mod tests {
             trace: None,
             identity: None,
             scans: Vec::new(),
+            hints: Vec::new(),
         };
         assert_eq!(
             mermaid_of_profile(&profile),
@@ -870,6 +874,7 @@ mod tests {
             trace: None,
             identity: None,
             scans: Vec::new(),
+            hints: Vec::new(),
         };
         assert_eq!(
             mermaid_of_profile(&profile),
@@ -883,7 +888,7 @@ mod tests {
             name: format!("p{depth}"),
             detail: String::new(),
             children: Vec::new(),
-            estimate: None,
+            facts: None,
         };
         for i in (0..depth).rev() {
             node = ProfileNode {
@@ -891,7 +896,7 @@ mod tests {
                 name: format!("p{i}"),
                 detail: String::new(),
                 children: vec![node],
-                estimate: None,
+                facts: None,
             };
         }
         node

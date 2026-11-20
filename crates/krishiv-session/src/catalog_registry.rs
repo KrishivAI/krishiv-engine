@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The catalog registry (design P3-T067 §2.3, §2.4; ADR 0036 R11, R14): the declared catalogs of
+//! The catalog registry: the declared catalogs of
 //! one engine runtime, each built by the [`CatalogFactory`] of its type on first use and then
 //! shared by every session of the process.
 //!
@@ -14,9 +14,9 @@
 //!   startup, naming the type and the catalog, never skipped.
 //! - **Lazy, shared, never poisoned.** A catalog is built on its first use; a build that fails
 //!   fails that query and is tried again by the next one.
-//! - **Per tenant (§2.4).** A catalog that lists tenants does not exist for a principal of any
+//! - **Per tenant.** A catalog that lists tenants does not exist for a principal of any
 //!   other tenant, or of none: listings omit it and a name lookup fails as for an undeclared name.
-//! - **Callers (§3.2).** A built catalog answers one [`CatalogCaller`] at a time: the caller's
+//! - **Callers.** A built catalog answers one [`CatalogCaller`] at a time: the caller's
 //!   [`IdentityKey`] and, for a `delegated` catalog, the session's latest user token
 //!   ([`crate::Session::set_inbound_credential`]). Each query's view of the declared catalogs
 //!   carries its session's caller, so the analyzer's `Catalog` trait is unchanged. A catalog of
@@ -47,7 +47,7 @@ use crate::catalog_decl::{
     Delegation,
 };
 
-/// Who a declared catalog answers (design P3-T067 §3.2): for a `delegated` catalog the catalog,
+/// Who a declared catalog answers: for a `delegated` catalog the catalog,
 /// the principal id ([`Principal::id`]: kind, tenant, name, groups), its tenant and the service
 /// acting for it; for every other mode the catalog alone (every caller is the server). No token,
 /// token hash or scope is part of it: a refreshed token of the same identity keeps its caches.
@@ -99,7 +99,7 @@ impl IdentityKey {
     }
 }
 
-/// One call's caller of a declared catalog (§3.2): its identity key and, for a `delegated`
+/// One call's caller of a declared catalog: its identity key and, for a `delegated`
 /// catalog, the session's latest user token and how the session authenticated. `Debug` never
 /// shows the token.
 #[derive(Debug, Clone)]
@@ -138,6 +138,8 @@ impl CatalogCaller {
         }
     }
 
+    /// How error messages name the session's authentication.
+    ///
     /// How error messages name the session's authentication: the credential's kind when it has
     /// one, else the method (`token`, `mtls`, `none`).
     #[must_use]
@@ -154,7 +156,7 @@ impl CatalogCaller {
     }
 }
 
-/// A built declared catalog: the analyzer's `Catalog` with the caller of each call (§3.2).
+/// A built declared catalog: the analyzer's `Catalog` with the caller of each call.
 pub trait CallerCatalog: fmt::Debug + Send + Sync {
     /// As `Catalog::epoch`.
     fn epoch(&self) -> u64 {
@@ -212,12 +214,14 @@ impl Inbound {
     }
 }
 
-/// Builds the catalog of one declared type (design P3-T067 §2.3). Implemented by the connector
+/// Builds the catalog of one declared type. Implemented by the connector
 /// crates (`krishiv-catalogs`: `iceberg-rest`), registered by the binary that compiles them in.
 pub trait CatalogFactory: fmt::Debug + Send + Sync {
     /// The type it builds.
     fn kind(&self) -> CatalogType;
 
+    /// Checks `decl` at startup without connecting.
+    ///
     /// Checks `decl` at startup without connecting (what [`Self::build`] would refuse for the
     /// declaration alone: an option this factory does not implement, a URL its client refuses).
     /// The default accepts everything.
@@ -282,6 +286,8 @@ impl fmt::Debug for CatalogDeps {
 }
 
 impl CatalogDeps {
+    /// Dependencies with the default limits and no proxy.
+    ///
     /// Dependencies with the default limits (30 s, 256 MiB, 60 and 20 exchanges a minute) and no
     /// proxy.
     #[must_use]
@@ -585,11 +591,13 @@ impl CatalogRegistry {
         self.catalogs.values().map(|d| &d.decl)
     }
 
-    /// The declarations a principal of `tenant` sees, sorted by name (§2.4).
+    /// The declarations a principal of `tenant` sees, sorted by name.
     pub fn visible<'a>(&'a self, tenant: Option<&'a str>) -> impl Iterator<Item = &'a CatalogDecl> {
         self.declarations().filter(move |d| d.visible_to(tenant))
     }
 
+    /// The catalog `name` as a principal of `tenant` sees it, or `None`.
+    ///
     /// The catalog `name` (any letter case) as a principal of `tenant` sees it: `None` when it is
     /// not declared or not visible, the same answer either way (hidden means absent).
     /// It answers as the server: a `delegated` catalog fails every call for want of a user token.
@@ -760,7 +768,7 @@ impl crate::Session {
 
     /// Records how the session's latest RPC authenticated and the user token it carried (an
     /// OIDC token or a signed assertion; `None` for a static token, a certificate or plain act-as
-    /// metadata), for its `delegated` catalogs (design P3-T067 §3.3). The most recent call wins,
+    /// metadata), for its `delegated` catalogs. The most recent call wins,
     /// as the per-RPC baggage does: a fresher token replaces the stored one (a token of another
     /// principal never reaches this session, whose owner is fixed). Queries take it when they
     /// start.
