@@ -121,6 +121,16 @@ impl Resolver<'_> {
             return Err(refuse());
         }
         let (lc, rc) = (chain(&l.plan), chain(&r.plan));
+        // What is under the projections once resolved must be what the base is on its own: a
+        // projection holding an aggregate or a window resolves to an `Aggregate` or `Window`
+        // that a stripped `Project` chain would otherwise hide (Spark compares the resolved bases).
+        let alone = self.child(unresolved_base(left), env)?;
+        let kind = std::mem::discriminant(&chain(&alone.plan).base.node);
+        if std::mem::discriminant(&lc.base.node) != kind
+            || std::mem::discriminant(&rc.base.node) != kind
+        {
+            return Err(refuse());
+        }
         let (Some(lb), Some(rb)) = (lc.base.resolved_output(), rc.base.resolved_output()) else {
             return Err(refuse());
         };
@@ -141,7 +151,7 @@ impl Resolver<'_> {
             return Err(refuse());
         }
         // The right side reads the left base's columns.
-        let mut map: HashMap<AttrId, BoundColumn> = rb
+        let map: HashMap<AttrId, BoundColumn> = rb
             .iter()
             .zip(&lb)
             .map(|(from, to)| (from.id, to.clone()))
@@ -159,7 +169,6 @@ impl Resolver<'_> {
                 None => kept.push((output.clone(), body)),
             }
         }
-        map.extend(survivors.iter().map(|(k, v)| (*k, v.clone())));
         // One layer per dependency depth.
         let by_id: BTreeMap<AttrId, usize> = kept
             .iter()
@@ -222,19 +231,26 @@ impl Resolver<'_> {
                 let e = if from_right {
                     remap(e, &map)
                 } else {
-                    remap(e, &survivors)
+                    Arc::clone(e)
                 };
-                let item = match alias_of(&e) {
-                    // An alias kept by the layers is read from there; one a shared producer made
-                    // redundant is the survivor's value under its own name and identity.
-                    Some((output, body)) if survivors.contains_key(&output.id) => {
+                // A column a shared producer made redundant is the survivor's value under its
+                // own name and identity (Spark's `ResolveZip`), read from the survivor, not computed again.
+                let redundant = |c: &BoundColumn| {
+                    survivors.get(&c.id).map(|s| {
                         Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
-                            expr: Arc::clone(body),
-                            output: output.clone(),
+                            expr: col_expr(s, Origin::UNKNOWN),
+                            output: c.clone(),
                         })))
+                    })
+                };
+                let item = match (alias_of(&e), &e.node) {
+                    (Some((output, _)), _) => {
+                        redundant(output).unwrap_or_else(|| self.pass_expr(output))
                     }
-                    Some((output, _)) => self.pass_expr(output),
-                    None => e,
+                    (None, ExprNode::Resolved(ResolvedExpr::Column(c))) => {
+                        redundant(c).unwrap_or_else(|| Arc::clone(&e))
+                    }
+                    _ => e,
                 };
                 let col = match (&item.node, alias_of(&item)) {
                     (_, Some((output, _))) => output.clone(),
