@@ -225,3 +225,74 @@ fn the_state_carries_over_from_one_call_to_the_next() {
         [None, Some(250)]
     );
 }
+
+#[test]
+fn every_integral_width_and_a_decimal64_keep_their_type() {
+    use arrow_array::types::{Decimal64Type, Int8Type, Int16Type, Int64Type};
+    use arrow_array::{Decimal64Array, Int8Array, Int16Array, Int64Array};
+    let c: ArrayRef = Arc::new(Int8Array::from(vec![Some(10_i8), None, Some(15)]));
+    let out = CounterState::default().run(&c, None, &utc()).unwrap();
+    assert_eq!(
+        out.as_primitive::<Int8Type>().iter().collect::<Vec<_>>(),
+        [None, None, Some(5)]
+    );
+    let c: ArrayRef = Arc::new(Int16Array::from(vec![300_i16, 100, 250]));
+    let out = CounterState::default().run(&c, None, &utc()).unwrap();
+    assert_eq!(
+        out.as_primitive::<Int16Type>().iter().collect::<Vec<_>>(),
+        [None, None, Some(150)]
+    );
+    let c: ArrayRef = Arc::new(Int64Array::from(vec![1_i64 << 40, (1_i64 << 40) + 7]));
+    let out = CounterState::default().run(&c, None, &utc()).unwrap();
+    assert_eq!(
+        out.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+        [None, Some(7)]
+    );
+    let c: ArrayRef = Arc::new(
+        Decimal64Array::from(vec![1_000_i64, 1_250])
+            .with_precision_and_scale(10, 2)
+            .unwrap(),
+    );
+    let out = CounterState::default().run(&c, None, &utc()).unwrap();
+    assert_eq!(out.data_type(), &arrow_schema::DataType::Decimal64(10, 2));
+    assert_eq!(
+        out.as_primitive::<Decimal64Type>()
+            .iter()
+            .collect::<Vec<_>>(),
+        [None, Some(250)]
+    );
+}
+
+#[test]
+fn a_float32_follows_the_same_nan_order_and_refuses_a_negative() {
+    let nan = f32::NAN;
+    let c: ArrayRef = Arc::new(Float32Array::from(vec![100.0_f32, nan, nan, 200.0]));
+    let out = CounterState::default().run(&c, None, &utc()).unwrap();
+    let shown: Vec<Option<String>> = out
+        .as_primitive::<Float32Type>()
+        .iter()
+        .map(|v| v.map(|v| v.to_string()))
+        .collect();
+    assert_eq!(
+        shown,
+        [None, Some("NaN".to_owned()), Some("NaN".to_owned()), None]
+    );
+    let c: ArrayRef = Arc::new(Float32Array::from(vec![-1.5_f32]));
+    let e = CounterState::default().run(&c, None, &utc()).unwrap_err();
+    assert_eq!(
+        e.error_class().name(),
+        "COUNTER_DIFF_NEGATIVE_COUNTER_VALUE"
+    );
+}
+
+#[test]
+fn a_type_the_function_does_not_take_is_an_internal_error() {
+    let c: ArrayRef = Arc::new(arrow_array::StringArray::from(vec!["a"]));
+    assert!(CounterState::default().run(&c, None, &utc()).is_err());
+    let d: ArrayRef = Arc::new(arrow_array::Date32Array::from(vec![1]));
+    assert!(
+        CounterState::default()
+            .run(&ints(&[Some(1)]), Some(&d), &utc())
+            .is_err()
+    );
+}
