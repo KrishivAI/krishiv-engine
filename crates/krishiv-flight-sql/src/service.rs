@@ -49,7 +49,8 @@ impl FlightSqlServer {
         self.inner.auth.caller(request)
     }
 
-    /// The caller of a call that starts new work (handshake, statement, metadata command): refused
+    /// The caller of a call that starts new work (handshake, statement, update, prepared-statement create/execute/bind,
+    /// metadata command): refused
     /// with `KRISHIV_SERVER_DRAINING` while the server drains (design P3-T066 §5.1), a
     /// non-retryable `FAILED_PRECONDITION` and not `UNAVAILABLE`.
     fn admit_new<T>(&self, request: &Request<T>) -> Result<Authenticated, Status> {
