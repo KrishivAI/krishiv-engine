@@ -969,6 +969,10 @@ pub(crate) async fn step(
         }
         Loaded::TooLarge => {
             let arbitrated = loading.arbitrate;
+            shared.counters.add(Counter::GraceLoadsRefused, 1);
+            shared
+                .counters
+                .add(Counter::GraceRefusedBytes, loading.read_bytes() as u64);
             // The rows go back, then the credit, then the seat goes idle
             // (waking the rounds waiting for it).
             let seat = loading.seat.take();
@@ -1163,6 +1167,15 @@ impl Loading {
             estimate_refused: false,
             seat: holding_seat(ctx),
         }
+    }
+
+    /// The build bytes read so far (given back if the load is refused).
+    fn read_bytes(&self) -> usize {
+        self.chunks
+            .iter()
+            .chain(&self.pending)
+            .map(|b| b.data().get_array_memory_size())
+            .sum()
     }
 
     /// Gives the task back; what was read is released.

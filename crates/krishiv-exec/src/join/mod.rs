@@ -413,6 +413,12 @@ pub(crate) enum Counter {
     FixedBloom,
     /// The build's non-null keys counted for its fixed Blooms.
     FixedBloomKeys,
+    /// Grace partition loads given up because the pool lacked free memory
+    /// (`grace::Loaded::TooLarge`, before or after arbitration): the rows
+    /// read so far go back and the partition is read again.
+    GraceLoadsRefused,
+    /// The build bytes those loads had read when they gave up.
+    GraceRefusedBytes,
 }
 
 /// The build sink's counters, by name.
@@ -435,7 +441,7 @@ const BUILD_COUNTERS: [(Counter, &str); 16] = [
     (Counter::MaxPartitionNs, "finalize_max_partition_ns"),
 ];
 /// The probe operator's counters, by name.
-const PROBE_COUNTERS: [(Counter, &str); 10] = [
+const PROBE_COUNTERS: [(Counter, &str); 12] = [
     (Counter::ProbeRows, "probe_rows"),
     (Counter::ProbeSpilledRows, "probe_spilled_rows"),
     (Counter::ProbeSpillBytes, "spill_file_bytes"),
@@ -446,6 +452,8 @@ const PROBE_COUNTERS: [(Counter, &str); 10] = [
     (Counter::GraceHashBuckets, "grace_hash_buckets"),
     (Counter::ReversedPartitions, "reversed_partitions"),
     (Counter::ProbeTableNs, "probe_table_ns"),
+    (Counter::GraceLoadsRefused, "grace_loads_refused"),
+    (Counter::GraceRefusedBytes, "grace_refused_bytes"),
 ];
 /// The probe operator's per-lookup counters (detailed metrics only).
 const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
@@ -456,7 +464,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 35]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 37]);
 
 impl Default for Counters {
     fn default() -> Self {
