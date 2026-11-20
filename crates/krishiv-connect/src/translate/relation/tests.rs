@@ -1331,6 +1331,21 @@ fn repartition_by_expression_plans_as_distribute_by() {
 }
 
 #[test]
+fn repartition_and_coalesce_plan_as_their_hints() {
+    let rel = |shuffle: Option<bool>| {
+        relation(RelType::Repartition(Box::new(pb::Repartition {
+            input: star_input(),
+            num_partitions: 4,
+            shuffle,
+        })))
+    };
+    let (translated, parsed) = plans(&rel(None), "SELECT /*+ REPARTITION(4) */ * FROM t");
+    assert_eq!(translated, parsed);
+    let (translated, parsed) = plans(&rel(Some(false)), "SELECT /*+ COALESCE(4) */ * FROM t");
+    assert_eq!(translated, parsed);
+}
+
+#[test]
 fn unpivot_plans_as_unpivot_include_nulls() {
     let rel = relation(RelType::Unpivot(Box::new(pb::Unpivot {
         input: input(),

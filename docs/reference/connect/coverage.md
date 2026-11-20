@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 13 done, 16 partial, 29 missing, 4 out of scope.
+62 arms: 13 done, 17 partial, 28 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -28,7 +28,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 14 | deduplicate | partial | a column subset and within_watermark | Distinct (all columns); a subset is Aggregate with first per non-key column and needs the input columns (analyzer node); within_watermark → P4 | P3-T012 | 3 |
 | 15 | range | done |  | Range | P2-T091a | 0 |
 | 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
-| 17 | repartition | missing |  | Repartition (round robin / coalesce) | P3-T012 | 3 |
+| 17 | repartition | partial | the partition count (spark_partition_id, getNumPartitions) | Hint(REPARTITION n \| COALESCE n): rows pass through unchanged; the count is not applied to the plan | P3-T012 | 3 |
 | 18 | to_df | done |  | ColumnNames(ToDf): the analyzer renames by position (count mismatch is the derived-table alias error) | P3-T012 | 4 |
 | 19 | with_columns_renamed | partial | rename_columns_map when its result depends on entry order (wire order is lost on decode) | ColumnNames(Rename): the pairs in turn, case rule of the session, unknown names ignored | P3-T012 | 4 |
 | 20 | show_string | missing |  | server-side: execute, then format as Spark's Dataset.showString (truncate, vertical); returns a one-row, one-column relation | P3-T012 | 4 |

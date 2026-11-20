@@ -121,6 +121,18 @@ impl Translator<'_> {
                 name: h.name.clone(),
                 params: self.expressions(&h.parameters)?,
             },
+            RelType::Repartition(r) => PlanNode::Hint {
+                input: self.input("Repartition", r.input.as_deref())?,
+                // Spark's own hint forms: `repartition(n)` is `REPARTITION(n)`, and
+                // `coalesce(n)` (shuffle = false) is `COALESCE(n)`. Rows pass through.
+                name: if r.shuffle == Some(false) {
+                    "COALESCE"
+                } else {
+                    "REPARTITION"
+                }
+                .to_owned(),
+                params: vec![Arc::new(Expr::literal(Literal::Integer(r.num_partitions)))],
+            },
             RelType::RepartitionByExpression(r) => self.repartition_by_expression(r)?,
             RelType::Unpivot(u) => self.unpivot(u)?,
             RelType::ToDf(t) => PlanNode::ColumnNames {

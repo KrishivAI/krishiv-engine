@@ -111,7 +111,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     Deduplicate => ("deduplicate", 14, Partial, "a column subset and within_watermark", "Distinct (all columns); a subset is Aggregate with first per non-key column and needs the input columns (analyzer node); within_watermark → P4", "P3-T012", 3),
     Range => ("range", 15, Done, "", "Range", "P2-T091a", 0),
     SubqueryAlias => ("subquery_alias", 16, Done, "", "SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP", "P3-T012", 1),
-    Repartition => ("repartition", 17, Missing, "", "Repartition (round robin / coalesce)", "P3-T012", 3),
+    Repartition => ("repartition", 17, Partial, "the partition count (spark_partition_id, getNumPartitions)", "Hint(REPARTITION n | COALESCE n): rows pass through unchanged; the count is not applied to the plan", "P3-T012", 3),
     ToDf => ("to_df", 18, Done, "", "ColumnNames(ToDf): the analyzer renames by position (count mismatch is the derived-table alias error)", "P3-T012", 4),
     WithColumnsRenamed => ("with_columns_renamed", 19, Partial, "rename_columns_map when its result depends on entry order (wire order is lost on decode)", "ColumnNames(Rename): the pairs in turn, case rule of the session, unknown names ignored", "P3-T012", 4),
     ShowString => ("show_string", 20, Missing, "", "server-side: execute, then format as Spark's Dataset.showString (truncate, vertical); returns a one-row, one-column relation", "P3-T012", 4),
