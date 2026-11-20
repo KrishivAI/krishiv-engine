@@ -185,17 +185,21 @@ def _layout(
             for s in page.evaluate(SMALL_TARGETS)
         ]
     if name == "queries" and mode != "profiles":
+        # Each running query's Cancel is on the screen's width as it is: no sideways scroll of a table to reach it.
         shown = (
             page.locator("main")
             .get_by_role("button", name="Cancel")
             .locator("visible=true")
         )
+        boxes = [shown.nth(i).bounding_box() for i in range(shown.count())]
         on_screen = sum(
-            1 for i in range(shown.count()) if shown.nth(i).bounding_box() is not None
+            1
+            for b in boxes
+            if b is not None and b["x"] >= 0 and b["x"] + b["width"] <= width
         )
         if on_screen != RUNNING:
             problems.append(
-                f"{view}: {on_screen} Cancel actions for {RUNNING} running queries"
+                f"{view}: {on_screen} Cancel actions on the screen for {RUNNING} running queries"
             )
     if width >= ULTRAWIDE_FROM:
         w = page.evaluate(WIDE)

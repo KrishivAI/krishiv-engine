@@ -151,7 +151,7 @@
       {:else if c.key === "state"}
         <Badge variant={stateVariant(r.state)}>{r.state}</Badge>{#if r.error_class} <span class="mono text-muted-foreground">{r.error_class}</span>{/if}
       {:else if c.key === "principal"}{r.principal ?? "–"}
-        {#if r.client_type}<div class="ml-auto max-w-[min(12rem,100%)] truncate text-xs text-muted-foreground md:ml-0" title={r.client_type}>{r.client_type}</div>{/if}
+        {#if r.client_type}<div class="ml-auto max-w-[min(12rem,40vw)] truncate text-xs text-muted-foreground xl:ml-0" title={r.client_type}>{r.client_type}</div>{/if}
       {:else if c.key === "submitted"}{when(r.submitted_at)}
       {:else if c.key === "wall"}{nanos(r.wall_ns)}
       {:else}{bytes(r.peak_memory_bytes)}{/if}

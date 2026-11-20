@@ -36,8 +36,10 @@
   } = $props();
 </script>
 
-<!-- From the md breakpoint a table that scrolls inside its own box; below it one card per row. -->
-<div class="hidden md:block">
+<!-- From the xl breakpoint (1280 px), where every column fits, a table; below it one card per row, two cards
+     side by side on a tablet. A table narrower than its columns would hide the last ones (the row's action
+     among them) behind a sideways scroll. -->
+<div class="hidden xl:block">
   <Table>
     <thead>
       <tr>
@@ -64,7 +66,7 @@
   </Table>
 </div>
 
-<ul class="grid gap-3 md:hidden">
+<ul class="grid gap-3 md:grid-cols-2 xl:hidden">
   {#each rows as r (rowKey(r))}
     <li>
       <Card class={cn("grid grid-cols-1 gap-1.5 p-3", rowClass?.(r))}>
