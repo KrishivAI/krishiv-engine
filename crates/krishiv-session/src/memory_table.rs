@@ -72,9 +72,16 @@ struct SourceTable {
     /// The session's pool; every scan counts its bytes in a child group of its own, so an abort of
     /// one scan's group never reaches a later plan.
     memory: Arc<dyn MemoryPool>,
-    /// The bytes of the latest scan's batches, counted in the session's pool until the next scan
-    /// replaces them or the table is dropped (a plan's scan cannot hold them itself).
-    held: std::sync::Mutex<Option<(Arc<dyn MemoryPool>, Reservation)>>,
+    /// The schema `source`'s batches have (before the carrier's canonical form), which they are
+    /// checked against.
+    declared: SchemaRef,
+}
+
+/// A scan's bytes in the session's pool, released when the scan and every scan derived from it
+/// are gone.
+struct ScanHold {
+    _pool: Arc<dyn MemoryPool>,
+    _reservation: std::sync::Mutex<Reservation>,
 }
 
 /// The most bytes of batches one plan of a [`SourceTable`] may hold: the interim embedded path
@@ -101,35 +108,30 @@ impl TableProvider for SourceTable {
             }
             .into());
         }
-        // The previous scan's bytes go back first: a re-plan needs one copy of the source, not two.
-        let mut held = self
-            .held
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *held = None;
-        let pool = self.memory.child("python_source", None);
-        let consumer = pool.register("python_source", None);
-        let mut reservation = Reservation::new(Arc::clone(&pool), consumer);
-        reservation.try_grow(bytes).map_err(KrishivError::from)?;
-        *held = Some((pool, reservation));
-        drop(held);
         let batches = batches
             .into_iter()
             .map(|b| {
-                if b.schema() != self.schema {
+                if b.schema() != self.declared {
                     return Err(internal(format!(
                         "a batch of schema {} for a table of schema {}",
                         b.schema(),
-                        self.schema
+                        self.declared
                     )));
                 }
                 crate::carrier::recarried(&b, &self.schema).map(Batch::new)
             })
             .collect::<Result<Vec<Batch>, KrishivError>>()?;
-        Ok(Arc::new(MemoryScan::try_new(
-            Arc::clone(&self.schema),
-            batches,
-        )?))
+        let pool = self.memory.child("python_source", None);
+        let consumer = pool.register("python_source", None);
+        let mut reservation = Reservation::new(Arc::clone(&pool), consumer);
+        reservation.try_grow(bytes).map_err(KrishivError::from)?;
+        let hold = ScanHold {
+            _pool: pool,
+            _reservation: std::sync::Mutex::new(reservation),
+        };
+        Ok(Arc::new(
+            MemoryScan::try_new(Arc::clone(&self.schema), batches)?.with_guard(Arc::new(hold)),
+        ))
     }
 }
 
@@ -139,7 +141,7 @@ impl Session {
     /// source that lists files sees new ones on the next action).
     ///
     /// `label` names the source in errors. Each plan's batches are counted in the session's memory
-    /// pool (until the next plan or the table's drop) and capped at 1 GiB.
+    /// pool (until that plan's scans are dropped) and capped at 1 GiB.
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a column type Spark has no equivalent of;
@@ -165,6 +167,7 @@ impl Session {
                 ))
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
+        let declared = Arc::clone(&schema);
         let schema = crate::carrier::canonical_schema(schema);
         self.state.catalog.put(
             name,
@@ -176,7 +179,7 @@ impl Session {
                     source,
                     max_bytes: MAX_SOURCE_BYTES,
                     memory: Arc::clone(&self.state.memory),
-                    held: std::sync::Mutex::new(None),
+                    declared,
                 }),
             },
         );
@@ -210,7 +213,7 @@ mod tests {
             }),
             max_bytes: 1,
             memory: Arc::clone(&session.state.memory),
-            held: std::sync::Mutex::new(None),
+            declared: Arc::clone(&schema),
         };
         let error = table.scan().err().expect("over the cap").to_string();
         assert!(error.contains("demo"), "{error}");

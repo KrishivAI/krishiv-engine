@@ -12,7 +12,13 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from krishiv.errors import PySparkTypeError, PySparkValueError, not_expected_type, unsupported_feature
+from krishiv.errors import (
+    AnalysisException,
+    PySparkTypeError,
+    PySparkValueError,
+    not_expected_type,
+    unsupported_feature,
+)
 from krishiv.sql.column import Column
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.types import StructType
@@ -88,10 +94,11 @@ class DataFrameReader:
             raise _schema_type_error(schema)
         self.options(**options)
         from krishiv.sql import datasource
+        from krishiv.sql.datasource import CaseInsensitiveDict
 
         entry = datasource.registered(self._session, self._format) if isinstance(self._format, str) else None
         if entry is not None:
-            opts = dict(self._options)
+            opts = CaseInsensitiveDict(self._options)
             if path is not None:
                 if isinstance(path, list) and len(path) != 1:
                     raise not_expected_type("path", "str", path)
@@ -204,6 +211,15 @@ class DataFrameWriter:
         self._bucket_by = (numBuckets, names)
         return self
 
+    def _assert_not_bucketed(self, operation: str) -> None:
+        """Spark's refusal of a bucketed save, or of ``sortBy`` without ``bucketBy``."""
+        if self._bucket_by is None and self._sort_by is None:
+            return
+        if self._bucket_by is None:
+            raise AnalysisException(errorClass="SORT_BY_WITHOUT_BUCKETING", messageParameters={}, sqlState="42601")
+        code = "_LEGACY_ERROR_TEMP_1312" if self._sort_by is None else "_LEGACY_ERROR_TEMP_1313"
+        raise AnalysisException(errorClass=code, messageParameters={"operation": operation})
+
     def sortBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter:
         """Sorts each bucket by ``col`` (and ``cols``); needs ``bucketBy``."""
         if isinstance(col, list | tuple):
@@ -284,12 +300,14 @@ class DataFrameWriter:
         # As PySpark's shortcuts do, skip options given as ``None``.
         self.options(**{k: v for k, v in options.items() if v is not None})
         from krishiv.sql import datasource
+        from krishiv.sql.datasource import CaseInsensitiveDict
 
         entry = datasource.registered(self._df._session, self._format) if self._format_set else None
         if entry is not None:
-            opts = dict(self._options)
+            opts = CaseInsensitiveDict(self._options)
             if path is not None:
                 opts["path"] = path
+            self._assert_not_bucketed("save")
             datasource.save(self._df._session, entry, self._df, self._mode, opts)
             return
         if path is None:
