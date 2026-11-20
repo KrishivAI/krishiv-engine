@@ -43,3 +43,91 @@ def session() -> SparkSession
 ```
 
 The active session, created on first use (`SparkSession.builder.getOrCreate()`).
+
+### `ui`
+
+```python
+def ui(source: Any=None, *, path: str | Path | None=None, port: int=0) -> Console | ProfileView
+```
+
+The web console of a session, or the viewer of one query profile.
+
+`ui()` starts the console of the active session (making a session when there is none) and
+`ui(spark)` the console of `spark`. It prints the URL to open and returns the
+`Console`. The console listens on `127.0.0.1` only, on a free port unless `port`
+names one, behind a token generated for this start. A second call returns the running console.
+It stops with the session (`spark.stop()`) or with `Console.stop`.
+
+With any other `source` this is the offline viewer of one profile: a profile document
+(`dict` or JSON text), a `ProfileView`, or a DataFrame (which runs
+`EXPLAIN ANALYZE` and views its profile). With `path` the page is also written there. In a
+notebook the returned view renders itself.
+
+## `Console`
+
+```python
+class Console
+```
+
+The running web console of one session.
+
+Open `url` in a browser on this machine. The console listens on `127.0.0.1` only, and
+every request must carry the token in the URL, which is generated for this start: treat the URL
+as a password for the session. It is stopped by `stop`, by leaving a `with` block, by
+the session's `stop()` and at interpreter exit; it also stops once neither the session nor
+this handle is referenced any more.
+
+### `port`
+
+```python
+@property
+def port(self) -> int
+```
+
+The loopback port the console listens on.
+
+### `running`
+
+```python
+@property
+def running(self) -> bool
+```
+
+Whether the console is still serving.
+
+### `session_id`
+
+```python
+@property
+def session_id(self) -> str
+```
+
+The id of the session the console shows.
+
+### `stop`
+
+```python
+def stop(self) -> None
+```
+
+Stop the console and wait for its thread: the port is free when this returns.
+
+Stopping a stopped console does nothing.
+
+### `token`
+
+```python
+@property
+def token(self) -> str
+```
+
+The token every request of the console must carry.
+
+### `url`
+
+```python
+@property
+def url(self) -> str
+```
+
+The address to open: `http://127.0.0.1:<port>/?token=<token>`.
