@@ -196,3 +196,42 @@ fn a_read_left_without_an_aggregate_is_analyzable_but_not_plannable() {
         "{e}"
     );
 }
+
+/// The create aggregate groups by the dimensions' ordinals whatever `spark.sql.groupByOrdinal`
+/// says: with it off a create still groups, and a dimension that is an aggregate is still left
+/// out of the grouping (Spark groups by the dimensions' attributes).
+#[test]
+fn a_create_groups_by_its_dimensions_with_ordinals_off() {
+    let (s, _dir) = session();
+    s.conf().set("spark.sql.groupByOrdinal", "false").unwrap();
+    run(
+        &s,
+        "CREATE VIEW mv2 WITH METRICS LANGUAGE YAML AS $$
+version: 0.1
+source: src
+dimensions:
+  - name: region
+    expr: upper(region)
+  - name: everything
+    expr: sum(n)
+measures:
+  - name: total
+    expr: sum(n)
+$$",
+    )
+    .unwrap();
+    let err = run(
+        &s,
+        "SELECT region, measure(total) FROM mv2 GROUP BY region ORDER BY region",
+    )
+    .unwrap_err();
+    // The aggregate dimension makes every read Spark's `MISSING_GROUP_BY`, as the golden
+    // `yaml_dimension_is_aggregate` shows; the create itself succeeded above.
+    assert_eq!(class(&err), "MISSING_GROUP_BY");
+    let rows = run(
+        &s,
+        "SELECT region, measure(total) FROM mv GROUP BY region ORDER BY region",
+    )
+    .unwrap();
+    assert_eq!(longs(&rows, 1), vec![3, 5]);
+}

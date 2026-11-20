@@ -3,10 +3,6 @@
 
 /// Cases of both releases.
 pub(crate) const GAPS: &[&str] = &[
-    // Create checks: a dimension that is an aggregate (Spark creates it), a dimension naming another
-    // (`LATERAL_COLUMN_ALIAS_IN_GROUP_BY`).
-    "read_dimension_names_other_dimension",
-    "yaml_dimension_is_aggregate",
     // `DESCRIBE .. AS JSON` of a view.
     "ddl_describe_as_json",
     // A command's `TABLE_OR_VIEW_NOT_FOUND` names `default` in its search path, not the current

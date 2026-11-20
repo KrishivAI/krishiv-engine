@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     CreateViewColumnArityMismatchNotEnoughDataColumns,
-    CreateViewColumnArityMismatchTooManyDataColumns, ErrorQueryContext, InternalError,
+    CreateViewColumnArityMismatchTooManyDataColumns, ErrorClass, ErrorQueryContext, InternalError,
     KrishivError, MissingAttributesResolvedAttributeAppearInOperation,
     MissingAttributesResolvedAttributeMissingFromInput, SchemaNotFound, TableOrViewAlreadyExists,
 };
@@ -43,8 +43,12 @@ struct Aggregate {
 }
 
 impl Aggregate {
-    /// `SELECT d AS n, .., m AS n FROM source [WHERE filter] GROUP BY d, ..`.
-    fn build(spec: &MetricViewSpec) -> Self {
+    /// `SELECT d AS n, .., m AS n FROM source [WHERE filter] GROUP BY 1, ..`: grouped by the
+    /// dimensions' ordinals, as Spark groups by their attributes (`ResolveMetricView` 177-181),
+    /// so a dimension reading another one's alias is `LATERAL_COLUMN_ALIAS_IN_GROUP_BY`. The
+    /// ordinals in `ungrouped` (1-based) are left out: Spark's grouping attribute of a dimension
+    /// that is an aggregate is no aggregate, so its create succeeds (`yaml_dimension_is_aggregate`).
+    fn build(spec: &MetricViewSpec, ungrouped: &[usize]) -> Self {
         let mut out = Self {
             text: String::from("SELECT "),
             parts: Vec::new(),
@@ -78,11 +82,10 @@ impl Aggregate {
             // On a line of its own: a filter ending in a `--` comment leaves the parenthesis.
             out.text.push_str("\n)");
         }
-        for (i, d) in spec.dimensions.iter().enumerate() {
-            out.text
-                .push_str(if i == 0 { " GROUP BY (" } else { ", (" });
-            out.push_expr(&d.expr);
-            out.text.push(')');
+        let keys = (1..=spec.dimensions.len()).filter(|n| !ungrouped.contains(n));
+        for (i, n) in keys.enumerate() {
+            out.text.push_str(if i == 0 { " GROUP BY " } else { ", " });
+            out.text.push_str(&n.to_string());
         }
         out
     }
@@ -128,6 +131,16 @@ fn whole_statement(e: KrishivError, statement: &str) -> KrishivError {
     ))
 }
 
+/// The dimension ordinal `e` refuses as `GROUP_BY_POS_AGGREGATE`, if it is one not yet left out.
+fn aggregate_ordinal(e: &KrishivError, dimensions: usize, ungrouped: &[usize]) -> Option<usize> {
+    if e.error_class() != ErrorClass::GroupByPosAggregate {
+        return None;
+    }
+    let (_, index) = e.message_parameters().iter().find(|(k, _)| *k == "index")?;
+    let n: usize = index.parse().ok()?;
+    ((1..=dimensions).contains(&n) && !ungrouped.contains(&n)).then_some(n)
+}
+
 /// The first `limit` UTF-16 units of `s` (Java's `take`); a surrogate pair cut in half becomes
 /// U+FFFD, since a Rust string cannot hold a lone surrogate.
 fn take_utf16(s: &str, limit: usize) -> String {
@@ -167,7 +180,7 @@ impl Session {
             dimensions: Vec::new(),
             measures: Vec::new(),
         };
-        let text = Aggregate::build(&source)
+        let text = Aggregate::build(&source, &[])
             .text
             .replacen("SELECT 1", "SELECT *", 1);
         let query = krishiv_sql::parse_query(&text, &env.parser).map_err(|e| e.error)?;
@@ -277,22 +290,35 @@ impl Session {
             .into());
         }
 
-        let aggregate = Aggregate::build(&spec);
-        let query = krishiv_sql::parse_query(&aggregate.text, &env.parser)
-            .map_err(|e| at_statement(e.error))?;
-        let plan = krishiv_sql::lower_identified(
-            &query,
-            self.next_source_id(),
-            self.parser_options().case_sensitive,
-            &[],
-        )
-        .map_err(|e| aggregate.located(e.error, statement))?;
-        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        let redacted = krishiv_sql::redact_sql(&aggregate.text);
-        let analysis = df
-            .analyzed_in_with_text(env.clone(), Some(&redacted))
-            .await
-            .map_err(|e| aggregate.located(e, statement))?;
+        // The create aggregate groups by ordinals, whatever `spark.sql.groupByOrdinal` says.
+        let mut grouping = env.clone();
+        grouping.analysis.conf.group_by_ordinal = true;
+        let mut ungrouped = Vec::new();
+        let (plan, analysis) = loop {
+            let aggregate = Aggregate::build(&spec, &ungrouped);
+            let query = krishiv_sql::parse_query(&aggregate.text, &env.parser)
+                .map_err(|e| at_statement(e.error))?;
+            let plan = krishiv_sql::lower_identified(
+                &query,
+                self.next_source_id(),
+                self.parser_options().case_sensitive,
+                &[],
+            )
+            .map_err(|e| aggregate.located(e.error, statement))?;
+            let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+            let redacted = krishiv_sql::redact_sql(&aggregate.text);
+            match df
+                .analyzed_in_with_text(grouping.clone(), Some(&redacted))
+                .await
+            {
+                Ok(analysis) => break (plan, analysis),
+                Err(e) => match aggregate_ordinal(&e, spec.dimensions.len(), &ungrouped) {
+                    // At most one more analysis per dimension.
+                    Some(n) => ungrouped.push(n),
+                    None => return Err(aggregate.located(e, statement)),
+                },
+            }
+        };
         if let Some(c) = constant {
             // Spark groups by the dimensions' attributes, and a literal's never reaches the
             // aggregate's input (a Spark bug, reproduced by class, design note "Golden results" 5).
