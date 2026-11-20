@@ -232,9 +232,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def cookie_name(self) -> str:
-        """The session cookie's name carries the port, as the server's does: cookies are not kept per port."""
-        port = self.headers.get("Host", "").rpartition(":")[2]
-        return f"krishiv_ui_token_{port}" if port.isdigit() else "krishiv_ui_token"
+        """The session cookie's name carries the port, as the server's does: cookies are not kept per port.
+
+        The port is the listener's own, never text from the request (the real server takes it from a `Host`
+        header it has already checked against its allowlist).
+        """
+        return f"krishiv_ui_token_{int(self.server.server_address[1])}"
 
     def do_GET(self) -> None:
         url = urlparse(self.path)
