@@ -489,7 +489,7 @@ def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession,
 
 
 def _plan_and_read(session: SparkSession, source: DataSource, schema: StructType, label: str) -> Any:
-    """One physical plan's read: ``reader()``, ``partitions()``, ``read()`` of each, as one Arrow table.
+    """One scan's read: ``reader()``, ``partitions()``, ``read()`` of each, as one Arrow table.
 
     Planning failures (``reader()``, its type, ``pushFilters``, ``partitions()``) are raised once as
     ``PYTHON_DATA_SOURCE_ERROR`` of Spark's pairs; what ``read`` raises is not wrapped here (the engine

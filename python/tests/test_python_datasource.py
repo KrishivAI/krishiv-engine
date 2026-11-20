@@ -279,6 +279,8 @@ def test_partitions_are_planned_for_every_execution(spark: SparkSession) -> None
 
     spark.dataSource.register(Growing)
     df = spark.read.format("Growing").load()
+    df.explain()  # planning and EXPLAIN read nothing
+    assert (calls["n"], calls["partitions"], calls["reads"]) == (0, 0, 0)
     first = df.count()
     second = df.count()
     assert (first, second) == (1, 2)  # a second action sees a source that grew
@@ -719,6 +721,10 @@ def test_a_bucketed_save_through_a_python_sink_is_refused(spark: SparkSession) -
         df.write.format("sink").mode("append").sortBy("a").save()
     assert sort_only.value.getCondition() == "SORT_BY_WITHOUT_BUCKETING"
     assert "sortBy must be used together with bucketBy." in sort_only.value.getMessage()
+    # Spark asserts "not bucketed" before anything about partitioning.
+    with pytest.raises(AnalysisException) as mixed:
+        df.write.format("sink").mode("append").partitionBy("a").bucketBy(2, "a").save()
+    assert mixed.value.getCondition() == "_LEGACY_ERROR_TEMP_1312"
     assert Log.events == []
 
 

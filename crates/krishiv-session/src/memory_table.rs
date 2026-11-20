@@ -57,7 +57,7 @@ impl Session {
     }
 }
 
-/// What a `SourceTable` calls each time a plan reads it: the table's rows as batches of its schema.
+/// What a `SourceTable` calls each time a scan reads it: the table's rows as batches of its schema.
 pub type BatchSource = Arc<dyn Fn() -> Result<Vec<RecordBatch>, KrishivError> + Send + Sync>;
 
 /// A table whose rows come from a callback, asked afresh for every scan of a query (not
@@ -68,10 +68,10 @@ struct SourceTable {
     label: String,
     schema: SchemaRef,
     source: BatchSource,
-    /// The most bytes one plan's batches may hold ([`MAX_SOURCE_BYTES`]; a field so a test can lower it).
+    /// The most bytes one scan's batches may hold ([`MAX_SOURCE_BYTES`]; a field so a test can lower it).
     max_bytes: usize,
     /// The session's pool; every scan counts its bytes in a child group of its own, so an abort of
-    /// one scan's group never reaches a later plan.
+    /// one scan's group never reaches a later scan.
     memory: Arc<dyn MemoryPool>,
     /// The schema `source`'s batches have (before the carrier's canonical form), which they are
     /// checked against.
@@ -210,8 +210,8 @@ impl Session {
     /// scan of it runs. The schema is fixed here (the analysis); the rows are not (a
     /// source that lists files sees new ones on the next action).
     ///
-    /// `label` names the source in errors. Each plan's batches are counted in the session's memory
-    /// pool (until that plan's scans are dropped) and capped at 1 GiB.
+    /// `label` names the source in errors. Each scan's batches are counted in the session's memory
+    /// pool (until that scan's sources are dropped) and capped at 1 GiB.
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a column type Spark has no equivalent of;
