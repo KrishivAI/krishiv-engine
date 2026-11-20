@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
@@ -739,3 +741,58 @@ def test_a_partitioned_save_through_a_python_sink_is_refused_before_the_writer_r
     with pytest.raises(UnsupportedOperationException):
         df.write.format("sink").mode("append").save(partitionBy="nonexistent")
     assert Log.events == []
+
+
+QUERIES = Path(__file__).parents[2] / "tests" / "connect" / "python-source-queries.sql"
+
+
+def _equivalence_rows() -> list[tuple[Any, ...]]:
+    return [(i, f"n{i}", i % 4, None if i % 7 == 0 else i * 3, date(2026, 1, 1 + i % 5)) for i in range(40)]
+
+
+def _canonical(df: Any) -> list[str]:
+    return sorted(repr(tuple(r)) for r in df.collect())
+
+
+def test_python_source_matches_parquet(spark: SparkSession, tmp_path: Path) -> None:
+    """The 20 statements of ``tests/connect/python-source-queries.sql`` agree on a Python source and Parquet."""
+    pq = pytest.importorskip("pyarrow.parquet")
+    data = _equivalence_rows()
+
+    class Equiv(DataSource):
+        @classmethod
+        def name(cls) -> str:
+            return "equiv"
+
+        def schema(self) -> str:
+            return "id INT, name STRING, grp INT, v INT, d DATE"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def partitions(self) -> list[InputPartition]:
+                    return [InputPartition(k) for k in range(4)]
+
+                def read(self, partition: InputPartition) -> Any:
+                    yield from data[partition.value :: 4]
+
+            return R()
+
+    spark.dataSource.register(Equiv)
+    spark.read.format("equiv").load().createOrReplaceTempView("src")
+    table = pa.table(
+        {
+            "id": pa.array([r[0] for r in data], pa.int32()),
+            "name": [r[1] for r in data],
+            "grp": pa.array([r[2] for r in data], pa.int32()),
+            "v": pa.array([r[3] for r in data], pa.int32()),
+            "d": pa.array([r[4] for r in data], pa.date32()),
+        }
+    )
+    pq.write_table(table, tmp_path / "t.parquet")
+    spark.read.parquet(str(tmp_path / "t.parquet")).createOrReplaceTempView("pq")
+    statements = [line for line in QUERIES.read_text().splitlines() if line.strip() and not line.startswith("--")]
+    assert len(statements) == 20
+    for statement in statements:
+        got = _canonical(spark.sql(statement.format(t="src")))
+        want = _canonical(spark.sql(statement.format(t="pq")))
+        assert got == want, statement
