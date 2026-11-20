@@ -880,24 +880,19 @@ async fn build_local_relation(
     entry: &SessionEntry,
     request: LocalRequest,
 ) -> Result<krishiv_plan::LocalRelation, KrishivError> {
-    let mut request = request;
-    loop {
-        match request {
-            LocalRequest::Inline { data, schema } => {
-                return entry
-                    .session()
-                    .local_relation(data.as_deref(), schema)
-                    .await;
-            }
-            // `cached_request` answers an inline request, so this runs at most once.
-            LocalRequest::Cached { hash } => {
-                let Some(bytes) = entry.artifacts().cached(&hash) else {
-                    return Err(ConnectInvalidPlanCannotFindCachedLocalRelation { hash }.into());
-                };
-                request = cached_request(&bytes)?;
-            }
+    let (data, schema) = match request {
+        LocalRequest::Inline { data, schema } => (data, schema),
+        LocalRequest::Cached { hash } => {
+            let Some(bytes) = entry.artifacts().cached(&hash) else {
+                return Err(ConnectInvalidPlanCannotFindCachedLocalRelation { hash }.into());
+            };
+            cached_request(&bytes)?
         }
-    }
+    };
+    entry
+        .session()
+        .local_relation(data.as_deref(), schema)
+        .await
 }
 
 /// The plan as the engine's IR: a ROOT relation translated, a compressed

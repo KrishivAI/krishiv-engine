@@ -158,9 +158,7 @@ fn a_cached_relation_is_read_as_the_inline_one_it_holds() {
         schema: Some("a INT".to_owned()),
     }
     .encode_to_vec();
-    let LocalRequest::Inline { data, schema } = cached_request(&bytes).expect("decodes") else {
-        panic!("an inline request");
-    };
+    let (data, schema) = cached_request(&bytes).expect("decodes");
     assert_eq!(data.as_deref(), Some(&b"ipc"[..]));
     assert_eq!(schema.expect("schema").fields().len(), 1);
 }
