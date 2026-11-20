@@ -561,3 +561,43 @@ fn declared_streaming_on_delegated_refused() {
     }
     assert_eq!(loads(&server), 0, "no streaming source loaded the table");
 }
+
+/// The embedded rules take only absolute, unescaped `file:` paths on top of the remote ones, and
+/// let the `file` scheme through while the remote list still decides every other scheme.
+#[test]
+fn embedded_locations_take_plain_absolute_file_paths_only() {
+    use crate::location::{LocationPolicy, LocationRule};
+    let policy = super::table::EmbeddedLocations::default();
+    assert_eq!(policy.check("file:///data/t/metadata/v1.json"), Ok(()));
+    assert_eq!(policy.check("FILE:/data/t"), Ok(()));
+    assert_eq!(policy.check("s3://bucket/t"), Ok(()));
+    assert_eq!(
+        policy.check("file:///data\\t"),
+        Err(LocationRule::Malformed)
+    );
+    assert_eq!(
+        policy.check("file:///data/\u{7}t"),
+        Err(LocationRule::Malformed)
+    );
+    assert_eq!(policy.check("file:data/t"), Err(LocationRule::NoScheme));
+    assert_eq!(policy.check("file://data/t"), Err(LocationRule::NoScheme));
+    for escape in [
+        "file:///data/../etc",
+        "file:///data/%2E%2E/etc",
+        "file:///a%2fb",
+        "file:///a%5Cb",
+    ] {
+        assert_eq!(
+            policy.check(escape),
+            Err(LocationRule::PathEscape),
+            "{escape}"
+        );
+    }
+    assert_eq!(policy.check_scheme("file"), Ok(()));
+    assert_eq!(policy.check_scheme("FILE"), Ok(()));
+    assert_eq!(policy.check_scheme("s3"), Ok(()));
+    assert_eq!(
+        policy.check_scheme("ftp"),
+        Err(LocationRule::SchemeNotAllowed)
+    );
+}
