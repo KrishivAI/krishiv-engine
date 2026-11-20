@@ -99,6 +99,8 @@ pub struct DirectoryWrite {
     overwrite: bool,
     /// The commit log state, when the write goes through the log.
     log: Option<LogState>,
+    /// Minimum age of an unlogged file an overwrite sweeps.
+    grace: chrono::Duration,
 }
 
 /// What a logged write read before it started.
@@ -108,7 +110,14 @@ struct LogState {
     base: Option<u64>,
     /// Files visible in the log at that version, relative to the root.
     visible: Vec<String>,
+    /// Data files of an overwrite's directory that no log entry lists and that are older than
+    /// [`UNLOGGED_GRACE`]: what a killed earlier write left (PY-054). Deleted after the commit.
+    stale: Vec<Path>,
 }
+
+/// How old an unlogged data file must be before an overwrite sweeps it: a younger one may be the
+/// task output of a concurrent write that has not committed yet.
+const UNLOGGED_GRACE: chrono::Duration = chrono::Duration::hours(1);
 
 impl DirectoryWrite {
     /// Starts a write of `dir` in `store` with `mode`; `job_uuid` names its
@@ -176,6 +185,7 @@ impl DirectoryWrite {
             partitioned: false,
             overwrite: matches!(mode, SaveMode::Overwrite),
             log: None,
+            grace: UNLOGGED_GRACE,
         }))
     }
 
@@ -224,11 +234,44 @@ impl DirectoryWrite {
         let log_dir = self.dir.clone().join(LOG_DIR);
         self.replaced
             .retain(|p| !p.prefix_matches(&log_dir) && *p != log_dir);
+        let visible: Vec<String> = snap.files.into_keys().collect();
+        let mut stale = Vec::new();
+        if self.overwrite {
+            // The old marker goes first: a run killed before its commit must not leave the
+            // `_SUCCESS` of the data it began to replace (readers take it for complete).
+            let marker = self.dir.clone().join(SUCCESS_MARKER);
+            // Best effort: a marker that stays is rewritten by this write's commit.
+            if matches!(io.head(&self.store, &marker).await, Ok(Some(_))) {
+                let _ = io.delete(&self.store, &marker).await;
+            }
+            let seen: std::collections::HashSet<&str> =
+                visible.iter().map(String::as_str).collect();
+            let cutoff = chrono::Utc::now() - self.grace;
+            for meta in io.list(&self.store, &self.dir).await? {
+                let rel = self.relative(&meta.location);
+                if rel.is_empty()
+                    || rel.split('/').any(is_hidden)
+                    || seen.contains(rel.as_str())
+                    || meta.last_modified > cutoff
+                {
+                    continue;
+                }
+                stale.push(meta.location);
+            }
+        }
         self.log = Some(LogState {
             base: snap.version,
-            visible: snap.files.into_keys().collect(),
+            visible,
+            stale,
         });
         Ok(self)
+    }
+
+    /// The age an unlogged file must have for an overwrite to sweep it.
+    #[cfg(test)]
+    pub(crate) fn with_grace(mut self, grace: chrono::Duration) -> Self {
+        self.grace = grace;
+        self
     }
 
     fn commit_log<'a>(&self, io: &'a IoContext) -> CommitLog<'a> {
@@ -405,8 +448,10 @@ impl DirectoryWrite {
         // The (lazy) delete futures are built first: a stream mapping
         // through a borrowing closure makes this future unprovably `Send`
         // for callers that spawn it.
+        let swept: &[Path] = self.log.as_ref().map_or(&[], |l| l.stale.as_slice());
         let deletes: Vec<_> = replaced
             .iter()
+            .chain(swept)
             .filter(|p| !new.contains(p))
             .map(|p| io.delete(&self.store, p))
             .collect();
