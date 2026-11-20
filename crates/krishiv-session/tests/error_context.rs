@@ -423,4 +423,29 @@ mod derived_from_sql {
         );
         assert!(!e.query_contexts().is_empty());
     }
+
+    #[test]
+    fn counting_a_derived_frame_carries_no_sql_fragment() {
+        let s = Session::new().unwrap();
+        let e = block_on(source(&s).filter_expr("nope > 1").unwrap().count()).expect_err("nope");
+        assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
+        let e =
+            block_on(source(&s).select_expr(["a", "nope + 1"]).unwrap().count()).expect_err("nope");
+        assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
+        let e = block_on(source(&s).filter(col("nope").gt(lit(1))).count()).expect_err("nope");
+        assert!(
+            e.query_contexts().iter().all(|c| c.fragment.is_empty()),
+            "{:?}",
+            e.query_contexts()
+        );
+    }
+
+    #[test]
+    fn counting_a_derived_frame_after_collecting_it_carries_no_sql_fragment() {
+        let s = Session::new().unwrap();
+        let df = source(&s).filter_expr("nope > 1").unwrap();
+        block_on(df.collect()).expect_err("nope");
+        let e = block_on(df.count()).expect_err("nope");
+        assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
+    }
 }
