@@ -21,6 +21,13 @@ error reported can differ in class as well as in the blamed expression (for
 example `DIVIDE_BY_ZERO` against `ARITHMETIC_OVERFLOW`); a query that raises
 in one engine still raises in the other.
 
+## Spark 3.5 error-message parameters follow 4.x
+
+The parameters inside an error message follow Spark 4.x, also for a Spark
+3.5 client. For example, `SCHEMA_NOT_FOUND` names the schema with its catalog
+(`` `spark_catalog`.`dummy` ``) where Spark 3.5 names it without
+(`` `dummy` ``).
+
 ## Result cache, reproducible results (Krishiv extensions, off by default)
 
 `krishiv.resultCache.enabled` and `krishiv.deterministicOrder` add behaviour Spark does not have; with
