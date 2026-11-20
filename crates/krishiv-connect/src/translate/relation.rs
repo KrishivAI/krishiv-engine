@@ -137,6 +137,7 @@ impl Translator<'_> {
                 self.stat_pair("StatCorr", c.input.as_deref(), &c.col1, &c.col2, "corr")?
             }
             RelType::FillNa(n) => self.na_fill(n)?,
+            RelType::Replace(n) => self.na_replace(n)?,
             RelType::DropNa(n) => {
                 let min = n.min_non_nulls.map(|m| u32::try_from(m).unwrap_or(0));
                 PlanNode::ColumnNames {
@@ -292,6 +293,28 @@ impl Translator<'_> {
             op: ColumnNamesOp::FillNa {
                 cols: n.cols.clone(),
                 values,
+            },
+        })
+    }
+
+    /// `NAReplace`: Spark's `transformReplace`; an empty replacement list leaves the input as it is.
+    /// The columns each pair reaches are decided by the analyzer, which knows their types.
+    fn na_replace(&mut self, n: &pb::NaReplace) -> Result<PlanNode> {
+        let mut pairs = Vec::with_capacity(n.replacements.len() * 2);
+        for r in &n.replacements {
+            let (Some(old), Some(new)) = (&r.old_value, &r.new_value) else {
+                return Err(assertion(
+                    "NAReplace.Replacement needs old_value and new_value",
+                ));
+            };
+            pairs.push(self.literal_expression(old)?);
+            pairs.push(self.literal_expression(new)?);
+        }
+        Ok(PlanNode::ColumnNames {
+            input: self.input("NaReplace", n.input.as_deref())?,
+            op: ColumnNamesOp::Replace {
+                cols: n.cols.clone(),
+                pairs,
             },
         })
     }

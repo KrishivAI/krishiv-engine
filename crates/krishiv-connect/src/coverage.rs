@@ -145,7 +145,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     Zip => ("zip", 48, Missing, "", "new Zip (columns of two inputs side by side, by row position)", "P3-T012", 3),
     FillNa => ("fill_na", 90, Done, "", "ColumnNames(FillNa): the analyzer projects coalesce / nanvl of the cast value in the columns the value's type reaches; NA_FILL_VALUES_EMPTY, NA_FILL_VALUES_LENGTH_MISMATCH", "P3-T012", 5),
     DropNa => ("drop_na", 91, Done, "", "ColumnNames(DropNa): the analyzer filters on the count of values that are neither NULL nor NaN (min_non_nulls, else every column of the subset)", "P3-T012", 5),
-    Replace => ("replace", 92, Missing, "", "lowering: Project of CASE per column", "P3-T012", 5),
+    Replace => ("replace", 92, Done, "", "ColumnNames(Replace): the analyzer projects CASE WHEN col = old THEN new per column the first old value's kind reaches (a Spark 4.0 run); a NULL or mixed-type old value is refused", "P3-T012", 5),
     Summary => ("summary", 100, Missing, "", "lowering as Spark's StatFunctions.summary: Aggregate then a stack to rows", "P3-T012", 5),
     Crosstab => ("crosstab", 101, Missing, "", "lowering: Aggregate count + Pivot", "P3-T012", 5),
     Describe => ("describe", 102, Missing, "", "as summary with the fixed statistic list", "P3-T012", 5),

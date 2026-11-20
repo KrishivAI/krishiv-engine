@@ -282,3 +282,71 @@ fn fill_na_of_an_untyped_value_is_unsupported() {
     };
     assert!(e.to_string().contains("UNSUPPORTED"), "{e}");
 }
+
+fn replace(cols: &[&str], pairs: Vec<Arc<Expr>>) -> ColumnNamesOp {
+    ColumnNamesOp::Replace {
+        cols: strings(cols),
+        pairs,
+    }
+}
+
+#[test]
+fn replace_keeps_names_and_types_and_reaches_by_type() {
+    use crate::Literal;
+    let num = vec![literal(Literal::Long(1)), literal(Literal::Long(10))];
+    let plan = run(false, replace(&[], num.clone())).expect("a numeric replace");
+    let types: Vec<_> = plan.output.iter().map(|c| c.data_type.clone()).collect();
+    assert_eq!(
+        types,
+        vec![DataType::String, DataType::Integer, DataType::Integer]
+    );
+    assert!(
+        format!("{plan:?}").contains("CaseWhen")
+            || format!("{plan:?}").to_lowercase().contains("when")
+    );
+    // A string key reaches only `course`; a boolean key reaches none, so the plan is unchanged.
+    let text = run(
+        false,
+        replace(
+            &[],
+            vec![
+                literal(Literal::String("a".into())),
+                literal(Literal::String("z".into())),
+            ],
+        ),
+    )
+    .expect("a string replace");
+    assert_ne!(format!("{plan:?}"), format!("{text:?}"));
+    let none = run(
+        false,
+        replace(
+            &[],
+            vec![
+                literal(Literal::Boolean(true)),
+                literal(Literal::Boolean(false)),
+            ],
+        ),
+    )
+    .expect("no target");
+    assert!(
+        !format!("{none:?}").to_lowercase().contains("when"),
+        "{none:?}"
+    );
+    // A named column, case-insensitively; a missing name is an error.
+    run(false, replace(&["YEAR"], num.clone())).expect("named");
+    assert!(run(false, replace(&["nope"], num)).is_err());
+}
+
+#[test]
+fn replace_refuses_a_null_or_mixed_type_old_value() {
+    use crate::Literal;
+    let null_key = vec![literal(Literal::Null(None)), literal(Literal::Long(1))];
+    assert!(run(false, replace(&[], null_key)).is_err());
+    let mixed = vec![
+        literal(Literal::Long(1)),
+        literal(Literal::Long(2)),
+        literal(Literal::String("a".into())),
+        literal(Literal::String("b".into())),
+    ];
+    assert!(run(false, replace(&[], mixed)).is_err());
+}

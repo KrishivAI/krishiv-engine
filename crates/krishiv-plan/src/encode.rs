@@ -996,6 +996,11 @@ impl<'k, 'a> Encoder<'k, 'a> {
                         None => self.u8(0),
                     }
                 }
+                crate::ColumnNamesOp::Replace { cols, pairs } => {
+                    self.u8(5);
+                    self.strs(cols);
+                    self.exprs(pairs);
+                }
                 crate::ColumnNamesOp::FillNa { cols, values } => {
                     self.u8(4);
                     self.strs(cols);

@@ -729,6 +729,7 @@ impl Resolver<'_> {
                 min_non_nulls,
             } => self.drop_na(p, c, subset, *min_non_nulls, env),
             ColumnNamesOp::FillNa { cols, values } => self.fill_na(p, c, cols, values, env),
+            ColumnNamesOp::Replace { cols, pairs } => self.replace_na(p, c, cols, pairs, env),
         }
     }
 }

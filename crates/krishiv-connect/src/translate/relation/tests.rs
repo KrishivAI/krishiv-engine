@@ -1346,6 +1346,28 @@ fn repartition_and_coalesce_plan_as_their_hints() {
 }
 
 #[test]
+fn na_replace_flattens_the_pairs_for_the_analyzer() {
+    let long = |v: i64| pb::expression::Literal {
+        literal_type: Some(pb::expression::literal::LiteralType::Long(v)),
+        data_type: None,
+    };
+    let rel = relation(RelType::Replace(Box::new(pb::NaReplace {
+        input: input(),
+        cols: vec!["a".into()],
+        replacements: vec![pb::na_replace::Replacement {
+            old_value: Some(long(1)),
+            new_value: Some(long(10)),
+        }],
+    })));
+    let PlanNode::ColumnNames { op, .. } = node(&rel) else {
+        panic!("not a ColumnNames node")
+    };
+    assert!(
+        matches!(op, ColumnNamesOp::Replace { cols, pairs } if cols == ["a"] && pairs.len() == 2)
+    );
+}
+
+#[test]
 fn na_fill_and_na_drop_translate_and_check_their_values() {
     let long = |v: i64| pb::expression::Literal {
         literal_type: Some(pb::expression::literal::LiteralType::Long(v)),

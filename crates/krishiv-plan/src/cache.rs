@@ -933,6 +933,14 @@ impl Encoder {
                         }
                         self.num(min_non_nulls.map_or(0, |n| u64::from(n) + 1));
                     }
+                    crate::ColumnNamesOp::Replace { cols, pairs } => {
+                        self.num(5);
+                        self.num(cols.len() as u64);
+                        for n in cols {
+                            self.text(n);
+                        }
+                        self.exprs(pairs, bias);
+                    }
                     crate::ColumnNamesOp::FillNa { cols, values } => {
                         self.num(4);
                         self.num(cols.len() as u64);

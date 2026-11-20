@@ -204,6 +204,97 @@ impl Resolver<'_> {
     }
 }
 
+impl Resolver<'_> {
+    /// `na.replace`: a projection of `CASE WHEN col = old THEN new ... ELSE col END` per reached
+    /// column, the literals cast to the column's type (Spark's `DataFrameNaFunctions.replaceCol`;
+    /// a NaN old value matches NaN because SQL equality does). A NULL old value is refused, as
+    /// Spark's `convertToDouble` does.
+    pub(in crate::analyzer) fn replace_na(
+        &mut self,
+        p: &LogicalPlan,
+        c: Rel,
+        cols: &[String],
+        pairs: &[Arc<Expr>],
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let cs = self.ctx.conf.case_sensitive;
+        let mut literals = Vec::with_capacity(pairs.len());
+        for v in pairs {
+            match &v.node {
+                ExprNode::Literal(l) => {
+                    literals.push((Fills::of(l), Arc::clone(v), matches!(l, Literal::Null(_))));
+                }
+                _ => return Err(unsupported_replace(p.origin)),
+            }
+        }
+        let Some((kind, _, _)) = literals.first() else {
+            return Ok(c);
+        };
+        let Some(kind) = *kind else {
+            return Err(unsupported_replace(p.origin));
+        };
+        for (i, (k, _, null)) in literals.iter().enumerate() {
+            if i % 2 == 0 && (*null || *k != Some(kind)) {
+                return Err(unsupported_replace(p.origin));
+            }
+        }
+        for name in cols {
+            if self
+                .find(&c.out, std::slice::from_ref(name), p.origin, false)?
+                .is_none()
+            {
+                return Err(crate::analyzer::exprs::unresolved(
+                    std::slice::from_ref(name),
+                    &c.out,
+                    p.origin,
+                ));
+            }
+        }
+        let mut changed = false;
+        let mut exprs = Vec::with_capacity(c.out.len());
+        for a in c.out.iter() {
+            let pass = self.pass_expr(&a.col);
+            let named = cols.is_empty()
+                || cols
+                    .iter()
+                    .any(|n| crate::analyzer::bind::same(&a.col.name, n, cs));
+            if !named || !kind.reaches(&a.col.data_type) {
+                exprs.push(pass);
+                continue;
+            }
+            changed = true;
+            let ty = a.col.data_type.clone();
+            let mut args = Vec::with_capacity(pairs.len() + 1);
+            for pair in literals.chunks(2) {
+                let [(_, old, _), (_, new, _)] = pair else {
+                    return Err(unsupported_replace(p.origin));
+                };
+                let old = Arc::new(Expr::clone(old).cast(ty.clone()));
+                args.push(call(Builtin::Eq.name(), vec![Arc::clone(&pass), old]));
+                args.push(Arc::new(Expr::clone(new).cast(ty.clone())));
+            }
+            args.push(Arc::clone(&pass));
+            exprs.push(Arc::new(Expr::new(ExprNode::Alias {
+                expr: call(Builtin::When.name(), args),
+                name: a.col.name.clone(),
+            })));
+        }
+        if !changed {
+            return Ok(c);
+        }
+        self.project_items(p, &c, &exprs, env)
+    }
+}
+
+fn unsupported_replace(origin: Origin) -> AnalysisError {
+    AnalysisError::new(
+        krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "na.replace with a NULL or mixed-type old value, or a value that is not a number, a string or a boolean".to_owned(),
+        },
+        origin,
+    )
+}
+
 fn unsupported_fill(origin: Origin) -> AnalysisError {
     AnalysisError::new(
         krishiv_common::error::KrishivUnsupportedFeature {

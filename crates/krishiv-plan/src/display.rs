@@ -431,6 +431,13 @@ impl Display for NodeLine<'_> {
                     }
                     Ok(())
                 }
+                crate::ColumnNamesOp::Replace { cols, pairs } => {
+                    write!(f, "Replace ({})", List(pairs))?;
+                    if !cols.is_empty() {
+                        write!(f, " {}", Names(cols))?;
+                    }
+                    Ok(())
+                }
                 crate::ColumnNamesOp::FillNa { cols, values } => {
                     write!(f, "FillNa ({})", List(values))?;
                     if !cols.is_empty() {

@@ -155,6 +155,16 @@ pub enum ColumnNamesOp {
         /// Literal expressions.
         values: Vec<Arc<Expr>>,
     },
+    /// `na.replace`: in the named `cols` (every column when empty) whose type the first old value's
+    /// kind reaches (a number: the numeric columns; a string; a boolean), each old value becomes its
+    /// new value, cast to the column's type; other values stay (Spark's
+    /// `DataFrameNaFunctions.replace`). `pairs` is `[old0, new0, old1, new1, ...]`, literals.
+    Replace {
+        /// The named columns.
+        cols: Vec<String>,
+        /// Alternating old and new literal values.
+        pairs: Vec<Arc<Expr>>,
+    },
 }
 
 /// The relation node kinds.
