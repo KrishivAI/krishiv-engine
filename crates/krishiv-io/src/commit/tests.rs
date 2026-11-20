@@ -831,6 +831,8 @@ fn listings_and_deletes_are_retried() {
         .block_on(env.io.delete(&env.store, &Path::from("t/_SUCCESS")))
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::TaskWriteFailed);
+    // The reason is the cause, not lost (PY-075).
+    assert!(e.cause().is_some_and(|c| !c.to_string().is_empty()));
     fault.fail_next_deletes(0);
     // The failed delete left the object in place.
     assert!(env.names("t").contains(&"t/_SUCCESS".to_owned()));
