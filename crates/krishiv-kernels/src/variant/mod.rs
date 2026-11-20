@@ -35,7 +35,9 @@ use crate::cast::datetime::{format_date, format_timestamp, utc_to_local};
 
 pub use build::cast_to_variant;
 pub use cast::{cast_from_variant, cast_values};
-pub use edit::{Edit, EditFailure, Edited, apply, edit_path, invalid_path, strip_nulls};
+pub use edit::{
+    Edit, EditFailure, Edited, apply, edit_path, invalid_path, named_in, size_limit_in, strip_nulls,
+};
 pub use schema::Schema;
 
 fn internal(message: &str) -> KrishivError {
