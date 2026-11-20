@@ -326,6 +326,33 @@ impl GrantsPolicy {
         Some(self.grants.store.snapshot().0.lists(principal, &key, cs))
     }
 
+    /// Whether a listing shows the namespace `securable` to `principal` because of something under
+    /// it (`model::GrantState::holds_under`): admin always; `None` for a securable the `system`
+    /// policy decides. Answered from the grant state alone, with no catalog call.
+    pub(crate) fn listable_under(
+        &self,
+        principal: &Principal,
+        securable: &Securable,
+    ) -> Option<bool> {
+        if Self::decided_by(securable) == DecidedBy::Roles {
+            return None;
+        }
+        if self.admin && principal.definer_for.is_none() {
+            return Some(true);
+        }
+        let Some(key) = ObjectKey::of(securable).and_then(physical_key) else {
+            return Some(false);
+        };
+        let cs = self.exact_for(&key);
+        Some(
+            self.grants
+                .store
+                .snapshot()
+                .0
+                .holds_under(principal, &key, cs),
+        )
+    }
+
     /// The owner (creator) recorded for `securable` itself, not a parent's (review r7 M9: the owner
     /// of a stored function whose body a definer view's text calls is asked about the body's reads).
     pub(crate) fn owner_of(&self, securable: &Securable) -> Option<String> {
