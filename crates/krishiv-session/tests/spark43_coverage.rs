@@ -53,12 +53,6 @@ const PENDING: &[(&str, &str)] = &[
         "fix_insert_struct_by_position_legacy",
         "setup: INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
     ),
-    ("syn_comment_on_column", "PARSE_SYNTAX_ERROR"),
-    (
-        "syn_comment_on_column_describe",
-        "setup: PARSE_SYNTAX_ERROR",
-    ),
-    ("syn_comment_on_column_missing", "PARSE_SYNTAX_ERROR"),
     ("syn_show_tables_as_json", "PARSE_SYNTAX_ERROR"),
     ("syn_show_table_extended_as_json", "PARSE_SYNTAX_ERROR"),
     ("syn_show_partitions_as_json", "PARSE_SYNTAX_ERROR"),

@@ -199,6 +199,34 @@ impl<'s> Parser<'s> {
                     span,
                 }));
             }
+            if p.eat_kw("COLUMN") {
+                // `COMMENT ON COLUMN t.c IS '..'` (Spark 4.3) is `ALTER TABLE t ALTER COLUMN c COMMENT '..'`:
+                // the last part is the column, the rest the table.
+                let mut full = p.table_name()?;
+                let Some(column) = full.parts.pop().filter(|_| !full.parts.is_empty()) else {
+                    return p.fail();
+                };
+                if let Some(first) = full.parts.first() {
+                    full.span = Span::new(
+                        first.span.start,
+                        full.parts.last().map_or(first.span.end, |l| l.span.end),
+                    );
+                }
+                p.expect_kw("IS")?;
+                // Spark stores an absent comment as the empty string.
+                let comment = p.comment_value()?.unwrap_or_default();
+                let span = p.span_from(start);
+                p.command_end()?;
+                return Ok(Statement::AlterTable(Box::new(AlterTable {
+                    table: DdlName::Parts(full),
+                    action: AlterTableAction::AlterColumn {
+                        name: crate::ast::ColumnName::Ident(column),
+                        action: AlterColumnAction::Comment(comment),
+                        span,
+                    },
+                    span,
+                })));
+            }
             p.expect_kw("TABLE")?;
             let table = p.ddl_name()?;
             p.expect_kw("IS")?;
