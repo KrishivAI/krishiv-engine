@@ -160,7 +160,9 @@ pub fn json_table_rows(
     path: &str,
     error_on_error: bool,
 ) -> Result<ArrayRef, KrishivError> {
-    let mut steps = parse_path(path).unwrap_or_default();
+    let mut steps = parse_path(path).ok_or_else(|| InternalError {
+        message: format!("JSON_TABLE row path '{path}' was not validated"),
+    })?;
     let wildcard = matches!(steps.last(), Some(Step::Wildcard));
     if wildcard {
         steps.pop();

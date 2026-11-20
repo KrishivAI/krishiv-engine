@@ -20,8 +20,9 @@
 
 use krishiv_common::error::{
     InvalidVariantPath, KrishivError, VariantDuplicateKey, VariantPathTypeMismatch,
+    VariantSizeLimit,
 };
-use krishiv_types::variant::{VariantKind, VariantRef, VariantWriter};
+use krishiv_types::variant::{VARIANT_SIZE_LIMIT, VariantKind, VariantRef, VariantWriter};
 
 use super::{PathSegment, parse_path};
 
@@ -283,6 +284,17 @@ fn created<'a>(edit: Edit<'a>) -> Option<VariantRef<'a>> {
     }
 }
 
+/// The most levels one edit creates below an existing value (the variant JSON parser's depth bound).
+const MAX_CREATED_DEPTH: usize = 1000;
+
+fn size_limit() -> KrishivError {
+    VariantSizeLimit {
+        size_limit: "128.0 MiB".to_owned(),
+        function_name: "`variant`".to_owned(),
+    }
+    .into()
+}
+
 /// Writes the value an edit creates where the path leaves the existing value: the nested objects and arrays of the
 /// remaining steps around `val`.
 fn write_new(
@@ -293,6 +305,11 @@ fn write_new(
     let Some((step, tail)) = rest.split_first() else {
         return w.append_variant(&val);
     };
+    // The nested value must fit the variant size limit (each level and each filler null costs bytes), so a path
+    // longer than the limit, or an index past it, is refused before any recursion or allocation.
+    if rest.len() > MAX_CREATED_DEPTH {
+        return Err(size_limit());
+    }
     let start = w.position();
     match step {
         PathSegment::Key(k) => {
@@ -301,6 +318,9 @@ fn write_new(
             w.finish_object(start, vec![field])
         }
         PathSegment::Index(i) => {
+            if *i >= VARIANT_SIZE_LIMIT / 5 {
+                return Err(size_limit());
+            }
             let mut offsets = Vec::with_capacity(i.saturating_add(1));
             for _ in 0..*i {
                 offsets.push(w.position().saturating_sub(start));

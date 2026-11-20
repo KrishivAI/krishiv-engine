@@ -1037,7 +1037,7 @@ fn json_table_path_ok(path: &str, row: bool) -> bool {
             let Some(after) = r[end..].strip_prefix(']') else {
                 return false;
             };
-            if end == 0 {
+            if end == 0 || r[..end].parse::<usize>().is_err() {
                 return false;
             }
             rest = after;
@@ -1050,7 +1050,7 @@ fn json_table_path_ok(path: &str, row: bool) -> bool {
 
 /// The path of a column written without one: `$.name`, quoted when the name has path punctuation.
 fn json_table_default_path(name: &str) -> String {
-    if name.contains(['.', '[', ']', '\'', '"']) {
+    if name.contains(['.', '[', ']', '*', '\'', '"']) {
         format!("$['{}']", name.replace('\'', "\\'"))
     } else {
         format!("$.{name}")
@@ -1061,10 +1061,8 @@ fn json_table_default_path(name: &str) -> String {
 /// the paths and the columns with upper-case types.
 fn json_table_text(t: &crate::ast::JsonTable) -> String {
     use crate::ast::JsonTableColumnKind as Kind;
-    let input = match &t.input.kind {
-        ExprKind::Literal(Literal::String(s)) => s.clone(),
-        _ => "...".to_owned(),
-    };
+    // The input is never copied into the message: a literal can be a whole document.
+    let input = "...".to_owned();
     let columns: Vec<String> = t
         .columns
         .iter()

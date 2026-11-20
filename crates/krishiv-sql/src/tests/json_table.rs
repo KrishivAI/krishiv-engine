@@ -12,10 +12,10 @@ fn lowered(sql: &str) -> Result<krishiv_plan::Plan, super::super::ParseError> {
 }
 
 fn parse_fails(sql: &str) {
-    assert!(
-        parse_query(sql, &ParserOptions::default()).is_err(),
-        "{sql} parsed"
-    );
+    let e = parse_query(sql, &ParserOptions::default())
+        .err()
+        .unwrap_or_else(|| panic!("{sql} parsed"));
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError, "{sql}");
 }
 
 #[test]
@@ -69,6 +69,49 @@ fn it_lowers_to_a_projection_over_a_posexplode() {
     let text = plan.root().to_string();
     assert!(text.contains("Generate"), "{text}");
     assert!(text.contains("__json_table_rows"), "{text}");
+    // One output column per COLUMNS entry, in order: the ordinality (posexplode's position + 1) and the cast value.
+    assert!(text.contains("rn"), "{text}");
+    assert!(text.to_lowercase().contains("cast"), "{text}");
+}
+
+#[test]
+fn a_row_path_index_the_kernel_cannot_hold_is_refused_when_lowered() {
+    let e = lowered("SELECT * FROM json_table('[1,2]', '$[18446744073709551616]' COLUMNS (a INT))")
+        .unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::DatatypeMismatchInvalidJsonTablePath
+    );
+}
+
+#[test]
+fn the_error_does_not_repeat_the_input_document() {
+    let e =
+        lowered("SELECT * FROM json_table('{\"secret\": 1}', '$.*' COLUMNS (a INT))").unwrap_err();
+    assert!(!e.error.to_string().contains("secret"), "{}", e.error);
+}
+
+#[test]
+fn a_column_named_star_gets_a_quoted_default_path() {
+    lowered("SELECT * FROM json_table('{}', '$' COLUMNS (`*` INT))").unwrap();
+}
+
+#[test]
+fn a_column_type_is_validated() {
+    assert!(
+        parse_query(
+            "SELECT * FROM json_table('{}', '$' COLUMNS (a DECIMAL(99,1) PATH '$.a'))",
+            &ParserOptions::default()
+        )
+        .is_err()
+    );
+    assert!(
+        parse_query(
+            "SELECT * FROM json_table('{}', '$' COLUMNS (a DECIMAL(99,1) EXISTS PATH '$.a'))",
+            &ParserOptions::default()
+        )
+        .is_err()
+    );
 }
 
 #[test]
