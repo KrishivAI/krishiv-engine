@@ -1713,6 +1713,16 @@ fn quote(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }
 
+/// A SQL path as Spark quotes it in `searchPath`: `[`a`.`b`, `c`]`.
+pub(crate) fn render_search_path(path: &[Vec<String>]) -> String {
+    let entries: Vec<String> = path.iter().map(|e| quote_parts(e)).collect();
+    format!("[{}]", entries.join(", "))
+}
+
+fn quote_parts(parts: &[String]) -> String {
+    parts.iter().map(|p| quote(p)).collect::<Vec<_>>().join(".")
+}
+
 /// Spark's search path, as analysis reports it for a missing table.
 ///
 /// The last entry is the current namespace, as `USE` left it.
