@@ -299,7 +299,18 @@ fn create_table(
             DataType::Struct(s) => Ok(s
                 .fields()
                 .iter()
-                .map(|f| format!("`{}` {}", f.name().replace('`', "``"), f.data_type().sql()))
+                .map(|f| {
+                    let mut column =
+                        format!("`{}` {}", f.name().replace('`', "``"), f.data_type().sql());
+                    // A field's comment is the column's `COMMENT` (`listColumns` shows it).
+                    if let Some(comment) = f.metadata().comment() {
+                        column.push_str(&format!(
+                            " COMMENT '{}'",
+                            comment.replace('\\', "\\\\").replace('\'', "\\'")
+                        ));
+                    }
+                    column
+                })
                 .collect::<Vec<_>>()
                 .join(", ")),
             _ => Err(assertion("the schema of a table must be a struct")),

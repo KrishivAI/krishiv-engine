@@ -203,11 +203,11 @@ async fn rows(session: &Session, call: CatalogCall) -> Result<RecordBatch, Krish
             tables(&c.list_tables(db.as_deref(), pattern.as_deref()).await?)
         }
         CatalogCall::ListFunctions(db, pattern) => {
-            if let Some(db) = &db {
-                // Spark's `listFunctions(db)` requires the database to exist.
-                c.get_database(db).await?;
-            }
-            functions(&c.list_functions(pattern.as_deref()).await?)
+            // Spark's `listFunctions(db)` requires the database to exist.
+            functions(
+                &c.list_functions_in(db.as_deref(), pattern.as_deref())
+                    .await?,
+            )
         }
         CatalogCall::ListColumns { db, table } => {
             columns(&c.list_columns(&named(db.as_deref(), &table)).await?)
@@ -250,7 +250,7 @@ async fn rows(session: &Session, call: CatalogCall) -> Result<RecordBatch, Krish
             nothing()
         }
         CatalogCall::DropTempView(view) => one_bool(c.drop_temp_view(&view)),
-        CatalogCall::DropGlobalTempView(view) => one_bool(c.drop_global_temp_view(&view)),
+        CatalogCall::DropGlobalTempView(view) => one_bool(c.drop_global_temp_view(&view).await?),
         CatalogCall::RecoverPartitions(table) => {
             c.recover_partitions(&table).await?;
             nothing()
@@ -260,6 +260,8 @@ async fn rows(session: &Session, call: CatalogCall) -> Result<RecordBatch, Krish
             enforce(&Check::SideEffect, session).await?;
             match level {
                 Some(level) => {
+                    // A missing or forbidden table fails this request, as `CACHE TABLE` does.
+                    c.check_cache_target(&table).await?;
                     // The frame holds the cache entry; the level is the client's.
                     let _held = session.table(&table).persist(storage_level_of(&level));
                 }

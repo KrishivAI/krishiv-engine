@@ -371,6 +371,27 @@ fn create_table_turns_the_path_into_the_last_option_and_the_struct_into_ddl() {
 }
 
 #[test]
+fn a_field_comment_becomes_the_columns_comment_clause() {
+    let mut schema = struct_of(&["a", "b"]);
+    let Some(Kind::Struct(st)) = &mut schema.kind else {
+        panic!("struct");
+    };
+    st.fields[0].metadata = Some(r#"{"comment":"it's a \\ test"}"#.to_owned());
+    let CatalogCall::CreateTable(t) = catalog_call(&msg(CatType::CreateTable(pb::CreateTable {
+        table_name: s("t"),
+        schema: Some(schema),
+        ..pb::CreateTable::default()
+    })))
+    .expect("reads") else {
+        panic!("create table");
+    };
+    assert_eq!(
+        t.schema.as_deref(),
+        Some(r"`a` INT COMMENT 'it\'s a \\ test', `b` INT")
+    );
+}
+
+#[test]
 fn create_table_without_description_or_schema_reads_as_spark_does() {
     let CatalogCall::CreateTable(t) = catalog_call(&msg(CatType::CreateTable(pb::CreateTable {
         table_name: s("t"),
