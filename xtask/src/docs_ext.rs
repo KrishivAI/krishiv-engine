@@ -6,6 +6,7 @@
 //! Rust: rustdoc JSON (nightly rustdoc) converted to Markdown by `rustdoc-md` (a tool installed with
 //! `cargo install rustdoc-md --version 0.2.0 --locked`, not a workspace dependency; ADR 0028).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -51,7 +52,71 @@ fn markdown_of(json: &Path, out: &Path) -> Result<String, String> {
         return Err(format!("rustdoc-md failed on {}: {status}", json.display()));
     }
     let text = std::fs::read_to_string(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    Ok(tidy(&text))
+    let json_text =
+        std::fs::read_to_string(json).map_err(|e| format!("{}: {e}", json.display()))?;
+    let paragraphs = first_paragraphs(&json_text)?;
+    Ok(tidy(&expand_first_lines(&text, &paragraphs)))
+}
+
+/// The doc comments of the rustdoc JSON whose first paragraph spans several lines, keyed by their
+/// first line, with the whole paragraph as the value. `None` marks a first line that two items
+/// share with different paragraphs (it cannot be told which item a Markdown line belongs to).
+/// `rustdoc-md` 0.2.0 prints only `docs.lines().next()` for a method, which cuts a sentence in
+/// the middle.
+fn first_paragraphs(json_text: &str) -> Result<HashMap<String, Option<String>>, String> {
+    let doc: serde_json::Value =
+        serde_json::from_str(json_text).map_err(|e| format!("rustdoc JSON: {e}"))?;
+    let mut map: HashMap<String, Option<String>> = HashMap::new();
+    let Some(index) = doc.get("index").and_then(serde_json::Value::as_object) else {
+        return Ok(map);
+    };
+    for item in index.values() {
+        let Some(docs) = item.get("docs").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(first) = docs.lines().next() else {
+            continue;
+        };
+        let paragraph = docs
+            .lines()
+            .take_while(|l| !l.trim().is_empty() && !l.trim_start().starts_with("```"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        match map.get_mut(first) {
+            Some(known) if known.as_deref() != Some(paragraph.as_str()) => *known = None,
+            Some(_) => {}
+            None => {
+                map.insert(first.to_string(), Some(paragraph));
+            }
+        }
+    }
+    // A one-line paragraph has nothing to expand; it was recorded only so that a longer paragraph
+    // with the same first line is seen as ambiguous.
+    map.retain(|_, paragraph| paragraph.as_deref().is_none_or(|p| p.contains('\n')));
+    Ok(map)
+}
+
+/// Replaces a method's one-line description (the indented line after its closing code fence) by
+/// the whole first paragraph of its doc comment.
+fn expand_first_lines(md: &str, paragraphs: &HashMap<String, Option<String>>) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut after_fence = false;
+    for line in md.lines() {
+        let full = after_fence
+            .then(|| line.strip_prefix("  "))
+            .flatten()
+            .and_then(|first| paragraphs.get(first))
+            .and_then(Option::as_deref);
+        if let Some(paragraph) = full {
+            out.extend(paragraph.lines().map(|l| format!("  {l}")));
+        } else {
+            out.push(line.to_string());
+        }
+        after_fence = line == "  ```";
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    text
 }
 
 /// Rewrites a rustdoc intra-doc link whose target is an item path (`[`name`](ScalarUdf::name)`) to
@@ -98,9 +163,104 @@ fn tidy(text: &str) -> String {
             }
             continue;
         }
-        out.push(drop_item_links(l));
+        out.push(fix_signature(&drop_item_links(l)));
     }
-    format!("{}\n", out.join("\n").trim())
+    format!("{}\n", unhide_examples(&out).join("\n").trim())
+}
+
+/// Makes each Rust example valid for a reader who copies it: rustdoc hides lines that start with
+/// `# ` (setup lines and a closing `Ok::<(), E>(())`), but the Markdown shows them literally. The
+/// marker is removed, and an example that ends in `Ok::<_, E>(())` is wrapped in a function
+/// returning that `Result`, so its `?` operators compile.
+fn unhide_examples(lines: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        out.push(lines[i].clone());
+        if !lines[i].starts_with("```") {
+            i += 1;
+            continue;
+        }
+        // Every fence opens a block that the next bare fence closes; only Rust ones are rewritten.
+        let rust = lines[i] == "```rust" || lines[i] == "```";
+        let start = i + 1;
+        let end = lines[start..]
+            .iter()
+            .position(|l| l.starts_with("```"))
+            .map_or(lines.len(), |n| start + n);
+        let body: Vec<&str> = lines[start..end]
+            .iter()
+            .map(|l| {
+                if l == "#" {
+                    ""
+                } else {
+                    l.strip_prefix("# ").unwrap_or(l)
+                }
+            })
+            .collect();
+        if !rust {
+            out.extend(lines[start..end].iter().cloned());
+            if end < lines.len() {
+                out.push(lines[end].clone());
+            }
+            i = end + 1;
+            continue;
+        }
+        let hidden = lines[start..end]
+            .iter()
+            .any(|l| l == "#" || l.starts_with("# "));
+        let ok_err = body.last().and_then(|l| {
+            l.strip_prefix("Ok::<(), ")
+                .and_then(|r| r.strip_suffix(">(())"))
+        });
+        match (hidden, ok_err) {
+            (true, Some(err)) => {
+                out.push(format!("fn example() -> Result<(), {err}> {{"));
+                for l in &body[..body.len() - 1] {
+                    out.push(if l.is_empty() {
+                        String::new()
+                    } else {
+                        format!("    {l}")
+                    });
+                }
+                out.push("    Ok(())".to_owned());
+                out.push("}".to_owned());
+            }
+            _ => out.extend(body.iter().map(|l| (*l).to_owned())),
+        }
+        // The closing fence ends the block; the next line is prose again.
+        if end < lines.len() {
+            out.push(lines[end].clone());
+        }
+        i = end + 1;
+    }
+    out
+}
+
+/// Repairs what the converter renders in signatures: a lifetime comes out doubled (`''a`, one
+/// apostrophe is the valid form), and a function's argument-position `impl Trait` appears as a
+/// synthetic generic parameter (`</* synthetic */ impl IntoIterator<..>: IntoIterator<..>>`), which is
+/// not valid Rust in the signature. The synthetic parameter is removed; the `impl` argument stays.
+fn fix_signature(line: &str) -> String {
+    let line = line.replace("''", "'");
+    let marker = "/* synthetic */ impl ";
+    let Some(at) = line.find(marker) else {
+        return line;
+    };
+    // The synthetic parameter ends at the `>` that closes the parameter list, so the argument list
+    // is the first `>(` after the marker (a `(` alone also occurs inside it, in a tuple type).
+    let Some(paren) = line[at..].find(">(").map(|i| at + i + 1) else {
+        return line;
+    };
+    if line[..at].ends_with(", ") {
+        // `<S: Into, /* synthetic */ ...>(`: the list's own `>` closes the parameters that remain.
+        format!("{}>{}", &line[..at - 2], &line[paren..])
+    } else if line[..at].ends_with('<') {
+        // `lambda</* synthetic */ ...>(` has no other parameter: drop the whole list.
+        format!("{}{}", &line[..at - 1], &line[paren..])
+    } else {
+        line
+    }
 }
 
 /// The `description:` front matter of a generated page: one double-quoted line, then a blank line.
@@ -220,6 +380,60 @@ mod tests {
     }
 
     #[test]
+    fn fix_signature_drops_synthetic_generics_and_doubled_lifetimes() {
+        assert_eq!(
+            fix_signature(
+                "pub fn coalesce</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }"
+            ),
+            "pub fn coalesce(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }"
+        );
+        assert_eq!(
+            fix_signature("pub struct Credentials<''a> {"),
+            "pub struct Credentials<'a> {"
+        );
+        assert_eq!(
+            fix_signature(
+                "pub fn lambda<S: Into, /* synthetic */ impl IntoIterator<Item = S>: IntoIterator<Item = S>>(params: impl IntoIterator<Item = S>, body: crate::Column) -> crate::Column { /* ... */ }"
+            ),
+            "pub fn lambda<S: Into>(params: impl IntoIterator<Item = S>, body: crate::Column) -> crate::Column { /* ... */ }"
+        );
+        assert_eq!(
+            fix_signature("pub fn plain<T>(x: T)"),
+            "pub fn plain<T>(x: T)"
+        );
+        // A tuple type inside the synthetic parameter does not end the parameter list early.
+        assert_eq!(
+            fix_signature(
+                "pub fn parse<'a, /* synthetic */ impl IntoIterator<Item = (&'a str, &'a str)>: IntoIterator<Item = (&'a str, &'a str)>>(s: impl IntoIterator<Item = (&'a str, &'a str)>) -> u8"
+            ),
+            "pub fn parse<'a>(s: impl IntoIterator<Item = (&'a str, &'a str)>) -> u8"
+        );
+        // A marker with no argument list after it, or with an unexpected prefix, is left as it is.
+        assert_eq!(
+            fix_signature("pub trait T</* synthetic */ impl Foo"),
+            "pub trait T</* synthetic */ impl Foo"
+        );
+        assert_eq!(
+            fix_signature("fn f where /* synthetic */ impl Foo()"),
+            "fn f where /* synthetic */ impl Foo()"
+        );
+    }
+
+    #[test]
+    fn a_method_description_is_expanded_to_its_first_paragraph() {
+        let json = r#"{"index":{"1":{"docs":"Swaps the tree for the one `json`\ndescribes (other keys).\n\n# Errors\n\nNone."},
+            "2":{"docs":"One line only."},"3":{"docs":"Same start\nfirst."},"4":{"docs":"Same start\nsecond."},
+            "5":{"docs":"Same line"},"6":{"docs":"Same line\nlonger."},
+            "7":{"docs":"Fenced first\n```\ncode\n```"}}}"#;
+        let map = first_paragraphs(json).unwrap();
+        let md = "- ```rust\n  pub fn a() {}\n  ```\n  Swaps the tree for the one `json`\n\n- ```rust\n  pub fn b() {}\n  ```\n  Same start\n\n  Swaps the tree for the one `json`\n\n- ```rust\n  pub fn c() {}\n  ```\n  Same line\n\n- ```rust\n  pub fn d() {}\n  ```\n  Fenced first\n";
+        assert_eq!(
+            expand_first_lines(md, &map),
+            "- ```rust\n  pub fn a() {}\n  ```\n  Swaps the tree for the one `json`\n  describes (other keys).\n\n- ```rust\n  pub fn b() {}\n  ```\n  Same start\n\n  Swaps the tree for the one `json`\n\n- ```rust\n  pub fn c() {}\n  ```\n  Same line\n\n- ```rust\n  pub fn d() {}\n  ```\n  Fenced first\n"
+        );
+    }
+
+    #[test]
     fn tidy_drops_the_banner_and_the_blank_lines_after_it() {
         let t = tidy("# Crate Documentation\n\n**Format Version:** 57\n\n# Module `x`\n\nBody\n");
         assert_eq!(t, "# Module `x`\n\nBody\n");
@@ -270,5 +484,72 @@ mod tests {
             .err()
             .unwrap_or_default();
         assert!(err.contains("stale"), "{err}");
+    }
+
+    #[test]
+    fn unhide_examples_wraps_a_result_example_and_unhides_setup() {
+        let lines: Vec<String> = [
+            "```rust",
+            "# use a::B;",
+            "let x = B::new()?;",
+            "#",
+            "# Ok::<(), a::Error>(())",
+            "```",
+            "```rust",
+            "# use a::B;",
+            "B::run();",
+            "```",
+            "```rust",
+            "plain();",
+            "```",
+            "# Errors",
+            "#",
+            "Prose between blocks keeps its heading marker.",
+            "```",
+            "# hidden();",
+            "```",
+            "# Panics",
+            "```text",
+            "# not rust",
+            "```",
+            "# Examples",
+            "```",
+            "# use a::C;",
+            "```",
+        ]
+        .map(String::from)
+        .to_vec();
+        let want = [
+            "```rust",
+            "fn example() -> Result<(), a::Error> {",
+            "    use a::B;",
+            "    let x = B::new()?;",
+            "",
+            "    Ok(())",
+            "}",
+            "```",
+            "```rust",
+            "use a::B;",
+            "B::run();",
+            "```",
+            "```rust",
+            "plain();",
+            "```",
+            "# Errors",
+            "#",
+            "Prose between blocks keeps its heading marker.",
+            "```",
+            "hidden();",
+            "```",
+            "# Panics",
+            "```text",
+            "# not rust",
+            "```",
+            "# Examples",
+            "```",
+            "use a::C;",
+            "```",
+        ];
+        assert_eq!(unhide_examples(&lines), want);
     }
 }
