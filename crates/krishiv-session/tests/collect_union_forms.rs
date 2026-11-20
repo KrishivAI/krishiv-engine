@@ -92,6 +92,8 @@ fn a_user_written_second_argument_is_an_arity_error() {
     for sql in [
         "select collect_union(x, false) from values (array(1,null)),(array(2)) t(x)",
         "select collect_union(x, true) respect nulls from values (array(1)) t(x)",
+        "select builtin.collect_union(x, false) from values (array(1,null)),(array(2)) t(x)",
+        "select system.builtin.collect_union(x, true) respect nulls from values (array(1)) t(x)",
     ] {
         let e = run(&s, sql).unwrap_err();
         assert_eq!(

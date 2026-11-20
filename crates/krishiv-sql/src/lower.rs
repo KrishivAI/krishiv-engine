@@ -1446,7 +1446,13 @@ impl Lowerer {
                 // Spark registers only the one-argument `collect_union`; the
                 // null-treatment flag below is appended after this check, so
                 // a second argument is always the user's.
-                if lname == "collect_union" && qualifier.is_empty() && args.len() != 1 {
+                let builtin_q = match &qualifier[..] {
+                    [] => true,
+                    [b] => b.eq_ignore_ascii_case("builtin"),
+                    [s, b] => s.eq_ignore_ascii_case("system") && b.eq_ignore_ascii_case("builtin"),
+                    _ => false,
+                };
+                if lname == "collect_union" && builtin_q && args.len() != 1 {
                     return Err(err(
                         WrongNumArgsWithoutSuggestion {
                             function_name: format!("`{}`", name.value),
