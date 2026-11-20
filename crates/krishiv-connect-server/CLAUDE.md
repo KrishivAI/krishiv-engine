@@ -53,7 +53,8 @@ Paths are relative to this crate.
   `src/auth/layer.rs` `AuthLayer`, the tower layer in front of the router: every RPC (the unimplemented ones too)
   authenticates from its headers before the body is decoded, through the server's one `Authenticator`
   (`ServerAuth`, shared with the admin listener): the `authorization` header (two entries or a non-`Bearer` scheme
-  are malformed) and the peer address; failures `UNAUTHENTICATED` with Spark's messages, throttled or unavailable
+  are malformed; on `Surface::FlightSql` only, `Basic` is decoded by `ConnectAuth::authenticate` in `src/auth.rs`:
+  the password as the bearer, the user name bound to the principal, P3-T101 note §3.1) and the peer address; failures `UNAUTHENTICATED` with Spark's messages, throttled or unavailable
   `UNAVAILABLE`, no peer address refused, a caller with no role `PERMISSION_DENIED` (42501, audited) before any
   session; the result rides in the request extensions (`ConnectAuth::caller` fails closed without it); auth off =
   the local user. The layer takes the request's `Surface` from its path (`surface_of_path`: `/arrow.flight.protocol.FlightService/` is

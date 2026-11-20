@@ -25,7 +25,7 @@ use krishiv_connect_server::{
 };
 use krishiv_flight_sql::{FlightSqlConfig, FlightSqlServer, ServerInfo};
 use krishiv_session::Session;
-use krishiv_session::auth::{AuthConfig, Authenticator, DeniedCounts, ServerAuth};
+use krishiv_session::auth::{AuthConfig, Authenticator, DeniedCounts, Method, ServerAuth, Surface};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -383,26 +383,73 @@ async fn flight_sql_requires_auth() {
     assert_eq!(h.flight.session_count(), 0);
 }
 
-/// `Authorization: Basic` stays a malformed credential on every surface until owner item 5
-/// (§3.1): the operator's own token as the password is refused before any session work.
+/// `Authorization: Basic` on Flight SQL (§3.1, owner item 5, 2026-11-20): the token as the
+/// password and its principal's name as the user name (padded and unpadded base64 are
+/// `basic_header`'s unit tests); another principal's name with the token is `UNAUTHENTICATED`,
+/// counted under `basic`, before any session work. A Handshake with `Basic` answers the token
+/// as its bearer.
 #[tokio::test(flavor = "multi_thread")]
-async fn basic_refused_until_enabled() {
+async fn basic_binds_the_user_to_the_token() {
     let mut h = start(FlightSqlConfig::default()).await;
-    let cmd = CommandStatementQuery {
-        query: "SELECT 1".to_owned(),
-        transaction_id: None,
+    let with = |value: &str| {
+        let cmd = CommandStatementQuery {
+            query: "SELECT 1".to_owned(),
+            transaction_id: None,
+        };
+        let mut r = Request::new(FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec()));
+        r.metadata_mut()
+            .insert("authorization", value.parse().expect("header"));
+        r
     };
-    let mut r = Request::new(FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec()));
-    // base64("ops:" + OPS)
-    r.metadata_mut().insert(
+    // base64("ops:" + OPS); the scheme ignores case.
+    let ops = "Basic b3BzOmZsaWdodC1vcGVyYXRvci10b2tlbi0wMTIzNDU2Nzg5YWJjZGVm";
+    for value in [ops.to_owned(), ops.replacen("Basic", "BASIC", 1)] {
+        let value = value.as_str();
+        let info = h
+            .client
+            .get_flight_info(with(value))
+            .await
+            .expect("a Basic login");
+        assert_eq!(info.get_ref().endpoint.len(), 1);
+    }
+    // base64("other:" + OPS): the token is ops's.
+    let e = h
+        .client
+        .get_flight_info(with(
+            "Basic b3RoZXI6ZmxpZ2h0LW9wZXJhdG9yLXRva2VuLTAxMjM0NTY3ODlhYmNkZWY=",
+        ))
+        .await
+        .expect_err("another principal's name");
+    assert_eq!(e.code(), Code::Unauthenticated, "{e:?}");
+    let e = h
+        .client
+        .get_flight_info(with("Basic not-base64!"))
+        .await
+        .expect_err("malformed");
+    assert_eq!(e.code(), Code::Unauthenticated, "{e:?}");
+    let failed = h
+        .auth
+        .failure_counts()
+        .into_iter()
+        .find(|c| c.surface == Surface::FlightSql && c.method == Method::Basic)
+        .map(|c| c.count);
+    assert_eq!(failed, Some(1), "the wrong name counts under basic");
+
+    let mut request = Request::new(futures::stream::iter([HandshakeRequest::default()]));
+    request.metadata_mut().insert(
         "authorization",
         "Basic b3BzOmZsaWdodC1vcGVyYXRvci10b2tlbi0wMTIzNDU2Nzg5YWJjZGVm"
             .parse()
             .expect("header"),
     );
-    let e = h.client.get_flight_info(r).await.expect_err("basic");
-    assert_eq!(e.code(), Code::Unauthenticated, "{e:?}");
-    assert_eq!(h.flight.session_count(), 0);
+    let response = h.client.handshake(request).await.expect("handshake");
+    assert_eq!(
+        response
+            .metadata()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok()),
+        Some(format!("Bearer {OPS}").as_str())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

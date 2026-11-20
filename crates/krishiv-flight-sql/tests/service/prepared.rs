@@ -179,7 +179,7 @@ fn first_longs(batches: &[RecordBatch]) -> Vec<i64> {
 }
 
 /// A parameterized query: its `dataset_schema` is that of the `NULL`-bound analysis (a client
-/// reads an empty one as an update), each marker a nullable `Null` parameter; bound
+/// reads an empty one as an update), each marker a nullable parameter of its analyzed type; bound
 /// and fetched, rebound and fetched again, without a cookie (a session holding a prepared handle
 /// outlives a cookie-less fetch, §3.2); closed twice (the second is OK), then gone.
 #[tokio::test(flavor = "multi_thread")]
@@ -200,14 +200,16 @@ async fn prepared_query_with_parameters() {
         &DataType::Null,
         "`? AS s` is untyped"
     );
+    // `? + 1` types its marker `INT` (note §4.4, amended 2026-11-20); `? AS s` is untyped,
+    // advertised as a string.
     let params = schema_of(&created.parameter_schema).expect("parameter schema");
-    assert_eq!(params.fields().len(), 2);
-    assert!(
-        params
-            .fields()
-            .iter()
-            .all(|f| f.is_nullable() && f.data_type() == &DataType::Null)
-    );
+    let types: Vec<_> = params
+        .fields()
+        .iter()
+        .map(|f| f.data_type().clone())
+        .collect();
+    assert_eq!(types, [DataType::Int32, DataType::Utf8]);
+    assert!(params.fields().iter().all(|f| f.is_nullable()));
     let handle = created.prepared_statement_handle.to_vec();
     for (n, s) in [(41, "x"), (1, "it's")] {
         let echoed = bind(&mut h, OPS, &handle, vec![row(&[(n, s)])])
@@ -337,7 +339,7 @@ async fn prepared_update_batch_limit() {
     let count = run_update(&mut h, OPS, &handle, vec![longs(&[1, 2]), longs(&[3])])
         .await
         .expect("three rows");
-    assert_eq!(count, -1);
+    assert_eq!(count, 0, "no run reports a count");
     let e = run_update(&mut h, OPS, &handle, vec![longs(&[10, 10, 10, 10])])
         .await
         .expect_err("over maxBatchRows");
@@ -585,6 +587,96 @@ async fn prepared_handle_ttl_runs_from_last_use() {
         .await
         .expect("fetch");
     assert_eq!(first_longs(&batches), [199_999_999]);
+}
+
+/// The advertised types of the markers of `sql` prepared by `token` in `cookie`'s session.
+async fn parameter_types(
+    h: &mut Harness,
+    token: &str,
+    cookie: Option<&str>,
+    sql: &str,
+) -> Vec<DataType> {
+    let (created, _) = create(h, token, cookie, sql).await.expect(sql);
+    let params = schema_of(&created.parameter_schema).expect("parameter schema");
+    assert!(params.fields().iter().all(|f| f.is_nullable()), "{sql}");
+    params
+        .fields()
+        .iter()
+        .map(|f| f.data_type().clone())
+        .collect()
+}
+
+/// Each marker is advertised with the type its context gives it (note §4.4, amended
+/// 2026-11-20; the JDBC driver binds a value into a vector of that type): a query's from its
+/// analysis (comparisons, `IN`, a written `CAST`, inside a subquery; `LIMIT ?` an `INT`; an
+/// untyped marker a string), an `INSERT ... VALUES` cell's from its target column, by position
+/// or column list. A caller that may not write the table learns none of its types.
+#[tokio::test(flavor = "multi_thread")]
+async fn parameter_types_come_from_the_statement() {
+    let wh = tempfile::tempdir().expect("tempdir");
+    let mut h = start_with(
+        FlightSqlConfig::default(),
+        Setup {
+            factory: Some(grant_sessions(wh.path())),
+            ..Setup::default()
+        },
+    )
+    .await;
+    let mut cookie: Option<String> = None;
+    for sql in [
+        "CREATE DATABASE db1",
+        "CREATE TABLE db1.t (a INT, d DATE, s STRING, x DECIMAL(10,2)) USING parquet",
+    ] {
+        let (_, set) = info(&mut h, OPS, cookie.as_deref(), sql).await.expect(sql);
+        cookie = cookie.or(set);
+    }
+    let c = cookie.as_deref();
+    let decimal = DataType::Decimal128(10, 2);
+    for (sql, want) in [
+        (
+            "SELECT a FROM db1.t WHERE d <= ? AND a = ? AND x > ? AND s LIKE ?",
+            vec![
+                DataType::Date32,
+                DataType::Int32,
+                decimal.clone(),
+                DataType::Utf8,
+            ],
+        ),
+        (
+            "SELECT CAST(? AS BIGINT) AS b, ? AS u",
+            vec![DataType::Int64, DataType::Utf8],
+        ),
+        (
+            "SELECT a FROM db1.t WHERE a IN (?, ?) OR a IN (SELECT a FROM db1.t WHERE d = ?)",
+            vec![DataType::Int32, DataType::Int32, DataType::Date32],
+        ),
+        ("SELECT a FROM db1.t LIMIT ?", vec![DataType::Int32]),
+        (
+            "INSERT INTO db1.t VALUES (?, ?, 'z', ?)",
+            vec![DataType::Int32, DataType::Date32, decimal.clone()],
+        ),
+        (
+            "INSERT INTO db1.t (d, a) VALUES (?, ?), ((?), 1)",
+            vec![DataType::Date32, DataType::Int32, DataType::Date32],
+        ),
+        // Not a whole cell: untyped.
+        (
+            "INSERT INTO db1.t SELECT ? + 1, NULL, NULL, NULL",
+            vec![DataType::Utf8],
+        ),
+    ] {
+        assert_eq!(parameter_types(&mut h, OPS, c, sql).await, want, "{sql}");
+    }
+    // `other` may not write db1.t: its markers stay untyped.
+    assert_eq!(
+        parameter_types(&mut h, OTHER, None, "INSERT INTO db1.t VALUES (?, ?, ?, ?)").await,
+        [
+            DataType::Utf8,
+            DataType::Utf8,
+            DataType::Utf8,
+            DataType::Utf8
+        ]
+    );
 }
 
 /// Design P3-T066 §5.1: while the server drains, every Flight SQL call that starts new work is
