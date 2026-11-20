@@ -790,3 +790,19 @@ fn a_value_that_holds_or_straddles_the_key_is_hidden_everywhere() {
         assert!(!hidden.to_string().contains(value), "{hidden}");
     }
 }
+
+#[test]
+fn a_value_equal_to_the_key_stays() {
+    // `SET k.a = k.a`: the value is the key's own text, which the error names anyway.
+    let key = "k.a";
+    let e: KrishivError = InvalidConfValueTimeZone {
+        conf_name: key.to_owned(),
+        conf_value: "x".to_owned(),
+    }
+    .into();
+    let hidden = e.with_value_redacted(key, key);
+    assert_eq!(
+        hidden.message_parameters(),
+        [("confValue", "x".to_owned()), ("confName", key.to_owned())]
+    );
+}
