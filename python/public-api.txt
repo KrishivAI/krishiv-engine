@@ -686,7 +686,7 @@ def var_pop(col: ColumnOrName) -> Column
 def var_samp(col: ColumnOrName) -> Column
 def variance(col: ColumnOrName) -> Column
 def variant_array_append(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
-def variant_delete(v: ColumnOrName, *paths: ColumnOrName) -> Column
+def variant_delete(v: ColumnOrName, *paths: str) -> Column
 def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
 def variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
 def variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool=True) -> Column
@@ -1165,7 +1165,7 @@ def var_pop(col: ColumnOrName) -> Column
 def var_samp(col: ColumnOrName) -> Column
 def variance(col: ColumnOrName) -> Column
 def variant_array_append(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
-def variant_delete(v: ColumnOrName, *paths: ColumnOrName) -> Column
+def variant_delete(v: ColumnOrName, *paths: str) -> Column
 def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
 def variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
 def variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool=True) -> Column
