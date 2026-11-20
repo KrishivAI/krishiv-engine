@@ -363,6 +363,13 @@ result is first analyzed (its first action, or the first call that needs its sch
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
 
+`spark.conf.set("spark.checkpoint.dir", ...)` succeeds in Krishiv. Spark 4.2 over Spark Connect refuses it
+with `CANNOT_MODIFY_CONFIG` (SQLSTATE 46110), and a Connect client there has no other way to set the
+directory, so a reliable `checkpoint()` fails with "Checkpoint directory has not been set in the SparkContext"
+unless the server was started with one. Krishiv accepts the setting per session (or `krishiv.checkpoint.dir`
+at server start) because a client with no `SparkContext` has no other route; code that relies on Spark's
+refusal is the only code that sees a difference.
+
 ## `remote("local")` is not supported
 
 In Spark 4.3, `SparkSession.builder.remote("local")` starts a JVM `SparkContext` with the Connect plugin and
