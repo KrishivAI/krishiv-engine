@@ -470,6 +470,10 @@ pub struct FileScanMetrics {
     /// was full and nothing could be spilled for them
     /// (`krishiv_io::ScanGate`).
     pub decode_overcommit_bytes: u64,
+    /// Nanoseconds streams waited for their decode share
+    /// (`krishiv_io::ScanGate`: another stream's share, or the pool
+    /// spilling for it); part of the scan's `blocked_io`.
+    pub decode_gate_wait_ns: u64,
     /// Units decoded with the row filter (predicate columns first).
     pub units_filtered: u64,
     /// Units decoded without it.
@@ -544,6 +548,12 @@ impl FileScanMetrics {
                 self.decode_overcommit_bytes,
             )]));
         }
+        if self.decode_gate_wait_ns > 0 {
+            out.extend(crate::metrics::counts([(
+                "decode_gate_wait_ns",
+                self.decode_gate_wait_ns,
+            )]));
+        }
         out
     }
 
@@ -551,8 +561,9 @@ impl FileScanMetrics {
         self.reads.add(r);
     }
 
-    pub(super) fn add(&mut self, m: &ScanUnitMetrics, overcommitted: u64) {
+    pub(super) fn add(&mut self, m: &ScanUnitMetrics, overcommitted: u64, gate_wait_ns: u64) {
         self.decode_overcommit_bytes += overcommitted;
+        self.decode_gate_wait_ns += gate_wait_ns;
         self.splits += 1;
         self.units += m.units;
         self.units_pruned += m.units_pruned;
@@ -640,7 +651,11 @@ struct FileScanGlobal {
 /// Adds what a finished (or abandoned) split cost to the scan's totals.
 fn record_split(metrics: &Mutex<FileScanMetrics>, current: &Current) {
     let mut metrics = metrics.lock().unwrap_or_else(PoisonError::into_inner);
-    metrics.add(&current.stream.metrics(), current.stream.overcommitted());
+    metrics.add(
+        &current.stream.metrics(),
+        current.stream.overcommitted(),
+        current.stream.gate_wait_ns(),
+    );
     metrics.add_reads(&current.stream.read_stats());
 }
 
@@ -1815,11 +1830,23 @@ mod tests {
     fn decode_over_commit_is_reported_when_there_was_any() {
         let mut m = FileScanMetrics::default();
         assert!(m.extra().is_empty());
-        m.add(&ScanUnitMetrics::default(), 0);
+        m.add(&ScanUnitMetrics::default(), 0, 0);
         assert_eq!(value(&m.extra(), "decode_overcommit_bytes"), None);
-        m.add(&ScanUnitMetrics::default(), 3);
-        m.add(&ScanUnitMetrics::default(), 4);
+        m.add(&ScanUnitMetrics::default(), 3, 0);
+        m.add(&ScanUnitMetrics::default(), 4, 0);
         assert_eq!(value(&m.extra(), "decode_overcommit_bytes"), Some(7));
+    }
+
+    /// The time streams waited for decode shares shows only when there was
+    /// a wait, summed over the scan's splits.
+    #[test]
+    fn decode_gate_waits_are_reported_when_there_were_any() {
+        let mut m = FileScanMetrics::default();
+        m.add(&ScanUnitMetrics::default(), 0, 0);
+        assert_eq!(value(&m.extra(), "decode_gate_wait_ns"), None);
+        m.add(&ScanUnitMetrics::default(), 0, 5);
+        m.add(&ScanUnitMetrics::default(), 0, 6);
+        assert_eq!(value(&m.extra(), "decode_gate_wait_ns"), Some(11));
     }
 
     /// The scan counters are summed over splits; the row filter's appear
@@ -1855,7 +1882,7 @@ mod tests {
         unit.units_pruned = 1;
         unit.rows = 100;
         unit.bytes_pushed = 1000;
-        m.add(&unit, 0);
+        m.add(&unit, 0, 0);
         let extra = m.extra();
         assert_eq!(value(&extra, "scan_splits"), Some(1));
         assert_eq!(value(&extra, "row_filter_rows"), None);
@@ -1870,7 +1897,7 @@ mod tests {
         filtered.page_index_rejected = 1;
         filtered.units_pruned_bloom = 1;
         filtered.bloom_rejected = 2;
-        m.add(&filtered, 0);
+        m.add(&filtered, 0, 0);
         let extra = m.extra();
         for (name, want) in [
             ("scan_splits", 2),
