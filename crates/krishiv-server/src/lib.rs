@@ -27,9 +27,11 @@ pub mod metrics;
 pub mod admin;
 #[cfg(feature = "admin-api")]
 pub mod admin_v1;
+pub mod drain;
 pub mod guard;
 pub mod internal;
 pub mod pages;
+pub mod readiness;
 #[cfg(feature = "tls")]
 pub mod tls;
 
