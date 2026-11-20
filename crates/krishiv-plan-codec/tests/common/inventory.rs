@@ -1409,6 +1409,29 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     null_safe: j.null_safe,
                     residual: j.residual,
                     single_match: false,
+                    as_of: None,
+                }
+            }),
+        ),
+        (
+            "as_of_join",
+            PhysNode::SortMergeJoin({
+                let j = join_plan(JoinType::LeftOuter);
+                SortMergeJoinPlan {
+                    probe: j.probe,
+                    build: j.build,
+                    join_type: j.join_type,
+                    probe_keys: j.probe_keys,
+                    build_keys: j.build_keys,
+                    null_safe: j.null_safe,
+                    residual: j.residual,
+                    single_match: false,
+                    as_of: Some(krishiv_exec::AsOfMergeSpec {
+                        left_column: 0,
+                        right_column: 0,
+                        direction: krishiv_exec::AsOfMergeDirection::Backward,
+                        allow_exact: true,
+                    }),
                 }
             }),
         ),

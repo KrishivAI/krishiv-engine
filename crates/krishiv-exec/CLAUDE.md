@@ -54,7 +54,11 @@ task; owner decision 2026-11-06); each task's build reports `broadcast_shared` o
 `join/merge.rs` sort-merge join (P2-T056): `SortMergeJoin` is the source over two `Sort`s in hash buckets of the keys
 (`Sort::bucket_reader`, `PipelineBuilder::set_merge_source`), `Merge` the merge of one bucket pair; a key's right rows
 are the group, spilled past `krishiv.exec.join.smj.bufferBytes`; `join/fallback.rs` runs a grace partition that will not
-split through the same `Merge`.
+split through the same `Merge`. `join/merge/asof.rs` the as-of merge (Spark 4.3's `ASOF JOIN`, `SortMergeJoinPlan::as_of`, codec feature
+`as_of_join`): both sorts also order by the as-of column (NULLs first, skipped), groups are the keys alone, and each
+left row takes the nearest right row of its group (two pointers without a residual; with one, every allowed pair is
+evaluated, as Spark); `planner/join/asof.rs` plans `PlanNode::AsOfJoin` onto it (no key: one constant key; runtime-filter
+sites on the left only; nearest and tolerance are `KRISHIV_UNSUPPORTED_FEATURE`).
 `values/` (P2-T177) `ValueService` + `LocalValues`: runtime filters, subquery results and broadcast builds as
 versioned values (`ValueId`, `Version` are plan data), published as one partial per producer partition and visible
 once every producer partition published (count 1 unless the task says otherwise; a retried partition's partial is

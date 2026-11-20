@@ -1924,17 +1924,20 @@ pub(crate) fn sort_merge_join(
     env: &EvalEnv,
     spill: Option<SpillScope>,
 ) -> Result<SortMergeJoin> {
-    SortMergeJoin::try_new(JoinSpec {
-        join_type: j.join_type,
-        probe_schema: Arc::clone(probe),
-        build_schema: Arc::clone(build),
-        probe_keys: j.probe_keys.clone(),
-        build_keys: j.build_keys.clone(),
-        null_safe: j.null_safe.clone(),
-        filter: residual(probe, build, j.residual.as_ref(), env)?,
-        single_match: j.single_match,
-        spill,
-    })
+    SortMergeJoin::try_new_as_of(
+        JoinSpec {
+            join_type: j.join_type,
+            probe_schema: Arc::clone(probe),
+            build_schema: Arc::clone(build),
+            probe_keys: j.probe_keys.clone(),
+            build_keys: j.build_keys.clone(),
+            null_safe: j.null_safe.clone(),
+            filter: residual(probe, build, j.residual.as_ref(), env)?,
+            single_match: j.single_match,
+            spill,
+        },
+        j.as_of,
+    )
 }
 
 pub(crate) fn nested_loop_join(

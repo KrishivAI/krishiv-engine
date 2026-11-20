@@ -953,6 +953,11 @@ impl Decoder {
             null_safe: j.null_safe.clone(),
             residual: self.residual(j.residual.as_ref())?,
             single_match: j.single_match,
+            as_of: j
+                .as_of
+                .as_ref()
+                .map(crate::decode_asof::as_of_merge)
+                .transpose()?,
         })
     }
 

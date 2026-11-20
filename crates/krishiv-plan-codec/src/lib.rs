@@ -66,6 +66,7 @@
 
 mod arrow;
 mod decode;
+mod decode_asof;
 mod decode_sketch;
 mod encode;
 mod error;

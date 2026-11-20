@@ -620,6 +620,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             "window_group_limit"
             | "late_fetch"
             | "sort_merge_join"
+            | "as_of_join"
             | "partial_aggregate"
             | "shared_subplan"
             | "exchange_source"

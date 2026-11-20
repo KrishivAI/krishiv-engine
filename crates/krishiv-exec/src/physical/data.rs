@@ -141,6 +141,8 @@ value_types!(
     crate::aggregate::AggregateExpr,
     crate::aggregate::AggregateOutput,
     crate::join::JoinType,
+    crate::join::AsOfMergeSpec,
+    crate::join::AsOfMergeDirection,
     crate::planner::ExplainNode,
 );
 
