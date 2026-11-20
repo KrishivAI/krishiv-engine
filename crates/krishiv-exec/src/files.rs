@@ -1554,11 +1554,15 @@ fn check_sql_location(text: &str) -> Result<()> {
     .into())
 }
 
-/// Whether Spark skips a file or directory named `name`.
+/// Whether Spark skips a file or directory named `name`: `HadoopFSUtils.shouldFilterOutPathName`
+/// (v4.2.0): names starting with `_` (unless they hold `=`) or `.`, and `._COPYING_` files, except
+/// the names starting with `_common_metadata` or `_metadata`.
 fn hidden(name: &str) -> bool {
-    name.starts_with('.')
-        || name.starts_with('_') && !name.contains('=')
-        || name.ends_with("._COPYING_")
+    let exclude = name.starts_with('_') && !name.contains('=')
+        || name.starts_with('.')
+        || name.ends_with("._COPYING_");
+    let include = name.starts_with("_common_metadata") || name.starts_with("_metadata");
+    exclude && !include
 }
 
 /// A format as Spark names it in messages (`Parquet`, `JSON`).
@@ -1781,7 +1785,15 @@ mod tests {
         for name in [".x", "_SUCCESS", "_temporary", "a._COPYING_"] {
             assert!(hidden(name), "{name}");
         }
-        for name in ["a.parquet", "_k=1", "k=_1"] {
+        for name in [
+            "a.parquet",
+            "_k=1",
+            "k=_1",
+            "_metadata",
+            "_common_metadata",
+            "_metadata.parquet",
+            "_common_metadata2",
+        ] {
             assert!(!hidden(name), "{name}");
         }
         assert_eq!(display_name("parquet"), "Parquet");
