@@ -516,6 +516,8 @@ impl Memo {
             if let PlanNode::WithCte { ctes, .. } = &p.node {
                 shared_defs.extend(
                     ctes.iter()
+                        // `ShareCte`'s definitions; a user CTE named so
+                        // only loses an inferred filter.
                         .filter(|c| c.name.starts_with(crate::share_cte::SHARED_PREFIX))
                         .map(|c| c.name.clone()),
                 );
@@ -553,6 +555,31 @@ impl Memo {
         // a body with a twin.
         let mut shapes: HashMap<*const LogicalPlan, u64> = HashMap::new();
         let mut groups: HashMap<u64, Vec<(Arc<LogicalPlan>, u32)>> = HashMap::new();
+        // Bodies that differ only in the filters and projections above an
+        // equal core share that core (`ShareCte`), so a core with a twin is
+        // shared too: an inferred filter must not enter one instance's core
+        // and cost the sharing.
+        let mut cores: HashMap<u64, Vec<Arc<LogicalPlan>>> = HashMap::new();
+        if bodies.len() > 1 {
+            for (body, _) in &bodies {
+                let c = crate::share_cte::core(body);
+                cores
+                    .entry(shape(c, &mut shapes))
+                    .or_default()
+                    .push(Arc::clone(c));
+            }
+        }
+        for group in cores.into_values() {
+            for (i, c) in group.iter().enumerate() {
+                let twin = group
+                    .iter()
+                    .enumerate()
+                    .any(|(j, other)| i != j && (Arc::ptr_eq(c, other) || **c == **other));
+                if twin && crate::share_cte::worth_sharing(c) {
+                    shared.insert(Arc::as_ptr(c), (Arc::clone(c), Arc::clone(c)));
+                }
+            }
+        }
         if bodies.len() > 1 || bodies.iter().any(|(_, n)| *n > 1) {
             for (body, n) in bodies {
                 groups

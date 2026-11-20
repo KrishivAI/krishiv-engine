@@ -145,7 +145,7 @@ fn tpcds(q: usize) -> Plan {
 
 /// TPC-DS q47 and q57 read `v1` three times; the main instance has the outer filter pushed in
 /// above the windows, so its body is not equal to the lag/lead instances'. The windowed
-/// aggregate below that filter is the same, and it is computed once (perf-1 L1).
+/// aggregate below that filter is the same, and it is computed once (TPC-DS q47, q57).
 #[test]
 fn an_instance_with_its_own_filter_shares_the_common_subtree() {
     for (q, fact) in [(47, "store_sales"), (57, "catalog_sales")] {
@@ -213,4 +213,38 @@ fn a_filtered_instance_reads_the_shared_window() {
     )
     .unwrap();
     assert_eq!(scans(unshared.root(), "spark_catalog.default.orders"), 2);
+}
+
+/// Equal bodies whose filter above the shared aggregate is nondeterministic do not share that
+/// filter: the aggregate is one definition and each instance evaluates its own `rand()`, as the
+/// copies do (`ShareCte` never shares a nondeterministic part).
+#[test]
+fn a_nondeterministic_chain_over_a_shared_core_stays_per_instance() {
+    let sql = "WITH a AS (SELECT o_custkey k, count(*) n FROM orders GROUP BY o_custkey \
+                 HAVING rand() < 0.5), b AS (SELECT k, n FROM a) \
+               SELECT x.k, x.n, y.n FROM b x JOIN b y ON x.k = y.k";
+    let plan = run(sql, false);
+    let text = plan.root().to_string();
+    assert_eq!(
+        scans(plan.root(), "spark_catalog.default.orders"),
+        1,
+        "{text}"
+    );
+    // The definition is the aggregate alone; the `rand()` filter stays above its `CteRef` in
+    // the instances (the physical planner plans each instance's path apart).
+    let krishiv_plan::PlanNode::WithCte { ctes, .. } = &plan.root().node else {
+        panic!("the aggregate is shared:\n{text}");
+    };
+    assert_eq!(ctes.len(), 1, "{text}");
+    let def = ctes[0].plan.to_string();
+    assert!(def.starts_with("Aggregate"), "{def}");
+    assert!(!def.contains("rand("), "{def}");
+    assert!(text.contains("rand() < 0.5D"), "{text}");
+    Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
+    let again = optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &Config::new()).unwrap();
+    assert!(
+        again.structurally_eq(&plan),
+        "a fixed point:\n{}",
+        again.root()
+    );
 }

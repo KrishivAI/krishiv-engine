@@ -28,6 +28,9 @@
 //! filter pushed into one instance above its windows, TPC-DS q47 and q57),
 //! the core is the definition: each member keeps its `Shift` and its own
 //! filters and projections, over a `CteRef` of the core in the body's ids.
+//! So does a group of equal bodies whose chain above the core is
+//! nondeterministic or holds an outer reference: the chain stays per
+//! instance, as the copies would evaluate it.
 //!
 //! The rewrite replaces each member `Shift` alone by a `CteRef` that
 //! produces exactly the ids the shift produced, so no parent changes, and
@@ -84,9 +87,12 @@ pub(crate) fn share(
     let mut keys: HashSet<Vec<AttrId>> = HashSet::new();
     for group in groups {
         let first = &members[group[0]];
-        // Equal bodies are shared whole; bodies that differ only in the
-        // filters and projections above an equal core share the core.
-        let whole = group.iter().all(|&i| equal(&members[i].body, &first.body));
+        // Equal bodies are shared whole when the whole body may be shared;
+        // bodies that differ only in the filters and projections above an
+        // equal core, or whose chain over it is nondeterministic or
+        // correlated, share the core (each member evaluates its own chain).
+        let whole = worth_sharing(&first.body)
+            && group.iter().all(|&i| equal(&members[i].body, &first.body));
         let def = if whole {
             Arc::clone(&first.body)
         } else {
@@ -334,7 +340,7 @@ fn groups(members: &[Member]) -> Vec<Vec<usize>> {
 /// `body` below the filters and projections at its top: what members whose
 /// bodies differ only there have in common (TPC-DS q47 and q57: the outer
 /// filter pushed into one instance of `v1` above its windows).
-fn core(body: &Arc<LogicalPlan>) -> &Arc<LogicalPlan> {
+pub(crate) fn core(body: &Arc<LogicalPlan>) -> &Arc<LogicalPlan> {
     let mut cur = body;
     while let PlanNode::Project { input, .. } | PlanNode::Filter { input, .. } = &cur.node {
         cur = input;
