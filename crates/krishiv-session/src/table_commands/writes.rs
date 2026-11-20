@@ -119,11 +119,17 @@ impl Session {
         dry: bool,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
-        if c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some() {
+        if c.replace_on.is_some() || c.replace_using.is_some() {
             return Err(unsupported("INSERT ... REPLACE"));
         }
         let name = self.table_name(&c.name, &env)?;
         let table = self.table_for_write(&name, "INSERT", &env)?;
+        if c.replace_where.is_some() {
+            // Spark 4.3.0 runs REPLACE WHERE on DSv2 tables only; a Parquet or Hive table (every table
+            // here) fails with this class, with or without a column list
+            // (`tests/fixtures/spark-4.3.0/write-semantics/replace_where.json`).
+            return Err(table_operation(&name, "INSERT INTO ... REPLACE WHERE"));
+        }
         let statics = match &c.partition {
             None => Vec::new(),
             Some(spec) => {
