@@ -66,10 +66,15 @@ class SparkConnectEngine(Engine):
             p = str(dataset.root / f"{t}.parquet")
             if self.cdata:
                 p = p.replace(host_root, self.cdata, 1)
-            self.spark.read.parquet(p).createOrReplaceTempView(t)
+            self._register_table(t, p)
         if self.container:
             self._p = DockerProc(self.container)
             self._p.check()
+
+    def _register_table(self, name: str, path: str) -> None:
+        """Make the Parquet file at ``path`` queryable as ``name``; a server lacking a command overrides this."""
+        assert self.spark is not None
+        self.spark.read.parquet(path).createOrReplaceTempView(name)
 
     def run(self, query: Query) -> list[tuple]:
         assert self.spark is not None, "setup() not called"

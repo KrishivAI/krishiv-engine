@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -189,3 +189,20 @@ def test_teardown_kills_a_server_that_ignores_sigterm(tmp_path, monkeypatch):
     assert calls
     assert real_wait(timeout=5) is not None
     assert mod is not None
+
+
+def test_tables_are_registered_as_sql_views(tmp_path):
+    class Spark:
+        def __init__(self):
+            self.sql_seen = []
+
+        def sql(self, text):
+            self.sql_seen.append(text)
+
+    fake = _fake_server(tmp_path, "echo x")
+    e = KrishivConnectEngine(binary=fake, startup_timeout_s=10)
+    e.spark = cast(Any, Spark())
+    e._register_table("lineitem", "/d/it's/lineitem.parquet")
+    assert e.spark.sql_seen == [  # type: ignore[attr-defined]
+        "CREATE OR REPLACE TEMPORARY VIEW lineitem USING parquet OPTIONS (path '/d/it''s/lineitem.parquet')"
+    ]
