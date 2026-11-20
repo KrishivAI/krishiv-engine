@@ -319,6 +319,20 @@ impl Parser<'_> {
         } else {
             false
         };
+        // `INSERT INTO t (a, b) REPLACE WHERE ..` (Spark 4.3): a column list goes where `BY NAME`
+        // does, and is one only when `REPLACE` follows it (else it is the insert's own list).
+        let mut columns_before = Vec::new();
+        if !by_name_before && self.sym_at(0, Sym::LParen) && !self.query_follows(1) {
+            let cp = self.checkpoint();
+            match self.paren_list(Self::column_name) {
+                Ok(c) if self.kw_at(0, "REPLACE") => {
+                    self.commit(cp);
+                    columns_before = c;
+                }
+                Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                _ => self.restore(cp),
+            }
+        }
         if self.kw_at(0, "REPLACE") {
             let replace_kw_at = self.pos;
             self.pos += 1;
@@ -344,7 +358,7 @@ impl Parser<'_> {
                     name,
                     target_alias,
                     target_options,
-                    columns: Vec::new(),
+                    columns: columns_before,
                     partition: None,
                     if_not_exists: false,
                     replace_where,
@@ -376,7 +390,7 @@ impl Parser<'_> {
                     name,
                     target_alias,
                     target_options,
-                    columns: Vec::new(),
+                    columns: columns_before,
                     partition: None,
                     if_not_exists: false,
                     replace_where: None,
@@ -387,6 +401,10 @@ impl Parser<'_> {
                     head_span,
                     span: self.span_from(clause_start),
                 });
+            }
+            if self.kw_at(0, "USING") && !columns_before.is_empty() {
+                // `REPLACE USING` takes no column list in front of it.
+                return Err(Fail::Syntax);
             }
             if self.eat_kw("USING") {
                 let using_at = replace_kw_at + 1;

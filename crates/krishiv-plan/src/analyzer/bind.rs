@@ -447,6 +447,7 @@ fn check_in_stored_view(ctx: &AnalysisContext, node: Node<'_>) -> Result<(), Ana
                 && is_registry_call(&f.name)
                 && !super::ops::is_qualify_wrapper(&f.name)
                 && !f.name.eq_ignore_ascii_case("stack")
+                && !is_unnest_call(&f.name)
                 && !is_grammar_unit_call(&f.name)
                 && !builtin(&f.name);
             if session || bare {
@@ -572,6 +573,11 @@ pub(super) fn check_function_namespace(
     Ok(())
 }
 
+/// The call lowering gives `UNNEST(..)` in `FROM`, which `generate_node` expands.
+fn is_unnest_call(name: &str) -> bool {
+    name == crate::UNNEST_FUNCTION || name == crate::UNNEST_ORDINALITY_FUNCTION
+}
+
 fn check_function(
     ctx: &AnalysisContext,
     f: &crate::FunctionCall,
@@ -579,7 +585,7 @@ fn check_function(
 ) -> Result<(), AnalysisError> {
     // A generator's `stack` argument is rewritten by Resolve; anywhere else
     // Resolve still refuses the call.
-    if f.qualifier.is_empty() && f.name.eq_ignore_ascii_case("stack") {
+    if f.qualifier.is_empty() && (f.name.eq_ignore_ascii_case("stack") || is_unnest_call(&f.name)) {
         return Ok(());
     }
     // `builtin.f` / `system.builtin.f` (case-insensitively) resolve to the

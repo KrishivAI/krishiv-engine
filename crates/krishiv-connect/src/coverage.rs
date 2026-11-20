@@ -142,7 +142,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     ChunkedCachedLocalRelation => ("chunked_cached_local_relation", 45, Missing, "", "as #36, from chunked artifacts (4.1+); CHUNKED_CACHED_LOCAL_RELATION_WITHOUT_DATA", "P3-T083", 7),
     RelationChanges => ("relation_changes", 46, Missing, "", "CDC read (DataFrameReader.changes()): Delta change data feed through table_changes; the Iceberg changelog and is_streaming come later", "P3-T021b", 8),
     NearestByJoin => ("nearest_by_join", 47, Missing, "", "top-k per left row by a ranking expression: new NearestByJoin, planned on T077's top-k (num_results 1–100,000)", "P3-T077", 8),
-    Zip => ("zip", 48, Missing, "", "new Zip (columns of two inputs side by side, by row position)", "P3-T012", 3),
+    Zip => ("zip", 48, Done, "", "PlanNode::Zip; the analyzer merges the two projection chains over their shared base (Spark's ResolveZip), ZIP_PLANS_NOT_MERGEABLE otherwise", "P3-T012", 3),
     FillNa => ("fill_na", 90, Missing, "", "lowering: Project of coalesce / nanvl by type; NA_FILL_VALUES_EMPTY, NA_FILL_VALUES_LENGTH_MISMATCH", "P3-T012", 5),
     DropNa => ("drop_na", 91, Missing, "", "lowering: Filter on non-null counts (how, thresh, subset)", "P3-T012", 5),
     Replace => ("replace", 92, Missing, "", "lowering: Project of CASE per column", "P3-T012", 5),
