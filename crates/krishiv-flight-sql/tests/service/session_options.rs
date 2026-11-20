@@ -252,3 +252,117 @@ async fn close_session_releases_handles() {
     assert_eq!(h.flight.session_count(), 0);
     assert_eq!(h.flight.handle_count(), 0, "its handles went with it");
 }
+
+/// The call is refused as new work while draining: `FAILED_PRECONDITION`, `KRISHIV_SERVER_DRAINING`.
+fn assert_draining<T>(what: &str, r: Result<T, Status>) {
+    let e = r
+        .err()
+        .unwrap_or_else(|| panic!("{what}: served while draining"));
+    assert_eq!(e.code(), Code::FailedPrecondition, "{what}: {e:?}");
+    assert_eq!(
+        e.metadata()
+            .get("x-krishiv-error-class")
+            .map(|v| v.to_str().ok()),
+        Some(Some("KRISHIV_SERVER_DRAINING")),
+        "{what}"
+    );
+}
+
+/// `GetFlightInfo` of the command `cmd`: its info.
+async fn command_info<M: ProstMessageExt>(
+    h: &mut Harness,
+    cookie: Option<&str>,
+    cmd: &M,
+) -> Result<arrow_flight::FlightInfo, Status> {
+    let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+    let response = h
+        .client
+        .get_flight_info(authed(descriptor, OPS, cookie))
+        .await?;
+    Ok(response.into_inner())
+}
+
+/// Design P3-T066 §5.1, Flight SQL row: while the server drains, a metadata command (its info
+/// and the `DoGet` of a ticket issued before the drain) and the session-option actions are
+/// refused as new work, without opening a session, and `CloseSession` on the existing cookie is
+/// still served.
+#[tokio::test(flavor = "multi_thread")]
+async fn metadata_and_session_options_are_refused_while_draining_and_close_is_served() {
+    use std::sync::atomic::Ordering::Release;
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (_, cookie) =
+        set_options(&mut h, None, vec![("spark.sql.ansi.enabled", text("true"))]).await;
+    let cookie = cookie.expect("cookie");
+    let c = Some(cookie.as_str());
+    let tables = command_info(&mut h, c, &arrow_flight::sql::CommandGetTables::default())
+        .await
+        .expect("listing info before the drain");
+    let xdbc = command_info(
+        &mut h,
+        c,
+        &arrow_flight::sql::CommandGetXdbcTypeInfo { data_type: None },
+    )
+    .await
+    .expect("type info before the drain");
+    let sql_info = command_info(&mut h, c, &CommandGetSqlInfo::default())
+        .await
+        .expect("sql info before the drain");
+    assert_eq!(h.flight.session_count(), 1);
+    h.runtime.set_draining(true);
+    h.draining.store(true, Release);
+    assert_draining(
+        "GetTables info",
+        command_info(&mut h, c, &arrow_flight::sql::CommandGetTables::default()).await,
+    );
+    assert_draining(
+        "GetTables DoGet of an earlier ticket",
+        h.client.do_get(authed(ticket(&tables), OPS, c)).await,
+    );
+    assert_draining(
+        "GetTables DoGet without a cookie",
+        h.client.do_get(authed(ticket(&tables), OPS, None)).await,
+    );
+    assert_draining(
+        "GetXdbcTypeInfo info",
+        command_info(
+            &mut h,
+            c,
+            &arrow_flight::sql::CommandGetXdbcTypeInfo { data_type: None },
+        )
+        .await,
+    );
+    assert_draining(
+        "GetXdbcTypeInfo DoGet",
+        h.client.do_get(authed(ticket(&xdbc), OPS, c)).await,
+    );
+    assert_draining(
+        "GetSqlInfo info",
+        command_info(&mut h, c, &CommandGetSqlInfo::default()).await,
+    );
+    assert_draining(
+        "GetSqlInfo DoGet",
+        h.client.do_get(authed(ticket(&sql_info), OPS, c)).await,
+    );
+    let set = SetSessionOptionsRequest {
+        session_options: HashMap::from([("spark.sql.ansi.enabled".to_owned(), text("false"))]),
+    };
+    assert_draining(
+        "SetSessionOptions",
+        action(&mut h, c, SET_SESSION_OPTIONS, set.encode_to_vec()).await,
+    );
+    assert_draining(
+        "GetSessionOptions",
+        action(&mut h, c, GET_SESSION_OPTIONS, Vec::new()).await,
+    );
+    assert_eq!(h.flight.session_count(), 1, "no session opened or closed");
+    let (body, _) = action(&mut h, c, CLOSE_SESSION, Vec::new())
+        .await
+        .expect("CloseSession is served while draining");
+    assert_eq!(
+        CloseSessionResult::decode(body.as_slice())
+            .expect("result")
+            .status,
+        CloseStatus::Closed as i32
+    );
+    assert_eq!(h.flight.session_count(), 0);
+}
