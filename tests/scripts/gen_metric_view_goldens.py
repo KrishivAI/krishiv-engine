@@ -34,7 +34,7 @@ Usage (from the repo root; needs docker; a few minutes per release):
     python3 tests/scripts/gen_metric_view_goldens.py [--only 4.2.1,4.3.0]
     python3 tests/scripts/gen_metric_view_goldens.py --rematch   # recompute `match` only, no Spark run
 
-The 4.1.0 and 3.5.7 runs execute only the cases marked `gate` (the version refusals of section 0).
+The 4.1.0, 4.0.0 and 3.5.7 runs execute only the cases marked `gate` (the version refusals of section 0).
 The probe part runs inside the image's own Python (3.8 for 3.5.7), so it avoids newer syntax at run time.
 """
 
@@ -70,6 +70,12 @@ RUNS = {
         "o2-mv-spark41x",
         "apache/spark:4.1.0@sha256:370ada682945240b41cc2785aeb0b12c1b276b5bb46fc3930ba6732726ed6836",
         "spark-4.1.0",
+        True,
+    ),
+    "4.0.0": (
+        "o2-mv-g2-spark400",
+        "apache/spark:4.0.0@sha256:a89782d90529a623fc4471cdddb0f9c32d6eed10a81b256a80207b23c3b1df00",
+        "spark-4.0.0",
         True,
     ),
     "3.5.7": (

@@ -10,6 +10,8 @@ metric view. Every outcome was produced by a real Spark run; nothing is transcri
 | `tests/fixtures/spark-4.2.1/metric-views/cases.json` | 4.2.1 | `apache/spark:4.2.1@sha256:0cb70cf0...` | all |
 | `tests/fixtures/spark-4.3.0/metric-views/cases.json` | 4.3.0 | `apache/spark:4.3.0@sha256:3dedc5c8...` | all |
 | `tests/fixtures/spark-4.1.0/metric-views/gate.json` | 4.1.0 | `apache/spark:4.1.0@sha256:370ada68...` | `gate` cases only |
+| `tests/fixtures/spark-4.0.0/metric-views/gate.json` | 4.0.0 | `apache/spark:4.0.0@sha256:a89782d9...` | `gate` cases only |
+| `tests/fixtures/spark-{4.2.1,4.3.0}/metric-views/connect.json` | 4.2.1, 4.3.0 | same images | Spark Connect form (see below) |
 | `tests/fixtures/spark-3.5.7/metric-views/gate.json` | 3.5.7 | `apache/spark:3.5.7@sha256:936ff39f...` | `gate` cases only |
 
 The 4.1 and 3.5 runs used the images already on the machine (4.1.0, 3.5.7), so their directories are named after
@@ -67,3 +69,15 @@ in EXPLAIN text. `target` is `compatible` for every case.
   `measure(x)` is `UNRESOLVED_ROUTINE` (42883) on both, with "routine" (4.1.0) vs "function" (3.5.7) in the text.
   `DROP VIEW <table>` reports `requiredType` `VIEW` (4.1.0, 3.5.7) vs `VIEW or METRIC_VIEW` (4.2.1, 4.3.0); 3.5.7
   has no SQLSTATE for `WRONG_COMMAND_FOR_OBJECT_TYPE`.
+- 4.0.0 (`gate.json`, container `o2-mv-g2-spark400`) is a hybrid of the two: `CREATE VIEW ... WITH METRICS` is a
+  `PARSE_SYNTAX_ERROR` at `'METRICS'` (pos 20, like 4.1.0) but the message still carries the `== SQL ==` fragment
+  (like 3.5.7, unlike 4.1.0); `measure(x)` and `DROP VIEW <table>` are byte-identical to 4.1.0 ("routine").
+
+## Spark Connect form (`connect.json`)
+
+`python3 tests/scripts/gen_metric_view_connect_goldens.py` starts a Connect server per release (containers
+`o2-mv-g1-spark421`, `o2-mv-g1-spark430`) and runs a `pyspark-client` of the same version from the host. Same case
+ids as `cases.json`; each step carries `vs_classic`. The three errors that are not `SparkThrowable` reach a Connect
+client as `UnknownException` (the 1,024 limit and `NoSuchElementException`, message `(<jvm class>) <text>`, no
+condition, no SQLSTATE, gRPC `INTERNAL`) or `IllegalArgumentException` (`SHOW CREATE TABLE ... AS SERDE`). All are
+raised by `spark.sql()`, as in classic.
