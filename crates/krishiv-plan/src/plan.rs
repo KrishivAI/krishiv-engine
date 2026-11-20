@@ -39,6 +39,21 @@ impl Plan {
         })
     }
 
+    /// [`Plan::try_new`] with the heights of nodes the caller already measured (see
+    /// [`crate::walk::too_deep_known`]); the analyzer's, for a result whose prefix it checked before.
+    pub(crate) fn try_new_known(
+        root: Arc<LogicalPlan>,
+        heights: &mut crate::walk::PtrMap<usize, usize>,
+    ) -> Result<Self, KrishivError> {
+        if crate::walk::too_deep_known(crate::walk::Node::Plan(&root), heights) {
+            return Err(krishiv_common::error::FailedToParseTooComplex {}.into());
+        }
+        Ok(Self {
+            ir_version: IR_VERSION,
+            root,
+        })
+    }
+
     /// The IR version.
     #[must_use]
     pub const fn ir_version(&self) -> u32 {

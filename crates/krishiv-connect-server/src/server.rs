@@ -231,6 +231,18 @@ impl ConnectServer {
         self
     }
 
+    /// This server refusing new work while `flag` is set (the drain controller's flag, design
+    /// P3-T066 §5.1), in place of its own flag, which `serve` sets at shutdown. The flag gates what
+    /// Connect itself admits: a new session, `CloneSession`, `AddArtifacts`. A new query on a session
+    /// that already exists is refused by the engine at admission, so the drain controller must also
+    /// call `EngineRuntime::set_draining` on the runtime the sessions come from (`krishiv server`'s
+    /// `Drainer` sets both); the flag alone does not stop it.
+    #[must_use]
+    pub fn with_draining(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.draining = flag;
+        self
+    }
+
     /// This server also serving `routes` on its listener (P3-T101 §2 H1: `krishiv server` adds
     /// the Flight SQL service; Connect itself never depends on Flight). They get the same HTTP/2
     /// limits, connection cap, TLS, [`AuthLayer`] and shutdown as the Connect service; each
