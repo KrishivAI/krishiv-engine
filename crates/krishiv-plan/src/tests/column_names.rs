@@ -383,3 +383,47 @@ fn replace_refuses_a_null_or_mixed_type_old_value() {
     ];
     assert!(run(false, replace(&[], mixed)).is_err());
 }
+
+#[test]
+fn na_subset_names_are_attribute_references() {
+    // A backquoted name is the column it quotes (`df.col("`year`")`), as in fill, replace and drop.
+    let quoted = strings(&["`year`"]);
+    let drop = ColumnNamesOp::DropNa {
+        subset: quoted,
+        min_non_nulls: None,
+    };
+    assert!(format!("{:?}", run(false, drop).expect("quoted")).contains("Filter"));
+    let fill = fill(&["`year`"], vec![literal(crate::Literal::Long(0))]);
+    assert_eq!(
+        names(run(false, fill)),
+        strings(&["course", "year", "earnings"])
+    );
+    assert!(run(false, replace(&["`year`"], vec![])).is_ok());
+    // Quotes that do not close name no column.
+    let bad = ColumnNamesOp::DropNa {
+        subset: strings(&["`ye``ar`"]),
+        min_non_nulls: None,
+    };
+    assert!(run(false, bad).is_err());
+}
+
+#[test]
+fn drop_na_over_no_columns_keeps_no_row_when_a_value_is_needed() {
+    let none = LogicalPlan::new(PlanNode::ColumnNames {
+        input: Arc::new(LogicalPlan::table(["sales"])),
+        op: drop_columns(&["course", "year", "earnings"]),
+    });
+    for (min, filtered) in [(Some(1), true), (None, false), (Some(0), false)] {
+        let op = ColumnNamesOp::DropNa {
+            subset: vec![],
+            min_non_nulls: min,
+        };
+        let plan = run_on(false, none.clone(), op, |p| p).expect("analyzes");
+        assert!(plan.output.is_empty());
+        assert_eq!(
+            format!("{plan:?}").contains("Filter"),
+            filtered,
+            "min {min:?}"
+        );
+    }
+}

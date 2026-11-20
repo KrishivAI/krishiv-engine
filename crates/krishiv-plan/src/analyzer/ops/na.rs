@@ -77,20 +77,7 @@ impl Resolver<'_> {
         let cols: Vec<Attr> = if subset.is_empty() {
             c.out.to_vec()
         } else {
-            let mut found = Vec::new();
-            for name in subset {
-                match self.find(&c.out, std::slice::from_ref(name), p.origin, false)? {
-                    Some((a, _)) => found.push(a),
-                    None => {
-                        return Err(crate::analyzer::exprs::unresolved(
-                            std::slice::from_ref(name),
-                            &c.out,
-                            p.origin,
-                        ));
-                    }
-                }
-            }
-            found
+            self.resolve_columns(p, &c, subset)?
         };
         let needed = min_non_nulls.map_or(cols.len(), |n| n as usize);
         if needed == 0 {
@@ -112,10 +99,10 @@ impl Resolver<'_> {
             call(Builtin::When.name(), vec![valid, one(), zero()])
         });
         let first = terms.next();
-        let Some(sum) =
-            first.map(|f| terms.fold(f, |acc, t| call(Builtin::Add.name(), vec![acc, t])))
-        else {
-            return Ok(c);
+        // No column: the sum of nothing is 0, below any positive threshold, so no row stays.
+        let sum = match first {
+            Some(f) => terms.fold(f, |acc, t| call(Builtin::Add.name(), vec![acc, t])),
+            None => zero(),
         };
         let predicate = call(
             Builtin::GtEq.name(),
@@ -160,19 +147,19 @@ impl Resolver<'_> {
             };
             literals.push((kind, Arc::clone(v)));
         }
-        self.check_fill_columns(p, &c, cols)?;
+        let named = self.resolve_columns(p, &c, cols)?;
         // Several values paired with columns are Spark's `fillMap`: each value is cast to its
         // column's type whatever its kind. One value is `fill(value, subset)`, which only reaches
         // the columns its kind fits.
         let by_kind = literals.len() == 1;
         let value_for = |name: &str| -> Option<&(Fills, Arc<Expr>)> {
-            if cols.is_empty() {
+            if named.is_empty() {
                 return literals.first();
             }
-            let at = cols
+            let at = named
                 .iter()
                 // A name given twice takes the last value (Spark builds a `Map` from the pairs).
-                .rposition(|n| crate::analyzer::bind::same(name, n, cs))?;
+                .rposition(|n| crate::analyzer::bind::same(name, &n.col.name, cs))?;
             if literals.len() == 1 {
                 literals.first()
             } else {
@@ -212,28 +199,28 @@ impl Resolver<'_> {
 }
 
 impl Resolver<'_> {
-    /// The columns a fill or replace names resolve, each to one column: a name that is not a
-    /// column is `UNRESOLVED_COLUMN`, an ambiguous one `AMBIGUOUS_REFERENCE` (Spark's
-    /// `df.resolve`).
-    fn check_fill_columns(
+    /// The columns a fill, replace or drop names, each resolved to one column: a name is an attribute
+    /// reference as `df.col(name)` reads it (`` `we``ird` `` is the column `we`ird`), a name that is not a
+    /// column is `UNRESOLVED_COLUMN`, an ambiguous one `AMBIGUOUS_REFERENCE` (Spark's `df.resolve`). A
+    /// nested field (`s.a`) is not resolved here and is `UNRESOLVED_COLUMN`.
+    fn resolve_columns(
         &mut self,
         p: &LogicalPlan,
         c: &Rel,
-        cols: &[String],
-    ) -> Result<(), AnalysisError> {
-        for name in cols {
-            if self
-                .find(&c.out, std::slice::from_ref(name), p.origin, false)?
-                .is_none()
-            {
-                return Err(crate::analyzer::exprs::unresolved(
-                    std::slice::from_ref(name),
-                    &c.out,
-                    p.origin,
-                ));
+        names: &[String],
+    ) -> Result<Vec<Attr>, AnalysisError> {
+        let mut found = Vec::with_capacity(names.len());
+        for name in names {
+            let parts = krishiv_common::names::parse_attribute_name(name)
+                .map_err(|e| AnalysisError::new(e, p.origin))?;
+            match self.find(&c.out, &parts, p.origin, false)? {
+                Some((a, used)) if used == parts.len() => found.push(a),
+                _ => {
+                    return Err(crate::analyzer::exprs::unresolved(&parts, &c.out, p.origin));
+                }
             }
         }
-        Ok(())
+        Ok(found)
     }
 
     /// `na.replace`: a projection of `CASE WHEN col = old THEN new ... ELSE col END` per reached
@@ -259,7 +246,7 @@ impl Resolver<'_> {
             }
         }
         // Spark resolves the named columns before it looks at the pairs.
-        self.check_fill_columns(p, &c, cols)?;
+        let resolved = self.resolve_columns(p, &c, cols)?;
         let Some((kind, _, _)) = literals.first() else {
             return Ok(c);
         };
@@ -275,10 +262,10 @@ impl Resolver<'_> {
         let mut exprs = Vec::with_capacity(c.out.len());
         for a in c.out.iter() {
             let pass = self.pass_expr(&a.col);
-            let named = cols.is_empty()
-                || cols
+            let named = resolved.is_empty()
+                || resolved
                     .iter()
-                    .any(|n| crate::analyzer::bind::same(&a.col.name, n, cs));
+                    .any(|n| crate::analyzer::bind::same(&a.col.name, &n.col.name, cs));
             if !named || !kind.reaches(&a.col.data_type) {
                 exprs.push(pass);
                 continue;
