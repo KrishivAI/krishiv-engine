@@ -41,7 +41,7 @@ pub(super) fn max_id(root: &LogicalPlan) -> u64 {
 /// The attributes `root` reads: every column an expression of any node (subquery plans included) refers
 /// to, the output of the root, and the whole input of a node that reads its input positionally (a union,
 /// a set operation, a `DISTINCT`). A scan's carrier column (kept only to count rows) is not among them.
-/// A reference above a `Shift` counts below it too (each id less every offset in the plan, a superset),
+/// A reference above a `Shift` counts below it too (each id less every offset in the plan, kept when some node outputs it: a superset, and bounded even for the huge ids of subquery plans),
 /// since each instance of a shared scan reads only its own parent's columns
 /// (`krishiv_optimizer::narrow_scan_instances`). A node that renames attributes (a CTE reference) can
 /// hide a reference, which is the safe side for its one use, `QUERY_ONLY_CORRUPT_RECORD_COLUMN`: it
@@ -49,6 +49,8 @@ pub(super) fn max_id(root: &LogicalPlan) -> u64 {
 pub(super) fn referenced_attrs(root: &Arc<LogicalPlan>) -> HashSet<AttrId> {
     let mut out: HashSet<AttrId> = HashSet::new();
     let mut offsets: HashSet<u64> = HashSet::new();
+    // Every attribute some node of the plan outputs: the only ids a shifted reference can land on.
+    let mut defined: HashSet<AttrId> = HashSet::new();
     if let Some(o) = root.resolved_output() {
         out.extend(o.iter().map(|c| c.id));
     }
@@ -57,6 +59,9 @@ pub(super) fn referenced_attrs(root: &Arc<LogicalPlan>) -> HashSet<AttrId> {
     while let Some(p) = stack.pop() {
         if !seen.insert(Arc::as_ptr(p)) {
             continue;
+        }
+        if let Some(o) = p.resolved_output() {
+            defined.extend(o.iter().map(|c| c.id));
         }
         if matches!(
             p.node,
@@ -91,6 +96,7 @@ pub(super) fn referenced_attrs(root: &Arc<LogicalPlan>) -> HashSet<AttrId> {
     while let Some(id) = fresh.pop() {
         for k in &offsets {
             if let Some(below) = id.0.checked_sub(*k)
+                && defined.contains(&AttrId(below))
                 && out.insert(AttrId(below))
             {
                 fresh.push(AttrId(below));
