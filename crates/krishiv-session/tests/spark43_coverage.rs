@@ -70,14 +70,6 @@ const PENDING: &[(&str, &str)] = &[
     ("syn_update_with_options", "PARSE_SYNTAX_ERROR"),
     ("syn_delete_with_options", "PARSE_SYNTAX_ERROR"),
     ("syn_merge_with_options", "PARSE_SYNTAX_ERROR"),
-    // counter_diff is the window function of P3-T031 (PR #898); its entries go when that lands.
-    ("fn_counter_diff", "UNRESOLVED_ROUTINE"),
-    ("fn_counter_diff_start_time", "UNRESOLVED_ROUTINE"),
-    ("fn_counter_diff_nulls", "UNRESOLVED_ROUTINE"),
-    ("fn_counter_diff_double", "UNRESOLVED_ROUTINE"),
-    ("fn_counter_diff_negative", "UNRESOLVED_ROUTINE"),
-    ("fn_counter_diff_no_over", "UNRESOLVED_ROUTINE"),
-    ("fn_counter_diff_start_time_type", "UNRESOLVED_ROUTINE"),
 ];
 
 fn fixture() -> Value {
