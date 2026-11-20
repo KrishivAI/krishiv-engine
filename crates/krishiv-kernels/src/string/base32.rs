@@ -166,7 +166,7 @@ mod tests {
             ("M", &[0x03]),
             ("MZ", b"f"),
             ("MZX", b"f"),
-            ("MZXW", b"fo"),
+            ("MZXW", &[0x66, 0x6f]),
             ("MZXW6", b"foo"),
             ("MZXW6Y", b"foo"),
             ("MZXW6YT", b"foob"),
