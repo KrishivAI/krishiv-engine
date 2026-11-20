@@ -432,6 +432,64 @@ async fn start_with(policy: UiPolicy) -> std::net::SocketAddr {
     .await
 }
 
+/// A browser keeps cookies per host name, not per port. Two consoles on one host (one per embedded session,
+/// each with its own port and token) therefore each name their cookie after their port, and read only that one.
+#[tokio::test]
+async fn the_session_cookie_is_named_after_the_port_so_two_consoles_share_a_browser() {
+    let addr = start_with(UiPolicy::for_listener(true, [])).await;
+    let port = addr.port();
+    let host = format!("Host: localhost:{port}");
+    let a = auth();
+    let (status, head, _) = raw(
+        addr,
+        "POST",
+        "/api/internal/session",
+        &[&host, &a, "X-Krishiv-Csrf: 1"],
+        "",
+    )
+    .await;
+    assert_eq!(status, 204);
+    let cookie = head.lines().find(|l| l.starts_with("set-cookie")).unwrap();
+    assert!(
+        cookie.starts_with(&format!("set-cookie: krishiv_ui_token_{port}=")),
+        "{cookie}"
+    );
+    let other = port.wrapping_add(1);
+    for (sent, want) in [
+        // The browser sends both consoles' cookies to both; each reads its own.
+        (
+            format!("krishiv_ui_token_{other}=another-console; krishiv_ui_token_{port}={TOKEN}"),
+            200,
+        ),
+        (
+            format!("krishiv_ui_token_{port}={TOKEN}; krishiv_ui_token_{other}=another-console"),
+            200,
+        ),
+        // Another console's cookie, or one with no port in its name, is not this console's.
+        (format!("krishiv_ui_token_{other}={TOKEN}"), 401),
+        (format!("krishiv_ui_token={TOKEN}"), 401),
+        (format!("krishiv_ui_token_{port}0={TOKEN}"), 401),
+    ] {
+        let cookie = format!("Cookie: {sent}");
+        let (status, ..) = raw(addr, "GET", "/api/internal/health", &[&host, &cookie], "").await;
+        assert_eq!(status, want, "{sent}");
+    }
+    // An IPv6 address keeps its brackets in `Host`; the port follows them.
+    let (status, head, _) = raw(
+        addr,
+        "POST",
+        "/api/internal/session",
+        &[&format!("Host: [::1]:{port}"), &a, "X-Krishiv-Csrf: 1"],
+        "",
+    )
+    .await;
+    assert_eq!(status, 204);
+    assert!(
+        head.contains(&format!("set-cookie: krishiv_ui_token_{port}=")),
+        "{head}"
+    );
+}
+
 #[tokio::test]
 async fn the_session_cookie_is_secure_when_the_listener_is_tls() {
     let a = auth();

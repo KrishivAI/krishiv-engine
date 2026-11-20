@@ -231,13 +231,18 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def cookie_name(self) -> str:
+        """The session cookie's name carries the port, as the server's does: cookies are not kept per port."""
+        port = self.headers.get("Host", "").rpartition(":")[2]
+        return f"krishiv_ui_token_{port}" if port.isdigit() else "krishiv_ui_token"
+
     def do_GET(self) -> None:
         url = urlparse(self.path)
         if url.path.startswith("/api/internal/"):
             authorised = (
                 self.headers.get("Authorization") == f"Bearer {TOKEN}"
                 or f"token={TOKEN}" in url.query
-                or f"krishiv_ui_token={TOKEN}" in self.headers.get("Cookie", "")
+                or f"{self.cookie_name()}={TOKEN}" in self.headers.get("Cookie", "")
             )
             if not authorised:
                 return self.send_json(
@@ -301,7 +306,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204)
             self.send_header(
                 "Set-Cookie",
-                f"krishiv_ui_token={TOKEN}; HttpOnly; SameSite=Strict; Path=/api/internal",
+                f"{self.cookie_name()}={TOKEN}; HttpOnly; SameSite=Strict; Path=/api/internal",
             )
             self.send_header("Content-Length", "0")
             self.end_headers()

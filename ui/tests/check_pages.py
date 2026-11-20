@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
+from urllib.parse import urlparse
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import expect, sync_playwright
@@ -217,9 +218,11 @@ def page_checks(origin: str) -> list[str]:
         # Session: the token left the address and no script can read it.
         if "token" in page.url:
             problems.append(f"the token is still in the address: {page.url}")
-        cookies = [c for c in ctx.cookies() if c["name"] == "krishiv_ui_token"]
-        if len(cookies) != 1:
-            problems.append(f"expected one krishiv_ui_token cookie, got {cookies}")
+        # The name carries the port: a browser keeps cookies per host name, so two consoles on 127.0.0.1 need two.
+        name = f"krishiv_ui_token_{urlparse(origin).port}"
+        cookies = [c for c in ctx.cookies() if c["name"].startswith("krishiv_ui_token")]
+        if [c["name"] for c in cookies] != [name]:
+            problems.append(f"expected one {name} cookie, got {cookies}")
         else:
             c = cookies[0]
             if not c["httpOnly"]:

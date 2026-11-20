@@ -354,11 +354,15 @@ fn presented(method: &Method, headers: &HeaderMap, uri: &Uri) -> Option<String> 
     if method != Method::GET && !crate::pages::has_csrf_header(headers) {
         return None;
     }
+    // Only the cookie of this address counts: another console on the same host name has its own (see
+    // `session_cookie_name`).
+    let name = crate::pages::session_cookie_name(headers);
     if let Some(c) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())
-        && let Some(t) = c
-            .split(';')
-            .filter_map(|p| p.trim().strip_prefix("krishiv_ui_token="))
-            .next()
+        && let Some(t) = c.split(';').find_map(|p| {
+            p.trim()
+                .strip_prefix(name.as_str())
+                .and_then(|rest| rest.strip_prefix('='))
+        })
     {
         return Some(t.to_owned());
     }
