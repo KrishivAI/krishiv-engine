@@ -222,9 +222,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-buffer"
-version = "60.0.0"
+version = "60.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7235b863533e9db3ab86905b4521251de11226275b436ff3cb2d0010558d1c5"
+checksum = "7bd46a530bc1a8e763102fc36c1dc0f51f3ffa150c78e7f5658ccb54b1458ade"
 dependencies = [
  "bytes",
  "half",
@@ -266,9 +266,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "60.0.0"
+version = "60.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5aa06d5e22786c4966ffc4d2f171d0cb65d95f6bdea108a14e8c335e9faa437f"
+checksum = "415b7fbc4cf56b080bb5677a4ae74211b5c79e571ed37a1d547633ec07f3b43b"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -347,9 +347,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "60.0.0"
+version = "60.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f85a9a58cd03560526b0066487574aacb9008e413504fa0ee23d61141e96c338"
+checksum = "de2c8e714b466404cdc1189e89f892426efea614d938e16c15518c340cd43ba3"
 dependencies = [
  "bitflags 2.13.2",
 ]
@@ -1634,7 +1634,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-common"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde_json",
  "thiserror",
@@ -1643,12 +1643,14 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connect"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array",
  "arrow-schema",
  "krishiv-common",
+ "krishiv-kernels",
  "krishiv-plan",
+ "krishiv-sql",
  "krishiv-types",
  "prost",
  "prost-types",
@@ -1656,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connectors-delta"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -1670,6 +1672,7 @@ dependencies = [
  "bytes",
  "chrono",
  "delta_kernel",
+ "jiff",
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
@@ -1684,7 +1687,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-exec"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1713,7 +1716,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-functions"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -1725,6 +1728,7 @@ dependencies = [
  "fancy-regex",
  "getrandom 0.4.3",
  "krishiv-common",
+ "krishiv-io",
  "krishiv-kernels",
  "krishiv-types",
  "krishiv-udf-sdk",
@@ -1765,12 +1769,13 @@ dependencies = [
 
 [[package]]
 name = "krishiv-io"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "apache-avro",
  "arrow-array",
  "arrow-buffer",
  "arrow-schema",
+ "arrow-select",
  "async-trait",
  "bytes",
  "bzip2",
@@ -1797,7 +1802,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-kernels"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1821,7 +1826,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-memory"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1837,7 +1842,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-optimizer"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1851,7 +1856,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-plan"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1859,6 +1864,7 @@ dependencies = [
  "krishiv-functions",
  "krishiv-io",
  "krishiv-kernels",
+ "krishiv-memory",
  "krishiv-types",
  "krishiv-udf-sdk",
  "thiserror",
@@ -1868,7 +1874,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-plan-codec"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-ipc",
  "arrow-schema",
@@ -1883,10 +1889,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-session"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
+ "arrow-cast",
  "arrow-schema",
  "futures",
  "krishiv-common",
@@ -1902,6 +1909,7 @@ dependencies = [
  "krishiv-types",
  "krishiv-udf-sdk",
  "object_store",
+ "parquet",
  "regex-lite",
  "serde",
  "serde_json",
@@ -1913,7 +1921,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-sql"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "krishiv-common",
  "krishiv-kernels",
@@ -1924,7 +1932,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-store"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1932,11 +1940,12 @@ dependencies = [
  "krishiv-common",
  "object_store",
  "tokio",
+ "url",
 ]
 
 [[package]]
 name = "krishiv-testkit"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1967,7 +1976,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-types"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1979,7 +1988,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-udf-pool"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1988,6 +1997,7 @@ dependencies = [
  "futures",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-plan",
  "krishiv-types",
  "krishiv-udf-sandbox",
  "rustix",
@@ -1998,7 +2008,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-udf-sandbox"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "krishiv-common",
  "landlock",
@@ -2010,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-udf-sdk"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-array",
  "krishiv-types",
