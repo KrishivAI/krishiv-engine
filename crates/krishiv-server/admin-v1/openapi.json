@@ -55,6 +55,51 @@
         },
         "type": "object"
       },
+      "DrainRequest": {
+        "properties": {
+          "exitWhenDrained": {
+            "type": "boolean"
+          },
+          "gracePeriod": {
+            "$ref": "#/components/schemas/google.protobuf.Duration"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "DrainResponse": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/DrainStatus"
+          }
+        },
+        "type": "object"
+      },
+      "DrainStatus": {
+        "properties": {
+          "deadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "exitWhenDrained": {
+            "type": "boolean"
+          },
+          "queriesRunning": {
+            "format": "int64",
+            "type": "string"
+          },
+          "sessionsOpen": {
+            "format": "int64",
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Error": {
         "properties": {
           "error": {
@@ -94,6 +139,36 @@
               "$ref": "#/components/schemas/Capability"
             },
             "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "GetDrainStatusRequest": {
+        "properties": {},
+        "type": "object"
+      },
+      "GetDrainStatusResponse": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/DrainStatus"
+          }
+        },
+        "type": "object"
+      },
+      "GetReadinessRequest": {
+        "properties": {},
+        "type": "object"
+      },
+      "GetReadinessResponse": {
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ReadinessCheck"
+            },
+            "type": "array"
+          },
+          "ready": {
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -249,6 +324,39 @@
         },
         "type": "object"
       },
+      "ReadinessCheck": {
+        "properties": {
+          "consecutiveFailures": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ResumeServingRequest": {
+        "properties": {
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ResumeServingResponse": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/DrainStatus"
+          }
+        },
+        "type": "object"
+      },
       "Session": {
         "properties": {
           "clientType": {
@@ -305,7 +413,7 @@
   },
   "info": {
     "title": "krishiv.admin.v1",
-    "version": "2"
+    "version": "3"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -318,6 +426,106 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GetCapabilitiesResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/drain": {
+      "delete": {
+        "operationId": "ResumeServing",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "requestId",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeServingResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      },
+      "get": {
+        "operationId": "GetDrainStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetDrainStatusResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      },
+      "post": {
+        "operationId": "Drain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DrainRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DrainResponse"
                 }
               }
             },
@@ -487,6 +695,34 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CancelQueriesByTagResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/readiness": {
+      "get": {
+        "operationId": "GetReadiness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetReadinessResponse"
                 }
               }
             },
