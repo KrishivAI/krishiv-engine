@@ -137,6 +137,7 @@ pub struct QueryOptions {
     pub(crate) inbound_credential:
         Option<(crate::auth::Method, Option<crate::auth::InboundCredential>)>,
     pub(crate) query_start_micros: Option<i64>,
+    pub(crate) drain_exempt: bool,
 }
 
 impl QueryOptions {
@@ -186,6 +187,16 @@ impl QueryOptions {
     /// instant (an Arrow Flight SQL ticket fetched twice, P3-T101) gets the same clock values.
     pub fn query_start(mut self, micros: i64) -> Self {
         self.query_start_micros = Some(micros);
+        self
+    }
+
+    /// Marks the statement as work the server accepted before a drain began (an Arrow Flight SQL
+    /// ticket fetched while the server drains, design P3-T066 §5.1): its queries are not refused
+    /// by the drain, though they still go through resource-group admission. A caller sets it only
+    /// for a ticket it issued while the server was not draining; the Flight layer refuses every
+    /// new statement while draining, so each live ticket qualifies.
+    pub fn admitted_before_drain(mut self) -> Self {
+        self.drain_exempt = true;
         self
     }
 
@@ -452,19 +463,20 @@ impl QueryHistory {
             row.peak_memory_bytes = Some(done.peak_memory_bytes);
             row.error_class = done.error_class.map(str::to_owned);
             row.operators = Arc::from(done.operators.as_slice());
+            row.hints = done.hints.as_deref().map(Arc::from);
             if let Some(t) = done.totals {
                 row.workload_class = Some(t.workload_class);
                 row.cpu_ns = Some(t.cpu_ns);
                 row.rows_produced = t.rows_produced;
-                row.bytes_read = Some(t.bytes_read);
-                row.rows_read = Some(t.rows_read);
+                row.bytes_read = t.bytes_read;
+                row.rows_read = t.rows_read;
                 row.rows_written = Some(t.rows_written);
                 row.bytes_written = Some(t.bytes_written);
-                row.files_read = Some(t.files_read);
+                row.files_read = t.files_read;
                 row.files_written = Some(t.files_written);
-                row.spill_bytes = Some(t.spill_bytes);
-                row.spill_files = Some(t.spill_files);
-                row.pipelines = Some(t.pipelines);
+                row.spill_bytes = t.spill_bytes;
+                row.spill_files = t.spill_files;
+                row.pipelines = t.pipelines;
                 row.workers = Some(t.workers);
             }
         });

@@ -23,6 +23,12 @@ pub(crate) fn shutting_down() -> Status {
     Status::unavailable("server shutting down")
 }
 
+/// The answer to new work while the server drains (design P3-T066 §5.1): `KRISHIV_SERVER_DRAINING`,
+/// which a driver does not retry the way it retries `UNAVAILABLE`.
+pub(crate) fn draining() -> Status {
+    flight_status(&krishiv_common::error::KrishivServerDraining {}.into())
+}
+
 /// A call in flight on a Flight session: counted in the session table from creation until
 /// dropped (design §3.2: the sweep never releases a session with a call in flight).
 pub(crate) struct CallSession {

@@ -194,6 +194,13 @@ impl ConnectServer {
     /// `krishiv server` refuses another address without it).
     #[must_use]
     pub fn new(manager: Arc<SessionManager>, config: ConnectServerConfig) -> Self {
+        // A Krishiv client learns the `krishiv.v1` extensions this server offers from the
+        // `surface` row of `system.capabilities` (or a `Config` read of the capabilities key).
+        krishiv_session::register_surface(
+            krishiv_connect::extension::PACKAGE,
+            "1",
+            &krishiv_connect::extension::capabilities_value(),
+        );
         Self {
             manager,
             draining: Arc::new(AtomicBool::new(false)),
@@ -221,6 +228,18 @@ impl ConnectServer {
     #[must_use]
     pub fn with_auth(mut self, auth: ConnectAuth) -> Self {
         self.auth = Arc::new(auth);
+        self
+    }
+
+    /// This server refusing new work while `flag` is set (the drain controller's flag, design
+    /// P3-T066 §5.1), in place of its own flag, which `serve` sets at shutdown. The flag gates what
+    /// Connect itself admits: a new session, `CloneSession`, `AddArtifacts`. A new query on a session
+    /// that already exists is refused by the engine at admission, so the drain controller must also
+    /// call `EngineRuntime::set_draining` on the runtime the sessions come from (`krishiv server`'s
+    /// `Drainer` sets both); the flag alone does not stop it.
+    #[must_use]
+    pub fn with_draining(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.draining = flag;
         self
     }
 

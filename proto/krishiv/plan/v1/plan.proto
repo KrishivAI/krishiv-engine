@@ -669,6 +669,8 @@ message WindowFunctionPlan {
     OffsetFunction offset_value = 11;
     // feature: window_offset_functions
     NthValueFunction nth_value = 12;
+    // feature: window_counter_diff
+    CounterDiffFunction counter_diff = 13;
   }
   WindowFrame frame = 8;
   // A boolean input column an aggregate is restricted to.
@@ -696,6 +698,15 @@ message NthValueFunction {
   bool ignore_nulls = 3;
   // Arrow IPC `Schema` flatbuffer of one field.
   bytes data_type = 4;
+}
+
+// `counter_diff(counter[, start_time])`: input column `counter`, and column `start_time` when present.
+// feature: window_counter_diff
+message CounterDiffFunction {
+  uint64 counter = 1;
+  optional uint64 start_time = 2;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes data_type = 3;
 }
 
 message WindowFrame {
@@ -1082,6 +1093,9 @@ message KeyFilterOptions {
   // ignorable: a reader that skips it sizes each Bloom for its keys; filters
   // of several build partitions then merge to their range, and pass more rows.
   optional uint32 bloom_bytes = 9;
+  // ignorable: a reader that skips it loses the Bloom form of a build past
+  // `bloom_max_items` or one that sheds its hashes to spill (a range only).
+  optional uint32 bloom_spill_bytes = 10;
 }
 
 message UnionNode {
@@ -1437,6 +1451,8 @@ message DataType {
     KIND_COLLATED_STRING = 22;
     // feature: variant_type
     KIND_VARIANT = 23;
+    // feature: udt_type
+    KIND_UDT = 24;
   }
   Kind kind = 1;
   // `KIND_DECIMAL` and `KIND_TIME` only.
@@ -1444,8 +1460,10 @@ message DataType {
   // `KIND_DECIMAL` only.
   uint32 scale = 3;
   // feature: nested_types
-  // `KIND_NESTED` only: an array, map or struct type as Spark's JSON form
+  // `KIND_NESTED`: an array, map or struct type as Spark's JSON form
   // (`DataType.json`), which keeps nullability and field metadata.
+  // `KIND_UDT`: the user-defined type as Spark's JSON form (class names and
+  // the storage type).
   string json = 4;
   // feature: geo_types
   // `KIND_GEOMETRY` and `KIND_GEOGRAPHY` only: the SRID, -1 for `ANY`.

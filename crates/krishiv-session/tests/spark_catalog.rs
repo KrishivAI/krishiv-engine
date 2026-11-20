@@ -67,6 +67,18 @@ fn databases_list_get_exists() {
     assert!(!block_on(c.database_exists("zzz")).unwrap());
     assert_eq!(block_on(c.list_databases(Some("d*"))).unwrap().len(), 2);
     assert_eq!(block_on(c.list_databases(Some("db*"))).unwrap().len(), 1);
+    let embedded: Vec<_> = block_on(c.list_embedded_databases())
+        .unwrap()
+        .into_iter()
+        .map(|d| (d.catalog, d.name))
+        .collect();
+    assert_eq!(
+        embedded,
+        [
+            ("spark_catalog".to_owned(), "db1".to_owned()),
+            ("spark_catalog".to_owned(), "default".to_owned())
+        ]
+    );
 }
 
 #[test]
@@ -418,6 +430,7 @@ fn the_catalog_api_shows_a_principal_no_more_than_the_sql_statements_do() {
     assert!(denied(block_on(c.table_exists("missing")).unwrap_err()));
     assert!(denied(block_on(c.list_columns("secret")).unwrap_err()));
     assert!(denied(block_on(c.list_databases(None)).unwrap_err()));
+    assert!(denied(block_on(c.list_embedded_databases()).unwrap_err()));
     assert!(denied(block_on(c.get_database("default")).unwrap_err()));
     assert!(denied(block_on(c.database_exists("default")).unwrap_err()));
     assert!(denied(block_on(c.list_functions(None)).unwrap_err()));

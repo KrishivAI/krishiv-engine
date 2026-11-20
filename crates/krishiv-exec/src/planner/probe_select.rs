@@ -323,6 +323,7 @@ mod tests {
             name: "Filter".to_owned(),
             detail: "true".to_owned(),
             children: vec![ExplainNode::leaf("OneRow", "")],
+            facts: None,
         };
         assert_eq!(
             take_filter_input(&mut node, &mut explain, 0).as_deref(),

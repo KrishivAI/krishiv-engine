@@ -25,10 +25,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    CastOverflowInTableInsert, DataSourceNotFound, ErrorClass,
-    IncompatibleDataForTableCannotSafelyCast, InsertColumnArityMismatchNotEnoughDataColumns,
-    InsertColumnArityMismatchTooManyDataColumns, InternalError, InvalidAttributeNameSyntax,
-    InvalidSchemaOrRelationName, KrishivError, KrishivUnsupportedFeature, LocationAlreadyExists,
+    DataSourceNotFound, InternalError, InvalidAttributeNameSyntax, InvalidSchemaOrRelationName,
+    KrishivError, KrishivUnsupportedFeature, LocationAlreadyExists,
     NotSupportedCommandWithoutHiveSupport, RequiresSinglePartNamespace, SchemaAlreadyExists,
     SchemaNotEmpty, SchemaNotFound, TableOrViewNotFound, UnresolvedColumnWithSuggestion,
     UnsupportedFeatureDropDatabase, UnsupportedFeatureTableOperation, UnsupportedOverwriteTable,
@@ -504,7 +502,8 @@ impl Session {
             .into());
         }
         let name = self.namespace_name(&u.name, &env)?;
-        if !self.state.catalog.store.has_namespace(&name) {
+        // One the principal may not list reads as missing (review r2 R4).
+        if !self.state.catalog.store.has_namespace(&name) || self.namespace_hidden(&name).await {
             return Err(SchemaNotFound {
                 schema_name: format!("`{name}`"),
             }
@@ -524,6 +523,7 @@ impl Session {
         (ids, written): (&[krishiv_sql::ast::Span], &[String]),
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let cte_precedence = env.analysis.conf.cte_precedence;
         if v.global && v.using.is_none() {
             return self.create_global_temp_view(v, &env, ids).await;
         }
@@ -592,17 +592,17 @@ impl Session {
             plan.root(),
             env.analysis.conf.case_sensitive,
         ) {
-            return Err(krishiv_common::error::InvalidTempObjReference {
-                obj_name: name.quoted(),
-                obj: "view".to_owned(),
-                temp_obj_name: format!("`{temp}`"),
-                temp_obj: "view".to_owned(),
-            }
-            .into());
+            return Err(crate::view_session_refs::refusal(
+                &name.quoted(),
+                format!("`{temp}`"),
+                "VIEW",
+            ));
         }
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let case_sensitive = env.analysis.conf.case_sensitive;
-        let analysis = df.analyzed_in(env).await?;
+        let analysis = df.analyzed_in(env.clone()).await?;
+        self.refuse_session_objects(&name.quoted(), plan.root(), &env)
+            .await?;
         let query_columns: Vec<String> = analysis
             .analyzed
             .output
@@ -664,6 +664,17 @@ impl Session {
         }
         // Spark checks the names after the aliases: a repeated one is `COLUMN_ALREADY_EXISTS`.
         check_column_name_duplication(columns.iter().map(|c| c.name.as_str()), case_sensitive)?;
+        let definer = matches!(v.security, Some(krishiv_sql::ast::SqlSecurity::Definer));
+        // A definer view's functions are bound now, through the path frozen with it (review r8
+        // item 1).
+        let functions = definer.then(|| {
+            env.sql_functions.bound_calls(
+                plan.root(),
+                &frozen_namespace,
+                &frozen_path,
+                self.state.profile,
+            )
+        });
         let view = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -687,6 +698,14 @@ impl Session {
                 written: crate::identifier_clause::written_within(
                     original, ids, written, query.span,
                 ),
+                // `SQL SECURITY DEFINER` reads as its creator (P3-T062 §2.4).
+                definer: definer.then(|| self.state.principal.name.clone()),
+                // Spark captures the session's SQL configs with the view (`views.scala` line 557).
+                cte_precedence: Some(cte_precedence),
+                functions,
+                // The store sets the version (review r10 M10).
+                revision: 0,
+                author: self.state.principal.name.clone(),
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -1043,6 +1062,7 @@ impl Session {
         (ids, written): (&[krishiv_sql::ast::Span], &[String]),
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let cte_precedence = env.analysis.conf.cte_precedence;
         let frozen_path = env.catalog.sql_path_snapshot();
         let frozen_namespace = env
             .catalog
@@ -1088,16 +1108,16 @@ impl Session {
                     plan.root(),
                     env.analysis.conf.case_sensitive,
                 ) {
-                    return Err(krishiv_common::error::InvalidTempObjReference {
-                        obj_name: name.quoted(),
-                        obj: "view".to_owned(),
-                        temp_obj_name: format!("`{temp}`"),
-                        temp_obj: "view".to_owned(),
-                    }
-                    .into());
+                    return Err(crate::view_session_refs::refusal(
+                        &name.quoted(),
+                        format!("`{temp}`"),
+                        "VIEW",
+                    ));
                 }
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-                let analysis = df.analyzed_in(env).await?;
+                let analysis = df.analyzed_in(env.clone()).await?;
+                self.refuse_session_objects(&name.quoted(), plan.root(), &env)
+                    .await?;
                 crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
                 changed.columns = crate::char_write::output_columns(&analysis.analyzed, None);
                 let query_columns = analysis
@@ -1108,6 +1128,16 @@ impl Session {
                     .collect();
                 // `ALTER VIEW ... AS` keeps the mode (`AlterViewAsCommand`).
                 let schema_mode = existing.view.as_ref().and_then(|v| v.schema_mode);
+                let definer = existing.view.as_ref().is_some_and(|v| v.definer.is_some());
+                // A definer view's functions are bound again with its new query (review r8 item 1).
+                let functions = definer.then(|| {
+                    env.sql_functions.bound_calls(
+                        plan.root(),
+                        &frozen_namespace,
+                        &frozen_path,
+                        self.state.profile,
+                    )
+                });
                 changed.view = Some(ViewDef {
                     sql: original
                         .get(query.span.start..query.span.end)
@@ -1121,6 +1151,15 @@ impl Session {
                     written: crate::identifier_clause::written_within(
                         original, ids, written, query.span,
                     ),
+                    // A definer view keeps its mode, and its new query reads as whoever wrote it:
+                    // never as the previous definer, whose rights the new text could reach.
+                    definer: definer.then(|| self.state.principal.name.clone()),
+                    // Captured again with the new query, as Spark's `ALTER VIEW .. AS` does.
+                    cte_precedence: Some(cte_precedence),
+                    functions,
+                    // A new text: the store gives it a new version (review r10 M10).
+                    revision: 0,
+                    author: self.state.principal.name.clone(),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {
@@ -1568,6 +1607,13 @@ struct InsertTarget<'a> {
     statics: &'a [(String, String)],
     /// Checked through to the rows it would write, not written.
     dry: bool,
+    /// The writer's options (`writeTo(..).option(..)`, `saveAsTable`'s): a Delta append reads
+    /// `maxRecordsPerFile` from them; `None` for SQL.
+    #[cfg_attr(
+        not(feature = "delta"),
+        expect(dead_code, reason = "read by the Delta write path only")
+    )]
+    options: Option<&'a BTreeMap<String, OptionValue>>,
 }
 
 /// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as
@@ -1672,220 +1718,6 @@ pub(crate) enum V2Mode {
     Append,
 }
 
-/// Where a table column's value comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Source {
-    /// The query's column at this position.
-    Position(usize),
-    /// The column's `DEFAULT`, else NULL.
-    Default,
-}
-
-/// Matches the query's `output` to the columns of `table`: by position, by
-/// the column list, or by name. Spark's arity and store-assignment errors.
-fn assign(
-    table: &CatalogTable,
-    listed: &[String],
-    by_name: bool,
-    output: &[TableColumn],
-    case_sensitive: bool,
-) -> Result<Vec<Source>, KrishivError> {
-    let eq = |a: &str, b: &str| {
-        if case_sensitive {
-            a == b
-        } else {
-            a.eq_ignore_ascii_case(b)
-        }
-    };
-    let quoted_names = |names: Vec<&str>| {
-        names
-            .iter()
-            .map(|n| format!("`{n}`"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let table_name = quoted(&table.namespace, &table.name);
-    let table_cols = || quoted_names(table.columns.iter().map(|c| c.name.as_str()).collect());
-    let data_cols = || quoted_names(output.iter().map(|c| c.name.as_str()).collect());
-    let mut out = vec![Source::Default; table.columns.len()];
-    if by_name {
-        for (i, o) in output.iter().enumerate() {
-            let Some(at) = table.columns.iter().position(|c| eq(&c.name, &o.name)) else {
-                // A data column the table does not have: Spark counts the table's columns against the data's.
-                return Err(InsertColumnArityMismatchTooManyDataColumns {
-                    table_name,
-                    table_columns: table_cols(),
-                    data_columns: data_cols(),
-                }
-                .into());
-            };
-            out[at] = Source::Position(i);
-        }
-    } else if !listed.is_empty() {
-        if listed.len() != output.len() {
-            let (not_enough, table_cols_text) = (
-                listed.len() > output.len(),
-                quoted_names(listed.iter().map(String::as_str).collect()),
-            );
-            return Err(if not_enough {
-                InsertColumnArityMismatchNotEnoughDataColumns {
-                    table_name,
-                    table_columns: table_cols_text,
-                    data_columns: data_cols(),
-                }
-                .into()
-            } else {
-                InsertColumnArityMismatchTooManyDataColumns {
-                    table_name,
-                    table_columns: table_cols_text,
-                    data_columns: data_cols(),
-                }
-                .into()
-            });
-        }
-        for (i, name) in listed.iter().enumerate() {
-            let Some(at) = table.columns.iter().position(|c| eq(&c.name, name)) else {
-                return Err(UnresolvedColumnWithSuggestion {
-                    object_name: format!("`{name}`"),
-                    proposal: table_cols(),
-                }
-                .into());
-            };
-            out[at] = Source::Position(i);
-        }
-    } else {
-        match output.len().cmp(&table.columns.len()) {
-            std::cmp::Ordering::Less => {
-                return Err(InsertColumnArityMismatchNotEnoughDataColumns {
-                    table_name,
-                    table_columns: table_cols(),
-                    data_columns: data_cols(),
-                }
-                .into());
-            }
-            std::cmp::Ordering::Greater => {
-                return Err(InsertColumnArityMismatchTooManyDataColumns {
-                    table_name,
-                    table_columns: table_cols(),
-                    data_columns: data_cols(),
-                }
-                .into());
-            }
-            std::cmp::Ordering::Equal => {
-                for (i, slot) in out.iter_mut().enumerate() {
-                    *slot = Source::Position(i);
-                }
-            }
-        }
-    }
-    for (column, from) in table.columns.iter().zip(&out) {
-        if let Source::Position(i) = from
-            && !can_store(&output[*i].data_type, &column.data_type)
-        {
-            return Err(IncompatibleDataForTableCannotSafelyCast {
-                table_name,
-                col_name: format!("`{}`", column.name),
-                src_type: format!(
-                    "\"{}\"",
-                    output[*i].data_type.catalog_string().to_uppercase()
-                ),
-                target_type: format!("\"{}\"", column.data_type.catalog_string().to_uppercase()),
-            }
-            .into());
-        }
-    }
-    Ok(out)
-}
-
-/// Spark's ANSI store assignment (`Cast.canANSIStoreAssign`): whether a
-/// value of type `from` may be stored into a column of type `to`.
-fn can_store(from: &DataType, to: &DataType) -> bool {
-    use DataType as T;
-    if from == to {
-        return true;
-    }
-    let numeric = |t: &T| {
-        matches!(
-            t,
-            T::Byte | T::Short | T::Integer | T::Long | T::Float | T::Double | T::Decimal(_)
-        )
-    };
-    // Anything atomic may be stored as a string.
-    let to_string = matches!(to, T::String | T::CollatedString(_))
-        && (numeric(from)
-            || matches!(
-                from,
-                T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary
-            ));
-    match (from, to) {
-        (T::Null, _) | (T::String | T::CollatedString(_), T::String | T::CollatedString(_)) => true,
-        (a, b) if (numeric(a) && numeric(b)) || to_string => true,
-        // Dates and timestamps among themselves.
-        (T::Date, T::Timestamp | T::TimestampNtz)
-        | (T::Timestamp | T::TimestampNtz, T::Date | T::Timestamp | T::TimestampNtz) => true,
-        (T::Array(a), T::Array(b)) => {
-            can_store(a.element_type(), b.element_type())
-                && (b.contains_null() || !a.contains_null())
-        }
-        (T::Map(a), T::Map(b)) => {
-            can_store(a.key_type(), b.key_type())
-                && can_store(a.value_type(), b.value_type())
-                && (b.value_contains_null() || !a.value_contains_null())
-        }
-        (T::Struct(a), T::Struct(b)) => {
-            a.fields().len() == b.fields().len()
-                && a.fields().iter().zip(b.fields()).all(|(x, y)| {
-                    can_store(x.data_type(), y.data_type()) && (y.nullable() || !x.nullable())
-                })
-        }
-        _ => false,
-    }
-}
-
-/// A `CAST_OVERFLOW` raised while a column is written is `CAST_OVERFLOW_IN_TABLE_INSERT`, naming the column,
-/// whatever `spark.sql.ansi.enabled` is; any other error is returned as it came.
-fn overflow_in_table_insert(
-    e: KrishivError,
-    table: &CatalogTable,
-    output: &[TableColumn],
-    assignment: &[Source],
-) -> KrishivError {
-    let e = crate::char_write::map_error(e);
-    if e.error_class() != ErrorClass::CastOverflow {
-        return e;
-    }
-    let params = e.message_parameters();
-    let param = |key: &str| {
-        params
-            .iter()
-            .find(|(name, _)| *name == key)
-            .map(|(_, v)| v.clone())
-    };
-    let (Some(source_type), Some(target_type)) = (param("sourceType"), param("targetType")) else {
-        return e;
-    };
-    let sql = |t: &DataType| format!("\"{}\"", t.catalog_string().to_uppercase());
-    let column = table
-        .columns
-        .iter()
-        .zip(assignment)
-        .find(|(c, from)| {
-            matches!(from, Source::Position(i)
-                if sql(&c.data_type) == target_type && sql(&output[*i].data_type) == source_type)
-        })
-        .map(|(c, _)| c.name.clone());
-    // No column matches: the overflow is the query's own, and Spark reports it as it is.
-    let Some(column) = column else {
-        return e;
-    };
-    CastOverflowInTableInsert {
-        source_type,
-        target_type,
-        column_name: format!("`{column}`"),
-    }
-    .into()
-}
-
 /// `OPTIONS (...)` / `TBLPROPERTIES (...)` as text pairs, keys lower-cased
 /// for options as Spark does not (kept as written).
 fn options_of(options: &[TableOption], original: &str) -> BTreeMap<String, String> {
@@ -1926,6 +1758,9 @@ pub(crate) fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+mod assign;
+use assign::{Source, assign, can_store, overflow_in_table_insert};
+
 mod files;
 pub(crate) use files::CheckedDir;
 mod questions;
@@ -1942,6 +1777,8 @@ pub(crate) use owned_directory::{OwnedDirectory, OwnedDirectoryError};
 #[cfg(test)]
 mod owned_directory_tests;
 
+#[cfg(feature = "unstable-ir")]
+mod insert_parameters;
 mod writes;
 
 mod create;
@@ -1949,6 +1786,10 @@ mod create;
 mod delta;
 #[cfg(feature = "delta")]
 pub(crate) use delta::{delta_write_refused, is_delta_table};
+#[cfg(feature = "delta")]
+mod delta_writes;
+#[cfg(feature = "delta")]
+pub(crate) use delta_writes::{DeltaTarget, delta_source};
 
 mod pipeline;
 mod row_level;

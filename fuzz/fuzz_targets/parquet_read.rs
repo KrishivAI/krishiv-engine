@@ -3,7 +3,7 @@
 //! its footer is read through the scheduler, then every column of every
 //! split (whole file, and two halves) is decoded, with and without a pushed
 //! predicate and row index. Each step must return rows or a typed error,
-//! never panic out of the reader, and never hold memory after the scan. Seeds: the
+//! never panic out of the reader, and never hold memory after the scan (each scan also unregisters its consumer). Seeds: the
 //! interoperability fixtures (`tests/fixtures/parquet`).
 #![no_main]
 
@@ -121,6 +121,13 @@ fuzz_target!(|data: &[u8]| {
                 if let Ok(mut s) = opened {
                     while let Ok(Some(_)) = s.next_batch().await {}
                 }
+                // Checked before the unregister, which subtracts any outstanding grants from the
+                // pool's accounting and would hide a leaked reservation from the final assert.
+                assert_eq!(h.pool.reserved(), 0, "a scan held memory after it ended");
+                // A `Reservation` returns its bytes on drop but does not leave the pool:
+                // without this the pool's consumer table grows by one entry per scan,
+                // forever (weekly fuzz run 42456135258: 934 MB to 2,058 MB over 420K runs).
+                h.pool.unregister(id);
             }
         }
         assert_eq!(h.pool.reserved(), 0, "a scan held memory after it ended");

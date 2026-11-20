@@ -11,9 +11,12 @@ are the check, since pixels differ between machines).
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
+from html import escape
 from pathlib import Path
+from urllib.parse import quote
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
@@ -35,7 +38,14 @@ PAGES = [
     (
         "query-detail",
         "#/queries/01932a40-1a00-7a01-8001-aaaaaaaaaa02",
-        ["HashJoin", "128.0 MiB", "Operators"],
+        [
+            "HashJoin",
+            "128.0 MiB",
+            "Operators",
+            "Advisor hints",
+            "SPILL",
+            "HashJoin spilled 128 MiB; give the query more memory.",
+        ],
     ),
     ("history", "#/history", ["History", "DIVIDE_BY_ZERO", "Compare the two selected"]),
     ("resources", "#/resources", ["Memory", "Caches", "root/query-1"]),
@@ -53,6 +63,229 @@ SMALL_TARGETS = """
   .filter(([e, r]) => (r.height < 40 || r.width < 40) && !(e.tagName === 'A' && e.closest('main') && e.closest('p, td')))
   .map(([e, r]) => `${e.tagName.toLowerCase()} "${(e.textContent || e.getAttribute('aria-label') || '').trim().slice(0, 30)}" ${Math.round(r.width)}x${Math.round(r.height)}`)
 """
+
+
+QID = "01932a40-1a00-7a01-8001-aaaaaaaaaa02"
+SAMPLE_THEME = {"mode": "dark", "tokens": {"accent": "#ff0000", "radius-md": "2px"}}
+
+
+def _console(page: object, sink: list[str]) -> None:
+    page.on("console", lambda m: sink.append(f"{m.type}: {m.text}"))  # type: ignore[attr-defined]
+    page.on("pageerror", lambda e: sink.append(f"error: {e}"))  # type: ignore[attr-defined]
+
+
+def serve_html(body: str):
+    """A route handler answering every request with `body` (a closure: Playwright passes the handler two arguments)."""
+    return lambda route: route.fulfill(status=200, content_type="text/html", body=body)
+
+
+def embed_checks(origin: str, shots: Path | None) -> list[str]:
+    """Deep links navigate; the embedded profile renders when framed from an allowed origin and not from another,
+    at three widths with the default and a sample theme; theme messages are applied only when valid and from an
+    allowed origin, also one sent as the frame loads; the embedded view has no header or navigation."""
+    problems: list[str] = []
+    link = f"{origin}/queries/{QID}/profile?embed=1&exp=9999999999&sig=ok"
+
+    def parent_html(src: str, onload: str = "") -> str:
+        return f'<!doctype html><iframe id="f" src="{src}" style="width:100%;height:700px;border:0" onload="{escape(onload)}"></iframe>'
+
+    with sync_playwright() as p:
+        # The fixture is on loopback and the embedding consoles are made-up public names: Chromium's local-network
+        # checks would refuse that frame, which is not what this check is about.
+        browser = p.chromium.launch(
+            args=[
+                "--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessSendPreflights,BlockInsecurePrivateNetworkRequests"
+            ]
+        )
+        # 1. A deep link navigates away: the header and the back link of the detail page still work.
+        ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+        page = ctx.new_page()
+        page.goto(f"{origin}/queries/{QID}?token=fixture")
+        page.get_by_text("HashJoin").first.wait_for(timeout=10000)
+        page.get_by_role("link", name="Health").first.click()
+        try:
+            page.get_by_text("Uptime").first.wait_for(timeout=5000)
+        except PlaywrightTimeout:
+            problems.append(
+                "deep link /queries/{id}: the header's Health link does not leave the page"
+            )
+        page.get_by_role("link", name="Queries").first.click()
+        try:
+            page.get_by_text("SELECT l_returnflag").first.wait_for(timeout=5000)
+        except PlaywrightTimeout:
+            problems.append(
+                "deep link: the header's Queries link does not show the query list"
+            )
+        page.goto(f"{origin}/sql?token=fixture")
+        page.get_by_role("link", name="Environment").first.click()
+        try:
+            page.get_by_text("krishiv.auth.token").first.wait_for(timeout=5000)
+        except PlaywrightTimeout:
+            problems.append(
+                "deep link /sql: the Environment link does not leave the page"
+            )
+        ctx.close()
+
+        # 2. Framed from the allowed origin: renders, with no header or navigation, at three widths.
+        for label, width, height in (
+            ("phone", 390, 844),
+            ("tablet", 820, 1180),
+            ("desktop", 1440, 900),
+        ):
+            for theme_name, theme in (("default", None), ("sample", SAMPLE_THEME)):
+                src = link
+                if theme is not None:
+                    src += "&theme=" + quote(json.dumps(theme))
+                ctx = browser.new_context(viewport={"width": width, "height": height})
+                log: list[str] = []
+                body = parent_html(src)
+                ctx.route("http://parent.test/**", serve_html(body))
+                page = ctx.new_page()
+                _console(page, log)
+                page.goto("http://parent.test/")
+                frame = page.frame_locator("#f")
+                view = f"embed {label} {theme_name}"
+                try:
+                    frame.get_by_text("HashJoin").first.wait_for(timeout=10000)
+                except PlaywrightTimeout:
+                    problems.append(f"{view}: the framed profile does not render")
+                    ctx.close()
+                    continue
+                if frame.locator("header, nav").count() != 0:
+                    problems.append(
+                        f"{view}: the embedded view shows a header or navigation"
+                    )
+                if frame.get_by_text("Powered by Krishiv").count() != 1:
+                    problems.append(f"{view}: the attribution mark is not shown")
+                accent = frame.locator("html").evaluate(
+                    "e => getComputedStyle(e).getPropertyValue('--k-accent').trim()"
+                )
+                if (accent == "#ff0000") != (theme is not None):
+                    problems.append(f"{view}: --k-accent is {accent!r}")
+                if (
+                    theme is not None
+                    and frame.locator("html").get_attribute("data-theme") != "dark"
+                ):
+                    problems.append(f"{view}: the theme's mode was not applied")
+                if shots is not None:
+                    shots.mkdir(parents=True, exist_ok=True)
+                    page.screenshot(
+                        path=str(shots / f"embed-{label}-{theme_name}.png"),
+                        full_page=True,
+                    )
+                problems += [
+                    f"{view}: {m}" for m in log if m.startswith(("error", "warning"))
+                ]
+                ctx.close()
+
+        # 3. Framed from an origin that is not allowed: the browser blocks it (CSP frame-ancestors).
+        ctx = browser.new_context()
+        ctx.route(
+            "http://blocked.test/**",
+            lambda r: r.fulfill(
+                status=200, content_type="text/html", body=parent_html(link)
+            ),
+        )
+        page = ctx.new_page()
+        page.goto("http://blocked.test/")
+        page.wait_for_timeout(1500)
+        framed = [f for f in page.frames if f != page.main_frame]
+        if not framed or not framed[0].url.startswith("chrome-error:"):
+            problems.append(
+                f"embed from a disallowed origin was not blocked: {[f.url for f in framed]}"
+            )
+        ctx.close()
+
+        # 4. Theme messages: valid from the allowed origin (sent as the frame loads) applies; the others do not.
+        def message(theme: object) -> str:
+            return f'this.contentWindow.postMessage({{type:"krishiv.theme",theme:{json.dumps(theme)}}},"*")'
+
+        def accent_of(page: object) -> str:
+            return (
+                page.frame_locator("#f")
+                .locator("html")
+                .evaluate(  # type: ignore[attr-defined]
+                    "e => getComputedStyle(e).getPropertyValue('--k-accent').trim()"
+                )
+            )
+
+        ctx = browser.new_context()
+        log = []
+        ctx.route(
+            "http://parent.test/**",
+            lambda r: r.fulfill(
+                status=200,
+                content_type="text/html",
+                body=parent_html(link, message({"tokens": {"accent": "#00ff00"}})),
+            ),
+        )
+        page = ctx.new_page()
+        _console(page, log)
+        page.goto("http://parent.test/")
+        page.frame_locator("#f").get_by_text("HashJoin").first.wait_for(timeout=10000)
+        page.wait_for_timeout(500)
+        if accent_of(page) != "#00ff00":
+            problems.append(
+                f"a theme sent as the frame loads was not applied (accent {accent_of(page)!r})"
+            )
+        for bad in (
+            {"tokens": {"accent": "url(http://x/y)"}},
+            {"tokens": {"nope": "#fff"}},
+            {"mode": "sepia"},
+        ):
+            page.evaluate(
+                f'(()=>{{const f=document.getElementById("f");{message(bad).replace("this.", "f.")}}})()'
+            )
+        page.wait_for_timeout(500)
+        if accent_of(page) != "#00ff00":
+            problems.append(
+                f"an invalid theme changed the page (accent {accent_of(page)!r})"
+            )
+        if sum("ignored an invalid theme message" in m for m in log) != 3:
+            problems.append(f"invalid theme messages were not logged: {log}")
+        ctx.close()
+        ctx = browser.new_context()
+        log = []
+        ctx.route(
+            "http://other.test/**",
+            lambda r: r.fulfill(
+                status=200,
+                content_type="text/html",
+                body=parent_html(link, message({"tokens": {"accent": "#00ff00"}})),
+            ),
+        )
+        page = ctx.new_page()
+        _console(page, log)
+        page.goto("http://other.test/")
+        page.frame_locator("#f").get_by_text("HashJoin").first.wait_for(timeout=10000)
+        page.wait_for_timeout(500)
+        if accent_of(page) == "#00ff00":
+            problems.append(
+                "a theme message from an origin that is not allowed was applied"
+            )
+        if not any("not in krishiv.ui.allowedOrigins" in m for m in log):
+            problems.append(f"a message from a disallowed origin was not logged: {log}")
+        ctx.close()
+
+        # 5. A theme in the link that is not valid is ignored and logged.
+        ctx = browser.new_context()
+        log = []
+        bad_link = link + "&theme=" + quote(json.dumps({"tokens": {"accent": "red"}}))
+        ctx.route(
+            "http://parent.test/**",
+            lambda r: r.fulfill(
+                status=200, content_type="text/html", body=parent_html(bad_link)
+            ),
+        )
+        page = ctx.new_page()
+        _console(page, log)
+        page.goto("http://parent.test/")
+        page.frame_locator("#f").get_by_text("HashJoin").first.wait_for(timeout=10000)
+        if not any("ignored the theme in the link" in m for m in log):
+            problems.append(f"an invalid theme in the link was not logged: {log}")
+        ctx.close()
+        browser.close()
+    return problems
 
 
 def check(shots: Path | None) -> list[str]:
@@ -101,6 +334,15 @@ def check(shots: Path | None) -> list[str]:
                             f"{view}: the page scrolls sideways ({wide}px too wide)"
                         )
                     body = page.inner_text("body")
+                    if name == "query-detail":
+                        hints = page.get_by_test_id("advisor-hints").all_inner_texts()
+                        if (
+                            len(hints) != 1
+                            or "give the query more memory" not in hints[0]
+                        ):
+                            problems.append(
+                                f"{view}: the advisor-hints section is {hints!r}"
+                            )
                     problems += [
                         f"{view}: missing text {t!r}"
                         for t in texts
@@ -287,9 +529,13 @@ if __name__ == "__main__":
     server = fixture_server.serve()
     threading.Thread(target=server.serve_forever, daemon=True).start()
     found += page_checks(f"http://127.0.0.1:{server.server_address[1]}")
+    found += embed_checks(
+        f"http://127.0.0.1:{server.server_address[1]}",
+        Path(sys.argv[1]) if len(sys.argv) > 1 else None,
+    )
     print(
         "\n".join(found)
         if found
-        else "ui pages: ok (8 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe)"
+        else "ui pages: ok (8 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, deep links, embed)"
     )
     sys.exit(1 if found else 0)

@@ -106,9 +106,9 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     Aggregate => ("aggregate", 9, Partial, "GROUP_TYPE_PIVOT", "Aggregate; pivot → Pivot (exists)", "P3-T012", 2),
     Sql => ("sql", 10, Partial, "DataFrame arguments (with_relations)", "Sql; the with_relations form (#41) for DataFrame arguments", "P3-T012", 4),
     LocalRelation => ("local_relation", 11, Done, "", "Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit", "P3-T012a", 1),
-    Sample => ("sample", 12, Missing, "", "new Sample (Bernoulli/Poisson with seed, Spark's XORShiftRandom order)", "P3-T012", 3),
+    Sample => ("sample", 12, Partial, "with_replacement (Poisson) and deterministic_order (randomSplit)", "Sample (Bernoulli, seed or one drawn per plan, Spark's XORShiftRandom order); Poisson needs a new IR field; deterministic_order needs the per-partition sort", "P3-T012", 3),
     Offset => ("offset", 13, Done, "", "Offset", "P2-T091a", 0),
-    Deduplicate => ("deduplicate", 14, Missing, "", "lowering: Distinct (all columns) or Aggregate with first per non-key column; within_watermark → P4", "P3-T012", 3),
+    Deduplicate => ("deduplicate", 14, Partial, "a column subset and within_watermark", "Distinct (all columns); a subset is Aggregate with first per non-key column and needs the input columns (analyzer node); within_watermark → P4", "P3-T012", 3),
     Range => ("range", 15, Done, "", "Range", "P2-T091a", 0),
     SubqueryAlias => ("subquery_alias", 16, Done, "", "SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP", "P3-T012", 1),
     Repartition => ("repartition", 17, Missing, "", "Repartition (round robin / coalesce)", "P3-T012", 3),
@@ -118,10 +118,10 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     Drop => ("drop", 21, Missing, "", "lowering: Project without the dropped columns (names or column references)", "P3-T012", 4),
     Tail => ("tail", 22, Missing, "", "new Tail (the last n rows in plan order; not Sort + Limit)", "P3-T012", 3),
     WithColumns => ("with_columns", 23, Partial, "Alias.metadata", "WithColumns; metadata on the column field", "P3-T012", 4),
-    Hint => ("hint", 24, Missing, "", "Hint", "P3-T012", 3),
-    Unpivot => ("unpivot", 25, Missing, "", "Unpivot", "P3-T012", 2),
+    Hint => ("hint", 24, Done, "", "Hint; as Spark 4.2: parameters are literals or lists of them, a partitioning hint is dropped with a warning (3.5 reads parameters differently)", "P3-T012", 3),
+    Unpivot => ("unpivot", 25, Partial, "absent values, values that are not columns, and a column that is also an id or listed twice", "Project(ids, values) then Unpivot with nulls kept; values absent → every non-id column, known only after analysis", "P3-T012", 2),
     ToSchema => ("to_schema", 26, Missing, "", "lowering: Project of by-name Cast and reorder (Spark's Dataset.to)", "P3-T012", 4),
-    RepartitionByExpression => ("repartition_by_expression", 27, Missing, "", "Repartition (hash or range)", "P3-T012", 3),
+    RepartitionByExpression => ("repartition_by_expression", 27, Partial, "num_partitions, no expressions (round robin), repartitionByRange", "Repartition (hash); a partition count, a round-robin repartition and SortOrder expressions need IR fields", "P3-T012", 3),
     MapPartitions => ("map_partitions", 28, Partial, "is_barrier = true, profile_id, Scala/Java functions (56K00), eval types other than 205/207 (FUNCTION_EVAL_TYPE_NOT_SUPPORTED), additional_includes", "MapPartitions (mapInPandas 205, mapInArrow 207) over the PythonUdfRef the server's UdfHost names (Usage on System(udf), as for inline UDFs); runs on the session's Python workers", "P3-T014", 6),
     CollectMetrics => ("collect_metrics", 29, Done, "", "CollectMetrics (observe); the server returns ObservedMetrics after the action", "P3-T084", 6),
     Parse => ("parse", 30, Missing, "", "lowering: Project of from_json / from_csv over a string relation", "P3-T012", 4),
@@ -156,7 +156,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     SampleBy => ("sample_by", 107, Missing, "", "lowering: Filter with a seeded rand() against the per-stratum fraction", "P3-T012", 5),
     Catalog => ("catalog", 200, Missing, "", "the 36 catalog operations", "P3-T082", 9),
     MlRelation => ("ml_relation", 300, OutOfScope, "", "machine learning is out of scope", "", 0),
-    Extension => ("extension", 998, Missing, "", "the krishiv.v1 extension handler; a message no handler claims is refused", "P3-T015", 10),
+    Extension => ("extension", 998, Partial, "every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability)", "the krishiv.v1 registry (`extension::resolve`); Echo is a one-row Project over OneRowRelation", "P3-T015", 10),
     Unknown => ("unknown", 999, OutOfScope, "", "Spark falls to case other and answers 56K00 with UNKNOWN(999)", "", 0),
 }
 
@@ -182,7 +182,7 @@ oneof! { expression, EXPRESSION_ROWS, expression::ExprType, "Expression.expr_typ
     TypedAggregateExpression => ("typed_aggregate_expression", 20, OutOfScope, "", "Scala typed Dataset aggregation; unsupported row", "", 0),
     SubqueryExpression => ("subquery_expression", 21, Missing, "", "Subquery (scalar, EXISTS, IN) referencing with_relations", "P3-T012", 4),
     DirectShufflePartitionId => ("direct_shuffle_partition_id", 22, Missing, "", "partition id passed through for repartition_by_expression (expressions.proto §DirectShufflePartitionID); Repartition by explicit id", "P3-T012", 3),
-    Extension => ("extension", 999, Missing, "", "T015", "P3-T015", 10),
+    Extension => ("extension", 999, Partial, "every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability)", "the krishiv.v1 registry (`extension::resolve`); Echo is a string Literal", "P3-T015", 10),
 }
 
 oneof! { command, COMMAND_ROWS, command::CommandType, "Command.command_type";
@@ -205,7 +205,7 @@ oneof! { command, COMMAND_ROWS, command::CommandType, "Command.command_type";
     MlCommand => ("ml_command", 17, OutOfScope, "", "machine learning is out of scope; a client may send it for cache cleanup when a session ends", "", 0),
     ExecuteExternalCommand => ("execute_external_command", 18, Missing, "", "refusal: runs a command on an external JDBC source (executeExternal); no JDBC connector in P3", "P3-T012", 4),
     PipelineCommand => ("pipeline_command", 19, OutOfScope, "", "pipelines are out of scope until P4", "", 0),
-    Extension => ("extension", 999, Missing, "", "T015", "P3-T015", 10),
+    Extension => ("extension", 999, Partial, "every krishiv.v1 message: none is registered for a command yet (KRISHIV_UNSUPPORTED_FEATURE naming the capability)", "the krishiv.v1 registry (`extension::resolve`); the server runs a command extension when one is registered", "P3-T015", 10),
 }
 
 oneof! { catalog, CATALOG_ROWS, catalog::CatType, "Catalog.cat_type";
@@ -298,7 +298,7 @@ oneof! { data_kind, DATA_KIND_ROWS, data_type::Kind, "DataType.kind";
     Struct => ("struct", 21, Done, "", "DataType", "P2-T091a", 1),
     Map => ("map", 22, Done, "", "DataType", "P2-T091a", 1),
     Variant => ("variant", 25, Done, "", "DataType", "P2-T091a", 1),
-    Udt => ("udt", 23, Missing, "", "no IR type", "P3-T012", 1),
+    Udt => ("udt", 23, Partial, "a JVM UDT with no sql_type (Spark builds it from the JVM class alone; Krishiv cannot load JVM classes, so `sql_type` is required and the answer is INVALID_ONE_OF_FIELD_NOT_SET)", "DataType::Udt", "P3-T079", 1),
     Geometry => ("geometry", 26, Done, "", "DataType", "P2-T091a", 1),
     Geography => ("geography", 27, Done, "", "DataType", "P2-T091a", 1),
     Unparsed => ("unparsed", 24, Missing, "", "a type string parsed by the SQL type parser", "P3-T012", 1),

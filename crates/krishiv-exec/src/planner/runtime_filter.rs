@@ -64,11 +64,31 @@
 //! keys that holds 869K at SF100). A build whose key rows exceed
 //! `bloom.maxItems` publishes no Bloom form (`KeyFilterBuilder::add` and
 //! `merge` in `krishiv_io::runtime_filter` drop the hashes past it), so a
-//! wrong guess costs only the hashing until then. Whether the scan
+//! wrong guess costs only the hashing until then. Except for such a guessed
+//! build while `bloom.memoryTier` is on: it gets a fixed
+//! Bloom (`KeyFilterOptions::bloom_spill_bytes`) sized for a quarter of the
+//! scan's rows within the tier. Its memory is reserved once the build's
+//! keys reach a sixteenth of it as hashes, spill or not (early, while the
+//! pool has room; freed at publish if unused), and the partials make the
+//! filter on it once one passes the cap or is asked to spill, then drain
+//! their hashes into it. Once the keys drained pass
+//! what it holds within `bloom_max_fpp` it is freed and hashing stops, so
+//! a wrong guess costs at most the filter's keys; else it is published
+//! (TPC-H q09 at SF1000: `p_name LIKE '%green%'`, a lineitem-side build of
+//! ~300M keys that always spills, had only a range on `orders`;
+//! `join/build/spilled.rs`). A Bloom that drops little is switched off by
+//! the scan's adaptive row stage. The join may be broadcast or shuffled
+//! (q09's is shuffled on the key) when the plan runs on one worker: a cut
+//! plan keeps none (`krishiv-scheduler` `fragment.rs` clears it on every
+//! join of a fragment and on an exchange's collected filter, as a fragment
+//! runs as tasks).
+//! Whether the scan
 //! waits for the filter ([`scan_waits`]) still reads the uncapped
 //! estimate. Spark's size guards are not used: they are tuned for clusters.
 
 use std::sync::Arc;
+
+use super::explain::{FilterGap, FilterGapReason};
 
 use arrow_schema::DataType;
 use krishiv_common::config::{
@@ -235,6 +255,22 @@ impl Settings {
         }
         self
     }
+
+    /// The size of the fixed Bloom a guessed build keeps past its cap
+    /// (`KeyFilterOptions::bloom_spill_bytes`) under a scan of `scan_rows`:
+    /// sized for a quarter of the scan's rows (the planner's own 4x test: a
+    /// build of more keys filters too little to pay), within the memory
+    /// tier and an explicit `bloom.maxBytes`; `None` with the tier off.
+    /// TPC-H q09 at SF1000 keeps the whole tier (375M keys).
+    fn spill_bloom_bytes(&self, scan_rows: f64, fpp: f64) -> Option<u32> {
+        let tier = self.memory_tier?;
+        let cap = if self.at_scale_bytes {
+            tier
+        } else {
+            tier.min(self.bloom_max_bytes)
+        };
+        Some(planned_bloom_bytes(scan_rows / 4.0, fpp, cap))
+    }
 }
 
 /// The memory a query may use: `krishiv.memory.limit` (else the root pool's
@@ -334,6 +370,8 @@ pub(crate) struct JoinFilters {
     pub(crate) filters: Vec<JoinFilterPlan>,
     /// `EXPLAIN` text.
     pub(crate) explain: Vec<String>,
+    /// Keys that got no filter, for the advisor (P3-T073).
+    pub(crate) gaps: Vec<FilterGap>,
 }
 
 impl Planner<'_> {
@@ -353,19 +391,30 @@ impl Planner<'_> {
         let mut out = JoinFilters {
             filters: Vec::new(),
             explain: Vec::new(),
+            gaps: Vec::new(),
         };
         let s = self.rf;
-        if !s.enabled {
-            return out;
-        }
+        let gap = |key: usize, e: &Expr, reason| FilterGap {
+            key,
+            probe_key: e.to_string(),
+            reason,
+        };
         let input_type = |id: AttrId| column_type(probe, id);
         for (key, (e, key_type)) in probe_exprs.iter().zip(key_types).enumerate() {
             if !krishiv_io::runtime_filter::supported_key_type(key_type) {
                 continue;
             }
+            if !s.enabled {
+                out.gaps.push(gap(key, e, FilterGapReason::Disabled));
+                continue;
+            }
             let Some(source) = key_source(e, &input_type) else {
+                out.gaps.push(gap(key, e, FilterGapReason::NoScanColumn));
                 continue;
             };
+            if !probe.sites.iter().any(|s| s.attr == source) {
+                out.gaps.push(gap(key, e, FilterGapReason::Blocked));
+            }
             // Every scan the key reaches gets its own filter (the branches
             // of a union, both inputs of an inner join below).
             for site in probe.sites.iter().filter(|s| s.attr == source) {
@@ -380,10 +429,9 @@ impl Planner<'_> {
                 // capped there for the scan-size test and the planned size.
                 // So is a build cut by a predicate the estimator cannot
                 // model (TPC-H q20's `LIKE`: estimated 16M, holds 869K).
+                let guessed = filtered_aggregate(build) || guessed_filter(build);
                 #[expect(clippy::cast_precision_loss, reason = "estimates")]
-                let rows = if s.bloom_max_items > 0
-                    && (filtered_aggregate(build) || guessed_filter(build))
-                {
+                let rows = if s.bloom_max_items > 0 && guessed {
                     build_rows.min(s.bloom_max_items as f64)
                 } else {
                     build_rows
@@ -421,6 +469,17 @@ impl Planner<'_> {
                 // Sized at the false-positive rate the producers build with.
                 options.bloom_bytes = (bloom && partitioned)
                     .then(|| planned_bloom_bytes(rows, options.bloom_fpp, options.bloom_max_bytes));
+                // A guessed build may hold far more keys than its capped
+                // estimate, and spill: past the cap, or when it sheds its
+                // hashes, it keeps a Bloom of the memory tier. Broadcast or
+                // shuffled alike (q09's join is shuffled) on one worker,
+                // where the join is one build; cutting the plan clears it
+                // (`krishiv-scheduler` `fragment.rs` `local_filters`), and
+                // a build keeps it instead of the planned size
+                // (`instantiate/join.rs` `build_options`).
+                options.bloom_spill_bytes = (bloom && guessed)
+                    .then(|| s.spill_bloom_bytes(site.scan_rows, options.bloom_fpp))
+                    .flatten();
                 out.filters.push(JoinFilterPlan { id, key, options });
             }
         }
@@ -644,6 +703,22 @@ mod tests {
         let off = settings(&[("krishiv.runtimeFilter.bloom.memoryTier", "false")]);
         assert_eq!(caps(off.for_scan(8.0 * 30e6, 30e6)), base);
         assert_eq!(caps(off.for_scan(20.0 * 30e6, 30e6)), at_scale);
+    }
+
+    /// The fixed Bloom of a guessed build is sized for a quarter of its scan
+    /// within the tier: q09 at SF1000 (1.5B `orders`
+    /// rows) keeps the whole 320 MiB at 20g, a 17M-row scan about 20 MiB;
+    /// an explicit `bloom.maxBytes` binds; none with the tier off.
+    #[test]
+    fn the_fixed_bloom_follows_the_scan_within_the_tier() {
+        let s = settings(&[]);
+        assert_eq!(s.spill_bloom_bytes(1.5e9, 0.01), Some(320 << 20));
+        let small = s.spill_bloom_bytes(17e6, 0.01).unwrap_or(0);
+        assert!(small > 1 << 20 && small < 32 << 20, "{small}");
+        let explicit = settings(&[("krishiv.runtimeFilter.bloom.maxBytes", "8m")]);
+        assert_eq!(explicit.spill_bloom_bytes(1.5e9, 0.01), Some(8 << 20));
+        let off = settings(&[("krishiv.runtimeFilter.bloom.memoryTier", "false")]);
+        assert_eq!(off.spill_bloom_bytes(1.5e9, 0.01), None);
     }
 
     /// An explicit cap binds under the tier as under `atScale`; an explicit

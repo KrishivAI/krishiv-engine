@@ -17,7 +17,9 @@ use arrow_array::{
     Array, BooleanArray, GenericBinaryArray, GenericStringArray, Int32Array, Int64Array,
     OffsetSizeTrait,
 };
-use krishiv_common::error::{InvalidArrayIndex, InvalidIndexOfZero};
+use krishiv_common::error::{
+    InvalidArrayIndex, InvalidIndexOfZero, InvalidParameterValueOccurrence,
+};
 
 use super::{
     BinOperand, BinSink, Slot, StrOperand, StrSink, all_valid, bool_result, check_offset, int_at,
@@ -448,6 +450,92 @@ pub fn locate<O: OffsetSizeTrait>(
             }))
         })
         .collect())
+}
+
+/// Where `sub` is in `s` for `instr(s, sub, pos, occurrence)` (Spark 4.3): the 1-based character position of the
+/// `occurrence`-th match (matches may overlap), searching forward from character `pos` when it is positive and
+/// backward from the `-pos`-th character from the end (a match starts at or before it) when it is negative; 0 for
+/// none and for `pos` 0. An empty `sub` is at 1, whatever `pos` is.
+fn instr_at(s: &str, sub: &str, pos: i32, occurrence: u32) -> i32 {
+    if sub.is_empty() {
+        return 1;
+    }
+    if pos == 0 {
+        return 0;
+    }
+    let (text, pattern): (Vec<char>, Vec<char>) = (s.chars().collect(), sub.chars().collect());
+    let Some(last) = text.len().checked_sub(pattern.len()) else {
+        return 0;
+    };
+    let at_match = |at: usize| text.get(at..at.saturating_add(pattern.len())) == Some(&pattern[..]);
+    // The start positions to try, in the order of the search.
+    let starts: Box<dyn Iterator<Item = usize>> = if pos > 0 {
+        let from = usize::try_from(pos.saturating_sub(1)).unwrap_or(usize::MAX);
+        Box::new(from..=last)
+    } else {
+        // From the `-pos`-th character from the end, or the last start that leaves room for `sub`.
+        let from = i64::try_from(text.len())
+            .unwrap_or(i64::MAX)
+            .saturating_add(i64::from(pos));
+        let Ok(from) = usize::try_from(from) else {
+            return 0;
+        };
+        Box::new((0..=from.min(last)).rev())
+    };
+    let mut seen = 0_u32;
+    for at in starts {
+        if at_match(at) {
+            seen = seen.saturating_add(1);
+            if seen == occurrence {
+                return i32::try_from(at.saturating_add(1)).unwrap_or(i32::MAX);
+            }
+        }
+    }
+    0
+}
+
+/// `instr(str, substr, pos, occurrence)` (Spark 4.3; `instr(str, substr, pos)` has `occurrence` 1): see
+/// `instr_at`. NULL when any operand is NULL.
+///
+/// # Errors
+/// `INVALID_PARAMETER_VALUE.OCCURRENCE` for an `occurrence` below 1 on a row whose operands are all non-NULL;
+/// `INTERNAL_ERROR` for operands of different lengths.
+pub fn instr_nth<O: OffsetSizeTrait>(
+    input: StrOperand<'_, O>,
+    substr: StrOperand<'_, O>,
+    start: Operand<'_, Int32Type>,
+    occurrence: Operand<'_, Int32Type>,
+) -> Result<Int32Array, KernelError> {
+    let slots: [&dyn Slot; 4] = [&input, &substr, &start, &occurrence];
+    let rows = row_count(&slots)?;
+    let mut out = Vec::with_capacity(rows);
+    for i in 0..rows {
+        let all =
+            input.is_valid(i) && substr.is_valid(i) && start.is_valid(i) && occurrence.is_valid(i);
+        if !all {
+            out.push(None);
+            continue;
+        }
+        let nth = int_at(occurrence, i);
+        let Some(count) = u32::try_from(nth).ok().filter(|&n| n > 0) else {
+            return Err(KernelError::with_row(
+                Some(i),
+                InvalidParameterValueOccurrence {
+                    function_name: "`instr`".to_owned(),
+                    parameter: "`occurrence`".to_owned(),
+                    actual: nth.to_string(),
+                }
+                .into(),
+            ));
+        };
+        out.push(Some(instr_at(
+            input.at(i),
+            substr.at(i),
+            int_at(start, i),
+            count,
+        )));
+    }
+    Ok(Int32Array::from(out))
 }
 
 /// The code points Spark's `UTF8_LCASE` compares for `c` (`lowerCaseCodePoint`): `İ` is `i` and

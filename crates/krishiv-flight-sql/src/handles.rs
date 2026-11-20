@@ -185,6 +185,15 @@ impl<K: Eq + Hash + Clone, P: Clone> Handles<K, P> {
         }
     }
 
+    /// How many stored payloads satisfy `pred` (the drain's count of unfetched tickets).
+    pub(crate) fn count_where(&self, pred: impl Fn(&P) -> bool) -> usize {
+        self.lock()
+            .entries
+            .values()
+            .filter(|e| pred(&e.payload))
+            .count()
+    }
+
     /// The limits.
     #[must_use]
     pub fn limits(&self) -> HandleLimits {

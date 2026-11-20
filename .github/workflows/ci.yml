@@ -315,7 +315,8 @@ jobs:
       - run: cargo nextest run -p krishiv-session --features tls,oidc --lib -E 'test(/auth::mtls_tests::tls/) | test(/auth::oidc_tests/)' --locked
       # The admin listener's authentication (P3-T002) is feature-gated, so default-feature runs skip it.
       - run: cargo nextest run -p krishiv-server --features session,metrics-prometheus,admin-api --locked
-      - run: cargo nextest run -p krishiv-cli --features server,ui --test server --locked
+      - run: cargo nextest run -p krishiv-cli --features server,ui --test server --test doctor --locked
+      - run: cargo nextest run -p krishiv-cli --features server,ui --bin krishiv -E 'test(/^doctor::/)' --locked
       # The external catalog clients (Hive metastore, Iceberg REST) are feature-gated; their hostile-catalog tests
       # run here, not only nightly. The Docker acceptance against Apache's REST fixture is env-gated (skipped).
       - run: cargo nextest run -p krishiv-catalogs --features hive,iceberg-rest,unity --locked
@@ -612,6 +613,10 @@ jobs:
   # Miri compiles: those crates, their path dependency krishiv-common, the
   # root Cargo.toml/Cargo.lock, rust-toolchain.toml or this workflow (and
   # always on the nightly run of main).
+  # The Miri steps were one job that took 23 to 45 minutes on pull requests: the krishiv-kernels step
+  # alone ran up to 41 minutes, so the bridge steps behind it were cancelled by the job timeout
+  # (#895). The bridges (krishiv-python's stream_ffi, krishiv-arrow-bridge) are a job of their own,
+  # so each has its own time budget and a slow kernels run no longer cancels them.
   miri-kernels:
     # Not in the merge queue (about 33 minutes; it ran on the pull request, and the nightly
     # run covers main). The check still reports there: a skipped job satisfies it.
@@ -652,6 +657,44 @@ jobs:
       - name: Miri (unit, property and doc tests; reduced cases under cfg(miri))
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-kernels --locked
+
+  miri-bridges:
+    # Not in the merge queue (about 8 minutes; it ran on the pull request, and the nightly
+    # run covers main). The check still reports there: a skipped job satisfies it.
+    if: github.event_name != 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Path gate
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run=true
+          if [ "$EVENT" = "pull_request" ]; then
+            if ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
+              | grep -qE '^(crates/krishiv-kernels/|crates/krishiv-python/|crates/krishiv-arrow-bridge/|crates/krishiv-common/|\.github/workflows/ci\.yml$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
+              run=false
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "miri-bridges: run=$run"
+      # Dated nightly: Miri ships only on nightly; pinning keeps runs reproducible.
+      - name: Nightly toolchain with Miri
+        if: steps.gate.outputs.run == 'true'
+        run: rustup toolchain install nightly-2026-08-12 --profile minimal --component miri,rust-src
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.gate.outputs.run == 'true'
       - name: Miri (Arrow C stream bridge of krishiv-python)
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi --locked
@@ -1311,6 +1354,7 @@ jobs:
       - docs
       - release-dry-run
       - miri-kernels
+      - miri-bridges
       - wheels
       - wheels-targets
       - wheels-ok

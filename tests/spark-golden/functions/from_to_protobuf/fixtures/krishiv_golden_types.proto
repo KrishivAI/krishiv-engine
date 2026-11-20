@@ -1,0 +1,147 @@
+// SPDX-License-Identifier: Apache-2.0
+// Krishiv-authored: well-known types, Any, recursion shapes, empty messages, repeated/map element kinds.
+// Build: protoc --include_imports --descriptor_set_out=krishiv_golden_types.desc krishiv_golden_types.proto
+syntax = "proto3";
+
+package krishiv.golden.types;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+import "google/protobuf/empty.proto";
+
+enum Shade {
+  SHADE_UNSPECIFIED = 0;
+  LIGHT = 1;
+  DARK = 2;
+}
+
+message Payload {
+  string name = 1;
+  int32 id = 2;
+}
+
+message Wkt {
+  google.protobuf.Timestamp ts = 1;
+  google.protobuf.Duration dur = 2;
+  google.protobuf.Any any = 3;
+  google.protobuf.Int32Value i32v = 4;
+  google.protobuf.UInt32Value u32v = 5;
+  google.protobuf.Int64Value i64v = 6;
+  google.protobuf.UInt64Value u64v = 7;
+  google.protobuf.StringValue strv = 8;
+  google.protobuf.BytesValue binv = 9;
+  google.protobuf.BoolValue boolv = 10;
+  google.protobuf.FloatValue fltv = 11;
+  google.protobuf.DoubleValue dblv = 12;
+  google.protobuf.Empty empty = 13;
+  repeated google.protobuf.Timestamp tss = 14;
+  map<string, google.protobuf.Timestamp> tsmap = 15;
+  repeated google.protobuf.Int32Value i32vs = 16;
+}
+
+message TsOnly {
+  google.protobuf.Timestamp ts = 1;
+}
+
+message DurOnly {
+  google.protobuf.Duration dur = 1;
+}
+
+message AnyOnly {
+  string event = 1;
+  google.protobuf.Any details = 2;
+  repeated google.protobuf.Any many = 3;
+}
+
+message Empty0 {}
+
+message HasEmpty {
+  Empty0 e = 1;
+  string name = 2;
+  repeated Empty0 es = 3;
+  map<string, Empty0> em = 4;
+}
+
+message OnlyEmpty {
+  Empty0 e = 1;
+}
+
+// self-recursive through singular, repeated and map fields
+message Rec {
+  string name = 1;
+  Rec child = 2;
+  repeated Rec kids = 3;
+  map<string, Rec> byname = 4;
+}
+
+// mutually recursive
+message MA {
+  int32 x = 1;
+  MB b = 2;
+}
+message MB {
+  int32 y = 1;
+  MA a = 2;
+}
+
+// a field whose only content is the recursive one
+message OnlyRec {
+  OnlyRec next = 1;
+}
+
+message Kinds {
+  repeated Shade shades = 1;
+  Shade shade = 2;
+  repeated bytes bins = 3;
+  repeated string strs = 4;
+  repeated float flts = 5;
+  repeated double dbls = 6;
+  repeated bool bools = 7;
+  repeated sint64 s64s = 8;
+  repeated uint32 u32s = 9;
+  repeated uint64 u64s = 10;
+  map<int32, string> i2s = 11;
+  map<int64, bytes> l2b = 12;
+  map<bool, Shade> b2e = 13;
+  map<string, Payload> s2p = 14;
+  map<uint32, uint64> u2u = 15;
+  map<string, Rec> s2rec = 16;
+  oneof pick {
+    Payload p = 17;
+    Shade sh = 18;
+    bytes raw = 19;
+  }
+  repeated Payload ps = 20;
+  Payload single = 21;
+  optional Shade oshade = 22;
+  optional string ostr = 23;
+  optional Payload opayload = 24;
+  repeated int32 packed_nums = 25 [packed = true];
+  repeated int32 unpacked_nums = 26 [packed = false];
+  message Nested {
+    enum Inside {
+      INSIDE_ZERO = 0;
+      INSIDE_ONE = 1;
+    }
+    Inside inside = 1;
+  }
+  Nested nested = 27;
+  string CamelCase = 28;
+  string snake_case = 29;
+  string json_name_field = 30 [json_name = "customJson"];
+}
+
+// enum with aliases and negative number
+enum Weird {
+  option allow_alias = true;
+  W_ZERO = 0;
+  W_ONE = 1;
+  W_ONE_ALIAS = 1;
+  W_NEG = -1;
+}
+message WeirdMsg {
+  Weird w = 1;
+  repeated Weird ws = 2;
+}

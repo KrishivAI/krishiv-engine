@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "divergence-ceil-floor-ansi-overflow": [
+      34,
+      35,
+      36
+    ]
+  },
+  "file": "postgreSQL/float8",
+  "format_version": 1
+}
