@@ -657,3 +657,26 @@ fn an_overflow_under_a_narrowing_store_cast_is_delta_cast_overflow() {
         .is_none()
     );
 }
+
+/// Review of #909 (Codex P1): an `UPDATE` whose new value reads through a subquery reads every
+/// row, whatever its condition, so a concurrent change to another partition conflicts; without
+/// one, the condition is the read set.
+#[test]
+fn an_assignment_with_a_subquery_reads_the_whole_table() {
+    let cond = Some("p = 1");
+    let read = super::read_filter(cond, &[set("v", "(SELECT max(v) FROM t WHERE p = 2)")]).unwrap();
+    assert!(read.is_none(), "{read:?}");
+    let read = super::read_filter(cond, &[set("v", "v + 1"), set("w", "NULL")]).unwrap();
+    assert!(read.is_some_and(|f| !super::has_subquery(&f)));
+    assert!(
+        super::read_filter(None, &[set("v", "v + 1")])
+            .unwrap()
+            .is_none()
+    );
+    // An assignment without value text (stored as NULL) reads nothing.
+    let default = Assignment {
+        column: "v".into(),
+        value: None,
+    };
+    assert!(super::read_filter(cond, &[default]).unwrap().is_some());
+}

@@ -319,12 +319,7 @@ impl Session {
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let target = first_scan(physical.root())
             .ok_or_else(|| internal("a row-level rewrite that reads no table".to_owned()))?;
-        // The condition as the table's conflict check and commit record take it (the parsed,
-        // unresolved expression: column names as written).
-        let read_filter = match condition {
-            Some(c) => Some(Arc::new(crate::functions::expr(c)?.expr)),
-            None => None,
-        };
+        let read_filter = read_filter(condition, assignments)?;
         let mut request = RowLevelWrite::new(
             op,
             quoted,
@@ -481,6 +476,25 @@ impl Session {
         df.keep.push(entry);
         df
     }
+}
+
+/// What the statement read, for the table's conflict check: the condition (the parsed,
+/// unresolved expression: column names as written), or `None` for every row. An assignment
+/// with a subquery reads the table too (delta-spark records that scan in the transaction's
+/// read set, while it refuses a subquery only in the condition, `PreprocessTableUpdate.scala:43`),
+/// so such a statement reads every row: a concurrent change anywhere in the table conflicts.
+fn read_filter(
+    condition: Option<&str>,
+    assignments: &[Assignment],
+) -> Result<Option<Arc<krishiv_plan::Expr>>, KrishivError> {
+    for value in assignments.iter().filter_map(|a| a.value.as_deref()) {
+        if has_subquery(&crate::functions::expr(value)?.expr) {
+            return Ok(None);
+        }
+    }
+    condition
+        .map(|c| Ok(Arc::new(crate::functions::expr(c)?.expr)))
+        .transpose()
 }
 
 /// Whether `e` holds a subquery anywhere.
