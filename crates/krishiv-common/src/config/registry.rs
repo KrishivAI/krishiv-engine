@@ -1730,9 +1730,10 @@ pub static PRE_AGGREGATE_EXPAND: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.preAggregateExpand",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
-    doc: "For GROUP BY ROLLUP, CUBE and GROUPING SETS, aggregate the input rows into their finest \
-          groups before each row is repeated once per grouping set, and merge those groups' states \
-          per set. Only calls whose result cannot depend on row order are moved; it runs with \
+    doc: "Where an aggregate reads an expansion (GROUP BY ROLLUP, CUBE and GROUPING SETS, and the \
+          rewrite of several DISTINCT calls), aggregate the input rows into their finest groups before \
+          each row is repeated once per projection, and merge those groups' states per projection. \
+          Only calls whose result cannot depend on row order are moved; it runs with \
           krishiv.optimizer.eagerAggregation. Results are the same either way.",
     scope: Scope::Session,
     settable_by: SettableBy::User,

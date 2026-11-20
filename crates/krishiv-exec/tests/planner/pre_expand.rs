@@ -47,7 +47,7 @@ fn many() -> Vec<Row> {
 
 const WEIGHTS: [i64; 14] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 
-const FIRES: [&str; 5] = [
+const FIRES: [&str; 6] = [
     // Every call eager aggregation moves, over a ROLLUP of the table's own columns.
     "SELECT k, s, count(i), count(*), sum(i), avg(i), sum(d), avg(d), min(i), max(d), min(s), \
      max(s) FROM f GROUP BY ROLLUP(k, s)",
@@ -62,10 +62,12 @@ const FIRES: [&str; 5] = [
      WHERE w.wk < 6 GROUP BY ROLLUP(w.wk, f.s)",
     // An argument that is also a grouping column.
     "SELECT i, sum(i), max(i), count(i) FROM f GROUP BY ROLLUP(i)",
+    // The rewrite of several distinct calls is an expansion too.
+    "SELECT count(DISTINCT s), count(DISTINCT i), max(d) FROM f",
 ];
 
 /// Each stays above the expansion, for the reason in its comment.
-const STAYS: [&str; 6] = [
+const STAYS: [&str; 8] = [
     // Summation order: a `bigint` buffer that can overflow.
     "SELECT k, sum(k) FROM f GROUP BY ROLLUP(k)",
     // Summation order: floating point.
@@ -77,6 +79,10 @@ const STAYS: [&str; 6] = [
     "SELECT k, sum(i) FILTER (WHERE k > 2) FROM f GROUP BY ROLLUP(k)",
     // No key: a keyless partial aggregate yields a row over empty input.
     "SELECT sum(i), count(*) FROM f GROUP BY GROUPING SETS ((), (), ())",
+    // The multi-distinct rewrite with a key (the regular calls aggregate in an aggregate of their
+    // own between the expansion and the merge), or a `FILTER` on its regular call.
+    "SELECT k, count(DISTINCT s), count(DISTINCT i), count(*), sum(d) FROM f GROUP BY k",
+    "SELECT count(DISTINCT s), count(DISTINCT i), max(d) FILTER (WHERE k > 2) FROM f",
 ];
 
 #[test]

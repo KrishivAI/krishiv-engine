@@ -708,6 +708,28 @@ impl Interp<'_> {
                 };
                 self.merge(f, columns, ix, g, outer)
             }
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.kind == FunctionKind::Aggregate && f.id.name() == "first" =>
+            {
+                // `first(x[, ignoreNulls])`: the first kept row's value, NULL included unless
+                // `ignoreNulls` (the multi-distinct rewrite's regular calls).
+                let skip_nulls = f
+                    .args
+                    .get(1)
+                    .is_some_and(|a| self.eval(a, ix, &[], outer) == V::Bool(true));
+                for r in g {
+                    if let Some(c) = &f.filter
+                        && self.eval(c, ix, r, outer) != V::Bool(true)
+                    {
+                        continue;
+                    }
+                    let v = self.eval(&f.args[0], ix, r, outer);
+                    if !(skip_nulls && v == V::Null) {
+                        return v;
+                    }
+                }
+                V::Null
+            }
             ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
                 let mut vals: Vec<V> = Vec::new();
                 for r in g {

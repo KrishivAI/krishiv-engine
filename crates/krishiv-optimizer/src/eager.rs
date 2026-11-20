@@ -506,13 +506,15 @@ fn inner_join(p: &LogicalPlan) -> Option<(&Arc<LogicalPlan>, &Arc<LogicalPlan>, 
 fn read_below(node: &LogicalPlan, read: &Attrs, args: &Attrs) -> Result<Attrs, String> {
     let mut below = Attrs::default();
     let mut item = |out: &BoundColumn, values: &[&Arc<Expr>]| -> Result<(), String> {
+        // An argument's id must pass through unchanged in every value, also
+        // where something above reads it too.
+        if args.contains(&out.id) && !values.iter().all(|v| is_column(v, out.id)) {
+            return Err(format!(
+                "the argument {} is computed above the join",
+                out.name
+            ));
+        }
         if !read.contains(&out.id) {
-            if args.contains(&out.id) && !values.iter().all(|v| is_column(v, out.id)) {
-                return Err(format!(
-                    "the argument {} is computed above the join",
-                    out.name
-                ));
-            }
             return Ok(());
         }
         for v in values {
@@ -635,6 +637,18 @@ impl std::fmt::Display for Gates {
     }
 }
 
+/// Whether `t` is or holds (in an array, map or struct) a floating point
+/// type, whose `-0.0` and `0.0` compare equal but read differently.
+pub(crate) fn contains_floating(t: &DataType) -> bool {
+    match t {
+        DataType::Float | DataType::Double => true,
+        DataType::Array(a) => contains_floating(a.element_type()),
+        DataType::Map(m) => contains_floating(m.key_type()) || contains_floating(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| contains_floating(f.data_type())),
+        _ => false,
+    }
+}
+
 /// The combined distinct count of `keys` limited to the side's rows, or which
 /// key's count is only a guess.
 fn groups_of(keys: &[BoundColumn], side: &RelStats) -> Result<f64, String> {
@@ -642,9 +656,7 @@ fn groups_of(keys: &[BoundColumn], side: &RelStats) -> Result<f64, String> {
     for k in keys {
         // Values that compare equal but can be told apart above the join (`-0.0` and `0.0`, strings equal under a
         // collation) would merge in the partial aggregate.
-        if matches!(k.data_type, DataType::Float | DataType::Double)
-            || k.data_type.contains_collation()
-        {
+        if contains_floating(&k.data_type) || k.data_type.contains_collation() {
             return Err(format!(
                 "{} is a floating point or collated key: equal values can still differ above the join",
                 k.name
@@ -865,5 +877,36 @@ fn without_calls(e: &Arc<Expr>, none: &Arc<Expr>) -> Arc<Expr> {
     match out {
         Ok(v) => v,
         Err(never) => match never {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_floating;
+
+    fn floating(t: &str) -> bool {
+        krishiv_types::parse_data_type(t).is_ok_and(|t| contains_floating(&t))
+    }
+
+    /// A floating point type nested in an array, map or struct counts as one: the executor groups
+    /// no such key today, but the rule must not rely on that.
+    #[test]
+    fn nested_floating_point_types_are_found() {
+        for t in [
+            "double",
+            "float",
+            "array<double>",
+            "map<int, float>",
+            "map<double, int>",
+            "struct<a: int, b: array<double>>",
+        ] {
+            assert!(floating(t), "{t}");
+        }
+        for t in ["int", "decimal(10,2)", "array<int>", "struct<a: string>"] {
+            assert!(
+                !floating(t) && krishiv_types::parse_data_type(t).is_ok(),
+                "{t}"
+            );
+        }
     }
 }

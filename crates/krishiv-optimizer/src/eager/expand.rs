@@ -10,6 +10,13 @@
 //! 132.6M fed the aggregate; about 100K groups feed it now). Each group of a
 //! grouping set is the union of the finest groups that the set's columns
 //! cannot tell apart, so merging their states gives what folding the rows does.
+//! The same holds for any expansion, so the rule also takes the rewrite of
+//! several distinct calls (`ops/distinct.rs`): its regular calls' arguments
+//! pass through every projection unchanged, and the keys are the distinct
+//! arguments the expansion reads.
+//!
+//! A shape with no key stays: a keyless partial aggregate is a global one and
+//! yields a row over empty input, where the grouped aggregate above yields none.
 //!
 //! The calls are the ones eager aggregation moves ([`refusal_of_call`]): the
 //! same accumulators, whose result cannot depend on the order or the grouping
@@ -20,17 +27,18 @@
 
 use std::sync::Arc;
 
-use krishiv_plan::{Grouping, LogicalPlan, PlanNode};
-use krishiv_types::DataType;
-
 use super::{
-    Attrs, Estimator, Shape, attrs_of, column, contains, distinct_calls, references_into,
-    refusal_of_call, states_of,
+    Attrs, Estimator, Shape, attrs_of, column, contains, contains_floating, distinct_calls,
+    references_into, refusal_of_call, states_of,
 };
+use krishiv_plan::{Grouping, LogicalPlan, PlanNode};
 
 impl<'a> Shape<'a> {
     /// An aggregate over projections over one `Expand` of at least two
-    /// projections; `join` is then the expansion's input.
+    /// projections; `join` is then the expansion's input. Any expansion
+    /// matches: grouping sets, and the rewrite of several distinct calls
+    /// (`ops/distinct.rs`), whose regular arguments pass through every
+    /// projection unchanged.
     pub(super) fn over_expand(plan: &'a LogicalPlan) -> Option<Self> {
         let PlanNode::Aggregate {
             input,
@@ -111,10 +119,10 @@ impl<'a> Shape<'a> {
         // Values that compare equal but read differently (`-0.0` and `0.0`,
         // strings equal under a collation) would merge before a grouping
         // expression could tell them apart.
-        if let Some(k) = keys.iter().find(|k| {
-            matches!(k.data_type, DataType::Float | DataType::Double)
-                || k.data_type.contains_collation()
-        }) {
+        if let Some(k) = keys
+            .iter()
+            .find(|k| contains_floating(&k.data_type) || k.data_type.contains_collation())
+        {
             return Err(format!(
                 "{} is a floating point or collated key: equal values can still differ above",
                 k.name

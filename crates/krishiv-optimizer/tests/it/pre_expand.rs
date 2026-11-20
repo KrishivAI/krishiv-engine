@@ -279,3 +279,34 @@ fn a_plain_group_by_is_left_alone() {
     let r = run("SELECT c, sum(w) FROM h GROUP BY c");
     assert!(!r.fired(), "{:?}\n{}", r.notes, r.on.root());
 }
+
+/// The rewrite of several distinct calls is an expansion too: the regular call merges below it,
+/// keyed by the distinct arguments (Opus review of b58a8e4e7, finding 2).
+#[test]
+fn the_multi_distinct_rewrite_aggregates_its_input() {
+    let r = assert_fires("SELECT count(DISTINCT s), count(DISTINCT c), max(w) FROM h");
+    let text = r.on.root().to_string();
+    assert!(
+        text.contains("PartialAggregate [c#0, s#2], [max(w#4)]"),
+        "{text}"
+    );
+}
+
+/// With a key, the rewrite aggregates its regular calls in an aggregate of their own (with a
+/// projection of the grouping id), which the rule does not match; the rows stay the same.
+#[test]
+fn the_multi_distinct_rewrite_with_a_key_stays() {
+    let r =
+        run("SELECT c, count(DISTINCT s), count(DISTINCT w), count(*), max(v) FROM h GROUP BY c");
+    assert!(!r.fired(), "{:?}\n{}", r.notes, r.on.root());
+}
+
+/// A `FILTER` on a regular call beside several distinct calls stays: the filtered call is not
+/// one accumulator per group.
+#[test]
+fn a_filtered_regular_call_beside_distinct_calls_stays() {
+    assert_refuses(
+        "SELECT count(DISTINCT s), count(DISTINCT c), max(w) FILTER (WHERE c > 0) FROM h",
+        "exports no states",
+    );
+}
