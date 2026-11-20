@@ -41,7 +41,13 @@ pub struct SessionSource {
     caller_sessions: Option<Arc<CallerSessions>>,
     /// One session per caller, so `SET` and `USE` of one user never reach another.
     sessions: Mutex<std::collections::HashMap<String, (Option<Role>, Session)>>,
+    /// The queries the history store held when the source was built ([`Self::with_stored_history`]): what ran
+    /// before the server's last start, which the runtime's own tables no longer list.
+    stored: Option<ProfilesSource>,
 }
+
+/// Stored queries a server's history shows beside its own (the newest; the History page lists at most 1,000).
+const MAX_STORED_QUERIES: usize = 1000;
 
 /// Rows an editor result keeps.
 const MAX_RESULT_ROWS: usize = 1000;
@@ -96,6 +102,7 @@ impl SessionSource {
             runs: Arc::new(Mutex::new(Runs::default())),
             caller_sessions: None,
             sessions: Mutex::new(std::collections::HashMap::new()),
+            stored: None,
         })
     }
 
@@ -117,6 +124,35 @@ impl SessionSource {
     pub fn with_caller_sessions(mut self, factory: Arc<CallerSessions>) -> Self {
         self.caller_sessions = Some(factory);
         self
+    }
+
+    /// The same, also listing the newest of `stored`: what the history store (`krishiv.history.path`,
+    /// [`krishiv_session::read_profile_history`], oldest first) held when the server started, so a server's
+    /// history survives a restart (ADR 0024, the modes table). What finishes later is in the runtime's own
+    /// tables; a query in both is shown as the runtime has it.
+    #[must_use]
+    pub fn with_stored_history(mut self, stored: &[krishiv_session::StoredProfile]) -> Self {
+        let newest = &stored[stored.len().saturating_sub(MAX_STORED_QUERIES)..];
+        self.stored = Some(ProfilesSource::from_profiles(newest));
+        self
+    }
+
+    /// `rows` of `table` followed by the stored rows of queries `rows` does not name.
+    fn with_stored(&self, table: SystemTable, mut rows: Vec<Row>) -> Vec<Row> {
+        let stored = match (&self.stored, table) {
+            (Some(s), SystemTable::Queries) => &s.queries,
+            (Some(s), SystemTable::Operators) => &s.operators,
+            _ => return rows,
+        };
+        let id = |r: &Row| r.get("query_id").and_then(Value::as_str).map(str::to_owned);
+        let live: std::collections::HashSet<String> = rows.iter().filter_map(id).collect();
+        rows.extend(
+            stored
+                .iter()
+                .filter(|r| id(r).is_none_or(|i| !live.contains(&i)))
+                .cloned(),
+        );
+        rows
     }
 
     /// The session `caller` runs statements in, built on first use.
@@ -450,7 +486,7 @@ impl UiSource for SessionSource {
             if table == SystemTable::Queries {
                 rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
             }
-            Ok(rows)
+            Ok(self.with_stored(table, rows))
         })
     }
 

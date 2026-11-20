@@ -543,6 +543,20 @@ fn admin_router(
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {
         let mut source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
             .map_err(|e| e.to_string())?;
+        // The history of earlier runs of the server, from the store this run writes to. A store that does not
+        // read costs the old history, not the server.
+        if let Some(dir) = config
+            .get(&krishiv_common::config::HISTORY_PATH)
+            .and_then(ConfigValue::as_str)
+            .filter(|p| !p.is_empty())
+        {
+            match krishiv_session::read_profile_history(std::path::Path::new(dir)) {
+                Ok(stored) => source = source.with_stored_history(&stored),
+                Err(e) => eprintln!(
+                    "warning: the stored query history was not read ({e}); the console lists this run only"
+                ),
+            }
+        }
         if let Some(denials) = denials {
             // The editor runs a statement as the authenticated caller, in the session a Spark Connect session of
             // that caller gets: the same role matrix and path confinement.

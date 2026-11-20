@@ -179,3 +179,73 @@ async fn an_embedded_ui_shows_the_hosts_own_queries_and_stops_on_drop() {
     assert!(stopped.is_ok(), "drop hung on an open event stream");
     assert!(tokio::net::TcpStream::connect(addr).await.is_err());
 }
+
+/// ADR 0024, the modes table: a server's history survives a restart. The second runtime's own tables start empty;
+/// the source adds what the store held when it was built, and a query in both is listed once, as the runtime has
+/// it.
+#[tokio::test]
+async fn a_servers_history_lists_what_ran_before_its_restart() {
+    use krishiv_session::QueryOptions;
+    const OP: &str = "0193b1c2-7a00-7a01-8001-00000000aa01";
+    async fn run(rt: &Arc<EngineRuntime>, sql: &str, options: QueryOptions) {
+        let session = Session::builder().runtime(Arc::clone(rt)).build().unwrap();
+        let df = session.sql_with(sql, options).await.unwrap();
+        df.collect().await.unwrap();
+    }
+    fn of<'a>(rows: &'a [krishiv_server::internal::Row], marker: &str) -> Vec<&'a Value> {
+        rows.iter()
+            .filter(|r| r["query_text"].as_str().is_some_and(|t| t.contains(marker)))
+            .map(|r| &r["query_id"])
+            .collect()
+    }
+    fn operators_of(rows: &[krishiv_server::internal::Row], id: &Value) -> usize {
+        rows.iter().filter(|r| &r["query_id"] == id).count()
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let with_store = || {
+        EngineRuntime::builder()
+            .config("krishiv.history.path", dir.path().to_str().unwrap())
+            .build()
+            .unwrap()
+    };
+    {
+        let rt = with_store();
+        let before = "SELECT count(*) AS before_restart FROM range(0, 100)";
+        run(&rt, before, QueryOptions::new()).await;
+        let again = "SELECT count(*) AS first_run FROM range(0, 100)";
+        run(&rt, again, QueryOptions::new().operation_id(OP)).await;
+        // Dropping the runtime flushes the history writer.
+    }
+    let stored = krishiv_session::read_profile_history(dir.path()).unwrap();
+    assert_eq!(stored.len(), 2, "{stored:?}");
+
+    let rt = with_store();
+    run(&rt, "SELECT 3 AS after_restart", QueryOptions::new()).await;
+    let again = "SELECT count(*) AS second_run FROM range(0, 100)";
+    run(&rt, again, QueryOptions::new().operation_id(OP)).await;
+    let plain = SessionSource::new(Arc::clone(&rt)).unwrap();
+    let source = SessionSource::new(rt).unwrap().with_stored_history(&stored);
+
+    let queries = source.rows(SystemTable::Queries).await.unwrap();
+    let before = of(&queries, "before_restart");
+    assert_eq!(before.len(), 1, "{queries:?}");
+    assert_eq!(of(&queries, "after_restart").len(), 1, "{queries:?}");
+    // The id that ran in both lives is the runtime's row, not the store's.
+    assert_eq!(
+        of(&queries, "second_run"),
+        [&Value::from(OP)],
+        "{queries:?}"
+    );
+    assert!(of(&queries, "first_run").is_empty(), "{queries:?}");
+
+    let operators = source.rows(SystemTable::Operators).await.unwrap();
+    assert!(operators_of(&operators, before[0]) > 0, "{operators:?}");
+    let live = plain.rows(SystemTable::Operators).await.unwrap();
+    let op = Value::from(OP);
+    assert!(operators_of(&live, &op) > 0, "{live:?}");
+    assert_eq!(operators_of(&operators, &op), operators_of(&live, &op));
+
+    // Without the store the restarted server knows this run only.
+    let alone = plain.rows(SystemTable::Queries).await.unwrap();
+    assert!(of(&alone, "before_restart").is_empty(), "{alone:?}");
+}
