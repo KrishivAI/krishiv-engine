@@ -320,6 +320,10 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CONNECT_HTTP2_MAX_HEADER_LIST_BYTES,
     &CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
     &SERVER_SHUTDOWN_TIMEOUT,
+    &SERVER_READINESS_INTERVAL,
+    &SERVER_READINESS_TIMEOUT,
+    &SERVER_READINESS_FAILURE_THRESHOLD,
+    &SERVER_READINESS_REQUIRED,
     &SERVER_ALLOW_CORE_DUMPS,
     &SERVER_METRICS_PUBLIC,
     &SERVER_ALLOWED_HOSTS,
@@ -1737,19 +1741,3 @@ pub static SHARE_CTE_INSTANCES: ConfigEntry = ConfigEntry {
 
 mod index;
 pub use index::INDEX;
-
-/// `krishiv.workload.resourceGroups.file`.
-pub static WORKLOAD_RESOURCE_GROUPS_FILE: ConfigEntry = ConfigEntry {
-    key: "krishiv.workload.resourceGroups.file",
-    value_type: ValueType::String,
-    default: None,
-    doc: "Path of the resource group file (JSON in the shape of Trino's `resource-groups.json`, \
-          restricted to the subset Krishiv supports): the group tree, its concurrency, queue, \
-          per-query memory and scan limits, and the selectors that route a query to a group. Read when \
-          the engine starts; a malformed file stops the start with \
-          `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID`. When unset, every query is admitted at once.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.3.0",
-    spark_alias: None,
-};
