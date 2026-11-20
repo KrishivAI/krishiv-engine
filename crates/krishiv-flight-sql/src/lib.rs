@@ -11,12 +11,14 @@ pub mod encode;
 mod gate;
 pub mod handles;
 pub mod metrics;
+mod prepared;
 pub mod server;
 mod service;
 pub mod sessions;
 pub mod sql_info;
 mod statement;
 pub mod status;
+mod update;
 
 pub use cookies::{SessionCookie, session_cookie, set_session_cookie};
 pub use encode::{EncodeLimits, encode_results};

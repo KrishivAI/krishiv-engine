@@ -15,9 +15,10 @@ use arrow_flight::sql::metadata::SqlInfoData;
 use arrow_schema::SchemaRef;
 use krishiv_common::config::{
     CONNECT_MAX_INBOUND_MESSAGE_SIZE, Config, ConfigEntry, ConfigValue,
-    FLIGHT_SQL_FETCH_IDLE_TIMEOUT, FLIGHT_SQL_HANDLE_TTL, FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES,
-    FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL, FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL,
-    FLIGHT_SQL_MAX_HANDLES_PER_SESSION, FLIGHT_SQL_MAX_STATEMENT_BYTES, FLIGHT_SQL_PROVISIONAL_TTL,
+    FLIGHT_SQL_FETCH_IDLE_TIMEOUT, FLIGHT_SQL_HANDLE_TTL, FLIGHT_SQL_MAX_BATCH_ROWS,
+    FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES, FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
+    FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL, FLIGHT_SQL_MAX_HANDLES_PER_SESSION,
+    FLIGHT_SQL_MAX_STATEMENT_BYTES, FLIGHT_SQL_PROVISIONAL_TTL,
 };
 use krishiv_common::error::KrishivError;
 use krishiv_connect_server::execute::ResponseBudget;
@@ -54,6 +55,8 @@ pub struct FlightSqlConfig {
     /// The most operations one session holds (`krishiv.connect.maxOperationsPerSession`): a
     /// `DoGet` and a running command register one each, as Connect's `ExecutePlan` does.
     pub max_operations_per_session: usize,
+    /// `maxBatchRows`: the most parameter rows one prepared update binds (design §4.4).
+    pub max_batch_rows: usize,
 }
 
 impl Default for FlightSqlConfig {
@@ -67,6 +70,7 @@ impl Default for FlightSqlConfig {
             max_inbound_message_size: 128 << 20,
             encode: EncodeLimits::default(),
             max_operations_per_session: ExecuteLimits::default().max_operations_per_session,
+            max_batch_rows: 10_000,
         }
     }
 }
@@ -127,6 +131,7 @@ impl FlightSqlConfig {
             encode: d.encode,
             max_operations_per_session: ExecuteLimits::from_config(config)
                 .max_operations_per_session,
+            max_batch_rows: size(config, &FLIGHT_SQL_MAX_BATCH_ROWS, d.max_batch_rows),
         }
     }
 }
@@ -198,6 +203,19 @@ pub(crate) enum Kind {
     /// A command that ran: its stored rows (Spark's Arrow shapes, the session time zone fixed
     /// when it ran), held in the pool as `flight_sql_handles` while the handle lives.
     Command(Arc<Stored>),
+    /// A prepared statement (design §4.4): never a ticket itself; each execution makes a
+    /// statement handle (`GetFlightInfo`) or runs it (`DoPut` update).
+    Prepared(Arc<Prepared>),
+}
+
+/// A prepared statement's handle (design §4.4).
+pub(crate) struct Prepared {
+    /// A query (analyzed at create); else a command, stored as text and run per execution.
+    pub(crate) query: bool,
+    /// Its positional parameter markers.
+    pub(crate) markers: usize,
+    /// The statement with the literals of the last row a `DoPut` bound (a query's binding).
+    pub(crate) bound: Option<Arc<str>>,
 }
 
 /// A command's stored result.

@@ -231,6 +231,42 @@ fn quiet_trials_leave_no_trace() {
     assert_eq!(provider(), before + 1, "the read counts one denial");
     assert_eq!(take().len(), 1, "the read writes one audit record");
 
+    // #868 review 9fcd13d57 F1: the stored-function calls of a definer view's text are asked of
+    // its definer through the analysis's policy, so plain EXPLAIN's trial of a read whose definer
+    // lost a function tells the provider nothing: every denial the provider counts is one the
+    // audited fallback reports (one audit record each), none is the trial's.
+    let carl = session_of("carl", false);
+    for sql in [
+        "GRANT CREATE ON SCHEMA d TO user:carl",
+        "GRANT SELECT ON TABLE d.t TO user:carl",
+        "CREATE FUNCTION d.pos(x INT) RETURNS BOOLEAN RETURN x > 0",
+        "GRANT SELECT ON FUNCTION d.pos TO user:carl",
+    ] {
+        run(&root, sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    for sql in [
+        "CREATE VIEW d.dvf SQL SECURITY DEFINER AS SELECT a FROM d.t WHERE d.pos(a)",
+        "GRANT SELECT ON VIEW d.dvf TO user:ana",
+    ] {
+        run(&carl, sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    assert_eq!(run(&ana, "SELECT a FROM d.dvf").unwrap(), 1);
+    run(&root, "REVOKE SELECT ON FUNCTION d.pos FROM user:carl").unwrap();
+    take();
+    let before = provider();
+    let explained = run(&ana, "EXPLAIN SELECT a FROM d.dvf");
+    let audits = take().len() as u64;
+    assert_eq!(
+        provider() - before,
+        audits,
+        "a trial counted a denial no audit record reports ({explained:?})"
+    );
+    // The read itself is the definer's refusal: counted once, audited once.
+    let before = provider();
+    run(&ana, "SELECT a FROM d.dvf").unwrap_err();
+    assert_eq!(provider(), before + 1, "the definer's refusal counts once");
+    assert_eq!(take().len(), 1, "the definer's refusal is audited once");
+
     // A custom policy that may drop but not browse: the CASCADE's BROWSE trial tells it nothing.
     let warehouse = tempfile::tempdir().unwrap();
     let policy = Arc::new(NoBrowseRecording::default());
