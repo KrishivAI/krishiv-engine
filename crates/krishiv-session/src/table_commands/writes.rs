@@ -274,12 +274,18 @@ impl Session {
                 .retain(|c| !statics.iter().any(|(k, _)| *k == c.name));
             t
         };
+        let legacy_store = env
+            .config
+            .get(&krishiv_common::config::STORE_ASSIGNMENT_POLICY)
+            .and_then(krishiv_common::config::ConfigValue::as_str)
+            .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY"));
         let assignment = assign(
             &assigned,
             listed,
             by_name,
             &output,
             env.analysis.conf.case_sensitive,
+            legacy_store,
         )?;
         let renamed: Vec<String> = (0..output.len())
             .map(|i| format!("__krishiv_c{i}"))
@@ -306,8 +312,13 @@ impl Session {
                     if output[*i].data_type == column.data_type {
                         value
                     } else {
-                        // Store assignment is ANSI whatever `spark.sql.ansi.enabled` says.
-                        value.cast_ansi(column.data_type.clone())
+                        // Store assignment is ANSI whatever `spark.sql.ansi.enabled` says, and non-ANSI under
+                        // `storeAssignmentPolicy=LEGACY`.
+                        if legacy_store {
+                            value.cast_legacy(column.data_type.clone())
+                        } else {
+                            value.cast_ansi(column.data_type.clone())
+                        }
                     }
                 }
                 Source::Default => match &column.default {

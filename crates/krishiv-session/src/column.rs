@@ -98,6 +98,17 @@ impl Column {
         }))
     }
 
+    /// `CAST(self AS to)` non-ANSI whatever `spark.sql.ansi.enabled` says: invalid input becomes `NULL`. Store
+    /// assignment under `spark.sql.storeAssignmentPolicy=LEGACY`.
+    #[must_use]
+    pub(crate) fn cast_legacy(self, to: DataType) -> Self {
+        Self::new(Expr::new(ExprNode::Cast {
+            expr: Arc::new(self.expr),
+            to,
+            mode: CastMode::Legacy,
+        }))
+    }
+
     /// `TRY_CAST(self AS to)`: invalid input becomes `NULL`, even under ANSI.
     ///
     /// ```

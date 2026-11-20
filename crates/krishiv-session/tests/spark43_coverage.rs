@@ -48,10 +48,6 @@ const PENDING: &[(&str, &str)] = &[
         "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
     ),
     ("fn_localtime_9", "UNRESOLVED_ROUTINE"),
-    (
-        "fix_insert_struct_by_position_legacy",
-        "setup: INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
-    ),
     ("syn_comment_on_column", "PARSE_SYNTAX_ERROR"),
     (
         "syn_comment_on_column_describe",
