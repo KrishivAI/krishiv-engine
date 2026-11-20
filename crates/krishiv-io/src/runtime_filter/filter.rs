@@ -657,6 +657,23 @@ impl KeyFilter {
         }
     }
 
+    /// Whether [`Self::evaluate`] keeps exactly the rows whose key is one of
+    /// the stored keys (an exact set, or a range every value of which is a
+    /// key), so the statistics `IN` list adds nothing at row level.
+    #[must_use]
+    pub fn exact_rows(&self) -> bool {
+        !self.empty
+            && self.bound.is_none()
+            && match &self.member {
+                Member::Small(_) | Member::Exact(_) => true,
+                Member::Range => self
+                    .values
+                    .as_ref()
+                    .is_some_and(|v| dense(self.range.as_ref(), v.len())),
+                Member::Bloom(_) => false,
+            }
+    }
+
     /// The row-level form.
     #[must_use]
     pub fn form(&self) -> FilterForm {

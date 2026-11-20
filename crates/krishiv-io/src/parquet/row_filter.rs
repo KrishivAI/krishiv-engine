@@ -233,6 +233,107 @@ fn compare(a: &dyn Array, op: CmpOp, lit: &ScalarValue) -> Option<BooleanBuffer>
     })
 }
 
+/// The `IN` lists at most this long are compared value by value (one
+/// vectorised pass each); longer ones look each row up in the sorted values.
+const IN_PASSES_MAX: usize = 8;
+
+/// `column IN values` evaluated exactly (NULL rows aside), or `None` as for
+/// [`compare`] when a value's type is not one compared exactly here.
+fn in_list(a: &dyn Array, values: &[ScalarValue]) -> Option<BooleanBuffer> {
+    use ScalarValue as S;
+    fn passes(a: &dyn Array, values: &[ScalarValue]) -> Option<BooleanBuffer> {
+        values
+            .iter()
+            .try_fold(BooleanBuffer::new_unset(a.len()), |acc, v| {
+                Some(&acc | &compare(a, CmpOp::Eq, v)?)
+            })
+    }
+    /// The values as `T`'s natives, sorted, or `None` if one is not one.
+    fn natives<'v, N: Ord>(
+        values: &'v [ScalarValue],
+        f: impl Fn(&'v ScalarValue) -> Option<N>,
+    ) -> Option<Vec<N>> {
+        let mut v = values.iter().map(f).collect::<Option<Vec<N>>>()?;
+        v.sort_unstable();
+        Some(v)
+    }
+    fn lookup<T: ArrowPrimitiveType>(
+        a: &dyn Array,
+        values: &[ScalarValue],
+        f: impl Fn(&ScalarValue) -> Option<T::Native>,
+    ) -> Option<BooleanBuffer>
+    where
+        T::Native: Ord,
+    {
+        let sorted = natives(values, f)?;
+        let col = a.as_primitive::<T>().values();
+        Some(BooleanBuffer::collect_bool(col.len(), |i| {
+            sorted.binary_search(&col[i]).is_ok()
+        }))
+    }
+    if values.len() <= IN_PASSES_MAX {
+        return passes(a, values);
+    }
+    let decimal = |s: i8| {
+        move |v: &ScalarValue| match v {
+            S::Decimal128 {
+                unscaled, scale, ..
+            } if *scale == s => Some(*unscaled),
+            _ => None,
+        }
+    };
+    match a.data_type() {
+        DataType::Int8 => lookup::<Int8Type>(a, values, |v| match v {
+            S::Int8(x) => Some(*x),
+            _ => None,
+        }),
+        DataType::Int16 => lookup::<Int16Type>(a, values, |v| match v {
+            S::Int16(x) => Some(*x),
+            _ => None,
+        }),
+        DataType::Int32 => lookup::<Int32Type>(a, values, |v| match v {
+            S::Int32(x) => Some(*x),
+            _ => None,
+        }),
+        DataType::Int64 => lookup::<Int64Type>(a, values, |v| match v {
+            S::Int64(x) => Some(*x),
+            _ => None,
+        }),
+        DataType::Date32 => lookup::<Date32Type>(a, values, |v| match v {
+            S::Date32(x) => Some(*x),
+            _ => None,
+        }),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            lookup::<TimestampMicrosecondType>(a, values, |v| match v {
+                S::TimestampMicros(x) => Some(*x),
+                _ => None,
+            })
+        }
+        DataType::Decimal128(_, s) => lookup::<Decimal128Type>(a, values, decimal(*s)),
+        // A literal beyond every Decimal64 value is not filtered here (as in
+        // `compare`): the whole list is then not evaluated.
+        DataType::Decimal64(_, s) => {
+            let d = decimal(*s);
+            lookup::<Decimal64Type>(a, values, |v| i64::try_from(d(v)?).ok())
+        }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            let sorted = natives(values, |v: &ScalarValue| match v {
+                S::Utf8(x) => Some(x.as_bytes()),
+                _ => None,
+            })?;
+            bytes(a, |x| sorted.binary_search(&x).is_ok())
+        }
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
+            let sorted = natives(values, |v: &ScalarValue| match v {
+                S::Binary(x) => Some(x.as_slice()),
+                _ => None,
+            })?;
+            bytes(a, |x| sorted.binary_search(&x).is_ok())
+        }
+        _ => passes(a, values),
+    }
+}
+
 /// Evaluates `e` (negation normal form) on `batch`.
 fn eval(e: &PushdownExpr, batch: &RecordBatch) -> Maybe {
     let n = batch.num_rows();
@@ -251,13 +352,37 @@ fn eval(e: &PushdownExpr, batch: &RecordBatch) -> Maybe {
     let binary = |c: &Collation| *c == Collation::Utf8Binary;
     match e {
         PushdownExpr::Constant(b) => Maybe::constant(*b, n),
-        PushdownExpr::And(xs) => xs.iter().fold(Maybe::constant(true, n), |acc, x| {
-            let m = eval(x, batch);
-            Maybe {
+        PushdownExpr::And(xs) => {
+            let conj = |acc: Maybe, m: Maybe| Maybe {
                 may_true: and(acc.may_true, m.may_true),
                 may_false: or(acc.may_false, m.may_false),
+            };
+            // A runtime filter lowers to an `In` of its keys (for
+            // statistics) beside a `Membership` over the same keys. Where
+            // that membership is evaluated and exact, the `In` keeps no row
+            // fewer: it is skipped (as unknown), not compared value by value.
+            let mut covered: Vec<&ColumnPath> = Vec::new();
+            let mut acc = Maybe::constant(true, n);
+            for x in xs {
+                if let PushdownExpr::Membership { column: c, filter } = x {
+                    let m = eval(x, batch);
+                    if m.may_true.is_some() && filter.keys.exact_rows() {
+                        covered.push(c);
+                    }
+                    acc = conj(acc, m);
+                }
             }
-        }),
+            for x in xs {
+                match x {
+                    PushdownExpr::Membership { .. } => {}
+                    PushdownExpr::In { column: c, .. } if covered.contains(&c) => {
+                        acc = conj(acc, Maybe::default());
+                    }
+                    _ => acc = conj(acc, eval(x, batch)),
+                }
+            }
+            acc
+        }
         PushdownExpr::Or(xs) => xs.iter().fold(Maybe::constant(false, n), |acc, x| {
             let m = eval(x, batch);
             Maybe {
@@ -291,13 +416,7 @@ fn eval(e: &PushdownExpr, batch: &RecordBatch) -> Maybe {
             column: c,
             values,
             collation,
-        } if binary(collation) => exact(c, &|a| {
-            values
-                .iter()
-                .try_fold(BooleanBuffer::new_unset(a.len()), |acc, v| {
-                    Some(&acc | &compare(a, CmpOp::Eq, v)?)
-                })
-        }),
+        } if binary(collation) => exact(c, &|a| in_list(a, values)),
         PushdownExpr::StartsWith {
             column: c,
             prefix,
@@ -1169,6 +1288,274 @@ mod tests {
         assert_eq!(kept(&member, &b), [true, false, false, true]);
         // NOT of a superset is not a superset: every row stays.
         assert_eq!(kept(&PushdownExpr::Not(Box::new(member)), &b), [true; 4]);
+    }
+
+    fn key_filter(keys: &[i32], options: KeyFilterOptions) -> Arc<crate::KeyFilter> {
+        let mut b =
+            KeyFilterBuilder::new(DataType::Int32, options).unwrap_or_else(|| panic!("Int32 keys"));
+        b.add(&Int32Array::from(keys.to_vec()), None).unwrap();
+        Arc::new(b.finish())
+    }
+
+    fn membership(keys: &Arc<crate::KeyFilter>) -> PushdownExpr {
+        PushdownExpr::Membership {
+            column: c("a"),
+            filter: crate::MembershipFilter {
+                id: crate::FilterId(1),
+                generation: 1,
+                keys: Arc::clone(keys),
+            },
+        }
+    }
+
+    fn in_a(values: &[i32]) -> PushdownExpr {
+        PushdownExpr::In {
+            column: c("a"),
+            values: values.iter().copied().map(ScalarValue::Int32).collect(),
+            collation: Collation::Utf8Binary,
+        }
+    }
+
+    #[test]
+    fn an_in_beside_an_exact_membership_is_not_evaluated() {
+        let b = ints();
+        let exact = key_filter(&[1, 5], KeyFilterOptions::default());
+        assert!(exact.exact_rows());
+        // An `In` narrower than the membership shows whether it ran: beside
+        // an exact membership on the same column it is skipped.
+        let skipped = PushdownExpr::And(vec![in_a(&[1]), membership(&exact)]);
+        assert_eq!(kept(&skipped, &b), [true, false, false, true]);
+        // Order inside the `And` does not matter.
+        let first = PushdownExpr::And(vec![membership(&exact), in_a(&[1])]);
+        assert_eq!(kept(&first, &b), [true, false, false, true]);
+        // An `In` on another column, or beside a membership that may pass
+        // false positives (a Bloom filter), still runs.
+        let two = batch(vec![
+            (
+                "a",
+                Arc::new(Int32Array::from(vec![1, 3, 5, 5])) as ArrayRef,
+            ),
+            (
+                "b",
+                Arc::new(Int32Array::from(vec![1, 1, 1, 9])) as ArrayRef,
+            ),
+        ]);
+        let other = PushdownExpr::And(vec![
+            PushdownExpr::In {
+                column: c("b"),
+                values: vec![ScalarValue::Int32(1)],
+                collation: Collation::Utf8Binary,
+            },
+            membership(&exact),
+        ]);
+        assert_eq!(kept(&other, &two), [true, false, true, false]);
+        let bloom = key_filter(
+            &[1, 5],
+            KeyFilterOptions {
+                exact_max_values: 0,
+                ..KeyFilterOptions::default()
+            },
+        );
+        assert!(!bloom.exact_rows());
+        let applied = PushdownExpr::And(vec![in_a(&[1]), membership(&bloom)]);
+        assert_eq!(kept(&applied, &b), [true, false, false, false]);
+        // Skipping leaves the `And` unknown-false, so a NOT above it (never
+        // in negation normal form, but `eval` takes it) keeps every row.
+        assert_eq!(
+            eval(&PushdownExpr::Not(Box::new(skipped)), &b).may_true,
+            None
+        );
+        // A dense range is exact too; a published empty filter is not.
+        assert!(key_filter(&[4, 5, 6], KeyFilterOptions::default()).exact_rows());
+        assert!(!key_filter(&[], KeyFilterOptions::default()).exact_rows());
+    }
+
+    #[test]
+    fn a_lowered_runtime_filter_keeps_the_same_rows_without_its_in() {
+        let keys: Vec<i32> = (0..40).map(|k| k * 3).collect();
+        let f = key_filter(&keys, KeyFilterOptions::default());
+        let lowered = f
+            .lower(&c("a"), &DataType::Int32, crate::FilterId(1), 1)
+            .unwrap_or_else(|| panic!("lowers"));
+        let PushdownExpr::And(parts) = &lowered else {
+            panic!("{lowered:?}")
+        };
+        assert!(parts.iter().any(|p| matches!(p, PushdownExpr::In { .. })));
+        let col: Vec<Option<i32>> = (-5..130).map(|v| (v % 7 != 0).then_some(v)).collect();
+        let b = batch(vec![(
+            "a",
+            Arc::new(Int32Array::from(col.clone())) as ArrayRef,
+        )]);
+        let want: Vec<bool> = col
+            .iter()
+            .map(|v| v.is_some_and(|v| keys.contains(&v)))
+            .collect();
+        assert_eq!(kept(&lowered, &b), want);
+        // With NULL keys passing (a null-safe join), NULL rows stay.
+        let mut nb = KeyFilterBuilder::new(DataType::Int32, KeyFilterOptions::default())
+            .unwrap_or_else(|| panic!("Int32 keys"));
+        nb.add(&Int32Array::from(vec![Some(3), None, Some(9)]), None)
+            .unwrap();
+        let mut nulls = nb.finish();
+        nulls.nulls_pass = true;
+        let lowered = Arc::new(nulls)
+            .lower(&c("a"), &DataType::Int32, crate::FilterId(1), 1)
+            .unwrap_or_else(|| panic!("lowers"));
+        let want: Vec<bool> = col
+            .iter()
+            .map(|v| v.is_none_or(|v| v == 3 || v == 9))
+            .collect();
+        assert_eq!(kept(&lowered, &b), want);
+    }
+
+    #[test]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the test values lie in -40..120, which every integer type holds"
+    )]
+    fn a_long_in_list_keeps_what_one_pass_per_value_keeps() {
+        let long: Vec<i64> = (0..20).map(|v| v * 7 - 30).collect();
+        let rows: Vec<Option<i64>> = (-40..120).map(|v| (v % 11 != 0).then_some(v)).collect();
+        let arrays: Vec<(ArrayRef, Vec<ScalarValue>)> = vec![
+            (
+                Arc::new(Int8Array::from_iter(
+                    rows.iter().map(|v| v.map(|v| v as i8)),
+                )),
+                long.iter().map(|v| ScalarValue::Int8(*v as i8)).collect(),
+            ),
+            (
+                Arc::new(Int16Array::from_iter(
+                    rows.iter().map(|v| v.map(|v| v as i16)),
+                )),
+                long.iter().map(|v| ScalarValue::Int16(*v as i16)).collect(),
+            ),
+            (
+                Arc::new(Int32Array::from_iter(
+                    rows.iter().map(|v| v.map(|v| v as i32)),
+                )),
+                long.iter().map(|v| ScalarValue::Int32(*v as i32)).collect(),
+            ),
+            (
+                Arc::new(Int64Array::from(rows.clone())),
+                long.iter().map(|v| ScalarValue::Int64(*v)).collect(),
+            ),
+            (
+                Arc::new(Date32Array::from_iter(
+                    rows.iter().map(|v| v.map(|v| v as i32)),
+                )),
+                long.iter()
+                    .map(|v| ScalarValue::Date32(*v as i32))
+                    .collect(),
+            ),
+            (
+                Arc::new(TimestampMicrosecondArray::from(rows.clone())),
+                long.iter()
+                    .map(|v| ScalarValue::TimestampMicros(*v))
+                    .collect(),
+            ),
+            (
+                Arc::new(
+                    Decimal128Array::from_iter(rows.iter().map(|v| v.map(i128::from)))
+                        .with_precision_and_scale(10, 2)
+                        .unwrap(),
+                ),
+                long.iter()
+                    .map(|v| ScalarValue::Decimal128 {
+                        unscaled: i128::from(*v),
+                        precision: 10,
+                        scale: 2,
+                    })
+                    .collect(),
+            ),
+            (
+                Arc::new(StringArray::from_iter(
+                    rows.iter().map(|v| v.map(|v| v.to_string())),
+                )),
+                long.iter()
+                    .map(|v| ScalarValue::Utf8(v.to_string()))
+                    .collect(),
+            ),
+            (
+                Arc::new(StringViewArray::from_iter(
+                    rows.iter().map(|v| v.map(|v| v.to_string())),
+                )),
+                long.iter()
+                    .map(|v| ScalarValue::Utf8(v.to_string()))
+                    .collect(),
+            ),
+            (
+                Arc::new(BinaryArray::from_iter(
+                    rows.iter().map(|v| v.map(|v| v.to_string().into_bytes())),
+                )),
+                long.iter()
+                    .map(|v| ScalarValue::Binary(v.to_string().into_bytes()))
+                    .collect(),
+            ),
+        ];
+        for (a, values) in arrays {
+            let ty = a.data_type().clone();
+            let b = batch(vec![("a", a)]);
+            let e = PushdownExpr::In {
+                column: c("a"),
+                values: values.clone(),
+                collation: Collation::Utf8Binary,
+            };
+            let col = b.column(0).as_ref();
+            let one_pass_each: Vec<bool> = values
+                .iter()
+                .fold(BooleanBuffer::new_unset(col.len()), |acc, v| {
+                    &acc | &compare(col, CmpOp::Eq, v).unwrap()
+                })
+                .iter()
+                .zip(
+                    col.logical_nulls()
+                        .map_or(vec![true; col.len()], |n| n.iter().collect()),
+                )
+                .map(|(t, valid)| t && valid)
+                .collect();
+            assert!(one_pass_each.iter().any(|k| *k), "{ty}");
+            assert_eq!(kept(&e, &b), one_pass_each, "{ty}");
+            // NOT IN drops the listed values and NULLs.
+            let not: Vec<bool> = col
+                .logical_nulls()
+                .map_or(vec![true; col.len()], |n| n.iter().collect())
+                .into_iter()
+                .zip(&one_pass_each)
+                .map(|(valid, hit)| valid && !hit)
+                .collect();
+            assert_eq!(kept(&PushdownExpr::Not(Box::new(e)), &b), not, "{ty}");
+        }
+        // A value of another type, or a decimal at another scale, leaves
+        // the list unevaluated (every row kept), as for a short list.
+        let b = ints();
+        let mut mixed: Vec<ScalarValue> = (0..10).map(ScalarValue::Int32).collect();
+        mixed.push(ScalarValue::Int64(1));
+        let e = PushdownExpr::In {
+            column: c("a"),
+            values: mixed,
+            collation: Collation::Utf8Binary,
+        };
+        assert_eq!(kept(&e, &b), [true; 4]);
+        let dec = batch(vec![(
+            "a",
+            Arc::new(
+                Decimal128Array::from(vec![100, 200])
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ) as ArrayRef,
+        )]);
+        let other_scale = PushdownExpr::In {
+            column: c("a"),
+            values: (0..10)
+                .map(|v| ScalarValue::Decimal128 {
+                    unscaled: v,
+                    precision: 10,
+                    scale: 1,
+                })
+                .collect(),
+            collation: Collation::Utf8Binary,
+        };
+        assert_eq!(kept(&other_scale, &dec), [true; 2]);
     }
 
     #[test]
