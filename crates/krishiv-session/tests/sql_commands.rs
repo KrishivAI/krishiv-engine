@@ -499,7 +499,8 @@ fn create_view_with_both_flags_fails_before_the_query_is_checked() {
 fn drop_view_needs_the_view() {
     let s = session();
     block_on(s.sql("CREATE TEMP VIEW v AS SELECT id FROM people")).unwrap();
-    // A missing view fails as in Spark, naming the view and search path.
+    // A missing view fails as in Spark's v1 `NoSuchTableException`: the qualified view, and only the
+    // current namespace as the path (identifier-clause-legacy.sql.out).
     let e = block_on(s.sql("DROP VIEW nosuch")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
     assert_eq!(e.sql_state(), Some("42P01"));
@@ -507,11 +508,11 @@ fn drop_view_needs_the_view() {
     assert_eq!(
         e.message_parameters(),
         [
-            ("relationName", "`nosuch`".to_owned()),
             (
-                "searchPath",
-                "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]".to_owned()
+                "relationName",
+                "`spark_catalog`.`default`.`nosuch`".to_owned()
             ),
+            ("searchPath", "[`spark_catalog`.`default`]".to_owned()),
         ]
     );
     // `IF EXISTS` tolerates it, returning an empty frame as in Spark.

@@ -484,6 +484,18 @@ impl Session {
         )
     }
 
+    /// The search path of a v1 `DROP VIEW` that finds nothing: only the current catalog and namespace
+    /// (Spark's `NoSuchTableException` carries no SQL path), with the relation qualified by it.
+    pub(crate) fn drop_view_not_found(&self, name: &str) -> KrishivError {
+        let (catalog, namespace) = self.state.catalog.position_pair();
+        let q = |s: &str| format!("`{}`", s.replace('`', "``"));
+        krishiv_common::error::TableOrViewNotFound {
+            relation_name: format!("{}.{}.{}", q(&catalog), q(&namespace), q(name)),
+            search_path: format!("[{}.{}]", q(&catalog), q(&namespace)),
+        }
+        .into()
+    }
+
     /// A builder with the defaults.
     ///
     /// ```
