@@ -11,6 +11,7 @@ use super::ast::{BinaryOp, ExprKind, SetExprKind, SetKind, Span, Statement};
 use super::lexer::{TokenKind, tokenize, unescape_string};
 use super::*;
 
+mod asof;
 mod commands;
 mod function;
 mod golden_syntax;
