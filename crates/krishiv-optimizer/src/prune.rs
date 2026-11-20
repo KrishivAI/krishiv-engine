@@ -75,6 +75,7 @@ pub fn narrow_scan_instances(
         req: &req,
         done: HashMap::new(),
         chains: HashMap::new(),
+        chain_kind: HashMap::new(),
         stats,
     };
     pass.node(0)
@@ -86,6 +87,8 @@ struct Instances<'a> {
     done: HashMap<usize, Arc<LogicalPlan>>,
     /// Chains rebuilt for one demand, by node and sorted demand.
     chains: HashMap<(usize, Vec<AttrId>), Arc<LogicalPlan>>,
+    /// [`Instances::is_chain`] by node, so a graph that shares subtrees is walked once.
+    chain_kind: HashMap<usize, bool>,
     stats: Option<&'a dyn Statistics>,
 }
 
@@ -111,7 +114,7 @@ impl Instances<'_> {
             .map_children(|c| {
                 let id = self.graph.id(&c);
                 Ok::<_, std::convert::Infallible>(match edge.get(&id) {
-                    Some(Some(d)) if is_scan_chain(&c) => self.chain(id, d),
+                    Some(Some(d)) if self.is_chain(id) => self.chain(id, d),
                     _ => self.node(id),
                 })
             })
@@ -122,6 +125,37 @@ impl Instances<'_> {
         };
         self.done.insert(i, Arc::clone(&out));
         out
+    }
+
+    /// Whether node `i` is a `Scan` under `Filter`s (with no subquery) and `Shift`s only, or a
+    /// join (with no subquery) with such a chain below it: a chain whose columns one parent's
+    /// demand decides. Memoized by node.
+    fn is_chain(&mut self, i: usize) -> bool {
+        if let Some(&known) = self.chain_kind.get(&i) {
+            return known;
+        }
+        let p = Arc::clone(&self.graph.nodes[i]);
+        let mut sub = false;
+        let kind = match &p.node {
+            PlanNode::Scan(_) => true,
+            PlanNode::Filter { input, .. } | PlanNode::Shift { input, .. } => {
+                let filter = matches!(p.node, PlanNode::Filter { .. });
+                if filter {
+                    subqueries(&p, &mut |_, _| sub = true);
+                }
+                !sub && self.is_chain(self.graph.id(input))
+            }
+            PlanNode::Join { left, right, .. } => {
+                subqueries(&p, &mut |_, _| sub = true);
+                !sub && {
+                    let (l, r) = (self.graph.id(left), self.graph.id(right));
+                    self.is_chain(l) || self.is_chain(r)
+                }
+            }
+            _ => false,
+        };
+        self.chain_kind.insert(i, kind);
+        kind
     }
 
     /// The scan chain at node `i` reading only `need` of its output.
@@ -183,7 +217,7 @@ impl Instances<'_> {
                 let rebuilt = Arc::clone(&p).map_children(|c| {
                     let id = self.graph.id(&c);
                     Ok::<_, std::convert::Infallible>(match edge.get(&id) {
-                        Some(Some(d)) if is_scan_chain(&c) => self.chain(id, d),
+                        Some(Some(d)) if self.is_chain(id) => self.chain(id, d),
                         _ => self.node(id),
                     })
                 });
@@ -224,27 +258,6 @@ impl Instances<'_> {
             Ok(v) => v,
             Err(never) => match never {},
         }
-    }
-}
-
-/// Whether `p` is a `Scan` under `Filter`s (with no subquery) and `Shift`s
-/// only: a chain whose columns one parent's demand decides.
-fn is_scan_chain(p: &LogicalPlan) -> bool {
-    match &p.node {
-        PlanNode::Scan(_) => true,
-        PlanNode::Filter { input, .. } => {
-            let mut sub = false;
-            subqueries(p, &mut |_, _| sub = true);
-            !sub && is_scan_chain(input)
-        }
-        PlanNode::Shift { input, .. } => is_scan_chain(input),
-        // A join with a chain below it: its copy reads what the edge needs.
-        PlanNode::Join { left, right, .. } => {
-            let mut sub = false;
-            subqueries(p, &mut |_, _| sub = true);
-            !sub && (is_scan_chain(left) || is_scan_chain(right))
-        }
-        _ => false,
     }
 }
 
