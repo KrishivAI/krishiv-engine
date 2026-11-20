@@ -195,10 +195,14 @@ fn handle(mut stream: TcpStream, state: &Mutex<State>) {
         object: object.clone(),
         key_id: key_id.clone(),
     });
-    // A HEAD answer has no body, so it could not name `ExpiredToken` (real S3 answers a bare 403 there, which the
-    // store cannot tell from a denial): an expired key still passes HEAD here.
-    if r.method != "HEAD" && key_id.as_ref().is_some_and(|k| st.expired.contains(k)) {
+    // A HEAD answer has no body, so it cannot name `ExpiredToken`: real S3 answers a bare 403 there, which the
+    // store retries once with a fresh credential (`RefreshingStore`).
+    if key_id.as_ref().is_some_and(|k| st.expired.contains(k)) {
         drop(st);
+        if r.method == "HEAD" {
+            answer(&mut stream, "403 Forbidden", &[], b"");
+            return;
+        }
         let body =
             b"<Error><Code>ExpiredToken</Code><Message>The provided token has expired.</Message></Error>";
         answer(&mut stream, "403 Forbidden", &[], body);

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The whole path against a loopback S3 stand-in: a scoped store signs with the source's
 //! credential, a `403 ExpiredToken` forces exactly one refresh and one retry (signed with the
-//! new key id), and any other 403 fails with no refresh.
+//! new key id), any other 403 fails with no refresh, and a HEAD's bare 403 gets the one refresh
+//! and retry (its answer cannot name the expired token).
 #![cfg(feature = "cloud")]
 #![expect(clippy::unwrap_used, reason = "test code")]
 
@@ -123,7 +124,7 @@ async fn any_other_403_fails_without_a_refresh() {
     let opened = registry.open("s3://b/warehouse/f.txt").unwrap();
     let e = opened
         .store
-        .head(&Path::from("warehouse/f.txt"))
+        .get(&Path::from("warehouse/f.txt"))
         .await
         .unwrap_err();
     assert!(
@@ -132,6 +133,30 @@ async fn any_other_403_fails_without_a_refresh() {
     );
     assert_eq!(source.0.load(Ordering::SeqCst), 1);
     assert_eq!(server.await.unwrap().len(), 1);
+}
+
+/// A HEAD's 403 has no body, so an expired key cannot be told from a denial: the HEAD is
+/// retried once with a fresh credential, then fails as the store answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bare_403_on_a_head_is_retried_once_with_a_fresh_key() {
+    let (endpoint, server) = serve(vec![("403 Forbidden", ""), ("403 Forbidden", "")]).await;
+    let source = Arc::new(Counting::default());
+    let registry = registry(&endpoint, Arc::clone(&source));
+    let opened = registry.open("s3://b/warehouse/f.txt").unwrap();
+    let e = opened
+        .store
+        .head(&Path::from("warehouse/f.txt"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(e, object_store::Error::PermissionDenied { .. }),
+        "{e:?}"
+    );
+    assert_eq!(source.0.load(Ordering::SeqCst), 2, "one forced refresh");
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 2, "exactly one retry");
+    assert!(seen[0].contains("AKIAKEY0XYZ"), "{}", seen[0]);
+    assert!(seen[1].contains("AKIAKEY1XYZ"), "{}", seen[1]);
 }
 
 #[tokio::test(flavor = "multi_thread")]

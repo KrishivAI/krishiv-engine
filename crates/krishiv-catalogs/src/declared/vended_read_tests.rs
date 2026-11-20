@@ -410,7 +410,8 @@ fn vended_credential_refreshed_by_table_reload() {
 
 /// Design §4.1 minor 5, §4.3: a credential without an expiry key that storage refuses as expired (403
 /// `ExpiredToken`) is refreshed once and the request retried, though the cache still thinks it good for the default
-/// TTL; the refused answer is replaced, so the next query never signs with it.
+/// TTL; the refused answer is replaced, so the next query never signs with it. A read starts with HEADs, which storage
+/// answers with a bare 403 (no `ExpiredToken` body): those are refreshed and retried once too (review thread `Lf1s`).
 #[test]
 fn vended_credential_refused_mid_read_is_refreshed() {
     let s3 = serve_s3();

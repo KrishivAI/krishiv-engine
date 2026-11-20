@@ -98,7 +98,7 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   connector's `testing::write_table` wrote, served by the fake REST server); `declared/vended_read_tests.rs`: a table
   `testing::write_table_with` wrote to `s3://bucket/wh` with a writer key on `src/s3_test_server.rs` (a loopback S3 stand-in, tests only:
   PUT/GET range/HEAD/DELETE in memory, records each request's SigV4 key id, `deny` (403 `AccessDenied`) and `expire`
-  (403 `ExpiredToken`, not on HEAD) per key id), read by a session with no S3 key:
+  (403 `ExpiredToken`; a bare 403 on HEAD, as real S3) per key id), read by a session with no S3 key:
   every request signed with the vended key, a credential inside the refresh skew replaced through `loadCredentials`
   (with the table token) or a table reload, a key storage refuses as expired mid-read refreshed and never served
   again, a path read never signed with the vended key (`vended_prefix_does_not_open_path_reads`), remote signing
