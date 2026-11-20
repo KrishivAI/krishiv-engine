@@ -82,6 +82,7 @@ mod join_order;
 mod late_payload;
 mod limit;
 mod narrow;
+mod one_row_scalar;
 mod partition_advice;
 mod payload_above;
 mod plan_stats;
@@ -634,6 +635,12 @@ fn run(
             }
             _ => root,
         };
+        // After the final join order (the cross join with a one-row relation is placed), before
+        // eager aggregation (which would otherwise see the `max` in the aggregate on the first
+        // run only: a fixed point) and pruning, which drops what the rewrite leaves unread.
+        let root = t.once("OneRowAbove", &root, |r| {
+            one_row_scalar::rewrite(Arc::clone(r))
+        })?;
         // After the plan's joins are final, so the rule reads the join it
         // moves below; before pruning, which drops what it leaves unread.
         let eager = options.eager_aggregation

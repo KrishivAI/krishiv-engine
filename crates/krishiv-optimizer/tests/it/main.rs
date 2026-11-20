@@ -18,6 +18,7 @@ mod join_cost;
 mod join_enumerator;
 mod join_order;
 mod late_payload;
+mod one_row_scalar;
 mod oracle;
 mod payload_above;
 mod plan_stats;
