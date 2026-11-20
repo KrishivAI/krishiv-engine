@@ -541,17 +541,19 @@ impl<'s> Parser<'s> {
     /// The action of an `ALTER VIEW`, after the view name.
     fn alter_view_action(&mut self) -> PR<AlterViewAction> {
         let start = self.start();
-        if self.eat_kw("AS") {
+        if self.kw_at(0, "WITH") && self.kw_at(1, "SCHEMA") {
+            let binding = self.schema_binding()?;
+            return Ok(AlterViewAction::SetSchemaBinding(binding));
+        }
+        // `ALTER VIEW identifierReference AS? query` (Spark's `alterViewQuery`): without `AS`, a
+        // `WITH` starts the query's CTEs.
+        if self.eat_kw("AS") || self.query_starts() {
             let query = Box::new(self.query()?);
             return Ok(AlterViewAction::SetQuery {
                 query,
                 schema_binding: None,
                 span: self.span_from(start),
             });
-        }
-        if self.kw_at(0, "WITH") && self.kw_at(1, "SCHEMA") {
-            let binding = self.schema_binding()?;
-            return Ok(AlterViewAction::SetSchemaBinding(binding));
         }
         if self.eat_kw("SET") {
             self.expect_kw("TBLPROPERTIES")?;

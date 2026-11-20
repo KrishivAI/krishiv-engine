@@ -182,6 +182,13 @@ pub(crate) struct ViewDef {
     pub(crate) kind: ViewKind,
 }
 
+impl ViewDef {
+    /// Whether this is a metric view (Spark's table type `METRIC_VIEW`), whose [`Self::sql`] is YAML.
+    pub(crate) const fn is_metric(&self) -> bool {
+        matches!(self.kind, ViewKind::Metric(_))
+    }
+}
+
 /// [`ViewDef::kind`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ViewKind {

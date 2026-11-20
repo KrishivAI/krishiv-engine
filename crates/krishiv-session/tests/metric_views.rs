@@ -61,6 +61,35 @@ fn rows(batches: &[RecordBatch]) -> Vec<Value> {
 }
 
 /// A row as text, with `<normalized>` cells kept as the fixture wrote them.
+/// A text cell without what differs between runs and patch releases: the creating release
+/// (`Created By`, the engine says 4.2.0, the goldens ran on 4.2.1 and 4.3.0) and, inside
+/// `SHOW TABLE EXTENDED`'s information, the times the goldens print as `<normalized>`.
+fn text(cell: &str) -> String {
+    let release = |s: &str| {
+        s.strip_prefix("Spark ")
+            .is_some_and(|v| v.split('.').all(|p| p.parse::<u32>().is_ok()))
+    };
+    if release(cell) {
+        return "Spark <release>".to_owned();
+    }
+    if !cell.contains('\n') {
+        return cell.to_owned();
+    }
+    cell.split('\n')
+        .map(|line| match line.split_once(": ") {
+            Some(("Created Time" | "Last Access", _)) => {
+                format!(
+                    "{}: <normalized>",
+                    line.split_once(": ").map_or("", |p| p.0)
+                )
+            }
+            Some(("Created By", v)) if release(v) => "Created By: Spark <release>".to_owned(),
+            _ => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn normalized(row: &Value, expected: &Value) -> String {
     match (row, expected) {
         (Value::Array(r), Value::Array(e)) => {
@@ -72,6 +101,8 @@ fn normalized(row: &Value, expected: &Value) -> String {
                         e.to_string()
                     } else if let (Some(a), Some(b)) = (r.as_f64(), e.as_f64()) {
                         if a == b { e.to_string() } else { a.to_string() }
+                    } else if let Some(r) = r.as_str() {
+                        Value::String(text(r)).to_string()
                     } else {
                         r.to_string()
                     }
@@ -172,14 +203,20 @@ fn check(release: &str, gaps: &[&str]) {
     let fixture = fixture(release);
     let mut failing = BTreeSet::new();
     let mut report = String::new();
+    let mut all = String::new();
     for case in fixture["cases"].as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
         if let Some(why) = run_case(case) {
+            all.push_str(&format!("{name}: {why}\n"));
             failing.insert(name.to_owned());
             if !gaps.contains(&name) {
                 report.push_str(&format!("{name}: {why}\n"));
             }
         }
+    }
+    // `METRIC_VIEWS_FAILURES=<dir>` writes every failing case, gaps included, and why.
+    if let Ok(dir) = std::env::var("METRIC_VIEWS_FAILURES") {
+        std::fs::write(format!("{dir}/failures-{release}.txt"), &all).unwrap();
     }
     let gaps: BTreeSet<String> = gaps.iter().map(|g| (*g).to_owned()).collect();
     let fixed: Vec<_> = gaps.difference(&failing).collect();

@@ -101,3 +101,23 @@ Files split to stay under 2,000 lines; the parent file keeps the types and the e
 
 ## Vector carrier (P3-T075)
 A column registered or read as `FixedSizeList<float|double, N>` runs as a vector carrier; callers, UDFs and `collect` see Spark `array<float>` (a plain list). Tests: `tests/vector_carrier.rs` (plain-list read, array functions, hash/equality, UDF edge, unions, Parquet path vs table).
+
+## Metric views (P3 4.2-MV, design note `P3-metric-views.md` §3)
+A metric view is a stored `ViewDef` with `kind: ViewKind::Metric` (`ViewDef::is_metric`): `sql`/`written` hold the
+YAML, never a query. Rule: a site that parses `view.sql` as SQL or reads a SQL view's binding fields branches on
+the kind; every other `.view` read treats it as a view. Branches (4.2.1/4.3.0 goldens, `tests/metric_views.rs`):
+| Site | Metric view |
+|---|---|
+| `catalog/expand.rs` `inline_stored` | Refused (`KRISHIV_UNSUPPORTED_FEATURE`) until the read path (step 6); never parsed as SQL. |
+| `introspection.rs` `table_information` (DESCRIBE EXTENDED, SHOW TABLE EXTENDED) | `Type METRIC_VIEW`, `Comment`, `View Text` = YAML, `Language YAML`; no binding rows. |
+| `introspection.rs` SHOW CREATE TABLE | `UNSUPPORTED_SHOW_CREATE_TABLE.ON_METRIC_VIEW`; `AS SERDE` Spark's internal error. |
+| `introspection.rs` SHOW PARTITIONS | `EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE`. |
+| `table_commands/create.rs` `drop_named_table` | `DROP TABLE` drops it. |
+| `table_commands.rs` `drop_stored_view` | `DROP VIEW` drops it; on a table, requiredType `VIEW or METRIC_VIEW` from 4.2 (`VIEW` before). |
+| `table_commands.rs` `exec_alter_view` | `RENAME TO` keeps kind and column metadata (`rename_table`); `AS query` keeps the kind. |
+| `table_commands.rs` `altered_table` | Partition actions `EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE`; others `USE_ALTER_VIEW` with a bare `ALTER TABLE`. |
+| `table_commands/writes.rs` `stored_table_for` | INSERT `UNSUPPORTED_INSERT.RDD_BASED`, ANALYZE `UNSUPPORTED_FEATURE.ANALYZE_VIEW`, TRUNCATE etc. `NO_ALTERNATIVE`. |
+| `spark_catalog.rs` `table_of` | Table type `METRIC_VIEW`. |
+Unchanged, as a view: `access.rs`/`grants/` (`Securable::View`), `result_cache.rs`, `session/definer.rs`,
+`store_catalog.rs` (v2 `TableKind::View`), `view_schema.rs` (never reached: the read is refused first),
+`sql_functions.rs`, `catalog.rs` lookups.

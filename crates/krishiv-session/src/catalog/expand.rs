@@ -437,6 +437,14 @@ impl Expander<'_> {
             }
             _ => return Ok(Arc::clone(plan)),
         };
+        if view.is_metric() {
+            // Its `sql` is YAML, never a query: the measure-aware read of design note
+            // `P3-metric-views.md` §4 (step 6) is not built yet.
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: "reading a metric view".to_owned(),
+            }
+            .into());
+        }
         let key = format!("{namespace}.{table_key}");
         if self.path.contains(&key) {
             return Err(InternalError {
