@@ -34,7 +34,8 @@ pub(crate) fn restore(schema: &Schema, kv: Option<&Vec<KeyValue>>) -> Option<Sch
         .value
         .as_deref()?;
     // Collations, and user-defined types (P3-T079): Parquet holds a UDT as its storage type.
-    if !json.contains("__COLLATIONS") && !json.contains(r#""type":"udt""#) {
+    // A cheap prefilter; the JSON may carry whitespace around the colon (`"type": "udt"`), so look for the value.
+    if !json.contains("__COLLATIONS") && !json.contains(r#""udt""#) {
         return None;
     }
     let DataType::Struct(spark) = DataType::from_json(json).ok()? else {
@@ -327,6 +328,18 @@ mod tests {
                 "{footer}"
             );
         }
+    }
+
+    #[test]
+    fn a_footer_with_whitespace_in_its_json_still_restores_a_udt() {
+        let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+        let schema = Schema::new(vec![storage.to_arrow_field("p", true)]);
+        let footer = r#"{"type": "struct", "fields": [{"name": "p", "type": {"type": "udt", "class": "org.example.PointUDT", "pyClass": null, "sqlType": {"type": "array", "elementType": "double", "containsNull": false}}, "nullable": true, "metadata": {}}]}"#;
+        let restored = restore(&schema, Some(&kv(footer))).expect("tagged");
+        assert!(matches!(
+            DataType::from_arrow_field(restored.field(0)).unwrap(),
+            DataType::Udt(_)
+        ));
     }
 
     /// A UDT over a collated string: the footer holds the collation inline (Spark 4.2.0), and a read whose Arrow
