@@ -198,8 +198,9 @@ unpartitioned spec); an equality delete is skipped for a data file when their co
 of literals (Murmur3 bucket, truncate, year/month/day/hour) · `strict.rs` (PR-36b part 2b) the overwrite row filter: `Pred` (Iceberg semantics, from Spark's `PushdownExpr` with `not_null` guards on `<>`/`NOT startswith`), `RowFilter::rows_must_match`/`rows_might_match` on the residual after the partition (strict projections per transform, the pre-1970 time fix) as Java's `StrictMetricsEvaluator`/`ManifestFilterManager`; tests `strict_tests.rs` · `prune.rs` `Pruner`, the might-match evaluator over
 summaries, partition tuples and metrics (`PruneMode::Conservative` for T027 validation, review-1 S11) · `tests.rs`,
 `prop_tests.rs` (`prune_never_skips_a_matching_row`).
-Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
-`research/p3/t022a-iceberg-spark-types.md` in krishiv-internal).
+Type goldens: `tests/fixtures/iceberg-1.12.0/types.json` at the repository root, from a real Spark 4.1.0 +
+iceberg-spark-runtime 1.12.0 run (Iceberg's `SparkSchemaUtil.convert` per schema, `tests/scripts/gen_iceberg_type_goldens.py`),
+checked by `iceberg_v0/type_golden_tests.rs`; column defaults are a documented refusal.
 
 ## Write conformance and round trip (PR-53b)
 `write_conformance_tests.rs`: two `#[ignore]`d tests run by `tests/scripts/iceberg_write_conformance.sh` (Docker; nightly job
