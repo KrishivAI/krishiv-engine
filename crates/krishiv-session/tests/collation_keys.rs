@@ -95,7 +95,9 @@ fn distinct_over_a_union_dedupes_on_the_key() {
         ["a", "b", "c"]
     );
     assert_eq!(
-        rows(&format!("SELECT count(*) FROM (SELECT DISTINCT c FROM ({u}))")),
+        rows(&format!(
+            "SELECT count(*) FROM (SELECT DISTINCT c FROM ({u}))"
+        )),
         ["3"]
     );
 }
