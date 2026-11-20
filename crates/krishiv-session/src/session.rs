@@ -676,6 +676,7 @@ impl Session {
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
             Statement::Delete(d) => {
+                self.refuse_target_options(&d.table, &d.options, "DELETE")?;
                 let changes = crate::table_commands::RowChanges {
                     targets: &[],
                     values: &[],
@@ -685,6 +686,7 @@ impl Session {
                     .await
             }
             Statement::Update(u) => {
+                self.refuse_target_options(&u.table, &u.options, "UPDATE TABLE")?;
                 let targets: Vec<_> = u.assignments.iter().map(|a| &a.target).collect();
                 let values: Vec<_> = u.assignments.iter().map(|a| &a.value).collect();
                 let changes = crate::table_commands::RowChanges {
@@ -702,6 +704,7 @@ impl Session {
                 .await
             }
             Statement::Merge(m) => {
+                self.refuse_target_options(&m.target, &m.options, "MERGE INTO TABLE")?;
                 let changes = crate::table_commands::RowChanges {
                     targets: &[],
                     values: &[],

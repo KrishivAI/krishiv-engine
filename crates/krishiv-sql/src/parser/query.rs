@@ -1280,7 +1280,16 @@ impl Parser<'_> {
                     args,
                 }
             } else {
-                let temporal = self.temporal_clause()?;
+                let at_suffix = self.at_suffix_clause()?;
+                let temporal = match (at_suffix, self.temporal_clause()?) {
+                    (Some(at), Some(clause)) => {
+                        return Self::fatal(error::multiple_time_travel_spec(Span::new(
+                            at.span.start,
+                            clause.span.end,
+                        )));
+                    }
+                    (at, clause) => at.or(clause),
+                };
                 let options = self.table_options()?;
                 match name {
                     DdlName::Parts(name) => TableFactorKind::Table {
@@ -1443,6 +1452,65 @@ impl Parser<'_> {
             kind,
             span: self.span_from(start),
         })
+    }
+
+    /// The `@v123` / `@yyyyMMddHHmmssSSS` suffix of a table name (Spark 4.3), as the clause it
+    /// stands for: `VERSION AS OF 123` or `TIMESTAMP AS OF 'yyyy-MM-dd HH:mm:ss.SSS'`.
+    #[inline(never)]
+    fn at_suffix_clause(&mut self) -> PR<Option<TemporalClause>> {
+        let at_tok = match self.tok(0) {
+            Some(t) if t.kind == TokenKind::Unrecognized && t.span.text(self.src) == "@" => t,
+            _ => return Ok(None),
+        };
+        if !self.opts.time_travel_at_syntax {
+            return Self::fatal(error::time_travel_at_syntax(at_tok.span));
+        }
+        let start = self.start();
+        let next = self.tok(1).filter(|t| t.span.start == at_tok.span.end);
+        let Some(next) = next else {
+            self.bump();
+            return self.fail();
+        };
+        let word = next.span.text(self.src);
+        let value_span = next.span;
+        let (kind, literal) = if let Some(n) = word
+            .strip_prefix(['v', 'V'])
+            .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        {
+            (
+                TemporalKind::Version,
+                Literal::Number {
+                    text: n.to_owned(),
+                    kind: NumKind::Int,
+                },
+            )
+        } else if word.len() == 17 && word.bytes().all(|b| b.is_ascii_digit()) {
+            (
+                TemporalKind::Timestamp,
+                Literal::String(format!(
+                    "{}-{}-{} {}:{}:{}.{}",
+                    &word[0..4],
+                    &word[4..6],
+                    &word[6..8],
+                    &word[8..10],
+                    &word[10..12],
+                    &word[12..14],
+                    &word[14..17]
+                )),
+            )
+        } else {
+            self.bump();
+            return self.fail();
+        };
+        self.pos += 2;
+        Ok(Some(TemporalClause {
+            kind,
+            value: Expr {
+                kind: ExprKind::Literal(literal),
+                span: value_span,
+            },
+            span: self.span_from(start),
+        }))
     }
 
     /// `[FOR] (VERSION | SYSTEM_VERSION) AS OF version` or `[FOR]

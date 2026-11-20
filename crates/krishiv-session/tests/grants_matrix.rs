@@ -344,7 +344,7 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         // this row is a denial like the others.
         if *row == "via time travel"
             && let Err(e) = &result
-            && e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE"
+            && e.error_class().name() == "UNSUPPORTED_FEATURE.TIME_TRAVEL"
             && records.is_empty()
             && leaks(&e.to_string()).is_none()
         {
