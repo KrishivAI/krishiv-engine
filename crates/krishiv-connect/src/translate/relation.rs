@@ -23,7 +23,7 @@ use super::errors::{
     assertion, expression_not_set, invalid_enum, not_set, relation_not_set, unsupported,
     unsupported_field, unsupported_variant,
 };
-use super::names::parse_multipart_identifier;
+use super::names::{parse_attribute_name, parse_multipart_identifier};
 use super::{Result, Translator};
 use crate::extension::{Extension, Slot, resolve};
 use crate::proto::v4_3::{self as pb, Expression};
@@ -286,15 +286,17 @@ impl Translator<'_> {
         name: &str,
     ) -> Result<PlanNode> {
         let input = self.input(message, input)?;
-        let zero_filled = |c: &str| {
-            Expr::function(
+        // Each argument is an attribute reference (`t.x`, `` `a.b` ``), parsed as `UnresolvedAttribute`.
+        let zero_filled = |c: &str| -> Result<Expr> {
+            Ok(Expr::function(
                 "coalesce",
                 vec![
-                    Expr::column([c]).cast(krishiv_types::DataType::Double),
+                    Expr::column(parse_attribute_name(c)?).cast(krishiv_types::DataType::Double),
                     Expr::literal(Literal::Double(0.0)),
                 ],
-            )
+            ))
         };
+        let (left, right) = (zero_filled(col1)?, zero_filled(col2)?);
         let (func, default) = if name == "cov" {
             ("covar_samp", 0.0)
         } else {
@@ -303,7 +305,7 @@ impl Translator<'_> {
         let value = Expr::function(
             "coalesce",
             vec![
-                Expr::function(func, vec![zero_filled(col1), zero_filled(col2)]),
+                Expr::function(func, vec![left, right]),
                 Expr::literal(Literal::Double(default)),
             ],
         )

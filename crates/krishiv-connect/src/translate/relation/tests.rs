@@ -1444,6 +1444,24 @@ fn cov_and_corr_plan_as_one_row_aggregates_named_for_the_statistic() {
 }
 
 #[test]
+fn cov_reads_its_columns_as_attribute_references() {
+    let rel = relation(RelType::Cov(Box::new(pb::StatCov {
+        input: input(),
+        col1: "t.x".into(),
+        col2: "`a.b`".into(),
+    })));
+    let PlanNode::Aggregate { aggregates, .. } = node(&rel) else {
+        panic!("not an Aggregate node")
+    };
+    let text = format!("{:?}", aggregates[0]);
+    assert!(
+        text.contains("\"t\", \"x\"") || text.contains("t.x"),
+        "{text}"
+    );
+    assert!(text.contains("a.b"), "{text}");
+}
+
+#[test]
 fn corr_refuses_a_method_other_than_pearson() {
     let rel = relation(RelType::Corr(Box::new(pb::StatCorr {
         input: input(),

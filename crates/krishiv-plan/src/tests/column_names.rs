@@ -276,6 +276,39 @@ fn fill_na_pairs_values_with_columns() {
 }
 
 #[test]
+fn fill_na_with_a_value_per_column_casts_each_whatever_its_kind() {
+    use crate::Literal;
+    let coalesces = |op| {
+        format!("{:?}", run(false, op).expect("fill"))
+            .matches("coalesce")
+            .count()
+    };
+    // One string value for an integer column fits no kind: `fill(value, subset)` leaves it.
+    let single = fill(&["year"], vec![literal(Literal::String("5".into()))]);
+    assert_eq!(coalesces(single), 0);
+    // The map form casts "5" to the column's type, as Spark's `fillMap` does.
+    let each = fill(
+        &["year", "course"],
+        vec![
+            literal(Literal::String("5".into())),
+            literal(Literal::String("x".into())),
+        ],
+    );
+    assert_eq!(coalesces(each), 2);
+}
+
+#[test]
+fn fill_na_of_an_unknown_column_is_unresolved() {
+    let Err(e) = run(
+        false,
+        fill(&["nope"], vec![literal(crate::Literal::Long(1))]),
+    ) else {
+        panic!("a misspelled column must not be a no-op")
+    };
+    assert!(e.to_string().contains("UNRESOLVED_COLUMN"), "{e}");
+}
+
+#[test]
 fn fill_na_of_an_untyped_value_is_unsupported() {
     let Err(e) = run(false, fill(&[], vec![literal(crate::Literal::Null(None))])) else {
         panic!("expected an error")

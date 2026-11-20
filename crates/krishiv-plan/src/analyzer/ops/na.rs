@@ -160,6 +160,11 @@ impl Resolver<'_> {
             };
             literals.push((kind, Arc::clone(v)));
         }
+        self.check_fill_columns(p, &c, cols)?;
+        // Several values paired with columns are Spark's `fillMap`: each value is cast to its
+        // column's type whatever its kind. One value is `fill(value, subset)`, which only reaches
+        // the columns its kind fits.
+        let by_kind = literals.len() == 1;
         let value_for = |name: &str| -> Option<&(Fills, Arc<Expr>)> {
             if cols.is_empty() {
                 return literals.first();
@@ -177,7 +182,8 @@ impl Resolver<'_> {
         let mut exprs = Vec::with_capacity(c.out.len());
         for a in c.out.iter() {
             let pass = self.pass_expr(&a.col);
-            let fill = value_for(&a.col.name).filter(|(kind, _)| kind.reaches(&a.col.data_type));
+            let fill = value_for(&a.col.name)
+                .filter(|(kind, _)| !by_kind || kind.reaches(&a.col.data_type));
             let Some((_, value)) = fill else {
                 exprs.push(pass);
                 continue;
@@ -205,6 +211,30 @@ impl Resolver<'_> {
 }
 
 impl Resolver<'_> {
+    /// The columns a fill or replace names resolve, each to one column: a name that is not a
+    /// column is `UNRESOLVED_COLUMN`, an ambiguous one `AMBIGUOUS_REFERENCE` (Spark's
+    /// `df.resolve`).
+    fn check_fill_columns(
+        &mut self,
+        p: &LogicalPlan,
+        c: &Rel,
+        cols: &[String],
+    ) -> Result<(), AnalysisError> {
+        for name in cols {
+            if self
+                .find(&c.out, std::slice::from_ref(name), p.origin, false)?
+                .is_none()
+            {
+                return Err(crate::analyzer::exprs::unresolved(
+                    std::slice::from_ref(name),
+                    &c.out,
+                    p.origin,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// `na.replace`: a projection of `CASE WHEN col = old THEN new ... ELSE col END` per reached
     /// column, the literals cast to the column's type (Spark's `DataFrameNaFunctions.replaceCol`;
     /// a NaN old value matches NaN because SQL equality does). A NULL old value is refused, as
@@ -238,18 +268,7 @@ impl Resolver<'_> {
                 return Err(unsupported_replace(p.origin));
             }
         }
-        for name in cols {
-            if self
-                .find(&c.out, std::slice::from_ref(name), p.origin, false)?
-                .is_none()
-            {
-                return Err(crate::analyzer::exprs::unresolved(
-                    std::slice::from_ref(name),
-                    &c.out,
-                    p.origin,
-                ));
-            }
-        }
+        self.check_fill_columns(p, &c, cols)?;
         let mut changed = false;
         let mut exprs = Vec::with_capacity(c.out.len());
         for a in c.out.iter() {
@@ -269,8 +288,12 @@ impl Resolver<'_> {
                 let [(_, old, _), (_, new, _)] = pair else {
                     return Err(unsupported_replace(p.origin));
                 };
-                let old = Arc::new(Expr::clone(old).cast(ty.clone()));
-                args.push(call(Builtin::Eq.name(), vec![Arc::clone(&pass), old]));
+                // Spark's `CaseKeyWhen` compares the key as written (SQL coercion between the column
+                // and the literal; `1.5` never matches an INT `1`); only the replacement is cast.
+                args.push(call(
+                    Builtin::Eq.name(),
+                    vec![Arc::clone(&pass), Arc::clone(old)],
+                ));
                 args.push(Arc::new(Expr::clone(new).cast(ty.clone())));
             }
             args.push(Arc::clone(&pass));
