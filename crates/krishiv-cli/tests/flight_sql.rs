@@ -494,10 +494,11 @@ fn parse_jdbc(stdout: &str) -> JdbcRun {
 /// `user=<principal>&password=<token>` URL (Basic, owner item 5) runs q1 and another user name
 /// with the token is refused (design §0, §3.1, §4.3, §4.4, §5, §11, §17;
 /// `tests/scripts/flight_sql_jdbc.sh`). Needs Java 21 or Docker, and the network the first time
-/// (the driver jar is cached, checked against its pinned SHA-256). It runs where `flight-sql` is
-/// built, the nightly all-features job.
+/// (the driver jar is cached, checked against its pinned SHA-256), so it is `--run-ignored only`:
+/// the nightly all-features job runs it in a step of its own.
 #[cfg(unix)]
 #[test]
+#[ignore = "needs Java 21 or Docker, and the network on a cold cache (JDBC driver): --run-ignored only"]
 fn jdbc_flight_sql_tpch_q1() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (mut conf, _) = auth_conf(dir.path(), false);
