@@ -389,6 +389,26 @@ fn a_field_comment_becomes_the_columns_comment_clause() {
         t.schema.as_deref(),
         Some(r"`a` INT COMMENT 'it\'s a \\ test', `b` INT")
     );
+    assert!(t.lossy_in_escaped_mode);
+}
+
+#[test]
+fn a_non_nullable_field_keeps_its_not_null() {
+    let mut schema = struct_of(&["a", "b"]);
+    let Some(Kind::Struct(st)) = &mut schema.kind else {
+        panic!("struct");
+    };
+    st.fields[0].nullable = false;
+    let CatalogCall::CreateTable(t) = catalog_call(&msg(CatType::CreateTable(pb::CreateTable {
+        table_name: s("t"),
+        schema: Some(schema),
+        ..pb::CreateTable::default()
+    })))
+    .expect("reads") else {
+        panic!("create table");
+    };
+    assert_eq!(t.schema.as_deref(), Some("`a` INT NOT NULL, `b` INT"));
+    assert!(!t.lossy_in_escaped_mode);
 }
 
 #[test]

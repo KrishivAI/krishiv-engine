@@ -1135,8 +1135,14 @@ impl Catalog<'_> {
     }
 
     /// `CLEAR CACHE`.
-    pub fn clear_cache(&self) {
+    ///
+    /// # Errors
+    /// The access error of `CLEAR CACHE`, which drops the cached data of every session and so needs
+    /// `Manage` on the cluster.
+    pub async fn clear_cache(&self) -> Result<(), KrishivError> {
+        self.authorize_as("CLEAR CACHE").await?;
         self.session.clear_cache();
+        Ok(())
     }
 
     /// `REFRESH TABLE name`.

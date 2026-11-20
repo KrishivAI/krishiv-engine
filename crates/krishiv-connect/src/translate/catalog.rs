@@ -170,6 +170,9 @@ pub struct CreateTable {
     pub source: Option<String>,
     /// The columns as a DDL column list; `None` for no schema (the files give it).
     pub schema: Option<String>,
+    /// A column comment holds a quote or backslash: it cannot be written exactly under
+    /// `spark.sql.parser.escapedStringLiterals`, so the host refuses it in that mode.
+    pub lossy_in_escaped_mode: bool,
     /// The description (`createTable` only; Spark sends an empty one when unset).
     pub description: String,
     /// The options, with the `path` option last when the message has a `path`.
@@ -294,6 +297,7 @@ fn create_table(
     options: &BTreeMap<String, String>,
     path: Option<&String>,
 ) -> Result<CreateTable, KrishivError> {
+    let mut lossy_in_escaped_mode = false;
     let schema = schema
         .map(|t| match data_type(t)? {
             DataType::Struct(s) => Ok(s
@@ -302,8 +306,12 @@ fn create_table(
                 .map(|f| {
                     let mut column =
                         format!("`{}` {}", f.name().replace('`', "``"), f.data_type().sql());
+                    if !f.nullable() {
+                        column.push_str(" NOT NULL");
+                    }
                     // A field's comment is the column's `COMMENT` (`listColumns` shows it).
                     if let Some(comment) = f.metadata().comment() {
+                        lossy_in_escaped_mode |= comment.contains(['\\', '\'']);
                         column.push_str(&format!(
                             " COMMENT '{}'",
                             comment.replace('\\', "\\\\").replace('\'', "\\'")
@@ -331,6 +339,7 @@ fn create_table(
         schema,
         description: description.unwrap_or("").to_owned(),
         options,
+        lossy_in_escaped_mode,
     })
 }
 

@@ -326,7 +326,7 @@ fn drop_views_and_refresh() {
             .name(),
         "TABLE_OR_VIEW_NOT_FOUND"
     );
-    c.clear_cache();
+    block_on(c.clear_cache()).unwrap();
     assert_eq!(
         block_on(c.refresh_table("missing"))
             .unwrap_err()
@@ -392,7 +392,7 @@ impl AccessPolicy for NoBrowse {
     }
 }
 
-/// Denies `Drop`, allows the rest.
+/// Denies `Drop` and `Manage`, allows the rest.
 struct NoDrop;
 
 impl AccessPolicy for NoDrop {
@@ -406,7 +406,7 @@ impl AccessPolicy for NoDrop {
         _securable: &'a Securable,
         privilege: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
-        let decision = if privilege == Privilege::Drop {
+        let decision = if matches!(privilege, Privilege::Drop | Privilege::Manage) {
             AccessDecision::Deny {
                 reason: "drop".to_owned(),
             }
@@ -437,6 +437,19 @@ fn dropping_a_global_temporary_view_asks_for_drop_as_the_sql_does() {
     run(&s, "SELECT * FROM global_temp.gv");
     // a view that does not exist is no secret to keep
     assert!(!block_on(c.drop_global_temp_view("nope")).unwrap());
+}
+
+#[test]
+fn clearing_the_cache_asks_for_manage_as_the_sql_does() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let s = Session::builder()
+        .runtime(rt)
+        .principal(Principal::new("pat", PrincipalKind::User))
+        .access_policy(Arc::new(NoDrop))
+        .build()
+        .unwrap();
+    let e = block_on(s.catalog().clear_cache()).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
 }
 
 #[test]

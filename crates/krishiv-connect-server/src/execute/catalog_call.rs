@@ -236,7 +236,23 @@ async fn rows(session: &Session, call: CatalogCall) -> Result<RecordBatch, Krish
             schema,
             description,
             options,
+            lossy_in_escaped_mode,
         }) => {
+            // Under `escapedStringLiterals` a quote or backslash in a column comment cannot be
+            // written back as given: refuse it rather than store altered documentation.
+            if lossy_in_escaped_mode
+                && session
+                    .conf()
+                    .get("spark.sql.parser.escapedStringLiterals")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+            {
+                return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: "a column comment holding a quote or backslash under \
+                              spark.sql.parser.escapedStringLiterals"
+                        .to_owned(),
+                }
+                .into());
+            }
             let options: Vec<(&str, &str)> = options
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -280,7 +296,7 @@ async fn rows(session: &Session, call: CatalogCall) -> Result<RecordBatch, Krish
         }
         CatalogCall::ClearCache => {
             enforce(&Check::SideEffect, session).await?;
-            c.clear_cache();
+            c.clear_cache().await?;
             nothing()
         }
         CatalogCall::RefreshTable(table) => {
