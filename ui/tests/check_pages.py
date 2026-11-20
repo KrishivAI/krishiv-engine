@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Snapshot check of the eight UI pages at phone, tablet and desktop widths, dark and light, and of the pages the
-embedded and the profiles console show.
+"""Snapshot check of the eight UI pages at phone, tablet and desktop widths, dark and light, of the pages the
+embedded and the profiles console show, and of TPC-H Q9's profile in the console and in the offline viewer.
 
     uv run --with playwright python ui/tests/check_pages.py [SHOT_DIR]
 
@@ -12,7 +12,9 @@ are the check, since pixels differ between machines).
 
 from __future__ import annotations
 
+import importlib.util
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -474,18 +476,145 @@ def role_checks() -> list[str]:
     return problems
 
 
+# The plan tree of the offline viewer's page: each node's name under two spaces per level, as
+# `python/tests/fixtures/q09-plan-tree.txt` writes it.
+VIEWER_TREE = """
+() => [...document.querySelectorAll('.kp span.name')].map(e => {
+  let depth = -1;
+  for (let a = e.parentElement; a; a = a.parentElement) if (a.tagName === 'UL') depth++;
+  return '  '.repeat(depth) + e.textContent;
+}).join('\\n') + '\\n'
+"""
+
+
+def q9_checks(shots: Path | None) -> list[str]:
+    """TPC-H Q9's profile (`python/tests/fixtures/q09-profile.json`) in a browser: the console over stored profiles
+    shows the query's page with every operator, and the offline viewer's page shows the plan as its tree, runs no
+    script and asks the network for nothing."""
+    problems: list[str] = []
+    doc = fixture_server.Q9_PROFILE
+    operators = sorted(doc["operators"], key=lambda o: o["id"])
+    listed = [f"{o['id']} {o['name']}" for o in operators]
+    hot = fixture_server.Q9_DETAIL["hot_operator"]
+    server = fixture_server.serve(mode="profiles")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    origin = f"http://127.0.0.1:{server.server_address[1]}"
+    repo = Path(__file__).parent.parent.parent
+    # The viewer is one file that imports the standard library only, so it loads without the built package.
+    spec = importlib.util.spec_from_file_location(
+        "profile_view", repo / "python" / "krishiv" / "sql" / "profile_view.py"
+    )
+    if spec is None or spec.loader is None:
+        return ["q9 viewer: python/krishiv/sql/profile_view.py does not load"]
+    viewer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(viewer)
+    tree = (repo / "python" / "tests" / "fixtures" / "q09-plan-tree.txt").read_text()
+    with sync_playwright() as p, tempfile.TemporaryDirectory() as tmp:
+        browser = p.chromium.launch()
+        saved = viewer.ProfileView(doc).save(Path(tmp) / "q09.html")
+        for label, width, height in (VIEWPORTS[0], VIEWPORTS[-1]):
+            ctx = browser.new_context(
+                viewport={"width": width, "height": height},
+                has_touch=label in PHONES,
+                is_mobile=label in PHONES,
+            )
+            # The console's page of the query.
+            page = ctx.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e, errors=errors: errors.append(str(e)))
+            page.goto(f"{origin}/?token=fixture#/queries/{fixture_server.Q9_ID}")
+            view = f"q9 console {label}"
+            heat = page.locator(
+                "main ol[aria-label^='Operators shaded'] li > span:first-child"
+            )
+            try:
+                expect(heat).to_have_count(len(listed), timeout=10000)
+            except AssertionError:
+                problems.append(
+                    f"{view}: the heatmap lists {heat.count()} operators, not {len(listed)}"
+                )
+            else:
+                got = [" ".join(t.split()) for t in heat.all_inner_texts()]
+                if got != listed:
+                    problems.append(f"{view}: the heatmap lists {got}, not {listed}")
+            rows = page.locator("main :is(tbody tr, ul > li):visible")
+            if rows.count() != len(listed):
+                problems.append(
+                    f"{view}: the operator table has {rows.count()} rows, not {len(listed)}"
+                )
+            main = page.inner_text("main")
+            for wanted in (
+                "← History",
+                "finished",
+                "p_name LIKE '%green%'",
+                "25 ms",
+                f"the busiest one is highlighted: {hot['operator']}",
+            ):
+                if wanted not in main:
+                    problems.append(f"{view}: missing text {wanted!r}")
+            if "Warnings" in main:
+                problems.append(f"{view}: a warning is shown for a run that has none")
+            wide = page.evaluate(
+                "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+            )
+            if wide > 0:
+                problems.append(
+                    f"{view}: the page scrolls sideways ({wide}px too wide)"
+                )
+            if shots is not None:
+                shots.mkdir(parents=True, exist_ok=True)
+                page.screenshot(
+                    path=str(shots / f"q09-console-{label}.png"), full_page=True
+                )
+            problems += [f"{view}: page error: {e}" for e in errors]
+            page.close()
+            # The offline viewer's page, opened from its file.
+            page = ctx.new_page()
+            asked: list[str] = []
+            page.on("request", lambda r, asked=asked: asked.append(r.url))
+            page.on("pageerror", lambda e, errors=errors: errors.append(str(e)))
+            page.goto(saved.as_uri())
+            view = f"q9 viewer {label}"
+            if page.evaluate(VIEWER_TREE) != tree:
+                problems.append(
+                    f"{view}: the plan tree is not python/tests/fixtures/q09-plan-tree.txt"
+                )
+            for selector, want in (
+                (".kp .op", len(operators)),
+                (".kp table tr", len(doc["pipelines"])),
+                ("script", 0),
+            ):
+                got_count = page.locator(selector).count()
+                if got_count != want:
+                    problems.append(
+                        f"{view}: {got_count} elements match {selector!r}, not {want}"
+                    )
+            if asked != [saved.as_uri()]:
+                problems.append(f"{view}: the page asked for {asked}")
+            if shots is not None:
+                page.screenshot(
+                    path=str(shots / f"q09-viewer-{label}.png"), full_page=True
+                )
+            ctx.close()
+        browser.close()
+    server.shutdown()
+    return problems
+
+
 if __name__ == "__main__":
-    found = check(Path(sys.argv[1]) if len(sys.argv) > 1 else None)
+    shots = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+    found = check(shots)
     server = fixture_server.serve()
     threading.Thread(target=server.serve_forever, daemon=True).start()
     found += page_checks(f"http://127.0.0.1:{server.server_address[1]}")
     found += mode_checks()
     found += role_checks()
     found += filter_checks()
+    found += q9_checks(shots)
     print(
         "\n".join(found)
         if found
         else "ui pages: ok (8 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, "
-        "embedded and profiles consoles, operator, history filters)"
+        "embedded and profiles consoles, operator, history filters, TPC-H Q9's profile)"
     )
     sys.exit(1 if found else 0)

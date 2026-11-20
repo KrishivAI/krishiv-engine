@@ -7,7 +7,7 @@
 The routes and JSON shapes are those of `krishiv_server::internal`; the data is `fixtures.json`. The event stream
 sends the live list once a second, as the real one does. `--mode` chooses which console the fixture is: `embedded`
 reports one session and lists only its queries; `profiles` has the history and a query's page and refuses the rest,
-as the real sources do.
+as the real sources do. One more query has a page, in every mode: the stored profile of TPC-H Q9 (`Q9_ID`).
 """
 
 from __future__ import annotations
@@ -85,6 +85,24 @@ RUNS: dict[str, dict] = {}
 MODES = ("server", "embedded", "profiles")
 SESSION_ID = "01932a40-1a00-7a01-8001-5e5510000001"
 # What a console over stored profiles answers: the history, a query's page and the health the page reads its mode from.
+# TPC-H Q9 as a stored profile: the document the Python viewer's tests read, at SF 0.01.
+Q9_ID = "01932a40-1a00-7a01-8001-000000000009"
+Q9_PROFILE = json.loads(
+    (
+        HERE.parent.parent / "python" / "tests" / "fixtures" / "q09-profile.json"
+    ).read_text()
+)
+# A profile's metric -> the operator column the page reads, as `ProfilesSource::from_profiles` names them.
+OPERATOR_METRICS = {
+    "drivers": "drivers",
+    "rows_in": "rows_in",
+    "rows_out": "rows_out",
+    "compute_ns": "compute_time_ns",
+    "blocked_io_ns": "blocked_on_io_ns",
+    "blocked_memory_ns": "blocked_on_memory_ns",
+    "blocked_sink_ns": "blocked_on_sink_ns",
+    "spilled_bytes": "spilled_bytes",
+}
 PROFILES_ROUTES = (
     "/api/internal/health",
     "/api/internal/history",
@@ -107,6 +125,48 @@ def history(query: str) -> list[dict]:
             or any(tag in (k, f"{k}={v}") for k, v in (q.get("tags") or {}).items())
         )
     ]
+
+
+def stored_detail(query_id: str, profile: dict, sql: str) -> dict:
+    """A query's page from its stored profile, as the console over stored profiles answers it: the profile's
+    operators in id order and the one with the most compute time. A stored profile without a `usage` member has
+    no CPU time, peak memory or row count, and the page says so. This run has no warning: nothing spilled, no
+    driver did most of an operator's work and nothing waited for memory."""
+    operators = [
+        {"operator_id": o["id"], "name": o["name"]}
+        | {column: o["metrics"][metric] for column, metric in OPERATOR_METRICS.items()}
+        for o in sorted(profile["operators"], key=lambda o: o["id"])
+    ]
+    hot = max(operators, key=lambda o: o["compute_ns"])
+    return {
+        "query": {
+            "query_id": query_id,
+            "state": "finished",
+            "principal": "ann",
+            "query_text": sql,
+            "submitted_at": 1793988000000000,
+            "wall_ns": profile["query"]["wall_time_ns"],
+            "cpu_ns": None,
+            "peak_memory_bytes": None,
+            "rows_produced": None,
+            "spill_bytes": None,
+            "bytes_read": None,
+        },
+        "operators": operators,
+        "hot_operator": {
+            "operator_id": hot["operator_id"],
+            "operator": hot["name"],
+            "compute_ns": hot["compute_ns"],
+        },
+        "warnings": [],
+    }
+
+
+Q9_DETAIL = stored_detail(
+    Q9_ID,
+    Q9_PROFILE,
+    (HERE.parent.parent / "bench" / "queries" / "tpch" / "q09.sql").read_text().strip(),
+)
 
 
 def route(
@@ -140,6 +200,8 @@ def route(
         return {"queries": history(query)}
     if path == "/api/internal/resources":
         return {"memory": d["resources"]["memory"], "caches": d["health"]["caches"]}
+    if path == f"/api/internal/queries/{Q9_ID}":
+        return Q9_DETAIL
     if path.startswith("/api/internal/queries/"):
         return d["detail"]
     return None
