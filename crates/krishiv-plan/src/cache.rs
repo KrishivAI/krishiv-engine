@@ -908,6 +908,31 @@ impl Encoder {
                 self.exprs(metrics, bias);
                 self.plan(input, bias);
             }
+            PlanNode::MetricViewRead {
+                input,
+                name,
+                dimensions,
+                measures,
+                output,
+            } => {
+                self.tag("MetricViewRead");
+                self.num(name.len() as u64);
+                name.iter().for_each(|n| self.text(n));
+                for cols in [dimensions, measures] {
+                    self.num(cols.len() as u64);
+                    for c in cols {
+                        self.text(&c.name);
+                        self.expr(&c.expr, bias);
+                        self.debug(&c.data_type);
+                        self.flag(c.nullable);
+                    }
+                }
+                self.num(output.len() as u64);
+                for c in output {
+                    self.bound(c, bias);
+                }
+                self.plan(input, bias);
+            }
             PlanNode::JoinHint { input, strategy } => {
                 self.tag("JoinHint");
                 self.debug(strategy);

@@ -437,15 +437,11 @@ impl Expander<'_> {
             }
             _ => return Ok(Arc::clone(plan)),
         };
-        if view.is_metric() {
-            // Its `sql` is YAML, never a query: the measure-aware read of design note
-            // `P3-metric-views.md` §4 (step 6) is not built yet.
-            return Err(krishiv_common::error::KrishivUnsupportedFeature {
-                feature: "reading a metric view".to_owned(),
-            }
-            .into());
-        }
         let key = format!("{namespace}.{table_key}");
+        if let crate::store::ViewKind::Metric(def) = &view.kind {
+            // Its `sql` is YAML, never a query.
+            return self.inline_metric(plan, entry, view, def, namespace, table_key, key, stored);
+        }
         if self.path.contains(&key) {
             return Err(InternalError {
                 message: format!("view `{key}` reads itself"),
@@ -592,6 +588,105 @@ impl Expander<'_> {
                 input,
                 alias: table,
                 columns,
+            })
+            .with_origin(plan.origin),
+        ))
+    }
+
+    /// A read of the metric view `entry` (Spark's `MetricViewPlaceholder`, design note
+    /// `P3-metric-views.md` §4): its YAML read again under the parse options captured with it, the
+    /// source with its filter expanded in the reader's context (Spark analyzes the source with no
+    /// view context: the reader's namespace, path and temporary views), and the dimensions and
+    /// measures parsed, left for the analyzer's rule.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the parts of the read inline_stored already took apart"
+    )]
+    fn inline_metric(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        entry: &Arc<CatalogTable>,
+        view: &ViewDef,
+        def: &crate::store::MetricViewDef,
+        namespace: &str,
+        table_key: &str,
+        key: String,
+        stored: &StoredViews<'_>,
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        if self.path.contains(&key) {
+            return Err(InternalError {
+                message: format!("view `{key}` reads itself"),
+            }
+            .into());
+        }
+        let spec = crate::metric_view::parse_metric_view_yaml(&view.sql, &def.parser)?;
+        let mut text = String::from("SELECT * FROM ");
+        match &spec.source {
+            crate::metric_view::MetricViewSource::Asset(name) => text.push_str(name),
+            crate::metric_view::MetricViewSource::Sql(query) => {
+                text.push('(');
+                text.push_str(query);
+                text.push_str("\n)");
+            }
+        }
+        if let Some(filter) = &spec.filter {
+            text.push_str(" WHERE (");
+            text.push_str(filter);
+            text.push(')');
+        }
+        let query = krishiv_sql::parse_query(&text, &def.parser).map_err(|e| e.error)?;
+        let lowered = krishiv_sql::lower_identified(
+            &query,
+            (stored.next_source)(),
+            def.parser.case_sensitive,
+            &[],
+        )
+        .map_err(|e| e.error)?;
+        // The source with its filter: below the `SELECT *`.
+        let source = match &lowered.root().node {
+            PlanNode::Project { input, .. } => Arc::clone(input),
+            _ => Arc::clone(lowered.root()),
+        };
+        self.path.push(key);
+        let source = self.go(source, &mut Vec::new());
+        self.path.pop();
+        let source = source?;
+        let mut columns = entry.columns.iter();
+        let mut parsed = |c: &crate::metric_view::MetricViewColumn| {
+            let item =
+                krishiv_sql::parse_named_expression(&c.expr, &def.parser).map_err(|e| e.error)?;
+            let expr = krishiv_sql::lower_expression(&item.expr, (stored.next_source)())
+                .map_err(|e| e.error)?;
+            let stored_column = columns.next();
+            Ok::<_, KrishivError>(krishiv_plan::MetricColumn {
+                name: stored_column.map_or_else(|| c.name.clone(), |s| s.name.clone()),
+                expr: Arc::new(expr),
+                data_type: stored_column
+                    .map_or(krishiv_types::DataType::Null, |s| s.data_type.clone()),
+                nullable: stored_column.is_none_or(|s| s.nullable),
+            })
+        };
+        let dimensions = spec
+            .dimensions
+            .iter()
+            .map(&mut parsed)
+            .collect::<Result<Vec<_>, _>>()?;
+        let measures = spec
+            .measures
+            .iter()
+            .map(&mut parsed)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Arc::new(
+            LogicalPlan::new(PlanNode::MetricViewRead {
+                input: source,
+                name: vec![
+                    CATALOG.to_owned(),
+                    namespace.to_owned(),
+                    table_key.to_owned(),
+                ],
+                dimensions,
+                measures,
+                output: Vec::new(),
             })
             .with_origin(plan.origin),
         ))

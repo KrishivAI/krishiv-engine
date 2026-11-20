@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float64Type, Int32Type, Int64Type};
+use arrow_array::types::{Decimal128Type, DecimalType, Float64Type, Int32Type, Int64Type};
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::DataType;
 use futures::executor::block_on;
@@ -40,7 +40,21 @@ fn cell(c: &ArrayRef, i: usize) -> Value {
         DataType::Boolean => Value::from(c.as_boolean().value(i)),
         DataType::Int32 => Value::from(c.as_primitive::<Int32Type>().value(i)),
         DataType::Int64 => Value::from(c.as_primitive::<Int64Type>().value(i)),
-        DataType::Float64 => Value::from(c.as_primitive::<Float64Type>().value(i)),
+        DataType::Float64 => {
+            let v = c.as_primitive::<Float64Type>().value(i);
+            // Spark's JSON writes these as strings.
+            if v.is_nan() {
+                Value::from("NaN")
+            } else if v.is_infinite() {
+                Value::from(if v > 0.0 { "Infinity" } else { "-Infinity" })
+            } else {
+                Value::from(v)
+            }
+        }
+        DataType::Decimal128(_, scale) => {
+            let v = c.as_primitive::<Decimal128Type>().value(i);
+            Value::from(Decimal128Type::format_decimal(v, 38, *scale))
+        }
         DataType::Utf8 => Value::from(c.as_string::<i32>().value(i)),
         DataType::Utf8View => Value::from(c.as_string_view().value(i)),
         DataType::LargeUtf8 => Value::from(c.as_string::<i64>().value(i)),
@@ -152,8 +166,12 @@ fn run_step(s: &Session, step: &Value) -> Result<(), String> {
         (Err(e), None) => Err(format!("failed: {e}")),
         (Ok(_), Some(want)) => Err(format!("succeeded, Spark failed: {}", want["message"])),
         (Ok(batches), None) => {
-            let want = outcome["rows"].as_array().cloned().unwrap_or_default();
-            let got = rows(&batches);
+            let mut want = outcome["rows"].as_array().cloned().unwrap_or_default();
+            let mut got = rows(&batches);
+            if outcome["row_order"] == "sorted" {
+                got.sort_by_key(Value::to_string);
+                want.sort_by_key(Value::to_string);
+            }
             if got.len() != want.len() {
                 return Err(format!("{} rows vs {}: {got:?}", got.len(), want.len()));
             }

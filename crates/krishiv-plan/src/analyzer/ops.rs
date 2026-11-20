@@ -365,7 +365,21 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
-        self.project_items(p, &c, exprs, env)
+        let r = self.project_items(p, &c, exprs, env)?;
+        // A global aggregate over a metric view (`SELECT measure(m) FROM mv`): Spark's rule fires on it.
+        if super::metric_view::reads_metric_view(&c.plan)
+            && super::metric_view::is_aggregate(&r.plan)
+        {
+            let global = Grouping::GroupBy(Vec::new());
+            let agg = LogicalPlan::new(PlanNode::Aggregate {
+                input: Arc::clone(input),
+                grouping: global.clone(),
+                aggregates: exprs.to_vec(),
+            })
+            .with_origin(p.origin);
+            return self.aggregate_node(&agg, input, &global, exprs, env);
+        }
+        Ok(r)
     }
 
     pub(super) fn project_items(

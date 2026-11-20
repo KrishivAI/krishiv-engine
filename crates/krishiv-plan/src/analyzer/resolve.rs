@@ -411,7 +411,8 @@ pub(super) fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
                 PlanNode::MapPartitions { output, .. }
                 | PlanNode::GroupMap { output, .. }
                 | PlanNode::CoGroupMap { output, .. }
-                | PlanNode::PythonTableFunction { output, .. } => output.iter().for_each(&mut bump),
+                | PlanNode::PythonTableFunction { output, .. }
+                | PlanNode::MetricViewRead { output, .. } => output.iter().for_each(&mut bump),
                 PlanNode::CteRef(r) => r.output.iter().for_each(&mut bump),
                 PlanNode::Shift { offset, .. } => shifts = shifts.saturating_add(*offset),
                 // The `exists` column is defined by the join alone: an
@@ -944,7 +945,7 @@ impl Resolver<'_> {
                 input,
                 grouping,
                 aggregates,
-            } => self.aggregate(p, input, grouping, aggregates, env),
+            } => self.aggregate_node(p, input, grouping, aggregates, env),
             PlanNode::Join {
                 left,
                 right,
@@ -1027,6 +1028,13 @@ impl Resolver<'_> {
                 metrics,
             } => self.collect_metrics(p, input, name, metrics, env),
             PlanNode::TableFunction { name, args } => self.table_function(p, name, args, env),
+            PlanNode::MetricViewRead {
+                input,
+                name,
+                dimensions,
+                measures,
+                output,
+            } => self.metric_view_read(p, input, name, dimensions, measures, output, env),
             // Listed, not wildcarded: a new `PlanNode` variant must be
             // placed here or in `leaf_node` to compile.
             PlanNode::Read(ReadSource::Files { .. } | ReadSource::Local(_))
@@ -1250,6 +1258,7 @@ impl Resolver<'_> {
             | PlanNode::PipeOperator { .. }
             | PlanNode::Repartition { .. }
             | PlanNode::CollectMetrics { .. }
+            | PlanNode::MetricViewRead { .. }
             | PlanNode::Union { .. }
             | PlanNode::Distinct { .. }
             | PlanNode::Pivot { .. }

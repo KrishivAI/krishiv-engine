@@ -110,6 +110,7 @@ mod instance;
 mod intervals;
 pub(crate) mod legacy;
 pub mod lineage;
+mod metric_view;
 mod observe;
 mod ops;
 mod pivot;
@@ -167,6 +168,7 @@ pub use catalog::{
 pub use catalog_write::{CatalogWrite, CreateMode, NamespaceInfo, TableInfo};
 pub use char_varchar::DeclaredType;
 pub use input_file::bind_input_files;
+pub use metric_view::refuse_unplannable;
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use table_change::{
     AlterInput, AlterRules, AlteredTable, CatalogCapabilities, ColumnPosition, NamespaceChange,
