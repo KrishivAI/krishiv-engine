@@ -997,8 +997,8 @@ fn pid_and_limit(udfs: &SessionUdfs, py: &std::path::Path) -> String {
 fn two_tenants_never_share_a_worker_and_each_has_its_memory_limit() {
     let Some(py) = python() else { return };
     let mut config = config(&py);
-    config.memory_limit = Some(1 << 30);
-    config.tenant_memory_limit = Some(512 << 20);
+    config.memory_limit = Some(4 << 30);
+    config.tenant_memory_limit = Some(2 << 30);
     let pool = Pool::new(config).expect("pool");
     let acme = SessionUdfs::new(pool.clone(), tenant_owner("acme", "s1"));
     let acme2 = SessionUdfs::new(pool.clone(), tenant_owner("acme", "s2"));
@@ -1014,9 +1014,9 @@ fn two_tenants_never_share_a_worker_and_each_has_its_memory_limit() {
         .collect();
     assert_eq!(pids.len(), 4, "four owners, four workers: {results:?}");
     let limit = |r: &String| r.split('|').nth(1).expect("limit").to_owned();
-    assert_eq!(limit(&results[0]), (512_u64 << 20).to_string());
-    assert_eq!(limit(&results[2]), (512_u64 << 20).to_string());
-    assert_eq!(limit(&results[3]), (1_u64 << 30).to_string(), "no tenant");
+    assert_eq!(limit(&results[0]), (2_u64 << 30).to_string());
+    assert_eq!(limit(&results[2]), (2_u64 << 30).to_string());
+    assert_eq!(limit(&results[3]), (4_u64 << 30).to_string(), "no tenant");
     // The tenant's worker is reused by its own session.
     assert_eq!(pid_and_limit(&acme, &py), results[0]);
 }
