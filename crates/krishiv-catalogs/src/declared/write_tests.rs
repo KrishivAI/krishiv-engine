@@ -104,6 +104,7 @@ fn built(server: &Server, write: Option<&str>) -> Result<Arc<dyn CallerCatalog>,
     let mut pairs = vec![
         ("krishiv.catalog.lake.type", "iceberg-rest"),
         ("krishiv.catalog.lake.uri", server.base.as_str()),
+        ("krishiv.catalog.lake.storage", "allowed-prefixes"),
     ];
     if let Some(w) = write {
         pairs.push(("krishiv.catalog.lake.option.write", w));
