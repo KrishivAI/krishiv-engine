@@ -240,3 +240,23 @@ fn optimizing_a_shared_plan_again_is_a_fixed_point() {
         krishiv_optimizer::optimize_with_udfs(&once, &NoStatistics, &udfs, &config).unwrap();
     assert_eq!(once.root(), twice.root());
 }
+
+/// Two instances that differ only in a filter on a window column above the window (TPC-DS q47's
+/// shape) compute the windowed aggregate once and return what the copies return.
+#[test]
+fn instances_differing_above_their_common_window_share_it() {
+    let env = env();
+    let sql = "WITH c AS (SELECT a % 3 AS k, count(*) AS n, \
+                 sum(count(*)) OVER (PARTITION BY a % 3 > 0) AS w FROM t GROUP BY a % 3) \
+               SELECT k, n, w FROM c WHERE w > 3 UNION ALL SELECT k, n, -1 FROM c";
+    let (shared, rows) = sharing(&env, sql, &[]);
+    let (copies, same) = sharing(
+        &env,
+        sql,
+        &[("krishiv.sql.optimizer.shareCteInstances", "false")],
+    );
+    assert_eq!(copies, 0);
+    assert_eq!(rows, same, "sharing changes no result");
+    assert_eq!(shared, 1, "the window over the aggregate is one definition");
+    assert!(rows.len() > 3, "{rows:?}");
+}

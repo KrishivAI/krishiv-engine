@@ -114,3 +114,103 @@ fn q15_computes_the_revenue_body_once() {
         "{text}"
     );
 }
+
+/// How many times `table` is scanned when the plan runs: paths from the root, with each `WITH`
+/// definition counted once (a `CteRef` computes nothing). q47 and q57 hold no subquery.
+fn scans(plan: &std::sync::Arc<krishiv_plan::LogicalPlan>, table: &str) -> usize {
+    use krishiv_plan::PlanNode;
+    let mut n = 0;
+    if let PlanNode::Scan(_) = &plan.node
+        && plan.to_string().starts_with(&format!("Scan {table} "))
+    {
+        n += 1;
+    }
+    plan.for_each_child(&mut |c| n += scans(c, table));
+    n
+}
+
+fn tpcds(q: usize) -> Plan {
+    let plan = support::resolve(
+        &crate::tpcds::sql(q),
+        &support::ctx_over(crate::tpcds::catalog()),
+    );
+    optimize_with_udfs(
+        &plan,
+        &krishiv_optimizer::NoStatistics,
+        &UdfLibrary::new(),
+        &Config::new(),
+    )
+    .unwrap()
+}
+
+/// TPC-DS q47 and q57 read `v1` three times; the main instance has the outer filter pushed in
+/// above the windows, so its body is not equal to the lag/lead instances'. The windowed
+/// aggregate below that filter is the same, and it is computed once (perf-1 L1).
+#[test]
+fn an_instance_with_its_own_filter_shares_the_common_subtree() {
+    for (q, fact) in [(47, "store_sales"), (57, "catalog_sales")] {
+        let plan = tpcds(q);
+        let table = format!("spark_catalog.default.{fact}");
+        assert_eq!(scans(plan.root(), &table), 1, "q{q}:\n{}", plan.root());
+        assert_eq!(
+            plan.root().resolved_output(),
+            support::resolve(
+                &crate::tpcds::sql(q),
+                &support::ctx_over(crate::tpcds::catalog())
+            )
+            .root()
+            .resolved_output()
+        );
+        Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
+        let again = optimize_with_udfs(
+            &plan,
+            &krishiv_optimizer::NoStatistics,
+            &UdfLibrary::new(),
+            &Config::new(),
+        )
+        .unwrap();
+        assert!(
+            again.structurally_eq(&plan),
+            "q{q} is a fixed point:\n{}",
+            again.root()
+        );
+    }
+}
+
+/// The same shape over TPC-H: one instance keeps a filter on a window column, the other reads
+/// the CTE whole. The window over the aggregate is one definition, and the plan is a fixed point.
+#[test]
+fn a_filtered_instance_reads_the_shared_window() {
+    let sql = "WITH v AS (SELECT o_custkey, o_orderstatus, sum(o_totalprice) AS s, \
+                 avg(sum(o_totalprice)) OVER (PARTITION BY o_custkey) AS a \
+                 FROM orders GROUP BY o_custkey, o_orderstatus) \
+               SELECT x.o_custkey, x.s, y.s FROM v x JOIN v y \
+                 ON x.o_custkey = y.o_custkey AND x.o_orderstatus = y.o_orderstatus WHERE x.a > 10";
+    let plan = run(sql, false);
+    assert_eq!(
+        scans(plan.root(), "spark_catalog.default.orders"),
+        1,
+        "{}",
+        plan.root()
+    );
+    Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
+    assert!(run(sql, false).structurally_eq(&plan));
+    let again = optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &Config::new()).unwrap();
+    assert!(
+        again.structurally_eq(&plan),
+        "a fixed point:\n{}",
+        again.root()
+    );
+    // Off, both instances compute the window.
+    let mut off = Config::new();
+    off.set("krishiv.sql.optimizer.shareCteInstances", "false")
+        .unwrap();
+    let unshared = optimize_with_udfs(
+        &support::resolve(sql, &support::ctx()),
+        &fixture(),
+        &UdfLibrary::new(),
+        &off,
+    )
+    .unwrap();
+    assert_eq!(scans(unshared.root(), "spark_catalog.default.orders"), 2);
+}

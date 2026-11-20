@@ -461,6 +461,9 @@ pub(crate) struct Memo {
     /// input relation it comes from.
     shared: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
     worth: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, bool)>,
+    /// The names of the definitions `ShareCte` added: a `CteRef` to one is
+    /// shared ([`Self::reaches_shared`]).
+    shared_defs: HashSet<String>,
 }
 
 /// A cheap fingerprint of `plan`'s relation tree (node kinds and shape, not
@@ -503,11 +506,19 @@ impl Memo {
         // `Arc`s (join ordering re-plans a join inside each copy apart).
         let mut bodies: Vec<(Arc<LogicalPlan>, u32)> = Vec::new();
         let mut body_at: HashMap<*const LogicalPlan, usize> = HashMap::new();
+        let mut shared_defs: HashSet<String> = HashSet::new();
         let mut stack = vec![Arc::clone(root)];
         let mut seen: HashSet<*const LogicalPlan> = HashSet::new();
         while let Some(p) = stack.pop() {
             if !seen.insert(Arc::as_ptr(&p)) {
                 continue;
+            }
+            if let PlanNode::WithCte { ctes, .. } = &p.node {
+                shared_defs.extend(
+                    ctes.iter()
+                        .filter(|c| c.name.starts_with(crate::share_cte::SHARED_PREFIX))
+                        .map(|c| c.name.clone()),
+                );
             }
             if let PlanNode::Shift { input, .. } = &p.node {
                 let at = *body_at.entry(Arc::as_ptr(input)).or_insert_with(|| {
@@ -564,6 +575,7 @@ impl Memo {
         }
         Self {
             shared,
+            shared_defs,
             ..Self::default()
         }
     }
@@ -618,6 +630,10 @@ impl Memo {
                 | PlanNode::Repartition { input, .. }
                 | PlanNode::Window { input, .. }
                 | PlanNode::Generate { input, .. } => Arc::clone(input),
+                // What `ShareCte` computes once: the first `optimize` saw
+                // the instance it replaced, so a second adds nothing here
+                // either.
+                PlanNode::CteRef(r) => return self.shared_defs.contains(&r.name),
                 _ => return false,
             };
             at = next;
