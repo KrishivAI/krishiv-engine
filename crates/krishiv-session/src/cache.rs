@@ -1468,7 +1468,9 @@ impl Session {
             return;
         }
         taken.count();
-        let analysis = match frame.analysis().await {
+        // Quiet: a refused read is refused again, and audited once, by the action that drains
+        // the queue (P3-T062 G4: one audit record per refusal).
+        let analysis = match frame.trial_analysis().await {
             Ok(a) => a,
             Err(error) => {
                 taken.item = None;
