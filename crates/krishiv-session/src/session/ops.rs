@@ -395,13 +395,10 @@ impl Session {
         let bucket_write = match &bucket {
             None => None,
             Some(b) => {
-                let column = schema
-                    .fields()
-                    .iter()
-                    .position(|f| f.name() == super::BUCKET_ID_COLUMN)
-                    .ok_or_else(|| {
-                        internal("a bucketed write without its bucket id column".to_owned())
-                    })?;
+                // `with_bucket_id` appends the bucket id as the last column.
+                let column = schema.fields().len().checked_sub(1).ok_or_else(|| {
+                    internal("a bucketed write without its bucket id column".to_owned())
+                })?;
                 let sort_by = super::writes::resolve_columns(
                     &schema,
                     &b.sort_by,

@@ -198,6 +198,23 @@ impl FileWriter {
         options: WriteOptions,
         mem: Reservation,
     ) -> Result<Self> {
+        Self::new_bucketed(io, format, schema, format_options, options, mem, None)
+    }
+
+    /// [`Self::new`] for a write that [`Self::bucketed_by`] `bucket` will make bucketed: the
+    /// format checks the schema without the bucket id column, which no file holds.
+    ///
+    /// # Errors
+    /// As [`Self::new`].
+    pub fn new_bucketed(
+        io: &IoContext,
+        format: Arc<dyn FileFormat>,
+        schema: &SchemaRef,
+        format_options: FormatOptions,
+        options: WriteOptions,
+        mem: Reservation,
+        bucket: Option<usize>,
+    ) -> Result<Self> {
         if !format.capabilities(&format_options).write {
             return Err(unsupported(format!("writing the {} format", format.name())));
         }
@@ -224,8 +241,22 @@ impl FileWriter {
                 .project(&data_columns)
                 .map_err(|e| internal(format!("cannot drop the partition columns: {e}")))?,
         );
+        let checked: SchemaRef = match bucket {
+            Some(b) if data_columns.contains(&b) => Arc::new(
+                schema
+                    .project(
+                        &data_columns
+                            .iter()
+                            .copied()
+                            .filter(|c| *c != b)
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(|e| internal(format!("cannot drop the bucket column: {e}")))?,
+            ),
+            _ => Arc::clone(&data_schema),
+        };
         format
-            .check_write(&data_schema, &format_options)
+            .check_write(&checked, &format_options)
             .map_err(|e| e.into_error(&format!("{}/{}", options.store, options.dir)))?;
         let suffix = format.file_suffix(&format_options);
         Ok(Self {

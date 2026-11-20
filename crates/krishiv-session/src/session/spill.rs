@@ -109,11 +109,21 @@ pub(crate) struct BucketTarget {
 }
 
 impl BucketTarget {
-    /// `df` with each row's bucket id appended as [`BUCKET_ID_COLUMN`].
-    pub(crate) fn with_bucket_id(
+    /// `df` with each row's bucket id appended as its last column, named so that no column of `df`
+    /// (in any letter case) has the same name: [`BUCKET_ID_COLUMN`], with underscores added until free.
+    pub(crate) async fn with_bucket_id(
         &self,
         df: &crate::DataFrame,
     ) -> Result<crate::DataFrame, KrishivError> {
+        let schema = df.schema().await?;
+        let mut name = BUCKET_ID_COLUMN.to_owned();
+        while schema
+            .fields()
+            .iter()
+            .any(|f| f.name().eq_ignore_ascii_case(&name))
+        {
+            name.push('_');
+        }
         let quoted: Vec<String> = self
             .columns
             .iter()
@@ -122,7 +132,7 @@ impl BucketTarget {
         df.select_expr([
             "*".to_owned(),
             format!(
-                "pmod(hash({}), {}) AS {BUCKET_ID_COLUMN}",
+                "pmod(hash({}), {}) AS `{name}`",
                 quoted.join(", "),
                 self.buckets
             ),

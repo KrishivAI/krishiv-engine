@@ -215,7 +215,7 @@ impl DataFrameWriter {
             partition_by: self.partition_by,
         };
         let df = match &target.bucket {
-            Some(b) => b.with_bucket_id(&self.df)?,
+            Some(b) => b.with_bucket_id(&self.df).await?,
             None => self.df,
         };
         let session = df.session.clone();

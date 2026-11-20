@@ -516,6 +516,37 @@ impl Session {
                         a.eq_ignore_ascii_case(b)
                     }
                 };
+                // A bucketing the writer names must be the table's (count, columns, sort columns);
+                // one it leaves out is the table's own.
+                if let Some(asked) = &spec.bucket {
+                    let names_match = |want: Vec<&str>, have: &[String]| {
+                        want.len() == have.len() && want.iter().zip(have).all(|(w, h)| same(w, h))
+                    };
+                    let matches = table.layout.bucket.as_ref().is_some_and(|b| {
+                        asked.buckets == b.num_buckets
+                            && names_match(
+                                asked
+                                    .clustered_by
+                                    .iter()
+                                    .map(|c| c.value.as_str())
+                                    .collect(),
+                                &b.columns,
+                            )
+                            && names_match(
+                                asked
+                                    .sorted_by
+                                    .iter()
+                                    .map(|c| c.name.value.as_str())
+                                    .collect(),
+                                &b.sort_columns,
+                            )
+                    });
+                    if !matches {
+                        return Err(unsupported(
+                            "saveAsTable append with a bucketing that differs from the table's",
+                        ));
+                    }
+                }
                 let mut order = Vec::with_capacity(table.columns.len());
                 for c in &table.columns {
                     let mut hits = schema
@@ -590,6 +621,15 @@ impl Session {
                 self.validate_new_table(&name, &spec)?;
                 // The write refuses an indeterminate string column: not after the drop.
                 crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
+                // The requested partition and bucket columns must exist in the new output:
+                // `create_table_from` would refuse them, but only after the drop.
+                crate::partitions::table_layout(
+                    &name,
+                    &mut crate::char_write::output_columns(&analysis.analyzed, Some(true)),
+                    &spec.partitioned_by,
+                    spec.bucket.as_ref(),
+                    env.analysis.conf.case_sensitive,
+                )?;
                 // What the write itself would refuse (a format the engine does not
                 // write, duplicate output columns, options the format rejects) must
                 // not come after the drop.

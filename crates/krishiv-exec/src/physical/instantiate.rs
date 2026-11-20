@@ -1468,40 +1468,38 @@ impl Instantiation<'_> {
             input.schema.metadata().clone(),
         ));
         let bucket_column = write.bucket.as_ref().map(|b| b.column);
-        let sink = Arc::new(
-            FileWriteSink::try_new(
-                Arc::clone(&format),
-                io,
-                written,
-                options,
-                WriteOptions {
-                    store: StoreId::new(&write.store),
-                    dir: Path::from(write.dir.as_str()),
-                    task: self.task.partition,
-                    job_uuid: effective_job_uuid(&write.job_uuid, self.task.attempt),
-                    max_records_per_file: write.max_records_per_file,
-                    target_file_bytes: write.target_file_bytes,
-                    partition_by: write.partition_by.clone(),
-                    zone: self.env.zone,
-                    zone_name: self.env.zone_name.clone(),
-                    partition_names: write
-                        .partition_by
-                        .iter()
-                        .map(|&c| {
-                            input
-                                .schema
-                                .fields()
-                                .get(c)
-                                .map(|f| f.name().clone())
-                                .ok_or_else(|| {
-                                    internal(format!("partition column {c} is out of range"))
-                                })
-                        })
-                        .collect::<Result<_>>()?,
-                },
-            )?
-            .with_bucket_column(bucket_column),
-        );
+        let sink = Arc::new(FileWriteSink::try_new_bucketed(
+            Arc::clone(&format),
+            io,
+            written,
+            options,
+            WriteOptions {
+                store: StoreId::new(&write.store),
+                dir: Path::from(write.dir.as_str()),
+                task: self.task.partition,
+                job_uuid: effective_job_uuid(&write.job_uuid, self.task.attempt),
+                max_records_per_file: write.max_records_per_file,
+                target_file_bytes: write.target_file_bytes,
+                partition_by: write.partition_by.clone(),
+                zone: self.env.zone,
+                zone_name: self.env.zone_name.clone(),
+                partition_names: write
+                    .partition_by
+                    .iter()
+                    .map(|&c| {
+                        input
+                            .schema
+                            .fields()
+                            .get(c)
+                            .map(|f| f.name().clone())
+                            .ok_or_else(|| {
+                                internal(format!("partition column {c} is out of range"))
+                            })
+                    })
+                    .collect::<Result<_>>()?,
+            },
+            bucket_column,
+        )?);
         Ok(Built {
             schema: Source::schema(sink.as_ref()),
             node: Arc::new(FileWrite {

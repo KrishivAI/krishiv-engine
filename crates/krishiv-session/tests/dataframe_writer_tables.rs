@@ -571,3 +571,93 @@ fn a_table_in_a_schema_that_gained_a_collation_can_be_renamed() {
         "the old name is gone"
     );
 }
+
+#[test]
+fn an_overwrite_with_a_missing_layout_column_keeps_the_old_table() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("t")).unwrap();
+    let r = block_on(
+        s.table("people")
+            .write()
+            .partition_by(["missing"])
+            .mode("overwrite")
+            .save_as_table("t"),
+    );
+    assert!(r.is_err());
+    assert_eq!(count(&s, "t"), 3, "the old table must survive the refusal");
+    let r = block_on(
+        s.table("people")
+            .write()
+            .bucket_by(2, ["missing"])
+            .mode("overwrite")
+            .save_as_table("t"),
+    );
+    assert!(r.is_err());
+    assert_eq!(count(&s, "t"), 3);
+}
+
+#[test]
+fn a_bucketed_table_of_one_string_column_writes_as_text() {
+    let s = session();
+    let one = s.table("people").select(["name"]);
+    block_on(
+        one.write()
+            .format("text")
+            .bucket_by(2, ["name"])
+            .save_as_table("tb"),
+    )
+    .unwrap();
+    assert_eq!(count(&s, "tb"), 3);
+}
+
+#[test]
+fn an_append_names_the_tables_bucketing_or_none() {
+    let s = session();
+    block_on(
+        s.table("people")
+            .write()
+            .bucket_by(4, ["id"])
+            .save_as_table("b"),
+    )
+    .unwrap();
+    for w in [
+        s.table("people").write().bucket_by(8, ["id"]),
+        s.table("people").write().bucket_by(4, ["name"]),
+        s.table("people")
+            .write()
+            .bucket_by(4, ["id"])
+            .sort_by(["name"]),
+    ] {
+        assert_eq!(
+            class(block_on(w.mode("append").save_as_table("b"))),
+            "KRISHIV_UNSUPPORTED_FEATURE"
+        );
+    }
+    block_on(
+        s.table("people")
+            .write()
+            .bucket_by(4, ["ID"])
+            .mode("append")
+            .save_as_table("b"),
+    )
+    .unwrap();
+    block_on(s.table("people").write().mode("append").save_as_table("b")).unwrap();
+    assert_eq!(count(&s, "b"), 9);
+}
+
+#[test]
+fn a_column_named_like_the_bucket_helper_does_not_collide() {
+    let s = session();
+    let df = s
+        .table("people")
+        .select_expr(["id", "name AS __krishiv_bucket_id"])
+        .unwrap();
+    block_on(df.write().bucket_by(2, ["id"]).save_as_table("h")).unwrap();
+    assert_eq!(count(&s, "h"), 3);
+    let df = s
+        .table("people")
+        .select_expr(["id", "name AS __KRISHIV_BUCKET_ID"])
+        .unwrap();
+    block_on(df.write().bucket_by(2, ["id"]).save_as_table("h2")).unwrap();
+    assert_eq!(count(&s, "h2"), 3);
+}
