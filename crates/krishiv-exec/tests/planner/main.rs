@@ -35,6 +35,7 @@ mod partial_aggregate;
 mod payload_above;
 mod physical;
 mod plan_stats;
+mod pre_expand;
 mod prefix_cache;
 mod python_relations;
 mod rule_differential;

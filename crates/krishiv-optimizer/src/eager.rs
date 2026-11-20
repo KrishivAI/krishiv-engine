@@ -72,6 +72,8 @@ use crate::expr::{
 use crate::restrict::{MAX_ID, max_id};
 use crate::stats::{RelStats, Statistics};
 
+mod expand;
+
 /// The least fraction of `S`'s rows the join must keep.
 pub(crate) const MIN_RETENTION: f64 = 0.7;
 
@@ -94,22 +96,35 @@ pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
+    expand: bool,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let mut memo = Default::default();
     let mut next = max_id(&root, &mut memo).saturating_add(1);
     let mut est = Estimator::with_propagation(stats, propagate);
     let mut notes = Vec::new();
     let out = dag::rewrite_up(root, &mut |p| {
-        let Some(shape) = Shape::of(&p) else {
-            return Ok(p);
+        let tried = match Shape::of(&p) {
+            Some(shape) => shape.push(shape.join, &mut est, &mut next).or_else(|why| {
+                // The dimension the keys need may sit below another one.
+                shape
+                    .rotated()
+                    .and_then(|join| shape.push(&join, &mut est, &mut next).ok())
+                    .ok_or(why)
+            }),
+            None => Err(String::new()),
         };
-        let tried = shape.push(shape.join, &mut est, &mut next).or_else(|why| {
-            // The dimension the keys need may sit below another one.
-            shape
-                .rotated()
-                .and_then(|join| shape.push(&join, &mut est, &mut next).ok())
-                .ok_or(why)
-        });
+        // Where no join takes the calls, grouping sets still aggregate their
+        // input before the expansion repeats it ([`expand`]).
+        let tried = match (tried, expand.then(|| Shape::over_expand(&p)).flatten()) {
+            (Err(why), Some(shape)) => shape.pre_aggregate(&mut est, &mut next).map_err(|below| {
+                if why.is_empty() {
+                    format!("below the Expand: {below}")
+                } else {
+                    format!("{why}; below the Expand: {below}")
+                }
+            }),
+            (tried, _) => tried,
+        };
         match tried {
             Ok((pushed, note)) => {
                 // Out of attribute ids: leave the plan as it is, as CSE and the sum rewrite do.
@@ -120,6 +135,8 @@ pub(crate) fn rewrite(
                 notes.push(note);
                 Ok(pushed)
             }
+            // Not an aggregate this rule reads.
+            Err(why) if why.is_empty() => Ok(p),
             Err(why) => {
                 notes.push(format!("not applied: {why}"));
                 Ok(p)
@@ -263,25 +280,7 @@ impl<'a> Shape<'a> {
         gates.check()?;
 
         // Build, bottom up.
-        let mut states = Vec::new();
-        let mut merged: Vec<(Arc<Expr>, Arc<Expr>)> = Vec::new();
-        for (c, f) in &calls {
-            let raw = f
-                .args
-                .first()
-                .and_then(|a| data_type(a))
-                .unwrap_or(DataType::Long);
-            let columns = partial_state_columns(f, &raw, AttrId(*next))
-                .ok_or_else(|| format!("{} exports no states", f.id.name()))?;
-            *next = next.saturating_add(columns.len() as u64);
-            let mut upper = ResolvedFunction::clone(f);
-            upper.args = vec![resolved(ResolvedExpr::StateInput {
-                columns: columns.iter().map(column).collect(),
-                raw_type: raw,
-            })];
-            merged.push((Arc::clone(c), resolved(ResolvedExpr::Function(upper))));
-            states.extend(columns);
-        }
+        let (states, merged) = states_of(&calls, next)?;
         let partial = Arc::new(LogicalPlan::new(PlanNode::PartialAggregate {
             input: Arc::clone(side),
             keys: keys.iter().map(column).collect(),
@@ -293,7 +292,7 @@ impl<'a> Shape<'a> {
         } else {
             (Arc::clone(left), partial)
         };
-        let mut below = Arc::new(
+        let below = Arc::new(
             LogicalPlan::new(PlanNode::Join {
                 left: new_left,
                 right: new_right,
@@ -302,31 +301,42 @@ impl<'a> Shape<'a> {
             })
             .with_origin(join.origin),
         );
-        // The projections above: the arguments out, the states in.
+        let pushed = self.above(below, &args, &states, &merged)?;
+        let names: Vec<&str> = keys.iter().map(|k| k.name.as_str()).collect();
+        Ok((pushed, format!("pushed by [{}]: {gates}", names.join(", "))))
+    }
+
+    /// The aggregate merging `states` over the spine rebuilt on `below`: the
+    /// arguments out, the states in.
+    fn above(
+        &self,
+        mut below: Arc<LogicalPlan>,
+        args: &Attrs,
+        states: &[BoundColumn],
+        merged: &[Merged],
+    ) -> Result<Arc<LogicalPlan>, String> {
         let mut read = self.read_by_aggregate();
         let mut plans = Vec::with_capacity(self.spine.len());
         for node in &self.spine {
             plans.push((*node, read.clone()));
-            read = read_below(node, &read, &args)?;
+            read = read_below(node, &read, args)?;
         }
         for (node, read) in plans.into_iter().rev() {
-            below = rebuilt(node, below, &read, &states)?;
+            below = rebuilt(node, below, &read, states)?;
         }
         let outputs = self
             .outputs
             .iter()
-            .map(|e| replace_calls(e, &merged))
+            .map(|e| replace_calls(e, merged))
             .collect();
-        let pushed = Arc::new(
+        Ok(Arc::new(
             LogicalPlan::new(PlanNode::Aggregate {
                 input: below,
                 grouping: Grouping::GroupBy(self.keys.to_vec()),
                 aggregates: outputs,
             })
             .with_origin(self.plan.origin),
-        );
-        let names: Vec<&str> = keys.iter().map(|k| k.name.as_str()).collect();
-        Ok((pushed, format!("pushed by [{}]: {gates}", names.join(", "))))
+        ))
     }
 
     /// `(X JOIN Y) JOIN C` as `(X JOIN C) JOIN Y`, all inner, where the calls
@@ -435,6 +445,37 @@ impl<'a> Shape<'a> {
         }
         Ok(read)
     }
+}
+
+/// A call and the same function merging its states.
+type Merged = (Arc<Expr>, Arc<Expr>);
+
+/// The state columns of `calls` for a partial aggregate below, and each call
+/// as the same function merging them.
+fn states_of(
+    calls: &[(&Arc<Expr>, &ResolvedFunction)],
+    next: &mut u64,
+) -> Result<(Vec<BoundColumn>, Vec<Merged>), String> {
+    let mut states = Vec::new();
+    let mut merged = Vec::with_capacity(calls.len());
+    for (c, f) in calls {
+        let raw = f
+            .args
+            .first()
+            .and_then(|a| data_type(a))
+            .unwrap_or(DataType::Long);
+        let columns = partial_state_columns(f, &raw, AttrId(*next))
+            .ok_or_else(|| format!("{} exports no states", f.id.name()))?;
+        *next = next.saturating_add(columns.len() as u64);
+        let mut upper = ResolvedFunction::clone(f);
+        upper.args = vec![resolved(ResolvedExpr::StateInput {
+            columns: columns.iter().map(column).collect(),
+            raw_type: raw,
+        })];
+        merged.push((Arc::clone(c), resolved(ResolvedExpr::Function(upper))));
+        states.extend(columns);
+    }
+    Ok((states, merged))
 }
 
 /// Whether `p` is a table read whole, under projections.

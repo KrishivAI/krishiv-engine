@@ -383,6 +383,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
     (
+        "krishiv.optimizer.preAggregateExpand",
+        &PRE_AGGREGATE_EXPAND,
+    ),
+    (
         "krishiv.runtimeFilter.bloom.maxBytes",
         &RUNTIME_FILTER_BLOOM_MAX_BYTES,
     ),

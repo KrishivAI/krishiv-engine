@@ -684,7 +684,8 @@ impl Interp<'_> {
             "count" => V::Num(total(&first)),
             _ if first.is_empty() => V::Null,
             "sum" => V::Num(total(&first)),
-            "avg" => V::Num(total(&first) / total(&of(self, 1))),
+            // Both states are scaled numbers: the quotient keeps one scale.
+            "avg" => V::Num(total(&first) * SCALE / total(&of(self, 1))),
             "min" => first.iter().min().unwrap().clone(),
             "max" => first.iter().max().unwrap().clone(),
             other => panic!("merging {other}"),
