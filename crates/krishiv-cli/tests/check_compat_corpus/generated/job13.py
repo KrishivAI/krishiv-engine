@@ -2,7 +2,9 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = spark.sql("SELECT legacy_fn_35(a) FROM t13")
-df = spark.sql("SELECT legacy_fn_22(a) FROM t13")
-df = spark.sql("SELECT xxhash64(a) FROM t13")
-df = df.select(F.tuple_difference_theta_integer("a"), F.col("b"))
+df = spark.sql("SELECT split(a) FROM t13")
+df = df.select(F.vector_normalize("a"), F.col("b"))
+df = spark.sql("SELECT legacy_fn_9(a) FROM t13")
+df = df.select(F.ceiling("a"), F.col("b"))
+df = df.select(F.xpath("a"), F.col("b"))
+df = spark.sql("SELECT locate(a) FROM t13")

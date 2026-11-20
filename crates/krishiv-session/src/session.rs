@@ -1830,6 +1830,11 @@ impl Session {
                 } else {
                     env.history_job(self, &row_id, physical, detailed)
                 },
+                advisor: if withheld {
+                    None
+                } else {
+                    crate::query_fold::AdvisorJob::of(physical, &env.config)
+                },
                 withhold_operators: withheld,
             }),
             None,
@@ -1932,6 +1937,7 @@ mod spill;
 pub(crate) use spill::*;
 
 mod writes;
+pub(crate) use writes::partition_overwrite_is_dynamic;
 use writes::*;
 
 mod ops;

@@ -404,6 +404,10 @@ the table, and the first action fails.
   `krishiv.connect.maxOperationsPerSession`; Spark has no such cap.
 - **An invalid operation tag** fails with `KRISHIV_INVALID_OPERATION_TAG` (SQLSTATE 22023) and Spark's message; Spark
   sends an `INTERNAL` status without an error class.
+- **A Connect `Sample` whose bounds span more than `[0, 1]`** (or NaN) fails with `KRISHIV_SAMPLE_FRACTION_OUT_OF_RANGE`
+  (SQLSTATE 22023) and Spark's text (`requirement failed: Sampling fraction (1.5) must be on interval [0, 1] without
+  replacement`); Spark raises a classless `IllegalArgumentException` from the `Sample` constructor. PySpark raises
+  `IllegalArgumentException` for both.
 - **Results arrive in the engine's batches** (4,096 rows by default), cut further at Spark's
   `spark.connect.grpc.arrow.maxBatchSize` and `spark.sql.execution.arrow.maxRecordsPerBatch` but never merged.
 - **Timestamps are labelled UTC when `spark.sql.session.timeZone` is unset**; Spark labels them with the JVM's zone.
@@ -516,6 +520,40 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   raises.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
+
+## Delta Lake writes
+
+Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-connectors-delta`,
+`src/write/`). The rows, partition values and statistics match delta-spark 4.4.1 (the oracle in
+`tests/fixtures/delta-4.4.1/`); these parts of the log differ:
+
+- **Protocol.** A table Krishiv creates carries the table-features protocol (reader 3, writer 7)
+  where delta-spark writes (1, 2) for a table with no features. Spark 4.2 with delta-spark 4.4.1
+  reads such tables and appends to them, keeping the protocol
+  (`tests/fixtures/delta-4.4.1/krishiv-written/READBACK.json`).
+- **Operation names.** A CTAS commit records the kernel's `CREATE TABLE` (delta-spark: `CREATE TABLE
+  AS SELECT`) with the kernel's parameters; a v1 `saveAsTable` overwrite of an existing table is
+  recorded as `WRITE` (delta-spark: `CREATE OR REPLACE TABLE AS SELECT`).
+- **commitInfo fields.** `isBlindAppend` is omitted when false (the kernel owns the field);
+  `isDynamicPartitionOverwrite` is the string `"true"`, not a boolean; a `replaceWhere` writes no
+  `numDeletedRows`; `partitionBy` is always `"[]"`.
+- **Constraint text.** The nested `DELTA_VIOLATE_CONSTRAINT_WITH_VALUES` message of a
+  `replaceWhere` mismatch names the constraint by the filter's text, where delta-spark prints its
+  expression tree.
+- **Float bounds.** Statistics order floats as Spark does (every NaN above every number), except
+  that `-0.0` sorts below `0.0`: a file holding both keeps the other one as its bound (both are
+  written as `0.0`).
+- **Files.** Data files are named `part-00000-<uuid>.c000.snappy.parquet` for every task and roll
+  over at the `maxRecordsPerFile` write option (a value not above `0` is no limit) and at a fixed
+  128 MiB, on every write (`insertInto`, `saveAsTable` and `writeTo` on a catalog table too). A value
+  that is not a number fails with `KRISHIV_INVALID_FORMAT_OPTION_VALUE`, where delta-spark raises
+  Java's `NumberFormatException`.
+- **Checkpoints.** A checkpoint after a commit is written without the `.crc` file, and a V2
+  checkpoint without sidecars; it runs after the statement returns, and a failure is logged,
+  never raised.
+- **Refused.** `replaceWhere` on data columns, schema evolution (`mergeSchema`), `overwriteSchema`
+  on an existing table and every replace (RTAS, `REPLACE TABLE`, `createOrReplace`) are refused by
+  name.
 
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 

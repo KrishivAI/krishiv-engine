@@ -3,8 +3,7 @@
 //! catalog API every surface shares. Listings and lookups read the session catalog and the permanent store
 //! directly and return Spark's structs (`Database`, `Table`, `Column`, `Function`); the mutating calls run
 //! the SQL statement Spark's `CatalogImpl` runs, so the access checks, errors and cache invalidation are
-//! those of the statement. Spark Connect lowers its `Catalog` relation arms to these functions
-//! (`design/P3-connect-mapping.md` section 2.1).
+//! those of the statement. Spark Connect lowers its `Catalog` relation arms to these functions.
 
 use krishiv_common::error::KrishivError;
 
@@ -230,11 +229,12 @@ impl Catalog<'_> {
         self.session.state.catalog.current_catalog()
     }
 
-    /// Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees (design P3-T067
-    /// §2.4). A catalog's name matches whatever its case, in either `spark.sql.caseSensitive` mode, as Spark's
+    /// Makes `name` the current catalog: `spark_catalog` or a declared catalog this principal sees.
+    ///
+    /// A catalog's name matches whatever its case, in either `spark.sql.caseSensitive` mode, as Spark's
     /// `CatalogManager` and the SQL `USE` do. (Divergence: Spark 4.2 resets the namespace to `default` when the name
     /// differs from the current catalog's only in case; here the current namespace is kept.) The `system` catalog is
-    /// Krishiv's own (ADR 0023) and is reached with `USE system`, not here: Spark has no such catalog, so it is
+    /// Krishiv's own and is reached with `USE system`, not here: Spark has no such catalog, so it is
     /// `CATALOG_NOT_FOUND` like any other name.
     ///
     /// # Errors
@@ -255,8 +255,9 @@ impl Catalog<'_> {
         self.run(&format!("USE {}", quoted(&known))).await
     }
 
-    /// The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees (design P3-T067 §2.4;
-    /// Spark returns the loaded catalogs and `spark_catalog`). The `system` catalog is not listed, see
+    /// The catalogs, sorted: `spark_catalog` and the declared catalogs this principal sees.
+    ///
+    /// Spark returns the loaded catalogs and `spark_catalog`. The `system` catalog is not listed, see
     /// [`Catalog::set_current_catalog`].
     #[must_use]
     pub fn list_catalogs(&self) -> Vec<String> {
@@ -330,6 +331,8 @@ impl Catalog<'_> {
         }
     }
 
+    /// The namespaces of the current catalog, sorted by name.
+    ///
     /// The namespaces of the current catalog, sorted by name, optionally only those matching the
     /// `*`/`|` pattern.
     ///
@@ -722,6 +725,8 @@ impl Catalog<'_> {
             .collect())
     }
 
+    /// The functions visible to the session, sorted by name.
+    ///
     /// The functions: the built-ins, the session's temporary functions and the current namespace's
     /// stored ones, sorted by name.
     ///

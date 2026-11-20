@@ -647,6 +647,47 @@ fn check_root_is_private(root: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Whether `root` is a spill directory [`SpillManager::open`] accepts, judged without creating,
+/// locking or removing anything: an existing directory (not a symbolic link) owned by this user,
+/// not writable by group or others, on a file system whose locks can be trusted. A missing `root`
+/// passes (it is created private at start). Meant for `krishiv doctor`, so that a configuration it
+/// passes is one the server accepts.
+///
+/// # Errors
+/// A one-line reason naming what the server would refuse.
+pub fn check_spill_root(root: &Path) -> Result<(), String> {
+    let meta = match fs::symlink_metadata(root) {
+        Ok(m) => m,
+        // Missing, or under a file: `open` would fail on creation, and doctor's own probe says why.
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    if meta.file_type().is_symlink() {
+        return Err("is a symbolic link".to_owned());
+    }
+    if !meta.is_dir() {
+        return Err("is not a directory".to_owned());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let uid = rustix::process::geteuid().as_raw();
+        validate_owner_and_mode(&meta, uid).map_err(|e| e.to_string())?;
+    }
+    if let Some(fs_type) = network_fs(root) {
+        return Err(format!(
+            "locks do not work reliably on a {fs_type} file system"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 pub(crate) fn validate_owner_and_mode(meta: &fs::Metadata, uid: u32) -> io::Result<()> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};

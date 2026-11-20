@@ -232,6 +232,13 @@ fn explicit(conf: &RuntimeConf, key: &str) -> Option<String> {
         .map(|(_, v)| v)
 }
 
+/// The read-only key a Krishiv client reads to learn the `krishiv.v1` capabilities (P3-T015): the
+/// comma-separated set, never listed by `get_all` and never settable, so a stock client never sees it.
+fn capabilities_key(key: &str) -> Option<String> {
+    (key == krishiv_connect::extension::CAPABILITIES_KEY)
+        .then(krishiv_connect::extension::capabilities_value)
+}
+
 fn pair(key: &str, value: Option<String>) -> pb::KeyValue {
     pb::KeyValue {
         key: key.to_owned(),
@@ -289,7 +296,7 @@ pub(crate) async fn config(
         }
         Some(OpType::Get(get)) => {
             for key in &get.keys {
-                let value = conf.get(key);
+                let value = capabilities_key(key).or_else(|| conf.get(key));
                 if value.is_none() || is_redacted(key, value.as_deref()) {
                     return Err(SqlConfNotFound {
                         sql_conf: format!("\"{key}\""),
@@ -324,7 +331,8 @@ pub(crate) async fn config(
         }
         Some(OpType::GetOption(g)) => {
             for key in &g.keys {
-                let value = conf.get(key).filter(|v| !is_redacted(key, Some(v)));
+                let value = capabilities_key(key)
+                    .or_else(|| conf.get(key).filter(|v| !is_redacted(key, Some(v))));
                 out.pairs.push(pair(key, value));
                 out.warnings.extend(warning(key));
             }
