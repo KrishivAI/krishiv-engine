@@ -135,6 +135,13 @@ impl Session {
         // a V1 file table does not (`unsupportedInsertReplaceWhere`).
         let replace_where = match &c.replace_where {
             None => None,
+            Some(_)
+                if !c.columns.is_empty()
+                    && self.state.profile < krishiv_plan::analyzer::SparkProfile::V4_3 =>
+            {
+                // A column list before `REPLACE WHERE` is Spark 4.3 grammar.
+                return Err(unsupported("INSERT INTO ... (columns) REPLACE WHERE"));
+            }
             Some(cond) => {
                 #[cfg(feature = "delta")]
                 let delta = is_delta_table(&table);

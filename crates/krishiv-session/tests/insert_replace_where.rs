@@ -25,15 +25,11 @@ fn class_of(profile: SparkProfile, sql: &str) -> String {
 
 #[test]
 fn replace_where_on_a_file_table_is_refused_by_profile() {
-    for sql in [
-        "insert into tbl replace where id = 1 values (1, 'a')",
-        "insert into tbl (id, name) replace where id = 1 values (1, 'a')",
-    ] {
-        let new = class_of(SparkProfile::V4_3, sql);
-        assert!(new.contains("UNSUPPORTED_FEATURE.TABLE_OPERATION"), "{new}");
-        let old = class_of(SparkProfile::V4_2, sql);
-        assert!(old.contains("Cannot write into v1 table"), "{old}");
-    }
+    let sql = "insert into tbl replace where id = 1 values (1, 'a')";
+    let new = class_of(SparkProfile::V4_3, sql);
+    assert!(new.contains("UNSUPPORTED_FEATURE.TABLE_OPERATION"), "{new}");
+    let old = class_of(SparkProfile::V4_2, sql);
+    assert!(old.contains("Cannot write into v1 table"), "{old}");
 }
 
 #[test]
@@ -44,6 +40,35 @@ fn replace_on_takes_no_column_list() {
     );
     assert!(
         err.contains("INSERT_REPLACE_ON_COLUMN_LIST_NOT_ALLOWED"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_column_list_before_replace_where_is_4_3_grammar() {
+    let sql = "insert into tbl (id, name) replace where id = 1 values (1, 'a')";
+    let new = class_of(SparkProfile::V4_3, sql);
+    assert!(new.contains("UNSUPPORTED_FEATURE.TABLE_OPERATION"), "{new}");
+    let old = class_of(SparkProfile::V4_2, sql);
+    assert!(old.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{old}");
+}
+
+#[test]
+fn unnest_in_from_is_4_3_grammar() {
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .expect("session");
+    let err = block_on(async {
+        s.sql("select * from unnest(array(1, 2))")
+            .await?
+            .collect()
+            .await
+    })
+    .expect_err("refused");
+    assert!(
+        err.to_string()
+            .contains("UNRESOLVABLE_TABLE_VALUED_FUNCTION"),
         "{err}"
     );
 }
