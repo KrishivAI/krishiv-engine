@@ -33,8 +33,12 @@ use tonic::service::Routes;
 use tonic::transport::Channel;
 use tonic::{Code, Request, Status};
 
+#[path = "service/metadata.rs"]
+mod metadata;
 #[path = "service/prepared.rs"]
 mod prepared;
+#[path = "service/session_options.rs"]
+mod session_options;
 #[path = "service/updates.rs"]
 mod updates;
 
@@ -980,16 +984,16 @@ async fn unsupported_rpcs_unimplemented_before_decoding() {
             .expect_err(kind);
         assert_eq!(e.code(), Code::Unimplemented, "{kind}: {e:?}");
     }
-    let catalogs = arrow_flight::sql::CommandGetCatalogs {};
+    let substrait = arrow_flight::sql::CommandStatementSubstraitPlan::default();
     let e = h
         .client
         .get_flight_info(authed(
-            FlightDescriptor::new_cmd(catalogs.as_any().encode_to_vec()),
+            FlightDescriptor::new_cmd(substrait.as_any().encode_to_vec()),
             OPS,
             None,
         ))
         .await
-        .expect_err("GetCatalogs is 65b");
+        .expect_err("Substrait is not served");
     assert_eq!(e.code(), Code::Unimplemented, "{e:?}");
     let ingest = arrow_flight::sql::CommandStatementIngest::default();
     let e = h
@@ -1854,7 +1858,10 @@ async fn list_actions_names_the_served_actions() {
             "CancelFlightInfo",
             "CancelQuery",
             "CreatePreparedStatement",
-            "ClosePreparedStatement"
+            "ClosePreparedStatement",
+            "SetSessionOptions",
+            "GetSessionOptions",
+            "CloseSession"
         ]
     );
     assert_eq!(h.flight.session_count(), 0);

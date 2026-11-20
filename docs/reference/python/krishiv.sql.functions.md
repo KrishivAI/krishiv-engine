@@ -778,6 +778,14 @@ def count_min_sketch(col: ColumnOrName, eps: Column | float, confidence: Column 
 
 Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
+### `counter_diff`
+
+```python
+def counter_diff(value: ColumnOrName, startTime: ColumnOrName | None=None) -> Column
+```
+
+Calls the registry function `counter_diff`.
+
 ### `covar_pop`
 
 ```python
@@ -1417,6 +1425,14 @@ def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | No
 
 Calls the registry function `hll_union_agg`.
 
+### `hmac`
+
+```python
+def hmac(key: ColumnOrName, message: ColumnOrName, algorithm: ColumnOrName | None=None) -> Column
+```
+
+Calls the registry function `hmac`.
+
 ### `hour`
 
 ```python
@@ -1508,7 +1524,7 @@ Calls the registry function `input_file_name`.
 ### `instr`
 
 ```python
-def instr(str: ColumnOrName, substr: str | Column) -> Column
+def instr(str: ColumnOrName, substr: str | Column, start: int | Column | None=None, occurrence: int | Column | None=None) -> Column
 ```
 
 Calls the registry function `instr`.

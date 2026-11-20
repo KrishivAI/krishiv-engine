@@ -163,6 +163,22 @@ impl DataFrameWriter {
         dry: bool,
     ) -> Result<Vec<String>, KrishivError> {
         self.assert_not_bucketed("save")?;
+        #[cfg(feature = "delta")]
+        if !dry && crate::delta::handles(&self.format) {
+            let df = self.df;
+            let session = df.session.clone();
+            let (mode, options, partition_by) = (self.mode, self.options, self.partition_by);
+            let path = path.to_owned();
+            drop(admitted);
+            return session
+                .on_executor(async move {
+                    df.session
+                        .save_delta(&df, &path, &mode, &options, &partition_by)
+                        .await
+                })
+                .await
+                .map(|()| Vec::new());
+        }
         let target = WriteTarget {
             format: self.format,
             mode: self.mode,
@@ -354,11 +370,15 @@ impl DataFrameWriter {
             }
             .into());
         }
-        let df = self.df;
+        let (df, options) = (self.df, self.options);
         let table = table.to_owned();
         let session = df.session.clone();
         session
-            .on_executor(async move { df.session.exec_insert_into(&df, &table, mode).await })
+            .on_executor(async move {
+                df.session
+                    .exec_insert_into(&df, &table, mode, &options)
+                    .await
+            })
             .await
     }
 

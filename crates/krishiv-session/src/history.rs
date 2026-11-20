@@ -463,6 +463,7 @@ impl QueryHistory {
             row.peak_memory_bytes = Some(done.peak_memory_bytes);
             row.error_class = done.error_class.map(str::to_owned);
             row.operators = Arc::from(done.operators.as_slice());
+            row.hints = done.hints.as_deref().map(Arc::from);
             if let Some(t) = done.totals {
                 row.workload_class = Some(t.workload_class);
                 row.cpu_ns = Some(t.cpu_ns);

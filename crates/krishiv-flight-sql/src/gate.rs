@@ -8,8 +8,11 @@
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::{
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest, Any,
-    CommandGetSqlInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
-    CommandStatementQuery, CommandStatementUpdate, ProstMessageExt, TicketStatementQuery,
+    CommandGetCatalogs, CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
+    CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes,
+    CommandGetTables, CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
+    CommandPreparedStatementUpdate, CommandStatementQuery, CommandStatementUpdate, ProstMessageExt,
+    TicketStatementQuery,
 };
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
@@ -22,6 +25,9 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::metrics::Command;
 use crate::server::FlightSqlServer;
+use crate::session_options::{
+    CLOSE_SESSION, GET_SESSION_OPTIONS, SET_SESSION_OPTIONS, SetSessionOptionsRequest,
+};
 
 /// The Flight action `CancelFlightInfo`.
 pub(crate) const CANCEL_FLIGHT_INFO: &str = "CancelFlightInfo";
@@ -43,6 +49,10 @@ pub(crate) enum FlightRpc {
     Fetch,
     /// `GetFlightInfo` or `DoGet` of `CommandGetSqlInfo`.
     SqlInfo,
+    /// `GetFlightInfo` or `DoGet` of `CommandGetXdbcTypeInfo`.
+    XdbcTypeInfo,
+    /// `GetFlightInfo` or `DoGet` of a catalog listing or a key command (design §5).
+    Metadata,
     /// The `CancelFlightInfo` action.
     CancelFlightInfo,
     /// The deprecated `CancelQuery` action.
@@ -59,10 +69,31 @@ pub(crate) enum FlightRpc {
     PreparedBind,
     /// `DoPut(CommandPreparedStatementUpdate)`.
     PreparedUpdate,
+    /// The `SetSessionOptions` action.
+    SetSessionOptions,
+    /// The `GetSessionOptions` action.
+    GetSessionOptions,
+    /// The `CloseSession` action.
+    CloseSession,
     /// A command whose `Any` could not be decoded.
     Malformed(&'static str),
     /// Anything else: the RPC, and the command type or action named in the answer.
     Unsupported(String),
+}
+
+/// Whether `type_url` is one of the metadata commands of design §5.
+fn is_metadata(type_url: &str) -> bool {
+    [
+        CommandGetCatalogs::type_url(),
+        CommandGetDbSchemas::type_url(),
+        CommandGetTables::type_url(),
+        CommandGetTableTypes::type_url(),
+        CommandGetPrimaryKeys::type_url(),
+        CommandGetExportedKeys::type_url(),
+        CommandGetImportedKeys::type_url(),
+        CommandGetCrossReference::type_url(),
+    ]
+    .contains(&type_url)
 }
 
 impl FlightRpc {
@@ -71,6 +102,8 @@ impl FlightRpc {
         match Any::decode(descriptor.cmd.as_ref()) {
             Ok(any) if any.type_url == CommandStatementQuery::type_url() => Self::StatementInfo,
             Ok(any) if any.type_url == CommandGetSqlInfo::type_url() => Self::SqlInfo,
+            Ok(any) if any.type_url == CommandGetXdbcTypeInfo::type_url() => Self::XdbcTypeInfo,
+            Ok(any) if is_metadata(&any.type_url) => Self::Metadata,
             Ok(any) if any.type_url == CommandPreparedStatementQuery::type_url() => {
                 Self::PreparedInfo
             }
@@ -84,6 +117,8 @@ impl FlightRpc {
         match Any::decode(ticket.ticket.as_ref()) {
             Ok(any) if any.type_url == TicketStatementQuery::type_url() => Self::Fetch,
             Ok(any) if any.type_url == CommandGetSqlInfo::type_url() => Self::SqlInfo,
+            Ok(any) if any.type_url == CommandGetXdbcTypeInfo::type_url() => Self::XdbcTypeInfo,
+            Ok(any) if is_metadata(&any.type_url) => Self::Metadata,
             Ok(any) => Self::Unsupported(format!("DoGet of {:?}", any.type_url)),
             Err(_) => Self::Malformed("a ticket"),
         }
@@ -114,6 +149,9 @@ impl FlightRpc {
             CANCEL_QUERY => Self::CancelQuery,
             CREATE_PREPARED_STATEMENT => Self::CreatePrepared,
             CLOSE_PREPARED_STATEMENT => Self::ClosePrepared,
+            SET_SESSION_OPTIONS => Self::SetSessionOptions,
+            GET_SESSION_OPTIONS => Self::GetSessionOptions,
+            CLOSE_SESSION => Self::CloseSession,
             other => Self::Unsupported(format!("the Flight action {other:?}")),
         }
     }
@@ -127,6 +165,8 @@ pub(crate) fn check_flight(rpc: &FlightRpc) -> Result<(), Status> {
         | FlightRpc::StatementInfo
         | FlightRpc::Fetch
         | FlightRpc::SqlInfo
+        | FlightRpc::XdbcTypeInfo
+        | FlightRpc::Metadata
         | FlightRpc::CancelFlightInfo
         | FlightRpc::CancelQuery
         | FlightRpc::Update
@@ -134,7 +174,10 @@ pub(crate) fn check_flight(rpc: &FlightRpc) -> Result<(), Status> {
         | FlightRpc::ClosePrepared
         | FlightRpc::PreparedInfo
         | FlightRpc::PreparedBind
-        | FlightRpc::PreparedUpdate => Ok(()),
+        | FlightRpc::PreparedUpdate
+        | FlightRpc::SetSessionOptions
+        | FlightRpc::GetSessionOptions
+        | FlightRpc::CloseSession => Ok(()),
         FlightRpc::Malformed(what) => Err(Status::invalid_argument(format!(
             "{what} is not a Flight SQL command"
         ))),
@@ -163,6 +206,19 @@ pub(crate) fn served_actions() -> Vec<ActionType> {
         ActionType {
             r#type: CLOSE_PREPARED_STATEMENT.to_owned(),
             description: "Close a prepared statement.".to_owned(),
+        },
+        ActionType {
+            r#type: SET_SESSION_OPTIONS.to_owned(),
+            description: "Set session options (catalog, schema, SQL configuration keys)."
+                .to_owned(),
+        },
+        ActionType {
+            r#type: GET_SESSION_OPTIONS.to_owned(),
+            description: "Get the session's options.".to_owned(),
+        },
+        ActionType {
+            r#type: CLOSE_SESSION.to_owned(),
+            description: "Close the cookie's session.".to_owned(),
         },
     ]
 }
@@ -369,6 +425,25 @@ impl FlightService for FlightGate {
                 let result = close.and_then(|close| self.0.do_action_close(&close, &request));
                 self.0.counted(Command::PreparedClose, result)
             }
+            // Not in arrow-rs's trait at all (facts A1): their bodies are plain messages.
+            FlightRpc::SetSessionOptions => {
+                let result = match SetSessionOptionsRequest::decode(request.get_ref().body.as_ref())
+                {
+                    Ok(set) => self.0.do_action_set_options(set, &request).await,
+                    Err(_) => Err(Status::invalid_argument(
+                        "a malformed SetSessionOptionsRequest",
+                    )),
+                };
+                self.0.counted(Command::SessionOptions, result)
+            }
+            FlightRpc::GetSessionOptions => {
+                let result = self.0.do_action_get_options(&request).await;
+                self.0.counted(Command::SessionOptions, result)
+            }
+            FlightRpc::CloseSession => {
+                let result = self.0.do_action_close_session(&request);
+                self.0.counted(Command::SessionClose, result)
+            }
             _ => FlightService::do_action(&self.0, request).await,
         }
     }
@@ -402,11 +477,20 @@ mod tests {
         assert_eq!(FlightRpc::of_descriptor(&info), FlightRpc::SqlInfo);
         let fetch = Ticket::new(any_of(&TicketStatementQuery::default()));
         assert_eq!(FlightRpc::of_ticket(&fetch), FlightRpc::Fetch);
+        let types = CommandGetXdbcTypeInfo::default();
+        let types_info = FlightDescriptor::new_cmd(any_of(&types));
+        assert_eq!(
+            FlightRpc::of_descriptor(&types_info),
+            FlightRpc::XdbcTypeInfo
+        );
+        let types_ticket = Ticket::new(any_of(&types));
+        assert_eq!(FlightRpc::of_ticket(&types_ticket), FlightRpc::XdbcTypeInfo);
         for rpc in [
             FlightRpc::Handshake,
             FlightRpc::StatementInfo,
             FlightRpc::Fetch,
             FlightRpc::SqlInfo,
+            FlightRpc::XdbcTypeInfo,
             FlightRpc::CancelFlightInfo,
             FlightRpc::CancelQuery,
         ] {
@@ -417,7 +501,11 @@ mod tests {
     #[test]
     fn unknown_commands_and_actions_are_unimplemented() {
         let catalogs = FlightDescriptor::new_cmd(any_of(&arrow_flight::sql::CommandGetCatalogs {}));
-        let rpc = FlightRpc::of_descriptor(&catalogs);
+        assert_eq!(FlightRpc::of_descriptor(&catalogs), FlightRpc::Metadata);
+        let substrait = FlightDescriptor::new_cmd(any_of(
+            &arrow_flight::sql::CommandStatementSubstraitPlan::default(),
+        ));
+        let rpc = FlightRpc::of_descriptor(&substrait);
         assert!(matches!(rpc, FlightRpc::Unsupported(_)), "{rpc:?}");
         assert_eq!(
             check_flight(&rpc).map_err(|s| s.code()),
@@ -452,7 +540,10 @@ mod tests {
                 CANCEL_FLIGHT_INFO,
                 CANCEL_QUERY,
                 CREATE_PREPARED_STATEMENT,
-                CLOSE_PREPARED_STATEMENT
+                CLOSE_PREPARED_STATEMENT,
+                SET_SESSION_OPTIONS,
+                GET_SESSION_OPTIONS,
+                CLOSE_SESSION
             ]
         );
         for kind in &listed {

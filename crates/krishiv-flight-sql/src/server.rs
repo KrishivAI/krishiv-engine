@@ -11,14 +11,15 @@ use std::time::{Duration, Instant};
 
 use arrow_array::RecordBatch;
 use arrow_flight::flight_service_server::FlightServiceServer;
-use arrow_flight::sql::metadata::SqlInfoData;
+use arrow_flight::sql::metadata::{SqlInfoData, XdbcTypeInfoData};
 use arrow_schema::SchemaRef;
 use krishiv_common::config::{
     CONNECT_MAX_INBOUND_MESSAGE_SIZE, Config, ConfigEntry, ConfigValue,
     FLIGHT_SQL_FETCH_IDLE_TIMEOUT, FLIGHT_SQL_HANDLE_TTL, FLIGHT_SQL_MAX_BATCH_ROWS,
     FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES, FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
     FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL, FLIGHT_SQL_MAX_HANDLES_PER_SESSION,
-    FLIGHT_SQL_MAX_STATEMENT_BYTES, FLIGHT_SQL_PROVISIONAL_TTL,
+    FLIGHT_SQL_MAX_SCHEMA_TABLES, FLIGHT_SQL_MAX_STATEMENT_BYTES, FLIGHT_SQL_METADATA_TIMEOUT,
+    FLIGHT_SQL_PROVISIONAL_TTL,
 };
 use krishiv_common::error::KrishivError;
 use krishiv_connect_server::execute::ResponseBudget;
@@ -32,6 +33,7 @@ use crate::metrics::Requests;
 use crate::sessions::{Holds, Release, Sessions};
 use crate::sql_info::{ServerInfo, sql_info_data};
 use crate::statement::FetchCell;
+use crate::xdbc_info::xdbc_type_info_data;
 
 /// The limits of a [`FlightSqlServer`], from the `krishiv.flightSql.*` keys (all Startup).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +59,10 @@ pub struct FlightSqlConfig {
     pub max_operations_per_session: usize,
     /// `maxBatchRows`: the most parameter rows one prepared update binds (design §4.4).
     pub max_batch_rows: usize,
+    /// `metadataTimeout`: the time limit of one metadata listing (design §5).
+    pub metadata_timeout: Duration,
+    /// `maxSchemaTables`: the most tables a `GetTables` with `include_schema` loads (design §5).
+    pub max_schema_tables: usize,
 }
 
 impl Default for FlightSqlConfig {
@@ -71,6 +77,8 @@ impl Default for FlightSqlConfig {
             encode: EncodeLimits::default(),
             max_operations_per_session: ExecuteLimits::default().max_operations_per_session,
             max_batch_rows: 10_000,
+            metadata_timeout: Duration::from_secs(60),
+            max_schema_tables: 1_000,
         }
     }
 }
@@ -132,6 +140,8 @@ impl FlightSqlConfig {
             max_operations_per_session: ExecuteLimits::from_config(config)
                 .max_operations_per_session,
             max_batch_rows: size(config, &FLIGHT_SQL_MAX_BATCH_ROWS, d.max_batch_rows),
+            metadata_timeout: duration(config, &FLIGHT_SQL_METADATA_TIMEOUT, d.metadata_timeout),
+            max_schema_tables: size(config, &FLIGHT_SQL_MAX_SCHEMA_TABLES, d.max_schema_tables),
         }
     }
 }
@@ -245,6 +255,7 @@ pub(crate) struct Inner {
     pub(crate) handles: Handles<SessionOwner, Payload>,
     pub(crate) requests: Requests,
     pub(crate) sql_info: SqlInfoData,
+    pub(crate) xdbc_type_info: XdbcTypeInfoData,
     pub(crate) config: FlightSqlConfig,
     /// The live `DoGet` streams' idle cells, for the sweep (design §4.2).
     pub(crate) fetches: Mutex<Vec<Weak<FetchCell>>>,
@@ -272,7 +283,7 @@ impl FlightSqlServer {
     /// `info` for `GetSqlInfo`.
     ///
     /// # Errors
-    /// What building the `GetSqlInfo` table fails with (`INTERNAL_ERROR`).
+    /// What building the `GetSqlInfo` or `GetXdbcTypeInfo` table fails with (`INTERNAL_ERROR`).
     pub fn new(
         manager: Arc<SessionManager>,
         auth: Arc<ConnectAuth>,
@@ -291,6 +302,7 @@ impl FlightSqlServer {
                 handles: Handles::new(config.handles),
                 requests: Requests::default(),
                 sql_info: sql_info_data(info)?,
+                xdbc_type_info: xdbc_type_info_data()?,
                 config,
                 fetches: Mutex::new(Vec::new()),
             }),

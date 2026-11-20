@@ -52,6 +52,8 @@ mod script_results;
 mod session_catalog;
 
 use self::file_tables::{FileScanOf, reference_key};
+#[cfg(feature = "delta")]
+pub(crate) use self::scans::reads_files_at;
 pub(crate) use self::scans::reads_stored_table;
 
 /// The session catalog's name, as Spark names it.

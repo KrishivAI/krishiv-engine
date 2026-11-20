@@ -504,10 +504,12 @@ async fn prepared_update_partly_ran() {
 }
 
 /// A prepared handle's TTL runs from the end of its last use, not from its create (review of
-/// 4d7f3235f finding 1), and a sweep while an update runs leaves it.
+/// 4d7f3235f finding 1), and a sweep while an update runs leaves it. Expiry is checked against
+/// the real clock at each lookup, so the TTL leaves room for a loaded run: a bind ttl/2 after the
+/// create, and the use right after the slow update ends, each land well inside it.
 #[tokio::test(flavor = "multi_thread")]
 async fn prepared_handle_ttl_runs_from_last_use() {
-    let ttl = Duration::from_millis(400);
+    let ttl = Duration::from_secs(2);
     let mut h = start(FlightSqlConfig {
         handles: HandleLimits {
             ttl,
@@ -572,6 +574,10 @@ async fn prepared_handle_ttl_runs_from_last_use() {
     h.flight.sweep_at(Instant::now() + Duration::from_secs(60));
     assert!(!running.is_finished(), "the update is still running");
     assert_eq!(running.await.expect("task").expect("ran"), 1);
+    // Used right after the update ended (its TTL runs from there), before anything slower.
+    run_update(&mut h, OPS, &slow.prepared_statement_handle, Vec::new())
+        .await
+        .expect("idle only since the update ended: still there");
     let (q, _) = info(&mut h, OPS, Some(&cookie), "SELECT v")
         .await
         .expect("info");
@@ -579,9 +585,6 @@ async fn prepared_handle_ttl_runs_from_last_use() {
         .await
         .expect("fetch");
     assert_eq!(first_longs(&batches), [199_999_999]);
-    run_update(&mut h, OPS, &slow.prepared_statement_handle, Vec::new())
-        .await
-        .expect("idle only since the update ended: still there");
 }
 
 /// Design P3-T066 §5.1: while the server drains, every Flight SQL call that starts new work is

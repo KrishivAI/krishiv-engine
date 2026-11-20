@@ -43,6 +43,7 @@ extend-ignore-re = [
     'spark\.implicits\._', # Spark's implicit-conversions import
     "'SELEC 1'",           # a deliberately misspelled statement in the classifier tests and analyze goldens
     '"abd"',               # a probed property key in the krishiv-sql map-order tests (its hash fixes the order)
+    "'abd'",               # a string value of the Delta stats oracle rows (gen_delta_fixtures.py)
     '"Bash\([^"]*\)"',     # command patterns in agent permission rules (bundled git options like -nam)
     # the zone name in LEGACY parser docs and tests
     '(`IST`|\d\d:\d\d (IST|ist)")',
@@ -66,3 +67,4 @@ WRONLY = "WRONLY"           # `OFlags::WRONLY` (write-only open flag) in the anc
 selct = "selct"             # intentional misspelling in the syntax-error golden (error is at EXECUTE, not inside)
 mor = "mor"                 # Iceberg merge-on-read tables `mor2`, `mor3` in the PR-53b round trip
 MOR = "MOR"                 # the merge-on-read table properties in gen_iceberg_roundtrip.py
+SCHEM = "SCHEM"             # the JDBC `TABLE_SCHEM` column of `DatabaseMetaData.getSchemas` (Flight SQL JDBC test)
