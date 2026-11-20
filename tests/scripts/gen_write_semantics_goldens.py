@@ -13,6 +13,7 @@ without one they are recorded as `skipped`. Hive-serde cases need a Hive-enabled
 database so cases do not interact. Statements that must run through a classic-only client (SAT invalid-mode) are
 recorded as `skipped` when the Connect client rejects them first.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -59,7 +60,7 @@ def observe_sql_case(spark, case):
     conf = case.get("conf", {})
     try:
         run_sql(spark, case["stmt"], conf).collect()
-    except Exception as exc:  # noqa: BLE001 - every Spark error is a golden
+    except Exception as exc:
         return err_record(exc)
     q = case["expect"].get("query", "SELECT * FROM t")
     df = spark.sql(q)
@@ -92,7 +93,7 @@ def observe_save_as_table(spark, case):
         for k, v in wr.get("options", {}).items():
             w = w.option(k, v)
         w.saveAsTable("t")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         rec = err_record(exc)
         if note:
             rec["note"] = note
@@ -106,7 +107,7 @@ def observe_save_as_table(spark, case):
         if note:
             rec["note"] = note
         return rec
-    except Exception as exc:  # noqa: BLE001 - the read-back itself failed (e.g. a view over a dropped table)
+    except Exception as exc:
         rec = err_record(exc)
         rec["phase"] = "read-back"
         return rec
