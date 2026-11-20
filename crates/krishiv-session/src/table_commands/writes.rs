@@ -141,7 +141,17 @@ impl Session {
                 #[cfg(not(feature = "delta"))]
                 let delta = false;
                 if !delta {
-                    return Err(table_operation(&name, "INSERT INTO ... REPLACE WHERE"));
+                    // 4.3 refuses the operation on the table; 4.2 reaches the V1 write and refuses there.
+                    return Err(
+                        if self.state.profile >= krishiv_plan::analyzer::SparkProfile::V4_3 {
+                            table_operation(&name, "INSERT INTO ... REPLACE WHERE")
+                        } else {
+                            krishiv_common::error::LegacyErrorTemp1012 {
+                                identifier: name.quoted(),
+                            }
+                            .into()
+                        },
+                    );
                 }
                 let text = original
                     .get(cond.span.start..cond.span.end)
