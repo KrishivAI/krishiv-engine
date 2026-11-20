@@ -57,7 +57,7 @@ impl Session {
     }
 }
 
-/// What a [`SourceTable`] calls each time a plan reads it: the table's rows as batches of its schema.
+/// What a `SourceTable` calls each time a plan reads it: the table's rows as batches of its schema.
 pub type BatchSource = Arc<dyn Fn() -> Result<Vec<RecordBatch>, KrishivError> + Send + Sync>;
 
 /// A table whose rows come from a callback, asked afresh for every physical plan of a query (not
