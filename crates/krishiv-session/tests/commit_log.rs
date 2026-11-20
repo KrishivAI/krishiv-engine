@@ -524,3 +524,71 @@ fn an_intermediate_log_below_a_base_path_is_found_by_the_recheck_order() {
         .parquet([leaf.to_str().unwrap()]);
     assert_eq!(block_on(df.count()).unwrap(), 1);
 }
+
+/// E34: a retried statement with the same `krishiv.write.idempotencyKey` (as a write option or the
+/// session setting) appends once; another key appends; a plain directory refuses the key.
+#[test]
+fn a_retried_write_with_the_same_idempotency_key_appends_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = session_with(&[1, 2]);
+    let write = |key: &str| {
+        block_on(
+            s.table("t")
+                .write()
+                .mode("append")
+                .option("krishiv.write.idempotencyKey", key)
+                .parquet(&path),
+        )
+        .unwrap();
+    };
+    write("job-1");
+    let versions = log_versions(&root);
+    write("job-1");
+    assert_eq!(log_versions(&root), versions, "the retry made no commit");
+    assert_eq!(ids(&s, &path), [1, 2]);
+    let files = |r: &std::path::Path| {
+        std::fs::read_dir(r)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|x| x == "parquet")
+            })
+            .count()
+    };
+    assert_eq!(files(&root), 1, "the retry's file is gone");
+
+    // The session setting does the same, and another key appends.
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "job-2")
+        .unwrap();
+    block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
+    block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
+    assert_eq!(ids(&s, &path), [1, 1, 2, 2]);
+
+    // An empty key is invalid.
+    s.conf().set("krishiv.write.idempotencyKey", "").unwrap();
+    assert!(block_on(s.table("t").write().mode("append").parquet(&path)).is_err());
+}
+
+#[test]
+fn an_idempotency_key_on_a_directory_without_a_log_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("plain").to_str().unwrap().to_owned();
+    let s = session_with(&[1]);
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "NONE")
+        .unwrap();
+    let r = block_on(
+        s.table("t")
+            .write()
+            .mode("append")
+            .option("krishiv.write.idempotencyKey", "k")
+            .parquet(&path),
+    );
+    assert!(r.is_err());
+}

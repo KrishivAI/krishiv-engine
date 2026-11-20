@@ -137,6 +137,7 @@ pub(super) fn ids(write_id: &str) -> WriteIds<'_> {
         branch: "main",
         write_id,
         query_id: Some("q-1"),
+        idempotency_key: None,
     }
 }
 
@@ -389,6 +390,7 @@ fn a_new_branch_starts_from_the_current_snapshot_and_tags_are_refused() {
             branch: "dev",
             write_id: "w-2",
             query_id: None,
+            idempotency_key: None,
         };
         prepare_attempt(&io, &m1, &mut new, ids, now(&m1), MAX)
             .await
@@ -445,6 +447,7 @@ fn a_new_branch_starts_from_the_current_snapshot_and_tags_are_refused() {
             branch: "v1",
             write_id: "w-3",
             query_id: None,
+            idempotency_key: None,
         };
         prepare_attempt(&io, &tagged, &mut new, ids, now(&tagged), MAX)
             .await

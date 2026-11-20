@@ -58,6 +58,7 @@ fn entry(write: &str, mode: CommitMode, add: &[&str], remove: &[&str]) -> LogEnt
         mode,
         add: add.iter().map(|n| file(n)).collect(),
         remove: remove.iter().map(|r| (*r).to_owned()).collect(),
+        idempotency_key: None,
     }
 }
 
@@ -530,3 +531,5 @@ async fn snapshot_if_exists_replays_from_a_checkpoint() {
     assert_eq!(keys(&snap), expected);
     assert_eq!(keys(&l.snapshot().await.unwrap()), expected);
 }
+
+mod keyed;

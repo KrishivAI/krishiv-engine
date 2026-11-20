@@ -856,3 +856,42 @@ fn max_records_per_file_reaches_a_catalog_append() {
     );
     assert_eq!(rows(), 15);
 }
+
+/// E34: a retried `INSERT` under the same `krishiv.write.idempotencyKey` appends once (a `txn`
+/// action in the first commit); the next key appends again.
+#[test]
+fn a_retried_insert_with_the_same_idempotency_key_appends_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("k");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE k (a INT) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "job-1")
+        .unwrap();
+    run(&s, "INSERT INTO k VALUES (1), (2)").unwrap();
+    let after_first = versions(&dir);
+    run(&s, "INSERT INTO k VALUES (1), (2)").unwrap();
+    assert_eq!(versions(&dir), after_first, "the retry committed nothing");
+    assert_eq!(
+        query(&s, "SELECT a FROM k ORDER BY a"),
+        serde_json::json!([[1], [2]])
+    );
+    assert!(
+        last_commit(&dir)
+            .iter()
+            .any(|a| a["txn"]["appId"] == "krishiv.idempotency:job-1")
+    );
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "job-2")
+        .unwrap();
+    run(&s, "INSERT INTO k VALUES (3)").unwrap();
+    assert_eq!(
+        query(&s, "SELECT a FROM k ORDER BY a"),
+        serde_json::json!([[1], [2], [3]])
+    );
+}

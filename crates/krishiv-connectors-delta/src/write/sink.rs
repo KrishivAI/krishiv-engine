@@ -173,6 +173,7 @@ impl TableProvider for NewDeltaTable {
             target: Target::Create(Arc::clone(&self.table)),
             mode: Mode::Append,
             write_id: write_id(request)?,
+            idempotency_key: request.idempotency_key(),
             reads_target: false,
             limits: RetryLimits::default(),
             files: file_limits(request)?,
@@ -279,6 +280,7 @@ pub(crate) fn writer(
         target: Target::Existing(table.clone()),
         mode,
         write_id: write_id(request)?,
+        idempotency_key: request.idempotency_key(),
         reads_target: request
             .options
             .get(READS_TARGET_OPTION)
@@ -318,6 +320,8 @@ pub struct DeltaWriteSink {
     target: Target,
     mode: Mode,
     write_id: String,
+    /// `krishiv.write.idempotencyKey` (E34).
+    idempotency_key: Option<String>,
     reads_target: bool,
     limits: RetryLimits,
     files: FileLimits,
@@ -1120,9 +1124,11 @@ impl DeltaWriteSink {
             g.release_writers();
             return Ok(());
         }
+        let written_paths = written.paths.clone();
         let staged = StagedCommit {
             table: name.clone(),
             write_id: self.write_id.clone(),
+            idempotency_key: self.idempotency_key.clone(),
             operation: CommitOperation::Write,
             operation_parameters: parameters,
             operation_metrics: metrics,
@@ -1131,9 +1137,15 @@ impl DeltaWriteSink {
             read_set,
         };
         g.release_writers();
+        let orphans = written_paths;
         let committed = commit(engine, snapshot, staged, self.limits)
             .await
             .map_err(Failure::Unknown)?;
+        if committed.deduplicated {
+            // An earlier attempt of this statement committed: this one's files are orphans.
+            delete_files(engine, &orphans).await;
+            return Ok(());
+        }
         let interval = table
             .snapshot()
             .table_properties()

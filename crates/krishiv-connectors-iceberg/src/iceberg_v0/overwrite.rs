@@ -207,4 +207,5 @@ pub(crate) fn sink(
         request.write_id.clone(),
         overwrite,
     )
+    .map(|s| s.with_idempotency_key(request.idempotency_key()))
 }

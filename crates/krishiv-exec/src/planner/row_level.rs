@@ -152,6 +152,12 @@ impl RowLevelWrite {
 }
 
 impl RowLevelWrite {
+    /// The caller's `krishiv.write.idempotencyKey` (E34), carried in the options.
+    #[must_use]
+    pub fn idempotency_key(&self) -> Option<String> {
+        super::write::idempotency_key_option(&self.options)
+    }
+
     /// [`Self::read_filter`] as a typed predicate over the input's columns by name, for a
     /// table's conflict check: a superset of the rows it keeps (an untranslatable conjunct is
     /// left out), `None` when there is no filter or nothing of it translates (every row).

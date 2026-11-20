@@ -450,20 +450,17 @@ impl Session {
             };
             // Boxed: the statement futures are on the recursion of nested
             // scripts, so a larger write future would overflow their stack.
-            let write = if Box::pin(uses_commit_log(
+            let write = Box::pin(logged_or_plain(
+                write,
                 &env.config,
                 &self.state.commit_log_probes,
                 &io,
                 &store,
                 &at,
                 &job,
+                &options,
             ))
-            .await?
-            {
-                Box::pin(write.logged(&io)).await?
-            } else {
-                write
-            };
+            .await?;
             let plan = physical.into_write(WritePlan {
                 format: format.name().to_owned(),
                 // The session's conf fallbacks travel with the plan: a
