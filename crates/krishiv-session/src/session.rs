@@ -1830,6 +1830,11 @@ impl Session {
                 } else {
                     env.history_job(self, &row_id, physical, detailed)
                 },
+                advisor: if withheld {
+                    None
+                } else {
+                    crate::query_fold::AdvisorJob::of(physical, &env.config)
+                },
                 withhold_operators: withheld,
             }),
             None,

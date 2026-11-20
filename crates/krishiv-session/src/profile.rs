@@ -371,6 +371,10 @@ impl DataFrame {
         let mut profile = QueryProfile::new(physical, query.metrics(), true);
         profile.trace = Some(trace);
         profile.identity = Some(identity);
+        // The same plan, metrics and thresholds the query's `system.queries` row was computed from.
+        let profile = profile.with_hints(&krishiv_exec::profile::HintSettings::from_config(
+            &a.env.config,
+        ));
         Ok((out, profile))
     }
 

@@ -108,7 +108,7 @@ pub use resident::{
 pub use spill::{OwnerId, SpillOwner, SpillService, SpillSignal, SpillTicket, Spillable};
 pub use spillfile::{
     SpillCodec, SpillConfig, SpillError, SpillFile, SpillManager, SpillReader, SpillScope,
-    SpillWriter,
+    SpillWriter, check_spill_root,
 };
 
 /// A boxed `Send` future (the same type as `futures::future::BoxFuture`).

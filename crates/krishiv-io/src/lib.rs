@@ -39,6 +39,7 @@ pub mod json;
 mod name_mapping;
 mod options;
 pub mod parquet;
+pub mod protobuf;
 mod registry;
 
 pub mod partition;

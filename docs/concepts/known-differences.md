@@ -404,6 +404,10 @@ the table, and the first action fails.
   `krishiv.connect.maxOperationsPerSession`; Spark has no such cap.
 - **An invalid operation tag** fails with `KRISHIV_INVALID_OPERATION_TAG` (SQLSTATE 22023) and Spark's message; Spark
   sends an `INTERNAL` status without an error class.
+- **A Connect `Sample` whose bounds span more than `[0, 1]`** (or NaN) fails with `KRISHIV_SAMPLE_FRACTION_OUT_OF_RANGE`
+  (SQLSTATE 22023) and Spark's text (`requirement failed: Sampling fraction (1.5) must be on interval [0, 1] without
+  replacement`); Spark raises a classless `IllegalArgumentException` from the `Sample` constructor. PySpark raises
+  `IllegalArgumentException` for both.
 - **Results arrive in the engine's batches** (4,096 rows by default), cut further at Spark's
   `spark.connect.grpc.arrow.maxBatchSize` and `spark.sql.execution.arrow.maxRecordsPerBatch` but never merged.
 - **Timestamps are labelled UTC when `spark.sql.session.timeZone` is unset**; Spark labels them with the JVM's zone.
