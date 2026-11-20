@@ -713,3 +713,16 @@ def test_a_bucketed_save_through_a_python_sink_is_refused(spark: SparkSession) -
         df.write.format("sink").mode("append").sortBy("a").save()
     assert sort_only.value.getCondition() == "SORT_BY_WITHOUT_BUCKETING"
     assert Log.events == []
+
+
+def test_a_partitioned_save_through_a_python_sink_is_refused_before_the_writer_runs(spark: SparkSession) -> None:
+    from krishiv.errors import UnsupportedOperationException
+
+    Log.events = []
+    spark.dataSource.register(Sink)
+    df = spark.range(3).selectExpr("cast(id as int) as a")
+    with pytest.raises(UnsupportedOperationException):
+        df.write.format("sink").mode("append").partitionBy("a").save()
+    with pytest.raises(UnsupportedOperationException):
+        df.write.format("sink").mode("append").save(partitionBy="nonexistent")
+    assert Log.events == []

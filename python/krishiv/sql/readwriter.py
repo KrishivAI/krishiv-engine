@@ -307,6 +307,10 @@ class DataFrameWriter:
             opts = CaseInsensitiveDict(self._options)
             if path is not None:
                 opts["path"] = path
+            if self._partition_by:
+                raise unsupported_feature(
+                    "DataFrameWriter.partitionBy on a Python data source (its writer receives every row)"
+                )
             self._assert_not_bucketed("save")
             datasource.save(self._df._session, entry, self._df, self._mode, opts)
             return
