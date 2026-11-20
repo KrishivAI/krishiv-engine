@@ -382,7 +382,7 @@ def _registry(session: SparkSession) -> dict[str, _Registered]:
     registry = getattr(session, "_python_sources", None)
     if registry is None:
         registry = {}
-        session._python_sources = registry  # ty: ignore[unresolved-attribute]
+        session._python_sources = registry  # type: ignore[attr-defined]  # ty: ignore[unresolved-attribute]
     return registry
 
 
