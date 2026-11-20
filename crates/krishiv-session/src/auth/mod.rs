@@ -26,6 +26,7 @@
 //! - [`ServerAuth`]: the chain (throttle, client certificate, bearer token), its failure log record (target `krishiv::auth`, never the
 //!   credential) and its failure counters.
 
+mod basic;
 mod config;
 mod credential;
 mod denials;
@@ -77,6 +78,7 @@ use std::net::SocketAddr;
 use futures::future::BoxFuture;
 use krishiv_common::principal::Principal;
 
+pub use basic::{BasicCredentials, BasicHeader, basic_header};
 pub use config::{AuthConfig, RoleLists, ThrottleConfig, TokenSpec, is_auth_key};
 pub use credential::{CredentialKind, ExchangeClaims, InboundCredential};
 pub use denials::{DeniedCount, DeniedCounts};
@@ -200,19 +202,23 @@ pub enum Method {
     Throttle,
     /// No credential was presented.
     None,
+    /// `Authorization: Basic` on the Flight SQL surface: a bearer token as the password, its
+    /// principal's name as the user name (P3-T101 note §3.1).
+    Basic,
 }
 
 impl Method {
     /// Every method, in counter order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Token,
         Self::Oidc,
         Self::Mtls,
         Self::Throttle,
         Self::None,
+        Self::Basic,
     ];
 
-    /// The label value: `token`, `oidc`, `mtls` or `none`.
+    /// The label value: `token`, `oidc`, `mtls`, `throttle`, `none` or `basic`.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -221,6 +227,7 @@ impl Method {
             Self::Mtls => "mtls",
             Self::Throttle => "throttle",
             Self::None => "none",
+            Self::Basic => "basic",
         }
     }
 }
@@ -238,9 +245,14 @@ pub struct Credentials<'a> {
     pub peer: SocketAddr,
     /// The listener.
     pub surface: Surface,
-    /// An `Authorization` header was present but not a usable `Bearer` token (`Basic ..`,
-    /// `Bearer` with no token): Spark answers "Invalid authentication token", not "missing".
+    /// An `Authorization` header was present but not a usable `Bearer` token (`Basic ..` off the
+    /// Flight SQL surface, `Bearer` with no token): Spark answers "Invalid authentication
+    /// token", not "missing".
     pub malformed: bool,
+    /// The user name of an `Authorization: Basic` credential (its password is `bearer`): the
+    /// token's principal must have this name. Only the Flight SQL surface sets it
+    /// ([`Self::with_basic`]); on any other surface it is refused.
+    pub basic_user: Option<&'a str>,
 }
 
 impl<'a> Credentials<'a> {
@@ -253,6 +265,7 @@ impl<'a> Credentials<'a> {
             peer,
             surface,
             malformed: false,
+            basic_user: None,
         }
     }
 
@@ -273,6 +286,17 @@ impl<'a> Credentials<'a> {
         self.malformed = self.bearer.is_none();
         self
     }
+
+    /// The same credentials carrying a decoded `Basic` credential: its password as the bearer
+    /// token and its user name to check against the token's principal (P3-T101 note §3.1). The
+    /// transport decodes `Basic` only on `Surface::FlightSql`.
+    #[must_use]
+    pub fn with_basic(mut self, basic: &'a BasicCredentials) -> Self {
+        self.bearer = Some(basic.password());
+        self.basic_user = Some(basic.user());
+        self.malformed = false;
+        self
+    }
 }
 
 impl fmt::Debug for Credentials<'_> {
@@ -285,6 +309,7 @@ impl fmt::Debug for Credentials<'_> {
             .field("peer", &self.peer)
             .field("surface", &self.surface)
             .field("malformed", &self.malformed)
+            .field("basic_user", &self.basic_user)
             .finish()
     }
 }

@@ -42,6 +42,13 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   `concat_ws`, `bit_length`) and `string/codec.rs` the encodings (`base64`/`unbase64` as Java's MIME codec, `to_binary`, `encode`/`decode`
   for Spark's seven default charsets, the UTF-8 validators of `binary`, `url_encode`/`url_decode`); a kernel needs a column operand, the
   binding repeats an all-literal call over one row.
+  Spark 4.3 adds `string/base32.rs` (`to_base32`/`from_base32`: Commons Codec's lenient Base32, never an error on decode),
+  `string/similarity.rs` (`jaro_winkler_similarity` over UTF-16 code units, Commons Text's algorithm, prefix bonus 0.1 x at most 4),
+  `variant/edit.rs` (`variant_insert`/`variant_set`/`variant_delete`/`variant_array_append`/`variant_strip_nulls`: a path walk that
+  writes the edited copy through `VariantWriter`, `VARIANT_PATH_TYPE_MISMATCH` / `VARIANT_DUPLICATE_KEY` as `EditFailure`) and
+  `json/table.rs` (the kernels `JSON_TABLE` lowers to: row texts, a column's value or existence in a row text; numbers print as
+  Java's `BigDecimal.toString`), and `math/round.rs` `ceil_floor_to_long_checked` (ANSI `ceil`/`floor` of a double raise
+  `ARITHMETIC_OVERFLOW` outside `bigint`).
   Known approximations (Spark's defaults apply; the switches are not read): `initcap`/`mask` use the toolchain's Unicode data
   (pinned by `toolchain_unicode_is_pinned`), `encode`/`decode` take the legacy charset/coding switches as `CharsetOptions` (`encode_with`/`decode_with`; the SQL layer does not pass them yet), `base64` always chunks,
   `split_part`/`substring_index` with `Int.MIN` return the algorithm's value where the JVM raises, and `unbase64` of rejected text is

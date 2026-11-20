@@ -89,6 +89,7 @@ def test_native_stub_matches_runtime() -> None:
         "AnonymousPythonUdf",
         "LocalConnectServer",
         "Observation",
+        "Console",
     }
     for cls_name, methods in classes.items():
         runtime = getattr(krishiv_native, cls_name)

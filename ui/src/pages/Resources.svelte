@@ -2,6 +2,7 @@
   import { createQuery } from "@tanstack/svelte-query";
   import { api, type CacheRow, type MemoryRow } from "../api";
   import { bytes, count, percent } from "../format";
+  import { consoleInfo } from "../console.svelte";
   import ResponsiveTable, { type Column } from "$lib/components/responsive-table.svelte";
 
   const q = createQuery<{ memory: MemoryRow[]; caches: CacheRow[] }>(() => ({
@@ -71,6 +72,9 @@
 </script>
 
 <h1 class="mb-4">Resources</h1>
+{#if consoleInfo.mode === "embedded"}
+  <p class="mb-3 text-muted-foreground">Memory pools and caches of this process; query pools are this session's.</p>
+{/if}
 {#if q.isPending}
   <p class="text-muted-foreground">Loading…</p>
 {:else if q.isError}

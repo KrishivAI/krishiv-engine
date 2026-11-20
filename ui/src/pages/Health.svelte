@@ -2,6 +2,7 @@
   import { createQuery } from "@tanstack/svelte-query";
   import { api, type CacheRow, type Health } from "../api";
   import { bytes, count, percent, seconds } from "../format";
+  import { consoleInfo } from "../console.svelte";
   import { Card, CardLabel, CardValue } from "$lib/components/ui/card";
   import ResponsiveTable, { type Column } from "$lib/components/responsive-table.svelte";
 
@@ -26,6 +27,9 @@
 </script>
 
 <h1 class="mb-4">Health</h1>
+{#if consoleInfo.mode === "embedded"}
+  <p class="mb-3 text-muted-foreground">This process and the session that opened the console.</p>
+{/if}
 {#if q.isPending}
   <p class="text-muted-foreground">Loading…</p>
 {:else if q.isError}
@@ -35,7 +39,9 @@
   <div class="grid grid-cols-[repeat(auto-fit,minmax(min(100%,11rem),1fr))] gap-3">
     <Card><CardLabel>Version</CardLabel><CardValue>{h.version}</CardValue></Card>
     <Card><CardLabel>Uptime</CardLabel><CardValue>{seconds(h.uptime_seconds)}</CardValue></Card>
-    <Card><CardLabel>Workers</CardLabel><CardValue>{h.workers}</CardValue></Card>
+    {#if consoleInfo.mode !== "embedded"}
+      <Card><CardLabel>Workers</CardLabel><CardValue>{h.workers}</CardValue></Card>
+    {/if}
     <Card><CardLabel>Queries</CardLabel><CardValue>{h.running_queries} running · {h.queued_queries} queued</CardValue></Card>
     <Card>
       <CardLabel>Memory in use</CardLabel>

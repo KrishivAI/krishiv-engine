@@ -72,13 +72,26 @@ fn function_row(f: krishiv_session::spark_catalog::Function) -> FunctionRow {
     )
 }
 
+fn ids(ids: &[krishiv_session::QueryId]) -> Vec<String> {
+    ids.iter().map(ToString::to_string).collect()
+}
+
 /// A Krishiv session.
 #[pyclass(name = "Session", module = "krishiv._native", frozen)]
 #[derive(Debug)]
 pub struct PySession {
     inner: Session,
+    /// The session's state as `errors::LIVE_SESSIONS` holds it weakly, for a Ctrl-C to cancel through.
+    live: std::sync::Arc<Session>,
     /// The session's Python UDF runtime, made by the first registration.
-    udfs: std::sync::OnceLock<std::sync::Arc<crate::udf::runtime::PyUdfRuntime>>,
+    udfs: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::udf::runtime::PyUdfRuntime>>>,
+}
+
+impl PySession {
+    /// The engine session behind this handle.
+    pub(crate) fn session(&self) -> &Session {
+        &self.inner
+    }
 }
 
 #[pymethods]
@@ -92,9 +105,12 @@ impl PySession {
             builder = builder.config(key, value);
         }
         let inner = builder.build().map_err(|e| to_py(py, &e))?;
+        let live = std::sync::Arc::new(inner.clone());
+        crate::errors::register_session(&live);
         let session = Self {
             inner,
-            udfs: std::sync::OnceLock::new(),
+            live,
+            udfs: std::sync::Arc::default(),
         };
         // Every session runs unregistered UDFs (a DataFrame-side `udf(...)`
         // registers in no session), so it holds its runtime from the start;
@@ -102,6 +118,39 @@ impl PySession {
         // there is none (registration then raises, as before).
         let _ = session.udf_runtime(py);
         Ok(session)
+    }
+
+    /// A handle of this session whose frames carry the request tags `tags`
+    /// (`SparkSession.addTag`): it shares the session's state and UDF runtime.
+    fn tagged(&self, py: Python<'_>, tags: Vec<String>) -> PyResult<Self> {
+        let inner = self
+            .inner
+            .with_request_tags(tags)
+            .map_err(|e| to_py(py, &e))?;
+        Ok(Self {
+            inner,
+            live: std::sync::Arc::clone(&self.live),
+            udfs: std::sync::Arc::clone(&self.udfs),
+        })
+    }
+
+    /// Cancels every running query of the session; their operation ids.
+    fn interrupt_all(&self) -> Vec<String> {
+        ids(&self.inner.interrupt_all())
+    }
+
+    /// Cancels the running queries that carry the request tag `tag`; their operation ids.
+    fn interrupt_tag(&self, tag: &str) -> Vec<String> {
+        ids(&self.inner.interrupt_tag(tag))
+    }
+
+    /// Cancels the query with operation id `id`; its id in a list, or an empty list.
+    fn interrupt_operation(&self, id: &str) -> Vec<String> {
+        // As Spark Connect: an id that is no operation's (malformed included) cancels nothing.
+        match krishiv_session::QueryId::parse(id) {
+            Ok(query) if self.inner.cancel(&query) => vec![query.to_string()],
+            _ => Vec::new(),
+        }
     }
 
     /// Runs the SQL query `query` through analysis; its DataFrame.

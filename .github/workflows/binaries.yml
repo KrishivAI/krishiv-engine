@@ -29,6 +29,9 @@ env:
   CARGO_INCREMENTAL: 0
   # Read at build time by krishiv-session (the `git_sha` label of `krishiv.build.info`).
   KRISHIV_GIT_SHA: ${{ github.sha }}
+  # Released binaries carry `krishiv server` and the web console (ADR 0024); the crate's default
+  # features stay the embedded build the size and dependency budgets measure.
+  RELEASE_FEATURES: server,ui
 
 jobs:
   # Not for the pull-request run of this file. The merge queue skips Miri, the fuzz-target build and
@@ -89,7 +92,7 @@ jobs:
           RUSTFLAGS: ${{ matrix.rustflags }}
           ARTIFACT: ${{ matrix.artifact }}
         run: |
-          cargo build --profile dist --locked -p krishiv-cli
+          cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
           mkdir -p out
           cp target/dist/krishiv "out/$ARTIFACT"
       - name: Smoke test
@@ -98,6 +101,7 @@ jobs:
         run: |
           "out/$ARTIFACT" --version
           "out/$ARTIFACT" sql -e "SELECT 1"
+          .github/scripts/console-smoke.sh "out/$ARTIFACT"
       # The old-CPU path: user-mode QEMU with a pre-AVX2 CPU (Nehalem). The
       # v3 binary must exit cleanly with a message naming the missing
       # features and the compat binary; the compat binary must start.
@@ -152,13 +156,14 @@ jobs:
         env:
           RUSTFLAGS: -C target-cpu=neoverse-n1
         run: |
-          cargo build --profile dist --locked -p krishiv-cli
+          cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
           mkdir -p out
           cp target/dist/krishiv "out/$ARTIFACT"
       - name: Smoke test
         run: |
           "out/$ARTIFACT" --version
           "out/$ARTIFACT" sql -e "SELECT 1"
+          .github/scripts/console-smoke.sh "out/$ARTIFACT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: krishiv-linux-aarch64
@@ -187,13 +192,14 @@ jobs:
           key: krishiv-macos-arm64
       - name: Build
         run: |
-          cargo build --profile dist --locked -p krishiv-cli
+          cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
           mkdir -p out
           cp target/dist/krishiv "out/$ARTIFACT"
       - name: Smoke test
         run: |
           "out/$ARTIFACT" --version
           "out/$ARTIFACT" sql -e "SELECT 1"
+          .github/scripts/console-smoke.sh "out/$ARTIFACT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: krishiv-macos-arm64

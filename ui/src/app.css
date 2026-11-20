@@ -78,4 +78,10 @@
   h2 { @apply font-display text-base font-bold; }
   :focus-visible { @apply outline-2 outline-offset-2 outline-ring; }
   code, .mono { @apply font-mono text-[13px]; }
+  /* A line of text stays readable on a wide screen (about 80 characters of running text), whatever the page's width. */
+  main p { max-width: 72ch; }
+  /* No movement for a reader who asked for none. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  }
 }

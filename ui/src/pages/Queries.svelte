@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type Query } from "../api";
   import { bytes, count, elapsed, oneLine } from "../format";
+  import { consoleInfo } from "../console.svelte";
   import { Badge, stateVariant } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import Id from "$lib/components/id.svelte";
@@ -40,15 +41,17 @@
     }
   }
 
-  const columns: Column[] = [
+  const allColumns: Column[] = [
     { key: "query", label: "Query", title: true },
     { key: "state", label: "State" },
-    { key: "principal", label: "Principal" },
+    { key: "principal", label: "Principal", wrap: true },
     { key: "running", label: "Running for", num: true },
     { key: "rows", label: "Rows read", num: true },
     { key: "bytes", label: "Bytes read", num: true },
     { key: "memory", label: "Peak memory", num: true },
   ];
+  // One session has one user: the column would repeat the same name on every row.
+  const columns = $derived(consoleInfo.mode === "embedded" ? allColumns.filter((c) => c.key !== "principal") : allColumns);
 </script>
 
 <h1 class="mb-4">Queries</h1>
@@ -57,10 +60,10 @@
   <span class="text-muted-foreground">Refreshes once a second.</span>
   {#if message}<span class="text-muted-foreground wrap-anywhere">{message}</span>{/if}
 </div>
-<ResponsiveTable {columns} rows={queries} rowKey={(q) => q.query_id} empty="No query is running.">
+<ResponsiveTable {columns} rows={queries} rowKey={(q) => q.query_id} empty={consoleInfo.mode === "embedded" ? "No query of this session is running." : "No query is running."}>
   {#snippet cell(q, c)}
     {#if c.key === "query"}
-      <a class="block min-h-10 py-2 underline underline-offset-4" href={`#/queries/${encodeURIComponent(q.query_id)}`}>{oneLine(q.query_text, 80)}</a>
+      <a class="flex min-h-11 items-center underline underline-offset-4" href={`#/queries/${encodeURIComponent(q.query_id)}`}>{oneLine(q.query_text, 80)}</a>
       <div><Id id={q.query_id} /></div>
     {:else if c.key === "state"}
       <Badge variant={stateVariant(q.state)}>{q.state}</Badge>

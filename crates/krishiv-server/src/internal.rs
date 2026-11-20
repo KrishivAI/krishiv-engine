@@ -16,8 +16,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use axum::Extension;
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -122,6 +123,18 @@ pub trait UiSource: Send + Sync + 'static {
         Box::pin(async { Ok(None) })
     }
 
+    /// Which console this is, as `/api/internal/health` reports it and the page reads it: `server` (every
+    /// session of a server), `embedded` (one session of the host process) or `profiles` (stored profiles, no
+    /// engine).
+    fn mode(&self) -> &'static str {
+        "server"
+    }
+
+    /// The id of the one session an `embedded` console shows.
+    fn session_id(&self) -> Option<String> {
+        None
+    }
+
     /// The objects one level below `path` in the catalog tree, as rows with at least a `name`: no path lists the
     /// catalogs, `[catalog]` its schemas, `[catalog, schema]` its tables, `[catalog, schema, table]` its columns
     /// (`name`, `data_type`, `comment`). A source with no catalog has none.
@@ -189,14 +202,53 @@ pub fn random_token() -> Result<String, UiError> {
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
 connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'";
 
-async fn security_headers(req: axum::extract::Request, next: Next) -> Response {
+/// Whether `req` is the embeddable view: the profile page of one query (`/queries/{id}/profile`, the only
+/// `embeddable` route of `ui/routes.json`) with exactly one `embed` parameter, and it is `1`. Anything else (another
+/// page, `embed=0&embed=1`, an API path) is never framable.
+fn is_embed_page(req: &axum::extract::Request) -> bool {
+    let mut seg = req.uri().path().trim_matches('/').split('/');
+    let profile = matches!(
+        (seg.next(), seg.next(), seg.next(), seg.next()),
+        (Some("queries"), Some(id), Some("profile"), None) if !id.is_empty()
+    );
+    // Names and values are decoded as the page decodes them (`emb%65d` is `embed`).
+    let mut embeds = req.uri().query().unwrap_or("").split('&').filter_map(|kv| {
+        let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+        (crate::embed::percent_decode(k).as_deref() == Some(crate::embed::EMBED_PARAM))
+            .then(|| crate::embed::percent_decode(v))
+    });
+    profile && embeds.next() == Some(Some("1".to_owned())) && embeds.next().is_none()
+}
+
+async fn security_headers(
+    State(policy): State<Arc<crate::pages::UiPolicy>>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response {
+    // Only the embeddable view may be framed, and only by the listed origins (T071); the default is `'none'`.
+    let framable = is_embed_page(&req) && !policy.embed().origins().is_empty();
     let mut res = next.run(req).await;
     let h = res.headers_mut();
+    let csp = framable
+        .then(|| {
+            CSP.replace(
+                "frame-ancestors 'none'",
+                &format!("frame-ancestors {}", policy.embed().frame_ancestors()),
+            )
+        })
+        .and_then(|c| HeaderValue::from_str(&c).ok());
+    // A policy that cannot be written falls back to the static one and `DENY`: never open.
+    let framable = csp.is_some();
     h.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(CSP),
+        csp.unwrap_or_else(|| HeaderValue::from_static(CSP)),
     );
-    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    if framable {
+        // X-Frame-Options cannot name several origins; frame-ancestors decides.
+        h.remove(header::X_FRAME_OPTIONS);
+    } else {
+        h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -216,8 +268,8 @@ pub fn router_with_ui(source: Arc<dyn UiSource>, token: &str) -> Router {
 }
 
 /// [`router_with_ui`] behind `guard`: reading other principals' work needs [`Access::Monitor`], a cancel
-/// [`Access::Operate`] (ADR 0046 §3: both operator). The token is taken from the same places as with a start-up
-/// token, so the page works unchanged with a configured token.
+/// [`Access::Operate`] (ADR 0046 §3: both operator), the settings [`Access::Manage`] (admin). The token is taken
+/// from the same places as with a start-up token, so the page works unchanged with a configured token.
 pub fn router_with_ui_guard(source: Arc<dyn UiSource>, guard: Arc<dyn Guard>) -> Router {
     router_with_ui_policy(source, guard, crate::pages::UiPolicy::loopback())
 }
@@ -265,12 +317,25 @@ pub fn router_with_ui_policy(
         .route("/api/internal/sql/{run}/cancel", post(pages::sql_cancel))
         .route("/api/internal/session", post(pages::create_session))
         .route("/api/internal/openapi.json", get(pages::openapi_json))
+        .route("/api/internal/queries/{id}/embed-link", get(embed_link))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            pages::host_guard,
+        ));
+    let policy = Arc::clone(&state.policy);
+    // The embedded view's own routes: no token (the signed link is the credential, one query, read-only), but the
+    // same host check.
+    let embed_open = Router::new()
+        .route("/api/internal/embed/config", get(embed_config))
+        .route("/api/internal/embed/queries/{id}", get(embed_query))
+        .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, pages::host_guard));
     crate::router()
         .merge(internal)
-        .layer(middleware::from_fn(security_headers))
+        .merge(embed_open)
+        .layer(middleware::from_fn_with_state(policy, security_headers))
 }
 
 pub(crate) fn json_response(status: StatusCode, body: &Value) -> Response {
@@ -311,6 +376,28 @@ fn param<'a>(uri: &'a Uri, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v)
 }
 
+/// A filter's value as the page sent it (`URLSearchParams`): `+` is a space and every `%XX` its byte. A value
+/// that does not decode is no filter.
+fn filter_param(uri: &Uri, name: &str) -> Option<String> {
+    percent_decode(&param(uri, name)?.replace('+', " ")).filter(|v| !v.is_empty())
+}
+
+/// Whether a `system.queries` row carries `tag`: a tag's key, or `key=value`. A request tag (Spark Connect's
+/// `addTag`) is a key with an empty value.
+fn has_tag(row: &Row, tag: &str) -> bool {
+    row.get("tags")
+        .and_then(Value::as_object)
+        .is_some_and(|tags| {
+            tags.iter().any(|(k, v)| {
+                k == tag
+                    || tag
+                        .strip_prefix(k.as_str())
+                        .and_then(|rest| rest.strip_prefix('='))
+                        .is_some_and(|value| v.as_str() == Some(value))
+            })
+        })
+}
+
 /// The presented token. `Authorization: Bearer` is accepted for every method. The cookie and `?token=` (an
 /// `EventSource` cannot set headers) are accepted for `GET` only, so a request that changes something (cancel)
 /// cannot be made by a link or a cross-site form that carries the token in its address or a cookie.
@@ -327,11 +414,15 @@ fn presented(method: &Method, headers: &HeaderMap, uri: &Uri) -> Option<String> 
     if method != Method::GET && !crate::pages::has_csrf_header(headers) {
         return None;
     }
+    // Only the cookie of this address counts: another console on the same host name has its own (see
+    // `session_cookie_name`).
+    let name = crate::pages::session_cookie_name(headers);
     if let Some(c) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())
-        && let Some(t) = c
-            .split(';')
-            .filter_map(|p| p.trim().strip_prefix("krishiv_ui_token="))
-            .next()
+        && let Some(t) = c.split(';').find_map(|p| {
+            p.trim()
+                .strip_prefix(name.as_str())
+                .and_then(|rest| rest.strip_prefix('='))
+        })
     {
         return Some(t.to_owned());
     }
@@ -370,8 +461,12 @@ async fn require_token(
 ) -> Response {
     let token = presented(req.method(), req.headers(), req.uri());
     let malformed = token.is_none() && req.headers().contains_key(header::AUTHORIZATION);
-    // Anything but a read changes something: a cancel acts on another principal's query.
-    let access = if req.method() == Method::GET || req.uri().path() == "/api/internal/session" {
+    // The settings are the administrator's. Anything else but a read changes something: a cancel acts on another
+    // principal's query.
+    let path = req.uri().path();
+    let access = if path == "/api/internal/environment" {
+        Access::Manage
+    } else if req.method() == Method::GET || path == "/api/internal/session" {
         Access::Monitor
     } else {
         Access::Operate
@@ -512,9 +607,16 @@ fn mask_pass(text: &str) -> String {
     out
 }
 
-/// [`pick`] for a `system.queries` row, with the literals of its text masked.
+/// What the tag of a statement run from the console's editor starts with (the editor cancels its run by this
+/// tag). It is the console's own bookkeeping: a query's row is sent without it.
+pub(crate) const EDITOR_TAG_PREFIX: &str = "krishiv-ui-run-";
+
+/// [`pick`] for a `system.queries` row, with the literals of its text masked and without the editor's own tag.
 fn pick_query(row: &Row) -> Row {
     let mut picked = pick(row, QUERY_COLUMNS);
+    if let Some(Value::Object(tags)) = picked.get_mut("tags") {
+        tags.retain(|key, _| !key.starts_with(EDITOR_TAG_PREFIX));
+    }
     if let Some(Value::String(text)) = picked.get("query_text") {
         let masked = mask_literals(text);
         picked.insert("query_text".to_owned(), Value::String(masked));
@@ -534,6 +636,8 @@ const QUERY_COLUMNS: &[&str] = &[
     "query_id",
     "state",
     "principal",
+    "client_type",
+    "tags",
     "statement_class",
     "query_text",
     "query_text_truncated",
@@ -670,7 +774,7 @@ fn memory_total(memory: &[Row]) -> Value {
     })
 }
 
-async fn health(State(s): State<UiState>) -> Response {
+async fn health(State(s): State<UiState>, caller: Option<Extension<Caller>>) -> Response {
     let (memory, caches, queries) = match (
         table(&s, SystemTable::Memory).await,
         table(&s, SystemTable::Caches).await,
@@ -688,6 +792,10 @@ async fn health(State(s): State<UiState>) -> Response {
         StatusCode::OK,
         &json!({
             "version": crate::VERSION,
+            "mode": s.source.mode(),
+            "session_id": s.source.session_id(),
+            // The page hides what the caller's role cannot open; the routes decide by themselves.
+            "role": caller.and_then(|c| c.0.role),
             "uptime_seconds": s.started.elapsed().as_secs(),
             "workers": workers.len().max(1),
             "running_queries": queries.iter().filter(|r| text(r, "state") == "running").count(),
@@ -753,6 +861,113 @@ async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Respo
     )
 }
 
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The value of `name` in a query string, percent-decoded.
+fn query_param(raw: Option<&str>, name: &str) -> Option<String> {
+    raw?.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == name)
+            .then(|| crate::embed::percent_decode(v))
+            .flatten()
+    })
+}
+
+/// `GET /api/internal/queries/{id}/embed-link[?ttl=seconds&theme=json]`: a signed read-only link to one query's
+/// profile for an embedding console (T071). The life is the asked one, at most `krishiv.ui.embed.linkTtl`.
+async fn embed_link(
+    State(s): State<UiState>,
+    Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
+) -> Response {
+    let embed = s.policy.embed();
+    let max = embed.ttl().as_secs();
+    let ttl = match query_param(raw.as_deref(), "ttl") {
+        None => max,
+        Some(t) => match t.parse::<u64>() {
+            Ok(n) if n > 0 => n.min(max),
+            _ => {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "ttl is a whole number of seconds",
+                );
+            }
+        },
+    };
+    let theme = match query_param(raw.as_deref(), "theme") {
+        None => None,
+        Some(t) if t.len() > crate::embed::MAX_THEME_BYTES => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "bad_theme",
+                "the theme is too long",
+            );
+        }
+        Some(t) => match serde_json::from_str::<Value>(&t)
+            .map_err(|e| e.to_string())
+            .and_then(|v| crate::embed::validate_theme(&v))
+        {
+            Ok(theme) => Some(theme.to_json().to_string()),
+            Err(m) => return error(StatusCode::BAD_REQUEST, "bad_theme", &m),
+        },
+    };
+    let expires = now_secs().saturating_add(ttl);
+    let Some(sig) = embed.sign(&id, expires) else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            "the server has no signing key",
+        );
+    };
+    let mut url = format!(
+        "/queries/{}/profile?{}=1&exp={expires}&sig={sig}",
+        crate::embed::percent_encode(&id),
+        crate::embed::EMBED_PARAM
+    );
+    if let Some(t) = theme {
+        url.push_str("&theme=");
+        url.push_str(&crate::embed::percent_encode(&t));
+    }
+    json_response(
+        StatusCode::OK,
+        &json!({"url": url, "expires_at": expires, "query_id": id}),
+    )
+}
+
+/// `GET /api/internal/embed/config`: what the embedded page needs before it can trust a theme message.
+async fn embed_config(State(s): State<UiState>) -> Response {
+    let e = s.policy.embed();
+    json_response(
+        StatusCode::OK,
+        &json!({"allowed_origins": e.origins(), "hide_attribution": e.hide_attribution()}),
+    )
+}
+
+/// `GET /api/internal/embed/queries/{id}?exp=&sig=`: the query detail for a valid signed link, nothing else.
+async fn embed_query(
+    State(s): State<UiState>,
+    Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
+) -> Response {
+    let exp = query_param(raw.as_deref(), "exp").and_then(|e| e.parse::<u64>().ok());
+    let sig = query_param(raw.as_deref(), "sig");
+    match (exp, sig) {
+        (Some(exp), Some(sig)) if s.policy.embed().verify(&id, exp, &sig, now_secs()) => {
+            query_detail(State(s), Path(id)).await
+        }
+        _ => error(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "the link is not valid, or has expired",
+        ),
+    }
+}
+
 async fn cancel(State(s): State<UiState>, Path(id): Path<String>) -> Response {
     match s.source.cancel(&id).await {
         Ok(true) => json_response(StatusCode::OK, &json!({"cancelled": true})),
@@ -774,13 +989,27 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(100)
         .clamp(1, 1000);
-    let state = param(&uri, "state");
-    let principal = param(&uri, "principal");
+    let state = filter_param(&uri, "state");
+    let principal = filter_param(&uri, "principal");
+    // A client names itself at length (`_SPARK_CONNECT_PYTHON spark/4.2.0 os/linux python/3.12`): any part
+    // of the name finds it, in either case.
+    let client = filter_param(&uri, "client").map(|c| c.to_lowercase());
+    let tag = filter_param(&uri, "tag");
     let mut done: Vec<&Row> = rows
         .iter()
         .filter(|r| !is_live(r))
-        .filter(|r| state.is_none_or(|s| text(r, "state") == s))
-        .filter(|r| principal.is_none_or(|p| text(r, "principal") == p))
+        .filter(|r| state.as_deref().is_none_or(|s| text(r, "state") == s))
+        .filter(|r| {
+            principal
+                .as_deref()
+                .is_none_or(|p| text(r, "principal") == p)
+        })
+        .filter(|r| {
+            client
+                .as_deref()
+                .is_none_or(|c| text(r, "client_type").to_lowercase().contains(c))
+        })
+        .filter(|r| tag.as_deref().is_none_or(|t| has_tag(r, t)))
         .collect();
     done.sort_by_key(|r| std::cmp::Reverse(int(r, "submitted_at")));
     done.truncate(limit);
@@ -890,7 +1119,8 @@ async fn shared_snapshot(s: &UiState) -> Value {
 
 /// `GET /api/internal/events`: the live query list as a `queries` event, once a second. At most
 /// [`MAX_EVENT_CLIENTS`] streams at a time (a further one is a `503`); the streams share one snapshot a period.
-async fn events(State(s): State<UiState>) -> Response {
+/// An administrator's stream opens with an `environment` event.
+async fn events(State(s): State<UiState>, caller: Option<Extension<Caller>>) -> Response {
     if s.streams.fetch_add(1, Ordering::SeqCst) >= MAX_EVENT_CLIENTS {
         s.streams.fetch_sub(1, Ordering::SeqCst);
         return error(
@@ -902,13 +1132,19 @@ async fn events(State(s): State<UiState>) -> Response {
     let slot = StreamSlot(Arc::clone(&s.streams));
     let ticker = tokio::time::interval(EVENT_PERIOD);
     // The stream opens with the environment (secrets masked), so a page can show it without a second request.
-    let first = match crate::pages::environment_json(&s).await {
-        Ok(v) => Event::default().event("environment").data(v.to_string()),
-        Err(e) => Event::default()
-            .event("environment")
-            .data(json!({"error": e.message}).to_string()),
+    // Only for an administrator: the stream itself is open to operators, the settings are not
+    // (`/api/internal/environment` asks for `Access::Manage`).
+    let first = if caller.is_some_and(|c| c.0.is_admin()) {
+        Some(match crate::pages::environment_json(&s).await {
+            Ok(v) => Event::default().event("environment").data(v.to_string()),
+            Err(e) => Event::default()
+                .event("environment")
+                .data(json!({"error": e.message}).to_string()),
+        })
+    } else {
+        None
     };
-    let opening = futures::stream::once(async move { Ok::<_, std::convert::Infallible>(first) });
+    let opening = futures::stream::iter(first.map(Ok::<_, std::convert::Infallible>));
     let ticks = futures::stream::unfold((ticker, s, slot), |(mut ticker, s, slot)| async move {
         ticker.tick().await;
         let body = shared_snapshot(&s).await;

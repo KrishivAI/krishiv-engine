@@ -432,6 +432,64 @@ async fn start_with(policy: UiPolicy) -> std::net::SocketAddr {
     .await
 }
 
+/// A browser keeps cookies per host name, not per port. Two consoles on one host (one per embedded session,
+/// each with its own port and token) therefore each name their cookie after their port, and read only that one.
+#[tokio::test]
+async fn the_session_cookie_is_named_after_the_port_so_two_consoles_share_a_browser() {
+    let addr = start_with(UiPolicy::for_listener(true, [])).await;
+    let port = addr.port();
+    let host = format!("Host: localhost:{port}");
+    let a = auth();
+    let (status, head, _) = raw(
+        addr,
+        "POST",
+        "/api/internal/session",
+        &[&host, &a, "X-Krishiv-Csrf: 1"],
+        "",
+    )
+    .await;
+    assert_eq!(status, 204);
+    let cookie = head.lines().find(|l| l.starts_with("set-cookie")).unwrap();
+    assert!(
+        cookie.starts_with(&format!("set-cookie: krishiv_ui_token_{port}=")),
+        "{cookie}"
+    );
+    let other = port.wrapping_add(1);
+    for (sent, want) in [
+        // The browser sends both consoles' cookies to both; each reads its own.
+        (
+            format!("krishiv_ui_token_{other}=another-console; krishiv_ui_token_{port}={TOKEN}"),
+            200,
+        ),
+        (
+            format!("krishiv_ui_token_{port}={TOKEN}; krishiv_ui_token_{other}=another-console"),
+            200,
+        ),
+        // Another console's cookie, or one with no port in its name, is not this console's.
+        (format!("krishiv_ui_token_{other}={TOKEN}"), 401),
+        (format!("krishiv_ui_token={TOKEN}"), 401),
+        (format!("krishiv_ui_token_{port}0={TOKEN}"), 401),
+    ] {
+        let cookie = format!("Cookie: {sent}");
+        let (status, ..) = raw(addr, "GET", "/api/internal/health", &[&host, &cookie], "").await;
+        assert_eq!(status, want, "{sent}");
+    }
+    // An IPv6 address keeps its brackets in `Host`; the port follows them.
+    let (status, head, _) = raw(
+        addr,
+        "POST",
+        "/api/internal/session",
+        &[&format!("Host: [::1]:{port}"), &a, "X-Krishiv-Csrf: 1"],
+        "",
+    )
+    .await;
+    assert_eq!(status, 204);
+    assert!(
+        head.contains(&format!("set-cookie: krishiv_ui_token_{port}=")),
+        "{head}"
+    );
+}
+
 #[tokio::test]
 async fn the_session_cookie_is_secure_when_the_listener_is_tls() {
     let a = auth();
@@ -568,6 +626,65 @@ async fn an_editor_result_is_cut_at_the_row_cap_and_says_so() {
 }
 
 #[tokio::test]
+async fn a_query_id_stored_twice_is_listed_once_as_its_newest_profile() {
+    use krishiv_server::internal::{SystemTable, UiSource};
+    use krishiv_server::session_source::{ProfilesSource, SessionSource};
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let rt = EngineRuntime::builder()
+            .config("krishiv.history.path", dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let session = krishiv_session::Session::builder()
+            .runtime(Arc::clone(&rt))
+            .build()
+            .unwrap();
+        let df = session
+            .sql("SELECT id % 3 AS k, count(*) AS n FROM range(0, 300) GROUP BY id % 3")
+            .await
+            .unwrap();
+        df.collect().await.unwrap();
+    }
+    // The same id stored by two runs of a server (a client that reuses its operation id): an older profile
+    // that finished, a newer one that failed.
+    let older = krishiv_session::read_profile_history(dir.path())
+        .unwrap()
+        .remove(0);
+    let mut newer = older.clone();
+    newer.state = "failed".to_owned();
+    newer.finished_at_ms += 60_000;
+    let stored = [older.clone(), newer];
+    let doc: Value = serde_json::from_str(&older.profile).unwrap();
+    let operators = doc["operators"].as_array().unwrap().len();
+    assert!(operators > 0);
+
+    let profiles = ProfilesSource::from_profiles(&stored);
+    let restarted = SessionSource::new(EngineRuntime::builder().build().unwrap())
+        .unwrap()
+        .with_stored_history(&stored);
+    let sources: [(&str, &dyn UiSource); 2] = [("profiles", &profiles), ("server", &restarted)];
+    for (name, source) in sources {
+        let queries: Vec<_> = source
+            .rows(SystemTable::Queries)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|q| q["query_id"] == json!(older.query_id))
+            .collect();
+        assert_eq!(queries.len(), 1, "{name}: {queries:?}");
+        assert_eq!(queries[0]["state"], json!("failed"), "{name}");
+        let of_query = source
+            .rows(SystemTable::Operators)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|o| o["query_id"] == json!(older.query_id))
+            .count();
+        assert_eq!(of_query, operators, "{name}");
+    }
+}
+
+#[tokio::test]
 async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() {
     use krishiv_server::internal::{SystemTable, UiSource};
     use krishiv_server::session_source::ProfilesSource;
@@ -655,6 +772,14 @@ async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() 
     assert!(source.rows(SystemTable::Caches).await.unwrap().is_empty());
     assert!(!source.cancel("anything").await.unwrap());
     assert!(ProfilesSource::open(std::path::Path::new("/nonexistent/krishiv-profiles")).is_err());
+
+    // The page asks the server which mode it is in, and hides what saved profiles cannot give (ADR 0024).
+    assert_eq!(source.mode(), "profiles");
+    assert_eq!(source.session_id(), None);
+    let addr = serve(router_with_ui(Arc::new(source), TOKEN)).await;
+    let health = get(addr, "/api/internal/health").await;
+    assert_eq!(health["mode"], json!("profiles"), "{health}");
+    assert!(health["session_id"].is_null(), "{health}");
 }
 
 /// Acceptance of P3-T051: a query seen live and the same query read back from the history store show

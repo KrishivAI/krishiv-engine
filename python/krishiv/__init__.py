@@ -7,16 +7,18 @@ from krishiv import _cpu
 
 _cpu.ensure_supported()  # before the native module: an old CPU would die with SIGILL there
 
+from krishiv._console import Console, ui  # noqa: E402
 from krishiv._local import LocalConnect, start_local  # noqa: E402
 from krishiv._native import __allocator__, __commit__, __version__  # noqa: E402
 from krishiv._udf_hooks import register as _register_udf_hooks  # noqa: E402
-from krishiv.sql.profile_view import ProfileView, ui  # noqa: E402
+from krishiv.sql.profile_view import ProfileView  # noqa: E402
 
 _register_udf_hooks()
 from krishiv._unsupported import SparkConf  # noqa: E402
 from krishiv.sql.session import SparkSession  # noqa: E402
 
 __all__ = [
+    "Console",
     "LocalConnect",
     "ProfileView",
     "SparkConf",

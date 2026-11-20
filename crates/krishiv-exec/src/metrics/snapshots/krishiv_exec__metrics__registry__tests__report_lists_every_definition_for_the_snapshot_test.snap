@@ -31,6 +31,6 @@ krishiv.delta.log_pool.wait_ms gauge ms [] -> krishiv_delta_log_pool_wait_ms
 krishiv.delta.snapshot_cache.hits gauge 1 [] -> krishiv_delta_snapshot_cache_hits
 krishiv.delta.snapshot_cache.misses gauge 1 [] -> krishiv_delta_snapshot_cache_misses
 krishiv.build.info gauge 1 [version,git_sha] -> krishiv_build_info
-krishiv.auth.failed counter {request} [surface=connect|admin|metrics|ui|flight-sql,method=token|oidc|mtls|throttle|none] -> krishiv_auth_failed_total
+krishiv.auth.failed counter {request} [surface=connect|admin|metrics|ui|flight-sql,method=token|oidc|mtls|throttle|none|basic] -> krishiv_auth_failed_total
 krishiv.auth.denied counter {request} [surface=connect|admin|metrics|ui|flight-sql,privilege=SELECT|MODIFY|CREATE|DROP|MONITOR|USAGE|BROWSE|OPERATE|MANAGE|IMPERSONATE] -> krishiv_auth_denied_total
 krishiv.flight_sql.requests counter {request} [command=handshake|statement_query|statement_update|fetch|prepared_create|prepared_query|prepared_update|prepared_close|catalogs|db_schemas|tables|table_types|keys|sql_info|xdbc_type_info|cancel|session_options|session_close|list_actions|unsupported,outcome=ok|invalid|not_found|denied|exhausted|cancelled|unavailable|unimplemented|failed] -> krishiv_flight_sql_requests_total
