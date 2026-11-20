@@ -86,6 +86,14 @@ def layout(spark, root):
     spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cdb/p/k=2")
     spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cda/p/k=1/j=1")
     spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cda/p/k=2")
+    spark.sql("SELECT 'v0' AS v").coalesce(1).write.parquet(f"{root}/cdc/p")
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdc/p/k=1")
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cde/a/k=1")
+    spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cde/b/k=2")
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdg/p/k=1/j=1")
+    spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cdg/p/k=2/j=1")
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdf/p/k=1")
+    spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cdf/p/j=2")
     for tree, k in (("pfrac", "1.5"), ("pspace", " 1"), ("pplus", "+1"), ("pzeros", "007")):
         spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
     for name, values in (
@@ -665,6 +673,31 @@ def cases(spark, root):
         "partition directories of two depths",
         "parquet cda/p (files in cda/p/k=1/j=1 and cda/p/k=2)",
         lambda: spark.read.parquet(p("cda/p")),
+    )
+    add(
+        "files at the root beside a partition directory",
+        "parquet cdc/p (files in cdc/p and cdc/p/k=1)",
+        lambda: spark.read.parquet(p("cdc/p")),
+    )
+    add(
+        "two partitioned roots",
+        "parquet cde/a, cde/b (files in cde/a/k=1 and cde/b/k=2)",
+        lambda: spark.read.parquet(p("cde/a"), p("cde/b")),
+    )
+    add(
+        "a glob over partition directories",
+        "parquet cdg/p/k={1,2} (files in cdg/p/k=1/j=1, cdg/p/k=2/j=1)",
+        lambda: spark.read.parquet(p("cdg/p/k={1,2}")),
+    )
+    add(
+        "a glob matching one partition directory",
+        "parquet cdg/p/k={1,3} (files in cdg/p/k=1/j=1, cdg/p/k=2/j=1)",
+        lambda: spark.read.parquet(p("cdg/p/k={1,3}")),
+    )
+    add(
+        "partition column names differ",
+        "parquet cdf/p (files in cdf/p/k=1 and cdf/p/j=2)",
+        lambda: spark.read.parquet(p("cdf/p")),
     )
     return out
 

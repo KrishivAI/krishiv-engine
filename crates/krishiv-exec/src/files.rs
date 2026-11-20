@@ -59,6 +59,7 @@ use object_store::path::Path;
 
 use crate::error::Result;
 use crate::operators::PathRoots;
+use crate::operators::spark_dir_text;
 
 mod user_schema;
 use user_schema::{UserPartitions, check_user_schema, user_schema_columns};
@@ -558,6 +559,29 @@ impl FileReads {
         };
         let merge = self.merges_schemas(format.name(), options);
         let (options, _) = format.options().parse(options, &self.session)?;
+        // A read's layout is checked per leaf directory as Spark's partition discovery checks it; files
+        // beside its partition directories are not read. A catalog table's listing kept its own files.
+        if known.is_none() {
+            let leaves: Vec<krishiv_io::partition::discover::Leaf<'_>> = listed
+                .iter()
+                .map(|(f, segs)| {
+                    // From the key's segments, never from its text: a decoded value may hold a `/`.
+                    let parts: Vec<_> = f.path.parts().collect();
+                    let leaf = parts.len().saturating_sub(1);
+                    let base = leaf.saturating_sub(segs.len());
+                    let dir = |n: usize| Path::from_iter(parts[..n].iter().cloned());
+                    krishiv_io::partition::discover::Leaf {
+                        leaf: spark_dir_text(&f.store, &dir(leaf), &path_roots),
+                        base: spark_dir_text(&f.store, &dir(base), &path_roots),
+                        segments: segs,
+                    }
+                })
+                .collect();
+            let read =
+                krishiv_io::partition::discover::resolve_layout(&leaves, self.case_sensitive())?;
+            let mut read = read.into_iter();
+            listed.retain(|_| read.next().unwrap_or(true));
+        }
         let discovered: Vec<(String, Vec<Segment>)> = listed
             .iter()
             .map(|(f, segs)| (f.display_path(), segs.clone()))

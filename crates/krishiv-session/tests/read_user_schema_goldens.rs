@@ -20,20 +20,12 @@ use krishiv_types::{DataType, StructField, StructType};
 use serde_json::{Value, json};
 
 /// Cases not matched yet, with the reason; each must still differ from Spark.
-const KNOWN_GAPS: &[(&str, &str)] = &[
-    (
-        "sql view refreshed after a partition column added",
-        "partition discovery: the engine checks segment counts per file, Spark resolves the partition column \
-         lists per leaf directory (CONFLICTING_PARTITION_COLUMN_NAMES); its paths name the leaf directories",
-    ),
-    ("partition directories of two depths", "as above"),
-    (
-        "partition directory under a plain directory",
-        "partition discovery: the engine refuses a plain directory under the root (KRISHIV_UNSUPPORTED_FEATURE); \
-         Spark stops at it as the leaf directory's base path, so two base paths are \
-         CONFLICTING_DIRECTORY_STRUCTURES",
-    ),
-];
+const KNOWN_GAPS: &[(&str, &str)] = &[(
+    "partition directory under a plain directory",
+    "partition discovery: the engine refuses a plain directory under the root (KRISHIV_UNSUPPORTED_FEATURE); \
+     Spark stops at it as the leaf directory's base path, so two base paths are \
+     CONFLICTING_DIRECTORY_STRUCTURES",
+)];
 
 /// Cases that differ from Spark by decision, with the ADR.
 const BY_DESIGN: &[(&str, &str)] = &[
@@ -44,7 +36,7 @@ const BY_DESIGN: &[(&str, &str)] = &[
     ),
     (
         "sql view partition column added after create",
-        "ADR 0023, as above; with the new listing discovery fails (see KNOWN_GAPS for the class)",
+        "ADR 0023, as above: with the new listing discovery fails (CONFLICTING_PARTITION_COLUMN_NAMES)",
     ),
     (
         "sql view inferred, partition value added after create",
@@ -226,6 +218,14 @@ fn review_layout(s: &Session, root: &Path) {
         ("SELECT 'v2' AS v", "cdb/p/k=2"),
         ("SELECT 'v1' AS v", "cda/p/k=1/j=1"),
         ("SELECT 'v2' AS v", "cda/p/k=2"),
+        ("SELECT 'v0' AS v", "cdc/p"),
+        ("SELECT 'v1' AS v", "cdc/p/k=1"),
+        ("SELECT 'v1' AS v", "cde/a/k=1"),
+        ("SELECT 'v2' AS v", "cde/b/k=2"),
+        ("SELECT 'v1' AS v", "cdg/p/k=1/j=1"),
+        ("SELECT 'v2' AS v", "cdg/p/k=2/j=1"),
+        ("SELECT 'v1' AS v", "cdf/p/k=1"),
+        ("SELECT 'v2' AS v", "cdf/p/j=2"),
     ] {
         parquet(s, sql, &root.join(dir));
     }
@@ -508,6 +508,30 @@ fn review_cases(add: &mut impl FnMut(String, Read)) {
             options: Vec::new(),
         },
     );
+    let parquet_at = |paths: &[&str]| Read::Paths {
+        format: "parquet",
+        paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+    };
+    add(
+        "files at the root beside a partition directory".into(),
+        parquet_at(&["cdc/p"]),
+    );
+    add(
+        "two partitioned roots".into(),
+        parquet_at(&["cde/a", "cde/b"]),
+    );
+    add(
+        "a glob over partition directories".into(),
+        parquet_at(&["cdg/p/k={1,2}"]),
+    );
+    add(
+        "a glob matching one partition directory".into(),
+        parquet_at(&["cdg/p/k={1,3}"]),
+    );
+    add(
+        "partition column names differ".into(),
+        parquet_at(&["cdf/p"]),
+    );
 }
 
 /// What a case changes under a view's path after `CREATE TEMPORARY VIEW`.
@@ -531,6 +555,11 @@ enum Read {
         schema: Option<String>,
         built: bool,
         options: Vec<(&'static str, &'static str)>,
+    },
+    /// `spark.read.format(..).load(paths)`, no schema.
+    Paths {
+        format: &'static str,
+        paths: Vec<String>,
     },
     /// The read, then a filter.
     Where(Box<Read>, &'static str),
@@ -992,6 +1021,9 @@ fn frame(s: &Session, root: &Path, r: &Read) -> Result<DataFrame, KrishivError> 
             }
             Ok(reader.format(format).load([abs(path)]))
         }
+        Read::Paths { format, paths } => {
+            Ok(s.read().format(format).load(paths.iter().map(|p| abs(p))))
+        }
         Read::Where(r, condition) => frame(s, root, r)?.filter_expr(condition),
         Read::View {
             name,
@@ -1097,7 +1129,15 @@ fn outcome(s: &Session, root: &Path, r: &Read) -> Value {
             let params: BTreeMap<&str, String> = e
                 .message_parameters()
                 .iter()
-                .map(|(k, v)| (*k, v.replace(root.to_str().unwrap(), "<root>")))
+                // Spark prints discovered base paths lower-cased; its temporary root is lower case.
+                .map(|(k, v)| {
+                    let root = root.to_str().unwrap();
+                    (
+                        *k,
+                        v.replace(root, "<root>")
+                            .replace(&root.to_lowercase(), "<root>"),
+                    )
+                })
                 .collect();
             let chain: Vec<String> = std::iter::once(&e)
                 .chain(e.causes())
@@ -1108,6 +1148,39 @@ fn outcome(s: &Session, root: &Path, r: &Read) -> Value {
     }
 }
 
+/// Message parameters as sets of lines without list numbers: Spark lists partition directories in hash
+/// order, so two runs of the generator print the same lines in other orders (and number the column lists
+/// as they come).
+fn unordered(params: Option<&Value>) -> Option<BTreeMap<String, Vec<String>>> {
+    let params = params?.as_object()?;
+    Some(
+        params
+            .iter()
+            .map(|(k, v)| {
+                let mut lines: Vec<String> = v
+                    .as_str()
+                    .unwrap_or_default()
+                    .split('\n')
+                    .map(|l| {
+                        let l = l.trim();
+                        match l.split_once(": ") {
+                            Some((head, rest))
+                                if head.starts_with("Partition column name list #") =>
+                            {
+                                rest.to_owned()
+                            }
+                            _ => l.to_owned(),
+                        }
+                    })
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                lines.sort();
+                (k.clone(), lines)
+            })
+            .collect(),
+    )
+}
+
 /// Whether `got` matches the fixture case `want`: schema and rows, or the error at the level the fixture recorded.
 fn matches(want: &Value, got: &Value) -> bool {
     if let Some(class) = want.get("error_class") {
@@ -1116,6 +1189,13 @@ fn matches(want: &Value, got: &Value) -> bool {
         }
         if let Some(chain) = want.get("error_chain") {
             return got.get("error_chain") == Some(chain);
+        }
+        if matches!(
+            class.as_str(),
+            Some("CONFLICTING_DIRECTORY_STRUCTURES" | "CONFLICTING_PARTITION_COLUMN_NAMES")
+        ) {
+            return unordered(got.get("message_parameters"))
+                == unordered(want.get("message_parameters"));
         }
         return got.get("message_parameters") == want.get("message_parameters");
     }

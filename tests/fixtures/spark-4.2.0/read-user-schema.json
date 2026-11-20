@@ -3499,8 +3499,8 @@
    "input": "CREATE TEMPORARY VIEW v16 (v STRING, k INT) USING parquet OPTIONS (path pvg/p); then pvg/p/k=3/j=1 written; REFRESH TABLE v16",
    "error_class": "CONFLICTING_PARTITION_COLUMN_NAMES",
    "message_parameters": {
-    "distinctPartColLists": "\n\tPartition column name list #0: k\n\tPartition column name list #1: k, j\n",
-    "suspiciousPaths": "\n\tfile:<root>/pvg/p/k=1\n\tfile:<root>/pvg/p/k=2\n\tfile:<root>/pvg/p/k=3/j=1"
+    "distinctPartColLists": "\n\tPartition column name list #0: k, j\n\tPartition column name list #1: k\n",
+    "suspiciousPaths": "\n\tfile:<root>/pvg/p/k=2\n\tfile:<root>/pvg/p/k=1\n\tfile:<root>/pvg/p/k=3/j=1"
    }
   },
   {
@@ -3542,8 +3542,77 @@
    "input": "parquet cda/p (files in cda/p/k=1/j=1 and cda/p/k=2)",
    "error_class": "CONFLICTING_PARTITION_COLUMN_NAMES",
    "message_parameters": {
-    "distinctPartColLists": "\n\tPartition column name list #0: k, j\n\tPartition column name list #1: k\n",
+    "distinctPartColLists": "\n\tPartition column name list #0: k\n\tPartition column name list #1: k, j\n",
     "suspiciousPaths": "\n\tfile:<root>/cda/p/k=2\n\tfile:<root>/cda/p/k=1/j=1"
+   }
+  },
+  {
+   "name": "files at the root beside a partition directory",
+   "input": "parquet cdc/p (files in cdc/p and cdc/p/k=1)",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ]
+   ]
+  },
+  {
+   "name": "two partitioned roots",
+   "input": "parquet cde/a, cde/b (files in cde/a/k=1 and cde/b/k=2)",
+   "error_class": "CONFLICTING_DIRECTORY_STRUCTURES",
+   "message_parameters": {
+    "discoveredBasePaths": "\n\tfile:<root>/cde/a\n\tfile:<root>/cde/b\n"
+   }
+  },
+  {
+   "name": "a glob over partition directories",
+   "input": "parquet cdg/p/k={1,2} (files in cdg/p/k=1/j=1, cdg/p/k=2/j=1)",
+   "error_class": "CONFLICTING_DIRECTORY_STRUCTURES",
+   "message_parameters": {
+    "discoveredBasePaths": "\n\tfile:<root>/cdg/p/k=1\n\tfile:<root>/cdg/p/k=2\n"
+   }
+  },
+  {
+   "name": "a glob matching one partition directory",
+   "input": "parquet cdg/p/k={1,3} (files in cdg/p/k=1/j=1, cdg/p/k=2/j=1)",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "j",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ]
+   ]
+  },
+  {
+   "name": "partition column names differ",
+   "input": "parquet cdf/p (files in cdf/p/k=1 and cdf/p/j=2)",
+   "error_class": "CONFLICTING_PARTITION_COLUMN_NAMES",
+   "message_parameters": {
+    "distinctPartColLists": "\n\tPartition column name list #0: k\n\tPartition column name list #1: j\n",
+    "suspiciousPaths": "\n\tfile:<root>/cdf/p/k=1\n\tfile:<root>/cdf/p/j=2"
    }
   }
  ]
