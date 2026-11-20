@@ -92,6 +92,90 @@
         }
       }
     },
+    "DrainRequest": {
+      "fields": {
+        "exit_when_drained": {
+          "jsonName": "exitWhenDrained",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "bool"
+        },
+        "grace_period": {
+          "jsonName": "gracePeriod",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Duration"
+        },
+        "request_id": {
+          "jsonName": "requestId",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "DrainResponse": {
+      "fields": {
+        "status": {
+          "jsonName": "status",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "message:DrainStatus"
+        }
+      }
+    },
+    "DrainStatus": {
+      "fields": {
+        "deadline": {
+          "jsonName": "deadline",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
+        },
+        "exit_when_drained": {
+          "jsonName": "exitWhenDrained",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "bool"
+        },
+        "queries_running": {
+          "jsonName": "queriesRunning",
+          "label": "singular",
+          "number": 4,
+          "oneof": null,
+          "optional": false,
+          "type": "int64"
+        },
+        "sessions_open": {
+          "jsonName": "sessionsOpen",
+          "label": "singular",
+          "number": 5,
+          "oneof": null,
+          "optional": false,
+          "type": "int64"
+        },
+        "state": {
+          "jsonName": "state",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
     "GetCapabilitiesRequest": {
       "fields": {}
     },
@@ -104,6 +188,44 @@
           "oneof": null,
           "optional": false,
           "type": "message:Capability"
+        }
+      }
+    },
+    "GetDrainStatusRequest": {
+      "fields": {}
+    },
+    "GetDrainStatusResponse": {
+      "fields": {
+        "status": {
+          "jsonName": "status",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "message:DrainStatus"
+        }
+      }
+    },
+    "GetReadinessRequest": {
+      "fields": {}
+    },
+    "GetReadinessResponse": {
+      "fields": {
+        "checks": {
+          "jsonName": "checks",
+          "label": "repeated",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "message:ReadinessCheck"
+        },
+        "ready": {
+          "jsonName": "ready",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "bool"
         }
       }
     },
@@ -403,6 +525,66 @@
       },
       "mapEntry": true
     },
+    "ReadinessCheck": {
+      "fields": {
+        "consecutive_failures": {
+          "jsonName": "consecutiveFailures",
+          "label": "singular",
+          "number": 4,
+          "oneof": null,
+          "optional": false,
+          "type": "int32"
+        },
+        "name": {
+          "jsonName": "name",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "required": {
+          "jsonName": "required",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "bool"
+        },
+        "state": {
+          "jsonName": "state",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "ResumeServingRequest": {
+      "fields": {
+        "request_id": {
+          "jsonName": "requestId",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "ResumeServingResponse": {
+      "fields": {
+        "status": {
+          "jsonName": "status",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "message:DrainStatus"
+        }
+      }
+    },
     "Session": {
       "fields": {
         "client_type": {
@@ -556,6 +738,17 @@
       "response": "CancelQueryResponse",
       "serverStreaming": false
     },
+    "Drain": {
+      "clientStreaming": false,
+      "http": {
+        "method": "POST",
+        "path": "/drain"
+      },
+      "privilege": "authenticated",
+      "request": "DrainRequest",
+      "response": "DrainResponse",
+      "serverStreaming": false
+    },
     "GetCapabilities": {
       "clientStreaming": false,
       "http": {
@@ -565,6 +758,28 @@
       "privilege": "authenticated",
       "request": "GetCapabilitiesRequest",
       "response": "GetCapabilitiesResponse",
+      "serverStreaming": false
+    },
+    "GetDrainStatus": {
+      "clientStreaming": false,
+      "http": {
+        "method": "GET",
+        "path": "/drain"
+      },
+      "privilege": "authenticated",
+      "request": "GetDrainStatusRequest",
+      "response": "GetDrainStatusResponse",
+      "serverStreaming": false
+    },
+    "GetReadiness": {
+      "clientStreaming": false,
+      "http": {
+        "method": "GET",
+        "path": "/readiness"
+      },
+      "privilege": "authenticated",
+      "request": "GetReadinessRequest",
+      "response": "GetReadinessResponse",
       "serverStreaming": false
     },
     "GetVersion": {
@@ -610,8 +825,19 @@
       "request": "ListSessionsRequest",
       "response": "ListSessionsResponse",
       "serverStreaming": false
+    },
+    "ResumeServing": {
+      "clientStreaming": false,
+      "http": {
+        "method": "DELETE",
+        "path": "/drain"
+      },
+      "privilege": "authenticated",
+      "request": "ResumeServingRequest",
+      "response": "ResumeServingResponse",
+      "serverStreaming": false
     }
   },
   "package": "krishiv.admin.v1",
-  "revision": 2
+  "revision": 3
 }

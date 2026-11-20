@@ -3023,8 +3023,11 @@ dependencies = [
 name = "krishiv-catalogs"
 version = "0.2.1"
 dependencies = [
+ "arrow-array 60.1.0",
  "futures",
  "krishiv-common",
+ "krishiv-connectors-iceberg",
+ "krishiv-exec",
  "krishiv-plan",
  "krishiv-session",
  "krishiv-store",
@@ -3115,6 +3118,7 @@ dependencies = [
  "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect",
+ "krishiv-connectors-iceberg",
  "krishiv-exec",
  "krishiv-memory",
  "krishiv-plan",
@@ -3276,6 +3280,7 @@ dependencies = [
  "krishiv-memory",
  "krishiv-session",
  "krishiv-sql",
+ "krishiv-types",
  "prost",
  "tempfile",
  "tokio",

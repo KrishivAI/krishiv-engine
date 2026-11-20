@@ -387,6 +387,18 @@ not pinned by the Delta oracle yet. A Delta table's schema always comes from its
 asks for the schema (`df.schema`, `printSchema`, Connect `AnalyzePlan`) returns the declared schema without opening
 the table, and the first action fails.
 
+## Tags and global views
+
+`spark.addTag(tag)` tags the queries of the calling thread. A DataFrame keeps the tags it was made with: tag
+before `spark.sql`, `spark.table`, `spark.read` or `spark.range`, not before the action. A frame made before the
+tag, or made on another thread, is not cancelled by `spark.interruptTag(tag)`, and a frame made under a tag keeps
+it after `removeTag`. Frames derived from it (`filter`, `select`, ...) keep it. In Spark, the tags are those of the
+thread that runs the action. `removeTag` of a tag the thread does not have does nothing, as in Spark 4.3.
+
+Global temporary views (`createGlobalTempView`, `CREATE GLOBAL TEMPORARY VIEW`) belong to the session that
+made them: another session, `spark.newSession()` included, does not see `global_temp.<name>`. In Spark they are
+shared by every session of the application.
+
 ## `krishiv server` (Spark Connect)
 
 > The Spark Connect server is not part of the 0.2 release; `krishiv server` in 0.2 serves the web UI and admin API
@@ -512,19 +524,72 @@ counted are the first the racing drivers hand over (Spark's are partition 0's: a
 The budget is per instantiation, not global: in a staged or distributed run every task that instantiates the
 observed node has its own, so the count can exceed `n` (P3-T084c).
 
-- **Limit not last, or a filter in between:** `observe(..).limit(n).count()`, a limit under a join, or a filter between the observed node and the limit: Spark's per-partition `LocalLimit` can pull up to `n` rows per partition, and a filter changes how many rows the node saw per row taken; the engine applies one cap of `n` rows per instance of the node (see above). Not yet backed by a golden (P3-T084c).
-- **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` reads every row in the engine (`n` = the input);
-  Spark's `TakeOrderedAndProject` pulls a partition-dependent subset (20 of 1000 in the golden).
-- **ANSI `sum` overflow:** Spark's metric aggregate returns the saturated `9223372036854775807` for a long
-  `sum` that overflows under ANSI; the engine raises `ARITHMETIC_OVERFLOW`. With ANSI off both wrap.
+- **Limit not last, or a filter in between:** Spark counts the rows its limit operator *pulled* through the node, and
+  which limit operator runs depends on the action (`observe-goldens-followup.json`, `limit_counts`, run on Spark 4.2.0,
+  `range(0,1000,1,P)`, every case stable over 3 runs). `count()` plans `GlobalLimit <- Exchange <- LocalLimit` and
+  scans *every* partition (each pulls `min(n, partition rows)`: P x n); `collect()`/`take` scans one partition, then
+  `ceil(1.5 * missing * scanned / got)` more, at most 4 x the scanned. The engine applies one global cap of `n` rows
+  at the node (through projections only). Counts, `n = 5` / `n = 100`, count() then collect():
+
+  | shape | P = 1 | P = 4 | P = 16 | engine |
+  |---|---|---|---|---|
+  | `observe.limit(n)` | 5, 5 / 100, 100 | 20, 5 / 400, 100 | 80, 5 / 1000, 125 | P = 1 only (else 5 / 100) |
+  | `limit(n).observe` | n | n | n | matches |
+  | `observe.filter(v%2=0).limit(n)` | 9 / 199 | 36, 9 / 796, 199 | 152, 9 / 1000, 312 | reads 1000 (750 at P16) |
+  | `observe.filter(v%100=0).limit(n)` | 401 / 1000 | 1000, 500 / 1000 | 1000, 437 / 1000 | reads 1000 |
+  | `observe.offset(3).limit(n)` | n + 3 | 32, 8 / 412, 103 | 128, 8 / 1000, 125 | P = 1 only |
+  | `observe.orderBy(v desc).limit(n)` (TakeOrderedAndProject) | 1000 | 1000 | 1000 | matches |
+  | `orderBy(v desc).observe.limit(n)` | n | n | n | matches |
+  | `observe.union(range).limit(n)` | as `observe.limit(n)` | | | reads everything |
+  | `observe(A).limit(n) UNION ALL observe(B).limit(n)` | n, n | 20, 20 / 400, 400 | 80, 80 / 1000, 1000 | P = 1 only |
+  | `(limit(n) UNION ALL limit(n)).observe` | 2n | 2n | 2n | matches |
+  | observed side streamed through a broadcast join, `limit(n)` above | as `observe.limit(n)` (collect: Connect gives P x n) | | | reads everything |
+  | observed build side of a join | 1000 | 1000 | 1000 | matches |
+
+  The runner (`observe_goldens.rs`, `limit_counts_match_spark_where_they_can`) asserts every row marked "matches" and the
+  P = 1 cases, and pins the rest in `LIMIT_GAPS` with the reason; they must still differ, so a fix removes the line.
+  Emulating the per-partition `LocalLimit` and `CollectLimit`'s incremental scan is not planned: the numbers are plan- and
+  AQE-dependent (the post-shuffle partition count changes them), so only the deterministic shapes are matched.
+- **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` counts every row, as Spark's `TakeOrderedAndProject` does
+  for a descending sort (1000). The first fixture's ascending `orderBy(id)` over a range gave 20 of 1000 in Spark (a
+  partition-dependent count the engine does not reproduce: `observation_through_sort_limit_topn` in `KNOWN_GAPS`).
+- **ANSI `sum` overflow:** modelled on Spark's mechanism (`AggregatingAccumulator`): an overflow inside one task's
+  partition fails the action with `ARITHMETIC_OVERFLOW`; an overflow when the tasks' buffers are merged drops *that task's
+  whole buffer* and the action succeeds (Spark merges in task-completion order, so which task survives varies from run to
+  run: `{MAX-1, MAX}` for two rows in two tasks; the engine merges in partition order, so the first partition's buffer
+  wins). An overflow in a metric's result (a decimal `sum`/`avg`, `max(v) + 2`) is raised by `get`, not the action. The
+  decimal class is `ARITHMETIC_OVERFLOW` where Spark's is `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION` (both SQLSTATE
+  22003). The ANSI setting read is the one at action time (as Connect; classic Spark bakes the `Column`'s mode in when it
+  is built).
 - **Scalar subquery in a metric:** Spark runs it; the engine refuses it with `KRISHIV_UNSUPPORTED_FEATURE`.
-- **Empty relation above:** `observe(..).where(false)` (Spark prunes the node; `{}`) counts the rows read.
-  Only `LIMIT 0` prunes. Streaming frames are not refused as Spark refuses them.
-- **Connect:** struct, map and interval metric values are refused when the server builds the
-  `ObservedMetrics` literal (after the rows were sent); a name with no plan id reports `plan_id` 0.
+- **Empty relation above:** a relation proven empty (a filter that folds to `false` or NULL, `LIMIT 0`, and what
+  Spark's `PropagateEmptyRelation` carries that through: project, sort, keyed aggregate, inner or semi join with an
+  empty side, a union of empties, ...) drops the observed nodes inside it, as Spark does (`{}`); an empty input below the
+  node, an outer join's preserved side and a union with a live branch keep it (`n = 0`). Not matched: a cached frame
+  (`observe(..).cache().where(false)`: the engine fills the cache before the filter prunes it) and `sample` (not supported).
+  Spark's classic Python `get` raises a JVM `AssertionError` for a pruned node (an upstream defect); the engine returns `{}` as Connect does.
+- **Connect:** struct, map, array, binary and day-time interval metrics go out as Spark's `ObservedMetrics` literal forms
+  (year-month and calendar intervals too: Spark's Python client raises `UNSUPPORTED_LITERAL` for those, the server sends them);
+  a name with no plan id reports `plan_id` 0. A calendar-interval metric cannot be built yet (the engine has no aggregate over it).
+- **Streaming:** the engine has no streaming `DataFrame` yet (a Connect `Read` with `is_streaming` is refused when it is translated,
+  `UNSUPPORTED_FEATURE`), so there is nothing for `observe(Observation, ...)` to refuse. Spark refuses it at `observe()`: classic
+  `IllegalArgumentException` (no class) "Observation does not support streaming Datasets.This is because ..." (sic, no space);
+  Connect `UNSUPPORTED_OPERATION` "Streaming DataFrame with Observation is not supported."; `observe("name", ...)` on a stream is
+  allowed and reports per micro-batch in `StreamingQueryProgress.observedMetrics`
+  (`observe-goldens-followup.json`, `streaming`). Both belong to the streaming plan row, not here.
 - **Cancelled actions:** a dropped result stream completes the observation with `{}` or the rows
   folded before the drivers stopped (Spark: a partial value); a failed finalization of a metric is what `get`
   raises.
+- **Actions that fail before their query starts:** an action refused or dropped before its query
+  runs (a closed session, a full resource group, a plan that cannot be submitted, a caller that gives up
+  or a cancel, timeout or kill while it waits) completes the observation with that error, so `get` raises
+  it. Spark completes an observation only when an execution of the query ends (Spark 4.2:
+  `SQLExecution.withNewExecutionId0` calls `ObservationManager.tryComplete` as it finishes; 3.5 to 4.1:
+  the session's `QueryExecutionListener`, on success and failure alike), with the metrics it collected,
+  or (4.1, 4.2) an empty row when it has none (4.2 also completes it with a failure when collecting the
+  metrics fails: `Try(qe.observedMetrics)`), never with the action's own error. An action that fails before an execution starts leaves
+  it pending, and a later action can still complete it. In the engine the first action, failed or
+  not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
 

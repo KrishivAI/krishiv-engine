@@ -919,9 +919,11 @@ impl<'s> Parser<'s> {
                 self.expect_kw("NAMESPACES")?;
                 NamespaceKind::Namespace
             };
+            let namespace = self.show_namespace()?;
             let pattern = self.show_pattern_opt()?;
             return Ok(ShowKind::Namespaces {
                 kind,
+                namespace,
                 pattern,
                 span: self.span_from(start),
             });

@@ -1230,3 +1230,45 @@ fn missing_references_reach_grouping_attributes() {
     let again = block_on(DefaultAnalyzer.analyze(&a.plan, &ctx)).unwrap();
     assert!(again.plan.structurally_eq(&a.plan));
 }
+
+/// A table a catalog serves in a form Krishiv refuses (P3-T067 §4.1): Krishiv's own text, kept.
+struct TableUnsupported;
+
+impl crate::analyzer::Catalog for TableUnsupported {
+    fn name(&self) -> &str {
+        "spark_catalog"
+    }
+
+    fn epoch(&self) -> u64 {
+        0
+    }
+
+    fn load_table<'a>(
+        &'a self,
+        _: &'a crate::analyzer::TableIdent,
+        _: Option<TableVersion>,
+        _: crate::analyzer::NameForm,
+    ) -> BoxFuture<'a, Result<Option<crate::analyzer::TableMeta>, KrishivError>> {
+        let e = krishiv_common::error::KrishivCatalogTableUnsupported {
+            catalog: "`lake`".to_owned(),
+            relation_name: "`db`.`t`".to_owned(),
+            feature: "Iceberg REST read restrictions".to_owned(),
+        };
+        Box::pin(std::future::ready(Err(e.into())))
+    }
+}
+
+#[test]
+fn catalog_table_unsupported_is_kept() {
+    let mut ctx = ctx();
+    ctx.catalogs = Arc::new(crate::analyzer::testing::OneCatalog(
+        Arc::new(TableUnsupported),
+        vec!["default".to_owned()],
+    ));
+    let e = run(LogicalPlan::table(["t"]), &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::KrishivCatalogTableUnsupported
+    );
+    assert!(format!("{e}").contains("read restrictions"), "{e}");
+}
