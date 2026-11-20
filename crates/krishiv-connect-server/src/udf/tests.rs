@@ -3,14 +3,18 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use krishiv_common::error::{ErrorClass, KrishivError, KrishivUdfNotAvailable};
+use krishiv_common::error::{
+    ErrorClass, KrishivError, KrishivUdfNotAvailable, KrishivUnsupportedFeature,
+};
 use krishiv_connect::translate::{PythonUdf, UdfHost as _};
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
 use krishiv_plan::PythonEvalType;
 use krishiv_session::{ANONYMOUS_VERSION_BIT, Session};
 use krishiv_types::DataType;
 
-use super::{InlineUdfs, RunnerConf, SessionPython, SessionUdfRuntime, UdfHost};
+use super::{
+    FunctionStore as _, InlineUdfs, RunnerConf, SessionPython, SessionUdfRuntime, UdfHost,
+};
 
 /// What the host saw: each runtime's owner, registrations and releases.
 #[derive(Default)]
@@ -376,4 +380,135 @@ fn a_relation_udf_needs_the_same_grant_as_an_inline_one() {
             .len(),
         1
     );
+}
+
+/// A store in memory: tenant -> functions; records who persisted.
+#[derive(Default, Debug)]
+struct MemStore {
+    rows: Mutex<Vec<(Option<String>, String, PythonUdf)>>,
+    fail_list: std::sync::atomic::AtomicBool,
+}
+
+impl super::FunctionStore for MemStore {
+    fn list(&self, tenant: Option<&str>) -> Result<Vec<PythonUdf>, KrishivError> {
+        if self.fail_list.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(KrishivUnsupportedFeature {
+                feature: "down".to_owned(),
+            }
+            .into());
+        }
+        Ok(self
+            .rows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|(t, _, _)| t.as_deref() == tenant)
+            .map(|(_, _, u)| u.clone())
+            .collect())
+    }
+    fn put(&self, tenant: Option<&str>, owner: &str, udf: &PythonUdf) -> Result<(), KrishivError> {
+        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
+        rows.retain(|(t, _, u)| !(t.as_deref() == tenant && u.name == udf.name));
+        rows.push((tenant.map(str::to_owned), owner.to_owned(), udf.clone()));
+        Ok(())
+    }
+    fn remove(&self, tenant: Option<&str>, name: &str) -> Result<bool, KrishivError> {
+        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = rows.len();
+        rows.retain(|(t, _, u)| !(t.as_deref() == tenant && u.name == name));
+        Ok(rows.len() < before)
+    }
+}
+
+fn with_store(
+    host: &Arc<dyn UdfHost>,
+    store: &Arc<MemStore>,
+    tenant: Option<&str>,
+    s: &Session,
+) -> SessionPython {
+    let store: Arc<dyn super::FunctionStore> = Arc::clone(store) as _;
+    SessionPython::new(Some(host), "alice", tenant, true, s).with_store(Some(&store))
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn a_persisted_udf_reaches_a_later_session_of_the_tenant_only() {
+    let host: Arc<dyn UdfHost> = Arc::new(Host::default());
+    let store = Arc::new(MemStore::default());
+    let (s1, s2, s3) = (session(), session(), session());
+    let first = with_store(&host, &store, Some("acme"), &s1);
+    first.register(&s1, udf("plus1", b"x")).unwrap();
+    first.persist("PLUS1", false).await.unwrap();
+
+    let same_tenant = with_store(&host, &store, Some("acme"), &s2);
+    assert!(same_tenant.load_pending());
+    same_tenant.load_persisted(&s2).await;
+    assert!(!same_tenant.load_pending());
+    assert_eq!(same_tenant.lock().payloads.len(), 1);
+    assert_eq!(same_tenant.lock().payloads[0].0, "plus1");
+
+    let other_tenant = with_store(&host, &store, Some("globex"), &s3);
+    other_tenant.load_persisted(&s3).await;
+    assert!(other_tenant.lock().payloads.is_empty());
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn persist_needs_a_registered_udf_and_a_store_and_drop_removes() {
+    let host: Arc<dyn UdfHost> = Arc::new(Host::default());
+    let store = Arc::new(MemStore::default());
+    let s = session();
+    let python = with_store(&host, &store, None, &s);
+    let e = python
+        .persist("nope", false)
+        .await
+        .expect_err("not registered");
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    python.register(&s, udf("f", b"x")).unwrap();
+    python.persist("f", false).await.unwrap();
+    assert_eq!(store.rows.lock().unwrap().len(), 1);
+    python.persist("f", true).await.unwrap();
+    assert!(store.rows.lock().unwrap().is_empty());
+
+    let bare = SessionPython::new(Some(&host), "alice", None, true, &s);
+    assert!(!bare.load_pending());
+    let e = bare.persist("f", false).await.expect_err("no store");
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn load_keeps_the_sessions_own_name_retries_after_a_failure_and_skip_stops_it() {
+    let host: Arc<dyn UdfHost> = Arc::new(Host::default());
+    let store = Arc::new(MemStore::default());
+    store.put(None, "bob", &udf("f", b"stored")).unwrap();
+    store.put(None, "bob", &udf("g", b"stored")).unwrap();
+    let s = session();
+    let python = with_store(&host, &store, None, &s);
+    python.register(&s, udf("F", b"mine")).unwrap();
+
+    store
+        .fail_list
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    python.load_persisted(&s).await;
+    assert!(python.load_pending(), "a catalog failure is tried again");
+    store
+        .fail_list
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    python.load_persisted(&s).await;
+    let names: Vec<String> = python.lock().payloads.iter().map(|p| p.0.clone()).collect();
+    assert_eq!(names, ["F", "g"]);
+
+    let skipped = with_store(&host, &store, None, &session());
+    skipped.skip_load();
+    assert!(!skipped.load_pending());
 }

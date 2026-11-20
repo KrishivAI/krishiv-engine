@@ -522,6 +522,10 @@ pub(crate) fn feature_states() -> Vec<(&'static str, bool)> {
             "catalog-iceberg-rest",
             cfg!(feature = "catalog-iceberg-rest"),
         ),
+        (
+            "python-function-catalog",
+            cfg!(feature = "python-function-catalog"),
+        ),
         ("telemetry-otlp", cfg!(feature = "telemetry-otlp")),
         ("full", cfg!(feature = "full")),
     ]

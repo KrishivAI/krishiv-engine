@@ -545,6 +545,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
     ),
     (
+        "krishiv.connect.pythonFunctions.catalog",
+        &CONNECT_PYTHON_FUNCTIONS_CATALOG,
+    ),
+    (
         "krishiv.flightSql.maxCommandResultBytes",
         &FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES,
     ),

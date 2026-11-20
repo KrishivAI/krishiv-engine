@@ -207,3 +207,6 @@ Paths are relative to this crate.
 ## Tests
 `cargo nextest run -p krishiv-connect-server` · `cargo clippy -p krishiv-connect-server --all-targets -- -D warnings` · feature `oidc` (signed act-as assertions): `--features oidc`
 · the generated stub: `cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check`
+
+## Persisted Python UDFs (P3-T072c)
+`udf.rs` `FunctionStore` (tenant-keyed list/put/remove, blocking, run on `spawn_blocking`), `SessionPython::{with_store, load_pending, load_persisted, persist, skip_load}`; `function_store.rs` (feature `function-catalog`) `SqliteFunctionStore` over `krishiv-catalogs` `python_functions`. The `krishiv.v1.PersistPythonFunction` command extension (class `client_code()`, as `register_function`) stores the session's registered UDF or, with `drop`, removes the tenant's. A session loads its tenant's functions once, at its first `ExecutePlan` (`execute.rs` `load_persisted_udfs`), only if the principal passes the `Usage` on `System("udf")` check (one check per session, so one audit record for a principal without it; a catalog read failure is retried at the next request); a name the session registered itself is kept; a row this build cannot convert is skipped. Not done: `CREATE FUNCTION`/`DROP FUNCTION` SQL over persisted functions, a persisted function visible to `AnalyzePlan` before the first execute.

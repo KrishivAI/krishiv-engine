@@ -293,6 +293,41 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     result
 }
 
+/// Keeps persisted Python UDFs in the SQLite catalog named by `krishiv.connect.pythonFunctions.catalog` (P3-T072c).
+///
+/// # Errors
+/// The file cannot be opened, or the key is set in a build without the `python-function-catalog` feature.
+fn with_function_catalog(
+    manager: SessionManager,
+    config: &Config,
+) -> Result<SessionManager, String> {
+    let Some(path) = config
+        .get(&krishiv_common::config::CONNECT_PYTHON_FUNCTIONS_CATALOG)
+        .and_then(krishiv_common::config::ConfigValue::as_str)
+    else {
+        return Ok(manager);
+    };
+    #[cfg(feature = "python-function-catalog")]
+    {
+        let catalog = krishiv_catalogs::sqlite::SqliteCatalog::open(
+            "python_functions",
+            std::path::Path::new(path),
+            false,
+        )
+        .map_err(|e| format!("cannot open the Python function catalog: {e}"))?;
+        Ok(
+            manager.with_function_store(Arc::new(
+                krishiv_connect_server::SqliteFunctionStore::new(Arc::new(catalog)),
+            )),
+        )
+    }
+    #[cfg(not(feature = "python-function-catalog"))]
+    {
+        let _ = (manager, path);
+        Err("krishiv.connect.pythonFunctions.catalog needs a build with the `python-function-catalog` feature".to_owned())
+    }
+}
+
 /// The declared catalogs' setup in server mode, with the factories this build compiles in.
 fn catalog_setup() -> CatalogSetup {
     let setup = CatalogSetup::new(DeclMode::Server);
@@ -429,6 +464,7 @@ async fn run_listeners(
             .map_err(|e| format!("cannot start the Python UDF worker pool: {e}"))?;
         manager.with_udf_host(Arc::new(pool))
     };
+    let manager = with_function_catalog(manager, config)?;
     let manager = Arc::new(manager);
     let connect_listener = TcpListener::bind(connect_addr)
         .await

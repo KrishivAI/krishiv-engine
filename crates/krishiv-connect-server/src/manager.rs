@@ -57,7 +57,7 @@ use crate::artifacts::SessionArtifacts;
 use crate::auth::SessionOwner;
 use crate::errors::SessionErrors;
 use crate::operation::{Operation, Operations};
-use crate::udf::{SessionPython, UdfHost};
+use crate::udf::{FunctionStore, SessionPython, UdfHost};
 
 /// Builds the session an authenticated caller gets for a new session id:
 /// its principal, and the policy of its role. The transport is the service the
@@ -374,6 +374,8 @@ pub struct SessionManager {
     factory: Box<SessionFactory>,
     /// The server's Python UDF workers; `None` refuses Python UDFs.
     udfs: Option<Arc<dyn UdfHost>>,
+    /// The catalog of persisted Python UDFs; `None`: nothing is persisted.
+    function_store: Option<Arc<dyn FunctionStore>>,
     limits: SessionLimits,
     inner: Mutex<Inner>,
     epoch: Instant,
@@ -395,6 +397,7 @@ impl SessionManager {
         Self {
             factory,
             udfs: None,
+            function_store: None,
             limits,
             inner: Mutex::new(Inner::default()),
             epoch: Instant::now(),
@@ -418,6 +421,14 @@ impl SessionManager {
     #[must_use]
     pub fn with_udf_host(mut self, host: Arc<dyn UdfHost>) -> Self {
         self.udfs = Some(host);
+        self
+    }
+
+    /// Keeps the Python UDFs a client persists (`krishiv.v1.PersistPythonFunction`) in `store`, per tenant, and
+    /// loads a tenant's into its sessions (at a session's first request that passes the UDF privilege check).
+    #[must_use]
+    pub fn with_function_store(mut self, store: Arc<dyn FunctionStore>) -> Self {
+        self.function_store = Some(store);
         self
     }
 
@@ -564,7 +575,8 @@ impl SessionManager {
             caller.principal.tenant.as_deref(),
             caller.method != Method::None,
             &session,
-        );
+        )
+        .with_store(self.function_store.as_ref());
         let entry = self.new_entry(
             caller,
             session,

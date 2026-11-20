@@ -264,6 +264,20 @@ fn every_command_has_its_class() {
             Check::OwnSession,
         ),
         (
+            CommandType::Extension(Box::new(prost_types::Any {
+                type_url: "type.googleapis.com/krishiv.v1.PersistPythonFunction".to_owned(),
+                value: Vec::new(),
+            })),
+            super::client_code(),
+        ),
+        (
+            CommandType::Extension(Box::new(prost_types::Any {
+                type_url: "type.googleapis.com/krishiv.v1.Echo".to_owned(),
+                value: Vec::new(),
+            })),
+            Check::Unsupported("extension"),
+        ),
+        (
             CommandType::MlCommand(Box::new(pb::MlCommand {
                 command: Some(MlCommandType::CleanCache(Default::default())),
             })),

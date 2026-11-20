@@ -1,0 +1,130 @@
+// SPDX-License-Identifier: Apache-2.0
+//! [`SqliteFunctionStore`]: the persisted Python UDFs (P3-T072c) in the embedded SQLite catalog
+//! (`krishiv_catalogs::SqliteCatalog`, table `python_functions`), one row per (tenant, name).
+
+use std::sync::Arc;
+
+use krishiv_catalogs::sqlite::{SqliteCatalog, StoredPythonFunction};
+use krishiv_common::error::KrishivError;
+use krishiv_connect::translate::PythonUdf;
+use sha2::{Digest, Sha256};
+
+use crate::udf::FunctionStore;
+
+/// A [`FunctionStore`] over a SQLite catalog file.
+#[derive(Debug, Clone)]
+pub struct SqliteFunctionStore {
+    catalog: Arc<SqliteCatalog>,
+}
+
+impl SqliteFunctionStore {
+    /// The store over `catalog`.
+    #[must_use]
+    pub fn new(catalog: Arc<SqliteCatalog>) -> Self {
+        Self { catalog }
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
+}
+
+impl FunctionStore for SqliteFunctionStore {
+    fn list(&self, tenant: Option<&str>) -> Result<Vec<PythonUdf>, KrishivError> {
+        let mut udfs = Vec::new();
+        for f in self.catalog.python_functions(tenant)? {
+            // A row that no longer converts (a newer build wrote it) is skipped, not fatal.
+            match PythonUdf::from_stored(
+                f.name.clone(),
+                f.deterministic,
+                f.eval_type,
+                &f.return_type,
+                f.payload,
+                f.python_ver,
+            ) {
+                Ok(udf) => udfs.push(udf),
+                Err(e) => tracing::warn!(
+                    target: "krishiv::udf",
+                    function = %f.name,
+                    error = %e,
+                    "a persisted Python UDF cannot be read"
+                ),
+            }
+        }
+        Ok(udfs)
+    }
+
+    fn put(&self, tenant: Option<&str>, owner: &str, udf: &PythonUdf) -> Result<(), KrishivError> {
+        let digest = hex(&Sha256::digest(&udf.command));
+        self.catalog.put_python_function(
+            tenant,
+            &StoredPythonFunction::new(
+                udf.name.clone(),
+                udf.eval_type,
+                udf.deterministic,
+                udf.return_type.catalog_string(),
+                udf.command.clone(),
+                digest,
+                udf.python_ver.clone(),
+                owner,
+            ),
+        )
+    }
+
+    fn remove(&self, tenant: Option<&str>, name: &str) -> Result<bool, KrishivError> {
+        self.catalog.drop_python_function(tenant, name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use krishiv_types::DataType;
+
+    fn udf(name: &str) -> PythonUdf {
+        PythonUdf::from_stored(name.into(), true, 101, "bigint", vec![9, 9], "3.12".into())
+            .expect("udf")
+    }
+
+    #[test]
+    fn a_function_round_trips_per_tenant() {
+        let store = SqliteFunctionStore::new(Arc::new(
+            SqliteCatalog::open_in_memory("f", false).expect("catalog"),
+        ));
+        store
+            .put(Some("acme"), "alice", &udf("Plus1"))
+            .expect("put");
+        let listed = store.list(Some("acme")).expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "plus1");
+        assert_eq!(listed[0].return_type, DataType::Long);
+        assert_eq!(listed[0].command, vec![9, 9]);
+        assert!(store.list(Some("globex")).expect("list").is_empty());
+        assert!(store.remove(Some("acme"), "PLUS1").expect("remove"));
+        assert!(!store.remove(Some("acme"), "plus1").expect("remove"));
+    }
+
+    #[test]
+    fn a_row_this_build_cannot_read_is_skipped() {
+        let catalog = Arc::new(SqliteCatalog::open_in_memory("f", false).expect("catalog"));
+        catalog
+            .put_python_function(
+                None,
+                &StoredPythonFunction::new("bad", 999, true, "bigint", vec![1], "d", "3.12", "x"),
+            )
+            .expect("put");
+        let store = SqliteFunctionStore::new(catalog);
+        store.put(None, "x", &udf("good")).expect("put");
+        let names: Vec<_> = store
+            .list(None)
+            .expect("list")
+            .into_iter()
+            .map(|u| u.name)
+            .collect();
+        assert_eq!(names, ["good"]);
+    }
+}

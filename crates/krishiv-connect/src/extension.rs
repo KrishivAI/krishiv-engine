@@ -44,6 +44,17 @@ impl std::fmt::Debug for Echo {
     }
 }
 
+/// `PersistPythonFunction` (`krishiv.proto`): keep (or, with `drop`, remove) the tenant's stored Python UDF `name`.
+#[derive(Clone, PartialEq, Eq, prost::Message)]
+pub struct PersistPythonFunction {
+    /// The function's name, as registered with `register_function`.
+    #[prost(string, tag = "1")]
+    pub name: String,
+    /// Remove the stored function instead of storing it.
+    #[prost(bool, tag = "2")]
+    pub drop: bool,
+}
+
 /// The slot of a Spark Connect message an extension sits in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
@@ -70,6 +81,8 @@ impl Slot {
 pub enum Extension {
     /// [`Echo`].
     Echo(Echo),
+    /// [`PersistPythonFunction`].
+    PersistPythonFunction(PersistPythonFunction),
 }
 
 /// One registered message: its name, the capability that offers it and the slots it may sit in.
@@ -81,11 +94,18 @@ struct Registration {
 
 /// Every extension this build offers. A feature's own task adds its row (and its message to
 /// `krishiv.proto`); none is added here beyond the worked example.
-static REGISTRY: &[Registration] = &[Registration {
-    message: "Echo",
-    capability: "echo",
-    slots: &[Slot::Relation, Slot::Expression],
-}];
+static REGISTRY: &[Registration] = &[
+    Registration {
+        message: "Echo",
+        capability: "echo",
+        slots: &[Slot::Relation, Slot::Expression],
+    },
+    Registration {
+        message: "PersistPythonFunction",
+        capability: "persistpythonfunction",
+        slots: &[Slot::Command],
+    },
+];
 
 /// The capabilities this build offers, sorted.
 #[must_use]
@@ -151,6 +171,9 @@ pub fn resolve(any: &Any, slot: Slot) -> Result<Extension, KrishivError> {
 fn decode(row: &Registration, bytes: &[u8]) -> Result<Extension, KrishivError> {
     match row.message {
         "Echo" => crate::wire::decode_echo(bytes).map(Extension::Echo),
+        "PersistPythonFunction" => {
+            crate::wire::decode_persist_python_function(bytes).map(Extension::PersistPythonFunction)
+        }
         other => Err(unsupported(format!("the {PACKAGE} extension `{other}`"))),
     }
 }

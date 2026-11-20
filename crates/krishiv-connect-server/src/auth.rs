@@ -549,7 +549,17 @@ pub fn check_command(command: &pb::Command) -> Check {
         | CommandType::StreamingQueryListenerBusCommand(_) => {
             Check::Unsupported("streaming commands")
         }
-        // No command extension is registered (P3-T015 registers Echo for relations and expressions only); a command extension has no declared class and is refused.
+        // `PersistPythonFunction` keeps client code another session will run: the class of `register_function`.
+        // Any other command extension has no declared class and is refused.
+        CommandType::Extension(any)
+            if any.type_url
+                == format!(
+                    "{}PersistPythonFunction",
+                    krishiv_connect::extension::TYPE_URL_PREFIX
+                ) =>
+        {
+            client_code()
+        }
         CommandType::Extension(_) => Check::Unsupported("extension"),
     }
 }

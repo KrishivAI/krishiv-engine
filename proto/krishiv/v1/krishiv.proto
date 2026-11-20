@@ -16,3 +16,12 @@ package krishiv.v1;
 message Echo {
   string message = 1;
 }
+
+// A command (`Command.extension`, capability `persistpythonfunction`, P3-T072c): keep the Python UDF the
+// session registered under `name` (`register_function`) in the server's function catalog for the caller's
+// tenant, so later sessions of the tenant find it, also after a restart; with `drop` set, remove the
+// tenant's stored function of that name instead. Needs the same privilege as `register_function`.
+message PersistPythonFunction {
+  string name = 1;
+  bool drop = 2;
+}

@@ -154,6 +154,12 @@ impl Translator<'_> {
             }
             ExprType::Extension(any) => match resolve(any, Slot::Expression)? {
                 Extension::Echo(echo) => ExprNode::Literal(Literal::String(echo.message)),
+                // Registered for the command slot only: `resolve` has refused it here.
+                Extension::PersistPythonFunction(_) => {
+                    return Err(super::errors::unsupported(
+                        "the PersistPythonFunction extension in an expression",
+                    ));
+                }
             },
             other => {
                 return Err(unsupported_variant(
