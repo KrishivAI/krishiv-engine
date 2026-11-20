@@ -184,6 +184,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &NARROW_SCAN_INSTANCES,
     &UNION_OUTPUT_PARTITIONING,
     &CONNECT_MAX_PLAN_DEPTH,
     &LATE_FETCH_MAX_ROWS,
@@ -1580,6 +1581,21 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// Each instance of a shared scan reads only its own parent's columns.
+pub static NARROW_SCAN_INSTANCES: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.optimizer.narrowScanInstances",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "A table read several times in one query (a self-join, an EXISTS leg, a repeated CTE) \
+          is planned once per reader; with this on, each reader's scan reads only the columns \
+          its own parent uses rather than the union over all readers. Results are the same \
+          either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: None,
 };
 
 /// `spark.sql.unionOutputPartitioning`.

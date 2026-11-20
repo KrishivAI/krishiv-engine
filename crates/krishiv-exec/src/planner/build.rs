@@ -79,7 +79,16 @@ impl PhysicalPlanner for DefaultPlanner {
             // reads (a shared node is planned once per parent). It recurses
             // per level too, so it runs on the big stack.
             let stats = super::table::ProviderStatistics(Arc::clone(&cx.tables));
-            let narrowed = krishiv_optimizer::narrow_scan_instances(plan.root(), Some(&stats));
+            let on = cx
+                .config
+                .get(&krishiv_common::config::NARROW_SCAN_INSTANCES)
+                .and_then(krishiv_common::config::ConfigValue::as_bool)
+                .unwrap_or(true);
+            let narrowed = if on {
+                krishiv_optimizer::narrow_scan_instances(plan.root(), Some(&stats))
+            } else {
+                Arc::clone(plan.root())
+            };
             let root = &narrowed;
             // First as a plan with its deterministic shared definitions
             // inlined per reference (as before); the groups no runtime

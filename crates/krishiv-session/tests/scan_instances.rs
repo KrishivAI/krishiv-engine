@@ -145,3 +145,56 @@ fn a_self_join_of_json_reading_the_corrupt_record_column_still_runs() {
     // x.a = 1 meets both y rows with k = 1; x's corrupt column is null there.
     assert_eq!((col(0), col(1)), (0, 2));
 }
+
+#[test]
+fn the_switch_off_reads_the_union_and_returns_the_same_rows() {
+    let s = Session::new().unwrap();
+    let (_dir, path) = table(&s);
+    let q = format!(
+        "SELECT x.a + y.b FROM parquet.`{path}` x JOIN parquet.`{path}` y \
+         ON x.k = y.k WHERE x.c < 30 AND y.a < 20"
+    );
+    let (on_rows, on_plan) = run(&s, &q);
+    s.conf()
+        .set("krishiv.sql.optimizer.narrowScanInstances", "false")
+        .unwrap();
+    let (off_rows, off_plan) = run(&s, &q);
+    assert_eq!(on_rows, off_rows);
+    assert_ne!(
+        scan_columns(&on_plan),
+        scan_columns(&off_plan),
+        "{off_plan}"
+    );
+}
+
+#[test]
+fn a_union_and_a_cte_used_twice_return_the_same_rows_either_way() {
+    let s = Session::new().unwrap();
+    let (_dir, path) = table(&s);
+    let qs = [
+        format!(
+            "SELECT a FROM parquet.`{path}` WHERE c < 30 UNION ALL \
+             SELECT b FROM parquet.`{path}` WHERE a < 5"
+        ),
+        format!(
+            "WITH t AS (SELECT * FROM parquet.`{path}`) \
+             SELECT x.a + y.c FROM t x JOIN t y ON x.k = y.k WHERE x.b < 40"
+        ),
+        format!(
+            "SELECT l.a FROM parquet.`{path}` l WHERE l.b > (SELECT avg(m.b) \
+             FROM parquet.`{path}` m WHERE m.k = l.k)"
+        ),
+    ];
+    for q in &qs {
+        s.conf()
+            .set("krishiv.sql.optimizer.narrowScanInstances", "true")
+            .unwrap();
+        let (on, _) = run(&s, q);
+        s.conf()
+            .set("krishiv.sql.optimizer.narrowScanInstances", "false")
+            .unwrap();
+        let (off, _) = run(&s, q);
+        assert!(!on.is_empty());
+        assert_eq!(on, off, "{q}");
+    }
+}

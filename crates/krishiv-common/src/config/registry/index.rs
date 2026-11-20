@@ -512,6 +512,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
     ),
     (
+        "krishiv.sql.optimizer.narrowScanInstances",
+        &NARROW_SCAN_INSTANCES,
+    ),
+    (
         "krishiv.connect.artifacts.maxArtifactBytes",
         &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES,
     ),
