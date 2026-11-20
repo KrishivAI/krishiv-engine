@@ -425,6 +425,9 @@ impl Translator<'_> {
                 None => None,
             },
             distance: None,
+            // Spark runs a Connect `AsOfJoin` as `RewriteAsOfJoin`'s `min_by` over every
+            // passing right row, which evaluates the distance on each.
+            distance_on_every_pair: true,
             as_written: false,
         };
         Ok(PlanNode::AsOfJoin {

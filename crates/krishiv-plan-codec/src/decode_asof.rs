@@ -21,5 +21,6 @@ pub(crate) fn as_of_merge(a: &pb::AsOfMerge) -> Result<AsOfMergeSpec> {
         direction,
         allow_exact: a.allow_exact,
         distance: None,
+        distance_on_every_pair: a.distance_on_every_pair,
     })
 }

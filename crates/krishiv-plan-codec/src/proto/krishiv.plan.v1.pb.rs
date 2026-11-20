@@ -1187,6 +1187,10 @@ pub struct AsOfMerge {
     /// feature: as_of_join
     #[prost(message, optional, tag = "5")]
     pub distance: ::core::option::Option<Residual>,
+    /// feature: as_of_join
+    /// The distance counts on every passing pair, in both directions (Spark's Connect form).
+    #[prost(bool, tag = "6")]
+    pub distance_on_every_pair: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {

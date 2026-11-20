@@ -114,22 +114,24 @@ impl Resolver<'_> {
                 ));
             }
         };
-        // Spark's forward distance `R - L` (`buildLeafOrderExpression`) over the operands as
-        // normalized, where the left one's type subtracts (`supportsSubtract`); evaluated by the
-        // executor where Spark evaluates it. A subtraction Krishiv cannot resolve for the two
-        // types leaves no check (the match itself is unchanged).
-        let distance = if direction == crate::AsOfDirection::Forward
-            && subtracts(left.ty.data_type.as_ref())
-        {
-            self.call(
-                "-",
-                vec![Arc::clone(&right.expr), Arc::clone(&left.expr)],
-                env,
-                origin,
-            )
-            .ok()
-        } else {
-            None
+        // Spark's distance (`buildLeafOrderExpression`, `makeOrderingExpr`) over the operands as
+        // normalized, where the left one's type subtracts (`supportsSubtract`): `R - L` forward,
+        // `L - R` backward (evaluated only on the Connect form, `RewriteAsOfJoin`; Spark's SQL
+        // scan evaluates none backward). The executor evaluates it where Spark does. A
+        // subtraction Krishiv cannot resolve for the two types leaves no check (the match itself
+        // is unchanged); tuple and array values are not subtracted yet (Spark subtracts their
+        // leaves), see the design note.
+        let every_pair = m.distance_on_every_pair;
+        let operands = match direction {
+            crate::AsOfDirection::Forward => Some((&right.expr, &left.expr)),
+            crate::AsOfDirection::Backward if every_pair => Some((&left.expr, &right.expr)),
+            _ => None,
+        };
+        let distance = match operands {
+            Some((a, b)) if subtracts(left.ty.data_type.as_ref()) => self
+                .call("-", vec![Arc::clone(a), Arc::clone(b)], env, origin)
+                .ok(),
+            _ => None,
         };
         // The two values meet at the type a comparison of them casts both to.
         let compared = self
@@ -170,6 +172,7 @@ impl Resolver<'_> {
             allow_exact: m.allow_exact,
             tolerance,
             distance,
+            distance_on_every_pair: every_pair,
             as_written: false,
         })
     }

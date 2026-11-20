@@ -10,14 +10,24 @@ image (no Connect client dependencies needed). Krishiv's test,
 over the same rows and compares; the nearest direction, a tolerance and `using_columns` are
 recorded with Spark's rows but Krishiv refuses them for now (`KRISHIV_UNSUPPORTED_FEATURE`).
 
+The `overflow` cases (INT values, no key) show where Spark evaluates the distance on the Connect
+form: `RewriteAsOfJoin` takes `min_by` over every passing right row, so `L - R` (backward) or
+`R - L` (forward) of any passing pair can raise `ARITHMETIC_OVERFLOW` under ANSI, unlike the SQL
+scan (`SortMergeAsOfJoinExec`), which evaluates none backward and only two rows forward.
+
 Run from the repository root:
 
-    docker run --rm -v "$PWD:/repo" apache/spark:4.3.0 /opt/spark/bin/spark-submit \\
-        --master 'local[1]' /repo/tests/scripts/gen_connect_asof_goldens.py \\
-        /repo/tests/fixtures/spark-4.3.0/connect-asof.json
+    mkdir -m 777 -p /tmp/asof-out
+    docker run --rm -v "$PWD:/repo:ro" -v /tmp/asof-out:/out apache/spark:4.3.0 \\
+        /opt/spark/bin/spark-submit --master 'local[1]' \\
+        /repo/tests/scripts/gen_connect_asof_goldens.py /out/connect-asof.json
+    cp /tmp/asof-out/connect-asof.json tests/fixtures/spark-4.3.0/
+
+(the image's `spark` user cannot write a bind mount owned by another user).
 """
 
 import json
+import re
 import sys
 
 from pyspark.sql import SparkSession
@@ -45,6 +55,27 @@ RIGHT = [
 
 def cell(v):
     return "NULL" if v is None else str(v)
+
+
+OVERFLOW = [
+    # (name, direction, left values, right values)
+    ("backward_overflow", "backward", [2147483647], [-2]),
+    ("backward_overflow_farthest_row", "backward", [2147483647], [-2, 2147483646]),
+    ("forward_overflow_later_row", "forward", [-2], [0, 1, 2147483647]),
+    ("backward_no_overflow", "backward", [5], [1, 3]),
+    ("forward_no_overflow", "forward", [-2], [0, 1]),
+]
+
+
+def condition(e):
+    """The root error condition: AQE wraps a failed stage's error in
+    `STAGE_MATERIALIZATION_MULTIPLE_FAILURES`, whose causes are the query's own error."""
+    found = [
+        c for c in re.findall(r"Spark\w*Exception: \[([A-Z_]+)", str(e)) if not c.startswith("STAGE_MATERIALIZATION")
+    ]
+    if not found:
+        raise e
+    return found[0]
 
 
 def main(out):
@@ -101,12 +132,27 @@ def main(out):
     run("tolerance", "refused", tolerance=F.lit(2))
     run("using_columns", "refused", using=["k"])
 
+    overflow = []
+    for name, direction, lv, rv in OVERFLOW:
+        l1 = spark.createDataFrame([[v] for v in lv], "lt INT")
+        r1 = spark.createDataFrame([[v] for v in rv], "rt INT")
+        df = l1._joinAsOf(r1, l1["lt"], r1["rt"], direction=direction)
+        case = {"name": name, "direction": direction, "left": lv, "right": rv}
+        try:
+            case["rows"] = sorted("|".join(cell(v) for v in r) for r in df.collect())
+            case["error"] = None
+        except Exception as e:  # Spark's error class is the answer
+            case["rows"] = None
+            case["error"] = condition(e)
+        overflow.append(case)
+
     doc = {
         "spark": spark.version,
         "generator": "tests/scripts/gen_connect_asof_goldens.py",
         "left": {"columns": ["lk", "lt", "a"], "rows": LEFT},
         "right": {"columns": ["rk", "rt", "b"], "rows": RIGHT},
         "cases": cases,
+        "overflow": overflow,
     }
     with open(out, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=1)

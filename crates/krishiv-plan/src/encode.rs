@@ -938,6 +938,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     });
                     self.bool(as_of.allow_exact);
                     self.bool(as_of.as_written);
+                    self.bool(as_of.distance_on_every_pair);
                     for e in [&as_of.tolerance, &as_of.distance] {
                         match e {
                             None => self.u8(0),

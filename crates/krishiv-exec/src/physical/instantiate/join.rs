@@ -277,30 +277,59 @@ impl Instantiation<'_> {
     }
 }
 
-/// An as-of join's distance `R - L` as the check the merge evaluates: `isnotnull(R - L)`, built
-/// here so that no rule folds the subtraction away.
+/// An as-of join's distance as the check the merge evaluates: `isnotnull(distance)`, built here
+/// so that no rule folds the subtraction away, over a narrow batch of only the columns it reads.
 fn as_of_distance(
     probe: &SchemaRef,
     build: &SchemaRef,
     r: Option<&Residual>,
     env: &EvalEnv,
-) -> Result<Option<Arc<dyn Predicate>>> {
+) -> Result<Option<crate::join::AsOfDistance>> {
     let Some(r) = r else {
         return Ok(None);
     };
+    let [d] = r.conjuncts.as_slice() else {
+        return Err(internal("an as-of distance is one expression".to_owned()));
+    };
+    let mut ids = HashSet::new();
+    attrs_read(d, &mut ids);
     let both = crate::planner::concat_schemas(probe, build);
-    let exprs: Vec<&Expr> = r.conjuncts.iter().map(AsRef::as_ref).collect();
+    let width = probe.fields().len();
+    let keep: Vec<usize> = (0..r.layout.len().min(both.fields().len()))
+        .filter(|&i| ids.contains(&r.layout[i]))
+        .collect();
+    let schema: SchemaRef = Arc::new(Schema::new(
+        keep.iter()
+            .map(|&i| both.field(i).clone())
+            .collect::<Vec<Field>>(),
+    ));
+    let layout: Vec<AttrId> = keep.iter().map(|&i| r.layout[i]).collect();
     let v = Values {
         env,
         subqueries: &[],
     };
-    let mut compiled = compile_all(&exprs, &r.layout, &both, &v)?;
-    let (Some(d), true) = (compiled.pop(), compiled.is_empty()) else {
+    let mut compiled = compile_all(&[d.as_ref()], &layout, &schema, &v)?;
+    let (Some(c), true) = (compiled.pop(), compiled.is_empty()) else {
         return Err(internal("an as-of distance is one expression".to_owned()));
     };
-    Ok(Some(
-        Arc::new(Compiled(eval::is_not_null(d))) as Arc<dyn Predicate>
-    ))
+    Ok(Some(crate::join::AsOfDistance {
+        check: Arc::new(Compiled(eval::is_not_null(c))) as Arc<dyn Predicate>,
+        left_columns: keep.iter().copied().filter(|&i| i < width).collect(),
+        right_columns: keep
+            .iter()
+            .filter(|&&i| i >= width)
+            .map(|&i| i - width)
+            .collect(),
+        schema,
+    }))
+}
+
+/// The attributes `e` reads.
+fn attrs_read(e: &Expr, out: &mut HashSet<AttrId>) {
+    if let ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) = &e.node {
+        out.insert(c.id);
+    }
+    e.for_each_child(&mut |c| attrs_read(c, out));
 }
 
 pub(crate) fn sort_merge_join(

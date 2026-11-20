@@ -61,14 +61,14 @@ use crate::error::{Result, internal};
 use crate::executor::Executor;
 use crate::metrics::Metric;
 use crate::operator::{GlobalState, LocalState, Sink, Source};
-use crate::operators::{KeyEncoder, Predicate, blocking, data_bytes};
+use crate::operators::{KeyEncoder, blocking, data_bytes};
 use crate::operators::{Sort, SortKey, global_ref, local_mut};
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::sync::{Event, Mutex, lock};
 
 mod asof;
 use asof::{AsOfCursor, AsOfMerge, AsOfSlice};
-pub use asof::{AsOfMergeDirection, AsOfMergeSpec};
+pub use asof::{AsOfDistance, AsOfMergeDirection, AsOfMergeSpec};
 
 /// Candidate pairs whose residual condition is evaluated at once.
 const PAIR_BATCH: usize = 1024;
@@ -491,6 +491,9 @@ pub(crate) struct MergeCounters {
     pub(crate) spill_bytes: AtomicU64,
     /// Right rows an as-of merge moved past (a group read once counts each row once).
     pub(crate) as_of_right_rows: AtomicU64,
+    /// The most right chunks the open rows' best rows kept alive at once (backward with a
+    /// residual, after each read chunk is compacted): at most one copy and the chunk being read.
+    pub(crate) as_of_held_chunks: AtomicU64,
 }
 
 /// A batch of one row of NULLs, in `schema`'s first `columns` columns.
@@ -1385,7 +1388,7 @@ impl SortMergeJoin {
     pub fn try_new_with_distance(
         spec: JoinSpec,
         as_of: Option<AsOfMergeSpec>,
-        distance: Option<Arc<dyn Predicate>>,
+        distance: Option<AsOfDistance>,
     ) -> Result<Self> {
         if spec.join_type == JoinType::NullAwareAnti {
             return Err(super::unsupported("a null-aware anti sort-merge join"));
@@ -1578,6 +1581,10 @@ impl Source for SortMergeJoin {
             metrics.push((
                 std::borrow::Cow::Borrowed("as_of_right_rows"),
                 Metric::Count(self.counters.as_of_right_rows.load(Ordering::Relaxed)),
+            ));
+            metrics.push((
+                std::borrow::Cow::Borrowed("as_of_held_chunks"),
+                Metric::Count(self.counters.as_of_held_chunks.load(Ordering::Relaxed)),
             ));
         }
         metrics

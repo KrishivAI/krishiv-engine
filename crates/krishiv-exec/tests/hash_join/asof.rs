@@ -11,8 +11,8 @@ use arrow_array::types::Int64Type;
 use arrow_array::{BooleanArray, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use krishiv_exec::{
-    AsOfMergeDirection, AsOfMergeSpec, ExecConfig, JoinSpec, JoinType, Predicate, Result,
-    SortMergeJoin, SortMergeJoinNode,
+    AsOfDistance, AsOfMergeDirection, AsOfMergeSpec, ExecConfig, JoinSpec, JoinType, Predicate,
+    Result, SortMergeJoin, SortMergeJoinNode,
 };
 use krishiv_memory::TreePool;
 use proptest::prelude::*;
@@ -70,15 +70,27 @@ impl Predicate for Residual {
     }
 }
 
-/// A distance check that raises on a pair whose right payload is `POISON`.
+/// A distance check that raises on a pair whose right payload is `POISON`; it reads only that
+/// column (the merge hands it a narrow batch).
 #[derive(Debug)]
 struct Poison;
 
 const POISON: i64 = 999;
 
+/// [`Poison`] as the merge's distance check, over the right payload only.
+fn poison() -> AsOfDistance {
+    AsOfDistance {
+        check: Arc::new(Poison),
+        left_columns: vec![],
+        right_columns: vec![2],
+        schema: Arc::new(Schema::new(vec![schema().field(2).clone()])),
+    }
+}
+
 impl Predicate for Poison {
     fn evaluate(&self, batch: &RecordBatch) -> Result<BooleanArray> {
-        let r = batch.column(5).as_primitive::<Int64Type>();
+        assert_eq!(batch.num_columns(), 1, "the distance reads one column");
+        let r = batch.column(0).as_primitive::<Int64Type>();
         if r.iter().any(|w| w == Some(POISON)) {
             return Err(krishiv_common::error::InternalError {
                 message: "poisoned distance".to_owned(),
@@ -142,7 +154,7 @@ impl Case {
 
     fn join(
         &self,
-        distance: Option<Arc<dyn Predicate>>,
+        distance: Option<(AsOfDistance, bool)>,
         scope: krishiv_memory::SpillScope,
     ) -> SortMergeJoin {
         let spec = JoinSpec {
@@ -168,8 +180,9 @@ impl Case {
             },
             allow_exact: self.exact,
             distance: None,
+            distance_on_every_pair: distance.as_ref().is_some_and(|d| d.1),
         };
-        SortMergeJoin::try_new_with_distance(spec, Some(as_of), distance).unwrap()
+        SortMergeJoin::try_new_with_distance(spec, Some(as_of), distance.map(|d| d.0)).unwrap()
     }
 }
 
@@ -178,6 +191,10 @@ struct Run {
     rows: Vec<String>,
     right_rows: u64,
     groups_spilled: u64,
+    /// The most right chunks the open rows kept alive at once (backward with a residual).
+    held_chunks: u64,
+    /// The merge operator's peak reservation.
+    peak: u64,
 }
 
 /// Runs `case` with `batch_rows`-row inputs and `group_bytes` before a group spills.
@@ -187,7 +204,7 @@ async fn run_case(
     right: &[Row],
     batch_rows: usize,
     group_bytes: usize,
-    distance: Option<Arc<dyn Predicate>>,
+    distance: Option<(AsOfDistance, bool)>,
 ) -> Result<Run> {
     let limit = 64 << 20;
     let root: Arc<TreePool> = root(limit);
@@ -211,6 +228,14 @@ async fn run_case(
         rows: render(&out),
         right_rows: metric(&q, "SortMergeAsOfJoin", "as_of_right_rows"),
         groups_spilled: metric(&q, "SortMergeAsOfJoin", "groups_spilled"),
+        held_chunks: metric(&q, "SortMergeAsOfJoin", "as_of_held_chunks"),
+        peak: q
+            .metrics()
+            .operators
+            .values()
+            .filter(|e| e.name == "SortMergeAsOfJoin")
+            .map(|e| e.metrics.peak_reserved)
+            .sum(),
     })
 }
 
@@ -320,8 +345,12 @@ async fn a_group_is_read_once_across_left_batches() {
 /// did spill.
 #[tokio::test]
 async fn a_residual_over_a_spilled_group() {
-    let left: Vec<Row> = (0..300).map(|i| row(Some(1), Some(i * 7), i)).collect();
-    let right: Vec<Row> = (0..2000).map(|i| row(Some(1), Some(i), 5000 + i)).collect();
+    // A group of about 480 KB (20,000 right rows), well past the merge's fixed 128 KiB floor,
+    // and few left rows spread over it (the residual path pairs each with the rows it allows).
+    let left: Vec<Row> = (0..40).map(|i| row(Some(1), Some(i * 499), i)).collect();
+    let right: Vec<Row> = (0..20_000)
+        .map(|i| row(Some(1), Some(i), 50_000 + i))
+        .collect();
     for backward in [true, false] {
         let case = Case {
             join_type: JoinType::LeftOuter,
@@ -329,9 +358,26 @@ async fn a_residual_over_a_spilled_group() {
             exact: false,
             residual: true,
         };
-        let got = run_case(case, &left, &right, 32, 2048, None).await.unwrap();
+        let got = run_case(case, &left, &right, 64, 2048, None).await.unwrap();
         assert_eq!(got.rows, case.oracle(&left, &right), "{case:?}");
         assert!(got.groups_spilled > 0, "{case:?}: the group spilled");
+        // The group is 20,000 rows of three `BIGINT`s (480,000 bytes of values): what the merge
+        // holds stays near one buffer of the group plus the copied best rows, far below it.
+        let group_bytes = (right.len() * 3 * 8) as u64;
+        assert!(
+            got.peak < group_bytes / 2,
+            "{case:?}: peak {} of a {group_bytes}-byte group",
+            got.peak
+        );
+        if backward {
+            // The open rows' best rows live in one compact copy, not in the chunks they came
+            // from (each read chunk is copied out at its end).
+            assert!(
+                got.held_chunks <= 1,
+                "{case:?}: {} chunks held at once",
+                got.held_chunks
+            );
+        }
     }
 }
 
@@ -382,7 +428,7 @@ async fn the_forward_distance_runs_on_the_match_and_the_next_passing_row() {
                     &right,
                     batch_rows,
                     usize::MAX,
-                    Some(Arc::new(Poison)),
+                    Some((poison(), false)),
                 )
                 .await;
                 assert_eq!(
@@ -391,6 +437,128 @@ async fn the_forward_distance_runs_on_the_match_and_the_next_passing_row() {
                     "residual {residual} poison at {poison_at} batch_rows {batch_rows} \
                      (passing {passing:?})"
                 );
+            }
+        }
+    }
+}
+
+/// A distance check shaped like Spark's subtraction under ANSI: it raises when the pair's
+/// distance (forward `R - L`, backward `L - R`) is past `limit`, as an overflow does. It reads
+/// the two value columns only.
+#[derive(Debug)]
+struct Far {
+    backward: bool,
+    limit: i64,
+}
+
+impl Predicate for Far {
+    fn evaluate(&self, batch: &RecordBatch) -> Result<BooleanArray> {
+        assert_eq!(batch.num_columns(), 2, "the distance reads the two values");
+        let l = batch.column(0).as_primitive::<Int64Type>();
+        let r = batch.column(1).as_primitive::<Int64Type>();
+        for (l, r) in l.iter().zip(r.iter()) {
+            let (Some(l), Some(r)) = (l, r) else { continue };
+            let d = if self.backward { l - r } else { r - l };
+            if d > self.limit {
+                return Err(krishiv_common::error::InternalError {
+                    message: format!("distance {d} past {}", self.limit),
+                }
+                .into());
+            }
+        }
+        Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+    }
+}
+
+fn far(backward: bool, limit: i64) -> AsOfDistance {
+    AsOfDistance {
+        check: Arc::new(Far { backward, limit }),
+        left_columns: vec![1],
+        right_columns: vec![1],
+        schema: Arc::new(Schema::new(vec![
+            Field::new("l", DataType::Int64, true),
+            Field::new("r", DataType::Int64, true),
+        ])),
+    }
+}
+
+/// Whether Spark raises: SQL (`every` false) evaluates forward's distance on each left row's
+/// match and its next passing row, and none backward; Connect (`every`) evaluates it on every
+/// passing pair, in both directions.
+fn raises(case: &Case, left: &[Row], right: &[Row], every: bool, limit: i64) -> bool {
+    left.iter().any(|l| {
+        let (Some(k), Some(lt)) = (l.k, l.t) else {
+            return false;
+        };
+        let mut passing: Vec<i64> = right
+            .iter()
+            .filter(|r| {
+                r.k == Some(k)
+                    && r.t.is_some_and(|rt| case.passes(lt, rt))
+                    && (!case.residual || Residual::eval(l.w, r.w))
+            })
+            .filter_map(|r| r.t)
+            .collect();
+        passing.sort_unstable();
+        let distance = |rt: i64| if case.backward { lt - rt } else { rt - lt };
+        let evaluated: Vec<i64> = match (every, case.backward) {
+            (true, _) => passing,
+            (false, true) => Vec::new(),
+            (false, false) => passing.into_iter().take(2).collect(),
+        };
+        evaluated.into_iter().any(|rt| distance(rt) > limit)
+    })
+}
+
+/// The distance raises exactly where Spark's does, on both forms: many left rows of one key
+/// matching one right row over several left batches, the next passing row in a later chunk or
+/// absent, two keys in a row (a waiting row never takes the next key's row), in memory and
+/// spilled, with and without a residual.
+#[tokio::test]
+async fn the_distance_raises_where_spark_raises() {
+    let mut left: Vec<Row> = (0..24).map(|i| row(Some(1), Some(10 + i % 3), i)).collect();
+    left.extend((0..6).map(|i| row(Some(1), Some(30 + i), 40 + i)));
+    left.extend((0..9).map(|i| row(Some(2), Some(4 + i), 60 + i)));
+    left.push(row(Some(3), Some(50), 90));
+    let right = vec![
+        row(Some(1), None, 100),
+        row(Some(1), Some(3), 101),
+        row(Some(1), Some(12), 102),
+        row(Some(1), Some(19), 103),
+        row(Some(1), Some(36), 104),
+        row(Some(1), Some(70), 105),
+        row(Some(2), Some(1), 106),
+        row(Some(2), Some(9), 107),
+        row(Some(2), Some(40), 108),
+        row(Some(3), Some(49), 109),
+    ];
+    for case in cases().into_iter().filter(|c| c.exact) {
+        for every in [false, true] {
+            for limit in [0, 2, 6, 9, 20, 35, 60, 100] {
+                let expected = raises(&case, &left, &right, every, limit);
+                for batch_rows in [1, 4, 7] {
+                    for group_bytes in [usize::MAX, 64] {
+                        let got = run_case(
+                            case,
+                            &left,
+                            &right,
+                            batch_rows,
+                            group_bytes,
+                            Some((far(case.backward, limit), every)),
+                        )
+                        .await;
+                        assert_eq!(
+                            got.is_err(),
+                            expected,
+                            "{case:?} every {every} limit {limit} batch_rows {batch_rows} \
+                             group_bytes {group_bytes}: {:?}",
+                            got.err()
+                        );
+                        if let Ok(run) = got {
+                            assert_eq!(run.rows, case.oracle(&left, &right), "{case:?}");
+                        }
+                    }
+                }
             }
         }
     }

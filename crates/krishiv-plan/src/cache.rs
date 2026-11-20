@@ -846,6 +846,7 @@ impl Encoder {
                 self.debug(&as_of.direction);
                 self.flag(as_of.allow_exact);
                 self.flag(as_of.as_written);
+                self.flag(as_of.distance_on_every_pair);
                 match &as_of.tolerance {
                     None => self.tag("no-tolerance"),
                     Some(t) => self.expr(t, bias),

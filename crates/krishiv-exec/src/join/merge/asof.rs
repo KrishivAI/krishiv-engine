@@ -20,14 +20,26 @@
 //! Spark stops at it. Backward evaluates every pair the comparison allows and emits a row once a
 //! right row is past its value; the best rows of the rows still open are copied out of each read
 //! chunk, reserved ([`Merge::as_of_compact`]). Values compare by their sort rows (canonical floats;
-//! structs and arrays in Spark's order).
+//! structs and arrays in Spark's order). Because pairs go through the residual a batch at a time,
+//! forward may evaluate it on right rows past the two Spark's scan stops at: a residual that
+//! raises only there (`10 / q.v` with a later `v = 0`) raises here and not in Spark.
+//!
+//! Spark's distance ([`AsOfDistance`], planned only when it may raise) is evaluated where Spark
+//! evaluates it, over a narrow batch of the columns it reads. SQL (Spark's scan): forward only,
+//! on a left row's match and its next passing row; a run of left rows matched at one right row
+//! checks its first row only (its `R - L` is the largest of the run). Connect (Spark's
+//! `RewriteAsOfJoin`, `min_by` over every passing right row): every passing pair, both
+//! directions. Without a residual the farthest pair of a key decides (the distance only grows
+//! away from the match): backward its last matched left row with the first right row that passed
+//! one, forward its first matched left row with the group's last right row (the group is read to
+//! its end); with a residual every passing pair is checked.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use arrow_array::{Array, RecordBatch};
 use arrow_row::Rows;
-use arrow_schema::{DataType, Schema};
+use arrow_schema::{DataType, Schema, SchemaRef};
 use krishiv_common::error::KrishivError;
 use krishiv_types::batch::Batch;
 
@@ -55,11 +67,31 @@ pub struct AsOfMergeSpec {
     pub direction: AsOfMergeDirection,
     /// Whether an equal value matches.
     pub allow_exact: bool,
-    /// Forward: Spark's distance `R - L` (over probe then build columns; the merge checks
-    /// `isnotnull` of it),
-    /// evaluated on each left row's matched pair and its next passing pair, as Spark's forward scan
-    /// evaluates its `orderExpression`; it raises what Spark raises there.
+    /// Spark's distance (over probe then build columns; the merge checks `isnotnull` of it),
+    /// planned only when it may raise: forward `R - L` on each left row's matched pair and its
+    /// next passing pair, as Spark's forward scan evaluates its `orderExpression`; with
+    /// [`AsOfMergeSpec::distance_on_every_pair`] (forward `R - L`, backward `L - R`) where every
+    /// passing pair would raise. It raises what Spark raises there.
     pub distance: Option<crate::physical::Residual>,
+    /// Spark's Connect form (`RewriteAsOfJoin`'s `min_by`): the distance of every passing pair
+    /// counts, in both directions.
+    pub distance_on_every_pair: bool,
+}
+
+/// An as-of join's distance check compiled for the merge: Spark's `orderExpression` over a
+/// narrow batch of only the columns it reads (`left_columns` of the probe input, then
+/// `right_columns` of the build input, as `schema`). The merge evaluates it where Spark
+/// evaluates the distance; only what it raises matters.
+#[derive(Debug, Clone)]
+pub struct AsOfDistance {
+    /// The check: `isnotnull(distance)` over `schema`.
+    pub check: Arc<dyn Predicate>,
+    /// The probe input's columns the distance reads, in `schema` order.
+    pub left_columns: Vec<usize>,
+    /// The build input's columns the distance reads, after the probe's in `schema`.
+    pub right_columns: Vec<usize>,
+    /// The narrow batch's schema.
+    pub schema: SchemaRef,
 }
 
 /// An as-of merge's encoders.
@@ -70,8 +102,10 @@ pub(crate) struct AsOfMerge {
     right: Arc<KeyEncoder>,
     backward: bool,
     allow_exact: bool,
-    /// Forward: Spark's distance check, compiled ([`AsOfMergeSpec::distance`]).
-    distance: Option<Arc<dyn Predicate>>,
+    /// Spark's distance check, compiled ([`AsOfMergeSpec::distance`]).
+    distance: Option<AsOfDistance>,
+    /// The distance counts on every passing pair ([`AsOfMergeSpec::distance_on_every_pair`]).
+    every_pair: bool,
 }
 
 /// Whether sort rows of `a` and `b` compare as one type: equal but for nested field names and
@@ -101,7 +135,7 @@ impl AsOfMerge {
         left: &Schema,
         right: &Schema,
         spec: &AsOfMergeSpec,
-        distance: Option<Arc<dyn Predicate>>,
+        distance: Option<AsOfDistance>,
     ) -> Result<Self> {
         let types = (
             left.fields().get(spec.left_column).map(|f| f.data_type()),
@@ -122,9 +156,12 @@ impl AsOfMerge {
             right: KeyEncoder::new(right, &[SortKey::asc(spec.right_column)])?,
             backward: spec.direction == AsOfMergeDirection::Backward,
             allow_exact: spec.allow_exact,
-            distance: (spec.direction == AsOfMergeDirection::Forward)
+            // Spark's SQL scan evaluates no distance backward.
+            distance: (spec.direction == AsOfMergeDirection::Forward
+                || spec.distance_on_every_pair)
                 .then_some(distance)
                 .flatten(),
+            every_pair: spec.distance_on_every_pair,
         })
     }
 
@@ -164,6 +201,12 @@ pub(crate) struct AsOfCursor {
     awaiting_at: Option<(u64, usize)>,
     /// Pairs (left batch, left row, right row) whose distance is to be evaluated.
     checks: Vec<(Arc<Keyed>, usize, Pick)>,
+    /// Every-pair distance without a residual: the left row of the key's farthest passing pair
+    /// (backward the last matched left row, forward the first).
+    extreme_left: Option<(Arc<Keyed>, usize)>,
+    /// Its right row: backward the first right row that passed a left row, forward the group's
+    /// last right row with a value (read to the group's end at the key's end).
+    extreme_right: Option<Pick>,
 }
 
 /// Left rows `start..end` of the current left batch being matched.
@@ -281,6 +324,16 @@ impl Merge {
             .fetch_add(visited, Ordering::Relaxed);
         if filtered && a.backward && self.chunks.row >= c.end {
             self.as_of_compact(&mut slice, c.serial).await?;
+            let mut held: Vec<u64> = slice.best[slice.next - slice.start..]
+                .iter()
+                .flatten()
+                .map(|p| p.serial)
+                .collect();
+            held.sort_unstable();
+            held.dedup();
+            self.counters
+                .as_of_held_chunks
+                .fetch_max(held.len() as u64, Ordering::Relaxed);
         }
         self.phase = Phase::AsOf(slice);
         Ok(())
@@ -318,6 +371,10 @@ impl Merge {
                     self.as_of_cursor.checks.push((left, i, pick()));
                 }
             }
+            if a.distance.is_some() && a.every_pair && !a.backward {
+                // Forward's farthest right row so far.
+                self.as_of_cursor.extreme_right = Some(pick());
+            }
             let passes = a.passes(
                 values.row(r - c.start).data(),
                 slice.values.row(slice.next - slice.start).data(),
@@ -326,6 +383,13 @@ impl Merge {
                 // The best so far for the next left row and every later one (their values are
                 // not smaller).
                 (true, true) => {
+                    if a.distance.is_some()
+                        && a.every_pair
+                        && self.as_of_cursor.extreme_right.is_none()
+                    {
+                        // The smallest right value any left row passes: the farthest.
+                        self.as_of_cursor.extreme_right = Some(pick());
+                    }
                     self.as_of_cursor.candidate = Some(pick());
                     self.chunks.row += 1;
                     visited += 1;
@@ -339,7 +403,12 @@ impl Merge {
                 // The first right row the next left row allows; it may serve the rows after it.
                 (false, true) => {
                     self.as_of_emit(slice.next, Some(pick()));
+                    // Only the first left row of a run matched at one right row waits: its
+                    // value is the smallest, so its `R - L` is the largest of the run, here and
+                    // at the next row; if it does not raise, none of the others does.
                     if a.distance.is_some()
+                        && !a.every_pair
+                        && self.as_of_cursor.awaiting.is_empty()
                         && let Some(l) = self.left.current.clone()
                     {
                         self.as_of_cursor
@@ -460,37 +529,59 @@ impl Merge {
             serial: c.serial,
             row: r,
         };
+        let every = a.every_pair && a.distance.is_some();
         if a.backward {
-            // Rows come in as-of order: the last passing pair is the nearest.
+            // Rows come in as-of order: the last passing pair is the nearest. Every passing
+            // pair's distance counts on the Connect form.
             for (j, &(i, r)) in pairs.iter().enumerate() {
                 if mask.is_valid(j) && mask.value(j) {
+                    if every {
+                        self.as_of_cursor.checks.push((Arc::clone(&l), i, pick(r)));
+                    }
                     slice.best[i - slice.start] = Some(pick(r));
                 }
             }
         } else {
-            // A row's first passing pair is its match; with a distance, its next passing pair is
-            // checked too, then the row is done.
+            // A row's first passing pair is its match. With a distance its next passing pair is
+            // checked too, then the row is done; on the Connect form every later passing pair
+            // is, so the row waits to the group's end. One state per slice row (pairs come only
+            // from open and waiting rows).
+            const OPEN: u8 = 0;
+            const WAITING: u8 = 1;
+            const DONE: u8 = 2;
+            let mut state = vec![OPEN; slice.end - slice.start];
+            for &w in &slice.awaiting {
+                state[w - slice.start] = WAITING;
+            }
             let mut matched: Vec<usize> = Vec::new();
-            let mut checked: Vec<usize> = Vec::new();
-            let mut waiting = std::mem::take(&mut slice.awaiting);
             for (j, &(i, r)) in pairs.iter().enumerate() {
                 if !(mask.is_valid(j) && mask.value(j)) {
                     continue;
                 }
-                if let Some(at) = waiting.iter().position(|&w| w == i) {
-                    waiting.swap_remove(at);
-                    checked.push(i);
-                    self.as_of_cursor.checks.push((Arc::clone(&l), i, pick(r)));
-                } else if !matched.contains(&i) && !checked.contains(&i) {
-                    self.as_of_emit(i, Some(pick(r)));
-                    matched.push(i);
-                    if a.distance.is_some() {
+                let at = i - slice.start;
+                match state[at] {
+                    WAITING => {
                         self.as_of_cursor.checks.push((Arc::clone(&l), i, pick(r)));
-                        waiting.push(i);
+                        if !every {
+                            state[at] = DONE;
+                        }
                     }
+                    OPEN => {
+                        self.as_of_emit(i, Some(pick(r)));
+                        matched.push(i);
+                        if a.distance.is_some() {
+                            self.as_of_cursor.checks.push((Arc::clone(&l), i, pick(r)));
+                            state[at] = WAITING;
+                        } else {
+                            state[at] = DONE;
+                        }
+                    }
+                    _ => {}
                 }
             }
-            slice.awaiting = waiting;
+            slice.awaiting = (slice.start..slice.end)
+                .filter(|&i| state[i - slice.start] == WAITING)
+                .collect();
             matched.sort_unstable();
             slice.open.retain(|i| matched.binary_search(i).is_err());
         }
@@ -503,7 +594,14 @@ impl Merge {
         let Some(a) = self.as_of.clone() else {
             return Ok(());
         };
-        while !self.as_of_cursor.awaiting.is_empty() && !self.as_of_cursor.exhausted {
+        // Forward on the Connect form: the farthest right row is the group's last one with a
+        // value, so the group is read to its end (Spark's `min_by` reads every row too).
+        let to_end = a.every_pair
+            && a.distance.is_some()
+            && !a.backward
+            && self.shared.filter.is_none()
+            && self.as_of_cursor.extreme_left.is_some();
+        while (to_end || !self.as_of_cursor.awaiting.is_empty()) && !self.as_of_cursor.exhausted {
             self.query.check_cancelled()?;
             if !self.next_chunk().await? {
                 self.as_of_cursor.exhausted = true;
@@ -515,23 +613,37 @@ impl Merge {
             let nulls = c.batch.data().column(a.right_column).logical_nulls();
             while self.chunks.row < c.end {
                 let r = self.chunks.row;
-                let skip = nulls.as_ref().is_some_and(|n| n.is_null(r))
-                    || self.as_of_cursor.awaiting_at == Some((c.serial, r));
-                if !skip {
+                if !nulls.as_ref().is_some_and(|n| n.is_null(r)) {
                     let pick = Pick {
                         batch: Arc::clone(&c.batch),
                         serial: c.serial,
                         row: r,
                     };
-                    for (left, i) in std::mem::take(&mut self.as_of_cursor.awaiting) {
-                        self.as_of_cursor.checks.push((left, i, pick.clone()));
+                    if !self.as_of_cursor.awaiting.is_empty()
+                        && self.as_of_cursor.awaiting_at != Some((c.serial, r))
+                    {
+                        for (left, i) in std::mem::take(&mut self.as_of_cursor.awaiting) {
+                            self.as_of_cursor.checks.push((left, i, pick.clone()));
+                        }
                     }
-                    break;
+                    if to_end {
+                        self.as_of_cursor.extreme_right = Some(pick);
+                    } else if self.as_of_cursor.awaiting.is_empty() {
+                        break;
+                    }
                 }
                 self.chunks.row += 1;
             }
+            // The checks gathered here pin their chunks: evaluate them before the next one.
+            self.as_of_checks(&a)?;
         }
         self.as_of_cursor.awaiting.clear();
+        if let (Some((left, i)), Some(right)) = (
+            self.as_of_cursor.extreme_left.take(),
+            self.as_of_cursor.extreme_right.take(),
+        ) {
+            self.as_of_cursor.checks.push((left, i, right));
+        }
         self.as_of_checks(&a)
     }
 
@@ -564,10 +676,21 @@ impl Merge {
         }
         let lefts: Vec<RecordBatch> = lefts.into_iter().map(|(_, b)| b).collect();
         let rights: Vec<RecordBatch> = rights.into_iter().map(|(_, b)| b).collect();
-        let mut columns = gather(&lefts, &left_idx, self.left_columns)?;
-        columns.extend(gather(&rights, &right_idx, self.right_columns)?);
-        let pairs = super::record(&self.shared.filter_schema, columns, checks.len())?;
-        distance.evaluate_in(&pairs, self.partition)?;
+        // Only the columns the distance reads (its two values, usually).
+        let take = |sources: &[RecordBatch], idx: &[(usize, usize)], cols: &[usize]| {
+            cols.iter()
+                .map(|&c| {
+                    let arrays: Vec<&dyn Array> =
+                        sources.iter().map(|b| b.column(c).as_ref()).collect();
+                    arrow_select::interleave::interleave(&arrays, idx)
+                        .map_err(|e| internal(e.to_string()))
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+        let mut columns = take(&lefts, &left_idx, &distance.left_columns)?;
+        columns.extend(take(&rights, &right_idx, &distance.right_columns)?);
+        let pairs = super::record(&distance.schema, columns, checks.len())?;
+        distance.check.evaluate_in(&pairs, self.partition)?;
         Ok(())
     }
 
@@ -660,6 +783,17 @@ impl Merge {
         let Some(l) = self.left.current.clone() else {
             return;
         };
+        if pick.is_some()
+            && self.shared.filter.is_none()
+            && let Some(a) = &self.as_of
+            && a.every_pair
+            && a.distance.is_some()
+            && (a.backward || self.as_of_cursor.extreme_left.is_none())
+        {
+            // The left row of the key's farthest passing pair: backward the largest matched
+            // value (the last), forward the smallest (the first).
+            self.as_of_cursor.extreme_left = Some((Arc::clone(&l), i));
+        }
         match pick {
             Some(p) => {
                 let left = self.out.left_source(&l.batch, l.serial);

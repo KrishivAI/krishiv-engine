@@ -689,6 +689,7 @@ impl Encoder {
                     } as i32,
                     allow_exact: a.allow_exact,
                     distance: self.residual(a.distance.as_ref())?,
+                    distance_on_every_pair: a.distance_on_every_pair,
                 }),
             },
         })

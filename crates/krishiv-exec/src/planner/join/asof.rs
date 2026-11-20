@@ -104,9 +104,11 @@ impl Planner<'_> {
         };
         let (probe, build) = self.co_partition(probe, &probe_keys, build, &build_keys)?;
         let filter = residual_of(&probe, &build, &residual);
+        // Only a distance that can raise is evaluated: its value is never used.
         let distance = as_of
             .distance
             .as_deref()
+            .filter(|d| krishiv_plan::may_raise(d, self.env.ansi))
             .and_then(|d| residual_of(&probe, &build, &[d]));
         let null_safe = keys.iter().map(|k| k.2).collect();
         let mut layout = probe.layout.clone();
@@ -145,6 +147,7 @@ impl Planner<'_> {
                 direction,
                 allow_exact: as_of.allow_exact,
                 distance,
+                distance_on_every_pair: as_of.distance_on_every_pair,
             }),
         };
         // Validates the join and gives its schema.

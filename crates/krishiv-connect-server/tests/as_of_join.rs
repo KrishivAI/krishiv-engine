@@ -312,3 +312,62 @@ async fn as_of_joins_give_sparks_rows() {
         }
     }
 }
+
+/// Spark evaluates a Connect as-of join's distance on every passing pair (`RewriteAsOfJoin`'s
+/// `min_by`), backward `L - R` as well as forward `R - L`: under ANSI an overflow on any passing
+/// row raises, where the SQL scan would not (Spark 4.3.0, the fixture's `overflow` cases).
+#[tokio::test]
+async fn as_of_join_distances_overflow_where_sparks_do() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/spark-4.3.0/connect-asof.json"
+    );
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("fixture")).expect("json");
+    let s = start().await;
+    let cases = doc["overflow"].as_array().expect("overflow cases");
+    assert!(cases.len() >= 5, "the fixture's overflow cases");
+    for case in cases {
+        let name = case["name"].as_str().expect("name");
+        let side = |values: &serde_json::Value, column: &str| {
+            let rows: Vec<serde_json::Value> = values
+                .as_array()
+                .expect("values")
+                .iter()
+                .map(|v| serde_json::Value::Array(vec![v.clone()]))
+                .collect();
+            serde_json::json!({ "columns": [column], "rows": rows })
+        };
+        let rel = relation(RelType::AsOfJoin(Box::new(pb::AsOfJoin {
+            left: Some(Box::new(values(&side(&case["left"], "lt"), "l"))),
+            right: Some(Box::new(values(&side(&case["right"], "rt"), "r"))),
+            left_as_of: Some(attr("lt")),
+            right_as_of: Some(attr("rt")),
+            join_expr: None,
+            using_columns: Vec::new(),
+            join_type: "inner".to_owned(),
+            tolerance: None,
+            allow_exact_matches: true,
+            direction: case["direction"].as_str().expect("direction").to_owned(),
+        })));
+        let got = execute(&s.channel, rel).await;
+        match case["error"].as_str() {
+            Some(class) => {
+                let Err(e) = got else {
+                    panic!("{name}: Spark raises {class}, Krishiv ran");
+                };
+                assert_eq!(error_class(&e), class, "{name}");
+            }
+            None => {
+                let want: Vec<String> = case["rows"]
+                    .as_array()
+                    .expect("rows")
+                    .iter()
+                    .map(|r| r.as_str().expect("row").to_owned())
+                    .collect();
+                let got = got.unwrap_or_else(|e| panic!("{name}: {e}"));
+                assert_eq!(rows(&got), want, "{name}");
+            }
+        }
+    }
+}

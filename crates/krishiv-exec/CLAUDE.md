@@ -59,10 +59,12 @@ split through the same `Merge`. `join/merge/asof.rs` the as-of merge (Spark 4.3'
 left row takes the nearest right row of its group: without a residual two pointers whose place (and backward's candidate)
 carries across the left batches of a key, so a group is read once (`AsOfCursor`, metric `as_of_right_rows`); with one,
 pairs are evaluated per left batch, forward emits a row at its first passing pair and backward at the first right row past
-its value, the open rows' best rows copied out of each read chunk, reserved (`as_of_compact`); forward evaluates Spark's
-distance `R - L` (`AsOfMergeSpec::distance`, `isnotnull` built at instantiation so no rule folds it) on each row's match
-and its next passing row, as Spark's scan does, so an ANSI overflow raises where Spark's does (`as_of_finish` reads that
-row at the key's end); `planner/join/asof.rs` plans `PlanNode::AsOfJoin` onto it (no key: one constant key; runtime-filter
+its value, the open rows' best rows copied out of each read chunk, reserved (`as_of_compact`; gauge `as_of_held_chunks`);
+Spark's distance (`AsOfMergeSpec::distance`, planned only when `may_raise`; `AsOfDistance` compiled at instantiation over
+a narrow batch of the columns it reads, `isnotnull` so no rule folds it) is evaluated where Spark evaluates it: SQL,
+forward only, on a row's match and its next passing row (one row per run matched at one right row); Connect
+(`distance_on_every_pair`, Spark's `RewriteAsOfJoin`), every passing pair in both directions, by the key's farthest pair
+without a residual (`as_of_finish` reads to the group's end forward); so an ANSI overflow raises where Spark's does; `planner/join/asof.rs` plans `PlanNode::AsOfJoin` onto it (no key: one constant key; runtime-filter
 sites on the left only; nearest and tolerance are `KRISHIV_UNSUPPORTED_FEATURE`).
 `values/` (P2-T177) `ValueService` + `LocalValues`: runtime filters, subquery results and broadcast builds as
 versioned values (`ValueId`, `Version` are plan data), published as one partial per producer partition and visible

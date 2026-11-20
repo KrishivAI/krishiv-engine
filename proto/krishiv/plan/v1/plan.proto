@@ -1066,6 +1066,9 @@ message AsOfMerge {
   bool allow_exact = 4;
   // feature: as_of_join
   optional Residual distance = 5;
+  // feature: as_of_join
+  // The distance counts on every passing pair, in both directions (Spark's Connect form).
+  bool distance_on_every_pair = 6;
 }
 
 // feature: as_of_join

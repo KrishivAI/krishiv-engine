@@ -58,11 +58,18 @@ pub struct AsOfMatch {
     pub allow_exact: bool,
     /// The largest `|L - R|` that matches: a foldable value at least zero (Connect only).
     pub tolerance: Option<Arc<Expr>>,
-    /// Resolved, forward only: `R - L` over the operands as normalized, Spark's distance
-    /// (`orderExpression`) where their type subtracts. Spark evaluates it on each left row's
-    /// matched right row and on the next right row that passes, so the executor does too: what
-    /// it raises (an ANSI overflow) is Spark's error. `None` before analysis.
+    /// Resolved: Spark's distance (`orderExpression`) over the operands as normalized, where
+    /// their type subtracts: `R - L` forward, and backward `L - R` when
+    /// [`AsOfMatch::distance_on_every_pair`]. The executor evaluates it where Spark does, so
+    /// what it raises (an ANSI overflow) is Spark's error. `None` before analysis, and when no
+    /// row can raise.
     pub distance: Option<Arc<Expr>>,
+    /// Where Spark evaluates the distance. `false` (SQL, Spark's `SortMergeAsOfJoinExec` scan):
+    /// forward only, on each left row's matched right row and the next right row that passes.
+    /// `true` (Connect, whose `AsOfJoin` Spark rewrites into `min_by` over every passing right
+    /// row, `RewriteAsOfJoin`): both directions, on every pair that passes. Set by the front
+    /// end and kept through analysis.
+    pub distance_on_every_pair: bool,
     /// Unresolved SQL: the operands are as written and the analyzer puts the one that
     /// reads the left input first (Spark's `normalizeMatchOperands`); `false` once
     /// resolved and for Connect, whose operands are already per side.
@@ -88,6 +95,7 @@ impl AsOfMatch {
             allow_exact,
             tolerance: None,
             distance: None,
+            distance_on_every_pair: false,
             as_written: true,
         })
     }

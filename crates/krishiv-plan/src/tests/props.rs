@@ -550,6 +550,7 @@ impl Gen<'_> {
                     allow_exact: self.flag(),
                     tolerance: self.flag().then(|| Arc::new(self.expr(1))),
                     distance: self.flag().then(|| Arc::new(self.expr(1))),
+                    distance_on_every_pair: self.flag(),
                     as_written: self.flag(),
                 }),
             },
