@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The arrow-rs `FlightSqlService` implementation (design P3-T101 §2, §4, §5): Handshake,
-//! statement queries (`GetFlightInfo` / `DoGet`), `GetSqlInfo`, `CancelFlightInfo`, `CancelQuery`. Every RPC
-//! starts with the drain check and the caller `AuthLayer` attached (fail closed); what 65a does
+//! statement queries (`GetFlightInfo` / `DoGet`), `GetSqlInfo`, `CancelFlightInfo`, `CancelQuery`. Every RPC has the
+//! caller `AuthLayer` attached (fail closed), and an RPC that starts new work (via `admit_new`) first
+//! passes the drain check; what 65a does
 //! not serve never reaches it: [`crate::gate`] answers `UNIMPLEMENTED` first (§16 m5).
 
 use std::pin::Pin;
@@ -76,7 +77,7 @@ impl FlightSqlServer {
         update: CommandStatementUpdate,
         request: &Request<()>,
     ) -> Result<Response<DoPutStream>, Status> {
-        let caller = self.admit(request)?;
+        let caller = self.admit_new(request)?;
         self.statement_update(update, request.metadata(), &caller)
             .await
     }
@@ -88,7 +89,7 @@ impl FlightSqlServer {
         stream: Peekable<Streaming<FlightData>>,
         request: &Request<()>,
     ) -> Result<Response<DoPutStream>, Status> {
-        let caller = self.admit(request)?;
+        let caller = self.admit_new(request)?;
         self.prepared_bind(bind, stream, request.metadata(), &caller)
             .await
     }
@@ -100,7 +101,7 @@ impl FlightSqlServer {
         stream: Peekable<Streaming<FlightData>>,
         request: &Request<()>,
     ) -> Result<Response<DoPutStream>, Status> {
-        let caller = self.admit(request)?;
+        let caller = self.admit_new(request)?;
         self.prepared_update(&update, stream, request.metadata(), &caller)
             .await
     }
@@ -111,7 +112,7 @@ impl FlightSqlServer {
         create: ActionCreatePreparedStatementRequest,
         request: &Request<Action>,
     ) -> Result<Response<ActionStream>, Status> {
-        let caller = self.admit(request)?;
+        let caller = self.admit_new(request)?;
         self.prepared_create(create, request.metadata(), &caller)
             .await
     }
@@ -207,7 +208,7 @@ impl FlightSqlService for FlightSqlServer {
         query: CommandPreparedStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let result = match self.admit(&request) {
+        let result = match self.admit_new(&request) {
             Ok(caller) => {
                 let descriptor = request.get_ref().clone();
                 self.prepared_info(&query, request.metadata(), descriptor, &caller)
