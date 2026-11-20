@@ -20,18 +20,28 @@
 //! - **Reads.** `storage = allowed-prefixes`: the query's I/O and path placement (confined by the
 //!   session in server mode). `storage = vended` is refused when the table is read (unit 3); no
 //!   ambient fallback is tried.
+//! - **Writes (PR-36c part 2).** Only with `option.write = true` (default `false`: read-only, as
+//!   before): a table loaded at its current version opens with a committer, a [`RestCommitter`]
+//!   (the connector's `RestCommitTransport`) sending each commit through
+//!   [`RestClient::commit_table_as`] for the caller that loaded it, and probing with
+//!   `snapshots=all` straight from the catalog (never this cache). The provider then accepts
+//!   appends, overwrites and copy-on-write row-level changes; its data and metadata files go
+//!   through the same I/O and path placement as its reads. A time-travelled table never writes.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
+
 use krishiv_common::error::{
     KrishivCatalogTableUnsupported, KrishivError, KrishivUnsupportedFeature,
 };
 use krishiv_connectors_iceberg::plan::VersionSpec;
 use krishiv_connectors_iceberg::{
-    IcebergMetadata, IcebergTable, IcebergTableProvider, StorageRegistration,
+    IcebergMetadata, IcebergTable, IcebergTableProvider, RestCommitTransport, StorageRegistration,
+    TransportFailure, TransportReply,
 };
 use krishiv_exec::planner::TableProvider;
 use krishiv_plan::TableVersion;
@@ -44,7 +54,7 @@ use krishiv_session::catalog_registry::{
 };
 
 use super::{quoted, rest_caller};
-use crate::iceberg_rest::{LoadedTable, RestClient, RestError, RestLimits};
+use crate::iceberg_rest::{LoadedTable, RestCaller, RestClient, RestError, RestLimits, Snapshots};
 use crate::location::{LocationPolicy, LocationRule, RemoteLocationPolicy};
 
 /// Iceberg's metadata table names (`MetadataTableType` at apache-iceberg-1.12.0), lower case.
@@ -99,18 +109,26 @@ pub(crate) struct RestCatalog {
     client: Arc<RestClient>,
     storage: CatalogStorage,
     delegated: bool,
+    /// `option.write = true`: tables loaded at their current version accept writes.
+    writes: bool,
     ttl: Duration,
     epoch: AtomicU64,
     cache: Mutex<HashMap<Key, (Instant, Arc<Loaded>)>>,
 }
 
 impl RestCatalog {
-    pub(crate) fn new(decl: &CatalogDecl, client: Arc<RestClient>, ttl: Duration) -> Self {
+    pub(crate) fn new(
+        decl: &CatalogDecl,
+        client: Arc<RestClient>,
+        ttl: Duration,
+        writes: bool,
+    ) -> Self {
         Self {
             name: decl.name.clone(),
             client,
             storage: decl.storage,
             delegated: matches!(decl.auth, CatalogAuth::Delegated { .. }),
+            writes,
             ttl,
             epoch: AtomicU64::new(0),
             cache: Mutex::new(HashMap::new()),
@@ -318,6 +336,7 @@ impl CallerCatalog for RestCatalog {
             let Some(loaded) = self.loaded(caller, &id.namespace, &id.name).await? else {
                 return Ok(None);
             };
+            let time_travel = version.is_some();
             let spec = version.map_or(VersionSpec::Current, |v| VersionSpec::Id(v.0));
             let snapshot = loaded.metadata.snapshot(&spec)?;
             let mut columns = Vec::new();
@@ -344,15 +363,29 @@ impl CallerCatalog for RestCatalog {
                 file_metadata: FileMetadata::None,
                 column_comments,
             };
+            let relation = self.relation(&id.namespace, &id.name);
+            // Only the current version writes: its commits are based on this answer's metadata.
+            let committer = (self.writes && !time_travel).then(|| RestCommitter {
+                client: Arc::clone(&self.client),
+                caller: rest_caller(caller),
+                namespace: id.namespace.clone(),
+                table: id.name.clone(),
+                relation: relation.clone(),
+            });
             let table = RestTable {
-                relation: self.relation(&id.namespace, &id.name),
+                relation,
                 namespace: id.namespace.clone(),
                 name: id.name.clone(),
                 storage: self.storage,
                 loaded,
-                spec: snapshot
-                    .snapshot_id
-                    .map_or(VersionSpec::Current, VersionSpec::Id),
+                spec: if committer.is_some() {
+                    VersionSpec::Current
+                } else {
+                    snapshot
+                        .snapshot_id
+                        .map_or(VersionSpec::Current, VersionSpec::Id)
+                },
+                committer: committer.map(Arc::new),
                 registrations: Mutex::new(Vec::new()),
             };
             Ok(Some(LoadedDeclared::new(meta, Some(Arc::new(table)))))
@@ -417,6 +450,8 @@ struct RestTable {
     storage: CatalogStorage,
     loaded: Arc<Loaded>,
     spec: VersionSpec,
+    /// The commit endpoint, when the catalog writes and the table is at its current version.
+    committer: Option<Arc<RestCommitter>>,
     /// The storage registrations of the providers opened, kept while the query holds the table.
     registrations: Mutex<Vec<StorageRegistration>>,
 }
@@ -461,7 +496,7 @@ impl DeclaredTable for RestTable {
             let handle = tokio::runtime::Handle::try_current().ok();
             let work =
                 move || -> Result<(IcebergTableProvider, StorageRegistration), KrishivError> {
-                    let table = IcebergTable::from_metadata(
+                    let mut table = IcebergTable::from_metadata(
                         &registration,
                         &this.loaded.metadata,
                         &this.loaded.metadata_location,
@@ -469,6 +504,10 @@ impl DeclaredTable for RestTable {
                         &this.name,
                         &config,
                     )?;
+                    if let Some(c) = &this.committer {
+                        table =
+                            table.with_rest_commit(Arc::clone(c) as Arc<dyn RestCommitTransport>);
+                    }
                     let open = IcebergTableProvider::open(&table, &this.spec, &config, slots);
                     let provider = match handle {
                         Some(h) => h.block_on(open),
@@ -495,6 +534,107 @@ impl DeclaredTable for RestTable {
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(registration);
             Ok(Arc::new(provider) as Arc<dyn TableProvider>)
+        })
+    }
+}
+
+/// The commit endpoint of one declared table for the caller that loaded it (module docs): the
+/// client's blocking calls on the blocking pool.
+pub(crate) struct RestCommitter {
+    client: Arc<RestClient>,
+    caller: RestCaller,
+    namespace: Vec<String>,
+    table: String,
+    relation: String,
+}
+
+impl std::fmt::Debug for RestCommitter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RestCommitter")
+            .field("relation", &self.relation)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Runs `call` off the async workers: on the blocking pool inside a runtime, else here.
+async fn off_workers<T: Send + 'static>(
+    call: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, tokio::task::JoinError> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle.spawn_blocking(call).await,
+        Err(_) => Ok(call()),
+    }
+}
+
+#[async_trait]
+impl RestCommitTransport for RestCommitter {
+    fn name(&self) -> String {
+        self.relation.clone()
+    }
+
+    async fn post_commit(&self, body: Vec<u8>) -> Result<TransportReply, TransportFailure> {
+        let client = Arc::clone(&self.client);
+        let (caller, ns, table) = (
+            self.caller.clone(),
+            self.namespace.clone(),
+            self.table.clone(),
+        );
+        match off_workers(move || client.commit_table_as(&caller, &ns, &table, &body)).await {
+            Ok(Ok(r)) => {
+                let mut reply = TransportReply::new(r.status, r.body);
+                if let Some(wait) = r.retry_after {
+                    reply = reply.with_retry_after(wait);
+                }
+                Ok(reply)
+            }
+            Ok(Err(f)) => Err(TransportFailure::new(f.sent, f.reason)),
+            // The blocking call may have sent the request before it was lost.
+            Err(_) => Err(TransportFailure::new(
+                true,
+                "the commit call did not finish",
+            )),
+        }
+    }
+
+    async fn load(&self, all_snapshots: bool) -> Result<Vec<u8>, KrishivError> {
+        let client = Arc::clone(&self.client);
+        let (caller, ns, table) = (
+            self.caller.clone(),
+            self.namespace.clone(),
+            self.table.clone(),
+        );
+        let snapshots = if all_snapshots {
+            Snapshots::All
+        } else {
+            Snapshots::Refs
+        };
+        let loaded = off_workers(move || {
+            client.load_table_snapshots_as(&caller, &ns, &table, Some(snapshots))
+        })
+        .await
+        .map_err(|_| {
+            RestError::Transport("the catalog call did not finish".to_owned()).into_error(
+                self.client.name(),
+                &self.relation,
+                &RestLimits::default(),
+            )
+        })??;
+        let Some(t) = loaded else {
+            return Err(krishiv_common::error::KrishivCatalogFailure {
+                catalog: quoted(self.client.name()),
+                relation_name: self.relation.clone(),
+            }
+            .into());
+        };
+        let body = serde_json::json!({
+            "metadata-location": t.metadata_location,
+            "metadata": t.metadata,
+        });
+        serde_json::to_vec(&body).map_err(|e| {
+            krishiv_common::error::InternalError {
+                message: format!("a loadTable answer that does not serialize: {e}"),
+            }
+            .into()
         })
     }
 }
