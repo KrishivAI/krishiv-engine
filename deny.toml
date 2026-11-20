@@ -12,6 +12,10 @@ ignore = [
     # krishiv-exec for its `--cfg loom` concurrency models, never in a
     # shipped binary. Drop this when loom releases without it.
     { id = "RUSTSEC-2026-0441", reason = "unmaintained; dev-only, through loom 0.7.2; no safe upgrade" },
+    # chrono and humantime are declared unmaintained (chronotope/chrono#1768); same
+    # ignores as main. Unmaintained, not vulnerabilities; Arrow and krishiv-store need them.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained; required by every Arrow crate; no safe upgrade" },
+    { id = "RUSTSEC-2026-0542", reason = "unmaintained; through krishiv-store, object_store, sqllogictest; no safe upgrade" },
 ]
 
 [licenses]
