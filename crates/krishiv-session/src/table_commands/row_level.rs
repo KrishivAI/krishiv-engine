@@ -543,8 +543,9 @@ fn delta_task_write_failed(
 /// Spark's `ArithmeticException`s, such as `CAST_OVERFLOW`, `ARITHMETIC_OVERFLOW` and
 /// `DIVIDE_BY_ZERO`) raised in a new value whose store-assignment cast can overflow:
 /// delta-spark's `CheckOverflowInTableWrite` (`UpdateExpressionsSupport.scala:735-757`) catches
-/// any `ArithmeticException` of the value under such a cast (an integral or decimal column whose
-/// value's type does not up-cast to it, `:729-732`) and names the column and the cast's types.
+/// any `ArithmeticException` of the value under such a cast (a column whose type holds an
+/// integral or decimal type, at any depth, and that the value's type does not `Cast.canUpCast`
+/// to, `:719-732`) and names the column and the cast's types.
 /// Krishiv cannot tell which value raised: the first such column in table order is named.
 fn store_assignment_overflow(
     e: &KrishivError,
@@ -554,17 +555,9 @@ fn store_assignment_overflow(
     if !matches!(e.sql_state(), Some("22003" | "22012")) {
         return None;
     }
-    let rank = |t: &DataType| match t {
-        DataType::Byte => Some(1),
-        DataType::Short => Some(2),
-        DataType::Integer => Some(3),
-        DataType::Long => Some(4),
-        _ => None,
-    };
+    // delta-spark's `canCauseCastOverflow` (`:729-732`).
     let can_overflow = |from: &DataType, to: &DataType| {
-        let target = rank(to).is_some() || matches!(to, DataType::Decimal(..));
-        let up_cast = matches!((rank(from), rank(to)), (Some(a), Some(b)) if a <= b);
-        target && from != to && !up_cast
+        contains_integral_or_decimal(to) && !crate::view_schema::can_up_cast(from, to)
     };
     let sql = |t: &DataType| format!("\"{}\"", t.catalog_string().to_uppercase());
     let (column, value) = columns.iter().find_map(|c| {
@@ -587,6 +580,27 @@ fn store_assignment_overflow(
         }
         .into(),
     )
+}
+
+/// delta-spark's `containsIntegralOrDecimalType` (`UpdateExpressionsSupport.scala:719-727`).
+fn contains_integral_or_decimal(t: &DataType) -> bool {
+    match t {
+        DataType::Byte
+        | DataType::Short
+        | DataType::Integer
+        | DataType::Long
+        | DataType::Decimal(_) => true,
+        DataType::Array(a) => contains_integral_or_decimal(a.element_type()),
+        DataType::Map(m) => {
+            contains_integral_or_decimal(m.key_type())
+                || contains_integral_or_decimal(m.value_type())
+        }
+        DataType::Struct(s) => s
+            .fields()
+            .iter()
+            .any(|f| contains_integral_or_decimal(f.data_type())),
+        _ => false,
+    }
 }
 
 /// The touched files (each once) and the total hit count of the find query's rows.

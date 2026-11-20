@@ -532,10 +532,18 @@ fn cols() -> Vec<TableColumn> {
 #[test]
 fn delta_rewrite_errors_that_are_not_the_tasks_are_not_wrapped() {
     use krishiv_common::error::{
-        DeltaUnsupportedSubquery, InternalError, KrishivUnsupportedFeature, OperationCanceled,
-        UnsupportedFeatureTableOperation,
+        DeltaConcurrentAppendWithoutHint, DeltaUnsupportedSubquery, InternalError,
+        KrishivUnsupportedFeature, OperationCanceled, UnsupportedFeatureTableOperation,
     };
     let kept: Vec<KrishivError> = vec![
+        // A commit conflict.
+        DeltaConcurrentAppendWithoutHint {
+            operation: "UPDATE".into(),
+            table_name: "t".into(),
+            version: "3".into(),
+            doc_link: "d".into(),
+        }
+        .into(),
         DeltaUnsupportedSubquery {
             operation: "DELETE".into(),
             cond: "x".into(),
@@ -679,4 +687,33 @@ fn an_assignment_with_a_subquery_reads_the_whole_table() {
         value: None,
     };
     assert!(super::read_filter(cond, &[default]).unwrap().is_some());
+}
+
+/// Review of #909 (9bc733547, P1): a cast can overflow exactly when delta-spark's
+/// `canCauseCastOverflow` says so: the target holds an integral or decimal type at any depth and
+/// the value does not `Cast.canUpCast` to it.
+#[test]
+fn a_cast_can_overflow_as_delta_spark_decides() {
+    use krishiv_types::{ArrayType, DataType as T, DecimalType};
+    let dec = |p, s| T::Decimal(DecimalType::try_new(p, s).unwrap());
+    let array = |t: T| T::Array(Arc::new(ArrayType::new(t, true)));
+    for (value, target, rewrap) in [
+        (T::Integer, dec(10, 0), false),
+        (T::Integer, dec(9, 0), true),
+        (T::Long, dec(20, 0), false),
+        (dec(5, 2), dec(10, 2), false),
+        (dec(10, 2), dec(5, 2), true),
+        (dec(5, 0), T::Integer, false),
+        (T::Null, T::Short, false),
+        (T::Integer, T::Short, true),
+        (T::Short, T::Integer, false),
+        (array(T::Long), array(T::Integer), true),
+        (array(T::Integer), array(T::Long), false),
+        (T::Double, T::String, false),
+    ] {
+        let columns = [TableColumn::new("c", target.clone(), true)];
+        let out =
+            super::store_assignment_overflow(&overflow(), &columns, &[("c".into(), value.clone())]);
+        assert_eq!(out.is_some(), rewrap, "{value:?} into {target:?}");
+    }
 }
