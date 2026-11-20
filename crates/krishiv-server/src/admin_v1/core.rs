@@ -12,13 +12,20 @@ use super::action::{self, Action};
 use super::idempotency::{Idempotency, MAX_ID_LEN, Run};
 use super::{
     AdminApi, AdminError, AdminResult, Call, CancelQueriesByTagRequest, CancelQueryRequest,
-    GetCapabilitiesRequest, GetVersionRequest, KillSessionRequest, ListQueriesRequest,
-    ListSessionsRequest,
+    DrainRequest, GetCapabilitiesRequest, GetDrainStatusRequest, GetReadinessRequest,
+    GetVersionRequest, KillSessionRequest, ListQueriesRequest, ListSessionsRequest,
+    ResumeServingRequest,
 };
 
 /// The RPCs that change something: they take a `request_id`, are remembered by the idempotency
 /// store and write an action record.
-const MUTATING: &[&str] = &["KillSession", "CancelQuery", "CancelQueriesByTag"];
+const MUTATING: &[&str] = &[
+    "KillSession",
+    "CancelQuery",
+    "CancelQueriesByTag",
+    "Drain",
+    "ResumeServing",
+];
 
 pub(super) struct Core {
     api: Arc<dyn AdminApi>,
@@ -154,6 +161,22 @@ impl Core {
                 let r = CancelQueriesByTagRequest::decode(request).map_err(bad)?;
                 Ok(api.cancel_queries_by_tag(call, r).await?.encode_to_vec())
             }
+            "GetReadiness" => {
+                GetReadinessRequest::decode(request).map_err(bad)?;
+                Ok(api.get_readiness(call).await?.encode_to_vec())
+            }
+            "GetDrainStatus" => {
+                GetDrainStatusRequest::decode(request).map_err(bad)?;
+                Ok(api.get_drain_status(call).await?.encode_to_vec())
+            }
+            "Drain" => {
+                let r = DrainRequest::decode(request).map_err(bad)?;
+                Ok(api.drain(call, r).await?.encode_to_vec())
+            }
+            "ResumeServing" => {
+                let r = ResumeServingRequest::decode(request).map_err(bad)?;
+                Ok(api.resume_serving(call, r).await?.encode_to_vec())
+            }
             other => Err(AdminError::internal(format!("no handler for {other}"))),
         }
     }
@@ -167,6 +190,12 @@ fn request_id_in(rpc: &str, request: &[u8]) -> AdminResult<String> {
         "CancelQuery" => CancelQueryRequest::decode(request).map_err(bad)?.request_id,
         "CancelQueriesByTag" => {
             CancelQueriesByTagRequest::decode(request)
+                .map_err(bad)?
+                .request_id
+        }
+        "Drain" => DrainRequest::decode(request).map_err(bad)?.request_id,
+        "ResumeServing" => {
+            ResumeServingRequest::decode(request)
                 .map_err(bad)?
                 .request_id
         }
@@ -191,6 +220,16 @@ fn without_request_id(rpc: &str, request: &[u8]) -> AdminResult<Vec<u8>> {
         }
         "CancelQueriesByTag" => {
             let mut m = CancelQueriesByTagRequest::decode(request).map_err(bad)?;
+            m.request_id.clear();
+            m.encode_to_vec()
+        }
+        "Drain" => {
+            let mut m = DrainRequest::decode(request).map_err(bad)?;
+            m.request_id.clear();
+            m.encode_to_vec()
+        }
+        "ResumeServing" => {
+            let mut m = ResumeServingRequest::decode(request).map_err(bad)?;
             m.request_id.clear();
             m.encode_to_vec()
         }

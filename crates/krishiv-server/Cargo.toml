@@ -56,7 +56,7 @@ tower = { workspace = true, features = ["util"] }
 tonic = { workspace = true, features = ["channel", "server", "router", "codegen"] }
 tonic-prost.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros", "time", "test-util"] }
 
 [lints]
 workspace = true

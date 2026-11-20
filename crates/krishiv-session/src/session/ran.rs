@@ -89,6 +89,7 @@ impl Session {
         }
         self.authorize_statement(&statement, class, &env).await?;
         env.statement_class = Some(class.name());
+        self.refuse_changes_while_draining(class, &redacted, &env)?;
         let command = !matches!(statement, Statement::Query(_));
         let df = self.run_statement(statement, env, query, &redacted).await?;
         // Whatever frame the statement returns (a command's result too) shows the statement's
