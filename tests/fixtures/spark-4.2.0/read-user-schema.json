@@ -3402,6 +3402,149 @@
      "2"
     ]
    ]
+  },
+  {
+   "name": "sql view inferred, partition value added after create",
+   "input": "CREATE TEMPORARY VIEW v12 USING parquet OPTIONS (path pvc/p); then pvc/p/k=3 written",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "sql view file added to a partition after create",
+   "input": "CREATE TEMPORARY VIEW v13 (v STRING, k INT) USING parquet OPTIONS (path pvd/p); then a file added to pvd/p/k=1",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "sql view refreshed after a partition value added",
+   "input": "CREATE TEMPORARY VIEW v14 (v STRING, k INT) USING parquet OPTIONS (path pve/p); then pve/p/k=3 written; REFRESH TABLE v14",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "v3",
+     "3"
+    ]
+   ]
+  },
+  {
+   "name": "sql view partition directory deleted after create",
+   "input": "CREATE TEMPORARY VIEW v15 (v STRING, k INT) USING parquet OPTIONS (path pvf/p); then pvf/p/k=2 deleted",
+   "error_class": "FAILED_READ_FILE.FILE_NOT_EXIST",
+   "error_chain": [
+    "FAILED_READ_FILE.FILE_NOT_EXIST"
+   ],
+   "message": "org.apache.spark.SparkException: [FAILED_READ_FILE.FILE_NOT_EXIST] Encountered error while reading file file://<root>/pvf/p/k=2/part-<uuid>.snappy.parquet. File does not exist. It is possible the underlying files have been updated."
+  },
+  {
+   "name": "sql view refreshed after a partition column added",
+   "input": "CREATE TEMPORARY VIEW v16 (v STRING, k INT) USING parquet OPTIONS (path pvg/p); then pvg/p/k=3/j=1 written; REFRESH TABLE v16",
+   "error_class": "CONFLICTING_PARTITION_COLUMN_NAMES",
+   "message_parameters": {
+    "distinctPartColLists": "\n\tPartition column name list #0: k\n\tPartition column name list #1: k, j\n",
+    "suspiciousPaths": "\n\tfile:<root>/pvg/p/k=1\n\tfile:<root>/pvg/p/k=2\n\tfile:<root>/pvg/p/k=3/j=1"
+   }
+  },
+  {
+   "name": "dataframe view partition value added after create",
+   "input": "spark.read.parquet(pvh/p).createOrReplaceTempView(v17); then pvh/p/k=3 written",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition directory under a plain directory",
+   "input": "parquet cdb/p (files in cdb/p/x/k=1 and cdb/p/k=2)",
+   "error_class": "CONFLICTING_DIRECTORY_STRUCTURES",
+   "message_parameters": {
+    "discoveredBasePaths": "\n\tfile:<root>/cdb/p/x\n\tfile:<root>/cdb/p\n"
+   }
+  },
+  {
+   "name": "partition directories of two depths",
+   "input": "parquet cda/p (files in cda/p/k=1/j=1 and cda/p/k=2)",
+   "error_class": "CONFLICTING_PARTITION_COLUMN_NAMES",
+   "message_parameters": {
+    "distinctPartColLists": "\n\tPartition column name list #0: k, j\n\tPartition column name list #1: k\n",
+    "suspiciousPaths": "\n\tfile:<root>/cda/p/k=2\n\tfile:<root>/cda/p/k=1/j=1"
+   }
   }
  ]
 }
