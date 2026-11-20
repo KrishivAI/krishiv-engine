@@ -121,6 +121,7 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::CollectMetrics { .. } => 41,
         PlanNode::ColumnNames { .. } => 42,
         PlanNode::Tail { .. } => 43,
+        PlanNode::Zip { .. } => 44,
     }
 }
 
@@ -963,6 +964,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
             // Only the tag.
             PlanNode::OneRowRelation
             | PlanNode::PipeOperator { .. }
+            | PlanNode::Zip { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Repartition { exprs, .. } => self.exprs(exprs),
             PlanNode::ColumnNames { op, .. } => match op {

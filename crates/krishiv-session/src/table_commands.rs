@@ -1681,6 +1681,12 @@ struct InsertTarget<'a> {
     by_name: bool,
     overwrite: bool,
     statics: &'a [(String, String)],
+    /// `INSERT INTO .. REPLACE WHERE`: the condition as written (a Delta table replaces the rows it holds).
+    #[cfg_attr(
+        not(feature = "delta"),
+        expect(dead_code, reason = "read by the Delta write path only")
+    )]
+    replace_where: Option<&'a str>,
     /// Checked through to the rows it would write, not written.
     dry: bool,
     /// The writer's options (`writeTo(..).option(..)`, `saveAsTable`'s): a Delta append reads

@@ -1261,6 +1261,21 @@ impl Parser<'_> {
             }
         } else if self.kw_at(0, "JSON_TABLE") && self.sym_at(1, Sym::LParen) {
             self.json_table()?
+        } else if self.kw_at(0, "UNNEST") && self.sym_at(1, Sym::LParen) {
+            // ANSI `UNNEST(array, ...) [WITH ORDINALITY]` (Spark 4.3; `unnest` is non-reserved, so
+            // a quoted name stays a table function).
+            self.bump();
+            self.bump();
+            let args = self.comma_sep(Self::expr)?;
+            self.expect_sym(Sym::RParen)?;
+            let ordinality = if self.kw_at(0, "WITH") && self.kw_at(1, "ORDINALITY") {
+                self.bump();
+                self.bump();
+                true
+            } else {
+                false
+            };
+            TableFactorKind::Unnest { args, ordinality }
         } else {
             let name_start = self.tok(0).map_or(0, |t| t.span.start);
             let name = self.ddl_name()?;

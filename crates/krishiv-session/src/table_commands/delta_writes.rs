@@ -451,7 +451,11 @@ impl Session {
             }
             None => BTreeMap::new(),
         };
-        let mode = if !overwrite {
+        let mode = if let Some(text) = target.replace_where {
+            // `REPLACE WHERE cond`: delta-spark's `replaceWhere`, the condition recorded as written.
+            options.insert(PREDICATE_TEXT_OPTION.to_owned(), text.to_owned());
+            WriteMode::OverwriteByFilter(Arc::new(crate::functions::expr(text)?.expr))
+        } else if !overwrite {
             WriteMode::Append
         } else if !statics.is_empty() {
             let mut filter: Option<krishiv_plan::Expr> = None;
