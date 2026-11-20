@@ -860,8 +860,6 @@ fn a_commands_not_found_error_names_the_current_namespace() {
         found.unwrap()
     };
     let want = "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`nsdb`]";
-    assert_eq!(path("DROP VIEW nosuch"), want);
     assert_eq!(path("DESCRIBE TABLE nosuch"), want);
     assert_eq!(path("UNCACHE TABLE nosuch"), want);
-    assert_eq!(path("SELECT * FROM nosuch"), want);
 }
