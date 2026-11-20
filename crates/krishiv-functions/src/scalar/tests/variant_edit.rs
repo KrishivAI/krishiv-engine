@@ -360,3 +360,20 @@ fn a_created_value_past_the_size_limit_is_refused() {
         Err(ErrorClass::VariantSizeLimit)
     );
 }
+
+/// Spark 4.3.0 run: a NULL variant with a bad path. `variant_delete` checks a literal path at analysis
+/// (INVALID_VARIANT_PATH even for a NULL variant), `variant_insert` evaluates it only for non-NULL rows (NULL).
+#[test]
+fn a_null_variant_with_a_bad_path() {
+    let v = variants(&[None]);
+    let bad = text_col(&[Some("bad")]);
+    let one = variants(&[Some("1")]);
+    assert_eq!(
+        run("variant_delete", &[&v, &bad], None).map(|o| show(&o).remove(0)),
+        Err(ErrorClass::InvalidVariantPath)
+    );
+    assert_eq!(
+        run("variant_insert", &[&v, &bad, &one], None).map(|o| show(&o).remove(0)),
+        Ok(None)
+    );
+}
