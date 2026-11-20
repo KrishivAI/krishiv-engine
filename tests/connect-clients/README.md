@@ -9,7 +9,7 @@ is a separate CI test.
 
 ## Run
 
-Docker is the only tool needed (the clients run in `golang:1.24` and `virtuslab/scala-cli`
+Docker and python3 are the only tools needed (the clients run in `golang:1.24` and `virtuslab/scala-cli`
 containers on the host network).
 
 ```text
@@ -40,3 +40,5 @@ the query) so the two clients' renderings agree.
 CI: `.github/workflows/connect-clients.yml` (manual and weekly) builds the server, runs this script
 and writes `summary.md` to the job summary. Tests of the report script: `python3 -m pytest` in this
 directory.
+
+Note: `error_divide_by_zero` expects Spark's ANSI behaviour (4.x default). Spark 3.5 returns NULL for `1 / 0`, so the check is for 4.x servers only.

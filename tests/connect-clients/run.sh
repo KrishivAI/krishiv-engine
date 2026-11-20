@@ -46,10 +46,11 @@ if [ -n "$server_bin" ]; then
   admin="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
   "$server_bin" server --connect-port "$port" --port "$admin" >"$out/server.log" 2>&1 &
   server_pid=$!
-  for _ in $(seq 1 60); do
+  for i in $(seq 1 60); do
     if python3 -c "import socket; socket.create_connection(('127.0.0.1', $port), 1)" 2>/dev/null; then break; fi
     kill -0 "$server_pid" 2>/dev/null || { echo "the server exited; see $out/server.log" >&2; exit 1; }
     sleep 1
+    [ "$i" = 60 ] && { echo "the server did not open port $port in 60 s; see $out/server.log" >&2; exit 1; }
   done
   remote="sc://127.0.0.1:$port"
 fi
@@ -60,7 +61,7 @@ for c in ${clients//,/ }; do
     go)
       docker run --rm --network host -v "$here:/src:ro" -v "$out:/out" -v krishiv-smoke-gomod:/go/pkg/mod \
         -e GOFLAGS=-buildvcs=false golang:1.24 \
-        sh -c "cp -r /src/go /tmp/go && cd /tmp/go && go mod tidy >/dev/null 2>&1; go run . --remote '$remote' --queries /src/queries.json --out /out/go.json" \
+        sh -c "cp -r /src/go /tmp/go && cd /tmp/go && go mod tidy && go run . --remote '$remote' --queries /src/queries.json --out /out/go.json" \
         || echo "go client run failed" >&2
       ;;
     scala)
