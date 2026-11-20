@@ -32,6 +32,8 @@ struct Files {
     files: Mutex<Vec<(Vec<u8>, RecordBatch)>>,
     commits: AtomicUsize,
     next: AtomicUsize,
+    /// Each rewrite request's `read_filter`, printed (`None`: every row).
+    reads: Mutex<Vec<Option<String>>>,
 }
 
 fn schema() -> SchemaRef {
@@ -61,6 +63,7 @@ impl Files {
             ]),
             commits: AtomicUsize::new(0),
             next: AtomicUsize::new(3),
+            reads: Mutex::new(Vec::new()),
         })
     }
 
@@ -149,6 +152,11 @@ impl RowLevelTable for RowLevel {
     }
 
     fn rewriter(&self, request: &RowLevelWrite) -> krishiv_exec::Result<Arc<dyn Sink>> {
+        self.0
+            .reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request.read_filter.as_ref().map(ToString::to_string));
         Ok(Arc::new(Swap {
             files: Arc::clone(&self.0),
             touched: request.touched.clone(),
@@ -666,27 +674,48 @@ fn an_overflow_under_a_narrowing_store_cast_is_delta_cast_overflow() {
     );
 }
 
-/// Review of #909 (Codex P1): an `UPDATE` whose new value reads through a subquery reads every
-/// row, whatever its condition, so a concurrent change to another partition conflicts; without
-/// one, the condition is the read set.
+/// Review of #909 (Codex P1; 66ad1730d, P2): an `UPDATE` whose subquery reads the target table
+/// again reads every row, so a concurrent change anywhere in the table conflicts; a subquery over
+/// another table, or none, leaves the condition as the read set (delta-spark records nothing on
+/// the target for it).
 #[test]
-fn an_assignment_with_a_subquery_reads_the_whole_table() {
-    let cond = Some("p = 1");
-    let read = super::read_filter(cond, &[set("v", "(SELECT max(v) FROM t WHERE p = 2)")]).unwrap();
-    assert!(read.is_none(), "{read:?}");
-    let read = super::read_filter(cond, &[set("v", "v + 1"), set("w", "NULL")]).unwrap();
-    assert!(read.is_some_and(|f| !super::has_subquery(&f)));
-    assert!(
-        super::read_filter(None, &[set("v", "v + 1")])
+fn only_a_subquery_over_the_target_reads_the_whole_table() {
+    let files = Files::new();
+    let (session, name) = session(&files);
+    let other = Arc::new(Schema::new(vec![Field::new("x", ArrowType::Utf8, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&other),
+        vec![Arc::new(arrow_array::StringArray::from(vec!["z"])) as ArrayRef],
+    )
+    .unwrap();
+    session.register_batches("o", other, vec![batch]).unwrap();
+    let update = |value: &str| {
+        run(
+            &session,
+            &name,
+            RowLevelOperation::Update,
+            Some("id = 1"),
+            vec![set("s", value)],
+        );
+        files
+            .reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop()
             .unwrap()
-            .is_none()
-    );
-    // An assignment without value text (stored as NULL) reads nothing.
-    let default = Assignment {
-        column: "v".into(),
-        value: None,
     };
-    assert!(super::read_filter(cond, &[default]).unwrap().is_some());
+    assert_eq!(update("(SELECT max(s) FROM t)"), None);
+    assert_eq!(update("(SELECT max(s) FROM t WHERE id = 5)"), None);
+    let read = update("(SELECT max(x) FROM o)");
+    assert!(
+        read.as_deref().is_some_and(|f| f.contains("id")),
+        "{read:?}"
+    );
+    let read = update("'v'");
+    assert!(
+        read.as_deref().is_some_and(|f| f.contains("id")),
+        "{read:?}"
+    );
 }
 
 /// Review of #909 (9bc733547, P1): a cast can overflow exactly when delta-spark's

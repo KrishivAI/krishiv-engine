@@ -319,7 +319,11 @@ impl Session {
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let target = first_scan(physical.root())
             .ok_or_else(|| internal("a row-level rewrite that reads no table".to_owned()))?;
-        let read_filter = read_filter(condition, assignments)?;
+        // The rewrite's own read is the hidden provider: a scan of the target's name or path in it
+        // is a subquery's (or a view's) read of the table.
+        let rereads_target =
+            crate::catalog::reads_source(analysis.analyzed.plan.root(), &scan.source);
+        let read_filter = read_filter(condition, rereads_target)?;
         let mut request = RowLevelWrite::new(
             op,
             quoted,
@@ -479,18 +483,18 @@ impl Session {
 }
 
 /// What the statement read, for the table's conflict check: the condition (the parsed,
-/// unresolved expression: column names as written), or `None` for every row. An assignment
-/// with a subquery reads the table too (delta-spark records that scan in the transaction's
-/// read set, while it refuses a subquery only in the condition, `PreprocessTableUpdate.scala:43`),
-/// so such a statement reads every row: a concurrent change anywhere in the table conflicts.
+/// unresolved expression: column names as written), or `None` for every row. A statement whose
+/// subquery (in an assignment, or through a view) reads the target table again reads every row:
+/// delta-spark records that scan's own predicates in the transaction's read set, and the whole
+/// table is a superset of them, so no conflict is missed (an over-approximation: delta-spark
+/// conflicts only on the subquery's predicates). A subquery over another table records nothing on
+/// the target, so the condition stays (#909 review, finding 2).
 fn read_filter(
     condition: Option<&str>,
-    assignments: &[Assignment],
+    rereads_target: bool,
 ) -> Result<Option<Arc<krishiv_plan::Expr>>, KrishivError> {
-    for value in assignments.iter().filter_map(|a| a.value.as_deref()) {
-        if has_subquery(&crate::functions::expr(value)?.expr) {
-            return Ok(None);
-        }
+    if rereads_target {
+        return Ok(None);
     }
     condition
         .map(|c| Ok(Arc::new(crate::functions::expr(c)?.expr)))
