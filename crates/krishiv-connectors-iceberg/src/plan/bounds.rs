@@ -167,15 +167,21 @@ pub fn encode(v: &ScalarValue, ty: &IcebergType) -> Option<Vec<u8>> {
 /// `BigInteger.toByteArray`).
 #[must_use]
 pub(crate) fn min_be_bytes(v: i128) -> Vec<u8> {
-    let b = v.to_be_bytes();
+    min_be_slice(v, &mut [0; 16]).to_vec()
+}
+
+/// [`min_be_bytes`] in `buf`, without allocating (the per-value path of the
+/// Theta sketches on write, PR-54b).
+pub(crate) fn min_be_slice(v: i128, buf: &mut [u8; 16]) -> &[u8] {
+    *buf = v.to_be_bytes();
     let mut start = 0;
     while start < 15 {
-        let (cur, next) = (b[start], b[start + 1]);
+        let (cur, next) = (buf[start], buf[start + 1]);
         let redundant = (cur == 0 && next & 0x80 == 0) || (cur == 0xff && next & 0x80 != 0);
         if !redundant {
             break;
         }
         start += 1;
     }
-    b[start..].to_vec()
+    &buf[start..]
 }

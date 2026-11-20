@@ -661,6 +661,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "write_files_column_types"
             | "aggregate_percentiles"
             | "aggregate_histogram_numeric"
+            | "aggregate_bitmaps"
+            | "aggregate_hll_sketches"
             | "options_map_literal"
             | "nested_literals"
             | "file_source_schema"
@@ -687,6 +689,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "exchange_filters"
             | "window_frames"
             | "window_offset_values"
+            | "window_counter_diff"
             | "window_range_values"
             | "window_range_months"
             | "window_range_day_time"
@@ -724,6 +727,7 @@ fn a_window_plan_survives_the_wire_with_every_field() {
         "window_aggregates",
         "window_frames",
         "window_offset_values",
+        "window_counter_diff",
         "window_range_values",
         "window_range_months",
         "window_range_day_time",

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `cargo xtask qerror [--data DIR] [--scale N] [--suite tpch|tpcds]...`: the
+//! `cargo xtask qerror [--data DIR] [--scale N] [--suite tpch|tpcds]... [--ndv exact|theta]`: the
 //! q-error report of the optimizer's cardinality estimates over TPC-H and
 //! TPC-DS (median, 95th percentile and largest of `max(est / actual, actual /
 //! est)` per join and aggregate, with statistics propagation on and off).
@@ -22,6 +22,9 @@ pub struct QerrorArgs {
     pub scale: Option<u64>,
     /// `--suite NAME`, repeatable: `tpch` and `tpcds` (both by default).
     pub suites: Vec<String>,
+    /// `--ndv exact|theta`: with `theta` the report also prints the q-error
+    /// with Theta sketch distinct counts (lg_k 12) next to the exact ones.
+    pub ndv: Option<String>,
 }
 
 /// Parses the command line.
@@ -54,9 +57,16 @@ pub fn parse_args(flags: &[&str]) -> Result<QerrorArgs, String> {
                     args.suites.push((*s).to_owned());
                 }
             }
+            "--ndv" => {
+                let m = it.next().ok_or("--ndv needs exact or theta")?;
+                if !["exact", "theta"].contains(m) {
+                    return Err(format!("--ndv expects exact or theta, got {m:?}"));
+                }
+                args.ndv = Some((*m).to_owned());
+            }
             other => {
                 return Err(format!(
-                    "unknown flag {other:?}; usage: cargo xtask qerror [--data DIR] [--scale N] [--suite tpch|tpcds]..."
+                    "unknown flag {other:?}; usage: cargo xtask qerror [--data DIR] [--scale N] [--suite tpch|tpcds]... [--ndv exact|theta]"
                 ));
             }
         }
@@ -90,6 +100,9 @@ pub fn invocation(args: &QerrorArgs) -> (Vec<String>, Vec<(String, String)>) {
     if !args.suites.is_empty() {
         env.push(("KRISHIV_QERROR_SUITES".to_owned(), args.suites.join(",")));
     }
+    if let Some(m) = &args.ndv {
+        env.push(("KRISHIV_QERROR_NDV".to_owned(), m.clone()));
+    }
     (cargo, env)
 }
 
@@ -111,11 +124,7 @@ pub fn run_qerror(root: &Path, flags: &[&str]) -> Result<(), String> {
     let (cargo_args, env) = invocation(&args);
     let mut cmd = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     // The flags describe the run: nothing inherited from the shell.
-    for var in [
-        "KRISHIV_QERROR_DIR",
-        "KRISHIV_QERROR_SCALE",
-        "KRISHIV_QERROR_SUITES",
-    ] {
+    for var in RUN_ENV {
         cmd.env_remove(var);
     }
     cmd.current_dir(root).args(cargo_args).envs(env);
@@ -126,9 +135,32 @@ pub fn run_qerror(root: &Path, flags: &[&str]) -> Result<(), String> {
     }
 }
 
+/// The variables that describe a run, cleared before the run sets its own.
+const RUN_ENV: [&str; 4] = [
+    "KRISHIV_QERROR_DIR",
+    "KRISHIV_QERROR_SCALE",
+    "KRISHIV_QERROR_SUITES",
+    "KRISHIV_QERROR_NDV",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_variable_the_run_sets_is_cleared_first() {
+        let args = parse_args(&[
+            "--data", "d", "--scale", "5", "--suite", "tpch", "--ndv", "theta",
+        ])
+        .unwrap();
+        let (_, env) = invocation(&args);
+        let mut keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        let mut cleared = RUN_ENV.to_vec();
+        keys.sort_unstable();
+        cleared.sort_unstable();
+        assert!(!keys.is_empty());
+        assert_eq!(keys, cleared);
+    }
 
     #[test]
     fn no_flags_run_both_suites_on_generated_data() {
@@ -169,6 +201,13 @@ mod tests {
     }
 
     #[test]
+    fn ndv_becomes_a_setting() {
+        let args = parse_args(&["--ndv", "theta"]).unwrap();
+        let (_, env) = invocation(&args);
+        assert_eq!(env, [("KRISHIV_QERROR_NDV".to_owned(), "theta".to_owned())]);
+    }
+
+    #[test]
     fn bad_command_lines_are_usage_errors() {
         for (flags, want) in [
             (vec!["--data"], "needs a directory"),
@@ -177,6 +216,8 @@ mod tests {
             (vec!["--scale", "many"], "positive"),
             (vec!["--suite", "clickbench"], "tpch or tpcds"),
             (vec!["--suite"], "needs tpch or tpcds"),
+            (vec!["--ndv", "hll"], "exact or theta"),
+            (vec!["--ndv"], "needs exact or theta"),
             (vec!["--fast"], "unknown flag"),
         ] {
             let e = parse_args(&flags).unwrap_err();

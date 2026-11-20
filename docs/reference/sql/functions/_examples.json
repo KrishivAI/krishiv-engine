@@ -599,56 +599,82 @@
     ]
   },
   "bitmap_and_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "300000"
+    ]
   },
   "bitmap_and_agg#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "FF0000"
+    ]
   },
   "bitmap_bit_position#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "0"
+    ]
   },
   "bitmap_bit_position#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "122"
+    ]
   },
   "bitmap_bucket_number#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "1"
+    ]
   },
   "bitmap_bucket_number#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "0"
+    ]
   },
   "bitmap_construct_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "070000"
+    ]
   },
   "bitmap_construct_agg#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "010000"
+    ]
   },
   "bitmap_count#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2"
+    ]
   },
   "bitmap_count#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "16"
+    ]
   },
   "bitmap_count#3": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "0"
+    ]
   },
   "bitmap_or_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "700000"
+    ]
   },
   "bitmap_or_agg#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "100000"
+    ]
   },
   "bool_and#1": {
     "ok": true,
@@ -1810,7 +1836,7 @@
     ]
   },
   "from_protobuf#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "class": "PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND",
     "ok": false
   },
   "from_unixtime#1": {
@@ -1948,20 +1974,28 @@
     ]
   },
   "hll_sketch_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "3"
+    ]
   },
   "hll_sketch_estimate#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "3"
+    ]
   },
   "hll_union#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6"
+    ]
   },
   "hll_union_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "1"
+    ]
   },
   "hour#1": {
     "ok": true,
@@ -5605,7 +5639,7 @@
     ]
   },
   "to_protobuf#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "class": "DATATYPE_MISMATCH.NON_STRUCT_TYPE",
     "ok": false
   },
   "to_time#1": {

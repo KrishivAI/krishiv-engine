@@ -406,6 +406,10 @@ fn reference(
                 };
                 show(v)
             }
+            // Checked against Spark's goldens in `counter_diff_tests.rs`; the generator builds none.
+            WindowFunction::CounterDiff { .. } => {
+                unreachable!("no property test builds counter_diff")
+            }
             WindowFunction::RowNumber => (pos + 1).to_string(),
             WindowFunction::Rank => rank.to_string(),
             WindowFunction::DenseRank => {
@@ -522,6 +526,11 @@ fn reference(
                         | AggregateFunction::PercentileDisc { .. }
                         | AggregateFunction::ApproxCountDistinct { .. }
                         | AggregateFunction::HistogramNumeric { .. }
+                        | AggregateFunction::BitmapConstructAgg
+                        | AggregateFunction::BitmapOrAgg
+                        | AggregateFunction::BitmapAndAgg
+                        | AggregateFunction::HllSketchAgg { .. }
+                        | AggregateFunction::HllUnionAgg { .. }
                         | AggregateFunction::Udf(_) => {
                             unreachable!("no window test aggregates with this function")
                         }

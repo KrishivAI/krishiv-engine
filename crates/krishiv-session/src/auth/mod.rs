@@ -27,6 +27,7 @@
 //!   credential) and its failure counters.
 
 mod config;
+mod credential;
 mod denials;
 mod der;
 mod impersonation;
@@ -77,6 +78,7 @@ use futures::future::BoxFuture;
 use krishiv_common::principal::Principal;
 
 pub use config::{AuthConfig, RoleLists, ThrottleConfig, TokenSpec, is_auth_key};
+pub use credential::{CredentialKind, ExchangeClaims, InboundCredential};
 pub use denials::{DeniedCount, DeniedCounts};
 pub use der::{CertNames, DerError};
 pub use impersonation::{ActAs, ActAsHint, Denial, ImpersonationConfig};
@@ -142,7 +144,7 @@ pub enum Surface {
     Metrics,
     /// The web UI and its `/api/internal` routes.
     Ui,
-    /// The Arrow Flight SQL service (on the Spark Connect listener, P3-T101).
+    /// The Arrow Flight SQL service (on the Spark Connect listener).
     FlightSql,
 }
 
@@ -156,9 +158,11 @@ impl Surface {
         Self::FlightSql,
     ];
 
+    /// The surface a session of `transport` is served by.
+    ///
     /// The surface whose requests a session of `transport` serves: `Connect`, `FlightSql` and
     /// `Ui` map to themselves; an embedded or MCP session arrives on no listener, so `None`
-    /// (P3-T101 §2 H3: a Flight SQL session counts its denials under `flight-sql`).
+    /// (a Flight SQL session counts its denials under `flight-sql`).
     #[must_use]
     pub fn of(transport: crate::Transport) -> Option<Self> {
         match transport {
@@ -259,6 +263,8 @@ impl<'a> Credentials<'a> {
         self
     }
 
+    /// The same credentials with the bearer token of an `Authorization` header value.
+    ///
     /// The same credentials with the token of an `Authorization` header value, if it is a
     /// `Bearer` one (scheme compared ignoring ASCII case, as RFC 9110 §11.1 asks).
     #[must_use]
@@ -305,6 +311,9 @@ pub struct Authenticated {
     pub method: Method,
     /// The credential's own id (an OIDC token's `jti`), for the audit record; never enforced.
     pub token_id: Option<String>,
+    /// The user token itself, kept for delegated catalogs: an OIDC token or a
+    /// signed assertion; `None` for a static token, a certificate or plain act-as metadata.
+    pub credential: Option<InboundCredential>,
 }
 
 impl Authenticated {
@@ -316,7 +325,15 @@ impl Authenticated {
             role,
             method,
             token_id: None,
+            credential: None,
         }
+    }
+
+    /// This result keeping `credential`, the user token.
+    #[must_use]
+    pub fn with_credential(mut self, credential: Option<InboundCredential>) -> Self {
+        self.credential = credential;
+        self
     }
 
     /// This result with the credential's id `token_id`.
@@ -357,6 +374,8 @@ impl AuthFailure {
         }
     }
 
+    /// The status message of the refusal.
+    ///
     /// The status message: Spark's own two for a missing and a wrong token
     /// (`PreSharedKeyAuthenticationInterceptor`, Spark 4.3.0).
     #[must_use]
@@ -370,6 +389,8 @@ impl AuthFailure {
         }
     }
 
+    /// Whether the refusal means "retry later" rather than "unauthenticated".
+    ///
     /// Whether the transport answers "retry later" (gRPC `UNAVAILABLE`, HTTP 503) rather than
     /// "unauthenticated" (gRPC `UNAUTHENTICATED`, HTTP 401).
     #[must_use]

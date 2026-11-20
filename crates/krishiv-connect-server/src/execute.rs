@@ -51,6 +51,7 @@ pub(crate) mod hooks;
 pub mod observed;
 pub mod schema;
 mod sql_command;
+mod write_command;
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -167,6 +168,19 @@ impl ResponseBudget {
     pub fn cap(&self) -> usize {
         self.cap
     }
+
+    /// Waits until `bytes` (clamped to the whole budget, at least 1) are free and holds them
+    /// until the returned permit is dropped: another service on the Connect listener (an Arrow
+    /// Flight SQL `DoGet`, P3-T101 note §16 M1) shares `krishiv.connect.maxResponseBytes` with
+    /// Connect's operations. Cancel-safe: dropping the future gives nothing back because it took
+    /// nothing. `None` once the budget is closed (never, today).
+    pub async fn reserve(&self, bytes: usize) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let want = u32::try_from(bytes.clamp(1, self.cap)).unwrap_or(u32::MAX);
+        Arc::clone(&self.permits)
+            .acquire_many_owned(want)
+            .await
+            .ok()
+    }
 }
 
 /// Removes its operation from the session when dropped, unless kept: the
@@ -271,6 +285,12 @@ pub struct InboundTrace {
     pub traceparent: Option<String>,
     /// The `baggage` header value.
     pub baggage: Option<String>,
+    /// How the request authenticated and its user token, for the query's delegated catalogs
+    /// (P3-T067 §3.3).
+    pub credential: Option<(
+        krishiv_session::auth::Method,
+        Option<krishiv_session::auth::InboundCredential>,
+    )>,
 }
 
 /// Starts `request` on the session `entry`; with the id of a live
@@ -298,10 +318,14 @@ pub async fn execute_plan(
     };
     let tags = validate_tags(&request.tags)?;
     // The request's tags and trace go to the engine's queries of this operation, per request.
-    let query_options = QueryOptions::new()
+    let mut query_options = QueryOptions::new()
         .operation_id(id.as_str())
         .tags(tags.iter())
         .inbound_trace(inbound.traceparent.as_deref(), inbound.baggage.as_deref());
+    // This request's own token, not whatever a concurrent request of the session stored.
+    if let Some((method, credential)) = &inbound.credential {
+        query_options = query_options.inbound_credential(*method, credential.clone());
+    }
     let opts = options(request);
     let op = Arc::new(
         Operation::new(
@@ -365,7 +389,7 @@ pub async fn execute_plan(
                 return Ok(Prepared::Command(answer));
             }
             // Decompression (up to `maxPlanSize`) runs off the async workers.
-            match execution_plan(entry, plan, limits).await? {
+            match Box::pin(execution_plan(entry, plan, limits, &query_options)).await? {
                 Executed::Relation(requested) => {
                     let df = requested.frame(session, query_options).await?;
                     let schema = df.schema().await?;
@@ -557,18 +581,16 @@ impl Translated {
         conf: &TranslateConf,
         udfs: &mut dyn TranslateHost,
     ) -> Result<Self, KrishivError> {
-        let input = match &command.command_type {
-            Some(pb::command::CommandType::CheckpointCommand(c)) => {
-                let empty = pb::Relation::default();
-                // The error waits for the command's class check: a viewer is refused first.
-                Some(translate_relation_with(
-                    c.relation.as_ref().unwrap_or(&empty),
-                    conf,
-                    udfs,
-                ))
-            }
+        let relation = match &command.command_type {
+            Some(pb::command::CommandType::CheckpointCommand(c)) => Some(c.relation.as_ref()),
+            Some(pb::command::CommandType::WriteOperation(w)) => Some(w.input.as_ref()),
+            Some(pb::command::CommandType::WriteOperationV2(w)) => Some(w.input.as_ref()),
             _ => None,
         };
+        let empty = pb::Relation::default();
+        // The error waits for the command's class check: a viewer is refused first.
+        let input = relation
+            .map(|relation| translate_relation_with(relation.unwrap_or(&empty), conf, udfs));
         Ok(Self::Command(Box::new(TranslatedCommand {
             check: check_command(command),
             run: translate_command(command),
@@ -616,6 +638,7 @@ async fn execution_plan(
     entry: &SessionEntry,
     plan: &pb::Plan,
     limits: &ExecuteLimits,
+    query_options: &QueryOptions,
 ) -> Result<Executed, KrishivError> {
     let session = entry.session();
     let decompressed = decompressed(plan, limits).await?;
@@ -645,32 +668,63 @@ async fn execution_plan(
                     entry.python().register_udtf(session, &udtf)?;
                 }
                 RunCommand::Checkpoint(spec) => {
-                    let Some(input) = input else {
-                        return Err(krishiv_common::error::InternalError {
-                            message: "a checkpoint command lost its relation".to_owned(),
-                        }
-                        .into());
-                    };
-                    let input = input?;
-                    if udfs.seen() {
-                        crate::auth::enforce(&crate::auth::client_code(), session).await?;
-                        udfs.grant(session)?;
-                    }
                     // No operation id or tags on the source: the result is held by the session
                     // for good, and its frame would hold them with it.
-                    let source = Requested::bind(entry, input, &cached)?
-                        .frame(session, QueryOptions::new())
-                        .await?;
+                    let source =
+                        command_source(entry, input, udfs, &cached, QueryOptions::new()).await?;
                     let id = cache_command::checkpoint(entry, &source, spec).await?;
                     return Ok(Executed::Checkpointed(id));
                 }
                 RunCommand::RemoveCachedRemoteRelation { relation_id } => {
                     entry.remove_cached_frame(&relation_id);
                 }
+                RunCommand::Write(spec) => {
+                    // A one-shot statement of this operation: its operation id, tags, trace and
+                    // credential, never the session's latest token.
+                    let source =
+                        command_source(entry, input, udfs, &cached, query_options.clone()).await?;
+                    Box::pin(write_command::write(session, &source, spec)).await?;
+                }
+                RunCommand::WriteV2(spec) => {
+                    let source =
+                        command_source(entry, input, udfs, &cached, query_options.clone()).await?;
+                    Box::pin(write_command::write_v2(&source, spec)).await?;
+                }
             }
             Ok(Executed::Command)
         }
     }
+}
+
+/// The frame of a command's relation (`checkpoint_command`, the writes), once the command's class
+/// is checked: a relation with a Python UDF needs `Usage` on `System("udf")` before its UDFs are
+/// registered (ADR 0046 §3b, N1), as for a ROOT relation. `options` are the frame's: the request's
+/// for a write, empty for a checkpoint.
+///
+/// # Errors
+/// The relation's translation errors, the privilege refusal, and binding errors.
+async fn command_source(
+    entry: &SessionEntry,
+    input: Option<Result<krishiv_plan::Plan, KrishivError>>,
+    udfs: InlineUdfs<'_>,
+    cached: &[String],
+    options: QueryOptions,
+) -> Result<DataFrame, KrishivError> {
+    let session = entry.session();
+    let Some(input) = input else {
+        return Err(krishiv_common::error::InternalError {
+            message: "a command lost its relation".to_owned(),
+        }
+        .into());
+    };
+    let input = input?;
+    if udfs.seen() {
+        crate::auth::enforce(&crate::auth::client_code(), session).await?;
+        udfs.grant(session)?;
+    }
+    Requested::bind(entry, input, cached)?
+        .frame(session, options)
+        .await
 }
 
 /// The engine plan of a request's `Plan`: a compressed one decompressed

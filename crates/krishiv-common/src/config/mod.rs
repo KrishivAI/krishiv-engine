@@ -24,6 +24,7 @@ use crate::error::{
     KrishivError, KrishivInvalidConfigValue, KrishivUnknownConfig, KrishivUnsupportedFeature,
 };
 
+mod agg_output_filter;
 mod build_projection;
 mod direct_keys;
 mod distinct_count;
@@ -32,9 +33,11 @@ mod legacy;
 mod partition_types;
 mod registry;
 mod registry_join;
+mod scan_instance;
 #[cfg(test)]
 mod ui_hosts_tests;
 
+pub use agg_output_filter::EXEC_AGG_OUTPUT_FILTER;
 pub use build_projection::EXEC_JOIN_BUILD_PROJECTION;
 pub use direct_keys::EXEC_AGG_DIRECT_KEYS;
 pub use distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE;
@@ -42,6 +45,7 @@ pub use join_cost::JOIN_COST;
 pub use partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION;
 pub use registry::*;
 pub use registry_join::*;
+pub use scan_instance::EXEC_SCAN_INSTANCE_PROJECTION;
 
 /// Where a config entry may be set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

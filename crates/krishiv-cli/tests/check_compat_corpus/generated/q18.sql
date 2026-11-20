@@ -1,4 +1,4 @@
 -- query 18: nope(1)
-SELECT tuple_union_integer(a, b) AS c1 FROM t18 WHERE x IN (1, 2) AND y = 'x(tuple_union_integer)';
-SELECT legacy_fn_4(a, b) AS c2 FROM t18 WHERE x IN (1, 2) AND y = 'x(legacy_fn_4)';
-SELECT bitmap_or_agg(a, b) AS c3 FROM t18 WHERE x IN (1, 2) AND y = 'x(bitmap_or_agg)';
+SELECT xpath_number(a, b) AS c1 FROM t18 WHERE x IN (1, 2) AND y = 'x(xpath_number)';
+SELECT explode(a, b) AS c2 FROM t18 WHERE x IN (1, 2) AND y = 'x(explode)';
+SELECT try_parse_json(a, b) AS c3 FROM t18 WHERE x IN (1, 2) AND y = 'x(try_parse_json)';

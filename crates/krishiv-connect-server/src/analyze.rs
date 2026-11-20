@@ -33,7 +33,12 @@
 //! principal whose `Select` check passes; otherwise the plan chosen with no
 //! table statistics and no distinct-value samples, with a note saying so.
 //! Its `cost` mode, a read by path and a permanent view keep `Select` (they
-//! show statistics, contents or a view's text).
+//! show statistics, contents or a view's text). `input_files`,
+//! `semantic_hash` and `same_semantics` list or hash the analyzed plan, so a
+//! `SQL SECURITY DEFINER` view's inlined query in it is asked of the reader
+//! as `EXPLAIN` asks it (`DataFrame::analyzed`, ADR 0048 A1 §3, review r3
+//! X2); `schema`, `is_local`, `is_streaming` and `explain` validate with
+//! `schema_for_metadata`, which shows no plan.
 
 pub mod types;
 
@@ -55,7 +60,8 @@ use crate::execute::{request_plan, request_relation, schema};
 use crate::manager::SessionEntry;
 use crate::operation::ExecuteLimits;
 
-/// Answers `request` on the session `entry`.
+/// Answers `request` on the session `entry`; `options` carry the RPC's own authentication, so
+/// a delegated catalog's metadata is read with this request's token (P3-T067 §3.3).
 ///
 /// # Errors
 /// The plan's decoding, translation and analysis errors;
@@ -67,8 +73,9 @@ pub async fn analyze_plan(
     entry: &Arc<SessionEntry>,
     request: &pb::AnalyzePlanRequest,
     limits: &ExecuteLimits,
+    options: &QueryOptions,
 ) -> Result<pb::AnalyzePlanResponse, KrishivError> {
-    let result = analyze(entry, request.analyze.as_ref(), limits).await?;
+    let result = analyze(entry, options, request.analyze.as_ref(), limits).await?;
     Ok(pb::AnalyzePlanResponse {
         session_id: request.session_id.clone(),
         server_side_session_id: entry.server_side_id().to_owned(),
@@ -79,12 +86,13 @@ pub async fn analyze_plan(
 /// The request's relation (`persist`, `unpersist`, `get_storage_level`) as a `DataFrame`.
 async fn frame_of_relation(
     entry: &SessionEntry,
+    options: &QueryOptions,
     relation: Option<&pb::Relation>,
 ) -> Result<DataFrame, KrishivError> {
     let empty = pb::Relation::default();
     request_relation(entry, relation.unwrap_or(&empty))
         .await?
-        .frame(entry.session(), QueryOptions::new())
+        .frame(entry.session(), options.clone())
         .await
 }
 
@@ -94,18 +102,20 @@ async fn frame_of_relation(
 /// big stack of its own).
 async fn frame(
     entry: &SessionEntry,
+    options: &QueryOptions,
     plan: Option<&pb::Plan>,
     limits: &ExecuteLimits,
 ) -> Result<DataFrame, KrishivError> {
     let empty = pb::Plan::default();
     request_plan(entry, plan.unwrap_or(&empty), limits)
         .await?
-        .frame(entry.session(), QueryOptions::new())
+        .frame(entry.session(), options.clone())
         .await
 }
 
 async fn analyze(
     entry: &SessionEntry,
+    options: &QueryOptions,
     analyze: Option<&Analyze>,
     limits: &ExecuteLimits,
 ) -> Result<res::Result, KrishivError> {
@@ -118,7 +128,7 @@ async fn analyze(
             .into());
         }
         Some(Analyze::Schema(s)) => {
-            let df = frame(entry, s.plan.as_ref(), limits).await?;
+            let df = frame(entry, options, s.plan.as_ref(), limits).await?;
             res::Result::Schema(res::Schema {
                 schema: Some(schema::proto_schema(&*df.schema_for_metadata().await?)?),
             })
@@ -127,15 +137,15 @@ async fn analyze(
             // Spark builds the Dataset (translation, analysis) before it
             // reads the mode: a metadata analysis here (`Browse`), then the
             // explain a principal may see (see the module docs).
-            let df = frame(entry, e.plan.as_ref(), limits).await?;
-            df.analyzed_for_metadata().await?;
+            let df = frame(entry, options, e.plan.as_ref(), limits).await?;
+            df.schema_for_metadata().await?;
             let mode = explain_mode(e.explain_mode)?;
             res::Result::Explain(res::Explain {
                 explain_string: df.explain_for_metadata(mode).await?,
             })
         }
         Some(Analyze::TreeString(t)) => {
-            let df = frame(entry, t.plan.as_ref(), limits).await?;
+            let df = frame(entry, options, t.plan.as_ref(), limits).await?;
             let spark = schema::spark_schema(&*df.schema_for_metadata().await?)?;
             res::Result::TreeString(res::TreeString {
                 tree_string: types::tree_string(&spark, t.level),
@@ -155,17 +165,17 @@ async fn analyze(
                 PlanNode::InlineTable { .. } | PlanNode::Read(ReadSource::Local(_))
             );
             requested
-                .frame(session, QueryOptions::new())
+                .frame(session, options.clone())
                 .await?
-                .analyzed_for_metadata()
+                .schema_for_metadata()
                 .await?;
             res::Result::IsLocal(res::IsLocal { is_local })
         }
         Some(Analyze::IsStreaming(s)) => {
             // Analyzed so that an invalid plan fails as in Spark.
-            frame(entry, s.plan.as_ref(), limits)
+            frame(entry, options, s.plan.as_ref(), limits)
                 .await?
-                .analyzed_for_metadata()
+                .schema_for_metadata()
                 .await?;
             res::Result::IsStreaming(res::IsStreaming {
                 is_streaming: false,
@@ -173,7 +183,7 @@ async fn analyze(
         }
         Some(Analyze::InputFiles(f)) => {
             // The paths themselves are shown: `Select` on them (ADR 0046 §3b).
-            let analyzed = frame(entry, f.plan.as_ref(), limits)
+            let analyzed = frame(entry, options, f.plan.as_ref(), limits)
                 .await?
                 .analyzed()
                 .await?;
@@ -192,14 +202,16 @@ async fn analyze(
             )?)?),
         }),
         Some(Analyze::SameSemantics(s)) => {
-            let target = semantic_hash(frame(entry, s.target_plan.as_ref(), limits).await?).await?;
-            let other = semantic_hash(frame(entry, s.other_plan.as_ref(), limits).await?).await?;
+            let target =
+                semantic_hash(frame(entry, options, s.target_plan.as_ref(), limits).await?).await?;
+            let other =
+                semantic_hash(frame(entry, options, s.other_plan.as_ref(), limits).await?).await?;
             res::Result::SameSemantics(res::SameSemantics {
                 result: target == other,
             })
         }
         Some(Analyze::SemanticHash(s)) => {
-            let hash = semantic_hash(frame(entry, s.plan.as_ref(), limits).await?).await?;
+            let hash = semantic_hash(frame(entry, options, s.plan.as_ref(), limits).await?).await?;
             res::Result::SemanticHash(res::SemanticHash {
                 result: fold_hash(hash),
             })
@@ -207,7 +219,7 @@ async fn analyze(
         Some(Analyze::Persist(p)) => {
             crate::auth::enforce(&crate::auth::Check::SideEffect, session).await?;
             // `persist(level)`, or `persist()` (the session's default level) without one.
-            let df = frame_of_relation(entry, p.relation.as_ref()).await?;
+            let df = frame_of_relation(entry, options, p.relation.as_ref()).await?;
             let df = match &p.storage_level {
                 Some(level) => df.persist(storage_level_of(level)),
                 None => df.cache(),
@@ -220,14 +232,14 @@ async fn analyze(
         Some(Analyze::Unpersist(u)) => {
             crate::auth::enforce(&crate::auth::Check::SideEffect, session).await?;
             // `blocking` is accepted: removal is synchronous either way.
-            frame_of_relation(entry, u.relation.as_ref())
+            frame_of_relation(entry, options, u.relation.as_ref())
                 .await?
                 .unpersist()
                 .await?;
             res::Result::Unpersist(res::Unpersist {})
         }
         Some(Analyze::GetStorageLevel(g)) => {
-            let level = frame_of_relation(entry, g.relation.as_ref())
+            let level = frame_of_relation(entry, options, g.relation.as_ref())
                 .await?
                 .storage_level()
                 .await?;

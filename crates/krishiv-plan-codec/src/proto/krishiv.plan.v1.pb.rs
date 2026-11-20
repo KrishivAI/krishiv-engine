@@ -852,7 +852,7 @@ pub struct WindowFunctionPlan {
     pub name: ::prost::alloc::string::String,
     #[prost(
         oneof = "window_function_plan::Function",
-        tags = "1, 2, 3, 4, 5, 6, 7, 11, 12"
+        tags = "1, 2, 3, 4, 5, 6, 7, 11, 12, 13"
     )]
     pub function: ::core::option::Option<window_function_plan::Function>,
 }
@@ -881,6 +881,9 @@ pub mod window_function_plan {
         /// feature: window_offset_functions
         #[prost(message, tag = "12")]
         NthValue(super::NthValueFunction),
+        /// feature: window_counter_diff
+        #[prost(message, tag = "13")]
+        CounterDiff(super::CounterDiffFunction),
     }
 }
 /// `lag` / `lead`: input column `input` of the row `offset` rows after the
@@ -912,6 +915,18 @@ pub struct NthValueFunction {
     pub ignore_nulls: bool,
     /// Arrow IPC `Schema` flatbuffer of one field.
     #[prost(bytes = "vec", tag = "4")]
+    pub data_type: ::prost::alloc::vec::Vec<u8>,
+}
+/// `counter_diff(counter\[, start_time\])`: input column `counter`, and column `start_time` when present.
+/// feature: window_counter_diff
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CounterDiffFunction {
+    #[prost(uint64, tag = "1")]
+    pub counter: u64,
+    #[prost(uint64, optional, tag = "2")]
+    pub start_time: ::core::option::Option<u64>,
+    /// Arrow IPC `Schema` flatbuffer of one field.
+    #[prost(bytes = "vec", tag = "3")]
     pub data_type: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1207,6 +1222,10 @@ pub struct KeyFilterOptions {
     /// of several build partitions then merge to their range, and pass more rows.
     #[prost(uint32, optional, tag = "9")]
     pub bloom_bytes: ::core::option::Option<u32>,
+    /// ignorable: a reader that skips it loses the Bloom form of a build past
+    /// `bloom_max_items` or one that sheds its hashes to spill (a range only).
+    #[prost(uint32, optional, tag = "10")]
+    pub bloom_spill_bytes: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnionNode {
@@ -2358,6 +2377,21 @@ pub enum AggregateFunction {
     MinByKeyFirst = 48,
     /// feature: histogram_numeric
     HistogramNumeric = 49,
+    /// `bitmap_construct_agg(position)`: a 4,096-byte bitmap of the positions.
+    /// feature: bitmap_aggregates
+    BitmapConstructAgg = 50,
+    /// `bitmap_or_agg(bitmap)`.
+    /// feature: bitmap_aggregates
+    BitmapOrAgg = 51,
+    /// `bitmap_and_agg(bitmap)`.
+    /// feature: bitmap_aggregates
+    BitmapAndAgg = 52,
+    /// `hll_sketch_agg(x, lgConfigK)`: the folded lgConfigK is `hll_precision`.
+    /// feature: hll_sketch_aggregates
+    HllSketchAgg = 53,
+    /// `hll_union_agg(sketch, allowDifferentLgConfigK)`: the folded flag is `hll_precision` (0 or 1).
+    /// feature: hll_sketch_aggregates
+    HllUnionAgg = 54,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2416,6 +2450,11 @@ impl AggregateFunction {
             Self::MaxByKeyFirst => "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST",
             Self::MinByKeyFirst => "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST",
             Self::HistogramNumeric => "AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC",
+            Self::BitmapConstructAgg => "AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG",
+            Self::BitmapOrAgg => "AGGREGATE_FUNCTION_BITMAP_OR_AGG",
+            Self::BitmapAndAgg => "AGGREGATE_FUNCTION_BITMAP_AND_AGG",
+            Self::HllSketchAgg => "AGGREGATE_FUNCTION_HLL_SKETCH_AGG",
+            Self::HllUnionAgg => "AGGREGATE_FUNCTION_HLL_UNION_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2471,6 +2510,11 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST" => Some(Self::MaxByKeyFirst),
             "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST" => Some(Self::MinByKeyFirst),
             "AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC" => Some(Self::HistogramNumeric),
+            "AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG" => Some(Self::BitmapConstructAgg),
+            "AGGREGATE_FUNCTION_BITMAP_OR_AGG" => Some(Self::BitmapOrAgg),
+            "AGGREGATE_FUNCTION_BITMAP_AND_AGG" => Some(Self::BitmapAndAgg),
+            "AGGREGATE_FUNCTION_HLL_SKETCH_AGG" => Some(Self::HllSketchAgg),
+            "AGGREGATE_FUNCTION_HLL_UNION_AGG" => Some(Self::HllUnionAgg),
             _ => None,
         }
     }

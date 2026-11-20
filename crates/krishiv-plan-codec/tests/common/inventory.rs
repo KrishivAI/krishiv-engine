@@ -244,6 +244,49 @@ pub(crate) fn subquery() -> SubqueryPlan {
     }
 }
 
+/// One aggregate of each bitmap aggregate (a position column, then bitmaps).
+pub(crate) fn bitmap_aggregate_exprs() -> Vec<AggregateExpr> {
+    let a = |function, arg_type| AggregateExpr {
+        function,
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type,
+        name: "x".to_owned(),
+        mask: None,
+        element: None,
+    };
+    vec![
+        a(AggregateFunction::BitmapConstructAgg, ArrowType::Int64),
+        a(AggregateFunction::BitmapOrAgg, ArrowType::Binary),
+        a(AggregateFunction::BitmapAndAgg, ArrowType::Binary),
+    ]
+}
+
+/// One aggregate of each HLL sketch aggregate (values at lgConfigK 14, then sketches allowing mixed lgConfigK).
+pub(crate) fn hll_sketch_aggregate_exprs() -> Vec<AggregateExpr> {
+    let a = |function, arg_type| AggregateExpr {
+        function,
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type,
+        name: "x".to_owned(),
+        mask: None,
+        element: None,
+    };
+    vec![
+        a(
+            AggregateFunction::HllSketchAgg { lg_k: 14 },
+            ArrowType::Int64,
+        ),
+        a(
+            AggregateFunction::HllUnionAgg {
+                allow_different: true,
+            },
+            ArrowType::Binary,
+        ),
+    ]
+}
+
 /// One aggregate of each new variant of this change: the exact and
 /// approximate percentiles, the discrete percentile and
 /// `approx_count_distinct`, with their folded parameters.
@@ -619,6 +662,39 @@ pub(crate) fn window_offset_values() -> WindowPlan {
     }
 }
 
+/// `counter_diff` with and without a start time, over its running frame.
+pub(crate) fn window_counter_diff() -> WindowPlan {
+    let running = WindowFrame {
+        units: FrameUnits::Rows,
+        lower: FrameBound::UnboundedPreceding,
+        upper: FrameBound::CurrentRow,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
+            window_function(
+                WindowFunction::CounterDiff {
+                    counter: 2,
+                    start_time: None,
+                    data_type: arrow_schema::DataType::Int64,
+                },
+                running,
+                "diff",
+            ),
+            window_function(
+                WindowFunction::CounterDiff {
+                    counter: 2,
+                    start_time: Some(3),
+                    data_type: arrow_schema::DataType::Decimal128(10, 2),
+                },
+                running,
+                "diff_started",
+            ),
+        ],
+    }
+}
+
 /// `RANGE` frames over a date or timestamp key with year-month interval bounds (calendar months).
 pub(crate) fn window_range_months() -> WindowPlan {
     let aggs = aggregate_exprs();
@@ -744,6 +820,7 @@ pub(crate) fn join_plan(join_type: JoinType) -> HashJoinPlan {
                 bloom_fpp: 0.01,
                 bloom_max_fpp: 0.05,
                 bloom_bytes: None,
+                bloom_spill_bytes: None,
             },
         }],
         distribution: JoinDistribution::Broadcast,
@@ -1072,6 +1149,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "window_counter_diff",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_counter_diff(),
+            },
+        ),
+        (
             "window_range_values",
             PhysNode::Window {
                 input: boxed(scan()),
@@ -1328,7 +1412,42 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
+        (
+            "aggregate_bitmaps",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: bitmap_aggregate_exprs(),
+                    distinct: vec![false; 3],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_hll_sketches",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: hll_sketch_aggregate_exprs(),
+                    distinct: vec![false; 2],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("hash_join", PhysNode::HashJoin(join_plan(JoinType::Inner))),
+        (
+            // A guessed build's fixed Bloom (field 10, ignorable).
+            "hash_join_spill_bloom",
+            PhysNode::HashJoin({
+                let mut j = join_plan(JoinType::Inner);
+                for f in &mut j.runtime_filters {
+                    f.options.bloom_spill_bytes = Some(320 << 20);
+                }
+                j
+            }),
+        ),
         (
             "sort_merge_join",
             PhysNode::SortMergeJoin({

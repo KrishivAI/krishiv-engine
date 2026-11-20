@@ -4,7 +4,9 @@
 //! test removing the table's first file (`init.parquet`) and adding its own.
 //! An unknown answer then a rebase that finds the removal missing (nothing
 //! deleted), an unknown answer then the landed commit, and a known failure
-//! (the rewritten and merged manifests deleted, the base's kept).
+//! (the rewritten and merged manifests deleted, the base's kept); a resend
+//! of the same attempt after a still-unknown answer, and a rebase after an
+//! unknown answer whose re-filter succeeds (round 2).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -24,6 +26,7 @@ fn removal(c: &Case, name: &str) -> Removals {
     Removals {
         data_files: BTreeSet::from([c.env.at(name)]),
         delete_files: BTreeSet::new(),
+        ..Removals::default()
     }
 }
 
@@ -168,4 +171,65 @@ fn a_known_failure_deletes_the_rewritten_and_merged_manifests_only() {
         assert!(exists(path), "{path}");
     }
     c.check(&[INIT]);
+}
+
+/// Review 36b2a round 2: a 503 before the table, and every probe finds the
+/// branch still at the base (still unknown): the loop resends the **same**
+/// prepared attempt (one manifest list, one rewritten manifest, no second
+/// filter run), which lands.
+#[test]
+fn a_still_unknown_answer_resends_the_same_overwrite_attempt() {
+    let mut c = case();
+    c.new.removals = Some(removal(&c, "init.parquet"));
+    c.cat.script(&[Fault::ServerErrorBeforeApply]);
+    let m = c.run().unwrap();
+    assert_eq!(m.current_snapshot_id(), Some(OURS));
+    assert_eq!(c.cat.requests(), 2);
+    // The filter ran once: one rewritten manifest, one list.
+    assert_eq!(c.new.merged.len(), 1, "{:?}", c.new.merged);
+    assert!(exists(&c.list(1)) && !exists(&c.list(2)));
+    let s = m.snapshot_by_id(OURS).unwrap();
+    assert_eq!(s.manifest_list(), c.list(1));
+    assert!(exists(&c.new.merged[0]));
+    c.check(&[MINE]);
+}
+
+/// Review 36b2a round 2: a 503, then another writer appends; the probe sees
+/// the branch moved and the rebase re-applies the removal to the new base
+/// (a second rewritten manifest), which commits: the removed file is gone,
+/// the foreign file kept, the first attempt's rewrite cleaned up.
+#[test]
+fn an_unknown_answer_then_a_rebase_refilters_and_commits() {
+    let mut c = case();
+    c.new.removals = Some(removal(&c, "init.parquet"));
+    c.cat.script(&[Fault::ServerErrorBeforeApply]);
+    c.cat
+        .on(When::BeforeLoad(1), c.foreign("other.parquet", 980, "main"));
+    let m = c.run().unwrap();
+    assert_eq!(m.current_snapshot_id(), Some(OURS));
+    assert_eq!(c.cat.requests(), 2);
+    assert_eq!(c.new.merged.len(), 2, "{:?}", c.new.merged);
+    let s = m.snapshot_by_id(OURS).unwrap();
+    assert_eq!(s.manifest_list(), c.list(2));
+    assert_eq!(
+        s.summary()
+            .additional_properties
+            .get("deleted-data-files")
+            .map(String::as_str),
+        Some("1")
+    );
+    // The first attempt's rewrite is in no list; the second's is listed.
+    let io = c.env.reg.file_io();
+    let listed: Vec<String> = c
+        .env
+        .rt
+        .block_on(read_manifest_files(&io, s.manifest_list(), 2, MAX))
+        .unwrap()
+        .into_iter()
+        .map(|m| m.manifest_path)
+        .collect();
+    assert!(!listed.contains(&c.new.merged[0]));
+    assert!(listed.contains(&c.new.merged[1]));
+    assert!(!exists(&c.new.merged[0]) && exists(&c.new.merged[1]));
+    c.check(&[MINE, "980|1|other.parquet"]);
 }

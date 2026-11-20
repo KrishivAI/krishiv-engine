@@ -193,6 +193,22 @@ impl core::fmt::Debug for krishiv_session::auth::ClientCertificates
 pub fn krishiv_session::auth::ClientCertificates::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::auth::ClientCertificates
 impl core::marker::StructuralPartialEq for krishiv_session::auth::ClientCertificates
+#[non_exhaustive] pub enum krishiv_session::auth::CredentialKind
+pub krishiv_session::auth::CredentialKind::Oidc
+pub krishiv_session::auth::CredentialKind::SignedAssertion
+impl krishiv_session::auth::CredentialKind
+pub fn krishiv_session::auth::CredentialKind::as_str(self) -> &'static str
+impl core::clone::Clone for krishiv_session::auth::CredentialKind
+pub fn krishiv_session::auth::CredentialKind::clone(&self) -> krishiv_session::auth::CredentialKind
+impl core::cmp::Eq for krishiv_session::auth::CredentialKind
+impl core::cmp::PartialEq for krishiv_session::auth::CredentialKind
+pub fn krishiv_session::auth::CredentialKind::eq(&self, &krishiv_session::auth::CredentialKind) -> bool
+impl core::fmt::Debug for krishiv_session::auth::CredentialKind
+pub fn krishiv_session::auth::CredentialKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::auth::CredentialKind
+pub fn krishiv_session::auth::CredentialKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for krishiv_session::auth::CredentialKind
+impl core::marker::StructuralPartialEq for krishiv_session::auth::CredentialKind
 #[non_exhaustive] pub enum krishiv_session::auth::Denial
 pub krishiv_session::auth::Denial::ActorMismatch
 pub krishiv_session::auth::Denial::AssertionOff
@@ -428,12 +444,14 @@ impl core::fmt::Debug for krishiv_session::auth::AuthConfig
 pub fn krishiv_session::auth::AuthConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::auth::AuthConfig
 #[non_exhaustive] pub struct krishiv_session::auth::Authenticated
+pub krishiv_session::auth::Authenticated::credential: core::option::Option<krishiv_session::auth::InboundCredential>
 pub krishiv_session::auth::Authenticated::method: krishiv_session::auth::Method
 pub krishiv_session::auth::Authenticated::principal: krishiv_common::principal::Principal
 pub krishiv_session::auth::Authenticated::role: core::option::Option<krishiv_session::auth::Role>
 pub krishiv_session::auth::Authenticated::token_id: core::option::Option<alloc::string::String>
 impl krishiv_session::auth::Authenticated
 pub fn krishiv_session::auth::Authenticated::new(krishiv_common::principal::Principal, core::option::Option<krishiv_session::auth::Role>, krishiv_session::auth::Method) -> Self
+pub fn krishiv_session::auth::Authenticated::with_credential(self, core::option::Option<krishiv_session::auth::InboundCredential>) -> Self
 pub fn krishiv_session::auth::Authenticated::with_token_id(self, core::option::Option<alloc::string::String>) -> Self
 impl core::clone::Clone for krishiv_session::auth::Authenticated
 pub fn krishiv_session::auth::Authenticated::clone(&self) -> krishiv_session::auth::Authenticated
@@ -496,6 +514,23 @@ impl core::default::Default for krishiv_session::auth::DeniedCounts
 pub fn krishiv_session::auth::DeniedCounts::default() -> Self
 impl core::fmt::Debug for krishiv_session::auth::DeniedCounts
 pub fn krishiv_session::auth::DeniedCounts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct krishiv_session::auth::ExchangeClaims
+pub krishiv_session::auth::ExchangeClaims::audiences: alloc::vec::Vec<alloc::string::String>
+pub krishiv_session::auth::ExchangeClaims::groups: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub krishiv_session::auth::ExchangeClaims::scope: core::option::Option<alloc::string::String>
+pub krishiv_session::auth::ExchangeClaims::scp: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+impl krishiv_session::auth::ExchangeClaims
+pub fn krishiv_session::auth::ExchangeClaims::with_audiences(alloc::vec::Vec<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_session::auth::ExchangeClaims
+pub fn krishiv_session::auth::ExchangeClaims::clone(&self) -> krishiv_session::auth::ExchangeClaims
+impl core::cmp::Eq for krishiv_session::auth::ExchangeClaims
+impl core::cmp::PartialEq for krishiv_session::auth::ExchangeClaims
+pub fn krishiv_session::auth::ExchangeClaims::eq(&self, &krishiv_session::auth::ExchangeClaims) -> bool
+impl core::default::Default for krishiv_session::auth::ExchangeClaims
+pub fn krishiv_session::auth::ExchangeClaims::default() -> krishiv_session::auth::ExchangeClaims
+impl core::fmt::Debug for krishiv_session::auth::ExchangeClaims
+pub fn krishiv_session::auth::ExchangeClaims::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::auth::ExchangeClaims
 #[non_exhaustive] pub struct krishiv_session::auth::FailureCount
 pub krishiv_session::auth::FailureCount::count: u64
 pub krishiv_session::auth::FailureCount::method: krishiv_session::auth::Method
@@ -544,6 +579,22 @@ impl core::fmt::Debug for krishiv_session::auth::ImpersonationCount
 pub fn krishiv_session::auth::ImpersonationCount::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::auth::ImpersonationCount
 impl core::marker::StructuralPartialEq for krishiv_session::auth::ImpersonationCount
+pub struct krishiv_session::auth::InboundCredential
+impl krishiv_session::auth::InboundCredential
+pub fn krishiv_session::auth::InboundCredential::claims(&self) -> &krishiv_session::auth::ExchangeClaims
+pub fn krishiv_session::auth::InboundCredential::claims_fingerprint(&self) -> [u8; 16]
+pub fn krishiv_session::auth::InboundCredential::expires_at(&self) -> std::time::SystemTime
+pub fn krishiv_session::auth::InboundCredential::kind(&self) -> krishiv_session::auth::CredentialKind
+pub fn krishiv_session::auth::InboundCredential::new(krishiv_session::auth::CredentialKind, krishiv_common::secret::SecretString, krishiv_session::auth::ExchangeClaims, std::time::SystemTime) -> Self
+pub fn krishiv_session::auth::InboundCredential::token(&self) -> &krishiv_common::secret::SecretString
+impl core::clone::Clone for krishiv_session::auth::InboundCredential
+pub fn krishiv_session::auth::InboundCredential::clone(&self) -> krishiv_session::auth::InboundCredential
+impl core::cmp::Eq for krishiv_session::auth::InboundCredential
+impl core::cmp::PartialEq for krishiv_session::auth::InboundCredential
+pub fn krishiv_session::auth::InboundCredential::eq(&self, &krishiv_session::auth::InboundCredential) -> bool
+impl core::fmt::Debug for krishiv_session::auth::InboundCredential
+pub fn krishiv_session::auth::InboundCredential::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::auth::InboundCredential
 #[non_exhaustive] pub struct krishiv_session::auth::MtlsConfig
 pub krishiv_session::auth::MtlsConfig::client_ca: core::option::Option<std::path::PathBuf>
 pub krishiv_session::auth::MtlsConfig::client_certificates: krishiv_session::auth::ClientCertificates
@@ -743,10 +794,18 @@ pub krishiv_session::catalog_decl::CatalogAuth::ClientCredentials::client_id: al
 pub krishiv_session::catalog_decl::CatalogAuth::ClientCredentials::client_secret: krishiv_session::auth::SecretRef
 pub krishiv_session::catalog_decl::CatalogAuth::ClientCredentials::scope: core::option::Option<alloc::string::String>
 pub krishiv_session::catalog_decl::CatalogAuth::ClientCredentials::token_endpoint: alloc::string::String
+pub krishiv_session::catalog_decl::CatalogAuth::Delegated
+pub krishiv_session::catalog_decl::CatalogAuth::Delegated::actor: core::option::Option<krishiv_session::catalog_decl::ActorClient>
+pub krishiv_session::catalog_decl::CatalogAuth::Delegated::audience: alloc::string::String
+pub krishiv_session::catalog_decl::CatalogAuth::Delegated::delegation: krishiv_session::catalog_decl::Delegation
+pub krishiv_session::catalog_decl::CatalogAuth::Delegated::scope: core::option::Option<alloc::string::String>
+pub krishiv_session::catalog_decl::CatalogAuth::Delegated::token_endpoint: core::option::Option<alloc::string::String>
 pub krishiv_session::catalog_decl::CatalogAuth::None
 pub krishiv_session::catalog_decl::CatalogAuth::Token(krishiv_session::auth::SecretRef)
 impl krishiv_session::catalog_decl::CatalogAuth
+pub fn krishiv_session::catalog_decl::CatalogAuth::delegation(&self) -> core::option::Option<krishiv_session::catalog_decl::Delegation>
 pub fn krishiv_session::catalog_decl::CatalogAuth::name(&self) -> &'static str
+pub fn krishiv_session::catalog_decl::CatalogAuth::token_endpoint(&self) -> core::option::Option<&str>
 impl core::clone::Clone for krishiv_session::catalog_decl::CatalogAuth
 pub fn krishiv_session::catalog_decl::CatalogAuth::clone(&self) -> krishiv_session::catalog_decl::CatalogAuth
 impl core::cmp::Eq for krishiv_session::catalog_decl::CatalogAuth
@@ -803,6 +862,31 @@ impl core::fmt::Debug for krishiv_session::catalog_decl::DeclMode
 pub fn krishiv_session::catalog_decl::DeclMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::catalog_decl::DeclMode
 impl core::marker::StructuralPartialEq for krishiv_session::catalog_decl::DeclMode
+pub enum krishiv_session::catalog_decl::Delegation
+pub krishiv_session::catalog_decl::Delegation::Exchange
+pub krishiv_session::catalog_decl::Delegation::Forward
+impl krishiv_session::catalog_decl::Delegation
+pub fn krishiv_session::catalog_decl::Delegation::name(self) -> &'static str
+impl core::clone::Clone for krishiv_session::catalog_decl::Delegation
+pub fn krishiv_session::catalog_decl::Delegation::clone(&self) -> krishiv_session::catalog_decl::Delegation
+impl core::cmp::Eq for krishiv_session::catalog_decl::Delegation
+impl core::cmp::PartialEq for krishiv_session::catalog_decl::Delegation
+pub fn krishiv_session::catalog_decl::Delegation::eq(&self, &krishiv_session::catalog_decl::Delegation) -> bool
+impl core::fmt::Debug for krishiv_session::catalog_decl::Delegation
+pub fn krishiv_session::catalog_decl::Delegation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::catalog_decl::Delegation
+impl core::marker::StructuralPartialEq for krishiv_session::catalog_decl::Delegation
+pub struct krishiv_session::catalog_decl::ActorClient
+pub krishiv_session::catalog_decl::ActorClient::client_id: alloc::string::String
+pub krishiv_session::catalog_decl::ActorClient::client_secret: krishiv_session::auth::SecretRef
+impl core::clone::Clone for krishiv_session::catalog_decl::ActorClient
+pub fn krishiv_session::catalog_decl::ActorClient::clone(&self) -> krishiv_session::catalog_decl::ActorClient
+impl core::cmp::Eq for krishiv_session::catalog_decl::ActorClient
+impl core::cmp::PartialEq for krishiv_session::catalog_decl::ActorClient
+pub fn krishiv_session::catalog_decl::ActorClient::eq(&self, &krishiv_session::catalog_decl::ActorClient) -> bool
+impl core::fmt::Debug for krishiv_session::catalog_decl::ActorClient
+pub fn krishiv_session::catalog_decl::ActorClient::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::catalog_decl::ActorClient
 #[non_exhaustive] pub struct krishiv_session::catalog_decl::CatalogDecl
 pub krishiv_session::catalog_decl::CatalogDecl::allow_config_keys: alloc::collections::btree::set::BTreeSet<alloc::string::String>
 pub krishiv_session::catalog_decl::CatalogDecl::allow_insecure: bool
@@ -847,8 +931,22 @@ pub const krishiv_session::catalog_decl::SPARK_CATALOG_PREFIX: &str
 pub fn krishiv_session::catalog_decl::is_catalog_key(&str) -> bool
 pub fn krishiv_session::catalog_decl::is_declaration_key(&str) -> bool
 pub mod krishiv_session::catalog_registry
+#[non_exhaustive] pub struct krishiv_session::catalog_registry::CatalogCaller
+pub krishiv_session::catalog_registry::CatalogCaller::credential: core::option::Option<krishiv_session::auth::InboundCredential>
+pub krishiv_session::catalog_registry::CatalogCaller::identity: krishiv_session::catalog_registry::IdentityKey
+pub krishiv_session::catalog_registry::CatalogCaller::method: core::option::Option<krishiv_session::auth::Method>
+impl krishiv_session::catalog_registry::CatalogCaller
+pub fn krishiv_session::catalog_registry::CatalogCaller::authenticated_with(&self) -> &'static str
+pub fn krishiv_session::catalog_registry::CatalogCaller::new(krishiv_session::catalog_registry::IdentityKey, core::option::Option<krishiv_session::auth::Method>, core::option::Option<krishiv_session::auth::InboundCredential>) -> Self
+pub fn krishiv_session::catalog_registry::CatalogCaller::server(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_session::catalog_registry::CatalogCaller
+pub fn krishiv_session::catalog_registry::CatalogCaller::clone(&self) -> krishiv_session::catalog_registry::CatalogCaller
+impl core::fmt::Debug for krishiv_session::catalog_registry::CatalogCaller
+pub fn krishiv_session::catalog_registry::CatalogCaller::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct krishiv_session::catalog_registry::CatalogDeps
 pub krishiv_session::catalog_registry::CatalogDeps::egress: alloc::sync::Arc<krishiv_store::egress::EgressPolicy>
+pub krishiv_session::catalog_registry::CatalogDeps::max_distinct_exchanges_per_minute: usize
+pub krishiv_session::catalog_registry::CatalogDeps::max_exchanges_per_minute: usize
 pub krishiv_session::catalog_registry::CatalogDeps::max_response_bytes: u64
 pub krishiv_session::catalog_registry::CatalogDeps::mode: krishiv_session::catalog_decl::DeclMode
 pub krishiv_session::catalog_registry::CatalogDeps::proxy: core::option::Option<alloc::string::String>
@@ -878,8 +976,43 @@ pub fn krishiv_session::catalog_registry::CatalogSetup::new(krishiv_session::cat
 pub fn krishiv_session::catalog_registry::CatalogSetup::setting(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::fmt::Debug for krishiv_session::catalog_registry::CatalogSetup
 pub fn krishiv_session::catalog_registry::CatalogSetup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct krishiv_session::catalog_registry::IdentityKey
+pub krishiv_session::catalog_registry::IdentityKey::catalog: alloc::string::String
+pub krishiv_session::catalog_registry::IdentityKey::delegated_by: core::option::Option<alloc::string::String>
+pub krishiv_session::catalog_registry::IdentityKey::limit_key: core::option::Option<alloc::string::String>
+pub krishiv_session::catalog_registry::IdentityKey::principal_id: core::option::Option<alloc::string::String>
+pub krishiv_session::catalog_registry::IdentityKey::tenant: core::option::Option<alloc::string::String>
+impl krishiv_session::catalog_registry::IdentityKey
+pub fn krishiv_session::catalog_registry::IdentityKey::of(impl core::convert::Into<alloc::string::String>, &krishiv_common::principal::Principal) -> Self
+pub fn krishiv_session::catalog_registry::IdentityKey::server(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_session::catalog_registry::IdentityKey
+pub fn krishiv_session::catalog_registry::IdentityKey::clone(&self) -> krishiv_session::catalog_registry::IdentityKey
+impl core::cmp::Eq for krishiv_session::catalog_registry::IdentityKey
+impl core::cmp::Ord for krishiv_session::catalog_registry::IdentityKey
+pub fn krishiv_session::catalog_registry::IdentityKey::cmp(&self, &krishiv_session::catalog_registry::IdentityKey) -> core::cmp::Ordering
+impl core::cmp::PartialEq for krishiv_session::catalog_registry::IdentityKey
+pub fn krishiv_session::catalog_registry::IdentityKey::eq(&self, &krishiv_session::catalog_registry::IdentityKey) -> bool
+impl core::cmp::PartialOrd for krishiv_session::catalog_registry::IdentityKey
+pub fn krishiv_session::catalog_registry::IdentityKey::partial_cmp(&self, &krishiv_session::catalog_registry::IdentityKey) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for krishiv_session::catalog_registry::IdentityKey
+pub fn krishiv_session::catalog_registry::IdentityKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::catalog_registry::IdentityKey
+pub fn krishiv_session::catalog_registry::IdentityKey::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for krishiv_session::catalog_registry::IdentityKey
+pub struct krishiv_session::catalog_registry::ServerIdentity(pub alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::Catalog>)
+impl core::fmt::Debug for krishiv_session::catalog_registry::ServerIdentity
+pub fn krishiv_session::catalog_registry::ServerIdentity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_session::catalog_registry::CallerCatalog for krishiv_session::catalog_registry::ServerIdentity
+pub fn krishiv_session::catalog_registry::ServerIdentity::epoch(&self) -> u64
+pub fn krishiv_session::catalog_registry::ServerIdentity::load_table<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent, core::option::Option<krishiv_plan::plan::TableVersion>, krishiv_plan::analyzer::catalog::NameForm) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<krishiv_plan::analyzer::catalog::TableMeta>, krishiv_common::error::KrishivError>>
+pub trait krishiv_session::catalog_registry::CallerCatalog: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn krishiv_session::catalog_registry::CallerCatalog::epoch(&self) -> u64
+pub fn krishiv_session::catalog_registry::CallerCatalog::load_table<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent, core::option::Option<krishiv_plan::plan::TableVersion>, krishiv_plan::analyzer::catalog::NameForm) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<krishiv_plan::analyzer::catalog::TableMeta>, krishiv_common::error::KrishivError>>
+impl krishiv_session::catalog_registry::CallerCatalog for krishiv_session::catalog_registry::ServerIdentity
+pub fn krishiv_session::catalog_registry::ServerIdentity::epoch(&self) -> u64
+pub fn krishiv_session::catalog_registry::ServerIdentity::load_table<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent, core::option::Option<krishiv_plan::plan::TableVersion>, krishiv_plan::analyzer::catalog::NameForm) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<krishiv_plan::analyzer::catalog::TableMeta>, krishiv_common::error::KrishivError>>
 pub trait krishiv_session::catalog_registry::CatalogFactory: core::fmt::Debug + core::marker::Send + core::marker::Sync
-pub fn krishiv_session::catalog_registry::CatalogFactory::build(&self, &krishiv_session::catalog_decl::CatalogDecl, &krishiv_session::catalog_registry::CatalogDeps) -> core::result::Result<alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::Catalog>, krishiv_common::error::KrishivError>
+pub fn krishiv_session::catalog_registry::CatalogFactory::build(&self, &krishiv_session::catalog_decl::CatalogDecl, &krishiv_session::catalog_registry::CatalogDeps) -> core::result::Result<alloc::sync::Arc<dyn krishiv_session::catalog_registry::CallerCatalog>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::catalog_registry::CatalogFactory::kind(&self) -> krishiv_session::catalog_decl::CatalogType
 pub fn krishiv_session::catalog_registry::CatalogFactory::validate(&self, &krishiv_session::catalog_decl::CatalogDecl, &krishiv_session::catalog_registry::CatalogDeps) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub mod krishiv_session::egress
@@ -1072,6 +1205,7 @@ pub async fn krishiv_session::spark_catalog::Catalog<'_>::is_cached(&self, &str)
 pub fn krishiv_session::spark_catalog::Catalog<'_>::list_catalogs(&self) -> alloc::vec::Vec<alloc::string::String>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_columns(&self, &str) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Column>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_databases(&self, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Database>, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_embedded_databases(&self) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Database>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_functions(&self, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Function>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_tables(&self, core::option::Option<&str>, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Table>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::recover_partitions(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
@@ -1718,6 +1852,7 @@ impl core::marker::StructuralPartialEq for krishiv_session::QueryInfo
 #[non_exhaustive] pub struct krishiv_session::QueryOptions
 impl krishiv_session::QueryOptions
 pub fn krishiv_session::QueryOptions::deadline(self, core::time::Duration) -> Self
+pub fn krishiv_session::QueryOptions::inbound_credential(self, krishiv_session::auth::Method, core::option::Option<krishiv_session::auth::InboundCredential>) -> Self
 pub fn krishiv_session::QueryOptions::inbound_trace(self, core::option::Option<&str>, core::option::Option<&str>) -> Self
 pub fn krishiv_session::QueryOptions::new() -> Self
 pub fn krishiv_session::QueryOptions::operation_id(self, impl core::convert::Into<alloc::string::String>) -> Self
@@ -1826,6 +1961,8 @@ pub fn krishiv_session::Session::python_udtf_frame(&self, &krishiv_session::Pyth
 pub fn krishiv_session::Session::register_python_udf(&self, krishiv_session::PythonUdfDef) -> krishiv_session::PythonUdfEntry
 pub fn krishiv_session::Session::register_python_udtf(&self, krishiv_session::PythonUdtfDef) -> core::result::Result<krishiv_session::PythonUdtfEntry, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::set_python_udf_runtime(&self, alloc::sync::Arc<dyn krishiv_exec::python_eval::UdfRuntime>)
+impl krishiv_session::Session
+pub fn krishiv_session::Session::set_inbound_credential(&self, krishiv_session::auth::Method, core::option::Option<krishiv_session::auth::InboundCredential>)
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::statement_info(&self, &str) -> core::result::Result<krishiv_session::StatementInfo, krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::Session

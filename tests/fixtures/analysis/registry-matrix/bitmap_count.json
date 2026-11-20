@@ -1,0 +1,14 @@
+{
+  "entries": [
+    {
+      "id": "bitmap_count#eba3a7ea96c2/ansi_on",
+      "reason": "SELECT bitmap_count(NULL) | resolves to bigint where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "bitmap_count#eba3a7ea96c2/ansi_off",
+      "reason": "SELECT bitmap_count(NULL) | resolves to bigint where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "bitmap_count"
+}

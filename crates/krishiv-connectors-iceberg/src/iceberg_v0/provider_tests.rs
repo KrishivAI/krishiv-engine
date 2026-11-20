@@ -66,12 +66,20 @@ pub(super) fn env_on(
     store: Arc<dyn object_store::ObjectStore>,
     config: krishiv_io::IoConfig,
 ) -> Env {
+    env_in(tempfile::tempdir().unwrap(), store, config)
+}
+
+/// [`env_on`] with the warehouse in `dir` (the write conformance fixes its path).
+pub(super) fn env_in(
+    dir: tempfile::TempDir,
+    store: Arc<dyn object_store::ObjectStore>,
+    config: krishiv_io::IoConfig,
+) -> Env {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()
         .unwrap();
-    let dir = tempfile::tempdir().unwrap();
     let (sched, reg) = {
         let _entered = rt.enter();
         local_on(dir.path(), store, config)

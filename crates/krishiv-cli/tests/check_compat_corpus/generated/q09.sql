@@ -1,6 +1,6 @@
 -- query 9: nope(1)
 SELECT array_compact(a, b) AS c1 FROM t9 WHERE x IN (1, 2) AND y = 'x(array_compact)';
-SELECT kll_sketch_get_rank_float(a, b) AS c2 FROM t9 WHERE x IN (1, 2) AND y = 'x(kll_sketch_get_rank_float)';
-SELECT coalesce(a, b) AS c3 FROM t9 WHERE x IN (1, 2) AND y = 'x(coalesce)';
-SELECT to_timestamp_ntz(a, b) AS c4 FROM t9 WHERE x IN (1, 2) AND y = 'x(to_timestamp_ntz)';
+SELECT schema_of_variant_agg(a, b) AS c2 FROM t9 WHERE x IN (1, 2) AND y = 'x(schema_of_variant_agg)';
+SELECT ceil(a, b) AS c3 FROM t9 WHERE x IN (1, 2) AND y = 'x(ceil)';
+SELECT tinyint(a, b) AS c4 FROM t9 WHERE x IN (1, 2) AND y = 'x(tinyint)';
 SELECT array_except(a, b) AS c5 FROM t9 WHERE x IN (1, 2) AND y = 'x(array_except)';

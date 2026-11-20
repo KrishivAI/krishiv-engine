@@ -315,7 +315,8 @@ jobs:
       - run: cargo nextest run -p krishiv-session --features tls,oidc --lib -E 'test(/auth::mtls_tests::tls/) | test(/auth::oidc_tests/)' --locked
       # The admin listener's authentication (P3-T002) is feature-gated, so default-feature runs skip it.
       - run: cargo nextest run -p krishiv-server --features session,metrics-prometheus,admin-api --locked
-      - run: cargo nextest run -p krishiv-cli --features server,ui --test server --locked
+      - run: cargo nextest run -p krishiv-cli --features server,ui --test server --test doctor --locked
+      - run: cargo nextest run -p krishiv-cli --features server,ui --bin krishiv -E 'test(/^doctor::/)' --locked
       # The external catalog clients (Hive metastore, Iceberg REST) are feature-gated; their hostile-catalog tests
       # run here, not only nightly. The Docker acceptance against Apache's REST fixture is env-gated (skipped).
       - run: cargo nextest run -p krishiv-catalogs --features hive,iceberg-rest,unity --locked
@@ -862,6 +863,13 @@ jobs:
               echo "::notice::$dep has no wheel for this interpreter; its tests are skipped"
             fi
           done
+          # The stock Spark Connect client (krishiv.start_local() tests): PyPI publishes only a
+          # source distribution of pyspark-client (pure Python), so it alone is built from source.
+          if ! uv pip install --python "$RUNNER_TEMP/venv/bin/python" \
+              --constraint "$GITHUB_WORKSPACE/python/ci-interop-constraints.txt" "pyspark-client"; then
+            if [ "$COVERAGE" = "true" ]; then exit 1; fi
+            echo "::notice::pyspark-client could not be installed; its tests are skipped"
+          fi
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/venv/bin/python" -c "import krishiv, sys; print(krishiv.__version__, sys.version)"
           if [ "$COVERAGE" = "true" ]; then

@@ -22,8 +22,10 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
 - `src/artifact.rs` `parse_artifact_name`: `AddArtifacts` names (prefixes, segments, fragments), fuzzed by
   `connect_artifact_name` in `fuzz/`
+- `src/extension.rs` the `krishiv.v1` extensions (P3-T015): `resolve(any, slot)` reads an `Any` once (registered message, or `KRISHIV_UNSUPPORTED_FEATURE` naming the capability), the registry, `capabilities()`; messages mirror `proto/krishiv/v1/krishiv.proto` (additive only, compared by a test)
 - `src/arrow.rs` result columns Spark sends in another Arrow shape than the engine holds (geometry/geography)
 - `tests/fuzz_regressions.rs` fuzz findings (inputs that once ran out of memory) must end in a typed error
+- `src/translate/write.rs` (PR-24) `write_spec` / `write_v2_spec`: a `WriteOperation` / `WriteOperationV2` as the writer state (`WriteSpec`, `WriteV2Spec`; Spark 4.3 `transformWriteOperation{,V2}` order), refusing V1 `clustering_columns`, `with_schema_evolution` and V2 partition transforms; INVALID_ENUM for unknown save methods and modes; `Debug` hides paths, option values and table names; `translate/write/tests.rs`
 - `src/coverage.rs` (P3-T012a) the coverage table: an exhaustive `match` per `oneof` (Relation, Expression, Command, Catalog, Literal, DataType) with a row per arm (status, refused fields, IR target, task, group), so a regenerated proto with a new arm does not compile until it has a row; `src/bin/connect-coverage-dump.rs` prints it as JSON for `cargo xtask connect-coverage [--check]`, which writes `docs/reference/connect/coverage.md` and `tests/connect/coverage.json` (CI checks them in the docs-site job). Update the row in the same commit that translates an arm; `tests/coverage.rs` fails when a row disagrees with the translator
 - `tests/goldens.rs` golden runner over `tests/snapshots/` and `tests/fixtures/pyspark-4.2/`
 
@@ -74,7 +76,7 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
   `design/P3-connect-mapping.md` s6). A supported arm with an unsupported **field** fails with
   `KRISHIV_UNSUPPORTED_FEATURE` naming the message and field, and an invalid plan with Spark's other
   `CONNECT_INVALID_PLAN.*` classes; never a silent approximation.
-- Krishiv extensions only in `google.protobuf.Any` slots, package `krishiv.v1`.
+- Krishiv extensions only in `google.protobuf.Any` slots, package `krishiv.v1`: add one by a message in `proto/krishiv/v1/krishiv.proto`, a prost type and a registry row in `extension.rs`, and a translator arm; a stock client never receives one unless it sent one.
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 

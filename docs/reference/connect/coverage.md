@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 11 done, 11 partial, 36 missing, 4 out of scope.
+62 arms: 12 done, 16 partial, 30 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -23,9 +23,9 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 9 | aggregate | partial | GROUP_TYPE_PIVOT | Aggregate; pivot → Pivot (exists) | P3-T012 | 2 |
 | 10 | sql | partial | DataFrame arguments (with_relations) | Sql; the with_relations form (#41) for DataFrame arguments | P3-T012 | 4 |
 | 11 | local_relation | done |  | Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit | P3-T012a | 1 |
-| 12 | sample | missing |  | new Sample (Bernoulli/Poisson with seed, Spark's XORShiftRandom order) | P3-T012 | 3 |
+| 12 | sample | partial | with_replacement (Poisson) and deterministic_order (randomSplit) | Sample (Bernoulli, seed or one drawn per plan, Spark's XORShiftRandom order); Poisson needs a new IR field; deterministic_order needs the per-partition sort | P3-T012 | 3 |
 | 13 | offset | done |  | Offset | P2-T091a | 0 |
-| 14 | deduplicate | missing |  | lowering: Distinct (all columns) or Aggregate with first per non-key column; within_watermark → P4 | P3-T012 | 3 |
+| 14 | deduplicate | partial | a column subset and within_watermark | Distinct (all columns); a subset is Aggregate with first per non-key column and needs the input columns (analyzer node); within_watermark → P4 | P3-T012 | 3 |
 | 15 | range | done |  | Range | P2-T091a | 0 |
 | 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
 | 17 | repartition | missing |  | Repartition (round robin / coalesce) | P3-T012 | 3 |
@@ -35,10 +35,10 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 21 | drop | missing |  | lowering: Project without the dropped columns (names or column references) | P3-T012 | 4 |
 | 22 | tail | missing |  | new Tail (the last n rows in plan order; not Sort + Limit) | P3-T012 | 3 |
 | 23 | with_columns | partial | Alias.metadata | WithColumns; metadata on the column field | P3-T012 | 4 |
-| 24 | hint | missing |  | Hint | P3-T012 | 3 |
-| 25 | unpivot | missing |  | Unpivot | P3-T012 | 2 |
+| 24 | hint | done |  | Hint; as Spark 4.2: parameters are literals or lists of them, a partitioning hint is dropped with a warning (3.5 reads parameters differently) | P3-T012 | 3 |
+| 25 | unpivot | partial | absent values, values that are not columns, and a column that is also an id or listed twice | Project(ids, values) then Unpivot with nulls kept; values absent → every non-id column, known only after analysis | P3-T012 | 2 |
 | 26 | to_schema | missing |  | lowering: Project of by-name Cast and reorder (Spark's Dataset.to) | P3-T012 | 4 |
-| 27 | repartition_by_expression | missing |  | Repartition (hash or range) | P3-T012 | 3 |
+| 27 | repartition_by_expression | partial | num_partitions, no expressions (round robin), repartitionByRange | Repartition (hash); a partition count, a round-robin repartition and SortOrder expressions need IR fields | P3-T012 | 3 |
 | 28 | map_partitions | partial | is_barrier = true, profile_id, Scala/Java functions (56K00), eval types other than 205/207 (FUNCTION_EVAL_TYPE_NOT_SUPPORTED), additional_includes | MapPartitions (mapInPandas 205, mapInArrow 207) over the PythonUdfRef the server's UdfHost names (Usage on System(udf), as for inline UDFs); runs on the session's Python workers | P3-T014 | 6 |
 | 29 | collect_metrics | done |  | CollectMetrics (observe); the server returns ObservedMetrics after the action | P3-T084 | 6 |
 | 30 | parse | missing |  | lowering: Project of from_json / from_csv over a string relation | P3-T012 | 4 |
@@ -73,12 +73,12 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 107 | sample_by | missing |  | lowering: Filter with a seeded rand() against the per-stratum fraction | P3-T012 | 5 |
 | 200 | catalog | missing |  | the 36 catalog operations | P3-T082 | 9 |
 | 300 | ml_relation | out of scope |  | machine learning is out of scope |  | 0 |
-| 998 | extension | missing |  | the krishiv.v1 extension handler; a message no handler claims is refused | P3-T015 | 10 |
+| 998 | extension | partial | every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); Echo is a one-row Project over OneRowRelation | P3-T015 | 10 |
 | 999 | unknown | out of scope |  | Spark falls to case other and answers 56K00 with UNKNOWN(999) |  | 0 |
 
 ## Expression.expr_type
 
-22 arms: 4 done, 6 partial, 11 missing, 1 out of scope.
+22 arms: 4 done, 7 partial, 10 missing, 1 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -103,18 +103,18 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 20 | typed_aggregate_expression | out of scope |  | Scala typed Dataset aggregation; unsupported row |  | 0 |
 | 21 | subquery_expression | missing |  | Subquery (scalar, EXISTS, IN) referencing with_relations | P3-T012 | 4 |
 | 22 | direct_shuffle_partition_id | missing |  | partition id passed through for repartition_by_expression (expressions.proto §DirectShufflePartitionID); Repartition by explicit id | P3-T012 | 3 |
-| 999 | extension | missing |  | T015 | P3-T015 | 10 |
+| 999 | extension | partial | every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); Echo is a string Literal | P3-T015 | 10 |
 
 ## Command.command_type
 
-20 arms: 2 done, 3 partial, 9 missing, 6 out of scope.
+20 arms: 2 done, 6 partial, 6 missing, 6 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
 | 1 | register_function | partial | scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes | Session::register_python_udf plus the payload on the session's UDF workers (translate_command; run by the server) | P3-T014 | 6 |
-| 2 | write_operation | missing |  | DataFrameWriter V1: krishiv-session save/save_as_table/insert_into (dataframe.rs), semantics T023 | P3-T023 | 11 |
+| 2 | write_operation | partial | clustering_columns, with_schema_evolution | krishiv-session's DataFrameWriter (write_to_with: save; write_table_with: saveAsTable, insertInto), the facade's path; save() without a path takes the path option (_LEGACY_ERROR_TEMP_2050 without one); run by the server after the Write class check | P3-T012 | 11 |
 | 3 | create_dataframe_view | missing |  | create_or_replace_temp_view (exists), global temp views | P3-T012 | 4 |
-| 4 | write_operation_v2 | missing |  | DataFrameWriterV2 (create/replace/append/overwrite/overwrite_partitions exist in dataframe.rs), T023 | P3-T023 | 11 |
+| 4 | write_operation_v2 | partial | with_schema_evolution, partition transforms (partitioning_columns other than a column), overwrite_condition (overwrite is refused by the session) | krishiv-session's DataFrameWriterV2 (write_to_table_with), the facade's path; run by the server after the Write class check | P3-T012 | 11 |
 | 5 | sql_command | partial | input of WithRelations form (group 4; the plain SQL input is supported); named and positional arguments (the analyzer refuses SQL parameters) | spark.sql() sends this. Run commands at once; for queries return sql_command_result.relation (Spark returns a SQL or LocalRelation relation the client re-sends). Translated here as the SQL relation of a query; the server runs commands (execute.rs) | P3-T012 | 1 |
 | 6 | write_stream_operation_start | out of scope |  | P4 |  | 0 |
 | 7 | streaming_query_command | out of scope |  | P4 |  | 0 |
@@ -130,7 +130,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 17 | ml_command | out of scope |  | machine learning is out of scope; a client may send it for cache cleanup when a session ends |  | 0 |
 | 18 | execute_external_command | missing |  | refusal: runs a command on an external JDBC source (executeExternal); no JDBC connector in P3 | P3-T012 | 4 |
 | 19 | pipeline_command | out of scope |  | pipelines are out of scope until P4 |  | 0 |
-| 999 | extension | missing |  | T015 | P3-T015 | 10 |
+| 999 | extension | partial | every krishiv.v1 message: none is registered for a command yet (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); the server runs a command extension when one is registered | P3-T015 | 10 |
 
 ## Catalog.cat_type
 

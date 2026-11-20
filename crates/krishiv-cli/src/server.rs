@@ -73,6 +73,52 @@ pub(crate) struct ServerArgs {
     conf: Vec<(String, String)>,
 }
 
+impl ServerArgs {
+    /// `--host`.
+    pub(crate) fn host(&self) -> Option<IpAddr> {
+        self.host
+    }
+    /// `--connect-port`.
+    pub(crate) fn connect_port(&self) -> Option<u16> {
+        self.connect_port
+    }
+    /// `--port`.
+    pub(crate) fn port(&self) -> u16 {
+        self.port
+    }
+    /// The `--conf` settings.
+    pub(crate) fn conf(&self) -> &[(String, String)] {
+        &self.conf
+    }
+    /// `--allow-root`.
+    pub(crate) fn allow_root(&self) -> bool {
+        self.allow_root
+    }
+    /// The settings of a test: default ports, no host, no `--allow-root`.
+    #[cfg(test)]
+    pub(crate) fn for_test(conf: &[(&str, &str)]) -> Self {
+        Self {
+            port: 0,
+            connect_port: Some(0),
+            host: None,
+            allow_root: false,
+            conf: conf
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn set_host(&mut self, host: &str) {
+        self.host = host.parse().ok();
+    }
+    #[cfg(test)]
+    pub(crate) fn set_ports(&mut self, connect: u16, admin: u16) {
+        self.connect_port = Some(connect);
+        self.port = admin;
+    }
+}
+
 /// Runs the server; the process exit code.
 #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
 pub(crate) fn run(args: &ServerArgs) -> i32 {
@@ -85,21 +131,37 @@ pub(crate) fn run(args: &ServerArgs) -> i32 {
     }
 }
 
-fn serve(args: &ServerArgs) -> Result<(), String> {
+/// The settings of `krishiv server`, parsed and checked. `krishiv doctor` runs the same code, so
+/// the two cannot disagree about what a configuration means.
+pub(crate) struct Settings {
+    pub(crate) config: Config,
+    pub(crate) auth: AuthConfig,
+    pub(crate) tls: TlsConfig,
+    /// The declared catalogs' setup (declarations are the registry's, not configuration).
+    pub(crate) catalogs: CatalogSetup,
+    /// The settings the engine runtime receives: everything but the listener's own and the
+    /// catalog declarations, the default-catalog key under its one spelling.
+    pub(crate) engine: Vec<(String, String)>,
+}
+
+/// Parses every `--conf` setting: the listener's own (authentication, TLS) into their typed
+/// forms, the rest into the engine configuration.
+///
+/// `krishiv.auth.*` and `krishiv.server.tls.*` settings (secret references and key files
+/// included) are read once here and never become engine configuration: a session could otherwise
+/// list them with `SET`.
+pub(crate) fn load_settings(conf: &[(String, String)]) -> Result<Settings, String> {
     let mut config = Config::new();
-    let mut builder = EngineRuntime::builder();
-    // Authentication and TLS settings (secret references and key files included) are read once
-    // here and never become engine configuration: a session could otherwise list them with `SET`.
     let listener_settings = || {
-        args.conf
-            .iter()
+        conf.iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .filter(|(k, _)| is_listener_key(k))
     };
-    let auth_config = AuthConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
-    let tls_config = TlsConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
+    let auth = AuthConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
+    let tls = TlsConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
     let mut catalogs = catalog_setup();
-    for (k, v) in &args.conf {
+    let mut engine = Vec::new();
+    for (k, v) in conf {
         if is_listener_key(k) {
             continue;
         }
@@ -128,6 +190,54 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
             };
             return Err(format!("{k} is not supported by krishiv server{hint}"));
         }
+        engine.push((k.to_owned(), v.clone()));
+    }
+    Ok(Settings {
+        config,
+        auth,
+        tls,
+        catalogs,
+        engine,
+    })
+}
+
+/// The address both listeners bind: `--host`, else `krishiv.connect.address`.
+pub(crate) fn resolve_host(host: Option<IpAddr>, config: &Config) -> Result<IpAddr, String> {
+    match host {
+        Some(h) => Ok(h),
+        None => config
+            .get(&CONNECT_ADDRESS)
+            .and_then(ConfigValue::as_str)
+            .unwrap_or("127.0.0.1")
+            .parse()
+            .map_err(|_| "krishiv.connect.address is not an IP address".to_owned()),
+    }
+}
+
+/// ADR 0046 §6, design §3.5: the check before either listener binds (both bind `host`).
+pub(crate) fn check_host(host: IpAddr, settings: &Settings) -> Result<(), String> {
+    check_listener(SocketAddr::new(host, 0), &settings.auth, &settings.tls).map_err(|e| {
+        format!(
+            "refusing to serve on {host}: {e}. Bind a loopback address (--host 127.0.0.1), or \
+             configure authentication (krishiv.auth.*) and, for tokens or OIDC, TLS \
+             (krishiv.server.tls.certFile and keyFile)."
+        )
+    })
+}
+
+fn serve(args: &ServerArgs) -> Result<(), String> {
+    let settings = load_settings(&args.conf)?;
+    let mut builder = EngineRuntime::builder();
+    let host = resolve_host(args.host, &settings.config)?;
+    check_host(host, &settings)?;
+    let Settings {
+        config,
+        auth: auth_config,
+        tls: tls_config,
+        catalogs,
+        engine,
+    } = settings;
+    for (k, v) in &engine {
         builder = builder.config(k, v);
     }
     builder = builder.catalogs(catalogs);
@@ -140,23 +250,6 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     {
         builder = builder.config(IO_EGRESS_PRIVATE_ADDRESSES.key, "deny");
     }
-    let host = match args.host {
-        Some(h) => h,
-        None => config
-            .get(&CONNECT_ADDRESS)
-            .and_then(ConfigValue::as_str)
-            .unwrap_or("127.0.0.1")
-            .parse()
-            .map_err(|_| "krishiv.connect.address is not an IP address".to_owned())?,
-    };
-    // ADR 0046 §6, design §3.5: before either listener binds (both bind `host`).
-    check_listener(SocketAddr::new(host, 0), &auth_config, &tls_config).map_err(|e| {
-        format!(
-            "refusing to serve on {host}: {e}. Bind a loopback address (--host 127.0.0.1), or \
-             configure authentication (krishiv.auth.*) and, for tokens or OIDC, TLS \
-             (krishiv.server.tls.certFile and keyFile)."
-        )
-    })?;
     let tls = ServerTls::new(&tls_config, &auth_config.mtls).map_err(|e| e.to_string())?;
     let auth = ServerAuth::new(&auth_config).map_err(|e| e.to_string())?;
     if host::is_root() && !args.allow_root {
@@ -207,8 +300,71 @@ fn catalog_setup() -> CatalogSetup {
 
 /// A setting `krishiv server` reads itself: authentication (`krishiv.auth.*`, Spark's token key)
 /// and the listeners' TLS (`krishiv.server.tls.*`).
-fn is_listener_key(key: &str) -> bool {
+pub(crate) fn is_listener_key(key: &str) -> bool {
     is_auth_key(key) || key.starts_with("krishiv.server.tls.")
+}
+
+/// `GetSqlInfo`'s server facts (design P3-T101 §5): the version, the parser's keywords and the
+/// functions Krishiv implements of Spark's math (numeric), string, datetime and misc (system)
+/// documentation groups.
+#[cfg(feature = "flight-sql")]
+fn flight_server_info() -> krishiv_flight_sql::ServerInfo {
+    use krishiv_functions::registry::{FunctionGroup, builtins, spark_function_groups};
+    let implemented: std::collections::HashSet<&str> =
+        builtins().functions().iter().map(|d| d.name).collect();
+    let mut info = krishiv_flight_sql::ServerInfo {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        keywords: krishiv_sql::SQL_KEYWORDS
+            .iter()
+            .map(|(k, _)| (*k).to_owned())
+            .collect(),
+        ..krishiv_flight_sql::ServerInfo::default()
+    };
+    for (name, group) in spark_function_groups().filter(|(n, _)| implemented.contains(n)) {
+        let list = match group {
+            FunctionGroup::Math => &mut info.numeric_functions,
+            FunctionGroup::String => &mut info.string_functions,
+            FunctionGroup::Datetime => &mut info.datetime_functions,
+            FunctionGroup::Misc => &mut info.system_functions,
+            _ => continue,
+        };
+        list.push(name.to_owned());
+    }
+    info
+}
+
+/// The Flight SQL service for `connect`'s listener and its sweep task, unless
+/// `krishiv.flightSql.enabled` is off (design P3-T101 §2, owner item 6: on by default when
+/// compiled in).
+#[cfg(feature = "flight-sql")]
+fn flight_sql(
+    config: &Config,
+    manager: &Arc<SessionManager>,
+    connect: &ConnectServer,
+    auth: ConnectAuth,
+) -> Result<
+    Option<(
+        krishiv_flight_sql::FlightSqlServer,
+        krishiv_flight_sql::SweepGuard,
+    )>,
+    String,
+> {
+    if !flag(config, &krishiv_common::config::FLIGHT_SQL_ENABLED, true) {
+        return Ok(None);
+    }
+    let info = flight_server_info();
+    let flight = krishiv_flight_sql::FlightSqlServer::new(
+        Arc::clone(manager),
+        Arc::new(auth),
+        connect.draining(),
+        connect.response_budget().clone(),
+        &info,
+        krishiv_flight_sql::FlightSqlConfig::from_config(config),
+    )
+    .map_err(|e| e.to_string())?;
+    let interval = ConnectServerConfig::from_config(config).maintenance_interval;
+    let sweeper = flight.spawn_sweeper(interval);
+    Ok(Some((flight, sweeper)))
 }
 
 fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: bool) -> bool {
@@ -278,6 +434,7 @@ async fn run_listeners(
         Arc::new(TokenGuard::new(&token))
     };
     let ready = Arc::new(AtomicBool::new(false));
+    let late_metrics = LateMetrics::default();
     let app = admin_router(
         &runtime,
         config,
@@ -286,20 +443,36 @@ async fn run_listeners(
         Arc::clone(&ready),
         admin_bound,
         tls.is_some(),
+        Arc::clone(&late_metrics),
     )?;
     let mut connect = ConnectServer::new(
         Arc::clone(&manager),
         ConnectServerConfig::from_config(config),
     );
-    if authenticated {
-        connect = connect.with_auth(
+    // One `ConnectAuth` per service on the listener, over the one `ServerAuth` (P3-T101 §2).
+    let connect_auth = || {
+        if authenticated {
             ConnectAuth::new(Arc::clone(&auth) as Arc<_>)
-                .with_denials(denials)
-                .with_impersonation(auth),
-        );
+                .with_denials(Arc::clone(&denials))
+                .with_impersonation(Arc::clone(&auth))
+        } else {
+            ConnectAuth::off()
+        }
+    };
+    if authenticated {
+        connect = connect.with_auth(connect_auth());
     }
     if let Some(tls) = &tls {
         connect = connect.with_tls(&tls.server_config());
+    }
+    #[cfg(feature = "flight-sql")]
+    let flight = flight_sql(config, &manager, &connect, connect_auth())?;
+    #[cfg(feature = "flight-sql")]
+    if let Some((flight, _)) = &flight {
+        connect = connect.with_routes(flight.routes());
+        // `krishiv.flight_sql.requests` in the scrape (design §7, review m6).
+        let counted = flight.clone();
+        let _ = late_metrics.set(Box::new(move || counted.metrics()));
     }
 
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -345,6 +518,10 @@ async fn run_listeners(
         ("", "http")
     };
     println!("krishiv server: Spark Connect on sc://{connect_bound}{sc_suffix}");
+    #[cfg(feature = "flight-sql")]
+    if flight.is_some() {
+        println!("krishiv server: Arrow Flight SQL on the same port");
+    }
     println!("krishiv server: admin on {http}://{admin_bound}");
     let ui = flag(config, &UI_ENABLED, true) && cfg!(feature = "ui");
     if authenticated {
@@ -364,6 +541,13 @@ async fn run_listeners(
         .await
         .map_err(|e| e.to_string());
     ready.store(false, Ordering::Release);
+    // `serve` closed every session: Flight's table and handles go too (design §16 m7); the sweep
+    // task ends with its guard.
+    #[cfg(feature = "flight-sql")]
+    if let Some((flight, sweeper)) = flight {
+        flight.close_all();
+        drop(sweeper);
+    }
     signals.abort();
     if let Some(reloads) = reloads {
         reloads.abort();
@@ -381,6 +565,15 @@ async fn run_listeners(
     served
 }
 
+/// Samples another service adds to `/metrics` once it exists (the Flight SQL service is built
+/// after the admin router).
+type LateMetrics =
+    Arc<std::sync::OnceLock<Box<dyn Fn() -> krishiv_session::MetricsSnapshot + Send + Sync>>>;
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the admin listener's parts, each built by `run`"
+)]
 fn admin_router(
     runtime: &Arc<EngineRuntime>,
     config: &Config,
@@ -389,6 +582,7 @@ fn admin_router(
     ready: Arc<AtomicBool>,
     bound: SocketAddr,
     tls: bool,
+    late: LateMetrics,
 ) -> Result<axum::Router, String> {
     let authenticated = auth.is_some();
     let denials = auth.as_ref().map(|a| a.denials());
@@ -409,6 +603,9 @@ fn admin_router(
             let mut snapshot = snapshot_runtime.metrics();
             if let Some(auth) = &auth {
                 snapshot.merge(&auth.metrics());
+            }
+            if let Some(more) = late.get() {
+                snapshot.merge(&more());
             }
             snapshot
         }),
@@ -619,6 +816,22 @@ mod tests {
             c.set(k, v).unwrap();
         }
         c
+    }
+
+    /// `GetSqlInfo` lists the parser's keywords and the implemented functions by group (review m9).
+    #[cfg(feature = "flight-sql")]
+    #[test]
+    fn flight_server_info_lists_keywords_and_functions() {
+        let info = flight_server_info();
+        assert!(info.keywords.iter().any(|k| k == "SELECT"));
+        for (list, name) in [
+            (&info.numeric_functions, "abs"),
+            (&info.string_functions, "upper"),
+            (&info.datetime_functions, "date_add"),
+            (&info.system_functions, "current_user"),
+        ] {
+            assert!(list.iter().any(|f| f == name), "{name} in {list:?}");
+        }
     }
 
     #[test]

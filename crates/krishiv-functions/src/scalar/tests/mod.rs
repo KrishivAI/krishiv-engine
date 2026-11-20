@@ -602,12 +602,14 @@ fn results_are_checked_against_the_binding() {
 mod array_edit;
 mod array_shape;
 mod avro;
+mod bitmap;
 mod bitwise;
 mod calendar;
 mod csv;
 mod datetime_format;
 mod element;
 mod families;
+mod hll;
 mod json;
 mod json_tuple;
 mod legacy_fast;

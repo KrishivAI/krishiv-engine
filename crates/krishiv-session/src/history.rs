@@ -134,6 +134,8 @@ pub struct QueryOptions {
     pub(crate) deadline: Option<std::time::Duration>,
     pub(crate) request_tags: Vec<Arc<str>>,
     pub(crate) inbound_trace: Option<(Option<String>, Option<String>)>,
+    pub(crate) inbound_credential:
+        Option<(crate::auth::Method, Option<crate::auth::InboundCredential>)>,
     pub(crate) query_start_micros: Option<i64>,
 }
 
@@ -162,6 +164,19 @@ impl QueryOptions {
     /// statement can tighten the session's limit, never loosen it.
     pub fn deadline(mut self, limit: std::time::Duration) -> Self {
         self.deadline = Some(limit);
+        self
+    }
+
+    /// Gives the statement's delegated catalogs the authentication of the request that started
+    /// it (P3-T067 §3.3): its method and user token, if any. Per request, unlike
+    /// [`crate::Session::set_inbound_credential`], which records the session's latest: of two
+    /// concurrent requests of one session, each query uses its own request's token.
+    pub fn inbound_credential(
+        mut self,
+        method: crate::auth::Method,
+        credential: Option<crate::auth::InboundCredential>,
+    ) -> Self {
+        self.inbound_credential = Some((method, credential));
         self
     }
 
@@ -437,19 +452,20 @@ impl QueryHistory {
             row.peak_memory_bytes = Some(done.peak_memory_bytes);
             row.error_class = done.error_class.map(str::to_owned);
             row.operators = Arc::from(done.operators.as_slice());
+            row.hints = done.hints.as_deref().map(Arc::from);
             if let Some(t) = done.totals {
                 row.workload_class = Some(t.workload_class);
                 row.cpu_ns = Some(t.cpu_ns);
                 row.rows_produced = t.rows_produced;
-                row.bytes_read = Some(t.bytes_read);
-                row.rows_read = Some(t.rows_read);
+                row.bytes_read = t.bytes_read;
+                row.rows_read = t.rows_read;
                 row.rows_written = Some(t.rows_written);
                 row.bytes_written = Some(t.bytes_written);
-                row.files_read = Some(t.files_read);
+                row.files_read = t.files_read;
                 row.files_written = Some(t.files_written);
-                row.spill_bytes = Some(t.spill_bytes);
-                row.spill_files = Some(t.spill_files);
-                row.pipelines = Some(t.pipelines);
+                row.spill_bytes = t.spill_bytes;
+                row.spill_files = t.spill_files;
+                row.pipelines = t.pipelines;
                 row.workers = Some(t.workers);
             }
         });

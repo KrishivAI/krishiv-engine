@@ -235,6 +235,13 @@ impl HashAggregate {
         };
         publish(&queue, &[], &spare);
         let limit = ctx.executor().parallelism().max(1);
+        // Every input byte the tasks hold at the start: presized pages are
+        // granted only beside all of them (see the grant below).
+        let inputs_held: usize = queue
+            .iter()
+            .flat_map(|t| &t.inputs)
+            .map(|(_, r)| r.size())
+            .sum();
         let mut running: Running<'_> = FuturesUnordered::new();
         let mut done: Vec<Task> = Vec::new();
         let mut out: Option<SpillWriter> = None;
@@ -258,9 +265,28 @@ impl HashAggregate {
                 debug_assert!(task.pages == 0 || !task.part_groups.is_empty());
                 if task.pages > 0 {
                     // Presized pages only when the pool grants them now;
-                    // never a reason to wait.
+                    // never a reason to wait. They take a task's whole
+                    // output before its inputs are freed, where the merge
+                    // they replace grows as it frees them, and the tasks
+                    // start together; so they are taken only while the pool
+                    // also has every input byte of the phase free beside
+                    // them. Under pressure the tasks grow as they merge:
+                    // with a task's own inputs as the margin, TPC-H q16
+                    // (every pair new) still spilled 2.3x the bytes at a
+                    // limit the merge fits (SF1000: 53 s -> 100 s). Checked,
+                    // then reserved, without a lock (as the spill writers'
+                    // optional memory): only `want` is ever reserved, and a
+                    // race either makes `try_grow` fail or, when another
+                    // consumer grows in between, grants the pages with less
+                    // than `inputs_held` free beside them; both are harmless.
                     let pages = std::mem::take(&mut task.pages);
-                    if task.reservation.try_grow(task.need + pages).is_ok() {
+                    let want = task.need + pages;
+                    let room = ctx
+                        .query()
+                        .pool()
+                        .available()
+                        .is_none_or(|free| free >= want.saturating_add(inputs_held));
+                    if room && task.reservation.try_grow(want).is_ok() {
                         task.need = 0;
                     } else {
                         task.part_groups.clear();

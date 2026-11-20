@@ -108,6 +108,7 @@ impl Planner<'_> {
         if !exprs.iter().all(|e| is_column(e)) {
             self.request_moves(node, input, exprs, false, Vec::new());
         }
+        self.demand = super::build::node_demand(node);
         let planned = self.plan(input)?;
         let exprs = self.moved_exprs(node, exprs);
         let (planned, exprs) = self.extract_python(planned, &exprs)?;
@@ -137,6 +138,7 @@ impl Planner<'_> {
         if let Grouping::GroupBy(keys) = grouping {
             self.request_moves(node, input, aggregates, true, keys.clone());
         }
+        self.demand = super::build::node_demand(node);
         let planned = self.plan(input)?;
         let aggregates = self.moved_exprs(node, aggregates);
         self.aggregate(planned, grouping, &aggregates)

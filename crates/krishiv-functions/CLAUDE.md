@@ -27,6 +27,8 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
   version), session zone, the query start instant (`current_date`, `current_timestamp`, `localtimestamp`), the session user (`current_user`, `user`, `session_user`; family `session`), `decimalOperations.allowPrecisionLoss` and `spark.sql.mapKeyDedupPolicy` (the map family). `round`/`ceil`/`floor` bind
   their scale from a `BindArg::Literal`. Operators, `CAST` and aggregates are not bound here.
 
+- `from_protobuf` / `to_protobuf` (P3-T087): `registry/protobuf.rs` (Spark's argument rules and result types: the descriptor and options are constants, read through `Constant::Binary`/`StringMap`; a string path's `Constant::Binary` is the file the analyzer read under the access policy, `DescriptorArg::File`, and its `Constant::Error` the read failure, raised after the argument checks) and `scalar/protobuf.rs` (the binding), both on `krishiv_io::protobuf::Call`. A call with no descriptor is Spark's Java-class form (`CANNOT_LOAD_PROTOBUF_CLASS`); a first argument that is not binary is a type mismatch where Spark raises `INTERNAL_ERROR`. Goldens: `krishiv-session/tests/protobuf_goldens.rs`.
+
 - `python_wrappers`: generates `python/krishiv/sql/_generated_functions.py` and `.pyi` (PySpark names and parameters) from the
   registry. Test-only code (not in the library): `the_checked_in_wrappers_match_the_registry` fails when they are stale and
   `KRISHIV_REGENERATE_PYTHON=1 cargo test -p krishiv-functions python_wrappers` rewrites them. `python_wrappers/table.rs` is the PySpark
@@ -40,6 +42,9 @@ Paths are relative to this crate.
 - `src/registry/defs.rs` string, datetime and aggregate signatures; `src/registry/math.rs` math and `try_*` signatures
 - `src/registry/conditional.rs` conditional evaluators; `src/registry/hashing.rs` hash signatures
 - `src/registry/catalog.rs` catalog rows loaded from `vendored/spark-functions.tsv`
+- `src/registry/groups.rs` `spark_function_groups()`: Spark's math/string/datetime/misc doc groups from
+  `vendored/spark-function-groups.tsv` (derived from `vendored/spark-function-docs.jsonl`; a test keeps them equal), for
+  Flight SQL's `GetSqlInfo` function lists
 - `src/scalar/mod.rs` `bind_scalar`; `src/scalar/args.rs` argument handling shared by bindings
 - `src/scalar/{string,chars,codec,datetime,math,arith,hash,map,session,regex}.rs` family bindings (`NAMES` and `bind`); `src/scalar/regex/java.rs` Java-to-`fancy_regex` translation
 - `vendored/spark-functions.tsv` generated from Spark runs; never edit by hand
@@ -85,6 +90,8 @@ Paths are relative to this crate.
   to this family.
 
 - `spark.sql.binaryOutputStyle` (`BindOptions::binary_style`, `krishiv_kernels::binary_style::BinaryStyle`; plan data through the `binary_output_style` codec feature, only when it differs from the unset default `HEX_DISCRETE`) sets how `to_csv` and `to_xml` print `BINARY` fields; `from_xml` reads a binary field back with Spark 4.1+'s `getBinaryParser` (`BinaryStyle::parse`, lenient as Java's decoders are: optional brackets, `Byte.parseByte`, odd-length hex, unpadded base64; SOURCE-DERIVED, no Spark run yet). A text the style's decoder refuses is a miss like any other leaf (NULL under PERMISSIVE, `MALFORMED_RECORD_IN_PARSING` under FAILFAST), there is no UTF-8 fallback; an empty element is NULL; Spark 4.0.x has no BINARY read-back, so every non-empty text misses there. `from_csv` reads the field text's UTF-8 bytes; `cast(binary as string)` ignores the setting (Spark 4.2.0 run). Goldens: `krishiv-session/tests/binary_output_style.rs`.
+
+- `sketch` (P3-T086): the DataSketches layer over the `datasketches` crate (pinned `=0.6.0`). `sketch/hll.rs` has the lgConfigK check, per-type update encodings, serialize/deserialize with Spark's error classes and the union rules; `registry/hll.rs` + `scalar/hll.rs` are `hll_sketch_estimate` and `hll_union`; `hll_sketch_agg` and `hll_union_agg` are registry aggregates run by `krishiv-exec`. Bytes are the compact form, Spark writes the updatable one (`length`/`hex` differ; both read both). The catalog TSV lists `hll_sketch_estimate`/`hll_union` as aggregates (a generator artifact), which `every_definition_is_in_sparks_catalog` exempts.
 
 ## Invariants
 - Behaviour keyed by Spark version (3.5, 4.0, 4.1, 4.2), never ad-hoc flags.

@@ -136,6 +136,11 @@ pub(crate) struct QueryEnv {
     /// What the temporary view entries the analysis inlined kept (`TempTable::View::keeps`), set by
     /// `analyze_in`: the handles of the definitions the query runs, whatever replaced them since.
     pub(crate) view_keeps: Arc<std::sync::Mutex<Vec<crate::catalog::Keep>>>,
+    /// Set by `analyze_in` when the plan inlines a `SQL SECURITY DEFINER` view whose query the
+    /// principal may not see as an invoker (review M2, the rule `EXPLAIN` follows): the query's
+    /// operators (names, text metrics, row counts of the definer's plan) are kept out of
+    /// `system.operators` and its profile out of the persisted history.
+    pub(crate) withhold_profile: Arc<std::sync::atomic::AtomicBool>,
     /// A trial analysis (P3 PR-14d): its read denials are answers, not refusals, so they write no
     /// `krishiv::audit` record ([`crate::access::audit_read`]) and the policy is not told of them.
     /// Built [`QuietDenials::default`] (off); only [`Self::set_quiet_denials`] turns it on, together
@@ -146,6 +151,9 @@ pub(crate) struct QueryEnv {
     /// policy ([`Self::set_quiet_denials`]), so a trial's `Usage` check before a Python UDTF's `analyze`
     /// tells the policy nothing either.
     pub(crate) udtfs: Arc<crate::python_udfs::SessionTableFunctions>,
+    /// Why this query's spill directory could not be set up, if it could not (PY-078): the query
+    /// then reports its memory error as that failure. Shared by the clones of one statement's env.
+    pub(crate) spill_failure: Arc<std::sync::Mutex<Option<KrishivError>>>,
 }
 
 /// Whether a [`QueryEnv`] is a trial analysis; its flag is private to this module, so it is set only
@@ -256,6 +264,7 @@ impl Session {
         .with_relations(Arc::clone(&self.state.relations))
         .with_spill_scopes(Arc::new(QuerySpill {
             state: Arc::clone(&self.state),
+            failure: Arc::clone(&env.spill_failure),
         }))
         .with_io(env.io.clone())
         .with_formats(Arc::clone(&self.state.runtime.formats))

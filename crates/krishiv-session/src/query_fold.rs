@@ -73,6 +73,10 @@ impl QueryStart {
     /// if any; otherwise the query's own error decides the outcome (none is
     /// success). A zero wall time means the query never finished (a
     /// cancelled stream dropped early): the duration then runs to now.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the query's end state; bundling it would add a struct used once"
+    )]
     fn fold(
         self,
         state: &SessionState,
@@ -80,6 +84,8 @@ impl QueryStart {
         error: Option<&KrishivError>,
         metrics_on: bool,
         log_id: &str,
+        hints: Option<Vec<crate::system::HintRow>>,
+        withhold_operators: bool,
     ) {
         let stored = query.error();
         let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
@@ -87,6 +93,8 @@ impl QueryStart {
             state.queries.note_error(log_id, e);
         }
         let metrics = query.metrics();
+        // The totals of a withheld plan's scans and pipelines are left out with its operators.
+        let shown = |total: i64| (!withhold_operators).then_some(total);
         let wall = metrics.wall_time;
         // A zero wall time means the query never finished (a cancelled
         // stream dropped early): the duration then runs from query start
@@ -108,10 +116,12 @@ impl QueryStart {
                 wall_ns: i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX),
                 peak_memory_bytes: i64::try_from(metrics.memory.peak_reserved).unwrap_or(i64::MAX),
                 error_class: error_class.as_deref(),
+                hints: hints.filter(|_| status == Status::Succeeded),
                 // The most operators one query keeps.
                 operators: metrics
                     .operators
                     .iter()
+                    .filter(|_| !withhold_operators)
                     .take(500)
                     .map(|(id, e)| crate::system::OperatorRow::of(log_id, *id, e, metrics.workers))
                     .collect(),
@@ -123,42 +133,52 @@ impl QueryStart {
                         .map(|e| i64::try_from(e.metrics.rows_in).unwrap_or(i64::MAX))
                         .max(),
                     // The query's own counters (its I/O context), since it started.
-                    bytes_read: i64::try_from(
-                        IoCounters::get(&self.io.counters().bytes_read)
-                            .saturating_sub(self.bytes_read),
-                    )
-                    .unwrap_or(i64::MAX),
+                    bytes_read: shown(
+                        i64::try_from(
+                            IoCounters::get(&self.io.counters().bytes_read)
+                                .saturating_sub(self.bytes_read),
+                        )
+                        .unwrap_or(i64::MAX),
+                    ),
                     bytes_written: i64::try_from(
                         IoCounters::get(&self.io.counters().bytes_written)
                             .saturating_sub(self.bytes_written),
                     )
                     .unwrap_or(i64::MAX),
-                    files_read: metrics
-                        .operators
-                        .values()
-                        .filter(|e| {
-                            e.role == krishiv_exec::OperatorRole::Source && e.name.ends_with("Scan")
-                        })
-                        .flat_map(|e| e.extra.iter())
-                        .filter(|(n, _)| n == "scan_files")
-                        .map(|(_, m)| match m {
-                            krishiv_exec::Metric::Count(n) => i64::try_from(*n).unwrap_or(i64::MAX),
-                            _ => 0,
-                        })
-                        .fold(0, i64::saturating_add),
+                    files_read: shown(
+                        metrics
+                            .operators
+                            .values()
+                            .filter(|e| {
+                                e.role == krishiv_exec::OperatorRole::Source
+                                    && e.name.ends_with("Scan")
+                            })
+                            .flat_map(|e| e.extra.iter())
+                            .filter(|(n, _)| n == "scan_files")
+                            .map(|(_, m)| match m {
+                                krishiv_exec::Metric::Count(n) => {
+                                    i64::try_from(*n).unwrap_or(i64::MAX)
+                                }
+                                _ => 0,
+                            })
+                            .fold(0, i64::saturating_add),
+                    ),
                     files_written: i64::try_from(
                         IoCounters::get(&self.io.counters().files_written)
                             .saturating_sub(self.files_written),
                     )
                     .unwrap_or(i64::MAX),
-                    rows_read: metrics
-                        .operators
-                        .values()
-                        .filter(|e| {
-                            e.role == krishiv_exec::OperatorRole::Source && e.name.ends_with("Scan")
-                        })
-                        .map(|e| i64::try_from(e.metrics.rows_out).unwrap_or(i64::MAX))
-                        .fold(0, i64::saturating_add),
+                    rows_read: shown(
+                        metrics
+                            .operators
+                            .values()
+                            .filter(|e| {
+                                e.role == krishiv_exec::OperatorRole::Source
+                                    && e.name.ends_with("Scan")
+                            })
+                            .map(|e| i64::try_from(e.metrics.rows_out).unwrap_or(i64::MAX))
+                            .fold(0, i64::saturating_add),
+                    ),
                     rows_written: metrics
                         .operators
                         .values()
@@ -167,17 +187,21 @@ impl QueryStart {
                         .fold(0, i64::saturating_add),
                     workload_class: query.class().as_str(),
                     cpu_ns: i64::try_from(metrics.drivers.busy.as_nanos()).unwrap_or(i64::MAX),
-                    spill_bytes: metrics
-                        .operators
-                        .values()
-                        .map(|e| i64::try_from(e.metrics.spill_write_bytes).unwrap_or(i64::MAX))
-                        .fold(0, i64::saturating_add),
-                    spill_files: metrics
-                        .operators
-                        .values()
-                        .map(|e| i64::try_from(e.metrics.spill_files).unwrap_or(i64::MAX))
-                        .fold(0, i64::saturating_add),
-                    pipelines: i64::try_from(metrics.pipelines.len()).unwrap_or(i64::MAX),
+                    spill_bytes: shown(
+                        metrics
+                            .operators
+                            .values()
+                            .map(|e| i64::try_from(e.metrics.spill_write_bytes).unwrap_or(i64::MAX))
+                            .fold(0, i64::saturating_add),
+                    ),
+                    spill_files: shown(
+                        metrics
+                            .operators
+                            .values()
+                            .map(|e| i64::try_from(e.metrics.spill_files).unwrap_or(i64::MAX))
+                            .fold(0, i64::saturating_add),
+                    ),
+                    pipelines: shown(i64::try_from(metrics.pipelines.len()).unwrap_or(i64::MAX)),
                     workers: i64::try_from(metrics.workers).unwrap_or(i64::MAX),
                 }),
             },
@@ -224,6 +248,30 @@ pub(crate) struct QueryFold {
     pub(crate) _operation: Option<Arc<crate::history::Operation>>,
     /// What the persisted history needs of the query, kept only when `krishiv.history.path` is set.
     pub(crate) history: Option<HistoryJob>,
+    /// What the advisor needs of the query (P3-T073); `None` with `krishiv.advisor.enabled=false`.
+    pub(crate) advisor: Option<AdvisorJob>,
+    /// The query's operators are not recorded (`QueryEnv::withhold_profile`, review M2).
+    pub(crate) withhold_operators: bool,
+}
+
+/// The plan tree (with the planner's facts) and thresholds the advisor reads when the query ends.
+pub(crate) struct AdvisorJob {
+    pub(crate) plan: krishiv_exec::profile::ProfileNode,
+    pub(crate) settings: krishiv_exec::profile::HintSettings,
+}
+
+impl AdvisorJob {
+    /// The job for `plan` under the query's configuration, `None` when the advisor is off.
+    pub(crate) fn of(
+        plan: &krishiv_exec::planner::PhysicalPlan,
+        config: &krishiv_common::config::Config,
+    ) -> Option<Self> {
+        let settings = krishiv_exec::profile::HintSettings::from_config(config);
+        settings.enabled.then(|| Self {
+            plan: krishiv_exec::profile::ProfileNode::of(plan),
+            settings,
+        })
+    }
 }
 
 /// The plan and who ran the query, held until the query ends, for the persisted history.
@@ -372,18 +420,31 @@ impl QueryFold {
 
     pub(crate) fn finish(mut self, error: Option<&KrishivError>) {
         self.report_usage();
-        self.record_history(error);
+        // After execution, from the finished metrics: planning is untouched.
+        let found = self.advisor.take().map(|job| {
+            krishiv_exec::profile::hints(&job.plan, &self.query.metrics(), &job.settings)
+        });
+        let hints = found
+            .as_ref()
+            .map(|h| h.iter().map(crate::system::HintRow::of).collect());
+        self.record_history(error, found.unwrap_or_default());
         self.start.fold(
             &self.state,
             &self.query,
             error,
             self.metrics_on,
             &self.log_id,
+            hints,
+            self.withhold_operators,
         );
     }
 
     /// Queues the query's profile for the persisted history: the queue send is all the query pays; the profile is built and written on the history thread.
-    fn record_history(&mut self, error: Option<&KrishivError>) {
+    fn record_history(
+        &mut self,
+        error: Option<&KrishivError>,
+        hints: Vec<krishiv_exec::profile::Hint>,
+    ) {
         // The plan moves into the entry: the one copy of it is the one taken when the query started.
         let (Some(job), Some(store)) = (self.history.take(), &self.state.runtime.profile_history)
         else {
@@ -418,6 +479,7 @@ impl QueryFold {
             identity: job.identity,
             trace: job.trace,
             scans: job.scans,
+            hints,
         };
         match &job.hold {
             Some(hold) => hold.offer(entry, store),

@@ -16,16 +16,18 @@ from krishiv.errors import (
     PySparkValueError,
     not_expected_type,
     not_implemented,
+    unsupported_attribute,
     unsupported_feature,
 )
 from krishiv.sql.catalog import CatalogMetadata, Column, Database, Function, Table
-from krishiv.sql.conf import RuntimeConfig
+from krishiv.sql.conf import RuntimeConfig, _warn_if_cluster_setting
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.readwriter import DataFrameReader
 from krishiv.sql.types import DataType, StructType
 from krishiv.storagelevel import StorageLevel
 
 if TYPE_CHECKING:
+    from krishiv._udf.profiler import Profile
     from krishiv.sql.udf import UDFRegistration
 
 #: The Spark version this engine is compatible with.
@@ -53,16 +55,28 @@ class SparkSession:
         ) -> SparkSession.Builder:
             if map is not None:
                 for k, v in map.items():
-                    self.config(k, v)
+                    self._put(k, v)
             if key is not None:
-                self._config[key] = ("true" if value else "false") if isinstance(value, bool) else str(value)
+                self._put(key, value)
             return self
 
+        def _put(self, key: str, value: Any) -> None:
+            """Stores one option. Every public setter calls this directly, so the cluster-setting
+            warning is raised at the same depth (the user's line) for each of them."""
+            self._config[key] = ("true" if value else "false") if isinstance(value, bool) else str(value)
+            _warn_if_cluster_setting(key, self._config[key], stacklevel=3)
+
         def appName(self, name: str) -> SparkSession.Builder:
-            return self.config("spark.app.name", name)
+            self._put("spark.app.name", name)
+            return self
 
         def master(self, master: str) -> SparkSession.Builder:
-            return self.config("spark.master", master)
+            self._put("spark.master", master)
+            return self
+
+        def enableHiveSupport(self) -> SparkSession.Builder:
+            """Not supported: there is no Hive metastore in Krishiv (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+            raise unsupported_feature("SparkSession.Builder.enableHiveSupport (there is no Hive metastore)")
 
         def remote(self, url: str) -> SparkSession.Builder:
             raise not_implemented("remote sessions")
@@ -84,7 +98,7 @@ class SparkSession:
                         )
                     for k, v in self._config.items():
                         if k not in skipped:
-                            _active.conf.set(k, v)
+                            _active.conf._set(k, v)  # the builder warned when the option was given
                 return _active
 
         def create(self) -> SparkSession:
@@ -103,6 +117,9 @@ class SparkSession:
     def __init__(self, native: _native.Session, config: list[tuple[str, str]] | None = None) -> None:
         self._native = native
         self._conf = RuntimeConfig(native)
+        from krishiv._udf.profiler import Registry
+
+        self._profile_registry = Registry()
         # The options the session was built with: `newSession` starts from them.
         self._config = list(config or [])
 
@@ -111,8 +128,21 @@ class SparkSession:
         return SPARK_VERSION
 
     @property
+    def sparkContext(self) -> Any:
+        """Not supported: Krishiv has no SparkContext or RDDs; use the DataFrame API."""
+        raise unsupported_attribute("SparkSession.sparkContext (SparkContext and RDDs; use the DataFrame API)")
+
+    @property
     def conf(self) -> RuntimeConfig:
         return self._conf
+
+    @property
+    def profile(self) -> Profile:
+        """The UDF profiles of this session (``spark.sql.pyspark.udf.profiler`` = ``perf`` or ``memory``):
+        ``show``, ``dump`` and ``clear``, as ``pyspark.sql.profiler.Profile``."""
+        from krishiv._udf.profiler import Profile
+
+        return Profile(self._profile_registry)
 
     @property
     def read(self) -> DataFrameReader:
