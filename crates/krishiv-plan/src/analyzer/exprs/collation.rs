@@ -547,9 +547,6 @@ enum RwArg {
     Kid(usize),
     /// The call's argument with its trailing spaces dropped (`_RTRIM` ignores them in a delimiter).
     RtrimKid(usize),
-    /// The call's argument in Java's simple case folding, as `UTF8_LCASE` patterns match: lower case, with `İ`
-    /// (whose full lower case is two characters) mapped to `i` first.
-    SimpleLowerKid(usize),
     /// An integer constant.
     Int(i32),
 }
@@ -595,12 +592,6 @@ fn collated_rewrite(name: &str, n: usize, c: Collation) -> Option<Option<Rewrite
                 vec![RwArg::Int(mode), RwArg::Kid(src), RwArg::Kid(chars)],
             )
         }
-        // Spark compiles the pattern with `CASE_INSENSITIVE | UNICODE_CASE` under `UTF8_LCASE`: a match of each
-        // character by simple case folding. (`_RTRIM` and the escape form are not modelled.)
-        ("like" | "ilike", 2) if lcase && !rtrim => (
-            "like",
-            vec![RwArg::SimpleLowerKid(0), RwArg::SimpleLowerKid(1)],
-        ),
         ("replace" | "translate", 3) if !lcase => return Some(None),
         ("replace", 3) => (
             "__replace_lcase",
@@ -1749,28 +1740,6 @@ impl Resolver<'_> {
                         b = self.expr(&Arc::new(call), cx)?;
                         b.shown = Some(shown);
                     }
-                    b
-                }
-                RwArg::SimpleLowerKid(i) => {
-                    let k = &kids[i];
-                    let b = if is_string(k.ty.data_type.as_ref()) {
-                        self.plain_string(k, e.origin, cx)?
-                    } else {
-                        k.clone()
-                    };
-                    let text = |t: &str| {
-                        Expr::new(ExprNode::Literal(Literal::String(t.to_owned())))
-                            .with_origin(e.origin)
-                    };
-                    let mapped = Expr::function(
-                        "translate",
-                        vec![(*b.expr).clone(), text("\u{130}"), text("i")],
-                    )
-                    .with_origin(e.origin);
-                    let call = Expr::function("lower", vec![mapped]).with_origin(e.origin);
-                    let shown = b.shown();
-                    let mut b = self.expr(&Arc::new(call), cx)?;
-                    b.shown = Some(shown);
                     b
                 }
                 RwArg::Int(v) => {
