@@ -356,12 +356,16 @@ fn parse_jdbc(stdout: &str) -> JdbcRun {
 /// the Rust Flight SQL client's answer, rows and decimal types; the parameterized prepared q1
 /// takes the query path (m11); each `executeUpdate` runs once; `getTables` and `getTypeInfo`
 /// answer (design §0, §4.4, §5, §11; `tests/scripts/flight_sql_jdbc.sh`). Needs Java 21 or
-/// Docker, and the network the first time (the driver jar is cached), so it is ignored by
-/// default: `cargo nextest run -p krishiv-cli --features flight-sql --test flight_sql
-/// --run-ignored only jdbc`.
+/// Docker, and the network the first time (the driver jar is cached, checked against its pinned
+/// SHA-256). Ignored until prepared-statement parameters have types the driver can bind: run
+/// 2026-11-20, the plain statement passes, but the driver refuses a `Null` parameter ("Can't set
+/// non-null value on NullVector") and an empty parameter schema ("parameter ordinal 1 out of
+/// range"), the two answers design §4.4 allowed. Then un-ignore it (it runs where `flight-sql` is
+/// built, the nightly all-features job): `cargo nextest run -p krishiv-cli --features flight-sql
+/// --test flight_sql --run-ignored only jdbc`.
 #[cfg(unix)]
 #[test]
-#[ignore = "needs Java 21 or Docker, and the network (the JDBC driver): --run-ignored only"]
+#[ignore = "JDBC cannot bind a Null-typed prepared parameter (design §4.4 check failed): --run-ignored only"]
 fn jdbc_flight_sql_tpch_q1() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (mut conf, _) = auth_conf(dir.path(), false);
