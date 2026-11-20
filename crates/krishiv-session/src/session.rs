@@ -1244,8 +1244,10 @@ impl Session {
         // at listing from the read's option values (P2-T084).
         let stores = self.scoped_stores(&config);
         // One I/O context for the query's reads, scans and writes: its
-        // counters are the query's own bytes (`system.queries`).
-        let io = self.scoped_io();
+        // counters are the query's own bytes (`system.queries`). Its metadata reads charge
+        // the session's pool while the statement is planned, the query's once it runs
+        // (`start_query`), so `krishiv.session.memoryLimit` and arbitration see them.
+        let io = self.scoped_io().with_memory(Arc::clone(&self.state.memory));
         let paths: Arc<dyn krishiv_exec::files::PathLocator> = Arc::new(ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),
@@ -1839,6 +1841,7 @@ impl Session {
                 query: Arc::clone(&query),
                 state: Arc::clone(&self.state),
                 start: QueryStart::capture(&self.state, &env.io),
+                _io_memory: env.io.bind_query_memory(Arc::clone(query.pool())),
                 metrics_on,
                 log_id,
                 _permit: permit,

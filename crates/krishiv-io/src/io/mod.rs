@@ -33,6 +33,7 @@ pub mod latency;
 #[cfg(unix)]
 pub mod local_listing;
 mod pace;
+mod query_memory;
 pub mod stores;
 pub mod upload;
 
@@ -56,7 +57,7 @@ use krishiv_common::config::{
     IO_REQUEST_TIMEOUT,
 };
 use krishiv_common::secret::SecretString;
-use krishiv_memory::{ConsumerHandle, MemoryPool, Reservation};
+use krishiv_memory::{MemoryPool, Reservation};
 use object_store::path::Path;
 use object_store::{
     GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload,
@@ -75,6 +76,8 @@ pub use self::inferred::{InferKey, InferredSchemas, infer_schema_cached};
 pub use self::key_facts::{KeyFact, KeyFactKey, KeyFacts};
 pub use self::latency::{LATENCY_BUCKETS, LatencyHistogram};
 use self::pace::{Direction, Pacer};
+use self::query_memory::MemorySlot;
+pub use self::query_memory::QueryIoMemory;
 pub use self::stores::{
     AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
     GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, OpenedStore, ParsedUrl, S3_ACCESS_KEY,
@@ -424,6 +427,9 @@ pub struct IoScheduler {
     /// options for the life of the runtime, so a query does not build its client and TLS roots
     /// again (see `krishiv_store::SharedHttpClients`).
     http_clients: krishiv_store::SharedHttpClients,
+    /// The runtime's memory root ([`Self::attach_memory`]): what work no query owns (a
+    /// detached Delta checkpoint) reserves from.
+    memory: std::sync::OnceLock<Arc<dyn MemoryPool>>,
 }
 
 impl fmt::Debug for IoScheduler {
@@ -486,6 +492,7 @@ impl IoScheduler {
             runtime,
             totals: IoCounters::default(),
             http_clients,
+            memory: std::sync::OnceLock::new(),
         })
     }
 
@@ -607,13 +614,16 @@ impl IoScheduler {
             counters: Arc::new(IoCounters::default()),
             secrets: Arc::new(CachedSecrets::new(Arc::new(NoSecrets))),
             principal: Arc::new(Principal::unset()),
-            memory: None,
+            memory: Arc::default(),
         }
     }
 
     /// Accounts the metadata cache in a child of `pool` (see
     /// [`MetadataCache::attach_pool`]).
+    /// The first pool attached is also the runtime's memory root ([`Self::runtime_memory`]).
     pub fn attach_memory(&self, pool: &Arc<dyn MemoryPool>) {
+        // A second attach keeps the first root: the caches below follow the latest pool.
+        let _ = self.memory.set(Arc::clone(pool));
         self.cache.attach_pool(pool);
         if let Some(c) = &self.block_cache {
             c.attach_pool(pool);
@@ -801,8 +811,9 @@ pub struct IoContext {
     secrets: Arc<CachedSecrets>,
     /// Who runs the query: told to the secret resolver (E12).
     principal: Arc<Principal>,
-    /// The query's consumer for metadata reads ([`Held`] bytes).
-    memory: Option<Arc<ConsumerHandle>>,
+    /// The consumer for metadata reads ([`Held`] bytes), shared by the clones of the
+    /// context: the session's while a statement is planned, the query's while it runs.
+    memory: Arc<MemorySlot>,
 }
 
 /// Secrets resolved once per query: a later request for the same reference
@@ -925,33 +936,47 @@ impl IoContext {
     }
 
     /// This context reserving the bytes of metadata reads ([`Self::get_tail`],
-    /// [`Self::get_ranges_held`]) from `pool`, the query's pool.
+    /// [`Self::get_ranges_held`]) from `pool` (the session's pool, or a query's). The context
+    /// and its later clones share this binding; earlier clones keep theirs.
     #[must_use]
     pub fn with_memory(mut self, pool: Arc<dyn MemoryPool>) -> Self {
-        self.memory = Some(ConsumerHandle::register(pool, "file-metadata-reads", None));
+        self.memory = MemorySlot::over(pool);
         self
     }
 
-    /// This context reserving nothing from a query's pool: for work that outlives the query
-    /// (a Delta checkpoint after a commit), which must not hold the finished query's memory.
-    /// Its metadata reads ([`Self::get_tail`], [`Self::get_ranges_held`]) then reserve nothing,
-    /// as with a context that never had [`Self::with_memory`].
+    /// This context reserving metadata reads from no pool, apart from its clones.
     #[must_use]
     pub fn without_memory(mut self) -> Self {
-        self.memory = None;
+        self.memory = Arc::default();
         self
     }
 
-    /// The query's pool this context reserves metadata reads from, when it
-    /// has one ([`Self::with_memory`]).
-    #[must_use]
-    pub fn memory_pool(&self) -> Option<&Arc<dyn MemoryPool>> {
-        self.memory.as_ref().map(|h| h.pool())
+    /// Charges the metadata reads of this context and every clone sharing its binding
+    /// (the file tables a planner opened with one) to `pool`, the running query's, while
+    /// the returned handle lives; afterwards they go back to the [`Self::with_memory`] pool.
+    /// Reservations taken before keep the pool they came from. A second binding replaces the
+    /// first.
+    pub fn bind_query_memory(&self, pool: Arc<dyn MemoryPool>) -> QueryIoMemory {
+        self.memory.bind(pool)
     }
 
-    /// An empty reservation from the query's pool, when the context has one.
+    /// The pool this context reserves metadata reads from now, when it has one
+    /// ([`Self::with_memory`], [`Self::bind_query_memory`]).
+    #[must_use]
+    pub fn memory_pool(&self) -> Option<Arc<dyn MemoryPool>> {
+        self.memory.current().map(|h| Arc::clone(h.pool()))
+    }
+
+    /// The runtime's memory root, when the scheduler was given one
+    /// ([`IoScheduler::attach_memory`]): for reads no query owns.
+    #[must_use]
+    pub fn runtime_memory(&self) -> Option<&Arc<dyn MemoryPool>> {
+        self.sched.memory.get()
+    }
+
+    /// An empty reservation from the context's pool, when it has one.
     pub(crate) fn reservation(&self) -> Option<Reservation> {
-        self.memory.as_ref().map(ConsumerHandle::reservation)
+        self.memory.current().map(|h| h.reservation())
     }
 
     /// Grows (waiting for memory) or shrinks `r` to `bytes`.
@@ -975,7 +1000,7 @@ impl IoContext {
     }
 
     async fn reserve(&self, bytes: u64) -> Result<Option<Reservation>> {
-        let Some(h) = &self.memory else {
+        let Some(h) = self.memory.current() else {
             return Ok(None);
         };
         let mut r = h.reservation();

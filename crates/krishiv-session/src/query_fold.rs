@@ -236,6 +236,9 @@ pub(crate) struct QueryFold {
     pub(crate) query: Arc<QueryContext>,
     pub(crate) state: Arc<SessionState>,
     pub(crate) start: QueryStart,
+    /// The query's pool bound to the statement's I/O context: footer and metadata reads of
+    /// the file tables the planner opened charge the query while it runs.
+    pub(crate) _io_memory: krishiv_io::QueryIoMemory,
     /// `krishiv.metrics.enabled` as the query started.
     pub(crate) metrics_on: bool,
     /// The query's id in `system.queries`.
