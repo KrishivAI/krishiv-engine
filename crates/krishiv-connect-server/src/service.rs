@@ -95,7 +95,7 @@ pub struct ConnectService {
 
 impl ConnectService {
     /// A service over `manager`, with authentication off; new RPCs are
-    /// refused with `UNAVAILABLE` once `draining` is set (shutdown).
+    /// refused as the design's table says (P3-T066 §5.1) once `draining` is set.
     #[must_use]
     pub fn new(manager: Arc<SessionManager>, draining: Arc<AtomicBool>) -> Self {
         Self {
@@ -157,12 +157,23 @@ impl ConnectService {
         &self.manager
     }
 
-    /// `UNAVAILABLE` while the server shuts down: the client retries it
-    /// (PySpark retries `UNAVAILABLE` with backoff), so it reaches the
-    /// server once it is back.
-    fn admit(&self) -> Result<(), Status> {
-        if self.draining.load(Ordering::Acquire) {
-            Err(Status::unavailable("server shutting down"))
+    /// Whether the server drains (design P3-T066 §5.1).
+    fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::Acquire)
+    }
+
+    /// The refusal of new work while draining: `KRISHIV_SERVER_DRAINING` in Spark Connect's own
+    /// error encoding (`INTERNAL` with an `ErrorInfo`), never `UNAVAILABLE` and never with
+    /// `RetryInfo`: the stock client retries those for minutes on a session that cannot move to
+    /// another replica, and this one raises at once.
+    fn draining_status() -> Status {
+        status_of(&krishiv_common::error::KrishivServerDraining {}.into())
+    }
+
+    /// An RPC that prepares new work (`AddArtifacts`, `CloneSession`) is refused while draining.
+    fn refuse_new_work(&self) -> Result<(), Status> {
+        if self.is_draining() {
+            Err(Self::draining_status())
         } else {
             Ok(())
         }
@@ -194,7 +205,9 @@ impl ConnectService {
         request: &Request<T>,
         rpc: Rpc,
     ) -> Result<(Authenticated, Check), Status> {
-        self.admit()?;
+        if matches!(rpc, Rpc::AddArtifacts | Rpc::CloneSession) {
+            self.refuse_new_work()?;
+        }
         let caller = self.auth.caller(request)?;
         Ok((caller, check_rpc(rpc)))
     }
@@ -210,15 +223,46 @@ impl ConnectService {
         user: Option<&pb::UserContext>,
     ) -> Result<Arc<SessionEntry>, Status> {
         let user = user.map_or("", |u| u.user_id.as_str());
-        let entry = self
-            .manager
-            .get_or_create(caller, session_id, observed, user)
-            .map_err(|e| status_of(&e))?;
+        // While draining no session is created: an unknown id is not found.
+        let entry = if self.is_draining() {
+            self.manager.get(caller, session_id, observed)
+        } else {
+            self.manager
+                .get_or_create(caller, session_id, observed, user)
+        }
+        .map_err(|e| status_of(&e))?;
         // The latest RPC's user token, for the session's delegated catalogs (P3-T067 §3.3).
         entry
             .session()
             .set_inbound_credential(caller.method, caller.credential.clone());
         Ok(entry)
+    }
+}
+
+impl ConnectService {
+    /// [`Self::session`] for the RPCs that start work (`ExecutePlan`, `AnalyzePlan`, `Config`):
+    /// while draining, an unknown session id is `KRISHIV_SERVER_DRAINING` (design P3-T066 §5.1).
+    fn session_for_work(
+        &self,
+        caller: &Authenticated,
+        session_id: &str,
+        observed: Option<&str>,
+        user: Option<&pb::UserContext>,
+    ) -> Result<Arc<SessionEntry>, Status> {
+        if self.is_draining() {
+            return self.manager.get(caller, session_id, observed).map_err(|e| {
+                // Only an unknown (or foreign) id is the drain's refusal; a stale or closed
+                // session keeps its own answer so a client can tell them apart.
+                if e.error_class()
+                    == krishiv_common::error::ErrorClass::InvalidHandleSessionNotFound
+                {
+                    Self::draining_status()
+                } else {
+                    status_of(&e)
+                }
+            });
+        }
+        self.session(caller, session_id, observed, user)
     }
 }
 
@@ -237,7 +281,7 @@ impl SparkConnectService for ConnectService {
         let mut inbound = inbound_of(request.metadata());
         inbound.credential = Some((caller.method, caller.credential.clone()));
         let request = request.into_inner();
-        let entry = self.session(
+        let entry = self.session_for_work(
             &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
@@ -271,7 +315,7 @@ impl SparkConnectService for ConnectService {
     ) -> Result<Response<pb::AnalyzePlanResponse>, Status> {
         let caller = self.caller(&request, Rpc::AnalyzePlan)?;
         let request = request.into_inner();
-        let entry = self.session(
+        let entry = self.session_for_work(
             &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
@@ -295,7 +339,7 @@ impl SparkConnectService for ConnectService {
     ) -> Result<Response<pb::ConfigResponse>, Status> {
         let caller = self.caller(&request, Rpc::Config)?;
         let request = request.into_inner();
-        let entry = self.session(
+        let entry = self.session_for_work(
             &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),

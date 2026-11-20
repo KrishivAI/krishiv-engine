@@ -33,6 +33,15 @@ use tonic::service::Routes;
 use tonic::transport::Channel;
 use tonic::{Code, Request, Status};
 
+#[path = "service/metadata.rs"]
+mod metadata;
+#[path = "service/prepared.rs"]
+mod prepared;
+#[path = "service/session_options.rs"]
+mod session_options;
+#[path = "service/updates.rs"]
+mod updates;
+
 const OPS: &str = "flight-operator-token-0123456789abcdef";
 const OTHER: &str = "flight-other-token-0123456789abcdefgh";
 
@@ -64,6 +73,8 @@ struct Harness {
     flight: FlightSqlServer,
     manager: Arc<SessionManager>,
     draining: Arc<std::sync::atomic::AtomicBool>,
+    /// The runtime of the base session, whose drain flag refuses queries (design P3-T066 §5.1).
+    runtime: Arc<krishiv_session::EngineRuntime>,
     client: FlightServiceClient<Channel>,
     /// Sending (or dropping) it starts `serve`'s shutdown.
     stop: Option<oneshot::Sender<()>>,
@@ -102,14 +113,11 @@ async fn start_with(config: FlightSqlConfig, setup: Setup) -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
     let auth = server_auth(dir.path());
     let denials = Arc::new(DeniedCounts::new());
+    let base = Session::new().expect("session");
+    let runtime = Arc::clone(base.runtime());
     let factory = match factory {
         Some(f) => f,
-        None => role_sessions(
-            Session::new().expect("session"),
-            &Config::new(),
-            Arc::clone(&denials),
-        )
-        .expect("factory"),
+        None => role_sessions(base, &Config::new(), Arc::clone(&denials)).expect("factory"),
     };
     let manager = Arc::new(SessionManager::new(factory, limits));
     let connect_auth = || {
@@ -145,6 +153,7 @@ async fn start_with(config: FlightSqlConfig, setup: Setup) -> Harness {
         flight,
         manager,
         draining,
+        runtime,
         client: FlightServiceClient::new(channel),
         stop: Some(stop),
         served,
@@ -594,24 +603,97 @@ async fn open_fetch(
 
 const LONG: &str = "SELECT id, id * 2 AS d FROM range(0, 50000000)";
 
+/// Design P3-T066 §5.1, Flight SQL row, with the runtime draining as `krishiv server` does: new
+/// statements and handshakes are refused with `KRISHIV_SERVER_DRAINING` (not retryable, not
+/// `UNAVAILABLE`); a query ticket and a stored command result issued before the drain are still
+/// fetched, though the runtime refuses new queries; `ListActions` is served; after a resume,
+/// statements work again.
 #[tokio::test(flavor = "multi_thread")]
-async fn flight_sql_refused_while_draining() {
+async fn flight_sql_refuses_new_work_while_draining_and_serves_held_tickets() {
+    use std::sync::atomic::Ordering::Release;
     let mut h = start(FlightSqlConfig::default()).await;
-    h.draining.store(true, std::sync::atomic::Ordering::Release);
-    let e = info(&mut h, OPS, None, "SELECT 1")
+    let (held, cookie) = info(&mut h, OPS, None, "SELECT 1 AS x")
+        .await
+        .expect("info before the drain");
+    let (stored, _) = info(&mut h, OPS, cookie.as_deref(), "SHOW TABLES")
+        .await
+        .expect("a command before the drain");
+    let (doomed, _) = info(&mut h, OPS, cookie.as_deref(), "SELECT 4 AS x")
+        .await
+        .expect("a third ticket before the drain");
+    let sessions_before = (h.flight.session_count(), h.manager.counts().live);
+    h.runtime.set_draining(true);
+    h.draining.store(true, Release);
+    let e = info(&mut h, OPS, cookie.as_deref(), "SELECT 2")
         .await
         .expect_err("draining");
-    assert_eq!(e.code(), Code::Unavailable, "{e:?}");
-    assert_eq!(e.message(), "server shutting down");
-    // ListActions needs no session, but drains too (§2 "Drain": every Flight RPC).
+    assert_eq!(e.code(), Code::FailedPrecondition, "{e:?}");
+    assert_eq!(
+        e.metadata().get("x-krishiv-error-class").unwrap(),
+        "KRISHIV_SERVER_DRAINING"
+    );
+    let e = info(&mut h, OPS, Some("stale-session"), "SELECT 2")
+        .await
+        .expect_err("draining");
+    assert_eq!(e.code(), Code::FailedPrecondition, "{e:?}");
+    assert_eq!(
+        (h.flight.session_count(), h.manager.counts().live),
+        sessions_before,
+        "no session is created while draining"
+    );
+    // A handshake is new work too.
     let e = h
         .client
+        .handshake(authed(
+            futures::stream::iter([HandshakeRequest::default()]),
+            OPS,
+            None,
+        ))
+        .await
+        .expect_err("a handshake while draining");
+    assert_eq!(e.code(), Code::FailedPrecondition, "{e:?}");
+    assert_eq!(
+        e.metadata().get("x-krishiv-error-class").unwrap(),
+        "KRISHIV_SERVER_DRAINING"
+    );
+    // The unfetched tickets are work the server accepted: the drain waits for them.
+    assert_eq!(h.flight.held(), 3);
+    // A cancel is served while draining and releases its ticket.
+    let body = CancelFlightInfoRequest::new(doomed).encode_to_vec();
+    let mut results = h
+        .client
+        .do_action(authed(
+            Action::new("CancelFlightInfo", body),
+            OPS,
+            cookie.as_deref(),
+        ))
+        .await
+        .expect("a cancel while draining")
+        .into_inner();
+    let result = results.next().await.expect("one result").expect("ok");
+    let status = CancelFlightInfoResult::decode(result.body)
+        .expect("decode")
+        .status;
+    assert_eq!(status, CancelStatus::Cancelled as i32);
+    assert_eq!(h.flight.held(), 2, "a cancelled ticket is no longer held");
+    let batches = fetch(&mut h, OPS, cookie.as_deref(), ticket(&held))
+        .await
+        .expect("a held query ticket is fetched while the runtime drains");
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    fetch(&mut h, OPS, cookie.as_deref(), ticket(&stored))
+        .await
+        .expect("a stored result is fetched while draining");
+    assert_eq!(h.flight.held(), 0, "fetched tickets are no longer held");
+    h.client
         .list_actions(authed(arrow_flight::Empty {}, OPS, None))
         .await
-        .expect_err("draining");
-    assert_eq!(e.code(), Code::Unavailable, "{e:?}");
-    assert_eq!(e.message(), "server shutting down");
-    assert_eq!(h.flight.session_count(), 0);
+        .expect("ListActions while draining");
+    // Resumed: new statements work again.
+    h.runtime.set_draining(false);
+    h.draining.store(false, Release);
+    info(&mut h, OPS, cookie.as_deref(), "SELECT 3")
+        .await
+        .expect("a statement after the resume");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -887,9 +969,9 @@ async fn requests_reach_the_metrics_snapshot() {
 async fn unsupported_rpcs_unimplemented_before_decoding() {
     let mut h = start(FlightSqlConfig::default()).await;
     for kind in [
-        "ClosePreparedStatement",
         "BeginTransaction",
-        "CreatePreparedStatement",
+        "EndTransaction",
+        "CreatePreparedSubstraitPlan",
     ] {
         let e = h
             .client
@@ -902,26 +984,27 @@ async fn unsupported_rpcs_unimplemented_before_decoding() {
             .expect_err(kind);
         assert_eq!(e.code(), Code::Unimplemented, "{kind}: {e:?}");
     }
-    let catalogs = arrow_flight::sql::CommandGetCatalogs {};
+    let substrait = arrow_flight::sql::CommandStatementSubstraitPlan::default();
     let e = h
         .client
         .get_flight_info(authed(
-            FlightDescriptor::new_cmd(catalogs.as_any().encode_to_vec()),
+            FlightDescriptor::new_cmd(substrait.as_any().encode_to_vec()),
             OPS,
             None,
         ))
         .await
-        .expect_err("GetCatalogs is 65b");
+        .expect_err("Substrait is not served");
     assert_eq!(e.code(), Code::Unimplemented, "{e:?}");
+    let ingest = arrow_flight::sql::CommandStatementIngest::default();
     let e = h
         .client
         .do_put(authed(
-            futures::stream::empty::<arrow_flight::FlightData>(),
+            futures::stream::iter([updates::put_of(&ingest)]),
             OPS,
             None,
         ))
         .await
-        .expect_err("DoPut is 65b");
+        .expect_err("ingest is not served");
     assert_eq!(e.code(), Code::Unimplemented, "{e:?}");
     let e = h
         .client
@@ -1080,20 +1163,6 @@ async fn ticket_expires() {
         .await
         .expect_err("expired");
     assert_eq!(e.code(), Code::NotFound, "{e:?}");
-}
-
-/// While the server drains, a call with a stale cookie is `UNAVAILABLE` and creates no session
-/// (§3.2, §2 "Drain").
-#[tokio::test(flavor = "multi_thread")]
-async fn reset_during_shutdown_is_unavailable() {
-    let mut h = start(FlightSqlConfig::default()).await;
-    h.draining.store(true, std::sync::atomic::Ordering::Release);
-    let e = info(&mut h, OPS, Some("stale-session"), "SELECT 1")
-        .await
-        .expect_err("draining");
-    assert_eq!(e.code(), Code::Unavailable, "{e:?}");
-    assert_eq!(h.flight.session_count(), 0);
-    assert_eq!(h.manager.counts().live, 0);
 }
 
 /// A listener whose shutdown grace is long enough that only the running fetch decides when
@@ -1767,7 +1836,7 @@ async fn flight_release_leaves_connect_tombstones() {
     );
 }
 
-/// `ListActions` lists the two actions served, with no session (§4.6, §9).
+/// `ListActions` lists the actions served, with no session (§4.6, §9).
 #[tokio::test(flavor = "multi_thread")]
 async fn list_actions_names_the_served_actions() {
     let mut h = start(FlightSqlConfig::default()).await;
@@ -1783,6 +1852,17 @@ async fn list_actions_names_the_served_actions() {
         .try_collect()
         .await
         .expect("actions");
-    assert_eq!(actions, ["CancelFlightInfo", "CancelQuery"]);
+    assert_eq!(
+        actions,
+        [
+            "CancelFlightInfo",
+            "CancelQuery",
+            "CreatePreparedStatement",
+            "ClosePreparedStatement",
+            "SetSessionOptions",
+            "GetSessionOptions",
+            "CloseSession"
+        ]
+    );
     assert_eq!(h.flight.session_count(), 0);
 }

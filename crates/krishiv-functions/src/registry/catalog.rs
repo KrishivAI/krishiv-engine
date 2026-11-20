@@ -99,7 +99,7 @@ mod tests {
     fn the_vendored_catalog_parses() {
         let (rows, malformed) = load();
         assert_eq!(malformed, 0);
-        assert_eq!(rows.len(), 574);
+        assert_eq!(rows.len(), 588);
         let upper = rows.iter().find(|r| r.name == "upper").unwrap();
         assert_eq!(upper.since, SparkProfile::V3_5);
         assert_eq!(upper.deterministic, Some(true));

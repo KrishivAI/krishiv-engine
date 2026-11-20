@@ -97,6 +97,12 @@
     ],
     "sqlState" : "42KD7"
   },
+  "DELTA_CREATE_TABLE_WITH_NON_EMPTY_LOCATION" : {
+    "message" : [
+      "Cannot create table ('<tableId>'). The associated location ('<tableLocation>') is not empty and also not a Delta table."
+    ],
+    "sqlState" : "42601"
+  },
   "DELTA_FAILED_TO_MERGE_FIELDS" : {
     "message" : [
       "Failed to merge fields '<currentField>' and '<updateField>'"
@@ -170,11 +176,31 @@
     },
     "sqlState" : "42KDG"
   },
+  "DELTA_NOT_NULL_CONSTRAINT_VIOLATED" : {
+    "message" : [
+      "NOT NULL constraint violated for column: <columnName>.",
+      ""
+    ],
+    "sqlState" : "23502"
+  },
+  "DELTA_PATH_EXISTS" : {
+    "message" : [
+      "Cannot write to already existent path <path> without setting OVERWRITE = 'true'."
+    ],
+    "sqlState" : "42K04"
+  },
   "DELTA_PROTOCOL_CHANGED" : {
     "message" : [
       "ProtocolChangedException: The protocol version of the Delta table has been changed by a concurrent update. <additionalInfo><conflictingCommit>\nRefer to <docLink> for more details."
     ],
     "sqlState" : "2D521"
+  },
+  "DELTA_REPLACE_WHERE_MISMATCH" : {
+    "message" : [
+      "Written data does not conform to partial table overwrite condition or constraint '<replaceWhere>'.",
+      "<message>"
+    ],
+    "sqlState" : "44000"
   },
   "DELTA_TIMESTAMP_EARLIER_THAN_COMMIT_RETENTION" : {
     "message" : [

@@ -2,7 +2,7 @@
 description: "Native Rust scalar and aggregate UDFs (layer SDK)."
 ---
 
-**Version:** 0.2.0
+**Version:** 0.2.1
 
 # Module `krishiv_udf_sdk`
 

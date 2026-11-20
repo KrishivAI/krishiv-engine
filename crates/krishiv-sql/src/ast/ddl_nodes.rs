@@ -664,6 +664,10 @@ pub struct CreatePermanentView {
     pub tblproperties: Vec<TableOption>,
     /// `WITH SCHEMA ...`.
     pub schema_binding: Option<SchemaBindingClause>,
+    /// `SQL SECURITY INVOKER | DEFINER` (a Krishiv extension, permanent views only; P3-T062 §2.4):
+    /// how the view's base tables are authorized. `None` (as Spark, which has no such clause) is
+    /// `INVOKER`.
+    pub security: Option<super::SqlSecurity>,
     /// `PARTITIONED ON (...)` was written (Spark rejects it after
     /// parsing).
     pub partitioned_on: bool,
@@ -1264,6 +1268,8 @@ pub enum ShowKind {
     Namespaces {
         /// Which keyword.
         kind: NamespaceKind,
+        /// The catalog or namespace named by `FROM`/`IN`, if written.
+        namespace: Option<DdlName>,
         /// The pattern, if written.
         pattern: Option<ShowPattern>,
         /// Source text.

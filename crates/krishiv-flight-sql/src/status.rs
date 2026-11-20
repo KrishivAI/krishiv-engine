@@ -77,13 +77,17 @@ pub fn code_of(class: &str, sql_state: Option<&str>) -> Code {
     match class {
         "KRISHIV_INSUFFICIENT_PERMISSIONS" => return Code::PermissionDenied,
         "OPERATION_CANCELED" | "KRISHIV_QUERY_KILLED" => return Code::Cancelled,
-        "KRISHIV_QUERY_TIMEOUT" | "KRISHIV_FLIGHT_SQL_FETCH_IDLE" => return Code::DeadlineExceeded,
+        "KRISHIV_QUERY_TIMEOUT"
+        | "KRISHIV_FLIGHT_SQL_FETCH_IDLE"
+        | "KRISHIV_FLIGHT_SQL_METADATA_TIMEOUT" => return Code::DeadlineExceeded,
         "INVALID_HANDLE.FORMAT" => return Code::InvalidArgument,
         "INVALID_HANDLE.OPERATION_ALREADY_EXISTS" => return Code::AlreadyExists,
         "KRISHIV_SESSION_LIMIT" | "KRISHIV_OPERATION_LIMIT" | "KRISHIV_FLIGHT_SQL_HANDLE_LIMIT" => {
             return Code::ResourceExhausted;
         }
-        "KRISHIV_FLIGHT_SQL_SCHEMA_CHANGED" => return Code::FailedPrecondition,
+        "KRISHIV_FLIGHT_SQL_SCHEMA_CHANGED" | "KRISHIV_SERVER_DRAINING" => {
+            return Code::FailedPrecondition;
+        }
         "TABLE_OR_VIEW_NOT_FOUND" | "SCHEMA_NOT_FOUND" | "UNRESOLVED_ROUTINE" => {
             return Code::NotFound;
         }
@@ -159,6 +163,16 @@ mod tests {
                 "KRISHIV_FLIGHT_SQL_FETCH_IDLE",
                 Some("HY008"),
                 Code::DeadlineExceeded,
+            ),
+            (
+                "KRISHIV_FLIGHT_SQL_METADATA_TIMEOUT",
+                Some("HY008"),
+                Code::DeadlineExceeded,
+            ),
+            (
+                "KRISHIV_FLIGHT_SQL_SCHEMA_TABLES_LIMIT",
+                Some("54000"),
+                Code::InvalidArgument,
             ),
             (
                 "INVALID_HANDLE.FORMAT",

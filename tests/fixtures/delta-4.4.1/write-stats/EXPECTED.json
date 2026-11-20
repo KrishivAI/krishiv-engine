@@ -1,0 +1,1239 @@
+{
+ "commits": [
+  {
+   "adds": [],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "CREATE TABLE",
+    "operationMetrics": {},
+    "operationParameters": {
+     "clusterBy": "[]",
+     "description": null,
+     "isManaged": "false",
+     "partitionBy": "[\"p\"]",
+     "properties": "{}"
+    }
+   },
+   "partitionColumns": [
+    "p"
+   ],
+   "protocol": {
+    "minReaderVersion": 3,
+    "minWriterVersion": 7,
+    "readerFeatures": [
+     "timestampNtz"
+    ],
+    "writerFeatures": [
+     "timestampNtz",
+     "invariants",
+     "appendOnly"
+    ]
+   },
+   "removes": [],
+   "version": 0
+  },
+  {
+   "adds": [
+    {
+     "partitionValues": {
+      "p": "x"
+     },
+     "path": "p=x/part-00000-08bd6d5a-c0cc-4822-8459-de2b0ef7fd1c.c000.snappy.parquet",
+     "stats": {
+      "maxValues": {
+       "b": 1,
+       "d": 2.5,
+       "dec": 12.34,
+       "dec38": 1.2345678901234568e+29,
+       "dt": "2024-01-01",
+       "f": 1.5,
+       "i": 100,
+       "id": 4,
+       "k": 3,
+       "l": 1000,
+       "ntz": "2024-01-01T12:30:45.500",
+       "s": 10,
+       "st": {
+        "x": 1,
+        "y": "yy"
+       },
+       "str": "abd",
+       "ts": "2024-01-01T12:30:45.123Z"
+      },
+      "minValues": {
+       "b": -5,
+       "d": -2.5,
+       "dec": -12.34,
+       "dec38": -1.0001,
+       "dt": "1969-12-31",
+       "f": -0.5,
+       "i": -100,
+       "id": 1,
+       "k": 1,
+       "l": -1000,
+       "ntz": "1900-01-01T00:00:00.000",
+       "s": -10,
+       "st": {
+        "x": 1,
+        "y": "aa"
+       },
+       "str": "abc",
+       "ts": "1969-12-31T23:59:59.999Z"
+      },
+      "nullCount": {
+       "arr": 2,
+       "b": 1,
+       "bin": 2,
+       "bool": 1,
+       "d": 1,
+       "dec": 1,
+       "dec38": 1,
+       "dt": 1,
+       "f": 1,
+       "i": 1,
+       "id": 0,
+       "k": 0,
+       "l": 1,
+       "m": 2,
+       "ntz": 1,
+       "s": 1,
+       "st": {
+        "x": 2,
+        "y": 1
+       },
+       "str": 1,
+       "ts": 1
+      },
+      "numRecords": 3
+     }
+    }
+   ],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "WRITE",
+    "operationMetrics": {
+     "numFiles": "1",
+     "numOutputBytes": "5715",
+     "numOutputRows": "3"
+    },
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "readVersion": 0
+   },
+   "removes": [],
+   "version": 1
+  },
+  {
+   "adds": [
+    {
+     "partitionValues": {
+      "p": "y"
+     },
+     "path": "p=y/part-00000-95bdec89-6aa1-4aa6-9836-a49609cb329f.c000.snappy.parquet",
+     "stats": {
+      "maxValues": {
+       "id": 5,
+       "k": 4,
+       "st": {}
+      },
+      "minValues": {
+       "id": 5,
+       "k": 4,
+       "st": {}
+      },
+      "nullCount": {
+       "arr": 1,
+       "b": 1,
+       "bin": 1,
+       "bool": 1,
+       "d": 1,
+       "dec": 1,
+       "dec38": 1,
+       "dt": 1,
+       "f": 1,
+       "i": 1,
+       "id": 0,
+       "k": 0,
+       "l": 1,
+       "m": 1,
+       "ntz": 1,
+       "s": 1,
+       "st": {
+        "x": 1,
+        "y": 1
+       },
+       "str": 1,
+       "ts": 1
+      },
+      "numRecords": 1
+     }
+    }
+   ],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "WRITE",
+    "operationMetrics": {
+     "numFiles": "1",
+     "numOutputBytes": "4813",
+     "numOutputRows": "1"
+    },
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "readVersion": 1
+   },
+   "removes": [],
+   "version": 2
+  },
+  {
+   "adds": [
+    {
+     "partitionValues": {
+      "p": "x"
+     },
+     "path": "p=x/part-00000-027d417e-35fc-4481-b4e7-6052e0a570de.c000.snappy.parquet",
+     "stats": {
+      "maxValues": {
+       "d": "NaN",
+       "f": "NaN",
+       "id": 7,
+       "k": 5,
+       "st": {}
+      },
+      "minValues": {
+       "d": 1.0,
+       "f": 0.0,
+       "id": 6,
+       "k": 5,
+       "st": {}
+      },
+      "nullCount": {
+       "arr": 2,
+       "b": 2,
+       "bin": 2,
+       "bool": 2,
+       "d": 0,
+       "dec": 2,
+       "dec38": 2,
+       "dt": 2,
+       "f": 0,
+       "i": 2,
+       "id": 0,
+       "k": 0,
+       "l": 2,
+       "m": 2,
+       "ntz": 2,
+       "s": 2,
+       "st": {
+        "x": 2,
+        "y": 2
+       },
+       "str": 2,
+       "ts": 2
+      },
+      "numRecords": 2
+     }
+    }
+   ],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "WRITE",
+    "operationMetrics": {
+     "numFiles": "1",
+     "numOutputBytes": "4932",
+     "numOutputRows": "2"
+    },
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "readVersion": 2
+   },
+   "removes": [],
+   "version": 3
+  },
+  {
+   "adds": [
+    {
+     "partitionValues": {
+      "p": "x"
+     },
+     "path": "p=x/part-00000-6f058349-edfe-438c-9c20-27ec191b5714.c000.snappy.parquet",
+     "stats": {
+      "maxValues": {
+       "id": 100,
+       "k": 10,
+       "st": {},
+       "str": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "minValues": {
+       "id": 100,
+       "k": 10,
+       "st": {},
+       "str": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "nullCount": {
+       "arr": 1,
+       "b": 1,
+       "bin": 1,
+       "bool": 1,
+       "d": 1,
+       "dec": 1,
+       "dec38": 1,
+       "dt": 1,
+       "f": 1,
+       "i": 1,
+       "id": 0,
+       "k": 0,
+       "l": 1,
+       "m": 1,
+       "ntz": 1,
+       "s": 1,
+       "st": {
+        "x": 1,
+        "y": 1
+       },
+       "str": 0,
+       "ts": 1
+      },
+      "numRecords": 1
+     }
+    }
+   ],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "WRITE",
+    "operationMetrics": {
+     "numFiles": "1",
+     "numOutputBytes": "5023",
+     "numOutputRows": "1"
+    },
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "readVersion": 3
+   },
+   "removes": [],
+   "version": 4
+  },
+  {
+   "adds": [
+    {
+     "partitionValues": {
+      "p": "x"
+     },
+     "path": "p=x/part-00000-f34dc937-a803-4a04-a546-8886bc1d0ce3.c000.snappy.parquet",
+     "stats": {
+      "maxValues": {
+       "id": 101,
+       "k": 11,
+       "st": {},
+       "str": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u007f"
+      },
+      "minValues": {
+       "id": 101,
+       "k": 11,
+       "st": {},
+       "str": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "nullCount": {
+       "arr": 1,
+       "b": 1,
+       "bin": 1,
+       "bool": 1,
+       "d": 1,
+       "dec": 1,
+       "dec38": 1,
+       "dt": 1,
+       "f": 1,
+       "i": 1,
+       "id": 0,
+       "k": 0,
+       "l": 1,
+       "m": 1,
+       "ntz": 1,
+       "s": 1,
+       "st": {
+        "x": 1,
+        "y": 1
+       },
+       "str": 0,
+       "ts": 1
+      },
+      "numRecords": 1
+     }
+    }
+   ],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "WRITE",
+    "operationMetrics": {
+     "numFiles": "1",
+     "numOutputBytes": "5029",
+     "numOutputRows": "1"
+    },
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "readVersion": 4
+   },
+   "removes": [],
+   "version": 5
+  },
+  {
+   "adds": [
+    {
+     "partitionValues": {
+      "p": "x"
+     },
+     "path": "p=x/part-00000-83fde202-bc16-4543-a6df-078d50b83eaf.c000.snappy.parquet",
+     "stats": {
+      "maxValues": {
+       "id": 102,
+       "k": 12,
+       "st": {},
+       "str": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\u007f"
+      },
+      "minValues": {
+       "id": 102,
+       "k": 12,
+       "st": {},
+       "str": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+      },
+      "nullCount": {
+       "arr": 1,
+       "b": 1,
+       "bin": 1,
+       "bool": 1,
+       "d": 1,
+       "dec": 1,
+       "dec38": 1,
+       "dt": 1,
+       "f": 1,
+       "i": 1,
+       "id": 0,
+       "k": 0,
+       "l": 1,
+       "m": 1,
+       "ntz": 1,
+       "s": 1,
+       "st": {
+        "x": 1,
+        "y": 1
+       },
+       "str": 0,
+       "ts": 1
+      },
+      "numRecords": 1
+     }
+    }
+   ],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "WRITE",
+    "operationMetrics": {
+     "numFiles": "1",
+     "numOutputBytes": "5069",
+     "numOutputRows": "1"
+    },
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "readVersion": 5
+   },
+   "removes": [],
+   "version": 6
+  },
+  {
+   "adds": [
+    {
+     "partitionValues": {
+      "p": "x"
+     },
+     "path": "p=x/part-00000-d41bcefd-58bc-41b3-b446-b3d37849073a.c000.snappy.parquet",
+     "stats": {
+      "maxValues": {
+       "id": 103,
+       "k": 13,
+       "st": {},
+       "str": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00\u007f"
+      },
+      "minValues": {
+       "id": 103,
+       "k": 13,
+       "st": {},
+       "str": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00"
+      },
+      "nullCount": {
+       "arr": 1,
+       "b": 1,
+       "bin": 1,
+       "bool": 1,
+       "d": 1,
+       "dec": 1,
+       "dec38": 1,
+       "dt": 1,
+       "f": 1,
+       "i": 1,
+       "id": 0,
+       "k": 0,
+       "l": 1,
+       "m": 1,
+       "ntz": 1,
+       "s": 1,
+       "st": {
+        "x": 1,
+        "y": 1
+       },
+       "str": 0,
+       "ts": 1
+      },
+      "numRecords": 1
+     }
+    }
+   ],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "WRITE",
+    "operationMetrics": {
+     "numFiles": "1",
+     "numOutputBytes": "5060",
+     "numOutputRows": "1"
+    },
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "readVersion": 6
+   },
+   "removes": [],
+   "version": 7
+  },
+  {
+   "adds": [
+    {
+     "partitionValues": {
+      "p": "x"
+     },
+     "path": "p=x/part-00000-1c9e805f-c58d-4995-bfa9-21188b3e076b.c000.snappy.parquet",
+     "stats": {
+      "maxValues": {
+       "id": 104,
+       "k": 14,
+       "st": {},
+       "str": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\udbff\udfff"
+      },
+      "minValues": {
+       "id": 104,
+       "k": 14,
+       "st": {},
+       "str": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "nullCount": {
+       "arr": 1,
+       "b": 1,
+       "bin": 1,
+       "bool": 1,
+       "d": 1,
+       "dec": 1,
+       "dec38": 1,
+       "dt": 1,
+       "f": 1,
+       "i": 1,
+       "id": 0,
+       "k": 0,
+       "l": 1,
+       "m": 1,
+       "ntz": 1,
+       "s": 1,
+       "st": {
+        "x": 1,
+        "y": 1
+       },
+       "str": 0,
+       "ts": 1
+      },
+      "numRecords": 1
+     }
+    }
+   ],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "WRITE",
+    "operationMetrics": {
+     "numFiles": "1",
+     "numOutputBytes": "5065",
+     "numOutputRows": "1"
+    },
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "readVersion": 7
+   },
+   "removes": [],
+   "version": 8
+  },
+  {
+   "adds": [
+    {
+     "partitionValues": {
+      "p": "x"
+     },
+     "path": "p=x/part-00000-0f45d893-249f-4079-9202-c36c49c41c69.c000.snappy.parquet",
+     "stats": {
+      "maxValues": {
+       "id": 105,
+       "k": 15,
+       "st": {},
+       "str": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\udbff\udfff\udbff\udfff\u007f"
+      },
+      "minValues": {
+       "id": 105,
+       "k": 15,
+       "st": {},
+       "str": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "nullCount": {
+       "arr": 1,
+       "b": 1,
+       "bin": 1,
+       "bool": 1,
+       "d": 1,
+       "dec": 1,
+       "dec38": 1,
+       "dt": 1,
+       "f": 1,
+       "i": 1,
+       "id": 0,
+       "k": 0,
+       "l": 1,
+       "m": 1,
+       "ntz": 1,
+       "s": 1,
+       "st": {
+        "x": 1,
+        "y": 1
+       },
+       "str": 0,
+       "ts": 1
+      },
+      "numRecords": 1
+     }
+    }
+   ],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "WRITE",
+    "operationMetrics": {
+     "numFiles": "1",
+     "numOutputBytes": "5087",
+     "numOutputRows": "1"
+    },
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "readVersion": 8
+   },
+   "removes": [],
+   "version": 9
+  },
+  {
+   "adds": [
+    {
+     "partitionValues": {
+      "p": "x"
+     },
+     "path": "p=x/part-00000-3a26ca1d-fc2c-4f24-846f-67f9e29d173d.c000.snappy.parquet",
+     "stats": {
+      "maxValues": {
+       "id": 106,
+       "k": 16,
+       "st": {}
+      },
+      "minValues": {
+       "id": 106,
+       "k": 16,
+       "st": {},
+       "str": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "nullCount": {
+       "arr": 1,
+       "b": 1,
+       "bin": 1,
+       "bool": 1,
+       "d": 1,
+       "dec": 1,
+       "dec38": 1,
+       "dt": 1,
+       "f": 1,
+       "i": 1,
+       "id": 0,
+       "k": 0,
+       "l": 1,
+       "m": 1,
+       "ntz": 1,
+       "s": 1,
+       "st": {
+        "x": 1,
+        "y": 1
+       },
+       "str": 0,
+       "ts": 1
+      },
+      "numRecords": 1
+     }
+    }
+   ],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "WRITE",
+    "operationMetrics": {
+     "numFiles": "1",
+     "numOutputBytes": "5427",
+     "numOutputRows": "1"
+    },
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "readVersion": 9
+   },
+   "removes": [],
+   "version": 10
+  },
+  {
+   "adds": [
+    {
+     "partitionValues": {
+      "p": "x"
+     },
+     "path": "p=x/part-00000-d90c7804-2c36-468b-b111-029c45e00d98.c000.snappy.parquet",
+     "stats": {
+      "maxValues": {
+       "id": 107,
+       "k": 17,
+       "st": {},
+       "str": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\udbff\udfff"
+      },
+      "minValues": {
+       "id": 107,
+       "k": 17,
+       "st": {},
+       "str": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+      },
+      "nullCount": {
+       "arr": 1,
+       "b": 1,
+       "bin": 1,
+       "bool": 1,
+       "d": 1,
+       "dec": 1,
+       "dec38": 1,
+       "dt": 1,
+       "f": 1,
+       "i": 1,
+       "id": 0,
+       "k": 0,
+       "l": 1,
+       "m": 1,
+       "ntz": 1,
+       "s": 1,
+       "st": {
+        "x": 1,
+        "y": 1
+       },
+       "str": 0,
+       "ts": 1
+      },
+      "numRecords": 1
+     }
+    }
+   ],
+   "commitInfo": {
+    "isBlindAppend": true,
+    "isolationLevel": "Serializable",
+    "operation": "WRITE",
+    "operationMetrics": {
+     "numFiles": "1",
+     "numOutputBytes": "5286",
+     "numOutputRows": "1"
+    },
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "readVersion": 10
+   },
+   "removes": [],
+   "version": 11
+  }
+ ],
+ "delta_log": [
+  "00000000000000000000.crc",
+  "00000000000000000000.json",
+  "00000000000000000001.crc",
+  "00000000000000000001.json",
+  "00000000000000000002.crc",
+  "00000000000000000002.json",
+  "00000000000000000003.crc",
+  "00000000000000000003.json",
+  "00000000000000000004.crc",
+  "00000000000000000004.json",
+  "00000000000000000005.crc",
+  "00000000000000000005.json",
+  "00000000000000000006.crc",
+  "00000000000000000006.json",
+  "00000000000000000007.crc",
+  "00000000000000000007.json",
+  "00000000000000000008.crc",
+  "00000000000000000008.json",
+  "00000000000000000009.crc",
+  "00000000000000000009.json",
+  "00000000000000000010.checkpoint.parquet",
+  "00000000000000000010.crc",
+  "00000000000000000010.json",
+  "00000000000000000011.crc",
+  "00000000000000000011.json",
+  "_last_checkpoint"
+ ],
+ "delta_spark": "4.4.1",
+ "dv_storage_types": [],
+ "feature": "stats",
+ "fields": [
+  "id",
+  "k",
+  "b",
+  "s",
+  "i",
+  "l",
+  "f",
+  "d",
+  "dec",
+  "dec38",
+  "str",
+  "dt",
+  "ts",
+  "ntz",
+  "bool",
+  "bin",
+  "st",
+  "arr",
+  "m",
+  "p"
+ ],
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py",
+ "protocol": {
+  "minReaderVersion": 3,
+  "minWriterVersion": 7,
+  "readerFeatures": [
+   "timestampNtz"
+  ],
+  "writerFeatures": [
+   "timestampNtz",
+   "invariants",
+   "appendOnly"
+  ]
+ },
+ "rows": [],
+ "schema": "struct<id:int,k:int,b:tinyint,s:smallint,i:int,l:bigint,f:float,d:double,dec:decimal(10,2),dec38:decimal(38,4),str:string,dt:date,ts:timestamp,ntz:timestamp_ntz,bool:boolean,bin:binary,st:struct<x:int,y:string>,arr:array<int>,m:map<string,int>,p:string>",
+ "spark": "4.2.0",
+ "strings": [
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00bc",
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u00e9\u00e9\u00e9",
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\udbff\udfff\udbff\udfffb",
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfffb",
+  "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+ ],
+ "timezone": "UTC",
+ "typed_rows": [
+  [
+   1,
+   1,
+   1,
+   10,
+   100,
+   1000,
+   {
+    "float": "1.5"
+   },
+   {
+    "float": "2.5"
+   },
+   {
+    "decimal": "12.34"
+   },
+   {
+    "decimal": "123456789012345678901234567890.1234"
+   },
+   "abc",
+   {
+    "date": "2024-01-01"
+   },
+   {
+    "timestamp": "2024-01-01T12:30:45.123456"
+   },
+   {
+    "timestamp": "2024-01-01T12:30:45.500000"
+   },
+   true,
+   {
+    "binary": "0102"
+   },
+   {
+    "struct": {
+     "x": 1,
+     "y": "yy"
+    }
+   },
+   [
+    1,
+    2
+   ],
+   {
+    "map": [
+     [
+      "a",
+      1
+     ]
+    ]
+   },
+   "x"
+  ],
+  [
+   3,
+   2,
+   -5,
+   -10,
+   -100,
+   -1000,
+   {
+    "float": "-0.5"
+   },
+   {
+    "float": "-2.5"
+   },
+   {
+    "decimal": "-12.34"
+   },
+   {
+    "decimal": "-1.0001"
+   },
+   "abd",
+   {
+    "date": "1969-12-31"
+   },
+   {
+    "timestamp": "1969-12-31T23:59:59.999999"
+   },
+   {
+    "timestamp": "1900-01-01T00:00:00"
+   },
+   false,
+   null,
+   {
+    "struct": {
+     "x": null,
+     "y": "aa"
+    }
+   },
+   null,
+   null,
+   "x"
+  ],
+  [
+   4,
+   3,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "x"
+  ],
+  [
+   5,
+   4,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "y"
+  ],
+  [
+   6,
+   5,
+   null,
+   null,
+   null,
+   null,
+   {
+    "float": "nan"
+   },
+   {
+    "float": "nan"
+   },
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "x"
+  ],
+  [
+   7,
+   5,
+   null,
+   null,
+   null,
+   null,
+   {
+    "float": "0.0"
+   },
+   {
+    "float": "1.0"
+   },
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "x"
+  ],
+  [
+   100,
+   10,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "x"
+  ],
+  [
+   101,
+   11,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "x"
+  ],
+  [
+   102,
+   12,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "x"
+  ],
+  [
+   103,
+   13,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00bc",
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "x"
+  ],
+  [
+   104,
+   14,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u00e9\u00e9\u00e9",
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "x"
+  ],
+  [
+   105,
+   15,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\udbff\udfff\udbff\udfffb",
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "x"
+  ],
+  [
+   106,
+   16,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfff\udbff\udfffb",
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "x"
+  ],
+  [
+   107,
+   17,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "x"
+  ]
+ ]
+}

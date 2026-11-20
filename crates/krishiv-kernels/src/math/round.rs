@@ -509,10 +509,87 @@ pub fn ceil_floor_to_long(input: &arrow_array::Float64Array, ceil: bool) -> Int6
     input.unary(|v| saturating_long(if ceil { v.ceil() } else { v.floor() }))
 }
 
+/// [`ceil_floor_to_long`] for Spark 4.3, where ANSI mode raises `ARITHMETIC_OVERFLOW` for a result outside `bigint`
+/// (an infinity too) instead of saturating; NaN stays 0, and without ANSI the result is the saturating one.
+///
+/// # Errors
+/// `ARITHMETIC_OVERFLOW` (ANSI only), carrying the failing row.
+pub fn ceil_floor_to_long_checked(
+    input: &arrow_array::Float64Array,
+    ceil: bool,
+    ansi: bool,
+) -> Result<Int64Array, KernelError> {
+    if !ansi {
+        return Ok(ceil_floor_to_long(input, ceil));
+    }
+    input
+        .iter()
+        .enumerate()
+        .map(|(row, v)| {
+            let Some(v) = v else { return Ok(None) };
+            let r = if ceil { v.ceil() } else { v.floor() };
+            // 2^63 is the first double past `i64::MAX`; the range is [-2^63, 2^63).
+            if r.is_nan() || (-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&r) {
+                Ok(Some(saturating_long(r)))
+            } else {
+                Err(KernelError::arithmetic_overflow(row, "overflow", None))
+            }
+        })
+        .collect()
+}
+
 #[expect(
     clippy::cast_possible_truncation,
     reason = "Java's (long) cast saturates and maps NaN to 0, as Rust's `as` does"
 )]
 fn saturating_long(v: f64) -> i64 {
     v as i64
+}
+
+#[cfg(test)]
+mod ceil_floor_checked_tests {
+    use super::*;
+    use arrow_array::Float64Array;
+
+    #[test]
+    fn without_ansi_the_result_saturates() {
+        let a = Float64Array::from(vec![Some(f64::INFINITY), Some(-1.5), None, Some(f64::NAN)]);
+        let out = ceil_floor_to_long_checked(&a, true, false).unwrap();
+        assert_eq!(
+            out.iter().collect::<Vec<_>>(),
+            vec![Some(i64::MAX), Some(-1), None, Some(0)]
+        );
+    }
+
+    #[test]
+    fn ansi_raises_past_bigint_and_keeps_nan_and_nulls() {
+        let ok = Float64Array::from(vec![
+            Some(1.2),
+            Some(-1.2),
+            None,
+            Some(f64::NAN),
+            Some(-9.223_372_036_854_776e18),
+        ]);
+        let up = ceil_floor_to_long_checked(&ok, true, true).unwrap();
+        assert_eq!(
+            up.iter().collect::<Vec<_>>(),
+            vec![Some(2), Some(-1), None, Some(0), Some(i64::MIN)]
+        );
+        let down = ceil_floor_to_long_checked(&ok, false, true).unwrap();
+        assert_eq!(down.value(0), 1);
+        assert_eq!(down.value(1), -2);
+        for bad in [
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            9.223_372_036_854_776e18,
+            -1e19,
+        ] {
+            let a = Float64Array::from(vec![bad]);
+            assert!(ceil_floor_to_long_checked(&a, true, true).is_err(), "{bad}");
+            assert!(
+                ceil_floor_to_long_checked(&a, false, true).is_err(),
+                "{bad}"
+            );
+        }
+    }
 }

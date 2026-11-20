@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The `grants` access-policy provider (P3-T062 unit G2; design `P3-T062-access-policy-providers.md`
-//! §2, ADR 0046 §7, ADR 0036 R2).
+//! The `grants` access-policy provider.
 //!
 //! [`Grants`] is the server-wide part: the [`GrantStore`] (roles, grant rows, owners, the epoch)
-//! and the denial counters. [`GrantsPolicy`] is one session's policy over it, composed as ADR 0046
-//! §7 says: data securables (tables, views, columns, namespaces, functions, paths, secrets,
+//! and the denial counters. [`GrantsPolicy`] is one session's policy over it, composed as follows:
+//! data securables (tables, views, columns, namespaces, functions, paths, secrets,
 //! connections) are decided by the grants alone; `System(..)` securables and the reserved
 //! `system` catalog's tables by the `system` policy (the role matrix in server mode); an admin
 //! passes every data check. Path confinement (`PathPrefixPolicy`) wraps the whole policy, so it
@@ -207,6 +206,8 @@ impl std::fmt::Debug for GrantsPolicy {
 }
 
 impl GrantsPolicy {
+    /// The policy of a session over `grants`.
+    ///
     /// The policy of a session over `grants`, with `system` deciding `System(..)` securables (the
     /// session's `RolePolicy` in server mode) and `admin` for a principal whose role is admin.
     #[must_use]
@@ -309,6 +310,63 @@ impl GrantsPolicy {
             || state.allows(principal, relation, Privilege::Drop, exact)
     }
 
+    /// Whether a listing shows `securable` to `principal` (`model::GrantState::lists`); `None`
+    /// for a securable the `system` policy decides (then `Browse` decides).
+    pub(crate) fn listable(&self, principal: &Principal, securable: &Securable) -> Option<bool> {
+        if Self::decided_by(securable) == DecidedBy::Roles {
+            return None;
+        }
+        if self.admin && principal.definer_for.is_none() {
+            return Some(true);
+        }
+        let Some(key) = ObjectKey::of(securable).and_then(physical_key) else {
+            return Some(false);
+        };
+        let cs = self.exact_for(&key);
+        Some(self.grants.store.snapshot().0.lists(principal, &key, cs))
+    }
+
+    /// Whether a listing shows the namespace `securable` to `principal` because of something under
+    /// it (`model::GrantState::holds_under`): admin always; `None` for a securable the `system`
+    /// policy decides. Answered from the grant state alone, with no catalog call.
+    pub(crate) fn listable_under(
+        &self,
+        principal: &Principal,
+        securable: &Securable,
+    ) -> Option<bool> {
+        if Self::decided_by(securable) == DecidedBy::Roles {
+            return None;
+        }
+        if self.admin && principal.definer_for.is_none() {
+            return Some(true);
+        }
+        let Some(key) = ObjectKey::of(securable).and_then(physical_key) else {
+            return Some(false);
+        };
+        let cs = self.exact_for(&key);
+        Some(
+            self.grants
+                .store
+                .snapshot()
+                .0
+                .holds_under(principal, &key, cs),
+        )
+    }
+
+    /// The owner (creator) recorded for `securable` itself, not a parent's (review r7 M9: the owner
+    /// of a stored function whose body a definer view's text calls is asked about the body's reads).
+    pub(crate) fn owner_of(&self, securable: &Securable) -> Option<String> {
+        let key = ObjectKey::of(securable).and_then(physical_key)?;
+        let cs = self.exact_for(&key);
+        let state = self.grants.store.snapshot();
+        state
+            .0
+            .owners
+            .iter()
+            .find(|(k, _)| k.same(&key, cs))
+            .map(|(_, owner)| owner.clone())
+    }
+
     /// The shared grants.
     #[must_use]
     pub fn grants(&self) -> &Arc<Grants> {
@@ -354,7 +412,11 @@ impl GrantsPolicy {
         if privilege == Privilege::Impersonate {
             return deny("impersonation is not a grant");
         }
-        if self.admin {
+        // A principal acting for another (a definer view's owner for its reader, a refresh's
+        // owner for the scheduler; P3-T062 §2.4) holds only its own grants: never the session's
+        // admin role, nor what the session's running statement is creating.
+        let own = principal.definer_for.is_none();
+        if self.admin && own {
             return AccessDecision::Allow;
         }
         let Some(key) = ObjectKey::of(securable).and_then(physical_key) else {
@@ -363,10 +425,11 @@ impl GrantsPolicy {
         let cs = self.exact_for(&key);
         // The object the running statement creates, its columns and its managed location: the
         // creator will own it (only set when the statement is really creating it).
-        if self
-            .creating
-            .lock()
-            .is_ok_and(|keys| keys.iter().any(|k| key.covered_by(k, cs)))
+        if own
+            && self
+                .creating
+                .lock()
+                .is_ok_and(|keys| keys.iter().any(|k| key.covered_by(k, cs)))
         {
             return AccessDecision::Allow;
         }

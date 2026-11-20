@@ -19,7 +19,7 @@ use arrow_flight::{FlightData, FlightEndpoint, FlightInfo, Ticket};
 use arrow_schema::SchemaRef;
 use futures::stream::{self, BoxStream, Stream, StreamExt};
 use krishiv_common::error::{
-    InternalError, InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError,
+    ErrorClass, InternalError, InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError,
     KrishivFlightSqlFetchIdle, KrishivFlightSqlResultNotStored, KrishivFlightSqlSchemaChanged,
     KrishivFlightSqlStatementTooLarge, OperationCanceled,
 };
@@ -49,7 +49,7 @@ pub(crate) type DoGetStream = Pin<Box<dyn Stream<Item = Result<FlightData, Statu
 
 /// An `Operation` registered in a session for one run or fetch (design §4.1, "operation per
 /// fetch"): not reattachable, so `busy()` waits for it at shutdown and a drop cancels its query.
-struct OpGuard {
+pub(crate) struct OpGuard {
     entry: Arc<SessionEntry>,
     op: Arc<Operation>,
     /// The handle's live set, which holds `op` until the guard drops.
@@ -58,7 +58,7 @@ struct OpGuard {
 
 impl OpGuard {
     /// Registers a fresh operation for `sql` in `entry`'s session, live on the handle `live`.
-    fn register(
+    pub(crate) fn register(
         entry: &Arc<SessionEntry>,
         live: &Arc<LiveOps>,
         sql: &str,
@@ -85,12 +85,12 @@ impl OpGuard {
         Ok(guard)
     }
 
-    fn id(&self) -> &str {
+    pub(crate) fn id(&self) -> &str {
         self.op.id().as_str()
     }
 
     /// The run or fetch ended as it should.
-    fn finish(&self) {
+    pub(crate) fn finish(&self) {
         self.op.finish();
     }
 
@@ -114,11 +114,12 @@ impl Drop for OpGuard {
     }
 }
 
-/// A fetch in flight on a handle ([`crate::Handles::begin`]): ends it when dropped, so the TTL
-/// runs from the stream's end.
-struct FetchGuard {
-    server: FlightSqlServer,
-    id: HandleId,
+/// An operation in flight on a handle ([`crate::Handles::begin`]: a fetch, or a prepared
+/// handle's bind or execution): ends it when dropped, so the handle does not expire while it
+/// runs and its TTL runs from the operation's end.
+pub(crate) struct FetchGuard {
+    pub(crate) server: FlightSqlServer,
+    pub(crate) id: HandleId,
 }
 
 impl Drop for FetchGuard {
@@ -129,11 +130,11 @@ impl Drop for FetchGuard {
 
 /// The slot a `GetFlightInfo` reserved (design §4.1 step 1): given back when dropped before its
 /// answer (§16 M3: also after its command ran; the client never saw the ticket), else left idle.
-struct SlotGuard {
+pub(crate) struct SlotGuard {
     server: FlightSqlServer,
     cap: SessionOwner,
-    id: HandleId,
-    answered: bool,
+    pub(crate) id: HandleId,
+    pub(crate) answered: bool,
 }
 
 impl Drop for SlotGuard {
@@ -278,14 +279,14 @@ impl Stream for Guarded {
     }
 }
 
-fn now_micros() -> i64 {
+pub(crate) fn now_micros() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_micros()).unwrap_or(i64::MAX))
 }
 
 /// The session time zone results are shaped in (as Connect's `sql_command`).
-fn time_zone(session: &Session) -> Option<Arc<str>> {
+pub(crate) fn time_zone(session: &Session) -> Option<Arc<str>> {
     session
         .conf()
         .get("spark.sql.session.timeZone")
@@ -293,8 +294,35 @@ fn time_zone(session: &Session) -> Option<Arc<str>> {
 }
 
 /// `schema` in the Spark-to-Arrow form the stream sends (design §4.1, m11).
-fn spark_schema(schema: &SchemaRef, tz: Option<&Arc<str>>) -> Result<SchemaRef, KrishivError> {
+pub(crate) fn spark_schema(
+    schema: &SchemaRef,
+    tz: Option<&Arc<str>>,
+) -> Result<SchemaRef, KrishivError> {
     Ok(empty_batch(schema, tz)?.schema())
+}
+
+/// Whether `e`, or a cause of it, is `INVALID_HANDLE.SESSION_CLOSED`: the manager was shut
+/// (`close_all`) while a command's result was being stored. `store_command` wraps every failure in
+/// `KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED`, and `error_class` is the outer class only.
+fn closed_by_shutdown(e: &KrishivError) -> bool {
+    std::iter::once(e)
+        .chain(e.causes())
+        .any(|c| c.error_class() == ErrorClass::InvalidHandleSessionClosed)
+}
+
+/// `maxStatementBytes` (design §4.1): a statement's text over it is `INVALID_ARGUMENT`
+/// (`KRISHIV_FLIGHT_SQL_STATEMENT_TOO_LARGE`) before parsing.
+pub(crate) fn check_statement_bytes(sql: &str, max: usize) -> Result<(), Status> {
+    if sql.len() > max {
+        return Err(flight_status(
+            &KrishivFlightSqlStatementTooLarge {
+                bytes: sql.len().to_string(),
+                limit: max.to_string(),
+            }
+            .into(),
+        ));
+    }
+    Ok(())
 }
 
 /// The handle of a ticket's or `FlightInfo`'s `TicketStatementQuery`.
@@ -308,7 +336,7 @@ pub(crate) fn handle_of(statement_handle: &[u8]) -> Result<HandleId, KrishivErro
 }
 
 /// A handle another owner holds, an unknown one and one not answered yet get the same answer.
-fn not_found() -> KrishivError {
+pub(crate) fn not_found() -> KrishivError {
     InvalidHandleOperationNotFound {
         handle: "<ticket>".to_owned(),
     }
@@ -316,7 +344,7 @@ fn not_found() -> KrishivError {
 }
 
 /// The `FlightInfo` of a statement handle (design §4.1).
-fn flight_info(
+pub(crate) fn flight_info(
     schema: &SchemaRef,
     id: &HandleId,
     descriptor: arrow_flight::FlightDescriptor,
@@ -347,16 +375,8 @@ impl FlightSqlServer {
         caller: &Authenticated,
     ) -> Result<Response<FlightInfo>, Status> {
         let inner = &self.inner;
+        check_statement_bytes(&query.query, inner.config.max_statement_bytes)?;
         let sql: Arc<str> = Arc::from(query.query.as_str());
-        if sql.len() > inner.config.max_statement_bytes {
-            return Err(flight_status(
-                &KrishivFlightSqlStatementTooLarge {
-                    bytes: sql.len().to_string(),
-                    limit: inner.config.max_statement_bytes.to_string(),
-                }
-                .into(),
-            ));
-        }
         // A session this call created is released when the call ends, by an error or a dropped
         // future, unless the answer naming it goes out (`kept`, review M4).
         let mut call = self.call_session(metadata, caller)?;
@@ -369,7 +389,7 @@ impl FlightSqlServer {
     }
 
     /// Steps 1-3 of §4.1 in the call's session: the slot, the operation, the analysis or the run.
-    async fn run_statement(
+    pub(crate) async fn run_statement(
         &self,
         call: &mut CallSession,
         sql: Arc<str>,
@@ -383,6 +403,7 @@ impl FlightSqlServer {
             query_start_micros: query_start,
             kind: Kind::Pending,
             live: Arc::default(),
+            fetched: Arc::default(),
         };
         // 1. The slot (count and text bytes, with eviction); a refusal here runs nothing.
         let inserted = inner
@@ -452,7 +473,7 @@ impl FlightSqlServer {
                 // The command ran: any failure from here says so (§15 m3).
                 let stored = self.store_command(session, df).await;
                 drop(gate);
-                if stored.is_err() && self.draining() {
+                if stored.as_ref().err().is_some_and(closed_by_shutdown) {
                     return Err(Status::unavailable(
                         "server shutting down; the statement ran, its result was not stored",
                     ));
@@ -563,7 +584,7 @@ impl FlightSqlServer {
         let Some((sid, payload)) = inner.handles.get(&cap, &id, Instant::now()) else {
             return Err(flight_status(&not_found()));
         };
-        if payload.owner != owner || matches!(payload.kind, Kind::Pending) {
+        if payload.owner != owner || matches!(payload.kind, Kind::Pending | Kind::Prepared(_)) {
             return Err(flight_status(&not_found()));
         }
         // The call is counted from before its analysis (admission waits count, §3.2).
@@ -583,6 +604,9 @@ impl FlightSqlServer {
         let Some((_, payload)) = inner.handles.begin(&cap, &id, Instant::now()) else {
             return Err(flight_status(&not_found()));
         };
+        payload
+            .fetched
+            .store(true, std::sync::atomic::Ordering::Release);
         let fetch = FetchGuard {
             server: self.clone(),
             id,
@@ -613,7 +637,10 @@ impl FlightSqlServer {
                 let gate = entry.shared().await;
                 let options = QueryOptions::new()
                     .operation_id(op.id())
-                    .query_start(payload.query_start_micros);
+                    .query_start(payload.query_start_micros)
+                    // The ticket was issued before any drain (a drain refuses new statements): a
+                    // fetch is work the server accepted, which a drain lets finish (T066 §5.1).
+                    .admitted_before_drain();
                 let df = session
                     .sql_query_with(&payload.sql, options)
                     .await
@@ -641,7 +668,7 @@ impl FlightSqlServer {
                     .boxed();
                 (schema, rows)
             }
-            Kind::Pending => return Err(flight_status(&not_found())),
+            Kind::Pending | Kind::Prepared(_) => return Err(flight_status(&not_found())),
         };
         let encoded = encode_results(schema, batches, consumer, limits);
         let cell = Arc::new(FetchCell::new(
@@ -675,7 +702,8 @@ impl FlightSqlServer {
         let cap = owner.cap_key();
         let id = handle_of(statement_handle)?;
         match inner.handles.get(&cap, &id, Instant::now()) {
-            Some((_, p)) if p.owner == owner => {}
+            // A prepared statement is closed, not cancelled (§4.4).
+            Some((_, p)) if p.owner == owner && !matches!(p.kind, Kind::Prepared(_)) => {}
             _ => return Err(not_found()),
         }
         let Some((sid, payload)) = inner.handles.remove(&cap, &id) else {
@@ -710,7 +738,7 @@ impl FlightSqlServer {
 /// §16 m2): `Session` and `Admin` statements, any script and any `EXECUTE IMMEDIATE` (their
 /// class is their parts', which may hide a `SET`; checked on the text, erring towards keeping
 /// the session). Plain `Read`, `Write` and `Ddl` statements leave it unchanged.
-fn marks_changed(class: StatementClass, sql: &str) -> bool {
+pub(crate) fn marks_changed(class: StatementClass, sql: &str) -> bool {
     if matches!(class, StatementClass::Session | StatementClass::Admin) {
         return true;
     }
@@ -738,7 +766,7 @@ fn marks_changed(class: StatementClass, sql: &str) -> bool {
 }
 
 /// What a schema costs a handle (its IPC message, roughly).
-fn schema_bytes(schema: &SchemaRef) -> usize {
+pub(crate) fn schema_bytes(schema: &SchemaRef) -> usize {
     schema
         .fields()
         .iter()
@@ -760,6 +788,17 @@ fn not_stored_after(bytes: usize, e: &KrishivError) -> KrishivError {
     .with_cause(e.clone())
 }
 
+/// A command that ran but whose result could not be read afterwards (an update's count):
+/// `RESULT_NOT_STORED` of unknown size with the failure's client-safe text, so the client knows
+/// the statement ran and does not run it again (§15 m3).
+pub(crate) fn ran_unread(e: KrishivError) -> KrishivError {
+    KrishivError::from(KrishivFlightSqlResultNotStored {
+        size: stored_size(None),
+        reason: client_reason(&e),
+    })
+    .with_cause(e)
+}
+
 /// The `<size>` of `KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED`: the bytes when the result was built,
 /// else "size unknown" (a failure before it was, review n3).
 fn stored_size(bytes: Option<usize>) -> String {
@@ -773,7 +812,7 @@ pub(crate) fn internal(message: String) -> Status {
 
 /// A failure after `op` was registered: the operation ends failed, not cancelled (review m10),
 /// and the error goes out as its Flight status.
-fn op_failed(op: &OpGuard, e: &KrishivError) -> Status {
+pub(crate) fn op_failed(op: &OpGuard, e: &KrishivError) -> Status {
     op.fail();
     flight_status(e)
 }
@@ -788,6 +827,26 @@ fn client_reason(e: &KrishivError) -> String {
 mod tests {
     use super::*;
     use krishiv_common::error::{ErrorClass, KrishivSpillIoError};
+
+    /// A result that was not stored because the session was closed by shutdown is told apart from
+    /// one that failed for its own reason, though `store_command` wraps both (review of d54cd33f4).
+    #[test]
+    fn a_not_stored_result_caused_by_a_closed_session_is_a_shutdown() {
+        let closed: KrishivError = krishiv_common::error::InvalidHandleSessionClosed {
+            handle: "s".to_owned(),
+        }
+        .into();
+        let wrap = |cause: KrishivError| {
+            KrishivError::from(KrishivFlightSqlResultNotStored {
+                size: stored_size(None),
+                reason: "r".to_owned(),
+            })
+            .with_cause(cause)
+        };
+        assert!(closed_by_shutdown(&closed));
+        assert!(closed_by_shutdown(&wrap(closed)));
+        assert!(!closed_by_shutdown(&wrap(not_found())));
+    }
 
     /// An operation that would join a handle after `CancelFlightInfo` took its live set is refused,
     /// so a fetch between `begin` and its registration never streams (review of 15c4ffa75, 5).

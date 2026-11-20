@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Stage 1, Bind: SQL text, functions, tables, pins and access decisions.
 
+mod descriptors;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -58,6 +60,9 @@ pub(super) struct Bindings {
     pub(super) files: Vec<BoundFiles>,
     /// Whether the plan reads files by path.
     pub(super) reads_files: bool,
+    /// The protobuf descriptor files the plan names, by path as written: their bytes, read after the access check, or why they
+    /// could not be read (`bind/descriptors.rs`).
+    pub(super) descriptors: HashMap<String, Result<Vec<u8>, krishiv_common::error::KrishivError>>,
     /// Securables of already-resolved scans, by name parts.
     pub(super) scans: HashMap<Vec<String>, usize>,
     /// The declared `CHAR`/`VARCHAR` types of the columns of already-resolved scans (a DataFrame's stored
@@ -70,6 +75,12 @@ pub(super) struct Bindings {
     pub(super) pins: BTreeMap<TableIdent, TableVersion>,
     pub(super) epochs: BTreeMap<String, u64>,
     pub(super) securables: Vec<(Securable, Privilege)>,
+    /// The [`Self::securables`] read only under a `SQL SECURITY DEFINER` view's text
+    /// ([`AnalysisContext::definer_texts`]): authorized for the view's owner, never asked of the
+    /// principal here, so the column pass skips them and the analysis does not report them.
+    pub(super) definer_only: std::collections::BTreeSet<usize>,
+    /// Whether the read being bound is under a definer view's text (see [`Self::definer_only`]).
+    pub(super) under_definer: bool,
     pub(super) query_text: Option<RedactedSql>,
     /// Spark's search path, for `TABLE_OR_VIEW_NOT_FOUND` and
     /// `UNRESOLVED_ROUTINE`.
@@ -123,25 +134,52 @@ pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings,
         b.sql.insert(addr(p), Arc::clone(&root));
         roots.push(root);
     }
-    sql_function_roots(ctx, &mut roots)?;
+    // Per root: whether it is only under definer views' texts (a body only they call).
+    let mut root_under = vec![false; roots.len()];
+    // Per root: whether it is a stored function's body (resolved like a stored view's text).
+    let mut root_stored = vec![false; roots.len()];
+    sql_function_roots(ctx, &mut roots, &mut root_under, &mut root_stored)?;
     let mut found = Vec::new();
+    // Per `found` entry: whether it is under a definer view's text.
+    let mut definer = Vec::new();
     let mut seen = HashSet::new();
     // Every CTE scope stays alive for the walk, so no scope address is
     // reused while `seen` holds it.
     let mut scopes: Vec<Arc<[String]>> = vec![Arc::from(Vec::new())];
-    for root in &roots {
-        let mut stack = vec![(Node::Plan(root), Arc::clone(&scopes[0]))];
-        while let Some((node, env)) = stack.pop() {
-            if !seen.insert((node.key() as usize, addr(&*env))) {
+    for ((root, &root_under), &root_stored) in roots.iter().zip(&root_under).zip(&root_stored) {
+        let mut stack = vec![(
+            Node::Plan(root),
+            Arc::clone(&scopes[0]),
+            root_under,
+            root_stored,
+        )];
+        while let Some((node, env, under, in_view)) = stack.pop() {
+            if !seen.insert((node.key() as usize, addr(&*env), under, in_view)) {
                 continue;
+            }
+            let under = under || matches!(node, Node::Plan(p) if ctx.definer_texts.contains(p));
+            let in_view =
+                in_view || matches!(node, Node::Plan(p) if ctx.stored_view_texts.contains(p));
+            if in_view {
+                check_in_stored_view(ctx, node)?;
             }
             let mut next = Vec::new();
             visit(node, &env, ctx, &mut next, &mut found)?;
+            definer.resize(found.len(), under);
             scopes.extend(next.iter().map(|(_, e)| Arc::clone(e)));
-            stack.extend(next.into_iter().rev());
+            stack.extend(next.into_iter().rev().map(|(n, e)| (n, e, under, in_view)));
         }
     }
-    load(ctx, &mut b, found).await?;
+    // The principal's own reads first, then those only a definer view's text makes: a name both
+    // read is bound (and asked) as the principal's, never served from the owner's check.
+    let (own, owner): (Vec<_>, Vec<_>) = found
+        .into_iter()
+        .zip(definer)
+        .partition(|(_, under)| !*under);
+    load(ctx, &mut b, own.into_iter().map(|(f, _)| f).collect()).await?;
+    b.under_definer = true;
+    load(ctx, &mut b, owner.into_iter().map(|(f, _)| f).collect()).await?;
+    b.under_definer = false;
     Ok(b)
 }
 
@@ -162,6 +200,8 @@ enum Found<'a> {
     Secrets(Vec<String>, Origin),
     /// A table read whose options (`FROM t WITH (...)`) hold a server-scoped store key.
     StoreOptions(Origin),
+    /// The descriptor file path of a `from_protobuf` / `to_protobuf` call.
+    Descriptor(&'a str, Origin),
 }
 
 /// Whether read `options` hold a server-scoped store key (`krishiv_io::is_server_scoped_option`).
@@ -263,7 +303,12 @@ fn visit<'a>(
                         }
                         match node {
                             Node::Plan(q) => next.push((Node::Plan(q), Arc::clone(env))),
-                            Node::Expr(e) => walk::children(Node::Expr(e), &mut stack),
+                            Node::Expr(e) => {
+                                if let Some(path) = descriptors::descriptor_path(e) {
+                                    found.push(Found::Descriptor(path, e.origin));
+                                }
+                                walk::children(Node::Expr(e), &mut stack);
+                            }
                         }
                     }
                     return Ok(());
@@ -276,6 +321,9 @@ fn visit<'a>(
         Node::Expr(e) => {
             if let ExprNode::Function(f) = &e.node {
                 check_function(ctx, f, e.origin)?;
+            }
+            if let Some(path) = descriptors::descriptor_path(e) {
+                found.push(Found::Descriptor(path, e.origin));
             }
             if let ExprNode::Subquery { plan, .. } = &e.node {
                 next.push((Node::Plan(plan), Arc::clone(env)));
@@ -290,35 +338,55 @@ fn visit<'a>(
 /// SQL-bodied function the plans in `roots` call, and of those they call
 /// in turn, so that the walk below binds the tables and functions they read
 /// like the query's own. A function is added once, however often it is
-/// called.
+/// called; `under` (one flag per root) holds whether a root is reached only
+/// under definer views' texts ([`AnalysisContext::definer_texts`]): such a
+/// body reads as the view's definer, who was asked about it (review r6 M8). A
+/// body also called outside them is added (again) as the principal's.
+/// `stored` (one flag per root) holds whether a root is a stored function's
+/// body: like a stored view's text, nothing of the reading session answers in
+/// it (review r7 R7-1). A temporary function's body is never the definer's:
+/// one reached under a definer view's text is refused (fails closed).
 fn sql_function_roots(
     ctx: &AnalysisContext,
     roots: &mut Vec<Arc<LogicalPlan>>,
+    under: &mut Vec<bool>,
+    stored: &mut Vec<bool>,
 ) -> Result<(), AnalysisError> {
-    let mut known: HashSet<String> = HashSet::new();
+    // Each function added, and whether only as reached under a definer's text.
+    let mut known: HashMap<String, bool> = HashMap::new();
     let mut next = 0;
     while next < roots.len() {
         let mut defs = Vec::new();
-        let _ = walk::visit_distinct(Node::Plan(&roots[next]), |node| {
-            if let Node::Plan(p) = node
-                && let PlanNode::TableFunction { name, .. } = &p.node
-                && let Some(def) = sql_table_function(ctx, name)
-            {
-                defs.push(def);
-            }
-            if let Node::Expr(e) = node
-                && let ExprNode::Function(f) = &e.node
-                && let Some(def) = sql_call(ctx, f)
-            {
-                defs.push(def);
-            }
-            ControlFlow::Continue(())
-        });
-        next += 1;
-        for def in defs {
-            if !known.insert(def.routine_name()) {
+        let mut seen: HashSet<(usize, bool)> = HashSet::new();
+        let mut stack = vec![(Node::Plan(&roots[next]), under[next])];
+        let mut children = Vec::new();
+        while let Some((node, below)) = stack.pop() {
+            let below = below || matches!(node, Node::Plan(p) if ctx.definer_texts.contains(p));
+            if !seen.insert((node.key() as usize, below)) {
                 continue;
             }
+            if let Some(def) = called_sql_function(ctx, node) {
+                defs.push((def, below));
+            }
+            walk::children(node, &mut children);
+            stack.extend(children.drain(..).rev().map(|c| (c, below)));
+        }
+        next += 1;
+        for (def, below) in defs {
+            if below && def.qualifier.is_empty() {
+                return Err(AnalysisError::new(
+                    UnresolvedRoutine {
+                        routine_name: def.routine_name(),
+                        search_path: search_path(ctx),
+                    },
+                    roots[0].origin,
+                ));
+            }
+            match known.get(&def.routine_name()) {
+                Some(&only_under) if !only_under || below => continue,
+                _ => {}
+            }
+            known.insert(def.routine_name(), below);
             if known.len() > crate::MAX_DEPTH {
                 return Err(AnalysisError::new(
                     krishiv_common::error::FailedToParseTooComplex {},
@@ -333,6 +401,88 @@ fn sql_function_roots(
                 input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
                 exprs,
             })));
+            under.push(below);
+            stored.push(!def.qualifier.is_empty());
+        }
+    }
+    Ok(())
+}
+
+/// The SQL-bodied function `node` calls, if any (a table function or a registry call).
+fn called_sql_function(ctx: &AnalysisContext, node: Node<'_>) -> Option<Arc<super::SqlFunction>> {
+    match node {
+        Node::Plan(p) => match &p.node {
+            PlanNode::TableFunction { name, .. } => sql_table_function(ctx, name),
+            _ => None,
+        },
+        Node::Expr(e) => match &e.node {
+            ExprNode::Function(f) => sql_call(ctx, f),
+            _ => None,
+        },
+    }
+}
+
+/// A node of a permanent view's text ([`AnalysisContext::stored_view_texts`], review r5 Z1): no
+/// function of the reading session answers in it. The session qualified every call a stored
+/// function of the view's path answers when it inlined the view, so a call still bare that no
+/// built-in answers, or one qualified `session.` / `system.session.`, is an unresolved routine
+/// (Spark v4.2.0 `SessionCatalog.scala` lines 2427-2441: while a permanent view resolves no
+/// temporary function answers); a table function of that shape that is no built-in one is
+/// unresolvable.
+fn check_in_stored_view(ctx: &AnalysisContext, node: Node<'_>) -> Result<(), AnalysisError> {
+    let builtin = |name: &str| {
+        let parts = ["system".to_owned(), "builtin".to_owned(), name.to_owned()];
+        !matches!(
+            ctx.functions.lookup(&parts, ctx.profile),
+            FunctionLookup::NotFound
+        )
+    };
+    match node {
+        Node::Expr(e) => {
+            let ExprNode::Function(f) = &e.node else {
+                return Ok(());
+            };
+            let session = is_session_qualifier(&f.qualifier);
+            let bare = f.qualifier.is_empty()
+                && is_registry_call(&f.name)
+                && !super::ops::is_qualify_wrapper(&f.name)
+                && !f.name.eq_ignore_ascii_case("stack")
+                && !is_grammar_unit_call(&f.name)
+                && !builtin(&f.name);
+            if session || bare {
+                let mut parts = f.qualifier.clone();
+                parts.push(f.name.clone());
+                return Err(AnalysisError::new(
+                    UnresolvedRoutine {
+                        routine_name: quoted(&parts),
+                        search_path: search_path(ctx),
+                    },
+                    e.origin,
+                ));
+            }
+        }
+        Node::Plan(p) => {
+            let PlanNode::TableFunction { name, .. } = &p.node else {
+                return Ok(());
+            };
+            let parts: Vec<String> = name
+                .split(crate::TABLE_FUNCTION_NAME_SEP)
+                .map(str::to_owned)
+                .collect();
+            let session = parts.len() > 1 && is_session_qualifier(&parts[..parts.len() - 1]);
+            let builtin_table = name.eq_ignore_ascii_case("json_tuple")
+                || matches!(
+                    ctx.table_functions.lookup(name, ctx.profile),
+                    super::TableFunctionLookup::Found(_)
+                );
+            if (session || parts.len() == 1) && !builtin_table {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::UnresolvableTableValuedFunction {
+                        name: quoted(&parts),
+                    },
+                    p.origin,
+                ));
+            }
         }
     }
     Ok(())
@@ -774,6 +924,18 @@ async fn authorize_as(
     {
         return Ok(*i);
     }
+    // A catalog table or view read under a definer view's text was asked of the view's owner
+    // (paths, secret scopes and store options are still the principal's).
+    if b.under_definer
+        && matches!(securable, Securable::Table(_) | Securable::View(_))
+        && matches!(privilege, Privilege::Select | Privilege::Browse)
+    {
+        b.securables.push((securable.clone(), privilege));
+        let i = b.securables.len() - 1;
+        b.definer_only.insert(i);
+        checked.push((securable, i));
+        return Ok(i);
+    }
     // A policy that decides columns is asked only whether the schema may be seen here; the rows
     // are asked per referenced column once the query is resolved (`authorize_columns`).
     let asked = if privilege == Privilege::Select
@@ -839,6 +1001,10 @@ async fn load(
             }
             Found::StoreOptions(origin) => {
                 authorize_store_options(ctx, b, &mut checked, origin).await?;
+                continue;
+            }
+            Found::Descriptor(path, origin) => {
+                descriptors::bind_descriptor(ctx, b, &mut checked, path, origin).await?;
                 continue;
             }
             Found::Table(name, origin) => (name, None, &[][..], origin, false),
@@ -933,13 +1099,17 @@ async fn load(
                 authorize(ctx, b, &mut checked, Securable::Table(first), origin).await?;
             }
             let failed = |e: krishiv_common::error::KrishivError| {
-                // A delegated catalog's refusal and a catalog limit (P3-T067 §3.3) are Krishiv's
-                // own text, never the provider's, and tell the user what to do: they stay as
-                // they are.
+                // A delegated catalog's refusal, a catalog limit (P3-T067 §3.3) and a table the
+                // catalog serves in a form Krishiv refuses (`KRISHIV_CATALOG_TABLE_UNSUPPORTED`:
+                // read restrictions, server-side planning, a metadata table, §4.1) are Krishiv's
+                // own text, never the provider's, and tell the user what to do: they stay as they
+                // are. Any other class, `KRISHIV_UNSUPPORTED_FEATURE` included, may carry the
+                // provider's text and is hidden.
                 if matches!(
                     e.error_class(),
                     krishiv_common::error::ErrorClass::KrishivCatalogDelegationUnavailable
                         | krishiv_common::error::ErrorClass::KrishivCatalogLimitExceeded
+                        | krishiv_common::error::ErrorClass::KrishivCatalogTableUnsupported
                 ) {
                     return AnalysisError::new(e, origin);
                 }

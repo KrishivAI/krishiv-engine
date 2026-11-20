@@ -102,6 +102,7 @@ collation	function	4.0	true	scalar	0100000	1
 collations	table_function	4.0	true	generator	1111111	
 collect_list	function	3.5	true	aggregate	0100000	1
 collect_set	function	3.5	true	aggregate	0100000	1
+collect_union	function	4.2	true	aggregate	0100000	1
 concat	function	3.5	true	scalar	1111111	
 concat_ws	function	3.5	true	scalar	0111111	> 0
 contains	function	3.5	true	scalar	0010000	2
@@ -114,6 +115,7 @@ cot	function	3.5	true	scalar	0100000	1
 count	function	3.5	true	aggregate	0111111	 >= 1
 count_if	function	3.5	true	aggregate	0100000	1
 count_min_sketch	function	3.5	true	aggregate	1111100	4
+counter_diff	function	4.2	true	window	0110000	[1, 2]
 covar_pop	function	3.5	true	aggregate	0010000	2
 covar_samp	function	3.5	true	aggregate	0010000	2
 crc32	function	3.5	true	scalar	0100000	1
@@ -176,6 +178,7 @@ forall	function	3.5	true	scalar	0010000	2
 format_number	function	3.5	true	scalar	0010000	2
 format_string	function	3.5	true	scalar	0111111	> 0
 from_avro	function	4.0	unknown	unknown	0011000	[2, 3]
+from_base32	function	4.2	true	scalar	0100000	1
 from_csv	function	3.5	true	scalar	0011000	[2, 3]
 from_json	function	3.5	true	scalar	0011000	[2, 3]
 from_protobuf	function	4.0	unknown	unknown	0011100	[2, 3, 4]
@@ -195,6 +198,7 @@ hll_sketch_agg	function	3.5	true	aggregate	0110000	[1, 2]
 hll_sketch_estimate	function	3.5	true	aggregate	0100000	1
 hll_union	function	3.5	true	aggregate	0011000	[2, 3]
 hll_union_agg	function	3.5	true	aggregate	0110000	[1, 2]
+hmac	function	4.2	true	scalar	0011000	[2, 3]
 hour	function	3.5	true	scalar	0111111	> 0
 hypot	function	3.5	true	scalar	0010000	2
 if	function	3.5	true	scalar	0001000	3
@@ -207,7 +211,7 @@ inline_outer	table_function	3.5	true	generator	1100000	1
 input_file_block_length	function	3.5	false	scalar	1000000	0
 input_file_block_start	function	3.5	false	scalar	1000000	0
 input_file_name	function	3.5	false	scalar	1000000	0
-instr	function	3.5	true	scalar	0010000	2
+instr	function	3.5	true	scalar	0011100	[2, 3, 4]
 int	function	3.5	true	scalar	0100000	1
 is_valid_utf8	function	4.0	true	scalar	0100000	1
 is_valid_variant	function	4.2	true	scalar	0100000	1
@@ -215,6 +219,7 @@ is_variant_null	function	4.0	true	scalar	0100000	1
 isnan	function	3.5	true	scalar	0100000	1
 isnotnull	function	3.5	true	scalar	0100000	1
 isnull	function	3.5	true	scalar	0100000	1
+jaro_winkler_similarity	function	4.2	true	scalar	0010000	2
 java_method	function	3.5	false	scalar	0011111	> 1
 json_array_length	function	3.5	true	scalar	0100000	1
 json_object_keys	function	3.5	true	scalar	0100000	1
@@ -451,6 +456,7 @@ timestamp_millis	function	3.5	true	scalar	0100000	1
 timestamp_seconds	function	3.5	true	scalar	0100000	1
 tinyint	function	3.5	true	scalar	0100000	1
 to_avro	function	4.0	unknown	unknown	0110000	[1, 2]
+to_base32	function	4.2	true	scalar	0100000	1
 to_binary	function	3.5	true	scalar	0110000	[1, 2]
 to_char	function	3.5	true	scalar	0010000	2
 to_csv	function	3.5	true	scalar	0110000	[1, 2]
@@ -496,7 +502,10 @@ try_to_time	function	4.1	true	scalar	0110000	[1, 2]
 try_to_timestamp	function	3.5	true	scalar	0110000	[1, 2]
 try_url_decode	function	4.0	true	scalar	0100000	1
 try_validate_utf8	function	4.0	true	scalar	0100000	1
+try_variant_array_append	function	4.2	true	scalar	0001000	3
 try_variant_get	function	4.0	true	scalar	0011000	[2, 3]
+try_variant_insert	function	4.2	true	scalar	0001000	3
+try_variant_set	function	4.2	true	scalar	0001100	[3, 4]
 tuple_difference_double	function	4.2	true	aggregate	0010000	2
 tuple_difference_integer	function	4.2	true	aggregate	0010000	2
 tuple_difference_theta_double	function	4.2	true	aggregate	0010000	2
@@ -540,9 +549,14 @@ validate_utf8	function	4.0	true	scalar	0100000	1
 var_pop	function	3.5	true	aggregate	0100000	1
 var_samp	function	3.5	true	aggregate	0100000	1
 variance	function	3.5	true	aggregate	0100000	1
+variant_array_append	function	4.2	true	scalar	0001000	3
+variant_delete	function	4.2	true	scalar	0011111	> 1
 variant_explode	table_function	4.0	true	generator	1111111	
 variant_explode_outer	table_function	4.0	true	generator	1111111	
 variant_get	function	4.0	true	scalar	0011000	[2, 3]
+variant_insert	function	4.2	true	scalar	0001000	3
+variant_set	function	4.2	true	scalar	0001100	[3, 4]
+variant_strip_nulls	function	4.2	true	scalar	0110000	[1, 2]
 vector_avg	function	4.2	true	aggregate	0100000	1
 vector_cosine_similarity	function	4.2	true	scalar	0010000	2
 vector_inner_product	function	4.2	true	scalar	0010000	2

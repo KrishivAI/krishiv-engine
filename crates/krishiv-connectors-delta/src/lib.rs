@@ -20,7 +20,9 @@
 //! - feature gates: `DELTA_UNSUPPORTED_FEATURES_FOR_READ`, `DELTA_UNSUPPORTED_FEATURES_FOR_WRITE`,
 //!   `DELTA_INVALID_PROTOCOL_VERSION`;
 //! - writes: `DELTA_CANNOT_MODIFY_APPEND_ONLY`, `DELTA_METADATA_MISMATCH`,
-//!   `DELTA_FAILED_TO_MERGE_FIELDS`, `DELTA_INVALID_ISOLATION_LEVEL`;
+//!   `DELTA_FAILED_TO_MERGE_FIELDS`, `DELTA_INVALID_ISOLATION_LEVEL`,
+//!   `DELTA_REPLACE_WHERE_MISMATCH`, `DELTA_PATH_EXISTS`,
+//!   `DELTA_CREATE_TABLE_WITH_NON_EMPTY_LOCATION`;
 //! - time travel: `DELTA_VERSION_NOT_FOUND`, `DELTA_TIMESTAMP_EARLIER_THAN_COMMIT_RETENTION`,
 //!   `DELTA_TIMESTAMP_GREATER_THAN_COMMIT`, `DELTA_TIMESTAMP_INVALID`;
 //! - conflicts: `DELTA_CONCURRENT_APPEND`, `DELTA_CONCURRENT_DELETE_READ`,
@@ -46,6 +48,11 @@
 //! id, the conflict checker against every winning commit ([`commit::conflict`], a port of
 //! delta-spark's), the rebuild at the last checked version, and the landed check after a lost
 //! answer (design note sections 4.2 and 5).
+//!
+//! # Writing
+//! [`write`](mod@write) is the write path behind [`table::DeltaTable`]'s `TableProvider::writer` and
+//! [`write::NewDeltaTable`]: data files with physical names and field ids, Krishiv's own
+//! statistics, the overwrite modes' removes and Delta's `WRITE` commit (design note section 4).
 
 #![forbid(unsafe_code)]
 
@@ -54,3 +61,4 @@ pub mod engine;
 pub mod error;
 pub mod features;
 pub mod table;
+pub mod write;
