@@ -145,22 +145,39 @@ impl SessionSource {
         self
     }
 
-    /// `rows` of `table` followed by the stored rows of queries `rows` does not name.
-    fn with_stored(&self, table: SystemTable, mut rows: Vec<Row>) -> Vec<Row> {
+    /// `rows` of `table` followed by the stored rows of the queries `live` does not name. `live` is the ids of
+    /// the runtime's own queries, whichever table is read: a running query has no operator rows yet, and its
+    /// id must still keep an earlier run's stored operators out.
+    fn with_stored(
+        &self,
+        table: SystemTable,
+        mut rows: Vec<Row>,
+        live: &std::collections::HashSet<String>,
+    ) -> Vec<Row> {
         let stored = match (&self.stored, table) {
             (Some(s), SystemTable::Queries) => &s.queries,
             (Some(s), SystemTable::Operators) => &s.operators,
             _ => return rows,
         };
-        let id = |r: &Row| r.get("query_id").and_then(Value::as_str).map(str::to_owned);
-        let live: std::collections::HashSet<String> = rows.iter().filter_map(id).collect();
         rows.extend(
             stored
                 .iter()
-                .filter(|r| id(r).is_none_or(|i| !live.contains(&i)))
+                .filter(|r| query_id(r).is_none_or(|i| !live.contains(i)))
                 .cloned(),
         );
         rows
+    }
+
+    /// The ids of the runtime's own queries, the console's reads among them (a stored row of theirs is never
+    /// listed). Read only by a source with a stored history.
+    async fn live_ids(&self) -> Result<std::collections::HashSet<String>, UiError> {
+        let sql = "SELECT query_id FROM system.queries";
+        let df = self.session.sql(sql).await.map_err(ui_error)?;
+        let batches = df.collect().await.map_err(ui_error)?;
+        Ok(batches_to_rows(&batches)
+            .iter()
+            .filter_map(|r| query_id(r).map(str::to_owned))
+            .collect())
     }
 
     /// Adds `client_type` to each query row: what the client of the query's session said it is
@@ -557,7 +574,21 @@ impl UiSource for SessionSource {
                 rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
                 self.add_client_types(&mut rows).await?;
             }
-            Ok(self.with_stored(table, rows))
+            if self.stored.is_none()
+                || !matches!(table, SystemTable::Queries | SystemTable::Operators)
+            {
+                return Ok(rows);
+            }
+            // The queries just read are the live ones; the operators table does not name a query that has
+            // reported no operator yet, so its ids are read from the queries.
+            let live = if table == SystemTable::Queries {
+                rows.iter()
+                    .filter_map(|r| query_id(r).map(str::to_owned))
+                    .collect()
+            } else {
+                self.live_ids().await?
+            };
+            Ok(self.with_stored(table, rows, &live))
         })
     }
 
@@ -840,6 +871,11 @@ impl ProfilesSource {
         }
         Self { queries, operators }
     }
+}
+
+/// The query a row of `system.queries` or `system.operators` belongs to.
+fn query_id(row: &Row) -> Option<&str> {
+    row.get("query_id").and_then(Value::as_str)
 }
 
 /// `stored` (oldest first) with one profile per query id, the newest, in the same order. A client may reuse an

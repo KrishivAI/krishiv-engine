@@ -250,6 +250,78 @@ async fn a_servers_history_lists_what_ran_before_its_restart() {
     assert!(of(&alone, "before_restart").is_empty(), "{alone:?}");
 }
 
+/// A client that reuses its operation id after a restart: while the new run has reported no operator yet, its
+/// id is in the queries table only. The stored operators of the earlier run must not stand in for it, or the
+/// query's page would show the new run with the old run's metrics.
+#[tokio::test]
+async fn a_running_query_does_not_show_the_stored_operators_of_an_earlier_run_of_its_id() {
+    use krishiv_session::QueryOptions;
+    const OP: &str = "0193b1c2-7a00-7a01-8001-00000000bb01";
+    let dir = tempfile::tempdir().unwrap();
+    let with_store = || {
+        EngineRuntime::builder()
+            .config("krishiv.history.path", dir.path().to_str().unwrap())
+            .build()
+            .unwrap()
+    };
+    {
+        let rt = with_store();
+        let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+        let first = "SELECT count(*) AS first_run FROM range(0, 100)";
+        let df = session
+            .sql_with(first, QueryOptions::new().operation_id(OP))
+            .await
+            .unwrap();
+        df.collect().await.unwrap();
+    }
+    let stored = krishiv_session::read_profile_history(dir.path()).unwrap();
+    assert_eq!(stored.len(), 1, "{stored:?}");
+    let doc: Value = serde_json::from_str(&stored[0].profile).unwrap();
+    assert!(!doc["operators"].as_array().unwrap().is_empty());
+
+    let rt = with_store();
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let runner = session.clone();
+    let task = tokio::spawn(async move {
+        // A cross join no machine finishes soon.
+        let sql = "SELECT count(*) FROM range(0, 1000000000) a CROSS JOIN range(0, 1000000000) b";
+        let df = runner
+            .sql_with(sql, QueryOptions::new().operation_id(OP))
+            .await?;
+        df.collect().await
+    });
+    let plain = SessionSource::new(Arc::clone(&rt)).unwrap();
+    let source = SessionSource::new(rt).unwrap().with_stored_history(&stored);
+    let op = Value::from(OP);
+    let start = std::time::Instant::now();
+    loop {
+        let queries = plain.rows(SystemTable::Queries).await.unwrap();
+        if queries
+            .iter()
+            .any(|q| q["query_id"] == op && q["state"] == "running")
+        {
+            break;
+        }
+        assert!(start.elapsed().as_secs() < 30, "the query never ran");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let of_op = |rows: Vec<krishiv_server::internal::Row>| {
+        rows.into_iter()
+            .filter(|r| r["query_id"] == op)
+            .collect::<Vec<_>>()
+    };
+    // One row for the id, the running one; and exactly the operators the runtime itself reports for it.
+    let queries = of_op(source.rows(SystemTable::Queries).await.unwrap());
+    assert_eq!(queries.len(), 1, "{queries:?}");
+    assert_eq!(queries[0]["state"], "running");
+    let live = of_op(plain.rows(SystemTable::Operators).await.unwrap());
+    let shown = of_op(source.rows(SystemTable::Operators).await.unwrap());
+    assert_eq!(shown.len(), live.len(), "{shown:?}");
+
+    assert_eq!(session.interrupt_all().len(), 1);
+    assert!(task.await.unwrap().is_err());
+}
+
 /// The console's own reads are stored like any query, about two a second while a page is open. A restarted
 /// server must still list what its users ran: the console's profiles take no place among the newest it shows, and
 /// none of them is listed.
