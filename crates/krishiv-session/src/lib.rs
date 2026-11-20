@@ -116,6 +116,7 @@ mod udfs;
 mod variable_substitution;
 mod variables;
 mod view_schema;
+mod view_session_refs;
 mod window;
 
 pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};
@@ -163,9 +164,9 @@ pub use python_udfs::{
 #[cfg(feature = "unstable-ir")]
 pub use python_udfs::{python_udf_call_name, python_udtf_call_name};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
-#[cfg(feature = "unstable-ir")]
-pub use session::SqlOutcome;
 pub use session::{RecordBatchStream, Session, SessionBuilder};
+#[cfg(feature = "unstable-ir")]
+pub use session::{SqlOutcome, SqlQuery};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
 /// for [`Session::register_udf`].
 pub use udfs::SessionFunctions;

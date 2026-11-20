@@ -28,6 +28,7 @@ from krishiv.storagelevel import StorageLevel
 
 if TYPE_CHECKING:
     from krishiv.sql.datasource import DataSourceRegistration
+    from krishiv._udf.profiler import Profile
     from krishiv.sql.udf import UDFRegistration
 
 #: The Spark version this engine is compatible with.
@@ -117,6 +118,9 @@ class SparkSession:
     def __init__(self, native: _native.Session, config: list[tuple[str, str]] | None = None) -> None:
         self._native = native
         self._conf = RuntimeConfig(native)
+        from krishiv._udf.profiler import Registry
+
+        self._profile_registry = Registry()
         # The options the session was built with: `newSession` starts from them.
         self._config = list(config or [])
 
@@ -132,6 +136,14 @@ class SparkSession:
     @property
     def conf(self) -> RuntimeConfig:
         return self._conf
+
+    @property
+    def profile(self) -> Profile:
+        """The UDF profiles of this session (``spark.sql.pyspark.udf.profiler`` = ``perf`` or ``memory``):
+        ``show``, ``dump`` and ``clear``, as ``pyspark.sql.profiler.Profile``."""
+        from krishiv._udf.profiler import Profile
+
+        return Profile(self._profile_registry)
 
     @property
     def read(self) -> DataFrameReader:

@@ -43,7 +43,7 @@ pub(super) const NAMES: &[&str] = &[
 ];
 
 /// The shape of an argument list: `S` string, `B` binary, `I` an integral
-/// up to `int`, `L` a `bigint`.
+/// up to `int`, `L` a `bigint`, `A` an array.
 pub(super) fn shape(args: &[BindArg]) -> String {
     args.iter()
         .map(|a| {
@@ -56,6 +56,8 @@ pub(super) fn shape(args: &[BindArg]) -> String {
                 'I'
             } else if t == DataType::Int64 {
                 'L'
+            } else if matches!(t, DataType::List(_)) {
+                'A'
             } else {
                 '?'
             }
