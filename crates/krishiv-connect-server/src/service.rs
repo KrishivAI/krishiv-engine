@@ -71,17 +71,19 @@ fn inbound_of(metadata: &tonic::metadata::MetadataMap) -> execute::InboundTrace 
     }
 }
 
-/// The client's gRPC `user-agent` (capped as the Flight SQL front end caps it).
+/// The client's gRPC `user-agent` (`Activity::set_client` caps what is stored).
 fn user_agent(metadata: &tonic::metadata::MetadataMap) -> Option<String> {
     metadata
         .get("user-agent")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.chars().take(256).collect())
+        .map(str::to_owned)
 }
 
 /// Tells the engine session who is calling (`system.sessions`: transport, client type, user).
 /// Client-asserted: shown, never used as an identity. The client type is the request's
-/// `client_type`, else the gRPC `user-agent` (design P3-T003 §3, the `source` selector).
+/// `client_type`, else the gRPC `user-agent` (design P3-T003 §3, the `source` selector). The first
+/// non-empty value stays: a client whose first request has no `client_type` and a later one has
+/// keeps the `user-agent` for the session (PySpark sets `client_type` on every request).
 fn observe(entry: &SessionEntry, client_type: Option<&str>, agent: Option<&str>) {
     entry.session().set_client_info(
         krishiv_session::Transport::Connect,

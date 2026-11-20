@@ -673,12 +673,14 @@ impl Session {
             tags: self.effective_tags(),
             class: WorkloadClass::Interactive,
             source: self.state.activity.client_type(),
-            // A query no SQL statement started (DataFrame, Spark Connect plan) has no class
-            // on its env: the entry point that admits it names one.
-            statement_class: env
-                .statement_class
-                .and_then(statement_class_named)
-                .or(Some(fallback)),
+            // A query no SQL statement started (DataFrame, Spark Connect plan) has no class on
+            // its env, and one a `SELECT` started (`spark.sql("select ..").write...`) carries
+            // `READ` into the write it ends in: the entry point that admits the query names the
+            // class then. A class a statement set itself (CTAS: `WRITE`, DDL) stays.
+            statement_class: match env.statement_class.and_then(statement_class_named) {
+                Some(krishiv_sql::StatementClass::Read) | None => Some(fallback),
+                other => other,
+            },
             estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);

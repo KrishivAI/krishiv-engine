@@ -511,7 +511,8 @@ async fn a_dataframe_read_and_write_match_the_query_type_selectors() {
         .runtime(rt)
         .build()
         .unwrap_or_else(|e| panic!("{e}"));
-    let dir = std::env::temp_dir().join(format!("krishiv-by-type-{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let dir = tmp.path().to_path_buf();
     let (src, out) = (dir.join("src"), dir.join("out"));
     s.sql("select 1 as a")
         .await
@@ -525,6 +526,14 @@ async fn a_dataframe_read_and_write_match_the_query_type_selectors() {
     df.collect().await.unwrap_or_else(|e| panic!("{e}"));
     df.write()
         .parquet(out.to_str().unwrap_or_default())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    // A write of a frame a SQL `SELECT` started is a write too.
+    s.sql("select 1 as a")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .write()
+        .parquet(dir.join("out2").to_str().unwrap_or_default())
         .await
         .unwrap_or_else(|e| panic!("{e}"));
     let batches = s
@@ -544,6 +553,15 @@ async fn a_dataframe_read_and_write_match_the_query_type_selectors() {
         })
         .collect();
     groups.sort();
-    let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(groups, ["root.reads", "root.writes"]);
+    // Both writes of `select 1 as a` ran in the writes group, whatever the frame's SQL class.
+    let batches = s
+        .sql("select resource_group from system.queries where query_text is not null and resource_group = 'root.writes'")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
+    assert_eq!(rows, 2, "the select-born writes: src and out2");
 }
