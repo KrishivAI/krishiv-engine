@@ -27,7 +27,15 @@ iceberg-rest = [
     "krishiv-store/cloud",
 ]
 # The catalog factories of the session's registry (design P3-T067 §2.3): `iceberg-rest` declared catalogs.
-session = ["iceberg-rest", "dep:krishiv-session", "dep:krishiv-plan", "tokio/rt"]
+# The declared tables' reads open through the Iceberg connector (design P3-T067 PR-58b).
+session = [
+    "iceberg-rest",
+    "dep:krishiv-session",
+    "dep:krishiv-plan",
+    "dep:krishiv-exec",
+    "dep:krishiv-connectors-iceberg",
+    "tokio/rt",
+]
 # The Unity Catalog read-only client (async reqwest over rustls on a thread of its own, every request on krishiv-store's
 # egress policy client). Off by default; shares no code with
 # `iceberg-rest`, so either feature builds without the other.
@@ -53,6 +61,9 @@ krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", optional = true }
 krishiv-types = { path = "../krishiv-types", version = "=0.2.1", optional = true }
 # The egress address rule of the metastore connection (design P3-T067 §5.2).
 krishiv-store = { path = "../krishiv-store", version = "=0.2.1", optional = true }
+# The `TableProvider` a declared table's scan opens, and the Iceberg tables it opens (feature `session`).
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1", optional = true }
+krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", optional = true }
 # The `CatalogFactory` trait and the declarations it builds from (feature `session`).
 krishiv-session = { path = "../krishiv-session", version = "=0.2.1", optional = true }
 tracing.workspace = true
@@ -67,3 +78,6 @@ rusqlite = { workspace = true, optional = true }
 futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", features = ["testing"] }
 tempfile.workspace = true
+# The declared-table read tests serve a table the connector's test helper writes.
+krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", features = ["testing"] }
+arrow-array = { workspace = true }

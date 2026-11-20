@@ -1258,6 +1258,7 @@ impl Session {
             Arc::clone(&paths),
             Arc::clone(&config),
         ));
+        let declared_paths = Arc::clone(&paths);
         let delta = Arc::new(crate::delta::DeltaReads::new(crate::delta::DeltaInputs {
             io: io.clone(),
             paths,
@@ -1285,6 +1286,14 @@ impl Session {
             relations: Arc::clone(&self.state.relations),
             memory: Arc::clone(&self.state.memory),
         };
+        let declared =
+            self.declared_catalogs()
+                .for_query(crate::catalog_registry::ScanInputs::new(
+                    io.clone(),
+                    declared_paths,
+                    Arc::clone(&config),
+                    scans.slots,
+                ));
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
             Arc::clone(&self.state.cache),
@@ -1307,7 +1316,7 @@ impl Session {
                     self.state.runtime.profile_history.clone(),
                     Arc::clone(&self.state.runtime.executor),
                 )),
-                catalogs: self.declared_catalogs(),
+                catalogs: declared,
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),

@@ -108,4 +108,4 @@ telemetry-otlp = ["krishiv/telemetry-otlp", "dep:krishiv-session"]
 # Cloud object stores (S3, GCS, Azure). Opt-in so the default build stays
 # inside the dependency and binary-size budgets.
 cloud = ["krishiv/cloud"]
-full = ["krishiv/full"]
+full = ["krishiv/full", "catalog-iceberg-rest"]

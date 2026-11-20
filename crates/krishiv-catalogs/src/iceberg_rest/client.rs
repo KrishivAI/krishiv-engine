@@ -32,7 +32,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    KrishivCatalogTableUnsupported, KrishivError, KrishivUnsupportedFeature,
+};
 use krishiv_common::secret::wipe_bytes;
 use serde_json::Value;
 use url::Url;
@@ -607,21 +609,24 @@ impl RestClient {
         let Some(loaded) = run().map_err(self.fail(&what))? else {
             return Ok(None);
         };
-        if loaded.restricted {
-            return Err(KrishivUnsupportedFeature {
-                feature: format!("Iceberg REST read restrictions on table {what}"),
+        // Krishiv's own text (the analyzer shows it, unlike a provider's failure).
+        let unsupported = |feature: &str| -> KrishivError {
+            KrishivCatalogTableUnsupported {
+                catalog: quoted(&self.name),
+                relation_name: what.clone(),
+                feature: feature.to_owned(),
             }
-            .into());
+            .into()
+        };
+        if loaded.restricted {
+            return Err(unsupported("Iceberg REST read restrictions"));
         }
         if loaded
             .config
             .get("scan-planning-mode")
             .is_some_and(|m| m.expose_secret().eq_ignore_ascii_case("server"))
         {
-            return Err(KrishivUnsupportedFeature {
-                feature: format!("Iceberg REST server-side scan planning for table {what}"),
-            }
-            .into());
+            return Err(unsupported("Iceberg REST server-side scan planning"));
         }
         self.check_locations(&what, &loaded)?;
         Ok(Some(loaded))
