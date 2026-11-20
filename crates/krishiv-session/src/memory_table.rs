@@ -7,9 +7,9 @@ use arrow_schema::SchemaRef;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
-use krishiv_exec::MemoryScan;
 use krishiv_exec::ScanPushdown;
 use krishiv_exec::planner::TableProvider;
+use krishiv_exec::{FilterPushdown, MemoryScan, PushedFilter, ScanPushdowns, Source};
 use krishiv_memory::{MemoryPool, Reservation};
 use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::DataType;
@@ -63,6 +63,7 @@ pub type BatchSource = Arc<dyn Fn() -> Result<Vec<RecordBatch>, KrishivError> + 
 /// A table whose rows come from a callback, asked afresh for every physical plan of a query (not
 /// once per registration): the Python Data Source API's reader lists its partitions and reads
 /// them when the plan is made, as Spark's `PythonScanBuilder` does (design P3-T040 §3.3).
+#[derive(Clone)]
 struct SourceTable {
     label: String,
     schema: SchemaRef,
@@ -96,8 +97,9 @@ impl std::fmt::Debug for SourceTable {
     }
 }
 
-impl TableProvider for SourceTable {
-    fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+impl SourceTable {
+    /// Reads the source and holds its bytes: one read of the callback.
+    fn materialize(&self) -> krishiv_exec::Result<MemoryScan> {
         let batches = (self.source)()?;
         let bytes: usize = batches.iter().map(RecordBatch::get_array_memory_size).sum();
         if bytes > self.max_bytes {
@@ -129,9 +131,76 @@ impl TableProvider for SourceTable {
             _pool: pool,
             _reservation: std::sync::Mutex::new(reservation),
         };
-        Ok(Arc::new(
-            MemoryScan::try_new(Arc::clone(&self.schema), batches)?.with_guard(Arc::new(hold)),
-        ))
+        Ok(MemoryScan::try_new(Arc::clone(&self.schema), batches)?.with_guard(Arc::new(hold)))
+    }
+}
+
+impl TableProvider for SourceTable {
+    fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+        Ok(Arc::new(LazySourceScan {
+            table: self.clone(),
+            read: std::sync::Mutex::new(None),
+        }))
+    }
+}
+
+/// A scan of a [`SourceTable`] that reads the source when its data is first needed. The planner
+/// asks a provider for a scan only to learn the schema, and execution asks again, so reading in
+/// `scan` would read the source twice and could consume a one-shot reader before the query runs.
+struct LazySourceScan {
+    table: SourceTable,
+    read: std::sync::Mutex<Option<Arc<MemoryScan>>>,
+}
+
+impl LazySourceScan {
+    fn read(&self) -> krishiv_exec::Result<Arc<MemoryScan>> {
+        let mut slot = self
+            .read
+            .lock()
+            .map_err(|_| internal("a poisoned Python source read".to_owned()))?;
+        if let Some(scan) = slot.as_ref() {
+            return Ok(Arc::clone(scan));
+        }
+        let scan = Arc::new(self.table.materialize()?);
+        *slot = Some(Arc::clone(&scan));
+        Ok(scan)
+    }
+}
+
+impl ScanPushdown for LazySourceScan {
+    fn table_schema(&self) -> SchemaRef {
+        Arc::clone(&self.table.schema)
+    }
+
+    fn filter_pushdown(&self, _filter: &PushedFilter) -> FilterPushdown {
+        FilterPushdown::Exact
+    }
+
+    fn build(&self, pushdowns: ScanPushdowns) -> krishiv_exec::Result<Arc<dyn Source>> {
+        self.read()?.build(pushdowns)
+    }
+
+    fn output_schema(&self, pushdowns: &ScanPushdowns) -> krishiv_exec::Result<SchemaRef> {
+        if pushdowns.selection.is_some()
+            || pushdowns.metadata != krishiv_io::MetadataCols::default()
+        {
+            // The in-memory scan refuses these; ask it (reads the source).
+            return self.read()?.output_schema(pushdowns);
+        }
+        match &pushdowns.projection {
+            Some(paths) => krishiv_io::project_schema(&self.table.schema, paths),
+            None => Ok(Arc::clone(&self.table.schema)),
+        }
+    }
+
+    fn with_memory_batches(
+        &self,
+        batches: Vec<Batch>,
+    ) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+        Ok(Arc::new(MemoryScan::try_new(
+            Arc::clone(&self.table.schema),
+            batches,
+        )?))
     }
 }
 
@@ -195,6 +264,39 @@ mod tests {
     use arrow_schema::{DataType as ArrowType, Field, Schema};
 
     #[test]
+    fn planning_reads_the_schema_only_and_a_scan_reads_the_source_once() {
+        let session = Session::builder().build().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("k", ArrowType::Int32, true)]));
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (s, r) = (Arc::clone(&schema), Arc::clone(&reads));
+        let table = SourceTable {
+            label: "demo".to_owned(),
+            schema: Arc::clone(&schema),
+            source: Arc::new(move || {
+                r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(vec![
+                    RecordBatch::try_new(
+                        Arc::clone(&s),
+                        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+                    )
+                    .unwrap(),
+                ])
+            }),
+            max_bytes: MAX_SOURCE_BYTES,
+            memory: Arc::clone(&session.state.memory),
+            declared: Arc::clone(&schema),
+        };
+        let planning = table.scan().unwrap();
+        planning.table_schema();
+        planning.output_schema(&ScanPushdowns::default()).unwrap();
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let execution = table.scan().unwrap();
+        execution.build(ScanPushdowns::default()).unwrap();
+        execution.build(ScanPushdowns::default()).unwrap();
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn a_plan_over_the_byte_cap_is_refused_and_the_table_debugs_by_schema() {
         let session = Session::builder().build().unwrap();
         let schema = Arc::new(Schema::new(vec![Field::new("k", ArrowType::Int32, true)]));
@@ -215,7 +317,13 @@ mod tests {
             memory: Arc::clone(&session.state.memory),
             declared: Arc::clone(&schema),
         };
-        let error = table.scan().err().expect("over the cap").to_string();
+        let error = table
+            .scan()
+            .unwrap()
+            .build(ScanPushdowns::default())
+            .err()
+            .expect("over the cap")
+            .to_string();
         assert!(error.contains("demo"), "{error}");
         let shown = format!("{table:?}");
         assert!(
