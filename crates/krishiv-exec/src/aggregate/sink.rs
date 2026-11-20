@@ -177,7 +177,7 @@ pub(super) fn writer_panicked(p: &(dyn std::any::Any + Send)) -> KrishivError {
 /// A hash-aggregation pipeline breaker (see the [module docs](super)).
 #[derive(Debug)]
 pub struct HashAggregate {
-    core: Arc<AggCore>,
+    pub(super) core: Arc<AggCore>,
     counters: Arc<Counters>,
     /// Overrides the thread-local row tables' index mode (tests force
     /// abandons).

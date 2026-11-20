@@ -167,6 +167,7 @@ impl RowLevelTable for IcebergRowLevel {
                 path: d.entry.file.path.clone(),
                 referenced_data_file: d.entry.file.referenced_data_file.clone(),
                 content_offset: d.entry.file.content_offset,
+                content_size: d.entry.file.content_size_in_bytes,
             })
             .collect();
         let filter = request.read_filter_pushdown();
@@ -194,6 +195,7 @@ impl RowLevelTable for IcebergRowLevel {
             removals: Removals {
                 data_files,
                 delete_files,
+                ..Removals::default()
             },
             validation,
             lineage: self.lineage,
