@@ -510,7 +510,8 @@ impl Session {
             .into());
         }
         let name = self.namespace_name(&u.name, &env)?;
-        if !self.state.catalog.store.has_namespace(&name) {
+        // One the principal may not list reads as missing (review r2 R4).
+        if !self.state.catalog.store.has_namespace(&name) || self.namespace_hidden(&name).await {
             return Err(SchemaNotFound {
                 schema_name: format!("`{name}`"),
             }
@@ -530,6 +531,7 @@ impl Session {
         (ids, written): (&[krishiv_sql::ast::Span], &[String]),
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let cte_precedence = env.analysis.conf.cte_precedence;
         if v.global && v.using.is_none() {
             return self.create_global_temp_view(v, &env, ids).await;
         }
@@ -598,17 +600,17 @@ impl Session {
             plan.root(),
             env.analysis.conf.case_sensitive,
         ) {
-            return Err(krishiv_common::error::InvalidTempObjReference {
-                obj_name: name.quoted(),
-                obj: "view".to_owned(),
-                temp_obj_name: format!("`{temp}`"),
-                temp_obj: "view".to_owned(),
-            }
-            .into());
+            return Err(crate::view_session_refs::refusal(
+                &name.quoted(),
+                format!("`{temp}`"),
+                "VIEW",
+            ));
         }
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let case_sensitive = env.analysis.conf.case_sensitive;
-        let analysis = df.analyzed_in(env).await?;
+        let analysis = df.analyzed_in(env.clone()).await?;
+        self.refuse_session_objects(&name.quoted(), plan.root(), &env)
+            .await?;
         let query_columns: Vec<String> = analysis
             .analyzed
             .output
@@ -670,6 +672,17 @@ impl Session {
         }
         // Spark checks the names after the aliases: a repeated one is `COLUMN_ALREADY_EXISTS`.
         check_column_name_duplication(columns.iter().map(|c| c.name.as_str()), case_sensitive)?;
+        let definer = matches!(v.security, Some(krishiv_sql::ast::SqlSecurity::Definer));
+        // A definer view's functions are bound now, through the path frozen with it (review r8
+        // item 1).
+        let functions = definer.then(|| {
+            env.sql_functions.bound_calls(
+                plan.root(),
+                &frozen_namespace,
+                &frozen_path,
+                self.state.profile,
+            )
+        });
         let view = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -693,6 +706,14 @@ impl Session {
                 written: crate::identifier_clause::written_within(
                     original, ids, written, query.span,
                 ),
+                // `SQL SECURITY DEFINER` reads as its creator (P3-T062 §2.4).
+                definer: definer.then(|| self.state.principal.name.clone()),
+                // Spark captures the session's SQL configs with the view (`views.scala` line 557).
+                cte_precedence: Some(cte_precedence),
+                functions,
+                // The store sets the version (review r10 M10).
+                revision: 0,
+                author: self.state.principal.name.clone(),
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -1049,6 +1070,7 @@ impl Session {
         (ids, written): (&[krishiv_sql::ast::Span], &[String]),
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let cte_precedence = env.analysis.conf.cte_precedence;
         let frozen_path = env.catalog.sql_path_snapshot();
         let frozen_namespace = env
             .catalog
@@ -1094,16 +1116,16 @@ impl Session {
                     plan.root(),
                     env.analysis.conf.case_sensitive,
                 ) {
-                    return Err(krishiv_common::error::InvalidTempObjReference {
-                        obj_name: name.quoted(),
-                        obj: "view".to_owned(),
-                        temp_obj_name: format!("`{temp}`"),
-                        temp_obj: "view".to_owned(),
-                    }
-                    .into());
+                    return Err(crate::view_session_refs::refusal(
+                        &name.quoted(),
+                        format!("`{temp}`"),
+                        "VIEW",
+                    ));
                 }
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-                let analysis = df.analyzed_in(env).await?;
+                let analysis = df.analyzed_in(env.clone()).await?;
+                self.refuse_session_objects(&name.quoted(), plan.root(), &env)
+                    .await?;
                 crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
                 changed.columns = crate::char_write::output_columns(&analysis.analyzed, None);
                 let query_columns = analysis
@@ -1114,6 +1136,16 @@ impl Session {
                     .collect();
                 // `ALTER VIEW ... AS` keeps the mode (`AlterViewAsCommand`).
                 let schema_mode = existing.view.as_ref().and_then(|v| v.schema_mode);
+                let definer = existing.view.as_ref().is_some_and(|v| v.definer.is_some());
+                // A definer view's functions are bound again with its new query (review r8 item 1).
+                let functions = definer.then(|| {
+                    env.sql_functions.bound_calls(
+                        plan.root(),
+                        &frozen_namespace,
+                        &frozen_path,
+                        self.state.profile,
+                    )
+                });
                 changed.view = Some(ViewDef {
                     sql: original
                         .get(query.span.start..query.span.end)
@@ -1127,6 +1159,15 @@ impl Session {
                     written: crate::identifier_clause::written_within(
                         original, ids, written, query.span,
                     ),
+                    // A definer view keeps its mode, and its new query reads as whoever wrote it:
+                    // never as the previous definer, whose rights the new text could reach.
+                    definer: definer.then(|| self.state.principal.name.clone()),
+                    // Captured again with the new query, as Spark's `ALTER VIEW .. AS` does.
+                    cte_precedence: Some(cte_precedence),
+                    functions,
+                    // A new text: the store gives it a new version (review r10 M10).
+                    revision: 0,
+                    author: self.state.principal.name.clone(),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {

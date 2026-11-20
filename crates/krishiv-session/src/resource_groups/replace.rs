@@ -18,6 +18,8 @@ use super::{ResourceGroups, canonical, read_file};
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 impl ResourceGroups {
+    /// The etag of the file at `path` as it is on disk now, or `None` when it cannot be read.
+    ///
     /// The etag of the file at `path` as it is on disk now (`file_etag`), or `None` when it cannot
     /// be read. It equals [`ResourceGroups::etag`] while the file holds the loaded document.
     #[must_use]
