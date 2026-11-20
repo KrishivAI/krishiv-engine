@@ -1105,7 +1105,7 @@ impl DataFrame {
             return Err(e.clone());
         }
         let plan = self.plan_with_checkpoints().await?;
-        let analyzed = self.session.analyze_in(&plan, &env, text).await?;
+        let (analyzed, through_views) = self.session.analyze_in(&plan, &env, text).await?;
         let mut env = env;
         // A trial's analysis is kept as an ordinary one: later checks are audited and told to
         // the policy.
@@ -1114,12 +1114,6 @@ impl DataFrame {
         if let Some(t) = text {
             env.set_text(t);
         }
-        let through_views = std::mem::take(
-            &mut *env
-                .view_keeps
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
-        );
         env.observers = Arc::new(self.observers_through(through_views));
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),

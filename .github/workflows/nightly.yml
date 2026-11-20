@@ -67,6 +67,13 @@ jobs:
         env:
           KRISHIV_TIGHT_MEMORY_CASES: "256"
         run: cargo nextest run --workspace --all-features --locked --no-tests=pass
+      # Needs Java 21 or Docker and the network (the driver jar), so it is ignored in the
+      # workspace run above (P3-T101 note §17). The Java toolcache is removed above; the
+      # script falls back to Docker.
+      - name: Flight SQL JDBC end to end
+        run: >-
+          cargo nextest run -p krishiv-cli --features flight-sql --locked --test flight_sql
+          --run-ignored only -E 'test(jdbc)'
       - name: doctests (all features)
         run: cargo test --workspace --doc --all-features --locked
       - name: docs (all features)

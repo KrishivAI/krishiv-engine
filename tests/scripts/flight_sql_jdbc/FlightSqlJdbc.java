@@ -6,6 +6,7 @@
 // SQL client's answer.
 //
 //   java -cp flight-sql-jdbc-driver.jar FlightSqlJdbc.java <url> <q1> <q1 with ?> <date for ?>
+//     [<url with user= and password=> <url with another user=>]
 //
 // Prints, one per line:
 //   QUERY <name>, then COL <label>|<java.sql.Types code>|<precision>|<scale> per column and
@@ -18,7 +19,9 @@
 //   TYPES <the type names of getTypeInfo, comma-separated>;
 //   CATALOGS, SCHEMAS <TABLE_CAT of getCatalogs, TABLE_SCHEM of getSchemas, comma-separated>;
 //   COLUMNS <COLUMN_NAME:TYPE_NAME of getColumns for the table, comma-separated> (GetTables with
-//     include_schema underneath).
+//     include_schema underneath);
+//   with the two Basic URLs (design §3.1): BASIC <rows of q1 as a Statement over the first>,
+//     BASIC_WRONG refused (the second, another principal's name with the token, cannot connect).
 // Exits 1 with a message on the first failure.
 
 import java.math.BigDecimal;
@@ -84,8 +87,9 @@ public final class FlightSqlJdbc {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 4) {
-            System.err.println("usage: FlightSqlJdbc <url> <q1> <q1 with ?> <date for ?>");
+        if (args.length != 4 && args.length != 6) {
+            System.err.println(
+                "usage: FlightSqlJdbc <url> <q1> <q1 with ?> <date for ?> [<basic url> <wrong basic url>]");
             System.exit(2);
         }
         String url = args[0];
@@ -136,6 +140,34 @@ public final class FlightSqlJdbc {
             System.err.println("JDBC failed: " + e);
             e.printStackTrace();
             System.exit(1);
+        }
+        if (args.length == 6) {
+            basic(args[4], args[5], args[1]);
+        }
+    }
+
+    /** Basic: `user=` and `password=` in the URL (the driver's handshake), then the wrong name. */
+    private static void basic(String url, String wrong, String q1) {
+        try (Connection conn = DriverManager.getConnection(url);
+                Statement st = conn.createStatement();
+                ResultSet rs = st.executeQuery(q1)) {
+            int rows = 0;
+            while (rs.next()) {
+                rows++;
+            }
+            System.out.println("BASIC " + rows);
+        } catch (SQLException e) {
+            System.err.println("JDBC failed: " + e);
+            e.printStackTrace();
+            System.exit(1);
+        }
+        try (Connection conn = DriverManager.getConnection(wrong);
+                Statement st = conn.createStatement();
+                ResultSet rs = st.executeQuery("SELECT 1")) {
+            System.err.println("JDBC failed: another principal's name with the token connected");
+            System.exit(1);
+        } catch (SQLException e) {
+            System.out.println("BASIC_WRONG refused");
         }
     }
 }
