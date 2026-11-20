@@ -229,6 +229,12 @@ pub(super) struct Resolver<'a> {
     pub(super) frame: Option<Arc<super::sqlfn::Frame>>,
     /// The SQL functions open, outermost first, to catch recursion.
     pub(super) fn_path: Vec<String>,
+    /// The relations (by address, each with its representative) of the permanent views' texts
+    /// ([`AnalysisContext::stored_view_texts`]); gathered only when the query has variables.
+    pub(super) view_nodes: HashSet<usize>,
+    /// The relation being resolved, or one around it, is in a permanent view's text: no session
+    /// variable resolves (review r5 Z2).
+    pub(super) in_stored_view: bool,
     /// SQL function calls inlined so far in this analysis (a budget).
     pub(super) sql_calls: usize,
     /// The first aggregate over a nondeterministic argument: Spark checks
@@ -244,6 +250,9 @@ pub(super) struct Resolver<'a> {
     pub(super) declared: HashMap<AttrId, Arc<str>>,
     /// The attributes that carry a column comment, by id (Spark's `comment` field metadata; see `comments`).
     pub(super) comments: HashMap<AttrId, Arc<str>>,
+    /// A `Hint` relation was resolved in this analysis (or in the prefix a warm start seeded from), so
+    /// the hint passes have something to do; without one they skip their walks of the whole plan.
+    pub(super) saw_hint: bool,
 }
 
 type Resolved = (
@@ -295,11 +304,14 @@ pub(super) fn resolve(
         lambdas: Vec::new(),
         frame: None,
         fn_path: Vec::new(),
+        view_nodes: HashSet::new(),
+        in_stored_view: false,
         sql_calls: 0,
         pending_nondeterministic: None,
         built_ids: std::collections::HashSet::new(),
         declared: HashMap::new(),
         comments: HashMap::new(),
+        saw_hint: false,
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -308,6 +320,7 @@ pub(super) fn resolve(
     let env = r.env(Vec::new(), 0, Vec::new());
     r.root_env = Some(Arc::clone(&env));
     r.canonicalize(plan.root());
+    r.gather_view_nodes();
     if let Some(entry) = warm {
         r.seed_prefix(entry, plan.root(), &env);
     }
@@ -322,9 +335,20 @@ pub(super) fn resolve(
         None
     };
     // What the hints read, before they are dropped (P3-T062 review r-m1).
-    let hinted = super::reads::hint_reads(&rel.plan);
-    // Hints name relations of their resolved subtree.
-    let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
+    // Both passes walk the whole plan, so a plan that resolved no hint skips them (a debug build checks
+    // that the flag agrees with the walk).
+    let (hinted, root, warnings) = if r.saw_hint {
+        let hinted = super::reads::hint_reads(&rel.plan);
+        // Hints name relations of their resolved subtree.
+        let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
+        (hinted, root, warnings)
+    } else {
+        debug_assert!(
+            !super::hints::has_hint(&rel.plan),
+            "a Hint relation reached the plan without the resolver seeing it"
+        );
+        (Default::default(), Arc::clone(&rel.plan), Vec::new())
+    };
     // Subqueries to joins, after everything resolved (P2-T071c).
     let root = super::subquery::rewrite(
         &root,
@@ -534,6 +558,32 @@ impl Resolver<'_> {
         }
     }
 
+    /// Fills [`Self::view_nodes`] when anything a permanent view's text must not read is there to
+    /// read (a session variable or script local): every relation under one of the texts, and its
+    /// representative, so a relation equal to one of them is resolved as view text too (which only
+    /// ever hides a variable).
+    fn gather_view_nodes(&mut self) {
+        let vars = &self.ctx.variables;
+        if self.ctx.stored_view_texts.is_empty()
+            || (vars.variables.is_empty() && vars.locals.is_empty())
+        {
+            return;
+        }
+        let mut nodes = Vec::new();
+        for root in self.ctx.stored_view_texts.roots() {
+            let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(root), |node| {
+                if let crate::walk::Node::Plan(p) = node {
+                    nodes.push(addr(p));
+                    if let Some(rep) = self.canon.get(&addr(p)) {
+                        nodes.push(addr(&**rep));
+                    }
+                }
+                std::ops::ControlFlow::<()>::Continue(())
+            });
+        }
+        self.view_nodes.extend(nodes);
+    }
+
     pub(super) fn rep(&self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         self.canon
             .get(&addr(&**p))
@@ -609,7 +659,15 @@ impl Resolver<'_> {
                 continue;
             }
             let (lo, saved) = (self.next_id, self.op_outer.take());
-            let mut r = match self.node(&p, env) {
+            // A view text's relation, and everything resolved while it is (its expressions'
+            // subqueries, the plans it is rewritten to), reads no session variable.
+            let outside_view = !self.in_stored_view;
+            self.in_stored_view |= self.view_nodes.contains(&key.0);
+            let resolved = self.node(&p, env);
+            if outside_view {
+                self.in_stored_view = false;
+            }
+            let mut r = match resolved {
                 Ok(r) => r,
                 // A select-list generator runs below its projection: see
                 // `generator_over_lateral_alias`.
@@ -1512,5 +1570,22 @@ impl Resolver<'_> {
             }
         }
         out
+    }
+}
+
+impl<'a> Resolver<'a> {
+    /// The session variables a name may read where resolution is: none in a permanent view's text.
+    pub(super) fn variables(&self) -> &'a super::VariableSnapshot {
+        static NONE: super::VariableSnapshot = super::VariableSnapshot {
+            variables: BTreeMap::new(),
+            version: 0,
+            locals: Vec::new(),
+        };
+        let ctx: &'a AnalysisContext = self.ctx;
+        if self.in_stored_view {
+            &NONE
+        } else {
+            &ctx.variables
+        }
     }
 }

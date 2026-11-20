@@ -46,17 +46,53 @@ Paths are relative to this crate.
   future, whatever the row's state (review M4)
 - `src/statement.rs` `GetFlightInfo(CommandStatementQuery)` (slot, `Operation`, classify with `sql_query_with`, a
   command runs once and is stored), `DoGet(TicketStatementQuery)` (re-analysis with the pinned clock,
-  `SCHEMA_CHANGED`, the stored rows of a command), `CancelFlightInfo` (only the operations live on the handle, `Payload::live`); marks are drop guards released in reverse
+  `SCHEMA_CHANGED`, the stored rows of a command), `described` (the announced schemas carry `ARROW:FLIGHT:SQL:PRECISION`/`SCALE`
+  on decimal columns, note §17 A3; the batches none), `CancelFlightInfo` (only the operations live on the handle, `Payload::live`); marks are drop guards released in reverse
   (operation, fetch, response budget, call; §16 M3)
+- `src/update.rs` `DoPut(CommandStatementUpdate)` (design §4.3, §16 M2): classified with `sql_query_with` (a query
+  is `KRISHIV_FLIGHT_SQL_QUERY_AS_UPDATE`, nothing runs), run once under an `Operation`; `record_count` from a
+  `num_affected_rows` column, else 0 (note §17 A2: Arrow's JDBC driver reads -1 as a result set and runs it again); a cookie-less update that marks nothing changed runs in a transient session
+  (no `set-cookie`, released at the end of the call)
+- `src/prepared.rs` prepared statements (design §4.4): `CreatePreparedStatement` classifies with `sql_query_with`
+  (a parameterized statement with each `?` bound to `NULL`; nothing runs), stores a `Kind::Prepared` handle (never
+  evicted) and marks the session changed; `dataset_schema` of every query, `parameter_schema` one nullable field per
+  marker typed from its context (note §17 A1: `krishiv_session::parameter_types::marker_types` over the `NULL`-bound
+  analysis, `Session::insert_parameter_types` for an `INSERT ... VALUES` cell, else a string); `DoPut(CommandPreparedStatementQuery)` binds one row (`Session::bind_parameters`, literals as
+  `EXECUTE IMMEDIATE ... USING`), `GetFlightInfo` of it runs as §4.1 in the handle's session,
+  `DoPut(CommandPreparedStatementUpdate)` runs once per row (all bound first; counts summed, a run that reports
+  none counts 0; over `maxBatchRows` `KRISHIV_FLIGHT_SQL_INVALID_PARAMETERS`, 07001); `ClosePreparedStatement` of a gone or
+  foreign handle is OK; every call but create is handle-carrying (`handle_call`)
+- `src/metadata.rs` catalog metadata (design §5): `GetCatalogs`, `GetDbSchemas`, `GetTables`, `GetTableTypes` and the
+  key commands; `GetFlightInfo` answers the fixed schema and a ticket that is the command (no session), `DoGet` runs it
+  in the call's session (cookie-less: transient, no `set-cookie`) under `metadataTimeout`
+  (`KRISHIV_FLIGHT_SQL_METADATA_TIMEOUT`, `DEADLINE_EXCEEDED`); reads `Session::catalog()` (`list_embedded_databases`,
+  `list_tables`: the `SHOW` checks); schemas and tables of `spark_catalog` only (declared catalogs list none yet),
+  temporary views once with the empty catalog (`GetDbSchemas` lists `("", "global_temp")`, and `("", "")` while local
+  temp views exist); a namespace a pattern matched whose `SHOW TABLES IN` is refused is absent (an exact name is
+  refused); Flight SQL patterns (`%`, `_`, `\`) ignoring case; `include_schema` reads each schema through
+  `schema_for_metadata` (`Browse`, as `DESCRIBE`), over `maxSchemaTables` is `KRISHIV_FLIGHT_SQL_SCHEMA_TABLES_LIMIT`
+  (54000), a table whose schema fails is skipped and logged; a refused `global_temp` hides the temporary views and
+  their schemas unless named exactly (`global\_temp`); the statement-gate wait is inside the timeout; key
+  commands empty with FlightSql.proto's schemas after a `tableExists` check (a catalog alone means its current
+  database)
 - `src/gate.rs` `FlightGate` (design §16 m5): the tonic `FlightService` in front of the arrow-rs dispatch; every call
   is a `FlightRpc` (method + command type URL or action type) and `check_flight` (exhaustive, no wildcard) answers what
-  65a does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
-  session work, counted `unsupported`; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, the actions it lets through; counted `list_actions`, no session)
-- `src/service.rs` the arrow-rs `FlightSqlService` impl: drain check and caller first; Handshake echoes the bearer;
+  the server does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
+  session work, counted `unsupported`; `DoPut` and the prepared-statement actions are dispatched here (first message peeked; the create's answer carries the cookie), not by arrow-rs; the session-option actions too; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, `CreatePreparedStatement`, `ClosePreparedStatement`, `SetSessionOptions`, `GetSessionOptions`, `CloseSession`, the actions it lets through; counted `list_actions`, no session)
+- `src/service.rs` the arrow-rs `FlightSqlService` impl: caller first, and new work (handshake, statements, updates, prepared-statement create/execute/bind, `GetSqlInfo` info; `admit_new`) refused with `KRISHIV_SERVER_DRAINING` (`FAILED_PRECONDITION`) while the drain flag is set (fetches of held tickets and cancels still served, T066 §5.1); Handshake echoes the bearer
+  (a `Basic` login's password as `Bearer`, note §3.1; `Basic` is decoded by Connect's `AuthLayer` on this surface only);
   `GetSqlInfo` without a session; `CancelFlightInfo` and the deprecated `CancelQuery` (a malformed ticket is
   `INVALID_HANDLE.FORMAT`)
 - `tests/service.rs` end to end over a Connect listener with token auth (round trip, cookie and cookie-less sessions,
   commands once, re-fetch clock, owner binding, cancel, limits, auth)
+- `src/session_options.rs` Flight's session options (design §3.2; Flight.proto messages declared here with prost,
+  arrow-flight 60 has none): `SetSessionOptions` (`catalog`/`schema` set the current catalog/database, other keys
+  `check_static` -> `authorize_set_key` -> `conf.set`, valueless = unset; marks the session changed, sets the cookie,
+  under the statement gate), `GetSessionOptions` (`conf().entries()` minus `is_redacted`, plus `catalog`/`schema`;
+  cookie-less: transient session), `CloseSession` (close then release; always `CLOSED`)
+- `src/xdbc_info.rs` `xdbc_type_info_data()` (design §5): the `GetXdbcTypeInfo` table, built once in `Inner`, one row
+  per Spark type a column can have (Spark SQL names; all 13 interval field ranges, each with its subcode; complex,
+  variant, geo and `VOID` types have no XDBC code and are not listed); served without a session, counted `xdbc_type_info`
 - `src/sql_info.rs` `sql_info_data(&ServerInfo)` (design §5): the `GetSqlInfo` table (arrow-flight `SqlInfoDataBuilder`):
   name `Krishiv`, not read-only, SQL yes, Substrait no, transactions none (ADBC reads it at connect), cancel yes,
   backtick quotes, case-insensitive identifiers; versions, keywords and the four function lists come from the caller

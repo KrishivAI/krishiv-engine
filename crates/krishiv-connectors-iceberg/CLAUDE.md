@@ -11,7 +11,7 @@ and the manifest cache since PR-25d; commits T027.
 Iceberg table connector. The only crate that depends on `iceberg` (iceberg-rust, Arrow 58).
 
 ## Layout
-`src/lib.rs` the public items (`StorageRegistration`, `IcebergTable`, `IcebergTableProvider`, module `plan`) · `src/iceberg_v0/` (private; every item
+`src/lib.rs` the public items (`StorageRegistration`, `IcebergTable` (`from_metadata`: a table whose metadata a catalog returned, no metadata file read), `IcebergMetadata`, `IcebergTableProvider`, module `plan`, feature `testing`: `testing::write_table`, a small table for other crates' tests) · `src/iceberg_v0/` (private; every item
 that names `iceberg`): `storage.rs` iceberg's `Storage`/`StorageFactory` (`#[typetag::serde]`, tag `krishiv`)
 over `krishiv-io`'s `IoContext`, the process registry of registration names, `iceberg::Runtime` on the
 scheduler's I/O runtime, error mapping both ways (a Krishiv error keeps its class through iceberg-rust) ·
@@ -200,6 +200,17 @@ summaries, partition tuples and metrics (`PruneMode::Conservative` for T027 vali
 `prop_tests.rs` (`prune_never_skips_a_matching_row`).
 Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 `research/p3/t022a-iceberg-spark-types.md` in krishiv-internal).
+
+## Write conformance and round trip (PR-53b)
+`write_conformance_tests.rs`: two `#[ignore]`d tests run by `tests/scripts/iceberg_write_conformance.sh` (Docker; nightly job
+`iceberg-write-conformance`): Krishiv's append sink writes `unpart`/`part`/`v3`/`v3part` into a Hadoop-catalog layout,
+Spark 4.1.0 + Iceberg 1.12.0 (`gen_iceberg_write_readback.py`) reads and appends on top, Krishiv compares and reads Spark's
+result. `roundtrip_tests.rs`: two `#[ignore]`d steps of `tests/scripts/iceberg_roundtrip.sh` (nightly `iceberg-roundtrip`):
+Spark makes `mor2`/`mor3`/`evolved` (position deletes, a DV, a promoted and a renamed column, a spec added), Krishiv
+reads them, appends and runs copy-on-write DELETE/UPDATE (`cow_tests`' `Dml`, over `sink_tests`' `Catalog::with_metadata` on
+Spark's metadata), Spark time travels to Krishiv's snapshots and runs merge-on-read DML on top, Krishiv reads the
+result. Pending, not stubbed: Krishiv merge-on-read writes, MERGE through SQL. See
+`tests/scripts/iceberg_write_conformance.README.md`.
 
 ## Invariants
 - Isolated `iceberg` crate (Arrow 58) crossing to Arrow 60 via the C Data Interface; only values iceberg-rust returns

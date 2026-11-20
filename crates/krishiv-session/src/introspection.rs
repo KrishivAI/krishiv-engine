@@ -291,6 +291,7 @@ impl Session {
         }
         Ok(self
             .stored_relation(name)
+            .await
             .map(|t| {
                 t.columns
                     .iter()
@@ -383,8 +384,13 @@ impl Session {
         }
     }
 
-    fn require_namespace(&self, namespace: &str) -> Result<(), KrishivError> {
-        if self.state.catalog.store.has_namespace(namespace) {
+    /// `SCHEMA_NOT_FOUND` unless the session catalog has `namespace`; with `named` (the statement
+    /// wrote the name), also for one the principal may not list, exactly as for a missing one
+    /// (review r2 R4: `database_exists`'s rule, `Session::namespace_hidden`).
+    async fn require_namespace(&self, namespace: &str, named: bool) -> Result<(), KrishivError> {
+        if self.state.catalog.store.has_namespace(namespace)
+            && !(named && self.namespace_hidden(namespace).await)
+        {
             Ok(())
         } else {
             Err(SchemaNotFound {
@@ -395,7 +401,7 @@ impl Session {
     }
 
     /// The namespace a `SHOW ... IN name` names, else the current one.
-    fn show_namespace(&self, name: Option<&DdlName>) -> Result<String, KrishivError> {
+    async fn show_namespace(&self, name: Option<&DdlName>) -> Result<String, KrishivError> {
         let env = self.query_env();
         let ns = match name {
             Some(n) => self.namespace_name(n, &env)?,
@@ -414,7 +420,7 @@ impl Session {
             }
         };
         if !is_global_namespace(&ns) {
-            self.require_namespace(&ns)?;
+            self.require_namespace(&ns, name.is_some()).await?;
         }
         Ok(ns)
     }
@@ -455,14 +461,34 @@ impl Session {
                         .ordered_frame(cols::SHOW_TABLES, &["isTemporary"], rows)
                         .await;
                 }
-                let ns = self.show_namespace(namespace.as_ref())?;
+                // `SHOW TABLES IN cat.ns` of a declared catalog: the catalog's own listing.
+                if let Some(n) = namespace {
+                    let parts = crate::access::ddl_parts(n, &self.query_env())?;
+                    if let [catalog, ns @ ..] = parts.as_slice()
+                        && !ns.is_empty()
+                        && let Some(found) = self.declared_tables(catalog, ns).await
+                    {
+                        let label = ns.join(".");
+                        let rows: Vec<Vec<Cell>> = found?
+                            .iter()
+                            .filter(|t| keep(pattern.as_ref(), t))
+                            .map(|t| vec![s(&label), s(t), s("false")])
+                            .collect();
+                        return self
+                            .ordered_frame(cols::SHOW_TABLES, &["isTemporary"], rows)
+                            .await;
+                    }
+                }
+                let ns = self.show_namespace(namespace.as_ref()).await?;
                 if is_global_namespace(&ns) {
                     return self
                         .global_views_frame(cols::SHOW_TABLES, pattern.as_ref())
                         .await;
                 }
-                let mut rows: Vec<Vec<Cell>> = store
-                    .tables_in(&ns)
+                // Only what the principal may see (P3-T062 §2.4).
+                let mut rows: Vec<Vec<Cell>> = self
+                    .listed_relations(store.tables_in(&ns))
+                    .await
                     .iter()
                     .filter(|t| keep(pattern.as_ref(), &t.name))
                     .map(|t| vec![s(&ns), s(&t.name), s("false")])
@@ -487,14 +513,15 @@ impl Session {
             ShowKind::Views {
                 namespace, pattern, ..
             } => {
-                let ns = self.show_namespace(namespace.as_ref())?;
+                let ns = self.show_namespace(namespace.as_ref()).await?;
                 if is_global_namespace(&ns) {
                     return self
                         .global_views_frame(cols::SHOW_VIEWS, pattern.as_ref())
                         .await;
                 }
-                let mut rows: Vec<Vec<Cell>> = store
-                    .tables_in(&ns)
+                let mut rows: Vec<Vec<Cell>> = self
+                    .listed_relations(store.tables_in(&ns))
+                    .await
                     .iter()
                     .filter(|t| t.view.is_some() && keep(pattern.as_ref(), &t.name))
                     .map(|t| vec![s(&ns), s(&t.name), s("false")])
@@ -563,16 +590,67 @@ impl Session {
                 self.frame_with_order(cols::SHOW_COLUMNS, &[], rows, false)
                     .await
             }
-            ShowKind::Namespaces { pattern, .. } => {
-                // `system` has no namespaces; never list the session catalog's under it.
-                let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
-                self.refuse_declared_current()?;
-                let rows = store
-                    .namespaces()
-                    .into_iter()
-                    .filter(|(n, _)| !in_system && keep(pattern.as_ref(), n))
-                    .map(|(n, _)| vec![s(n)])
-                    .collect();
+            ShowKind::Namespaces {
+                pattern, namespace, ..
+            } => {
+                // Spark's `CatalogAndNamespace`: a first part naming a catalog is that catalog,
+                // anything else a namespace of the current catalog (`LookupCatalog`, v4.2.0).
+                let parts = match namespace {
+                    Some(n) => crate::access::ddl_parts(n, &self.query_env())?,
+                    None => Vec::new(),
+                };
+                let (catalog, parent) = match parts.split_first() {
+                    Some((first, rest)) if self.is_catalog_name(first) => (first.clone(), rest),
+                    _ => (self.state.catalog.current_catalog(), parts.as_slice()),
+                };
+                if let Some(found) = self.declared_namespaces(&catalog, parent).await {
+                    let rows: Vec<Vec<Cell>> = found?
+                        .iter()
+                        .map(|n| n.join("."))
+                        .filter(|n| keep(pattern.as_ref(), n))
+                        .map(|n| vec![s(n)])
+                        .collect();
+                    return self.ordered_frame(cols::SHOW_NAMESPACES, &[], rows).await;
+                }
+                let rows = if crate::system::is_system(&catalog) {
+                    // `system` has no namespaces; never list the session catalog's under it.
+                    if !parent.is_empty() {
+                        return Err(crate::catalog_registry::schema_not_found("system", parent));
+                    }
+                    Vec::new()
+                } else {
+                    if !catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) {
+                        // The current catalog is a declared one that lists nothing here.
+                        self.refuse_declared_current()?;
+                    }
+                    // `V2SessionCatalog.listNamespaces`: every database at the top, none under an
+                    // existing one, `SCHEMA_NOT_FOUND` for anything else.
+                    let all = store.namespaces();
+                    match parent {
+                        [] => {
+                            let mut rows = Vec::new();
+                            for (n, _) in all {
+                                // Only what the principal may see (P3-T062 §2.4).
+                                if keep(pattern.as_ref(), &n) && self.may_list_namespace(&n).await {
+                                    rows.push(vec![s(n)]);
+                                }
+                            }
+                            rows
+                        }
+                        // One the principal may not list answers as a missing one (ADR 0046 §8).
+                        [db] if all.iter().any(|(n, _)| n.eq_ignore_ascii_case(db))
+                            && !self.namespace_hidden(db).await =>
+                        {
+                            Vec::new()
+                        }
+                        _ => {
+                            return Err(crate::catalog_registry::schema_not_found(
+                                crate::catalog::CATALOG,
+                                parent,
+                            ));
+                        }
+                    }
+                };
                 self.ordered_frame(cols::SHOW_NAMESPACES, &[], rows).await
             }
             ShowKind::TblProperties { name, key, .. } => {
@@ -584,7 +662,7 @@ impl Session {
                         .ordered_frame(cols::SHOW_TBLPROPERTIES, &[], Vec::new())
                         .await;
                 }
-                let table = self.stored_relation(&name)?;
+                let table = self.stored_relation(&name).await?;
                 if table.view.is_some() {
                     self.authorize_view(&name.namespace, &name.name, Privilege::Browse, &env)
                         .await?;
@@ -622,7 +700,7 @@ impl Session {
                     }
                     .into());
                 }
-                let table = self.stored_relation(&name)?;
+                let table = self.stored_relation(&name).await?;
                 // A view prints the same either way; a data source table has no serde to show,
                 // and Spark's error for it is not modelled yet.
                 if *serde && table.view.is_none() {
@@ -650,7 +728,7 @@ impl Session {
                 if self.temp_entry_of(&name, &env) {
                     return Err(unsupported("SHOW PARTITIONS on a temporary view"));
                 }
-                let table = self.stored_relation(&name)?;
+                let table = self.stored_relation(&name).await?;
                 if table.view.is_some() {
                     return Err(unsupported("SHOW PARTITIONS on a view"));
                 }
@@ -673,7 +751,7 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         self.require_current_profile("SHOW TABLE EXTENDED")?;
-        let ns = self.show_namespace(namespace)?;
+        let ns = self.show_namespace(namespace).await?;
         if is_global_namespace(&ns) {
             return Err(unsupported("SHOW TABLE EXTENDED IN global_temp"));
         }
@@ -705,7 +783,7 @@ impl Session {
             let p = self
                 .described_partition(&name, false, spec, original, "SHOW TABLE EXTENDED")
                 .await?;
-            let t = self.stored_relation(&name)?;
+            let t = self.stored_relation(&name).await?;
             // `CatalogTablePartition.simpleString`: the partition's own entries.
             let entries: Vec<(String, String)> = partition_details(&t, &p)
                 .into_iter()
@@ -723,14 +801,24 @@ impl Session {
                 .await;
         }
         let mut rows: Vec<Vec<Cell>> = Vec::new();
-        for t in self.state.catalog.store.tables_in(&ns) {
+        let tables = self.state.catalog.store.tables_in(&ns);
+        for t in self.listed_relations(tables).await {
             if !keep(Some(pattern), &t.name) {
                 continue;
             }
-            if t.view.is_some() {
-                // The information holds the view's text, as SHOW CREATE TABLE does.
-                self.authorize_view(&ns, &t.name, Privilege::Select, &self.query_env())
-                    .await?;
+            // The information holds a view's text, as SHOW CREATE TABLE does: a listed view the
+            // principal may not `Select` is left out, quietly, as a listing leaves out what it
+            // may not see (review M5), never refusing the whole listing.
+            if t.view.is_some()
+                && !krishiv_plan::analyzer::allowed(
+                    &*self.state.policy,
+                    &self.state.principal,
+                    &Self::relation_securable(&t),
+                    Privilege::Select,
+                )
+                .await
+            {
+                continue;
             }
             let mut entries = self.table_information(&t);
             if t.is_partitioned() {
@@ -845,12 +933,18 @@ impl Session {
     }
 
     /// The stored table or view `name` names (temporary views have no stored form).
-    fn stored_relation(&self, name: &TableName) -> Result<Arc<CatalogTable>, KrishivError> {
-        self.state
+    /// One the principal may not see under the grants provider reads as missing (review B3).
+    async fn stored_relation(&self, name: &TableName) -> Result<Arc<CatalogTable>, KrishivError> {
+        let table = self
+            .state
             .catalog
             .store
             .table(&name.namespace, &name.name)
-            .ok_or_else(|| name.not_found())
+            .ok_or_else(|| name.not_found())?;
+        if self.hidden(&Self::relation_securable(&table)) {
+            return Err(name.not_found());
+        }
+        Ok(table)
     }
 
     /// The (name, type, comment) of the columns of a table, view or temporary view. A permanent
@@ -895,7 +989,7 @@ impl Session {
                 .map(|c| (c.name.clone(), c.data_type.clone(), None))
                 .collect());
         }
-        let table = self.stored_relation(name)?;
+        let table = self.stored_relation(name).await?;
         if table.view.is_some() {
             self.authorize_view(&name.namespace, &name.name, privilege, &env)
                 .await?;
@@ -1010,7 +1104,7 @@ impl Session {
                         return Err(unsupported("DESCRIBE ... AS JSON of a temporary view"));
                     }
                     self.require_current_profile("DESCRIBE EXTENDED")?;
-                    let t = self.stored_relation(&name)?;
+                    let t = self.stored_relation(&name).await?;
                     let json = describe_json(&t, described.as_ref())?;
                     return self
                         .ordered_frame(cols::DESCRIBE_JSON, &[], vec![vec![s(json)]])
@@ -1047,7 +1141,7 @@ impl Session {
                 let stored = if temp {
                     None
                 } else {
-                    Some(self.stored_relation(&name)?)
+                    Some(self.stored_relation(&name).await?)
                 };
                 if let Some(t) = stored.as_ref().filter(|t| t.is_partitioned()) {
                     rows.push(vec![s("# Partition Information"), s(""), s("")]);
@@ -1074,7 +1168,7 @@ impl Session {
                 } else if mode.is_some() && stored.is_some() {
                     rows.push(vec![s(""), s(""), s("")]);
                     rows.push(vec![s("# Detailed Table Information"), s(""), s("")]);
-                    let info = self.detailed_information(&name)?;
+                    let info = self.detailed_information(&name).await?;
                     rows.extend(info.into_iter().map(|(k, v)| vec![s(k), s(v), s("")]));
                 }
                 // `ResolveDefaultColumns.getDescribeMetadata`: the columns' `DEFAULT` texts, last.
@@ -1120,6 +1214,8 @@ impl Session {
             }
             DescribeKind::Namespace { extended, name, .. } => {
                 let ns = self.namespace_name(name, &env)?;
+                // One the principal may not list reads as missing (review r2 R4).
+                self.require_namespace(&ns, true).await?;
                 let meta = self
                     .state
                     .catalog
@@ -1276,12 +1372,12 @@ impl Session {
     }
 
     /// The `# Detailed Table Information` rows of `DESCRIBE EXTENDED|FORMATTED`.
-    fn detailed_information(
+    async fn detailed_information(
         &self,
         name: &TableName,
     ) -> Result<Vec<(String, String)>, KrishivError> {
         self.require_current_profile("DESCRIBE EXTENDED")?;
-        let t = self.stored_relation(name)?;
+        let t = self.stored_relation(name).await?;
         Ok(self.table_information(&t))
     }
 

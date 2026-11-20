@@ -33,7 +33,12 @@
 //! principal whose `Select` check passes; otherwise the plan chosen with no
 //! table statistics and no distinct-value samples, with a note saying so.
 //! Its `cost` mode, a read by path and a permanent view keep `Select` (they
-//! show statistics, contents or a view's text).
+//! show statistics, contents or a view's text). `input_files`,
+//! `semantic_hash` and `same_semantics` list or hash the analyzed plan, so a
+//! `SQL SECURITY DEFINER` view's inlined query in it is asked of the reader
+//! as `EXPLAIN` asks it (`DataFrame::analyzed`, ADR 0048 A1 §3, review r3
+//! X2); `schema`, `is_local`, `is_streaming` and `explain` validate with
+//! `schema_for_metadata`, which shows no plan.
 
 pub mod types;
 
@@ -133,7 +138,7 @@ async fn analyze(
             // reads the mode: a metadata analysis here (`Browse`), then the
             // explain a principal may see (see the module docs).
             let df = frame(entry, options, e.plan.as_ref(), limits).await?;
-            df.analyzed_for_metadata().await?;
+            df.schema_for_metadata().await?;
             let mode = explain_mode(e.explain_mode)?;
             res::Result::Explain(res::Explain {
                 explain_string: df.explain_for_metadata(mode).await?,
@@ -162,7 +167,7 @@ async fn analyze(
             requested
                 .frame(session, options.clone())
                 .await?
-                .analyzed_for_metadata()
+                .schema_for_metadata()
                 .await?;
             res::Result::IsLocal(res::IsLocal { is_local })
         }
@@ -170,7 +175,7 @@ async fn analyze(
             // Analyzed so that an invalid plan fails as in Spark.
             frame(entry, options, s.plan.as_ref(), limits)
                 .await?
-                .analyzed_for_metadata()
+                .schema_for_metadata()
                 .await?;
             res::Result::IsStreaming(res::IsStreaming {
                 is_streaming: false,

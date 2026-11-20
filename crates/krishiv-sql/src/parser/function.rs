@@ -39,7 +39,7 @@ impl Parser<'_> {
             // runtime for. Spark parses it permanent or temporary.
             if p.kw_at(0, "AS") {
                 p.pos += 1;
-                p.string_lit().ok_or(Fail::Syntax)?;
+                let class_name = p.string_lit().ok_or(Fail::Syntax)?;
                 if p.eat_kw("USING") {
                     loop {
                         if !(p.eat_kw("JAR") || p.eat_kw("FILE") || p.eat_kw("ARCHIVE")) {
@@ -56,7 +56,17 @@ impl Parser<'_> {
                 if temporary {
                     p.temp_function_qualifier(&name, span)?;
                 }
-                return Self::fatal(error::unsupported_function_class(span));
+                let function = name
+                    .parts
+                    .iter()
+                    .map(|part| part.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                return Self::fatal(error::unsupported_function_class(
+                    function,
+                    &class_name,
+                    span,
+                ));
             }
             p.expect_sym(Sym::LParen)?;
             let params_start = p.start();

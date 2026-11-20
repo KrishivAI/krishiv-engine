@@ -3023,8 +3023,11 @@ dependencies = [
 name = "krishiv-catalogs"
 version = "0.2.1"
 dependencies = [
+ "arrow-array 60.1.0",
  "futures",
  "krishiv-common",
+ "krishiv-connectors-iceberg",
+ "krishiv-exec",
  "krishiv-plan",
  "krishiv-session",
  "krishiv-store",
@@ -3045,6 +3048,7 @@ version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-flight",
+ "arrow-schema 60.1.0",
  "axum",
  "clap",
  "futures",
@@ -3089,6 +3093,7 @@ dependencies = [
  "arrow-schema 60.1.0",
  "insta",
  "krishiv-common",
+ "krishiv-kernels",
  "krishiv-plan",
  "krishiv-sql",
  "krishiv-types",
@@ -3113,6 +3118,7 @@ dependencies = [
  "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect",
+ "krishiv-connectors-iceberg",
  "krishiv-exec",
  "krishiv-memory",
  "krishiv-plan",
@@ -3154,6 +3160,7 @@ dependencies = [
  "arrow-data 60.1.0",
  "arrow-json",
  "arrow-ord 60.1.0",
+ "arrow-row",
  "arrow-schema 60.1.0",
  "arrow-select 60.1.0",
  "async-trait",
@@ -3167,11 +3174,13 @@ dependencies = [
  "krishiv-io",
  "krishiv-memory",
  "krishiv-optimizer",
+ "krishiv-plan",
  "krishiv-types",
  "object_store",
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
  "url",
 ]
 
@@ -3271,6 +3280,7 @@ dependencies = [
  "krishiv-memory",
  "krishiv-session",
  "krishiv-sql",
+ "krishiv-types",
  "prost",
  "tempfile",
  "tokio",
@@ -3527,6 +3537,7 @@ dependencies = [
  "prost-reflect",
  "prost-types",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-rustls",

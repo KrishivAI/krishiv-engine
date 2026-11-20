@@ -351,25 +351,18 @@ async fn a_session_with_a_running_query_is_not_swept() {
     assert_eq!(manager.sweep(), 1);
 }
 
-#[tokio::test]
-async fn a_draining_service_refuses_new_rpcs_with_unavailable() {
-    use krishiv_connect_server::service::SparkConnectService;
-    use prost::Message;
-    let manager = Arc::new(SessionManager::from_base(
-        Session::new().expect("session"),
-        SessionLimits::default(),
-    ));
-    let draining = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let service = krishiv_connect_server::ConnectService::new(manager, draining);
-    let bytes = release(ID, false).encode_to_vec();
-    let decoded =
-        krishiv_connect::wire::decode_request::<pb::ReleaseSessionRequest>(&bytes).expect("decode");
-    let e = service
-        .release_session(tonic::Request::new(decoded))
-        .await
-        .unwrap_err();
-    assert_eq!(e.code(), Code::Unavailable);
-    assert_eq!(e.message(), "server shutting down");
+/// The drain refusal (design P3-T066 §5.1): Spark Connect's own encoding, never `UNAVAILABLE`
+/// (the stock client retries that for minutes) and never with retry details.
+fn assert_draining(status: &tonic::Status, what: &str) {
+    assert_eq!(status.code(), Code::Internal, "{what}: {status:?}");
+    assert!(
+        status.message().contains("shutting down"),
+        "{what}: {status:?}"
+    );
+    assert!(
+        !format!("{status:?}").contains("RetryInfo"),
+        "{what} must not be retried"
+    );
 }
 
 #[test]
@@ -546,9 +539,10 @@ fn decoded<T: krishiv_connect::wire::Request>() -> krishiv_connect::wire::Decode
     krishiv_connect::wire::decode_request::<T>(&T::default().encode_to_vec()).expect("decode")
 }
 
-/// Every RPC answers `UNAVAILABLE` once the server drains.
+/// Once the server drains, the RPCs that prepare new work and the ones that name an unknown session
+/// are refused with `KRISHIV_SERVER_DRAINING`; the ones that serve existing work are not.
 #[tokio::test]
-async fn every_rpc_is_unavailable_once_the_server_drains() {
+async fn a_draining_service_refuses_new_work_and_serves_existing_work() {
     use krishiv_connect_server::service::SparkConnectService;
     use tonic::Request;
     let manager = Arc::new(SessionManager::from_base(
@@ -561,70 +555,151 @@ async fn every_rpc_is_unavailable_once_the_server_drains() {
     assert!(Arc::ptr_eq(service.manager(), &manager));
     // No artifact directory until an artifact is written.
     assert!(service.artifacts().root_path().is_none());
-    {
-        draining.store(true, Ordering::Release);
-        let results: Vec<(&str, tonic::Status)> = vec![
-            (
-                "CloneSession",
-                service
-                    .clone_session(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-            (
-                "GetStatus",
-                service
-                    .get_status(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-        ];
-        {
-            // The other RPCs refuse too while draining.
-            for e in [
-                service
-                    .artifact_status(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-                service
-                    .fetch_error_details(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-                service
-                    .analyze_plan(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-                service.config(Request::new(decoded())).await.unwrap_err(),
-                service
-                    .interrupt(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ] {
-                assert_eq!(e.code(), Code::Unavailable);
-            }
-            let e = service
-                .execute_plan(Request::new(decoded()))
-                .await
-                .err()
-                .expect("err");
-            assert_eq!(e.code(), Code::Unavailable);
-            let e = service
-                .reattach_execute(Request::new(decoded()))
-                .await
-                .err()
-                .expect("err");
-            assert_eq!(e.code(), Code::Unavailable);
-            let e = service
-                .release_execute(Request::new(decoded()))
-                .await
-                .unwrap_err();
-            assert_eq!(e.code(), Code::Unavailable);
-        }
-        for (rpc, status) in results {
-            assert_eq!(status.code(), Code::Unavailable, "{rpc}");
-            assert_eq!(status.message(), "server shutting down", "{rpc}");
-        }
+    draining.store(true, Ordering::Release);
+    assert_draining(
+        &service
+            .clone_session(Request::new(decoded()))
+            .await
+            .unwrap_err(),
+        "CloneSession",
+    );
+    assert_draining(
+        // Boxed: `execute_plan`'s future is over clippy's `large_futures` threshold.
+        &Box::pin(service.execute_plan(Request::new(decoded())))
+            .await
+            .err()
+            .expect("err"),
+        "ExecutePlan on an unknown session",
+    );
+    assert_draining(
+        &service
+            .analyze_plan(Request::new(decoded()))
+            .await
+            .unwrap_err(),
+        "AnalyzePlan on an unknown session",
+    );
+    assert_draining(
+        &service.config(Request::new(decoded())).await.unwrap_err(),
+        "Config on an unknown session",
+    );
+    // The RPCs of existing work are never refused as draining (they fail for their own reasons
+    // here: the request names no session).
+    // `ReleaseSession` is idempotent: it answers for a session that is not there.
+    assert!(
+        service
+            .release_session(Request::new(decoded()))
+            .await
+            .is_ok()
+    );
+    for e in [
+        service
+            .get_status(Request::new(decoded()))
+            .await
+            .unwrap_err(),
+        service
+            .fetch_error_details(Request::new(decoded()))
+            .await
+            .unwrap_err(),
+        service
+            .artifact_status(Request::new(decoded()))
+            .await
+            .unwrap_err(),
+        service
+            .interrupt(Request::new(decoded()))
+            .await
+            .unwrap_err(),
+        service
+            .release_execute(Request::new(decoded()))
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(
+            !e.message().contains("shutting down"),
+            "refused as draining: {e:?}"
+        );
+        assert_ne!(e.code(), Code::Unavailable);
     }
+    let e = service
+        .reattach_execute(Request::new(decoded()))
+        .await
+        .err()
+        .expect("err");
+    assert!(!e.message().contains("shutting down"), "{e:?}");
+}
+
+/// While draining, only an unknown id is the drain's refusal: a closed session keeps its own answer
+/// (`INVALID_HANDLE.SESSION_CLOSED`), and a live one is still served.
+#[tokio::test]
+async fn a_draining_service_maps_only_an_unknown_session_to_draining() {
+    use krishiv_connect_server::service::SparkConnectService;
+    use prost::Message;
+    use tonic::Request;
+    let manager = Arc::new(SessionManager::from_base(
+        Session::new().expect("session"),
+        SessionLimits::default(),
+    ));
+    let draining = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let service =
+        krishiv_connect_server::ConnectService::new(Arc::clone(&manager), Arc::clone(&draining));
+    let local = local_caller();
+    let user = || {
+        Some(pb::UserContext {
+            user_id: "someone".to_owned(),
+            ..Default::default()
+        })
+    };
+    let config = |id: &str| {
+        let request = pb::ConfigRequest {
+            session_id: id.to_owned(),
+            user_context: user(),
+            ..Default::default()
+        };
+        krishiv_connect::wire::decode_request::<pb::ConfigRequest>(&request.encode_to_vec())
+            .expect("decode")
+    };
+    let live = "11111111-1111-4111-8111-111111111111";
+    let closed = "22222222-2222-4222-8222-222222222222";
+    let unknown = "33333333-3333-4333-8333-333333333333";
+    manager
+        .get_or_create(&local, live, None, "someone")
+        .expect("live");
+    manager
+        .get_or_create(&local, closed, None, "someone")
+        .expect("closed");
+    let _: pb::ReleaseSessionResponse = service
+        .release_session(Request::new(
+            krishiv_connect::wire::decode_request::<pb::ReleaseSessionRequest>(
+                &release(closed, false).encode_to_vec(),
+            )
+            .expect("decode"),
+        ))
+        .await
+        .expect("release")
+        .into_inner();
+    draining.store(true, Ordering::Release);
+    assert_draining(
+        &service
+            .config(Request::new(config(unknown)))
+            .await
+            .unwrap_err(),
+        "Config on an unknown session",
+    );
+    let e = service
+        .config(Request::new(config(closed)))
+        .await
+        .unwrap_err();
+    assert!(!e.message().contains("shutting down"), "closed: {e:?}");
+    // The status carries the session's own error class (in its ErrorInfo details), not the drain's.
+    assert!(
+        format!("{e:?}").contains("INVALID_HANDLE.SESSION_CLOSED"),
+        "closed: {e:?}"
+    );
+    // A live session is served: the request gets as far as its own (empty) operation.
+    let e = service
+        .config(Request::new(config(live)))
+        .await
+        .unwrap_err();
+    assert!(e.message().contains("OPTYPE_NOT_SET"), "live: {e:?}");
 }
 
 /// A connection cap past the semaphore's capacity is clamped, not a panic.

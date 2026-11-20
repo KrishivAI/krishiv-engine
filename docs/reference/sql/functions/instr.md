@@ -25,7 +25,7 @@ instr(str, substr)
 | Kind | scalar (function) |
 | Added in Spark | 1.5.0 |
 | In Spark profiles | 3.5 and later |
-| Arguments | 2 |
+| Arguments | [2, 3, 4] |
 | Deterministic | yes |
 
 ## Examples

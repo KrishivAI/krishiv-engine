@@ -14,7 +14,7 @@ use krishiv_common::config::{
 };
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
-    ConsumerHandle, ConsumerId, MemoryPool, Reservation, SpillOwner, SpillSignal, SpillStats,
+    ConsumerHandle, ConsumerId, MemoryPool, Reservation, Seat, SpillOwner, SpillSignal, SpillStats,
 };
 
 use crate::cancel::CancellationToken;
@@ -287,6 +287,7 @@ fn insert_in_order<T>(
 #[cfg(test)]
 mod forward_observed_tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use arrow_array::{Int64Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
@@ -354,6 +355,55 @@ mod forward_observed_tests {
         let e = task.forward_observed_to(&parent).unwrap_err();
         assert_eq!(e.error_class().name(), "UNABLE_TO_ACQUIRE_MEMORY", "{e}");
         assert_eq!(task.pool().reserved(), 0);
+    }
+
+    /// A take racing the senders never splits a partial's charge from its insert: whatever the
+    /// interleaving, the pool holds exactly the bytes of the partials still retained.
+    #[test]
+    fn a_take_racing_partials_keeps_the_charge_equal_to_what_is_held() {
+        let finalizer = Finalizer::count_for_tests("m").unwrap();
+        let bytes = states(64).get_array_memory_size();
+        for round in 0..20_u32 {
+            let ctx = query(1, root().child("q", None));
+            let taken_partials = AtomicUsize::new(0);
+            std::thread::scope(|scope| {
+                for lane in 0..4_usize {
+                    let (ctx, finalizer) = (&ctx, &finalizer);
+                    scope.spawn(move || {
+                        for i in 0..50_u32 {
+                            ctx.observe_partial(finalizer, (round * 1_000 + i, lane), states(64))
+                                .unwrap();
+                        }
+                    });
+                }
+                scope.spawn(|| {
+                    for _ in 0..200 {
+                        let (taken, _held) = ctx.take_observed_states();
+                        taken_partials.fetch_add(
+                            taken.values().map(|o| o.partials.len()).sum::<usize>(),
+                            Ordering::Relaxed,
+                        );
+                        std::thread::yield_now();
+                    }
+                });
+            });
+            let held: usize = crate::sync::lock(&ctx.observed)
+                .values()
+                .map(|o| o.partials.len())
+                .sum();
+            assert_eq!(
+                ctx.pool().reserved(),
+                held * bytes,
+                "round {round}: {held} partials held"
+            );
+            let (rest, held_back) = ctx.take_observed_states();
+            let total = taken_partials.load(Ordering::Relaxed)
+                + rest.values().map(|o| o.partials.len()).sum::<usize>();
+            // No partial is lost: every one sent (4 lanes x 50) is in some take.
+            assert_eq!(total, 200, "round {round}: partials lost between takes");
+            drop((rest, held_back));
+            assert_eq!(ctx.pool().reserved(), 0);
+        }
     }
 }
 
@@ -437,11 +487,11 @@ impl QueryContext {
         states: arrow_array::RecordBatch,
     ) -> Result<()> {
         let bytes = states.get_array_memory_size();
-        {
-            let mut held = lock(&self.observed_memory);
-            let reservation = held.get_or_insert_with(|| self.observed_consumer().reservation());
-            reservation.try_grow(bytes)?;
-        }
+        // Both locks, memory first (the order `take_observed_each` takes them in): the charge and
+        // the insert are one step, so a take never splits them.
+        let mut held = lock(&self.observed_memory);
+        let reservation = held.get_or_insert_with(|| self.observed_consumer().reservation());
+        reservation.try_grow(bytes)?;
         let mut all = lock(&self.observed);
         let o = all
             .entry((finalizer.name().to_owned(), finalizer.instance()))
@@ -464,9 +514,9 @@ impl QueryContext {
     /// is released all the same.
     #[doc(hidden)]
     pub fn forward_observed_to(&self, parent: &Self) -> Result<()> {
-        let taken = std::mem::take(&mut *lock(&self.observed));
-        // Dropped on every exit, an error included: what it still holds goes back.
-        let mut held = lock(&self.observed_memory).take();
+        // The states and their charge leave together, as in `take_observed_each`. The held
+        // reservation is dropped on every exit, an error included: what it still holds goes back.
+        let (taken, mut held) = self.take_observed_states();
         for o in taken.into_values() {
             for (source, states) in o.order.into_iter().zip(o.partials) {
                 if let Some(reservation) = held.as_mut() {
@@ -505,6 +555,13 @@ impl QueryContext {
     #[doc(hidden)]
     pub fn observed_each(&self) -> BTreeMap<String, Result<arrow_array::RecordBatch>> {
         let all = lock(&self.observed);
+        self.finalize_observed(&all)
+    }
+
+    fn finalize_observed(
+        &self,
+        all: &BTreeMap<(String, u32), Observed>,
+    ) -> BTreeMap<String, Result<arrow_array::RecordBatch>> {
         // Keys sort by name then instance: the last one of a name overwrites.
         let last: BTreeMap<&String, &Observed> =
             all.iter().map(|((name, _), o)| (name, o)).collect();
@@ -526,10 +583,21 @@ impl QueryContext {
     /// stream) keeps no observation memory. A later read sees only states sent since.
     #[doc(hidden)]
     pub fn take_observed_each(&self) -> BTreeMap<String, Result<arrow_array::RecordBatch>> {
-        let out = self.observed_each();
-        lock(&self.observed).clear();
-        *lock(&self.observed_memory) = None;
+        let (taken, held) = self.take_observed_states();
+        let out = self.finalize_observed(&taken);
+        // The retained states go back to the pool only after they were finalized.
+        drop(taken);
+        drop(held);
         out
+    }
+
+    /// The retained states and their reservation, left together under both locks: a partial sent
+    /// meanwhile lands wholly before (and is reported) or wholly after (and is kept, charged,
+    /// for a later read), never half of each.
+    fn take_observed_states(&self) -> (BTreeMap<(String, u32), Observed>, Option<Reservation>) {
+        let mut held = lock(&self.observed_memory);
+        let mut all = lock(&self.observed);
+        (std::mem::take(&mut *all), held.take())
     }
 
     /// The query id.
@@ -1047,6 +1115,14 @@ impl MemoryHandle {
     /// The spill signal: publish spillable bytes here.
     pub fn signal(&self) -> &Arc<SpillSignal> {
         &self.signal
+    }
+
+    /// A seat of this consumer in the query's cohort `name` (`None` outside a query): see
+    /// [`ConsumerHandle::join_cohort`]. While it holds, another driver's arbitration round
+    /// waits for this consumer's memory before it fails a request.
+    #[must_use]
+    pub fn join_cohort(&self, name: &'static str) -> Option<Seat> {
+        self.consumer.join_cohort(name)
     }
 
     pub(crate) fn consumer(&self) -> &Arc<ConsumerHandle> {

@@ -17,7 +17,10 @@ import krishiv.sql.functions
 
 
 def _bindable(port: int) -> bool:
+    # SO_REUSEADDR: a closed connection's TIME_WAIT entry (macOS keeps the server side of the
+    # test's own connection there) must not make a freed port look taken; a live listener still fails.
     with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", port))
         except OSError:
