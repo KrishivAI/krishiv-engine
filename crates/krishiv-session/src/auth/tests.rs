@@ -12,8 +12,9 @@ use krishiv_common::principal::PrincipalKind;
 use super::config::SPARK_TOKEN_KEY;
 use super::throttle::{MAX_PEERS, key, step};
 use super::{
-    AuthConfig, AuthFailure, Authenticator, Credentials, FailureThrottle, Method, Role, SecretRef,
-    ServerAuth, StaticTokens, Surface, ThrottleConfig, bearer_token, is_auth_key,
+    AuthConfig, AuthFailure, Authenticator, BasicHeader, Credentials, FailureThrottle, Method,
+    Role, SecretRef, ServerAuth, StaticTokens, Surface, ThrottleConfig, basic_header, bearer_token,
+    is_auth_key,
 };
 
 const TOKEN_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1084,4 +1085,106 @@ fn a_transport_maps_to_its_listener_surface() {
     assert_eq!(Surface::of(Transport::Ui), Some(Surface::Ui));
     assert_eq!(Surface::of(Transport::Embedded), None);
     assert_eq!(Surface::of(Transport::Mcp), None);
+}
+
+/// The decoded `Basic` credential of `user:password` (`basic_header` of its standard base64).
+fn basic(user: &str, password: &str) -> super::BasicCredentials {
+    let encoded = basic_b64(format!("{user}:{password}").as_bytes());
+    match basic_header(&format!("Basic {encoded}")) {
+        BasicHeader::Credentials(c) => c,
+        _ => panic!("not credentials"),
+    }
+}
+
+/// Standard padded base64 (test helper).
+fn basic_b64(bytes: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(char::from(A[((n >> (18 - 6 * i)) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// `Basic` on the Flight SQL surface (P3-T101 note §3.1, owner item 5): the password is the
+/// token, the user name must be its principal's; accepted as `basic`, a wrong name or password is
+/// `Invalid` and counts toward the throttle (counted under `basic`); off the Flight surface a
+/// decoded `Basic` is refused.
+#[test]
+fn basic_binds_the_user_name_to_the_token_principal() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth = ServerAuth::new(&two_tokens(dir.path())).unwrap();
+    let now = Instant::now();
+    let right = basic("alice", TOKEN_A);
+    let ok = auth
+        .authenticate_at(
+            &Credentials::new(peer(20), Surface::FlightSql).with_basic(&right),
+            now,
+        )
+        .unwrap();
+    assert_eq!(ok.principal.name, "alice");
+    assert_eq!((ok.role, ok.method), (Some(Role::Operator), Method::Basic));
+
+    let wrong_user = basic("prometheus", TOKEN_A);
+    let wrong_password = basic("alice", TOKEN_B);
+    for (case, c) in [
+        ("wrong user", &wrong_user),
+        ("wrong password", &wrong_password),
+    ] {
+        let r = auth.authenticate_at(
+            &Credentials::new(peer(21), Surface::FlightSql).with_basic(c),
+            now,
+        );
+        assert_eq!(r, Err(AuthFailure::Invalid), "{case}");
+    }
+    // Off the Flight surface: refused even with the right pair, not counted as a guess.
+    let r = auth.authenticate_at(
+        &Credentials::new(peer(22), Surface::Connect).with_basic(&right),
+        now,
+    );
+    assert_eq!(r, Err(AuthFailure::Invalid));
+    let async_auth: &dyn Authenticator = &auth;
+    let c = Credentials::new(peer(22), Surface::Connect).with_basic(&right);
+    assert_eq!(
+        futures::executor::block_on(async_auth.authenticate(&c)),
+        Err(AuthFailure::Invalid)
+    );
+    let count = |s: Surface, m: Method| {
+        auth.failure_counts()
+            .into_iter()
+            .find(|c| c.surface == s && c.method == m)
+            .map(|c| c.count)
+    };
+    assert_eq!(count(Surface::FlightSql, Method::Basic), Some(2));
+    assert_eq!(count(Surface::FlightSql, Method::Token), Some(0));
+    assert_eq!(count(Surface::Connect, Method::Basic), Some(2));
+    // A wrong user name with the right token is a guess: it counts toward the throttle.
+    for _ in 2..ThrottleConfig::default().max_failures {
+        let c = Credentials::new(peer(21), Surface::FlightSql).with_basic(&wrong_user);
+        assert_eq!(auth.authenticate_at(&c, now), Err(AuthFailure::Invalid));
+    }
+    let c = Credentials::new(peer(21), Surface::FlightSql).with_basic(&right);
+    assert_eq!(auth.authenticate_at(&c, now), Err(AuthFailure::Throttled));
+    assert_eq!(count(Surface::FlightSql, Method::Throttle), Some(1));
+    // The password never shows in the credentials' `Debug`.
+    let shown = format!(
+        "{:?}",
+        Credentials::new(peer(1), Surface::FlightSql).with_basic(&right)
+    );
+    assert!(
+        shown.contains("alice") && !shown.contains(TOKEN_A),
+        "Debug shows the user name and never the password"
+    );
 }
