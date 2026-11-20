@@ -129,6 +129,13 @@ impl ResourceGroups {
         config::parse(json, total_memory).map(drop)
     }
 
+    /// Every problem of `json` (empty when it is valid): one per bad group, selector or
+    /// reference, each with its path.
+    #[must_use]
+    pub fn problems(json: &str, total_memory: usize) -> Vec<KrishivError> {
+        config::problems(json, total_memory)
+    }
+
     /// Swaps the group tree for the one `json` describes.
     ///
     /// Swaps the tree for the one `json` describes. A group the new document keeps (by dotted
@@ -208,7 +215,19 @@ impl ResourceGroups {
     /// `system.resource_groups`).
     #[must_use]
     pub fn rows(&self) -> Vec<GroupRow> {
-        self.shared.rows()
+        let (etag, loaded_at_ms) = {
+            let doc = self.current();
+            (
+                doc.etag.clone(),
+                i64::try_from(doc.loaded_at_ms).unwrap_or(i64::MAX),
+            )
+        };
+        let mut rows = self.shared.rows();
+        for row in &mut rows {
+            row.config_etag.clone_from(&etag);
+            row.loaded_at_ms = loaded_at_ms;
+        }
+        rows
     }
 
     /// `(running, queued)` queries of the group `id` (a dotted path such as `root.etl`).
@@ -288,5 +307,9 @@ impl AdmissionController for ResourceGroups {
 
     fn uses_estimate(&self) -> bool {
         false
+    }
+
+    fn queued_group(&self, request: &QueryRequest) -> Option<String> {
+        Some(select::select(&self.current().config, request).to_owned())
     }
 }

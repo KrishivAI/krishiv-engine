@@ -260,6 +260,8 @@ impl Shared {
                 scan_window_resets_at_ms: n
                     .scan_quota
                     .map(|_| i64::try_from(n.window_end_ms).unwrap_or(i64::MAX)),
+                config_etag: String::new(),
+                loaded_at_ms: 0,
             })
             .collect()
     }
@@ -296,6 +298,9 @@ pub struct GroupRow {
     pub(crate) memory_reserved_bytes: i64,
     pub(crate) scan_bytes_in_window: Option<i64>,
     pub(crate) scan_window_resets_at_ms: Option<i64>,
+    /// The etag and load time of the document the row came from (filled by `ResourceGroups::rows`).
+    pub(crate) config_etag: String,
+    pub(crate) loaded_at_ms: i64,
 }
 
 /// The result of asking a group for a slot.

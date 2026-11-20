@@ -168,6 +168,13 @@ pub trait AdmissionController: Send + Sync + fmt::Debug {
     fn uses_estimate(&self) -> bool {
         true
     }
+
+    /// The group this controller would queue `request` in, shown in `system.queries.resource_group`
+    /// while the query waits (a visibility rule of `system.resource_groups` needs it). `None`
+    /// (the default) leaves the column empty until the query starts.
+    fn queued_group(&self, _request: &QueryRequest) -> Option<String> {
+        None
+    }
 }
 
 /// The default controller: admits every query immediately, with no budget.

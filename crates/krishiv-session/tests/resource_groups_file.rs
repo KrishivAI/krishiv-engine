@@ -565,3 +565,136 @@ async fn a_dataframe_read_and_write_match_the_query_type_selectors() {
     let rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
     assert_eq!(rows, 2, "the select-born writes: src and out2");
 }
+
+#[tokio::test]
+async fn system_resource_groups_rows_name_the_document_they_came_from() {
+    use arrow_array::Array;
+    use arrow_array::cast::AsArray;
+    let path = write_file(
+        "etag_columns",
+        r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 4, "maxQueued": 8,
+              "subGroups": [{"name": "etl", "hardConcurrencyLimit": 2, "maxQueued": 4}]}],
+            "defaultGroup": "root.etl"}"#,
+    );
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let s = Session::builder()
+        .runtime(rt)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let batches = s
+        .sql("select config_etag, loaded_at from system.resource_groups order by group_id")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let b = &batches[0];
+    assert_eq!(b.num_rows(), 2);
+    let etags = b.column(0).as_string::<i32>();
+    assert_eq!(etags.value(0), etags.value(1), "one document, one etag");
+    assert_eq!(etags.value(0).len(), 64, "a SHA-256 in hex");
+    assert!(etags.value(0).bytes().all(|c| c.is_ascii_hexdigit()));
+    assert!(!b.column(1).is_null(0) && !b.column(1).is_null(1));
+}
+
+#[tokio::test]
+async fn a_viewer_sees_only_the_groups_holding_its_own_queries() {
+    use arrow_array::cast::AsArray;
+    use krishiv_common::error::KrishivError;
+    use krishiv_plan::analyzer::{Privilege, Securable};
+    use krishiv_session::{
+        AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, PrincipalKind,
+    };
+    /// Allows everything except `Monitor`: a caller who reads the table but sees no other tenant's
+    /// work. (The viewer role's table list is the ADR 0046 matrix; it is not widened here.)
+    struct NoMonitor;
+    impl AccessPolicy for NoMonitor {
+        fn version(&self) -> PolicyVersion {
+            PolicyVersion(1)
+        }
+        fn check<'a>(
+            &'a self,
+            _: &'a Principal,
+            _: &'a Securable,
+            privilege: Privilege,
+        ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+            let decision = if privilege == Privilege::Monitor {
+                AccessDecision::Deny {
+                    reason: "test".to_owned(),
+                }
+            } else {
+                AccessDecision::Allow
+            };
+            Box::pin(std::future::ready(Ok(decision)))
+        }
+    }
+    let path = write_file(
+        "own_groups",
+        r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 8, "maxQueued": 8,
+              "subGroups": [{"name": "etl", "hardConcurrencyLimit": 4, "maxQueued": 4,
+                             "subGroups": [{"name": "nightly", "hardConcurrencyLimit": 2, "maxQueued": 4}]},
+                            {"name": "other", "hardConcurrencyLimit": 2, "maxQueued": 4}]}],
+            "defaultGroup": "root.etl.nightly"}"#,
+    );
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let admin = Session::builder()
+        .runtime(std::sync::Arc::clone(&rt))
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    // Another tenant's query holds the same leaf for the whole test.
+    let _held = admin
+        .sql("select 1")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .execute_stream()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let viewer = Session::builder()
+        .runtime(std::sync::Arc::clone(&rt))
+        .principal(Principal::new("viewer", PrincipalKind::User))
+        .access_policy(std::sync::Arc::new(NoMonitor))
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    // The viewer's own running query: the table lists what the caller holds when the scan is
+    // planned (a query takes its group when it starts), so it asks from a second statement.
+    let _own = viewer
+        .sql("select 1")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .execute_stream()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let batches = viewer
+        .sql("select group_id, running from system.resource_groups order by group_id")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let b = &batches[0];
+    let ids = b.column(0).as_string::<i32>();
+    let got: Vec<&str> = (0..b.num_rows()).map(|i| ids.value(i)).collect();
+    assert_eq!(
+        got,
+        ["root", "root.etl", "root.etl.nightly"],
+        "its group and the ancestors, not root.other"
+    );
+    let running = b.column(1);
+    assert!(
+        running.is_null(0) && running.is_null(1),
+        "totals over other tenants are null"
+    );
+    assert_eq!(
+        running
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .value(2),
+        2,
+        "its own group keeps the counter: the other tenant's query and its own held one"
+    );
+}

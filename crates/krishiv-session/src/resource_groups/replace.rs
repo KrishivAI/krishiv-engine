@@ -61,6 +61,13 @@ impl ResourceGroups {
         if meta.permissions().readonly() {
             return Err(read_only(path, "it is not writable"));
         }
+        if owner_would_change(&meta) {
+            return Err(read_only(
+                path,
+                "it belongs to another user, and a replace would change its owner; edit it as \
+                 that user and reload",
+            ));
+        }
         Self::validate(document, self.total_memory)?;
         match write_atomically(Path::new(path), document, &meta) {
             Ok(()) => {}
@@ -89,6 +96,21 @@ fn read_only(path: &str, reason: &str) -> KrishivError {
         reason: reason.to_owned(),
     }
     .into()
+}
+
+/// Whether a new file made by this process would have another owner than `original`: a replace
+/// writes a temporary file and renames it over the original, and a process cannot give a file to
+/// another user without privilege, so a file owned by someone else is not replaced (design §5.4
+/// asks for the original's owner). The process's user is its effective user id.
+#[cfg(unix)]
+fn owner_would_change(original: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    rustix::process::geteuid().as_raw() != original.uid()
+}
+
+#[cfg(not(unix))]
+fn owner_would_change(_: &fs::Metadata) -> bool {
+    false
 }
 
 /// A write refused for want of permission or on a read-only mount.
@@ -137,4 +159,29 @@ fn write_atomically(path: &Path, text: &str, original: &fs::Metadata) -> std::io
         tracing::warn!(error = %e, "the resource group file's directory could not be synced");
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::MetadataExt;
+
+    use super::*;
+
+    #[test]
+    fn a_file_owned_by_another_user_would_change_owner() {
+        let me = fs::metadata("/proc/self").map(|m| m.uid());
+        let root_owned = fs::metadata("/usr");
+        if let (Ok(me), Ok(root_owned)) = (me, root_owned) {
+            // `/usr` belongs to root: another user's file for everyone but root.
+            assert_eq!(owner_would_change(&root_owned), me != root_owned.uid());
+        }
+        // A file this process made is its own.
+        let dir = std::env::temp_dir().join(format!("krishiv-owner-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+        let file = dir.join("f");
+        fs::write(&file, "x").unwrap_or_else(|e| panic!("{e}"));
+        let meta = fs::metadata(&file).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!owner_would_change(&meta));
+        drop(fs::remove_dir_all(&dir));
+    }
 }
