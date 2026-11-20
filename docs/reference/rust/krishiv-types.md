@@ -2,7 +2,7 @@
 description: "Internal type representations."
 ---
 
-**Version:** 0.2.0
+**Version:** 0.2.1
 
 # Module `krishiv_types`
 
@@ -35,7 +35,7 @@ Spark data type ↔ Arrow mapping.
 | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
 | `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
 | `geometry(s)` / `geography(s)` | `Struct<srid: Int32, wkb: BinaryView>`, both children non-null, always tagged | |
-| `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
+| `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, `FixedSizeList` (the vector carrier, any length), any child name |
 | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
 | `struct<...>` | `Struct` of the fields | |
 | `variant` | `Struct<metadata: BinaryView, value: BinaryView>`, both children non-null and marked with [`VARIANT_CHILD_METADATA_KEY`]; the field also carries the Arrow extension name `arrow.parquet.variant` | |
@@ -173,6 +173,19 @@ pub fn client_arrow_type(arrow: &arrow_schema::DataType) -> arrow_schema::DataTy
 pub fn edge_arrow_type(arrow: &arrow_schema::DataType) -> arrow_schema::DataType { /* ... */ }
 ```
 
+#### Function `is_vector_carrier`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+Whether `arrow` is a vector carrier: a top-level `FixedSizeList` of `Float32` or `Float64` of length `1..=`
+[`MAX_VECTOR_LENGTH`].
+
+```rust
+pub fn is_vector_carrier(arrow: &arrow_schema::DataType) -> bool { /* ... */ }
+```
+
 ### Constants and Statics
 
 #### Constant `SPARK_TYPE_METADATA_KEY`
@@ -293,6 +306,15 @@ The microseconds child of a calendar interval's struct.
 pub const CALENDAR_MICROS_FIELD: &str = "microseconds";
 ```
 
+#### Constant `MAX_VECTOR_LENGTH`
+
+The longest vector the engine carries as a `FixedSizeList`: the bound keeps `N` times a batch's rows
+far from the `i32` offsets of the plain list it becomes at an expression input.
+
+```rust
+pub const MAX_VECTOR_LENGTH: i32 = 65_536;
+```
+
 ## Module `batch`
 
 The engine's unit of data: an Arrow [`RecordBatch`] plus per-row
@@ -312,25 +334,27 @@ weight into a column, except [`Batch::concat`] of batches whose constants
 differ.
 
 ```
-use std::sync::Arc;
+fn example() -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::Arc;
 
-use arrow_array::{BooleanArray, Int64Array, RecordBatch};
-use arrow_schema::{DataType, Field, Schema};
-use krishiv_types::batch::{Batch, Weights};
+    use arrow_array::{BooleanArray, Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use krishiv_types::batch::{Batch, Weights};
 
-let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]));
-let data = RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![1, 2, 3]))])?;
+    let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]));
+    let data = RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![1, 2, 3]))])?;
 
-// A batch query's rows: weight 1 each, no weight column.
-let batch = Batch::new(data.clone());
-assert!(batch.is_unweighted());
+    // A batch query's rows: weight 1 each, no weight column.
+    let batch = Batch::new(data.clone());
+    assert!(batch.is_unweighted());
 
-// A change stream: insert row 0, retract row 1, insert row 2 twice.
-let change = Batch::with_weights(data, Weights::Column(Int64Array::from(vec![1, -1, 2])))?;
-let kept = change.filter(&BooleanArray::from(vec![false, true, true]))?;
-assert_eq!(kept.num_rows(), 2);
-assert_eq!(kept.weights(), &Weights::Column(Int64Array::from(vec![-1, 2])));
-# Ok::<(), Box<dyn std::error::Error>>(())
+    // A change stream: insert row 0, retract row 1, insert row 2 twice.
+    let change = Batch::with_weights(data, Weights::Column(Int64Array::from(vec![1, -1, 2])))?;
+    let kept = change.filter(&BooleanArray::from(vec![false, true, true]))?;
+    assert_eq!(kept.num_rows(), 2);
+    assert_eq!(kept.weights(), &Weights::Column(Int64Array::from(vec![-1, 2])));
+    Ok(())
+}
 ```
 
 ```rust
@@ -424,7 +448,7 @@ Fields:
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Freeze**
@@ -513,6 +537,7 @@ pub struct Batch {
   pub fn new(data: RecordBatch) -> Self { /* ... */ }
   ```
   An unweighted batch: every row has weight 1 ([`Weights::Const`]`(1)`).
+  Change streams pass their weights explicitly with [`Self::with_weights`].
 
 - ```rust
   pub fn with_weights(data: RecordBatch, weights: Weights) -> Result<Self> { /* ... */ }
@@ -568,16 +593,20 @@ pub struct Batch {
   pub fn project(self: &Self, indices: &[usize]) -> Result<Self> { /* ... */ }
   ```
   The columns at `indices`, in that order, with the same rows and
+  weights. Zero-copy: the result shares the input's buffers. An index
+  may repeat; an empty `indices` keeps the row count.
 
 - ```rust
   pub fn slice(self: &Self, offset: usize, len: usize) -> Result<Self> { /* ... */ }
   ```
   `len` rows starting at `offset`, with their weights. Zero-copy: the
+  result shares the input's buffers.
 
 - ```rust
   pub fn concat(schema: &SchemaRef, batches: &[Self]) -> Result<Self> { /* ... */ }
   ```
   The rows of `batches`, in order, as one batch with `schema` (copies,
+  except that a single batch is returned with shared buffers).
 
 ###### Trait Implementations
 
@@ -609,7 +638,7 @@ pub struct Batch {
 
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Freeze**
@@ -743,7 +772,7 @@ pub struct CalendarValue {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Default**
@@ -814,7 +843,7 @@ pub struct CalendarValue {
 A read view of a calendar interval column.
 
 ```rust
-pub struct Calendars<''a> {
+pub struct Calendars<'a> {
     // Some fields omitted
 }
 ```
@@ -830,7 +859,7 @@ pub struct Calendars<''a> {
 ###### Methods
 
 - ```rust
-  pub fn of(a: &''a dyn Array) -> Option<Self> { /* ... */ }
+  pub fn of(a: &'a dyn Array) -> Option<Self> { /* ... */ }
   ```
   The view of `a`, when it is a calendar interval column.
 
@@ -860,7 +889,7 @@ pub struct Calendars<''a> {
   Row `i`'s stored value, NULL or not.
 
 - ```rust
-  pub fn iter(self: &Self) -> impl Iterator<Item = Option<CalendarValue>> + ''_ { /* ... */ }
+  pub fn iter(self: &Self) -> impl Iterator<Item = Option<CalendarValue>> + '_ { /* ... */ }
   ```
   Every row, in order.
 
@@ -884,7 +913,7 @@ pub struct Calendars<''a> {
 - **CastableFrom**
 - **Clone**
   - ```rust
-    fn clone(self: &Self) -> Calendars<''a> { /* ... */ }
+    fn clone(self: &Self) -> Calendars<'a> { /* ... */ }
     ```
 
 - **CloneToUninit**
@@ -895,7 +924,7 @@ pub struct Calendars<''a> {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Freeze**
@@ -1020,7 +1049,7 @@ pub struct CalendarBuilder {
 - **CastableFrom**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Default**
@@ -1071,7 +1100,7 @@ pub struct CalendarBuilder {
 A calendar interval column of `values`.
 
 ```rust
-pub fn calendar_array</* synthetic */ impl IntoIterator<Item = Option<CalendarValue>>: IntoIterator<Item = Option<CalendarValue>>>(values: impl IntoIterator<Item = Option<CalendarValue>>) -> arrow_array::ArrayRef { /* ... */ }
+pub fn calendar_array(values: impl IntoIterator<Item = Option<CalendarValue>>) -> arrow_array::ArrayRef { /* ... */ }
 ```
 
 #### Function `null_calendar_array`
@@ -1094,7 +1123,7 @@ pub fn null_calendar_array(len: usize) -> arrow_array::ArrayRef { /* ... */ }
 The first row whose microseconds overflow `i64` nanoseconds.
 
 ```rust
-pub fn to_month_day_nano(a: &Calendars<''_>) -> Result<arrow_array::IntervalMonthDayNanoArray, usize> { /* ... */ }
+pub fn to_month_day_nano(a: &Calendars<'_>) -> Result<arrow_array::IntervalMonthDayNanoArray, usize> { /* ... */ }
 ```
 
 #### Function `from_month_day_nano`
@@ -1255,7 +1284,7 @@ Big-endian (`XDR`).
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -1371,7 +1400,7 @@ pub enum SpatialKind {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Eq**
@@ -1647,7 +1676,7 @@ pub struct Calendar {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Default**
@@ -1773,7 +1802,7 @@ pub struct Named {
 - **Copy**
 - **Debug**
   - ```rust
-    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
     ```
 
 - **Default**

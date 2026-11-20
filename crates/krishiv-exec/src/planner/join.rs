@@ -358,6 +358,20 @@ impl Planner<'_> {
         }
         if join_type == JoinType::Inner {
             sites.extend(build.sites.iter().cloned());
+            if self.rf.equated_sites {
+                for s in
+                    super::runtime_filter::equated_sites(&probe, &probe_exprs, &build, &build_exprs)
+                {
+                    // One site per (column, scan column): a key equated
+                    // twice targets its scan once (review NIT-3).
+                    if !sites
+                        .iter()
+                        .any(|t| t.attr == s.attr && t.scan == s.scan && t.column == s.column)
+                    {
+                        sites.push(s);
+                    }
+                }
+            }
         }
         if join_type.builds_preserved() {
             // The rows the join returns are build rows (a right outer

@@ -802,20 +802,22 @@ pub(crate) struct Totals {
     pub(crate) workload_class: &'static str,
     pub(crate) cpu_ns: i64,
     pub(crate) rows_produced: Option<i64>,
-    /// The query's own I/O since it started (its I/O context; design P2-E1 R3).
-    pub(crate) bytes_read: i64,
+    /// The query's own I/O since it started (its I/O context; design P2-E1 R3). The totals in an
+    /// `Option` are those of the plan's scans and pipelines: `None` for a query whose operators are
+    /// withheld (`QueryEnv::withhold_profile`, review r2 item 5).
+    pub(crate) bytes_read: Option<i64>,
     /// Rows the scans of the plan produced (not a breaker's output side).
-    pub(crate) rows_read: i64,
+    pub(crate) rows_read: Option<i64>,
     /// Rows the file write sinks of the plan took.
     pub(crate) rows_written: i64,
     /// Files its scans opened.
-    pub(crate) files_read: i64,
+    pub(crate) files_read: Option<i64>,
     /// Files the query's writers completed.
     pub(crate) files_written: i64,
     pub(crate) bytes_written: i64,
-    pub(crate) spill_bytes: i64,
-    pub(crate) spill_files: i64,
-    pub(crate) pipelines: i64,
+    pub(crate) spill_bytes: Option<i64>,
+    pub(crate) spill_files: Option<i64>,
+    pub(crate) pipelines: Option<i64>,
     pub(crate) workers: i64,
 }
 

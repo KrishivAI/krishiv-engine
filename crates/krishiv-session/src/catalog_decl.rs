@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Declared catalogs (design P3-T067 §2; ADR 0036 R11, R14): the `krishiv.catalog.<name>.*` keys
+//! Declared catalogs: the `krishiv.catalog.<name>.*` keys
 //! and Spark's `spark.sql.catalog.<name>` alias, parsed and validated by one pure function, the
-//! same for the server at startup and for an embedded session builder (R11). Validation never
+//! same for the server at startup and for an embedded session builder. Validation never
 //! connects: a catalog that is down does not stop the server.
 //!
 //! ```text
@@ -24,7 +24,7 @@
 //! krishiv.catalog.default                = <name>
 //! ```
 //!
-//! `auth = delegated` (P3-T067 §3.3) needs `.audience`; `exchange` needs `.tokenEndpoint`, and
+//! `auth = delegated` needs `.audience`; `exchange` needs `.tokenEndpoint`, and
 //! with `actorToken = client-credentials` also `.clientId` and `.clientSecret` (the server's own
 //! client, the exchange's actor). `forward` takes no token endpoint, client or actor setting. The
 //! names `delegation` and `vended` are reserved: `krishiv.catalog.delegation.*` and
@@ -76,7 +76,8 @@ pub fn is_declaration_key(key: &str) -> bool {
 /// Where the declarations come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclMode {
-    /// `krishiv server`: references only, `https` only unless `allowInsecure`.
+    /// `krishiv server`: references only; an HTTP catalog uri must be `https` unless `allowInsecure`,
+    /// and a Hive catalog takes a `thrift://` uri.
     Server,
     /// An embedded session (no principal boundary).
     Embedded,
@@ -379,7 +380,9 @@ impl CatalogDecl {
         }
     }
 
-    /// The hosts this catalog's own clients may reach at private addresses by name (§5.1): its
+    /// The hosts this catalog's own clients may reach at private addresses by name.
+    ///
+    /// The hosts this catalog's own clients may reach at private addresses by name: its
     /// `uri` and token endpoint, and nothing a catalog response names.
     #[must_use]
     pub fn declared_hosts(&self) -> Vec<String> {
@@ -461,6 +464,8 @@ struct Raw {
 }
 
 impl CatalogDeclarations {
+    /// Parses every catalog declaration key of `settings`.
+    ///
     /// Parses every catalog declaration key of `settings` (other keys, registered
     /// `krishiv.catalog.*` settings included, are ignored). `compiled` lists the catalog types
     /// this build carries; `egress`, when given, checks every declared endpoint whose host is an

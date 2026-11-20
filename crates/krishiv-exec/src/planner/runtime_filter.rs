@@ -78,8 +78,8 @@ use krishiv_common::config::{
     RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_ENABLED,
     RUNTIME_FILTER_BLOOM_MAX_BYTES, RUNTIME_FILTER_BLOOM_MAX_ITEMS,
     RUNTIME_FILTER_BLOOM_MEMORY_TIER, RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
-    RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_EXACT_SET_MAX_VALUES, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
-    SESSION_MEMORY_LIMIT,
+    RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_EQUATED_SITES, RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
+    RUNTIME_FILTER_IN_LIST_MAX_VALUES, SESSION_MEMORY_LIMIT,
 };
 use krishiv_io::runtime_filter::RuntimeBloom;
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
@@ -124,6 +124,9 @@ pub(crate) struct Settings {
     /// `krishiv.runtimeFilter.bloom.memoryTier`: the at-scale size cap
     /// taken from the query memory limit, when larger.
     memory_tier: Option<usize>,
+    /// `krishiv.runtimeFilter.equatedSites`: an inner join's key
+    /// equalities add sites ([`equated_sites`]).
+    pub(crate) equated_sites: bool,
     row: RowStageSettings,
 }
 
@@ -184,6 +187,7 @@ impl Settings {
             memory_tier: flag(&RUNTIME_FILTER_BLOOM_MEMORY_TIER)
                 .then(|| memory_tier(query_memory_limit(config)))
                 .flatten(),
+            equated_sites: flag(&RUNTIME_FILTER_EQUATED_SITES),
             row: RowStageSettings {
                 min_rows: count(&RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, 65_536).max(1),
                 max_pass_rate,
@@ -283,6 +287,42 @@ pub(crate) fn key_source(
         }
         _ => None,
     }
+}
+
+/// The sites an inner equi-join adds through its key equalities: each key
+/// pair of plain columns of one type holds equal values in every row the
+/// join returns, so a filter from above on either column may drop the
+/// other column's scan rows too. A side's site of its key column is
+/// returned again under the other side's attribute (TPC-H q18: the
+/// `HAVING` keys' filter on `o_orderkey` reaches `lineitem.l_orderkey`
+/// through `l_orderkey = o_orderkey`). A dropped scan row either matched
+/// nothing (the join drops it) or matched a row of the other column's
+/// value, which the filter above drops; a residual only drops more. As
+/// DuckDB's `ExpandEquivalentFilterColumns` (research E11), which also
+/// takes column-to-column equalities of equal type only.
+pub(crate) fn equated_sites(
+    probe: &Planned,
+    probe_exprs: &[Arc<Expr>],
+    build: &Planned,
+    build_exprs: &[Arc<Expr>],
+) -> Vec<Site> {
+    let mut out = Vec::new();
+    for (p, b) in probe_exprs.iter().zip(build_exprs) {
+        let (Some(pa), Some(ba)) = (column_of(p), column_of(b)) else {
+            continue;
+        };
+        let ty = column_type(probe, pa);
+        if pa == ba || ty.is_none() || ty != column_type(build, ba) {
+            continue;
+        }
+        for (from, to, sites) in [(pa, ba, &probe.sites), (ba, pa, &build.sites)] {
+            out.extend(sites.iter().filter(|s| s.attr == from).map(|s| Site {
+                attr: to,
+                ..s.clone()
+            }));
+        }
+    }
+    out
 }
 
 /// The type of `id`'s column in `p`.
