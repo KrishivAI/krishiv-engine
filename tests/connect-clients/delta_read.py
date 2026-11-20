@@ -61,6 +61,8 @@ def actual_rows(df, cols: list[str]) -> list[tuple[str, ...]]:
 
 
 def check_table(spark, name: str) -> dict:
+    from pyspark.errors import PySparkException
+
     expected = json.loads((FIXTURES / name / "EXPECTED.json").read_text())
     path = str(FIXTURES / name)
     readers = {
@@ -77,7 +79,7 @@ def check_table(spark, name: str) -> dict:
                     "status": "fail",
                     "detail": "read succeeded but Krishiv refuses this table",
                 }
-            except Exception as e:
+            except PySparkException as e:
                 out[k] = {"status": "pass", "detail": str(e).splitlines()[0][:200]}
         return out
     cols, want = expected_rows(expected)
@@ -94,7 +96,7 @@ def check_table(spark, name: str) -> dict:
                     f"{next(((g, w) for g, w in zip(got, want, strict=False) if g != w), None)}",
                 }
             )
-        except Exception as e:
+        except PySparkException as e:
             out[k] = {
                 "status": "fail",
                 "detail": str(e).splitlines()[0][:200] if str(e) else type(e).__name__,

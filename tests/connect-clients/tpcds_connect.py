@@ -45,6 +45,8 @@ def register(spark, data: Path) -> list[str]:
 
 
 def run_one(spark, name: str) -> dict:
+    from pyspark.errors import PySparkException
+
     t0 = time.perf_counter()
     try:
         rows = 0
@@ -55,7 +57,7 @@ def run_one(spark, name: str) -> dict:
             "rows": rows,
             "seconds": round(time.perf_counter() - t0, 3),
         }
-    except Exception as e:
+    except PySparkException as e:
         msg = str(e)
         return {
             "status": "error",
