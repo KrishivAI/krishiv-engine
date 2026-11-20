@@ -40,9 +40,9 @@ pub const PROFILE_VERSION: u64 = 1;
 /// The minor version this build writes: it counts additive changes within
 /// [`PROFILE_VERSION`] (0 or absent: the first v1; 1: `usage`; 2: the scan read
 /// costs, `query.scan_reads_in_flight_mean` and the `scan_read*` operator
-/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`; 5: `usage.principal` and `usage.tags`; 6: `scans`, the tables read and the columns compared with values; 7: `hints` and the plan nodes' `facts`). A reader ignores
+/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`; 5: `usage.principal` and `usage.tags`; 6: `scans`, the tables read and the columns compared with values; 7: `hints` and the plan nodes' `facts`; 8: `usage.resource_group` and `usage.queued_ns`). A reader ignores
 /// members it does not know, so a later minor still loads.
-pub const PROFILE_MINOR: u64 = 7;
+pub const PROFILE_MINOR: u64 = 8;
 
 /// A node of the profiled plan: `EXPLAIN`'s node with its id.
 #[derive(Clone, Debug)]
@@ -269,6 +269,10 @@ pub struct ProfileIdentity {
     pub principal: String,
     /// The session's tags, by key.
     pub tags: std::collections::BTreeMap<String, String>,
+    /// The resource group the query ran in, when the engine has a resource-group file.
+    pub resource_group: Option<String>,
+    /// Nanoseconds the query waited in its group's queue, when it was admitted by a group.
+    pub queued_ns: Option<u64>,
 }
 
 impl QueryProfile {

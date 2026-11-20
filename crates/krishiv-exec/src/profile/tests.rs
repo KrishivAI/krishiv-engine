@@ -709,6 +709,8 @@ fn schema_matches_the_writer() {
     profile.identity = Some(ProfileIdentity {
         principal: "user:a".into(),
         tags: [("team".to_owned(), "x".to_owned())].into(),
+        resource_group: Some("root.etl".to_owned()),
+        queued_ns: Some(1_500),
     });
     profile.scans = vec![ProfileScan {
         table: "c.s.t".to_owned(),
@@ -719,6 +721,8 @@ fn schema_matches_the_writer() {
         }],
     }];
     let doc = profile.to_json_value();
+    assert_eq!(doc["usage"]["resource_group"], "root.etl");
+    assert_eq!(doc["usage"]["queued_ns"], 1_500);
     let keys = |v: &Value| -> Vec<String> {
         let mut k: Vec<String> = v
             .as_object()
@@ -875,6 +879,7 @@ fn identity_round_trips_and_a_shared_profile_drops_it_with_the_trace() {
     p.identity = Some(ProfileIdentity {
         principal: "sentinel-principal-ada".into(),
         tags: [("team".to_owned(), "sentinel-tag-data".to_owned())].into(),
+        ..ProfileIdentity::default()
     });
     let v = p.to_json_value();
     assert_eq!(v["usage"]["principal"], "sentinel-principal-ada");

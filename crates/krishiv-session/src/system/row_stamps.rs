@@ -16,6 +16,21 @@ impl QueryLog {
         tags
     }
 
+    /// The resource group row `id` ran in and the nanoseconds it queued there; `(None, None)` when
+    /// no group admitted it.
+    pub(crate) fn row_queue(&self, id: &str) -> (Option<String>, Option<u64>) {
+        let mut out = (None, None);
+        self.history.update(&self.session_id, id, |row| {
+            if row.resource_group.is_some() {
+                out = (
+                    row.resource_group.clone(),
+                    row.queued_ns.and_then(|n| u64::try_from(n).ok()),
+                );
+            }
+        });
+        out
+    }
+
     /// Sets the trace id of row `id` (a statement with a trace of its own).
     pub(crate) fn set_row_trace(&self, id: &str, trace_id: Option<String>) {
         self.history.update(&self.session_id, id, |row| {

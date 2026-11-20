@@ -1,0 +1,1 @@
+A stored query profile (minor 8) names the resource group that admitted the query and how long it waited in the group's queue (`usage.resource_group`, `usage.queued_ns`), the same two fields `system.queries` shows.

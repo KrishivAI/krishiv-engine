@@ -9,7 +9,7 @@
   "properties": {
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
-    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`, 5 adds `usage.principal` and `usage.tags`, 6 adds `scans`, 7 adds `hints` and each plan node's `facts`. A reader ignores members it does not know." },
+    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`, 5 adds `usage.principal` and `usage.tags`, 6 adds `scans`, 7 adds `hints` and each plan node's `facts`, 8 adds `usage.resource_group` and `usage.queued_ns`. A reader ignores members it does not know." },
     "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
     "trace": {
       "type": "object",
@@ -72,6 +72,8 @@
         "spill_bytes": { "$ref": "#/$defs/u64" },
         "principal": { "type": "string", "description": "Who ran the query (minor 5). Absent outside a session and in a shared profile." },
         "tags": { "type": "object", "additionalProperties": { "type": "string" }, "description": "The session's tags (minor 5). Absent with `principal`." },
+        "resource_group": { "type": "string", "description": "The resource group that admitted the query (minor 8). Absent when no resource-group file is loaded." },
+        "queued_ns": { "$ref": "#/$defs/u64", "description": "Nanoseconds the query waited in its group's queue (minor 8). Absent with `resource_group`." },
         "scan": {
           "type": "object",
           "required": ["bytes", "rows"],

@@ -356,6 +356,7 @@ impl DataFrame {
         let identity = krishiv_exec::profile::ProfileIdentity {
             principal: self.session.state.principal.name.clone(),
             tags: self.session.state.queries.tags().into_iter().collect(),
+            ..krishiv_exec::profile::ProfileIdentity::default()
         };
         let (mut stream, query) = self.session.run_profiled(physical, &a.env).await?;
         let mut out = Vec::new();

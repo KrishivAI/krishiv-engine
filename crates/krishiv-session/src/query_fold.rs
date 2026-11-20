@@ -331,12 +331,15 @@ impl HistoryJob {
         if let (Some(t), Some(o)) = (&who.trace_id, trace.as_object_mut()) {
             o.insert("trace_id".to_owned(), t.clone().into());
         }
+        let (resource_group, queued_ns) = state.queries.row_queue(row_id);
         Self {
             plan: plan.clone(),
             sql: sql.map(str::to_owned),
             detailed,
             hold,
             identity: krishiv_exec::profile::ProfileIdentity {
+                resource_group,
+                queued_ns,
                 principal: who.principal,
                 // The tags the query's own row holds (request tags included, and not changed by a `set_tag`
                 // while it waited), as `system.queries` shows them.

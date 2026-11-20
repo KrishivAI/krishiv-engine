@@ -178,6 +178,11 @@ impl QueryProfile {
                             .collect()
                     })
                     .unwrap_or_default(),
+                resource_group: usage
+                    .get("resource_group")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                queued_ns: usage.get("queued_ns").and_then(Value::as_u64),
             }),
             _ => None,
         };
@@ -305,6 +310,12 @@ fn usage_json(u: &QueryUsage, who: Option<&super::ProfileIdentity>) -> Value {
     if let (Some(w), Some(o)) = (who, v.as_object_mut()) {
         o.insert("principal".to_owned(), w.principal.clone().into());
         o.insert("tags".to_owned(), json!(w.tags));
+        if let Some(g) = &w.resource_group {
+            o.insert("resource_group".to_owned(), g.clone().into());
+        }
+        if let Some(q) = w.queued_ns {
+            o.insert("queued_ns".to_owned(), q.into());
+        }
     }
     v
 }

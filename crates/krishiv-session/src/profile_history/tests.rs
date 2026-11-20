@@ -60,11 +60,44 @@ fn a_finished_query_leaves_a_profile_that_reads_back() {
     let q = &stored[0];
     assert_eq!(q.state, "finished");
     assert!(q.sql.as_deref().unwrap().contains("range"));
-    assert_eq!((q.profile_version, q.profile_minor), (1, 7));
+    assert_eq!((q.profile_version, q.profile_minor), (1, 8));
     let profile = QueryProfile::from_json(&q.profile).unwrap();
     assert!(!profile.metrics.operators.is_empty());
     assert_eq!(profile.identity.unwrap().principal, q.principal);
     assert_eq!(rt.profile_history.as_ref().unwrap().failures(), 0);
+}
+
+/// A query admitted by a resource group keeps the group and its queue time in the stored profile; one
+/// without a group file keeps neither.
+#[test]
+fn a_stored_profile_names_the_resource_group_and_the_queue_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let groups = dir.path().join("groups.json");
+    std::fs::write(
+        &groups,
+        r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 2, "maxQueued": 2}],
+            "defaultGroup": "root"}"#,
+    )
+    .unwrap();
+    let hist = dir.path().join("hist");
+    let rt = EngineRuntime::builder()
+        .config("krishiv.history.path", hist.to_str().unwrap())
+        .config(
+            "krishiv.workload.resourceGroups.file",
+            groups.to_str().unwrap(),
+        )
+        .build()
+        .unwrap();
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    run(&session, "SELECT id FROM range(0, 10)");
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = nonempty_history(&hist);
+    let identity = QueryProfile::from_json(&stored[0].profile)
+        .unwrap()
+        .identity
+        .unwrap();
+    assert_eq!(identity.resource_group.as_deref(), Some("root"));
+    assert_eq!(identity.queued_ns, Some(0));
 }
 
 #[test]
