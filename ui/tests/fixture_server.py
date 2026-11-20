@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Serves the built UI and a fixture `/api/internal/*`, for the page snapshot check and for looking at the pages.
 
-    python ui/tests/fixture_server.py [--port 0] [--mode server|embedded|profiles]
+    python ui/tests/fixture_server.py [--port 0] [--mode server|embedded|profiles] [--role operator|admin]
     # prints the address; the token is `fixture`
 
 The routes and JSON shapes are those of `krishiv_server::internal`; the data is `fixtures.json`. The event stream
@@ -93,13 +93,13 @@ PROFILES_ROUTES = (
 )
 
 
-def route(path: str, mode: str = "server") -> object | None:
+def route(path: str, mode: str = "server", role: str = "admin") -> object | None:
     d = DATA
     parts = path.split("/")
     if mode == "profiles" and not path.startswith(PROFILES_ROUTES):
         return None
     if path == "/api/internal/environment":
-        return ENVIRONMENT
+        return ENVIRONMENT if role == "admin" else None
     if path == "/api/internal/catalog/catalogs":
         return {"catalogs": CATALOG["catalogs"]}
     if len(parts) == 6 and parts[5] == "schemas":
@@ -114,6 +114,7 @@ def route(path: str, mode: str = "server") -> object | None:
         return d["health"] | {
             "mode": mode,
             "session_id": SESSION_ID if mode == "embedded" else None,
+            "role": role,
         }
     if path == "/api/internal/queries":
         return {"queries": d["live"]}
@@ -133,6 +134,10 @@ class Handler(BaseHTTPRequestHandler):
     @property
     def mode(self) -> str:
         return self.server.mode  # type: ignore[attr-defined]
+
+    @property
+    def role(self) -> str:
+        return self.server.role  # type: ignore[attr-defined]
 
     def end_headers(self) -> None:
         self.send_header("Content-Security-Policy", CSP)
@@ -170,9 +175,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 try:
                     while True:
-                        self.wfile.write(
-                            f"event: environment\ndata: {json.dumps(ENVIRONMENT)}\n\n".encode()
-                        )
+                        if self.role == "admin":
+                            self.wfile.write(
+                                f"event: environment\ndata: {json.dumps(ENVIRONMENT)}\n\n".encode()
+                            )
                         self.wfile.write(
                             f"event: queries\ndata: {json.dumps({'queries': DATA['live']})}\n\n".encode()
                         )
@@ -180,7 +186,15 @@ class Handler(BaseHTTPRequestHandler):
                         time.sleep(1)
                 except (BrokenPipeError, ConnectionResetError):
                     return None
-            body = route(url.path, self.mode)
+            if url.path == "/api/internal/environment" and self.role != "admin":
+                return self.send_json(
+                    403,
+                    {
+                        "error": "forbidden",
+                        "message": "the principal's role does not allow this",
+                    },
+                )
+            body = route(url.path, self.mode, self.role)
             return (
                 self.send_json(200, body)
                 if body is not None
@@ -243,12 +257,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"cancelled": True})
 
 
-def serve(port: int = 0, mode: str = "server") -> ThreadingHTTPServer:
-    """The fixture server as a console of `mode`; `asked` collects the `/api/internal/*` paths pages requested."""
+def serve(
+    port: int = 0, mode: str = "server", role: str = "admin"
+) -> ThreadingHTTPServer:
+    """The fixture server as a console of `mode` for a caller of `role` (the settings are the administrator's);
+    `asked` collects the `/api/internal/*` paths pages requested."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.mode = mode  # type: ignore[attr-defined]
+    server.role = role  # type: ignore[attr-defined]
     server.asked = []  # type: ignore[attr-defined]
     return server
 
@@ -257,7 +275,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--mode", choices=MODES, default="server")
+    ap.add_argument("--role", choices=("operator", "admin"), default="admin")
     args = ap.parse_args()
-    server = serve(args.port, args.mode)
+    server = serve(args.port, args.mode, args.role)
     print(f"http://127.0.0.1:{server.server_address[1]}/?token={TOKEN}", flush=True)
     server.serve_forever()

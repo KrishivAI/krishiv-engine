@@ -394,16 +394,45 @@ def mode_checks() -> list[str]:
     return problems
 
 
+def role_checks() -> list[str]:
+    """A server console opened by an operator: no Environment page, and its address opens the first page."""
+    problems: list[str] = []
+    server = fixture_server.serve(role="operator")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
+        page.locator("header nav a").first.wait_for(timeout=10000)
+        links = page.locator("header nav a").all_inner_texts()
+        if "Environment" in links or len(links) != len(PAGES) - 2:
+            problems.append(f"operator: the menu lists {links}")
+        page.evaluate("window.location.hash = '#/environment'")
+        page.wait_for_timeout(700)
+        main = page.inner_text("main").lower()
+        if "uptime" not in main or "secrets show" in main:
+            problems.append("operator: #/environment does not open the Health page")
+        problems += [f"operator: page error: {e}" for e in errors]
+        browser.close()
+    if "/api/internal/environment" in server.asked:
+        problems.append("operator: the page asked for the settings")
+    server.shutdown()
+    return problems
+
+
 if __name__ == "__main__":
     found = check(Path(sys.argv[1]) if len(sys.argv) > 1 else None)
     server = fixture_server.serve()
     threading.Thread(target=server.serve_forever, daemon=True).start()
     found += page_checks(f"http://127.0.0.1:{server.server_address[1]}")
     found += mode_checks()
+    found += role_checks()
     print(
         "\n".join(found)
         if found
         else "ui pages: ok (8 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, "
-        "embedded and profiles consoles)"
+        "embedded and profiles consoles, operator)"
     )
     sys.exit(1 if found else 0)

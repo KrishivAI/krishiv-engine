@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use axum::Extension;
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
@@ -220,7 +221,7 @@ pub fn router_with_ui(source: Arc<dyn UiSource>, token: &str) -> Router {
 }
 
 /// [`router_with_ui`] behind `guard`: reading other principals' work needs [`Access::Monitor`], a cancel
-/// [`Access::Operate`] (ADR 0046 §3: both operator). The token is taken from the same places as with a start-up
+/// [`Access::Operate`] (ADR 0046 §3: both operator), the settings [`Access::Manage`] (admin). The token is taken from the same places as with a start-up
 /// token, so the page works unchanged with a configured token.
 pub fn router_with_ui_guard(source: Arc<dyn UiSource>, guard: Arc<dyn Guard>) -> Router {
     router_with_ui_policy(source, guard, crate::pages::UiPolicy::loopback())
@@ -374,8 +375,12 @@ async fn require_token(
 ) -> Response {
     let token = presented(req.method(), req.headers(), req.uri());
     let malformed = token.is_none() && req.headers().contains_key(header::AUTHORIZATION);
-    // Anything but a read changes something: a cancel acts on another principal's query.
-    let access = if req.method() == Method::GET || req.uri().path() == "/api/internal/session" {
+    // The settings are the administrator's. Anything else but a read changes something: a cancel acts on another
+    // principal's query.
+    let path = req.uri().path();
+    let access = if path == "/api/internal/environment" {
+        Access::Manage
+    } else if req.method() == Method::GET || path == "/api/internal/session" {
         Access::Monitor
     } else {
         Access::Operate
@@ -672,7 +677,7 @@ fn memory_total(memory: &[Row]) -> Value {
     })
 }
 
-async fn health(State(s): State<UiState>) -> Response {
+async fn health(State(s): State<UiState>, caller: Option<Extension<Caller>>) -> Response {
     let (memory, caches, queries) = match (
         table(&s, SystemTable::Memory).await,
         table(&s, SystemTable::Caches).await,
@@ -692,6 +697,8 @@ async fn health(State(s): State<UiState>) -> Response {
             "version": crate::VERSION,
             "mode": s.source.mode(),
             "session_id": s.source.session_id(),
+            // The page hides what the caller's role cannot open; the routes decide by themselves.
+            "role": caller.and_then(|c| c.0.role),
             "uptime_seconds": s.started.elapsed().as_secs(),
             "workers": workers.len().max(1),
             "running_queries": queries.iter().filter(|r| text(r, "state") == "running").count(),
@@ -943,7 +950,8 @@ async fn shared_snapshot(s: &UiState) -> Value {
 
 /// `GET /api/internal/events`: the live query list as a `queries` event, once a second. At most
 /// [`MAX_EVENT_CLIENTS`] streams at a time (a further one is a `503`); the streams share one snapshot a period.
-async fn events(State(s): State<UiState>) -> Response {
+/// An administrator's stream opens with an `environment` event.
+async fn events(State(s): State<UiState>, caller: Option<Extension<Caller>>) -> Response {
     if s.streams.fetch_add(1, Ordering::SeqCst) >= MAX_EVENT_CLIENTS {
         s.streams.fetch_sub(1, Ordering::SeqCst);
         return error(
@@ -955,13 +963,19 @@ async fn events(State(s): State<UiState>) -> Response {
     let slot = StreamSlot(Arc::clone(&s.streams));
     let ticker = tokio::time::interval(EVENT_PERIOD);
     // The stream opens with the environment (secrets masked), so a page can show it without a second request.
-    let first = match crate::pages::environment_json(&s).await {
-        Ok(v) => Event::default().event("environment").data(v.to_string()),
-        Err(e) => Event::default()
-            .event("environment")
-            .data(json!({"error": e.message}).to_string()),
+    // Only for an administrator: the stream itself is open to operators, the settings are not
+    // (`/api/internal/environment` asks for `Access::Manage`).
+    let first = if caller.is_some_and(|c| c.0.is_admin()) {
+        Some(match crate::pages::environment_json(&s).await {
+            Ok(v) => Event::default().event("environment").data(v.to_string()),
+            Err(e) => Event::default()
+                .event("environment")
+                .data(json!({"error": e.message}).to_string()),
+        })
+    } else {
+        None
     };
-    let opening = futures::stream::once(async move { Ok::<_, std::convert::Infallible>(first) });
+    let opening = futures::stream::iter(first.map(Ok::<_, std::convert::Infallible>));
     let ticks = futures::stream::unfold((ticker, s, slot), |(mut ticker, s, slot)| async move {
         ticker.tick().await;
         let body = shared_snapshot(&s).await;

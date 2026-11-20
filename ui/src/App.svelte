@@ -48,7 +48,7 @@
     sql: "SQL",
     environment: "Environment",
   };
-  const pages = $derived(pagesOf(consoleInfo.mode));
+  const pages = $derived(pagesOf(consoleInfo.mode, consoleInfo.role));
   const links = $derived(pages.map((id) => [id, labels[id]]));
   // An address of a page this mode lacks (or none) opens the mode's first page. A stored profile is a query's
   // page, so `queries/<id>` stays reachable where the live list is not.

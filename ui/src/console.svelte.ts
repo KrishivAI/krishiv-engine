@@ -14,16 +14,28 @@ const PAGES: Record<Mode, string[]> = {
   profiles: ["history"],
 };
 
-export const consoleInfo = $state<{ mode: Mode; sessionId: string | null }>({ mode: "server", sessionId: null });
+// A server's settings are the administrator's: the route answers 403 to any other role.
+const ADMIN_ONLY = ["environment"];
+
+export const consoleInfo = $state<{ mode: Mode; sessionId: string | null; role: string | null }>({
+  mode: "server",
+  sessionId: null,
+  role: null,
+});
 
 /** Reads the mode once, after the session is open. A server that reports none is a `server` console. */
 export async function loadConsole(): Promise<void> {
   const h = await api<Health>("/api/internal/health");
   consoleInfo.mode = h.mode !== undefined && h.mode in PAGES ? h.mode : "server";
   consoleInfo.sessionId = h.session_id ?? null;
+  consoleInfo.role = h.role ?? null;
 }
 
-/** The pages this mode has, in menu order; the first is where the console opens. */
-export function pagesOf(mode: Mode): string[] {
-  return PAGES[mode];
+/**
+ * The pages this mode has for a caller of `role`, in menu order; the first is where the console opens. A server
+ * that names no role decides on each request, so every page of the mode stays in the menu.
+ */
+export function pagesOf(mode: Mode, role: string | null = null): string[] {
+  const all = PAGES[mode];
+  return role === null || role === "admin" ? all : all.filter((p) => !ADMIN_ONLY.includes(p));
 }

@@ -106,6 +106,8 @@ export interface Health {
   mode?: "server" | "embedded" | "profiles";
   /** The one session an `embedded` console shows. */
   session_id?: string | null;
+  /** The caller's role (`viewer`, `operator`, `admin`); absent or null when the server does not say. */
+  role?: string | null;
   uptime_seconds: number;
   workers: number;
   running_queries: number;
