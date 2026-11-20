@@ -280,8 +280,8 @@ async fn the_consoles_own_reads_do_not_push_the_users_history_out_after_a_restar
         .filter(|p| p.principal == UI_PRINCIPAL)
         .count();
     assert!(
-        of_console > 1,
-        "{} stored, none the console's",
+        of_console > 1_000,
+        "{} stored, too few of them the console's to reach the cut",
         stored.len()
     );
 

@@ -254,8 +254,7 @@ async fn the_editor_shares_the_sessions_views_and_the_catalog_lists_them() {
         .collect();
     assert_eq!(cancelled.len(), 1, "{queries:?}");
     assert_eq!(cancelled[0]["cancel_reason"], "user", "{cancelled:?}");
-    // (The row's error class is not asserted: the run also drops the statement once the cancel is accepted, and
-    // a query dropped before its error surfaces records the reason alone.)
+    // (The row's error class is not asserted: `system.queries` leaves it null for every cancelled query.)
     assert_eq!(cancelled[0]["session_id"], mine.id());
 }
 
