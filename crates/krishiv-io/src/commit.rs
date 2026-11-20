@@ -142,7 +142,7 @@ impl DirectoryWrite {
         let replaced = match mode {
             SaveMode::ErrorIfExists if exists => {
                 return Err(PathAlreadyExists {
-                    output_path: format!("{store}/{dir}"),
+                    output_path: shown_path(&store, &dir),
                 }
                 .into());
             }
@@ -151,7 +151,7 @@ impl DirectoryWrite {
             // append to it, and overwriting replaces it.
             SaveMode::Append if file.is_some() => {
                 return Err(PathAlreadyExists {
-                    output_path: format!("{store}/{dir}"),
+                    output_path: shown_path(&store, &dir),
                 }
                 .into());
             }
@@ -536,12 +536,24 @@ impl DirectoryWrite {
     }
 }
 
+/// A path as Spark's messages show it: a local file is `file:/<path>` (a Hadoop `Path` with its
+/// scheme), an object store `<scheme>://<bucket>/<key>`.
+fn shown_path(store: &StoreId, dir: &Path) -> String {
+    let store = store.to_string();
+    if store == "file" {
+        format!("file:/{dir}")
+    } else {
+        format!("{store}/{dir}")
+    }
+}
+
 /// Spark's hidden-name rule for one path component.
 fn is_hidden(name: &str) -> bool {
     // The same rule as the reads' (`krishiv-exec` `hidden`), or adopted files would vanish from them.
-    name.starts_with('.')
+    let exclude = name.starts_with('.')
         || (name.starts_with('_') && !name.contains('='))
-        || name.ends_with("._COPYING_")
+        || name.ends_with("._COPYING_");
+    exclude && !(name.starts_with("_common_metadata") || name.starts_with("_metadata"))
 }
 
 /// The `name=value` directories of the relative file path `rel`.
