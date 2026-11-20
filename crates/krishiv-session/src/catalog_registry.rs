@@ -1138,6 +1138,14 @@ impl crate::Session {
         Some(
             async {
                 let (built, caller) = built?;
+                // A namespace the grants hide answers as a missing one before the catalog is
+                // asked (no existence oracle, no outbound call for it, ADR 0046 §8). A table the
+                // grants list implies its namespace is listed, so nothing listable is lost.
+                if self.state.grants.is_some()
+                    && !self.declared_namespace_listed(&name, namespace).await
+                {
+                    return Err(schema_not_found(catalog, namespace));
+                }
                 let Some(found) = built
                     .list_tables(&caller, namespace)
                     .await
@@ -1145,15 +1153,7 @@ impl crate::Session {
                 else {
                     return Err(schema_not_found(catalog, namespace));
                 };
-                let listed = self.listed_declared_tables(&name, namespace, found).await;
-                if listed.is_empty()
-                    && self.state.grants.is_some()
-                    && !self.declared_namespace_listed(&name, namespace).await
-                {
-                    // Nothing listable in it, nor under it: as for a missing one.
-                    return Err(schema_not_found(catalog, namespace));
-                }
-                Ok(listed)
+                Ok(self.listed_declared_tables(&name, namespace, found).await)
             }
             .await,
         )
