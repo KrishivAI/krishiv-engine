@@ -8,7 +8,7 @@ description: "Returns the bit position for the given input child expression."
 
 Returns the bit position for the given input child expression.
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -20,7 +20,7 @@ bitmap_bit_position(child)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `misc_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 3.5.0 |
@@ -33,18 +33,19 @@ bitmap_bit_position(child)
 ```sql
 -- bitmap_bit_position, example 1
 > SELECT bitmap_bit_position(1);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+0
 ```
 
 ```sql
 -- bitmap_bit_position, example 2
 > SELECT bitmap_bit_position(123);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+122
 ```
 
 ## Version history
 
 - Added in Spark 3.5.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

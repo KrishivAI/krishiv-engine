@@ -669,6 +669,8 @@ message WindowFunctionPlan {
     OffsetFunction offset_value = 11;
     // feature: window_offset_functions
     NthValueFunction nth_value = 12;
+    // feature: window_counter_diff
+    CounterDiffFunction counter_diff = 13;
   }
   WindowFrame frame = 8;
   // A boolean input column an aggregate is restricted to.
@@ -696,6 +698,15 @@ message NthValueFunction {
   bool ignore_nulls = 3;
   // Arrow IPC `Schema` flatbuffer of one field.
   bytes data_type = 4;
+}
+
+// `counter_diff(counter[, start_time])`: input column `counter`, and column `start_time` when present.
+// feature: window_counter_diff
+message CounterDiffFunction {
+  uint64 counter = 1;
+  optional uint64 start_time = 2;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes data_type = 3;
 }
 
 message WindowFrame {
@@ -851,6 +862,21 @@ enum AggregateFunction {
   AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST = 48;
   // feature: histogram_numeric
   AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC = 49;
+  // `bitmap_construct_agg(position)`: a 4,096-byte bitmap of the positions.
+  // feature: bitmap_aggregates
+  AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG = 50;
+  // `bitmap_or_agg(bitmap)`.
+  // feature: bitmap_aggregates
+  AGGREGATE_FUNCTION_BITMAP_OR_AGG = 51;
+  // `bitmap_and_agg(bitmap)`.
+  // feature: bitmap_aggregates
+  AGGREGATE_FUNCTION_BITMAP_AND_AGG = 52;
+  // `hll_sketch_agg(x, lgConfigK)`: the folded lgConfigK is `hll_precision`.
+  // feature: hll_sketch_aggregates
+  AGGREGATE_FUNCTION_HLL_SKETCH_AGG = 53;
+  // `hll_union_agg(sketch, allowDifferentLgConfigK)`: the folded flag is `hll_precision` (0 or 1).
+  // feature: hll_sketch_aggregates
+  AGGREGATE_FUNCTION_HLL_UNION_AGG = 54;
 }
 
 enum AggregateInput {
@@ -1067,6 +1093,9 @@ message KeyFilterOptions {
   // ignorable: a reader that skips it sizes each Bloom for its keys; filters
   // of several build partitions then merge to their range, and pass more rows.
   optional uint32 bloom_bytes = 9;
+  // ignorable: a reader that skips it loses the Bloom form of a build past
+  // `bloom_max_items` or one that sheds its hashes to spill (a range only).
+  optional uint32 bloom_spill_bytes = 10;
 }
 
 message UnionNode {

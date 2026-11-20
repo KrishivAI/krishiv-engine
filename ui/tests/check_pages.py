@@ -43,6 +43,9 @@ PAGES = [
             "Peak memory",
             "not reported",
             "do not add up",
+            "Advisor hints",
+            "SPILL",
+            "HashJoin spilled 128 MiB; give the query more memory.",
         ],
     ),
     ("history", "#/history", ["History", "DIVIDE_BY_ZERO", "Compare the two selected"]),
@@ -109,6 +112,15 @@ def check(shots: Path | None) -> list[str]:
                             f"{view}: the page scrolls sideways ({wide}px too wide)"
                         )
                     body = page.inner_text("body")
+                    if name == "query-detail":
+                        hints = page.get_by_test_id("advisor-hints").all_inner_texts()
+                        if (
+                            len(hints) != 1
+                            or "give the query more memory" not in hints[0]
+                        ):
+                            problems.append(
+                                f"{view}: the advisor-hints section is {hints!r}"
+                            )
                     problems += [
                         f"{view}: missing text {t!r}"
                         for t in texts

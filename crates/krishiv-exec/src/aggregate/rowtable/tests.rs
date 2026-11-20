@@ -1093,3 +1093,267 @@ fn split_and_release_parts() {
     }
     assert_eq!((s.len(), s.memory_size()), (0, 0));
 }
+
+/// A batch of nullable keys for [`core`] (`v` = 1 in every row).
+fn opt_batch(core: &AggCore, keys: &[Option<i64>]) -> Batch {
+    let v = Int64Array::from(vec![1; keys.len()]);
+    let cols: Vec<ArrayRef> = vec![Arc::new(Int64Array::from(keys.to_vec())), Arc::new(v)];
+    Batch::new(RecordBatch::try_new(Arc::clone(&core.spec.input), cols).unwrap())
+}
+
+/// Each key's total count over a table's partial rows (count and sum agree).
+fn totals(t: &RowTable) -> std::collections::BTreeMap<Option<i64>, i64> {
+    let mut m = std::collections::BTreeMap::new();
+    for (k, c, s) in sorted(&t.output_batch(&t.ids(0..t.len())).unwrap()) {
+        assert_eq!(c, s);
+        *m.entry(k).or_insert(0) += c.unwrap();
+    }
+    m
+}
+
+/// Input clustered by the key (runs of equal keys, NULL runs among them):
+/// a row equal to the one before takes its row without a lookup, so the
+/// per-row probe looks up each run once, and every key's count is its
+/// rows, in a growing and in a fixed index that clears inside the runs.
+#[test]
+fn runs_of_equal_keys_are_looked_up_once() {
+    let core = core();
+    let seed = HashSeed::new(Some(7));
+    // 1,000 runs of 1-4 rows; every seventh run is a NULL key, and a key
+    // comes back after other runs (k % 300).
+    let mut keys = Vec::new();
+    let mut runs = 0;
+    for r in 0..1_000_i64 {
+        let k = (r % 7 != 3).then_some(r % 300);
+        let len = usize::try_from(r % 4 + 1).unwrap();
+        keys.extend(std::iter::repeat_n(k, len));
+        runs += 1;
+    }
+    // Two NULL runs never touch, so each run starts a new key.
+    let mut want = std::collections::BTreeMap::new();
+    for k in &keys {
+        *want.entry(*k).or_insert(0) += 1;
+    }
+    for mode in [Mode::Grow, Mode::Fixed { limit: 50 }] {
+        let probes = Arc::new(ProbeTotals::default());
+        let mut t = RowTable::new(&core, &seed, mode, false, RADIX_BITS)
+            .unwrap()
+            .with_probes(Some(Arc::clone(&probes)));
+        // The per-row probe, not the batch-local key map.
+        t.local_skip = 1;
+        apply(&mut t, &opt_batch(&core, &keys));
+        assert_eq!(totals(&t), want, "{mode:?}");
+        assert_eq!(probes.get().lookups, runs, "{mode:?}");
+    }
+}
+
+/// An append-only table pushes one row per row of a batch with no two
+/// equal neighbours (the path without the run check), and one row per
+/// run of a batch with runs (NULL runs among them); every key counts its
+/// rows.
+#[test]
+fn append_pushes_a_row_per_run_and_per_row_without_runs() {
+    let core = core();
+    let seed = HashSeed::new(Some(9));
+    let mut t = RowTable::new(&core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
+    t.local_skip = 1;
+    // No runs: keys repeat, but never next to each other.
+    let plain: Vec<Option<i64>> = (0..500_i64).map(|i| Some(i % 250)).collect();
+    apply(&mut t, &opt_batch(&core, &plain));
+    assert_eq!(t.len(), 500);
+    // Runs of 1-3 rows, every fifth a NULL run: one row per run.
+    let mut runs = Vec::new();
+    let mut starts = 0;
+    for r in 0..300_i64 {
+        let k = (r % 5 != 2).then_some(r);
+        runs.extend(std::iter::repeat_n(k, usize::try_from(r % 3 + 1).unwrap()));
+        starts += 1;
+    }
+    apply(&mut t, &opt_batch(&core, &runs));
+    assert_eq!(t.len(), 500 + starts);
+    let mut want = std::collections::BTreeMap::new();
+    for k in plain.iter().chain(&runs) {
+        *want.entry(*k).or_insert(0) += 1;
+    }
+    assert_eq!(totals(&t), want);
+}
+
+/// Long (heap) string keys in runs: equal values sit at different heap
+/// offsets, so their encoded rows differ and each row is looked up; long
+/// values sharing a prefix stay apart; short (inline) values in runs take
+/// the run path. Every key's count is its rows.
+#[test]
+fn runs_of_string_keys_keep_their_groups() {
+    let core = core_str();
+    let seed = HashSeed::new(Some(8));
+    let long = |i: i64| format!("{i:0>200}");
+    let mut keys: Vec<Option<String>> = Vec::new();
+    for i in 0..600_i64 {
+        let k = match i % 3 {
+            0 => Some(long(i % 40)),
+            1 => Some(format!("s{}", i % 40)),
+            _ => None,
+        };
+        keys.extend(std::iter::repeat_n(k, 3));
+    }
+    let mut want = std::collections::BTreeMap::new();
+    for k in &keys {
+        *want.entry(k.clone()).or_insert(0_i64) += 1;
+    }
+    let v = Int64Array::from(vec![1; keys.len()]);
+    let cols: Vec<ArrayRef> = vec![Arc::new(StringArray::from(keys.clone())), Arc::new(v)];
+    let b = Batch::new(RecordBatch::try_new(Arc::clone(&core.spec.input), cols).unwrap());
+    for mode in [Mode::Grow, Mode::Fixed { limit: 30 }] {
+        let mut t = RowTable::new(&core, &seed, mode, false, RADIX_BITS).unwrap();
+        t.local_skip = 1;
+        apply(&mut t, &b);
+        let out = t.output_batch(&t.ids(0..t.len())).unwrap();
+        let ks = out
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let cs = out.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+        let mut got = std::collections::BTreeMap::new();
+        for i in 0..out.num_rows() {
+            let k = ks.is_valid(i).then(|| ks.value(i).to_string());
+            *got.entry(k).or_insert(0_i64) += cs.value(i);
+        }
+        assert_eq!(got, want, "{mode:?}");
+    }
+}
+
+/// An input clustered by the key whose runs are nearly all new keys (TPC-H
+/// q18: four rows an order) turns append-only at the first decision, as
+/// a unique input does: the decision counts run starts, not rows. Runs
+/// make one row each, a run across two batches two (merged later), and
+/// the merged groups count every row. Keys repeating far apart (the same
+/// run lengths, keys cycling) keep the index.
+#[test]
+fn clustered_new_keys_turn_append_only() {
+    let core = core();
+    let seed = HashSeed::new(Some(3));
+    let fixed =
+        || RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    let (mut runs, mut cycling) = (fixed(), fixed());
+    // Batches of 8,190 rows: runs of 4 cross the batch boundaries.
+    let step = 8190_usize;
+    let rows = 4 * FIRST_ADAPT_ROWS;
+    let mut start = 0;
+    while start < rows {
+        let s = i64::try_from(start).unwrap();
+        let e = i64::try_from((start + step).min(rows)).unwrap();
+        apply(&mut runs, &batch(&core, (s..e).map(|i| i / 4)));
+        apply(
+            &mut cycling,
+            &batch(&core, (s..e).map(|i| (i / 4) % 20_000)),
+        );
+        start += step;
+    }
+    assert_eq!(runs.mode, Mode::Append);
+    assert_ne!(cycling.mode, Mode::Append);
+    let groups = FIRST_ADAPT_ROWS;
+    // One row per run, plus one per batch whose first run continues
+    // the batch before, and the rows made before the decision.
+    assert!(runs.groups <= groups + rows / step + 1, "{}", runs.groups);
+    let mut merged = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS).unwrap();
+    for p in 0..runs.parts.len() {
+        let c = runs.merge_chunk(p, 0..runs.part_len(p)).unwrap();
+        merged.apply_merge(&runs, &c).unwrap();
+    }
+    assert_eq!(merged.groups, groups);
+    let t = totals(&merged);
+    assert!(t.values().all(|&c| c == 4), "{t:?}");
+}
+
+/// A table grouping by `k` with `hll_sketch_agg(v)` at lgK 12, raw or final.
+fn hll_core(output: AggregateOutput) -> Arc<AggCore> {
+    let s = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, true),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let spec = AggregateSpec {
+        input: Arc::clone(&s),
+        group_by: vec![0],
+        aggregates: vec![AggregateExpr::new(
+            AggregateFunction::HllSketchAgg { lg_k: 12 },
+            1,
+            DataType::Binary,
+            "h",
+        )],
+        output,
+        ansi: true,
+        spill: None,
+        require_unit_weights: false,
+        legacy_statistical: false,
+        udafs: None,
+    };
+    Arc::new(AggCore::new(spec).unwrap())
+}
+
+/// `groups` keys with `per_group` distinct values each.
+fn hll_batch(core: &AggCore, groups: i64, per_group: i64) -> Batch {
+    let (mut k, mut v) = (Vec::new(), Vec::new());
+    for d in 0..per_group {
+        for g in 0..groups {
+            k.push(g);
+            v.push(d);
+        }
+    }
+    let cols: Vec<ArrayRef> = vec![Arc::new(Int64Array::from(k)), Arc::new(Int64Array::from(v))];
+    Batch::new(RecordBatch::try_new(Arc::clone(&core.spec.input), cols).unwrap())
+}
+
+/// Review 5e55d3e29 finding 1: over several radix partitions, the projection before a batch of new groups is at
+/// least the table's size after it, whether every group's sketch reaches the registers in this batch (raw values)
+/// or arrives there already (partial states). Partition 0's groups alone, which is all the old bound saw, would
+/// not do: the table is empty.
+#[test]
+fn hll_sketches_are_projected_over_every_partition_of_a_new_batch() {
+    let seed = HashSeed::new(Some(4));
+    // Raw: 1,024 new groups, 500 distinct values each, so each reaches the registers.
+    let raw = hll_core(AggregateOutput::Partial);
+    let mut partial = RowTable::new(&raw, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+    assert_eq!(partial.part_count(), PARTS);
+    apply(&mut partial, &hll_batch(&raw, 1_024, 500));
+    assert!(
+        partial.memory_size() >= 1_024 * 4_096,
+        "{}",
+        partial.memory_size()
+    );
+    // States: the partial's sketches, all in registers, into an empty final table.
+    let refs = partial.ids(0..partial.len());
+    let states = Batch::new(partial.state_batch(&refs).unwrap());
+    let fin = hll_core(AggregateOutput::Final);
+    let mut table = RowTable::new(&fin, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+    let p = table.prepare(&states, true).unwrap();
+    let want = table.projected(&p);
+    table.apply(&p).unwrap();
+    assert!(
+        table.memory_size() <= want,
+        "{} > {want}",
+        table.memory_size()
+    );
+    assert!(table.memory_size() >= 1_024 * 4_096);
+}
+
+/// Review 023ffd9ab: a low-cardinality `GROUP BY` whose sketches are all at the registers reserves little for a
+/// further raw batch: the groups have no room to grow, and the fresh-group terms are per row, not per sketch.
+#[test]
+fn full_sketches_project_little_for_a_further_batch() {
+    let seed = HashSeed::new(Some(4));
+    let core = hll_core(AggregateOutput::Partial);
+    let mut t = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+    apply(&mut t, &hll_batch(&core, 10, 3_000));
+    assert!(t.memory_size() >= 10 * 4_096, "{}", t.memory_size());
+    let again = t.prepare(&hll_batch(&core, 10, 820), false).unwrap();
+    let (before, projected) = (t.memory_size(), t.projected(&again));
+    // 8,200 rows over 10 groups: the real growth is none. The old bound was rows * the registers (34 MB).
+    assert!(
+        projected - before < 3 << 20,
+        "{} bytes over {before}",
+        projected - before
+    );
+    t.apply(&again).unwrap();
+    assert!(t.memory_size() <= projected);
+}

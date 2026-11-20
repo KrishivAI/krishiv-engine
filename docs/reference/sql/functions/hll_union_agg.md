@@ -10,7 +10,7 @@ Returns the estimated number of unique values.
 `allowDifferentLgConfigK` (optional) Allow sketches with different lgConfigK values
  to be unioned (defaults to false).
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -22,7 +22,7 @@ hll_union_agg(expr, allowDifferentLgConfigK)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 3.5.0 |
@@ -35,12 +35,13 @@ hll_union_agg(expr, allowDifferentLgConfigK)
 ```sql
 -- hll_union_agg, example 1
 > SELECT hll_sketch_estimate(hll_union_agg(sketch, true)) FROM (SELECT hll_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT hll_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
-Error: KRISHIV_UNSUPPORTED_FEATURE
+1
 ```
 
 ## Version history
 
 - Added in Spark 3.5.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

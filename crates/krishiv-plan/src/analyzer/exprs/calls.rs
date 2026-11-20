@@ -22,9 +22,31 @@ pub(super) fn assert_message(cond: &Bound, origin: Origin, zone: Option<SessionZ
     }
 }
 
-/// The position of the options argument of the CSV and JSON functions.
-pub(super) fn options_index(name: &str) -> Option<usize> {
+/// The omitted constant of `hll_sketch_agg(c)` (`lgConfigK` 12), `hll_union_agg(s)` and `hll_union(a, b)` (`allowDifferentLgK`
+/// `false`): Spark's constructors write them, and the column name shows them.
+pub(super) fn hll_default(name: &str, n: usize, origin: Origin) -> Option<Bound> {
+    match (name, n) {
+        ("hll_sketch_agg", 1) => Some(default_argument(
+            Literal::Integer(12),
+            DataType::Integer,
+            false,
+            origin,
+        )),
+        ("hll_union_agg", 1) | ("hll_union", 2) => Some(default_argument(
+            Literal::Boolean(false),
+            DataType::Boolean,
+            false,
+            origin,
+        )),
+        _ => None,
+    }
+}
+
+/// The position of the options argument of the CSV and JSON functions (`n` arguments in the call: `from_protobuf` and `to_protobuf`
+/// take the options third in a three-argument call and fourth otherwise).
+pub(super) fn options_index(name: &str, n: usize) -> Option<usize> {
     match name {
+        "from_protobuf" | "to_protobuf" => Some(if n == 3 { 2 } else { 3 }),
         "from_csv" | "from_json" | "from_xml" | "from_avro" => Some(2),
         "to_csv" | "schema_of_csv" | "to_json" | "schema_of_json" | "to_xml" | "schema_of_xml" => {
             Some(1)
@@ -53,6 +75,28 @@ pub(super) fn literal_map_pairs(e: &Expr) -> Option<Vec<(String, String)>> {
 }
 
 impl Resolver<'_> {
+    /// The origin Spark's `time_bucket` builder writes: 1970-01-01 00:00:00 in the session zone for a `TIMESTAMP` (or anything that
+    /// is not a `TIMESTAMP_NTZ`), the epoch for a `TIMESTAMP_NTZ`.
+    pub(super) fn time_bucket_origin(&self, ts: &Bound, origin: Origin) -> Bound {
+        if ts.ty.data_type == Some(DataType::TimestampNtz) {
+            return default_argument(
+                Literal::TimestampNtz(0),
+                DataType::TimestampNtz,
+                false,
+                origin,
+            );
+        }
+        let offset = self.ctx.conf.session_zone.map_or(0, |z| {
+            krishiv_kernels::cast::TimeZoneRules::offset_for_local(&z, 0)
+        });
+        default_argument(
+            Literal::Timestamp(i64::from(offset).saturating_mul(-1_000_000)),
+            DataType::Timestamp,
+            false,
+            origin,
+        )
+    }
+
     /// A registry call's arguments after their implicit casts, and its
     /// result type: Spark's arity check, then the function's input types
     /// and result rule. Out of line: it keeps the recursive `expr` frame
@@ -83,10 +127,37 @@ impl Resolver<'_> {
             .then(|| self.pad_char_comparison(kids))
             .flatten();
         let kids = padded.as_deref().unwrap_or(kids);
-        let constants: Vec<Option<Constant>> = kids
+        let mut constants: Vec<Option<Constant>> = kids
             .iter()
             .map(|k| self.fold(&k.expr, self.ctx.conf.ansi))
             .collect();
+        if is_builtin_entry(entry) && matches!(entry.id.name(), "from_protobuf" | "to_protobuf") {
+            // A binary literal is the descriptor set and the rewritten options `map(..)` of string literals the options: values the
+            // result type reads (Spark folds both). Other functions keep seeing neither as a constant.
+            for (c, k) in constants.iter_mut().zip(kids) {
+                match &k.expr.node {
+                    ExprNode::Literal(Literal::Binary(b)) => *c = Some(Constant::Binary(b.clone())),
+                    ExprNode::Literal(Literal::Map(pairs)) => {
+                        *c = Some(Constant::StringMap(
+                            pairs
+                                .iter()
+                                .map(|(k, v)| (k.clone(), Some(v.clone())))
+                                .collect(),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            // A descriptor path Bind read under the access policy: the file's bytes, or why it could not be read.
+            if let Some(path) = Self::descriptor_literal(kids)
+                && let Some(read) = self.b.descriptors.get(path)
+            {
+                constants[2] = Some(match read {
+                    Ok(bytes) => Constant::Binary(bytes.clone()),
+                    Err(e) => Constant::Error(e.clone()),
+                });
+            }
+        }
         let literals: Vec<bool> = kids.iter().map(|k| fold::is_literal(&k.expr)).collect();
         let foldable: Vec<bool> = kids
             .iter()
@@ -138,7 +209,34 @@ impl Resolver<'_> {
                 .unwrap_or(e.origin);
             AnalysisError::new(err, origin)
         })?;
+        let mut call_kids = call_kids;
+        if is_builtin_entry(entry)
+            && matches!(entry.id.name(), "from_protobuf" | "to_protobuf")
+            && Self::descriptor_literal(kids).is_some()
+            && let Some(Some(Constant::Binary(bytes))) = constants.get(2)
+            && let Some(k) = call_kids.get_mut(2)
+        {
+            // The call binds from the bytes read here, never from the path (shown as written).
+            k.shown = Some(Arc::clone(&k.expr));
+            k.expr = Arc::new(
+                Expr::new(ExprNode::Literal(Literal::Binary(bytes.clone())))
+                    .with_origin(k.expr.origin),
+            );
+            k.ty = arg_type(DataType::Binary, false);
+        }
         Ok((Self::folded_ntile(entry, &constants, call_kids), ty))
+    }
+
+    /// The non-empty string literal path in the descriptor position of a `from_protobuf` / `to_protobuf` call (the third of three
+    /// or four arguments), as Bind found it (`bind/descriptors.rs`).
+    fn descriptor_literal(kids: &[Bound]) -> Option<&str> {
+        if !matches!(kids.len(), 3 | 4) {
+            return None;
+        }
+        match &kids[2].expr.node {
+            ExprNode::Literal(Literal::String(s)) if !s.is_empty() => Some(s),
+            _ => None,
+        }
     }
 
     /// `count()` with no arguments: `WRONG_NUM_ARGS.WITH_SUGGESTION`,

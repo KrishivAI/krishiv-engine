@@ -322,23 +322,17 @@ fn a_column_list_must_match_the_log() {
     );
 }
 
+/// The writes Spark + delta-spark runs (`SESSION.json`): INSERT, CTAS and a `CREATE` of a new
+/// table now write (PR-37a part 2); `ALTER` stays refused by name.
 #[test]
-fn writes_and_ddl_are_refused_by_name() {
+fn writes_run_and_ddl_is_refused_by_name() {
     let t = Table::copy("session-table");
     let s = Session::new().unwrap();
     let path = t.path();
     block_on(s.sql(&format!("CREATE TABLE d USING delta LOCATION '{path}'"))).unwrap();
     let missing = tempfile::tempdir().unwrap();
     let gone = missing.path().join("gone").to_string_lossy().into_owned();
-    let empty = missing.path().to_string_lossy().into_owned();
-    let new_table = "CREATE TABLE over a location without a Delta table (a new Delta table)";
     for (probe, sql, table, operation) in [
-        (
-            "insert",
-            "INSERT INTO d VALUES (3, 'c', 3.00, NULL, 'x')".to_owned(),
-            "d",
-            "INSERT",
-        ),
         (
             "alter_add_columns",
             "ALTER TABLE d ADD COLUMNS (extra INT)".to_owned(),
@@ -352,37 +346,14 @@ fn writes_and_ddl_are_refused_by_name() {
             "ALTER TABLE",
         ),
         (
-            "ctas",
-            "CREATE TABLE c USING delta AS SELECT 1 AS id".to_owned(),
-            "c",
-            "CREATE TABLE AS SELECT",
-        ),
-        (
-            "create_without_location",
-            "CREATE TABLE managed (id BIGINT) USING delta".to_owned(),
-            "managed",
-            "CREATE TABLE without LOCATION (a new Delta table)",
-        ),
-        (
             "create_missing_location",
             format!("CREATE TABLE gone USING delta LOCATION '{gone}'"),
             "gone",
-            new_table,
-        ),
-        (
-            "create_missing_location_with_columns",
-            format!("CREATE TABLE gone2 (id BIGINT) USING delta LOCATION '{gone}'"),
-            "gone2",
-            new_table,
-        ),
-        (
-            "create_empty_location",
-            format!("CREATE TABLE hollow USING delta LOCATION '{empty}'"),
-            "hollow",
-            new_table,
+            "CREATE TABLE without columns where there is no Delta table",
         ),
     ] {
-        // Spark + delta-spark runs each of them: a write Krishiv does not make yet.
+        // Spark + delta-spark runs each of them: DDL Krishiv does not make yet (a table of no
+        // columns, which the kernel refuses to create).
         assert!(session_record(probe)["error"].is_null(), "{probe}");
         let e = error(&s, &sql);
         assert_eq!(
@@ -397,16 +368,34 @@ fn writes_and_ddl_are_refused_by_name() {
             "{probe}: {e}"
         );
     }
-    // The table still reads, unchanged; nothing else was created.
-    assert_eq!(ids(&query(&s, "SELECT id FROM d ORDER BY id")), [1, 2]);
-    for name in ["c", "managed", "gone", "gone2", "hollow"] {
-        assert_eq!(
-            error(&s, &format!("SELECT * FROM {name}")).error_class(),
-            ErrorClass::TableOrViewNotFound,
-            "{name}"
-        );
-    }
     assert!(!Path::new(&gone).exists());
+    let gone2 = missing.path().join("gone2").to_string_lossy().into_owned();
+    for (probe, sql) in [
+        (
+            "insert",
+            "INSERT INTO d VALUES (3, 'c', 3.00, NULL, 'x')".to_owned(),
+        ),
+        (
+            "ctas",
+            "CREATE TABLE c USING delta AS SELECT 1 AS id".to_owned(),
+        ),
+        (
+            "create_without_location",
+            "CREATE TABLE managed (id BIGINT) USING delta".to_owned(),
+        ),
+        (
+            "create_missing_location_with_columns",
+            format!("CREATE TABLE gone2 (id BIGINT) USING delta LOCATION '{gone2}'"),
+        ),
+    ] {
+        assert!(session_record(probe)["error"].is_null(), "{probe}");
+        block_on(async { s.sql(&sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{probe}: {e}"));
+    }
+    assert_eq!(ids(&query(&s, "SELECT id FROM d ORDER BY id")), [1, 2, 3]);
+    assert_eq!(ids(&query(&s, "SELECT CAST(id AS BIGINT) FROM c")), [1]);
+    assert!(query(&s, "SELECT * FROM managed").is_empty());
+    assert!(Path::new(&gone2).join("_delta_log").exists());
 }
 
 /// delta-spark compares `TBLPROPERTIES` (and options) given to `CREATE TABLE .. USING delta

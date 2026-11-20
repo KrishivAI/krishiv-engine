@@ -489,14 +489,13 @@ impl Resolver<'_> {
         // written with for names and errors.
         // A nested value resolves from its constructor; `v.f` of a struct
         // variable reads its field.
-        let nested = match self.ctx.variables.get(&c.name) {
+        let nested = match self.variables().get(&c.name) {
             Some(var) => match &var.value {
                 VariableValue::Nested(e) => Some((var, Arc::clone(e), c.name.len())),
                 VariableValue::Scalar(_) => None,
             },
             None => {
-                self.ctx
-                    .variables
+                self.variables()
                     .get_struct_prefix(&c.name)
                     .and_then(|(var, used)| match &var.value {
                         VariableValue::Nested(e) => Some((var, Arc::clone(e), used)),
@@ -539,7 +538,7 @@ impl Resolver<'_> {
             b.shown = Some(named_as(top, text, c, origin));
             return Ok(b);
         }
-        if let Some(var) = self.ctx.variables.get(&c.name) {
+        if let Some(var) = self.variables().get(&c.name) {
             let Some(name) = c.name.last() else {
                 debug_assert!(false, "a variable name is never empty");
                 return Err(unresolved(&c.name, cx.scope, origin));

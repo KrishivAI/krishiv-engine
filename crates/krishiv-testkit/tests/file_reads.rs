@@ -109,6 +109,47 @@ fn class<T: std::fmt::Debug>(r: Result<T, KrishivError>) -> (ErrorClass, String)
     (e.error_class(), first)
 }
 
+/// `hf://` / `HF://` paths placed in the harness's in-memory store.
+#[derive(Debug)]
+struct HfPaths;
+
+impl PathLocator for HfPaths {
+    fn locate(&self, path: &str) -> krishiv_exec::Result<LocatedPath> {
+        let rest = path.get(5..).unwrap_or(path);
+        Ok(LocatedPath {
+            store: StoreId::new("memory://suite"),
+            path: Path::from(rest),
+            display: path.to_owned(),
+        })
+    }
+}
+
+/// KN-7: an `hf://` path that names no file is `PATH_NOT_FOUND` whatever the case of the scheme; the
+/// store has no listing, so it is never probed as a directory (here `d.parquet` is one in the store).
+#[test]
+fn an_hf_path_that_is_not_a_file_is_not_found_in_any_case() {
+    let env = Env::new(None).unwrap();
+    let fx = MockFixture::default();
+    let a = schema(&[("a", ArrowType::Int32)]);
+    env.write(&fx, "datasets/o/n/d.parquet/part-0", &a, &[ints(&a)], &[])
+        .unwrap();
+    env.write(&fx, "datasets/o/n/ok.parquet", &a, &[ints(&a)], &[])
+        .unwrap();
+    let r = reads(&env, vec![Arc::new(MockFormat)], Arc::new(HfPaths));
+    let none = BTreeMap::new();
+    for path in [
+        "hf://datasets/o/n/d.parquet",
+        "HF://datasets/o/n/d.parquet",
+        "hf://datasets/o/n/missing.parquet",
+        "HF://datasets/o/n/missing.parquet",
+    ] {
+        let got = env.block_on(r.listing("mock", &paths(&[path]), &none));
+        assert_eq!(class(got), (ErrorClass::PathNotFound, path.to_owned()));
+    }
+    let got = env.block_on(r.listing("mock", &paths(&["HF://datasets/o/n/ok.parquet"]), &none));
+    assert!(got.is_ok());
+}
+
 #[test]
 fn directories_list_like_spark() {
     let env = Env::new(None).unwrap();
@@ -169,6 +210,13 @@ fn directories_list_like_spark() {
     // Credentials in paths (globs are expanded: see `partition_discovery` in krishiv-session).
     let got = env.block_on(r.infer("mock", &paths(&["s3://user:secret@bucket/k"]), &none));
     assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
+    // KN-7: `hf://` has no listing, so a directory or a glob is refused before any request.
+    for path in ["hf://datasets/o/n/dir/", "hf://datasets/o/n/dir/*.parquet"] {
+        let got = env.block_on(r.infer("json", &paths(&[path]), &none));
+        let (kind, param) = class(got);
+        assert_eq!(kind, ErrorClass::KrishivUnsupportedFeature, "{path}");
+        assert!(param.contains("only named files"), "{path}: {param}");
+    }
     // Paths come before the format: a missing path of a format without a
     // reader here is PATH_NOT_FOUND, an existing one of a Spark built-in
     // source without an implementation is unsupported.

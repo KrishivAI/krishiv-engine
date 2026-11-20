@@ -39,6 +39,35 @@ pub static DELTA_SNAPSHOT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Most retries of a Delta commit that lost a race (delta-spark's `maxCommitAttempts`).
+pub static DELTA_MAX_COMMIT_ATTEMPTS: ConfigEntry = ConfigEntry {
+    key: "krishiv.delta.maxCommitAttempts",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10_000_000)),
+    doc: "Most times a Delta write retries its commit after another writer committed first and \
+          no conflict was found: up to this many retries, so one more attempt in all, as \
+          delta-spark counts them. Past it the write fails with \
+          `DELTA_MAX_COMMIT_RETRIES_EXCEEDED`.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.databricks.delta.maxCommitAttempts"),
+};
+
+/// Longest time a Delta commit retries.
+pub static WRITE_COMMIT_RETRY_TIMEOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.write.commitRetryTimeout",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(30 * 60))),
+    doc: "Experimental. Longest time all the attempts of one table-format commit may take \
+          together (a Delta commit retried after losing races). Past it the write fails with \
+          `DELTA_MAX_COMMIT_RETRIES_EXCEEDED`; delta-spark has no such bound.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// Largest catalog metadata a lakehouse connector parses.
 pub static CATALOG_MAX_METADATA_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.catalog.maxMetadataBytes",
@@ -155,13 +184,62 @@ pub static ICEBERG_COMMIT_MAX_INTERVENING: ConfigEntry = ConfigEntry {
     value_type: ValueType::PositiveInt,
     default: Some(ConfigValue::Int(1000)),
     doc: "Most snapshots committed to a branch between the snapshot an Iceberg write (an \
-          overwrite, delete, update or merge) started from and the branch's current head that \
-          its commit validates for conflicts. A commit that finds more fails with \
+          INSERT OVERWRITE, delete, update or merge) started from and the branch's current head \
+          that its commit validates for conflicts. An INSERT OVERWRITE validates only under the \
+          write option isolation-level, and without validate-from-snapshot-id it validates the \
+          whole history, which counts here. A commit that finds more fails with \
           KRISHIV_ICEBERG_COMMIT_CONFLICT rather than validating part of the history; appends \
-          validate nothing and ignore it. Read when the write is planned. Krishiv does not run \
-          Iceberg overwrites, deletes, updates or merges yet, so until it does this has no effect.",
+          validate nothing and ignore it. Read when the write is planned. Krishiv has no catalog \
+          that commits Iceberg overwrites, deletes, updates or merges yet, so until it runs them \
+          this has no effect.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.0",
     spark_alias: None,
 };
+
+/// Whether an Iceberg append writes Theta sketches of its columns into a Puffin statistics file.
+pub static ICEBERG_WRITE_STATISTICS_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.iceberg.write.statistics.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether an append into an Iceberg table (`INSERT`, CTAS) also writes a distinct-count \
+          sketch (`apache-datasketches-theta-v1`) of each of its first 100 top-level primitive columns \
+          (not `uuid`) into a Puffin statistics file, committed with the snapshot in the same request, \
+          so the optimizer and other engines read the table's distinct counts without a scan. A \
+          snapshot gets statistics only when every row it holds is sketched: the table was empty, or \
+          the previous snapshot has statistics of the column; otherwise the column, or the whole \
+          file, is left out. Statistics never fail a write: on any failure, or a catalog refusing \
+          the update, the write commits without them. A table opts out with the table property \
+          `krishiv.write.statistics.enabled=false`. Off by default until the write cost of the sketches \
+          is measured. Read when the write is planned.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::ICEBERG_WRITE_STATISTICS_ENABLED;
+    use crate::config::{Config, ConfigValue, Scope};
+
+    /// PR-54b: statistics on Iceberg writes, off by default until U3 measures the write cost.
+    #[test]
+    fn iceberg_write_statistics_enabled_parses_and_defaults() {
+        let mut c = Config::new();
+        let get = |c: &Config| {
+            c.get(&ICEBERG_WRITE_STATISTICS_ENABLED)
+                .and_then(ConfigValue::as_bool)
+        };
+        assert_eq!(get(&c), Some(false));
+        c.set("krishiv.iceberg.write.statistics.enabled", "true")
+            .unwrap();
+        assert_eq!(get(&c), Some(true));
+        assert!(
+            c.set("krishiv.iceberg.write.statistics.enabled", "sometimes")
+                .is_err()
+        );
+        assert_eq!(ICEBERG_WRITE_STATISTICS_ENABLED.scope, Scope::Session);
+    }
+}

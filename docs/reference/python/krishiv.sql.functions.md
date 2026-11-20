@@ -442,7 +442,7 @@ Calls the registry function `bit_xor`.
 def bitmap_and_agg(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_and_agg`.
 
 ### `bitmap_bit_position`
 
@@ -450,7 +450,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def bitmap_bit_position(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_bit_position`.
 
 ### `bitmap_bucket_number`
 
@@ -458,7 +458,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def bitmap_bucket_number(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_bucket_number`.
 
 ### `bitmap_construct_agg`
 
@@ -466,7 +466,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def bitmap_construct_agg(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_construct_agg`.
 
 ### `bitmap_count`
 
@@ -474,7 +474,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def bitmap_count(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_count`.
 
 ### `bitmap_or_agg`
 
@@ -482,7 +482,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def bitmap_or_agg(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `bitmap_or_agg`.
 
 ### `bitwiseNOT`
 
@@ -777,6 +777,14 @@ def count_min_sketch(col: ColumnOrName, eps: Column | float, confidence: Column 
 ```
 
 Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `counter_diff`
+
+```python
+def counter_diff(value: ColumnOrName, startTime: ColumnOrName | None=None) -> Column
+```
+
+Calls the registry function `counter_diff`.
 
 ### `covar_pop`
 
@@ -1391,7 +1399,7 @@ Calls the registry function `histogram_numeric`.
 def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `hll_sketch_agg`.
 
 ### `hll_sketch_estimate`
 
@@ -1399,7 +1407,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def hll_sketch_estimate(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `hll_sketch_estimate`.
 
 ### `hll_union`
 
@@ -1407,7 +1415,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def hll_union(col1: ColumnOrName, col2: ColumnOrName, allowDifferentLgConfigK: bool | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `hll_union`.
 
 ### `hll_union_agg`
 
@@ -1415,7 +1423,15 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `hll_union_agg`.
+
+### `hmac`
+
+```python
+def hmac(key: ColumnOrName, message: ColumnOrName, algorithm: ColumnOrName | None=None) -> Column
+```
+
+Calls the registry function `hmac`.
 
 ### `hour`
 
@@ -1508,7 +1524,7 @@ Calls the registry function `input_file_name`.
 ### `instr`
 
 ```python
-def instr(str: ColumnOrName, substr: str | Column) -> Column
+def instr(str: ColumnOrName, substr: str | Column, start: int | Column | None=None, occurrence: int | Column | None=None) -> Column
 ```
 
 Calls the registry function `instr`.

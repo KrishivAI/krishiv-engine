@@ -300,6 +300,7 @@ const ADDED_DATA: Checks = Checks {
     added_dvs: false,
     removed_data_files: false,
     new_deletes_for_replaced: false,
+    deleted_data_files: false,
 };
 
 fn added(id: i64, op: Operation, path: &str, x: i32) -> (i64, Operation, Vec<LiveEntry>) {
@@ -389,6 +390,7 @@ const ADDED_DELETES: Checks = Checks {
     added_dvs: false,
     removed_data_files: false,
     new_deletes_for_replaced: false,
+    deleted_data_files: false,
 };
 
 #[test]
@@ -448,6 +450,7 @@ const NEW_DELETES: Checks = Checks {
     added_dvs: false,
     removed_data_files: false,
     new_deletes_for_replaced: true,
+    deleted_data_files: false,
 };
 
 /// Java's `validateNoNewDeletesForDataFiles` (CoW): a delete added since S0
@@ -616,6 +619,7 @@ const ADDED_DVS: Checks = Checks {
     added_dvs: true,
     removed_data_files: false,
     new_deletes_for_replaced: false,
+    deleted_data_files: false,
 };
 
 #[test]
@@ -666,6 +670,7 @@ const REMOVED: Checks = Checks {
     added_dvs: false,
     removed_data_files: true,
     new_deletes_for_replaced: false,
+    deleted_data_files: false,
 };
 
 #[test]

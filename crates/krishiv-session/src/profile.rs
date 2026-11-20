@@ -329,6 +329,11 @@ impl DataFrame {
         keep: bool,
     ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
         let a = self.action_analysis().await?;
+        // A profile shows the queries of its definer views: SQL `EXPLAIN ANALYZE` and every
+        // DataFrame profile ask here (P3-T062 §2.4, review r2 R3).
+        self.session
+            .authorize_shown_definer_reads(&a.analyzed)
+            .await?;
         let (physical, fill) = self.physical_cached(&a).await?;
         let _lease = fill.into_lease();
         self.run_profiled_plan(&a, &physical, keep).await
@@ -366,6 +371,10 @@ impl DataFrame {
         let mut profile = QueryProfile::new(physical, query.metrics(), true);
         profile.trace = Some(trace);
         profile.identity = Some(identity);
+        // The same plan, metrics and thresholds the query's `system.queries` row was computed from.
+        let profile = profile.with_hints(&krishiv_exec::profile::HintSettings::from_config(
+            &a.env.config,
+        ));
         Ok((out, profile))
     }
 

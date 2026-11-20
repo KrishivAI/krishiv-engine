@@ -324,6 +324,16 @@ A new session with separate SQL configuration and temporary views,
 as `pyspark.sql.SparkSession.newSession`: it starts from the options
 this session was built with, not from later `conf.set` changes.
 
+### `profile`
+
+```python
+@property
+def profile(self) -> Profile
+```
+
+The UDF profiles of this session (`spark.sql.pyspark.udf.profiler` = `perf` or `memory`):
+`show`, `dump` and `clear`, as `pyspark.sql.profiler.Profile`.
+
 ### `range`
 
 ```python
@@ -366,6 +376,15 @@ accepted and ignored (one node has nothing to partition).
 @property
 def read(self) -> DataFrameReader
 ```
+
+### `sparkContext`
+
+```python
+@property
+def sparkContext(self) -> Any
+```
+
+Not supported: Krishiv has no SparkContext or RDDs; use the DataFrame API.
 
 ### `sql`
 

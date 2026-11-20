@@ -65,7 +65,7 @@ use crate::variables::SessionVariables;
 mod context;
 mod lifecycle;
 #[cfg(feature = "unstable-ir")]
-pub use lifecycle::SqlOutcome;
+pub use lifecycle::{SqlOutcome, SqlQuery};
 #[cfg(test)]
 mod run_task;
 
@@ -556,63 +556,10 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans))
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans, false))
             .await
+            .and_then(Ran::into_frame)
             .map(|(df, _)| df)
-    }
-
-    /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
-    /// the id of the `system.queries` row a query of it began.
-    pub(crate) async fn sql_here_marked(
-        &self,
-        query: &str,
-        row: Arc<std::sync::Mutex<Option<String>>>,
-    ) -> Result<(DataFrame, bool), KrishivError> {
-        // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, row, Vec::new())).await
-    }
-
-    async fn sql_here_inner(
-        &self,
-        query: &str,
-        row: Arc<std::sync::Mutex<Option<String>>>,
-        spans: Vec<krishiv_sql::ast::Span>,
-    ) -> Result<(DataFrame, bool), KrishivError> {
-        let mut env = self.query_env();
-        env.row = row;
-        let written = query;
-        let query = self.substituted(query);
-        let query: &str = &query;
-        // `IDENTIFIER(expr)` names are evaluated first: parsing, access checks and the run see them.
-        let resolved = self.identifier_clauses_into(query, &mut env).await?;
-        let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
-        if !spans.is_empty() && !named_by_clause && query == written {
-            env.identifier_spans = spans.into();
-        }
-        let query: &str = &resolved;
-        let redacted = krishiv_sql::redact_sql(query);
-        let statement = krishiv_sql::parse_statement(query, &env.parser)
-            .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
-        // clause when it drops it; the parser sees only the evaluated name.
-        if named_by_clause
-            && let Statement::DropFunction(f) = &statement
-            && f.temporary
-        {
-            krishiv_sql::check_temporary_function_name(&f.name, f.span)
-                .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        }
-        // Before any side effect: what the statement writes, creates or
-        // drops (its reads are checked by analysis, first thing).
-        let class = krishiv_sql::classify_with(&statement, &env.parser);
-        self.authorize_statement(&statement, class, &env).await?;
-        env.statement_class = Some(class.name());
-        let command = !matches!(statement, Statement::Query(_));
-        let df = self.run_statement(statement, env, query, &redacted).await?;
-        // Whatever frame the statement returns (a command's result too) shows the statement's
-        // text and class when it runs.
-        df.with_statement(&redacted, class.name());
-        Ok((df, command))
     }
 
     /// [`Self::run_statement`] without the ownership bookkeeping (`grants/exec.rs`).
@@ -1419,6 +1366,10 @@ impl Session {
             // `DataFrame::analyzed_for_metadata` / `schema_for_metadata` switch one analysis to
             // `Metadata`; every other analysis may run the plan.
             mode: krishiv_plan::analyzer::AnalysisMode::Execute,
+            // Filled per analysis by `Session::authorize_definer` callers; none by default.
+            definer_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
+            // Set per analysis to the permanent views it inlined (review r5 Z1, Z2).
+            stored_view_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
         };
         // The epoch the query's catalog reads at: entries it loads are at least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
@@ -1441,6 +1392,7 @@ impl Session {
             identifier_written: Arc::default(),
             observers: Arc::default(),
             view_keeps: Arc::default(),
+            withhold_profile: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1451,6 +1403,7 @@ impl Session {
             },
             quiet: QuietDenials::default(),
             udtfs,
+            spill_failure: Arc::default(),
         }
     }
 
@@ -1489,13 +1442,26 @@ impl Session {
                 path: env.catalog.sql_path_snapshot(),
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
                 outside_session: !env.catalog.in_session_catalog(),
-                qualify: Some(&|e, namespace, path| {
+                cte_precedence: env.analysis.conf.cte_precedence,
+                qualify: Some(&|e, namespace, path, rule| {
                     env.sql_functions
-                        .qualify_calls(e, namespace, path, self.state.profile, true)
+                        .qualify_calls(e, namespace, path, self.state.profile, rule)
                 }),
+                qualify_table: Some(&|name, namespace, path, rule| {
+                    env.sql_functions.qualify_table_call(
+                        name,
+                        namespace,
+                        path,
+                        self.state.profile,
+                        rule,
+                    )
+                }),
+                stored_body: false,
             }),
         )?;
         let mut inlined = std::mem::take(&mut expansion.views);
+        // What a definer view being created pins (review r10 M10).
+        env.sql_functions.note_views(&expansion.reached);
         *env.view_keeps
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = std::mem::take(&mut expansion.keeps);
@@ -1504,28 +1470,102 @@ impl Session {
         // can fail, so a principal who may not read it learns nothing from it.
         let mut views = self.authorize_reads(&expansion.reads, env).await?;
         if let Some(e) = expansion.deferred {
+            // Inside a definer view's text it is the definer's failure (review B2).
+            if expansion.deferred_in_definer {
+                return Err(self.definer_failure(env, e));
+            }
             let e = self.view_text_failure(&views, env, e).await;
             return crate::access::audit_read(self, env, Err(e));
         }
+        // `SQL SECURITY DEFINER` views (P3-T062 §2.4): the reader may read the view (asked above);
+        // its text is read with its definer's rights, and the reader's analysis skips what it reads.
+        let definers = std::mem::take(&mut expansion.definers);
+        // Trusted by node identity (review B1): the inlined queries themselves, never a number.
+        let texts = krishiv_plan::analyzer::views::DefinerTexts::new(
+            definers.iter().filter_map(|d| d.query.clone()).collect(),
+        );
+        for d in &definers {
+            match Box::pin(self.authorize_definer(d, &texts, env)).await {
+                Ok(owner_reads) => {
+                    if let Some(v) = inlined.get_mut(d.view) {
+                        v.owner_reads = owner_reads;
+                    }
+                }
+                Err(e) => return Err(self.definer_failure(env, e)),
+            }
+        }
+        // What only their texts call was asked of their definers (review r5 M7).
+        env.sql_functions
+            .settle_definer_calls(&expansion.plan, &texts, self.state.profile);
+        // The profile shows the definers' plans only to a principal that may see them (M2).
+        if !definers.is_empty() && !self.may_see_definer_reads(&inlined).await {
+            env.withhold_profile
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+        // Every permanent view's text, kept by identity: nothing of the reading session resolves in
+        // it (review r5 Z1, Z2).
+        let stored_texts = krishiv_plan::analyzer::views::DefinerTexts::new(
+            expansion
+                .stored_reads
+                .iter()
+                .map(|r| Arc::clone(&r.query))
+                .collect(),
+        );
+        let trusting_views;
+        let views_analysis = if texts.is_empty() && stored_texts.is_empty() {
+            &env.analysis
+        } else {
+            let mut ctx = env.analysis.clone();
+            ctx.definer_texts = texts.clone();
+            ctx.stored_view_texts = stored_texts.clone();
+            trusting_views = ctx;
+            &trusting_views
+        };
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
         let (synced, renames) =
-            match Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await {
+            match Box::pin(self.check_stored_views(&expansion.stored_reads, env, views_analysis))
+                .await
+            {
                 Ok(checked) => checked,
-                Err(e) => {
+                // A definer view's binding, or one inside a definer's text, is the definer's (review r2 R1).
+                Err((e, true)) => return Err(self.definer_failure(env, e)),
+                Err((e, false)) => {
                     let e = self.view_text_failure(&views, env, e).await;
                     return crate::access::audit_read(self, env, Err(e));
                 }
             };
-        let plan = Plan::try_new(crate::view_schema::apply_renames(&expansion.plan, &renames))?;
+        // A rename rebuilds the nodes above it: the trusted queries follow their rebuilt nodes.
+        let (renamed, mut kept) = crate::view_schema::apply_renames_keeping(
+            &expansion.plan,
+            &renames,
+            &[&texts, &stored_texts],
+        );
+        let stored_texts = kept.pop().unwrap_or_default();
+        let texts = kept.pop().unwrap_or_default();
+        let trusting;
+        let analysis = if texts.is_empty() && stored_texts.is_empty() {
+            &env.analysis
+        } else {
+            let mut ctx = env.analysis.clone();
+            ctx.definer_texts = texts;
+            ctx.stored_view_texts = stored_texts;
+            trusting = ctx;
+            &trusting
+        };
+        let plan = Plan::try_new(renamed)?;
         // The bodies of the functions the plan calls read views the same way:
         // the policy is asked about them before the analysis' own result (or
         // a failure inside a view's text) is shown. One boxed future for both
         // steps: `analyze_in` runs on the deepest stacks, where the size of
         // its own future counts.
-        let (analyzed, body_views) = Box::pin(async {
-            let analyzed = self.state.analyzer.analyze(&plan, &env.analysis).await;
-            (analyzed, self.authorize_body_reads(env).await)
+        let (analyzed, body_views, calls) = Box::pin(async {
+            let analyzed = self.state.analyzer.analyze(&plan, analysis).await;
+            (
+                analyzed,
+                self.authorize_body_reads(env).await,
+                self.authorize_function_calls(env).await,
+            )
         })
         .await;
         let analyzed = analyzed.map_err(|e| {
@@ -1538,6 +1578,8 @@ impl Session {
             attach_analysis(e, own.as_ref().or(text))
         });
         views.extend(body_views?);
+        // The stored functions it calls, before the analysis' own result (P3-T062 §2.4).
+        crate::access::audit_read(self, env, calls)?;
         let analyzed = match analyzed {
             Ok(analyzed) => Ok(analyzed),
             Err(e) => Err(self.view_text_failure(&views, env, e).await),
@@ -1575,30 +1617,6 @@ impl Session {
             }
         }
         Ok(analyzed)
-    }
-
-    /// The views the bodies of the functions a query called read, once the
-    /// policy allows them; a failure inside a view's text after that.
-    ///
-    /// Boxed: `analyze_in` runs on the deepest stacks (a script's nested
-    /// statements), where the size of its future counts.
-    fn authorize_body_reads<'a>(
-        &'a self,
-        env: &'a QueryEnv,
-    ) -> futures::future::BoxFuture<'a, Result<Vec<krishiv_plan::analyzer::TableIdent>, KrishivError>>
-    {
-        Box::pin(async move {
-            let (reads, deferred) = env.sql_functions.body_reads();
-            let views = if reads.is_empty() {
-                Vec::new()
-            } else {
-                Box::pin(self.authorize_reads(&reads, env)).await?
-            };
-            match deferred {
-                Some(e) => Err(e),
-                None => Ok(views),
-            }
-        })
     }
 
     /// Runs `physical`; the stream's batches are its result rows.
@@ -1653,6 +1671,26 @@ impl Session {
         Ok((crate::run_site::resolve_sites(stream, env), query))
     }
 
+    /// `error`, when it is a memory error of a query whose spill directory could not be set up,
+    /// as that failure (the memory error stays its cause): the query may have needed to spill
+    /// (PY-078). Applied below the metrics fold, so `system.queries` and the caller agree.
+    fn name_spill_failure(
+        error: KrishivError,
+        failure: &std::sync::Mutex<Option<KrishivError>>,
+    ) -> KrishivError {
+        if error.error_class() != krishiv_common::error::ErrorClass::UnableToAcquireMemory {
+            return error;
+        }
+        let found = failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match found {
+            Some(f) => f.with_cause(error),
+            None => error,
+        }
+    }
+
     /// The tags a query started now carries: the session's, then the statement's request tags as
     /// `(tag, "")` pairs (a key appears once; design P3-T064 §4.3).
     pub(crate) fn effective_tags(&self) -> Vec<(String, String)> {
@@ -1698,88 +1736,6 @@ impl Session {
             tags: self.effective_tags().into(),
             request_tags: Arc::clone(&self.request_tags),
         }
-    }
-
-    /// Asks the admission controller for a permit for the query whose
-    /// `system.queries` row is `log_id`. A controller that answers at once
-    /// leaves the row `running`; one that waits shows it `queued`. A refusal
-    /// closes the row as failed with the controller's error class, and a
-    /// caller that drops the query while it is queued closes it `cancelled`.
-    async fn admit(
-        &self,
-        log_id: &str,
-        env: &QueryEnv,
-        exempt: bool,
-    ) -> Result<crate::admission::Permit, KrishivError> {
-        // A query that reads only `system.*` is never queued behind the load it inspects.
-        if exempt {
-            return Ok(self.exempt_permit(log_id));
-        }
-        let request = QueryRequest {
-            principal: Arc::clone(&self.state.principal),
-            tags: self.effective_tags(),
-            class: WorkloadClass::Interactive,
-            source: None,
-            statement_class: None,
-            estimate: env.catalog.estimate(),
-        };
-        let controller = Arc::clone(&self.state.admission);
-        let mut admit = std::pin::pin!(controller.admit(&request));
-        let mut queued = QueuedRow {
-            state: Arc::clone(&self.state),
-            id: log_id,
-            open: true,
-        };
-        let admitted = match std::future::poll_fn(|cx| Poll::Ready(admit.as_mut().poll(cx))).await {
-            Poll::Ready(done) => done,
-            Poll::Pending => {
-                self.state.queries.set_state(log_id, "queued");
-                let done = admit.await;
-                if done.is_ok() {
-                    self.state.queries.set_state(log_id, "running");
-                }
-                done
-            }
-        };
-        queued.open = false;
-        match admitted {
-            Ok(permit) => {
-                let queued_ns = permit
-                    .slot::<crate::resource_groups::GroupSlot>()
-                    .map_or(0, crate::resource_groups::GroupSlot::queued_ns);
-                self.state
-                    .queries
-                    .mark_started(log_id, permit.group(), queued_ns);
-                Ok(permit)
-            }
-            Err(error) => {
-                self.state.queries.record_failed_row(log_id, &error);
-                Err(error)
-            }
-        }
-    }
-
-    /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
-    /// that is about to change something (a write replacing files) takes the permit first and
-    /// passes it on, so a refused or cancelled query has changed nothing.
-    pub(crate) async fn admit_query(
-        &self,
-        env: &QueryEnv,
-        exempt: bool,
-    ) -> Result<Admitted, KrishivError> {
-        // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
-        let log_id = self.state.queries.begin_as(
-            crate::system::TextPolicy::from_config(&env.config),
-            env.text.as_deref(),
-            env.statement_class,
-            self.operation_id(),
-        )?;
-        crate::action::note_row(&log_id);
-        // The request tags join the row's tags at once, so a queued query shows them too.
-        self.stamp_row(&log_id);
-        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
-        let permit = self.admit(&log_id, env, exempt).await?;
-        Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 
     /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution
@@ -1856,6 +1812,10 @@ impl Session {
             self.state.runtime.metrics.query_begin(query.class());
         }
         let row_id = log_id.clone();
+        // A definer's plan the principal may not see stays out of its profile (review M2).
+        let withheld = env
+            .withhold_profile
+            .load(std::sync::atomic::Ordering::Acquire);
         let mut pending = PendingFold(
             Some(QueryFold {
                 query: Arc::clone(&query),
@@ -1865,7 +1825,17 @@ impl Session {
                 log_id,
                 _permit: permit,
                 _operation: self.operation.clone(),
-                history: env.history_job(self, &row_id, physical, detailed),
+                history: if withheld {
+                    None
+                } else {
+                    env.history_job(self, &row_id, physical, detailed)
+                },
+                advisor: if withheld {
+                    None
+                } else {
+                    crate::query_fold::AdvisorJob::of(physical, &env.config)
+                },
+                withhold_operators: withheld,
             }),
             None,
         );
@@ -1915,6 +1885,7 @@ impl Session {
         };
         match submitted {
             Err(error) => {
+                let error = Self::name_spill_failure(error, &env.spill_failure);
                 if let Some(fold) = pending.0.take() {
                     fold.finish(Some(&error));
                 }
@@ -1922,7 +1893,11 @@ impl Session {
                 Err(error)
             }
             Ok(stream) => {
-                let (inner, fold) = (stream, pending.0.take());
+                let failure = Arc::clone(&env.spill_failure);
+                let inner = Box::pin(
+                    stream.map(move |r| r.map_err(|e| Self::name_spill_failure(e, &failure))),
+                );
+                let fold = pending.0.take();
                 let stream = MetricStream { inner, fold };
                 let stream = crate::dataframe::deliver(
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),
@@ -1962,9 +1937,16 @@ mod spill;
 pub(crate) use spill::*;
 
 mod writes;
+pub(crate) use writes::partition_overwrite_is_dynamic;
 use writes::*;
 
 mod ops;
 use ops::AbortOnDrop;
 
 mod planning;
+
+// `SQL SECURITY DEFINER` reads (P3-T062 §2.4).
+mod definer;
+
+mod ran;
+pub(crate) use ran::Ran;

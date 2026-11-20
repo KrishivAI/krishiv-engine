@@ -1245,6 +1245,11 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
                 data_type: type_from(&o.data_type)?,
             }
         }
+        Function::CounterDiff(o) => WindowFunction::CounterDiff {
+            counter: usize_of(o.counter)?,
+            start_time: o.start_time.map(usize_of).transpose()?,
+            data_type: type_from(&o.data_type)?,
+        },
     };
     let frame = required(&f.frame, "a window frame")?;
     let bound = |b: i32, offset: i64, range: &[u8]| {
@@ -1331,6 +1336,11 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         MinBy => AggregateFunction::MinBy,
         MaxByKeyFirst => AggregateFunction::MaxByKeyFirst,
         MinByKeyFirst => AggregateFunction::MinByKeyFirst,
+        BitmapConstructAgg => AggregateFunction::BitmapConstructAgg,
+        BitmapOrAgg => AggregateFunction::BitmapOrAgg,
+        BitmapAndAgg => AggregateFunction::BitmapAndAgg,
+        HllSketchAgg => crate::decode_sketch::hll_sketch_function(a, true)?,
+        HllUnionAgg => crate::decode_sketch::hll_sketch_function(a, false)?,
         Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
             return Err(corrupt("a listagg state of another shape than its orders"));
         } else {
@@ -1602,6 +1612,7 @@ fn join_filter(f: &pb::JoinFilter) -> Result<JoinFilterPlan> {
             bloom_fpp: o.bloom_fpp,
             bloom_max_fpp: o.bloom_max_fpp,
             bloom_bytes: o.bloom_bytes,
+            bloom_spill_bytes: o.bloom_spill_bytes,
         },
     })
 }

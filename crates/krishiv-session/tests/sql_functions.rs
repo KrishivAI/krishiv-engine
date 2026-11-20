@@ -1423,3 +1423,112 @@ fn pinned_bodies_survive_the_optimizer_and_grouping() {
     );
     assert_eq!(class_and_params(&e).0, "ARITHMETIC_OVERFLOW");
 }
+
+/// A session UDF `udf_r8(x)` returning `x` (a Rust UDF, a temporary function to Spark).
+#[derive(Debug)]
+struct Same;
+
+impl krishiv_session::ScalarUdf for Same {
+    fn name(&self) -> &str {
+        "udf_r8"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &krishiv_session::Signature {
+        static SIG: std::sync::OnceLock<krishiv_session::Signature> = std::sync::OnceLock::new();
+        SIG.get_or_init(|| {
+            krishiv_session::Signature::Exact(vec![krishiv_session::UdfInputType::Exact(
+                DataType::Integer,
+            )])
+        })
+    }
+
+    fn return_field(
+        &self,
+        _: &[krishiv_session::ArgField],
+    ) -> Result<krishiv_session::ReturnField, krishiv_session::UdfError> {
+        Ok(krishiv_session::ReturnField {
+            data_type: DataType::Integer,
+            nullable: true,
+        })
+    }
+
+    fn invoke(
+        &self,
+        args: &[krishiv_session::UdfArg<'_>],
+        _: usize,
+        _: &krishiv_session::InvokeContext,
+    ) -> Result<ArrayRef, krishiv_session::UdfError> {
+        Ok(args[0].array())
+    }
+}
+
+/// Review r7 concern 3 (r8 item 2): `CREATE [OR REPLACE] FUNCTION` of a stored function whose
+/// body references an object of the session is refused, and nothing is stored or replaced. Spark
+/// v4.2.0 `CreateSQLFunctionCommand.scala` lines 256-258 and 371-394
+/// (`verifyTemporaryObjectsNotExists`: temporary views, then temporary functions, then temporary
+/// variables) raises `INVALID_TEMP_OBJ_REFERENCE` with the parameters of
+/// `UserDefinedFunctionErrors.invalidTemp{View,Func,Var}Reference` (lines 67-99): `obj`
+/// `FUNCTION`, `tempObj` `VIEW` / `FUNCTION` / `VARIABLE`; a registered UDF is a temporary
+/// function there. `objName` as `sql-udf.sql.out` prints it (`foo3_5d`).
+#[test]
+fn a_stored_function_body_may_reference_no_object_of_the_session() {
+    let s = session();
+    ok(&s, "CREATE TEMPORARY VIEW tv_r8 AS SELECT 1 AS x");
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION tf_r8(x INT) RETURNS INT RETURN x",
+    );
+    ok(&s, "DECLARE VARIABLE var_r8 INT DEFAULT 7");
+    s.register_udf(Same).unwrap();
+    // `OR REPLACE` over an existing function leaves it as it was.
+    ok(&s, "CREATE FUNCTION r8_old() RETURNS INT RETURN 1");
+    let cases = [
+        ("RETURN (SELECT max(x) FROM tv_r8)", "VIEW", "`tv_r8`"),
+        ("RETURN tf_r8(1)", "FUNCTION", "`tf_r8`"),
+        ("RETURN udf_r8(1)", "FUNCTION", "`udf_r8`"),
+        (
+            "RETURN (SELECT max(c) FROM (SELECT 1 AS c) WHERE c < udf_r8(2))",
+            "FUNCTION",
+            "`udf_r8`",
+        ),
+        ("RETURN var_r8", "VARIABLE", "`var_r8`"),
+        ("RETURN (SELECT var_r8 + 1)", "VARIABLE", "`var_r8`"),
+        (
+            "RETURN session.var_r8 + 1",
+            "VARIABLE",
+            "`session`.`var_r8`",
+        ),
+    ];
+    for (head, name) in [
+        ("CREATE FUNCTION", "r8_new"),
+        ("CREATE OR REPLACE FUNCTION", "r8_old"),
+    ] {
+        for (body, kind, temp) in cases {
+            let sql = format!("{head} {name}() RETURNS INT {body}");
+            let (class, params) = class_and_params(&fails(&s, &sql));
+            assert_eq!(class, "INVALID_TEMP_OBJ_REFERENCE", "{sql}: {params:?}");
+            assert_eq!(params["obj"], "FUNCTION", "{sql}");
+            assert_eq!(params["objName"], format!("`default`.`{name}`"), "{sql}");
+            assert_eq!(params["tempObj"], kind, "{sql}");
+            assert_eq!(params["tempObjName"], temp, "{sql}");
+        }
+    }
+    let (class, _) = class_and_params(&fails(&s, "SELECT r8_new()"));
+    assert_eq!(class, "UNRESOLVED_ROUTINE");
+    assert_eq!(ok(&s, "SELECT r8_old()"), ["1"]);
+    // A parameter of a variable's name is the parameter; a temporary function may read them all.
+    ok(
+        &s,
+        "CREATE FUNCTION r8_param(var_r8 INT) RETURNS INT RETURN var_r8",
+    );
+    assert_eq!(ok(&s, "SELECT r8_param(3)"), ["3"]);
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION r8_tmp() RETURNS INT RETURN var_r8 + udf_r8(1) + tf_r8(1)",
+    );
+    assert_eq!(ok(&s, "SELECT r8_tmp()"), ["9"]);
+}

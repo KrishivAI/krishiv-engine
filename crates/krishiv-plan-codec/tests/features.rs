@@ -65,6 +65,10 @@ fn the_header_lists_exactly_the_features_in_use() {
         ["window", "window_frame_offsets", "window_offset_functions"]
     );
     assert_eq!(
+        message("window_counter_diff").features,
+        ["window", "window_counter_diff"]
+    );
+    assert_eq!(
         message("window_range_values").features,
         ["window", "window_range_bounds"]
     );
@@ -464,6 +468,27 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         Some(Feature::PercentileAggregates)
     );
+    for f in [
+        krishiv_exec::aggregate::AggregateFunction::BitmapConstructAgg,
+        krishiv_exec::aggregate::AggregateFunction::BitmapOrAgg,
+        krishiv_exec::aggregate::AggregateFunction::BitmapAndAgg,
+    ] {
+        assert_eq!(
+            feature_of(Construct::AggregateFunction(&f)),
+            Some(Feature::BitmapAggregates)
+        );
+    }
+    for f in [
+        krishiv_exec::aggregate::AggregateFunction::HllSketchAgg { lg_k: 12 },
+        krishiv_exec::aggregate::AggregateFunction::HllUnionAgg {
+            allow_different: false,
+        },
+    ] {
+        assert_eq!(
+            feature_of(Construct::AggregateFunction(&f)),
+            Some(Feature::HllSketchAggregates)
+        );
+    }
     assert_eq!(
         feature_of(Construct::AggregateFunction(
             &krishiv_exec::aggregate::AggregateFunction::CovarPop
@@ -520,6 +545,16 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         Some(Feature::WindowOffsetFunctions)
     );
+    assert_eq!(
+        feature_of(Construct::Window(
+            &krishiv_exec::window::WindowFunction::CounterDiff {
+                counter: 0,
+                start_time: None,
+                data_type: arrow_schema::DataType::Int64,
+            }
+        )),
+        Some(Feature::WindowCounterDiff)
+    );
     for bound in [
         FrameBound::RangeInt(3),
         FrameBound::RangeFloat(1.0_f64.to_bits()),
@@ -558,6 +593,7 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     assert_eq!(Feature::Window.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowFrameOffsets.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowOffsetFunctions.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::WindowCounterDiff.kind(), FeatureKind::Semantic);
     // A plain write plan is the `write_plan` feature; a layout (partition
     // columns) is the `partitioned_writes` feature.
     use krishiv_exec::physical::WritePlan;
@@ -876,6 +912,8 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
     // Likewise the moment and the `any_value`/`max_by`/`min_by` plans.
     for (case, feature) in [
         ("aggregate_histogram_numeric", "histogram_numeric"),
+        ("aggregate_bitmaps", "bitmap_aggregates"),
+        ("aggregate_hll_sketches", "hll_sketch_aggregates"),
         ("aggregate_moments", "moment_aggregates"),
         ("aggregate_any_value", "any_value_by_aggregates"),
         ("aggregate_max_min_by", "any_value_by_aggregates"),
