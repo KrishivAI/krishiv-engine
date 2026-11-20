@@ -20,12 +20,18 @@ use krishiv_types::{DataType, StructField, StructType};
 use serde_json::{Value, json};
 
 /// Cases not matched yet, with the reason; each must still differ from Spark.
-const KNOWN_GAPS: &[(&str, &str)] = &[(
-    "partition directory under a plain directory",
-    "partition discovery: the engine refuses a plain directory under the root (KRISHIV_UNSUPPORTED_FEATURE); \
-     Spark stops at it as the leaf directory's base path, so two base paths are \
-     CONFLICTING_DIRECTORY_STRUCTURES",
-)];
+const KNOWN_GAPS: &[(&str, &str)] = &[
+    (
+        "partition directory under a plain directory",
+        "partition discovery: the engine refuses a plain directory under the root (KRISHIV_UNSUPPORTED_FEATURE); \
+         Spark stops at it as the leaf directory's base path, so two base paths are \
+         CONFLICTING_DIRECTORY_STRUCTURES",
+    ),
+    (
+        "partition directory under a plain directory, ignoreInvalidPartitionPaths option",
+        "the same refusal as above; with the option Spark skips the base-path check and reads both files",
+    ),
+];
 
 /// Cases that differ from Spark by decision, with the ADR.
 const BY_DESIGN: &[(&str, &str)] = &[
@@ -228,6 +234,15 @@ fn review_layout(s: &Session, root: &Path) {
         ("SELECT 'v2' AS v", "cdf/p/j=2"),
     ] {
         parquet(s, sql, &root.join(dir));
+    }
+    // Non-ASCII directory names made by the file system, as Spark's writer leaves them on disk.
+    std::fs::create_dir_all(root.join("cdu/p")).unwrap();
+    for (sql, plain, dir) in [
+        ("SELECT 'v1' AS v", "cdu/w1", "cdu/p/\u{c9}=1"),
+        ("SELECT 'v2' AS v", "cdu/w2", "cdu/p/\u{e9}=2"),
+    ] {
+        parquet(s, sql, &root.join(plain));
+        std::fs::rename(root.join(plain), root.join(dir)).unwrap();
     }
     for tree in ["pva", "pvb", "pvc", "pvd", "pve", "pvf", "pvg", "pvh"] {
         for k in ["1", "2"] {
@@ -508,10 +523,12 @@ fn review_cases(add: &mut impl FnMut(String, Read)) {
             options: Vec::new(),
         },
     );
-    let parquet_at = |paths: &[&str]| Read::Paths {
+    let parquet_with = |paths: &[&str], options: &[(&'static str, &'static str)]| Read::Paths {
         format: "parquet",
         paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+        options: options.to_vec(),
     };
+    let parquet_at = |paths: &[&str]| parquet_with(paths, &[]);
     add(
         "files at the root beside a partition directory".into(),
         parquet_at(&["cdc/p"]),
@@ -531,6 +548,42 @@ fn review_cases(add: &mut impl FnMut(String, Read)) {
     add(
         "partition column names differ".into(),
         parquet_at(&["cdf/p"]),
+    );
+    // `ignoreInvalidPartitionPaths` (option, else the conf) skips the base-path check only.
+    let ignore = [("ignoreInvalidPartitionPaths", "true")];
+    for (name, paths) in [
+        ("two partitioned roots", &["cde/a", "cde/b"][..]),
+        ("a glob over partition directories", &["cdg/p/k={1,2}"][..]),
+        (
+            "partition directory under a plain directory",
+            &["cdb/p"][..],
+        ),
+        (
+            "files at the root beside a partition directory",
+            &["cdc/p"][..],
+        ),
+        ("partition column names differ", &["cdf/p"][..]),
+    ] {
+        add(
+            format!("{name}, ignoreInvalidPartitionPaths option"),
+            parquet_with(paths, &ignore),
+        );
+    }
+    // The conf comes from the fixture's `conf`.
+    add(
+        "two partitioned roots, ignoreInvalidPartitionPaths conf".into(),
+        parquet_at(&["cde/a", "cde/b"]),
+    );
+    add(
+        "two partitioned roots, option false over conf true".into(),
+        parquet_with(
+            &["cde/a", "cde/b"],
+            &[("ignoreInvalidPartitionPaths", "false")],
+        ),
+    );
+    add(
+        "partition column names differing in non-ASCII case".into(),
+        parquet_at(&["cdu/p"]),
     );
 }
 
@@ -556,10 +609,11 @@ enum Read {
         built: bool,
         options: Vec<(&'static str, &'static str)>,
     },
-    /// `spark.read.format(..).load(paths)`, no schema.
+    /// `spark.read.options(..).format(..).load(paths)`, no schema.
     Paths {
         format: &'static str,
         paths: Vec<String>,
+        options: Vec<(&'static str, &'static str)>,
     },
     /// The read, then a filter.
     Where(Box<Read>, &'static str),
@@ -1021,8 +1075,16 @@ fn frame(s: &Session, root: &Path, r: &Read) -> Result<DataFrame, KrishivError> 
             }
             Ok(reader.format(format).load([abs(path)]))
         }
-        Read::Paths { format, paths } => {
-            Ok(s.read().format(format).load(paths.iter().map(|p| abs(p))))
+        Read::Paths {
+            format,
+            paths,
+            options,
+        } => {
+            let mut reader = s.read();
+            for (k, v) in options {
+                reader = reader.option(k, v);
+            }
+            Ok(reader.format(format).load(paths.iter().map(|p| abs(p))))
         }
         Read::Where(r, condition) => frame(s, root, r)?.filter_expr(condition),
         Read::View {
@@ -1150,7 +1212,8 @@ fn outcome(s: &Session, root: &Path, r: &Read) -> Value {
 
 /// Message parameters as sets of lines without list numbers: Spark lists partition directories in hash
 /// order, so two runs of the generator print the same lines in other orders (and number the column lists
-/// as they come).
+/// as they come). So this compares neither the numbering nor which list a leaf path belongs to; the exact
+/// form (numbers, shorter lists' leaves first) is pinned by `krishiv-io`'s `discover.rs` unit test only.
 fn unordered(params: Option<&Value>) -> Option<BTreeMap<String, Vec<String>>> {
     let params = params?.as_object()?;
     Some(

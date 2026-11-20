@@ -94,6 +94,9 @@ def layout(spark, root):
     spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cdg/p/k=2/j=1")
     spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdf/p/k=1")
     spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cdf/p/j=2")
+    # Review of the follow-up: partition column names that differ only in a non-ASCII case.
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdu/p/\u00c9=1")
+    spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cdu/p/\u00e9=2")
     for tree, k in (("pfrac", "1.5"), ("pspace", " 1"), ("pplus", "+1"), ("pzeros", "007")):
         spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
     for name, values in (
@@ -698,6 +701,37 @@ def cases(spark, root):
         "partition column names differ",
         "parquet cdf/p (files in cdf/p/k=1 and cdf/p/j=2)",
         lambda: spark.read.parquet(p("cdf/p")),
+    )
+    # Review of the follow-up: `ignoreInvalidPartitionPaths` (option, else the conf) skips the base-path check only.
+    ignore = {"ignoreInvalidPartitionPaths": "true"}
+    for name, paths in (
+        ("two partitioned roots", ("cde/a", "cde/b")),
+        ("a glob over partition directories", ("cdg/p/k={1,2}",)),
+        ("partition directory under a plain directory", ("cdb/p",)),
+        ("files at the root beside a partition directory", ("cdc/p",)),
+        ("partition column names differ", ("cdf/p",)),
+    ):
+        add(
+            f"{name}, ignoreInvalidPartitionPaths option",
+            f"parquet {', '.join(paths)} with option ignoreInvalidPartitionPaths=true",
+            lambda paths=paths: spark.read.options(**ignore).parquet(*[p(x) for x in paths]),
+        )
+    add(
+        "two partitioned roots, ignoreInvalidPartitionPaths conf",
+        "parquet cde/a, cde/b with spark.sql.files.ignoreInvalidPartitionPaths=true",
+        lambda: spark.read.parquet(p("cde/a"), p("cde/b")),
+        conf={"spark.sql.files.ignoreInvalidPartitionPaths": "true"},
+    )
+    add(
+        "two partitioned roots, option false over conf true",
+        "parquet cde/a, cde/b with option ignoreInvalidPartitionPaths=false and the conf true",
+        lambda: spark.read.option("ignoreInvalidPartitionPaths", "false").parquet(p("cde/a"), p("cde/b")),
+        conf={"spark.sql.files.ignoreInvalidPartitionPaths": "true"},
+    )
+    add(
+        "partition column names differing in non-ASCII case",
+        "parquet cdu/p (files in cdu/p/\u00c9=1 and cdu/p/\u00e9=2)",
+        lambda: spark.read.parquet(p("cdu/p")),
     )
     return out
 

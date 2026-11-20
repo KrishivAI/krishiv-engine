@@ -3499,8 +3499,8 @@
    "input": "CREATE TEMPORARY VIEW v16 (v STRING, k INT) USING parquet OPTIONS (path pvg/p); then pvg/p/k=3/j=1 written; REFRESH TABLE v16",
    "error_class": "CONFLICTING_PARTITION_COLUMN_NAMES",
    "message_parameters": {
-    "distinctPartColLists": "\n\tPartition column name list #0: k, j\n\tPartition column name list #1: k\n",
-    "suspiciousPaths": "\n\tfile:<root>/pvg/p/k=2\n\tfile:<root>/pvg/p/k=1\n\tfile:<root>/pvg/p/k=3/j=1"
+    "distinctPartColLists": "\n\tPartition column name list #0: k\n\tPartition column name list #1: k, j\n",
+    "suspiciousPaths": "\n\tfile:<root>/pvg/p/k=1\n\tfile:<root>/pvg/p/k=2\n\tfile:<root>/pvg/p/k=3/j=1"
    }
   },
   {
@@ -3573,7 +3573,7 @@
    "input": "parquet cde/a, cde/b (files in cde/a/k=1 and cde/b/k=2)",
    "error_class": "CONFLICTING_DIRECTORY_STRUCTURES",
    "message_parameters": {
-    "discoveredBasePaths": "\n\tfile:<root>/cde/a\n\tfile:<root>/cde/b\n"
+    "discoveredBasePaths": "\n\tfile:<root>/cde/b\n\tfile:<root>/cde/a\n"
    }
   },
   {
@@ -3581,7 +3581,7 @@
    "input": "parquet cdg/p/k={1,2} (files in cdg/p/k=1/j=1, cdg/p/k=2/j=1)",
    "error_class": "CONFLICTING_DIRECTORY_STRUCTURES",
    "message_parameters": {
-    "discoveredBasePaths": "\n\tfile:<root>/cdg/p/k=1\n\tfile:<root>/cdg/p/k=2\n"
+    "discoveredBasePaths": "\n\tfile:<root>/cdg/p/k=2\n\tfile:<root>/cdg/p/k=1\n"
    }
   },
   {
@@ -3611,9 +3611,184 @@
    "input": "parquet cdf/p (files in cdf/p/k=1 and cdf/p/j=2)",
    "error_class": "CONFLICTING_PARTITION_COLUMN_NAMES",
    "message_parameters": {
-    "distinctPartColLists": "\n\tPartition column name list #0: k\n\tPartition column name list #1: j\n",
-    "suspiciousPaths": "\n\tfile:<root>/cdf/p/k=1\n\tfile:<root>/cdf/p/j=2"
+    "distinctPartColLists": "\n\tPartition column name list #0: j\n\tPartition column name list #1: k\n",
+    "suspiciousPaths": "\n\tfile:<root>/cdf/p/j=2\n\tfile:<root>/cdf/p/k=1"
    }
+  },
+  {
+   "name": "two partitioned roots, ignoreInvalidPartitionPaths option",
+   "input": "parquet cde/a, cde/b with option ignoreInvalidPartitionPaths=true",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "a glob over partition directories, ignoreInvalidPartitionPaths option",
+   "input": "parquet cdg/p/k={1,2} with option ignoreInvalidPartitionPaths=true",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "j",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "1"
+    ]
+   ]
+  },
+  {
+   "name": "partition directory under a plain directory, ignoreInvalidPartitionPaths option",
+   "input": "parquet cdb/p with option ignoreInvalidPartitionPaths=true",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "files at the root beside a partition directory, ignoreInvalidPartitionPaths option",
+   "input": "parquet cdc/p with option ignoreInvalidPartitionPaths=true",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ]
+   ]
+  },
+  {
+   "name": "partition column names differ, ignoreInvalidPartitionPaths option",
+   "input": "parquet cdf/p with option ignoreInvalidPartitionPaths=true",
+   "error_class": "CONFLICTING_PARTITION_COLUMN_NAMES",
+   "message_parameters": {
+    "distinctPartColLists": "\n\tPartition column name list #0: j\n\tPartition column name list #1: k\n",
+    "suspiciousPaths": "\n\tfile:<root>/cdf/p/j=2\n\tfile:<root>/cdf/p/k=1"
+   }
+  },
+  {
+   "name": "two partitioned roots, ignoreInvalidPartitionPaths conf",
+   "input": "parquet cde/a, cde/b with spark.sql.files.ignoreInvalidPartitionPaths=true",
+   "conf": {
+    "spark.sql.files.ignoreInvalidPartitionPaths": "true"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "two partitioned roots, option false over conf true",
+   "input": "parquet cde/a, cde/b with option ignoreInvalidPartitionPaths=false and the conf true",
+   "conf": {
+    "spark.sql.files.ignoreInvalidPartitionPaths": "true"
+   },
+   "error_class": "CONFLICTING_DIRECTORY_STRUCTURES",
+   "message_parameters": {
+    "discoveredBasePaths": "\n\tfile:<root>/cde/b\n\tfile:<root>/cde/a\n"
+   }
+  },
+  {
+   "name": "partition column names differing in non-ASCII case",
+   "input": "parquet cdu/p (files in cdu/p/É=1 and cdu/p/é=2)",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "É",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
   }
  ]
 }
