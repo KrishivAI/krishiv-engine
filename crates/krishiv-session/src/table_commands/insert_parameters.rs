@@ -71,6 +71,7 @@ impl Session {
             c.by_name,
             &output,
             env.analysis.conf.case_sensitive,
+            false,
         ) else {
             return out;
         };
