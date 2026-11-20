@@ -499,6 +499,77 @@ fn to_float(v: Num, f32_target: bool) -> f64 {
     }
 }
 
+/// A decimal cast that widens (no smaller scale, no fewer integer digits:
+/// `s2 >= s1` and `p2 - s2 >= p1 - s1`) keeps every value and cannot
+/// fail: the same scale is the input retyped, a larger one a multiply
+/// (TPC-DS q28's `decimal(7,2)` columns against integer bounds). `None`
+/// for any other cast, and for a value already outside its own type, which
+/// the general path then reports as before.
+fn widen_decimal(input: &dyn Array, to: &DataType) -> Option<Result<ArrayRef, KernelError>> {
+    let (p1, s1) = match input.data_type() {
+        DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => (*p, *s),
+        _ => return None,
+    };
+    let (p2, s2) = match to {
+        DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => (*p, *s),
+        _ => return None,
+    };
+    let widens = s1 >= 0
+        && s2 >= s1
+        // Precision and scale are below 100: the differences cannot wrap.
+        && i16::from(p2).wrapping_sub(i16::from(s2)) >= i16::from(p1).wrapping_sub(i16::from(s1));
+    if !widens {
+        return None;
+    }
+    let k = s2.abs_diff(s1);
+    let m = pow10(k);
+    let typed = |r: Result<ArrayRef, arrow_schema::ArrowError>| {
+        r.map_err(|e| KernelError::internal(e.to_string()))
+    };
+    // `with_precision_and_scale` checks the type, not the values.
+    match (input.data_type(), to) {
+        (DataType::Decimal64(..), DataType::Decimal64(..)) => {
+            let a = input.as_primitive::<Decimal64Type>();
+            let out = if k == 0 {
+                a.clone()
+            } else {
+                let m = i64::try_from(m).ok()?;
+                a.try_unary::<_, Decimal64Type, ()>(|v| v.checked_mul(m).ok_or(()))
+                    .ok()?
+            };
+            Some(typed(
+                out.with_precision_and_scale(p2, s2)
+                    .map(|o| Arc::new(o) as ArrayRef),
+            ))
+        }
+        (DataType::Decimal64(..), DataType::Decimal128(..)) => {
+            let out = input
+                .as_primitive::<Decimal64Type>()
+                .try_unary::<_, Decimal128Type, ()>(|v| i128::from(v).checked_mul(m).ok_or(()))
+                .ok()?;
+            Some(typed(
+                out.with_precision_and_scale(p2, s2)
+                    .map(|o| Arc::new(o) as ArrayRef),
+            ))
+        }
+        (DataType::Decimal128(..), DataType::Decimal128(..)) => {
+            let a = input.as_primitive::<Decimal128Type>();
+            let out = if k == 0 {
+                a.clone()
+            } else {
+                a.try_unary::<_, Decimal128Type, ()>(|v| v.checked_mul(m).ok_or(()))
+                    .ok()?
+            };
+            Some(typed(
+                out.with_precision_and_scale(p2, s2)
+                    .map(|o| Arc::new(o) as ArrayRef),
+            ))
+        }
+        // A wide carrier into a narrow one: the general path narrows it.
+        _ => None,
+    }
+}
+
 /// `CAST(input AS to)` with Spark semantics.
 ///
 /// # Errors
@@ -528,6 +599,9 @@ pub fn cast(
     let from = input.data_type();
     if from == to {
         return Ok(arrow_array::make_array(input.to_data()));
+    }
+    if let Some(out) = widen_decimal(input, to) {
+        return out;
     }
     // `Decimal64` is a carrier of `decimal(p <= 18, s)` (design P2-T160):
     // the cast is the `Decimal128` one, with the operand widened and the
