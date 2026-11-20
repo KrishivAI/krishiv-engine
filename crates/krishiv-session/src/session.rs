@@ -272,7 +272,7 @@ impl SessionBuilder {
         self
     }
 
-    /// The Spark version whose behaviour queries follow (default 4.2).
+    /// The Spark version whose behaviour queries follow (default 4.3).
     ///
     /// ```
     /// use krishiv_plan::analyzer::SparkProfile;
