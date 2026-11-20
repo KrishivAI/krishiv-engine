@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 17 done, 18 partial, 23 missing, 4 out of scope.
+62 arms: 18 done, 18 partial, 22 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -70,7 +70,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 104 | corr | partial | method other than pearson | Aggregate of coalesce(corr over NULL-as-0.0 doubles, NaN); recorded differences: a non-numeric column is not refused, zero variance is NaN (Spark 4.0 ANSI: DIVIDE_BY_ZERO) | P3-T012 | 5 |
 | 105 | approx_quantile | missing |  | Aggregate approx_percentile with relative error | P3-T012 | 5 |
 | 106 | freq_items | missing |  | new aggregate (Spark's frequent-items sketch, support) | P3-T012 | 5 |
-| 107 | sample_by | missing |  | lowering: Filter with a seeded rand() against the per-stratum fraction | P3-T012 | 5 |
+| 107 | sample_by | done |  | Filter(rand(seed) < CASE WHEN col = stratum THEN fraction ... ELSE 0.0 END), the draw made for every row as Spark does; recorded difference: strata compare with SQL = (numeric coercion), not boxed equality | P3-T012 | 5 |
 | 200 | catalog | missing |  | the 36 catalog operations | P3-T082 | 9 |
 | 300 | ml_relation | out of scope |  | machine learning is out of scope |  | 0 |
 | 998 | extension | partial | every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); Echo is a one-row Project over OneRowRelation | P3-T015 | 10 |

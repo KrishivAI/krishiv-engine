@@ -14,14 +14,14 @@ use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
-    ALIAS_PART_SEP, ColumnNamesOp, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal,
-    LogicalPlan, Origin, PlanId, PlanNode, ReadSource, SampleBounds, SetOperation, SqlArgs,
-    UnpivotColumnSet,
+    ALIAS_PART_SEP, Builtin, ColumnNamesOp, Expr, ExprNode, Grouping, JoinCondition, JoinKind,
+    Literal, LogicalPlan, Origin, PlanId, PlanNode, ReadSource, SampleBounds, SetOperation,
+    SqlArgs, UnpivotColumnSet,
 };
 
 use super::errors::{
-    assertion, invalid_enum, not_set, relation_not_set, unsupported, unsupported_field,
-    unsupported_variant,
+    assertion, expression_not_set, invalid_enum, not_set, relation_not_set, unsupported,
+    unsupported_field, unsupported_variant,
 };
 use super::names::parse_multipart_identifier;
 use super::{Result, Translator};
@@ -136,6 +136,7 @@ impl Translator<'_> {
                 }
                 self.stat_pair("StatCorr", c.input.as_deref(), &c.col1, &c.col2, "corr")?
             }
+            RelType::SampleBy(s) => self.sample_by(s)?,
             RelType::FillNa(n) => self.na_fill(n)?,
             RelType::Replace(n) => self.na_replace(n)?,
             RelType::DropNa(n) => {
@@ -223,6 +224,44 @@ impl Translator<'_> {
                 upper: s.upper_bound,
             },
             seed: s.seed,
+        })
+    }
+
+    /// `StatSampleBy`: Spark's `DataFrameStatFunctions.sampleBy` keeps a row when
+    /// `rand(seed) < fractions.getOrElse(stratum, 0.0)`, drawing the random number for every row.
+    /// Lowered to `Filter(rand(seed) < CASE WHEN col = k1 THEN f1 ... ELSE 0.0 END)` so the draw
+    /// is not skipped for unmatched strata. A NULL stratum matches nothing (fraction 0.0). A
+    /// fraction outside [0, 1] is refused (Spark's classless `require`). Recorded difference: the
+    /// stratum is compared with SQL `=` (numeric coercion), where Spark compares boxed values, so
+    /// an Int stratum never matches a Long column there.
+    fn sample_by(&mut self, s: &pb::StatSampleBy) -> Result<PlanNode> {
+        let input = self.input("StatSampleBy", s.input.as_deref())?;
+        let column = self.required_expression(s.col.as_ref())?;
+        if s.fractions
+            .iter()
+            .any(|f| !(0.0..=1.0).contains(&f.fraction))
+        {
+            return Err(assertion("Fractions must be in [0, 1]"));
+        }
+        let mut branches: Vec<Expr> = Vec::new();
+        for f in &s.fractions {
+            let stratum = f.stratum.as_ref().ok_or_else(expression_not_set)?;
+            let key = self.literal_expression(stratum)?;
+            branches.push(Expr::function(
+                Builtin::Eq.name(),
+                vec![(*column).clone(), (*key).clone()],
+            ));
+            branches.push(Expr::literal(Literal::Double(f.fraction)));
+        }
+        branches.push(Expr::literal(Literal::Double(0.0)));
+        let fraction = Expr::function(Builtin::When.name(), branches);
+        let draw = match s.seed {
+            Some(seed) => Expr::function("rand", vec![Expr::literal(Literal::Long(seed))]),
+            None => Expr::function("rand", Vec::new()),
+        };
+        Ok(PlanNode::Filter {
+            input,
+            predicate: Arc::new(Expr::function(Builtin::Lt.name(), vec![draw, fraction])),
         })
     }
 

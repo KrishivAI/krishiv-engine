@@ -1455,6 +1455,36 @@ fn corr_refuses_a_method_other_than_pearson() {
 }
 
 #[test]
+fn sample_by_plans_a_filter_drawing_rand_for_every_row() {
+    let stratum = |n: i32| pb::expression::Literal {
+        literal_type: Some(LiteralType::Integer(n)),
+        data_type: None,
+    };
+    let sample_by = |fraction: f64| {
+        relation(RelType::SampleBy(Box::new(pb::StatSampleBy {
+            input: input(),
+            col: Some(attr("k")),
+            fractions: vec![pb::stat_sample_by::Fraction {
+                stratum: Some(stratum(1)),
+                fraction,
+            }],
+            seed: Some(7),
+        })))
+    };
+    let rel = sample_by(0.5);
+    let PlanNode::Filter { predicate, .. } = node(&rel) else {
+        panic!("not a Filter node")
+    };
+    let text = format!("{predicate:?}");
+    assert!(text.contains("rand"), "{text}");
+    assert!(text.contains("When") || text.contains("when"), "{text}");
+    assert_eq!(
+        code(&sample_by(1.5)),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+}
+
+#[test]
 fn unpivot_plans_as_unpivot_include_nulls() {
     let rel = relation(RelType::Unpivot(Box::new(pb::Unpivot {
         input: input(),
