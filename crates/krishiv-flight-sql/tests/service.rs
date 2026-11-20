@@ -1807,3 +1807,101 @@ async fn list_actions_names_the_served_actions() {
     );
     assert_eq!(h.flight.session_count(), 0);
 }
+
+/// `authed` with a W3C `traceparent` header.
+fn traced<T>(message: T, token: &str, cookie: Option<&str>, traceparent: &str) -> Request<T> {
+    let mut r = authed(message, token, cookie);
+    r.metadata_mut()
+        .insert("traceparent", traceparent.parse().expect("header"));
+    r
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_requests_traceparent_names_the_trace_of_its_query_and_update() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let trace = "4bf92f3577b34da6a3ce929d0e0e4736";
+    let header = format!("00-{trace}-00f067aa0ba902b7-01");
+    // A query: the trace rides GetFlightInfo (the analysis) and DoGet (the run).
+    let cmd = CommandStatementQuery {
+        query: "SELECT 41 AS traced_query".to_owned(),
+        transaction_id: None,
+    };
+    let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+    let response = h
+        .client
+        .get_flight_info(traced(descriptor, OPS, None, &header))
+        .await
+        .expect("info");
+    let cookie = set_cookie(response.metadata()).expect("cookie");
+    let t = ticket(&response.into_inner());
+    let stream = h
+        .client
+        .do_get(traced(t, OPS, Some(&cookie), &header))
+        .await
+        .expect("do_get");
+    let data = stream
+        .into_inner()
+        .map_err(|s| FlightError::Tonic(Box::new(s)));
+    let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(data)
+        .try_collect()
+        .await
+        .expect("fetch");
+    assert_eq!(rows(&batches), 1);
+    // An update.
+    updates::update_with_trace(
+        &mut h,
+        OPS,
+        &cookie,
+        "SET spark.sql.shuffle.partitions=3",
+        &header,
+    )
+    .await
+    .expect("update");
+    // A query without the header has no trace.
+    let (plain, _) = info(&mut h, OPS, Some(&cookie), "SELECT 42 AS plain_query")
+        .await
+        .expect("info");
+    fetch(&mut h, OPS, Some(&cookie), ticket(&plain))
+        .await
+        .expect("fetch");
+    let (look, _) = info(
+        &mut h,
+        OPS,
+        Some(&cookie),
+        "SELECT query_text, trace_id FROM system.queries \
+         WHERE query_text LIKE 'SELECT 4_ AS %' OR query_text LIKE 'SET spark.sql.shuffle%'",
+    )
+    .await
+    .expect("info");
+    let seen = fetch(&mut h, OPS, Some(&cookie), ticket(&look))
+        .await
+        .expect("fetch");
+    let mut by_text = std::collections::BTreeMap::new();
+    for b in &seen {
+        let text = b
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("text");
+        let id = b
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("trace");
+        for i in 0..b.num_rows() {
+            by_text.insert(
+                text.value(i).to_owned(),
+                (!arrow_array::Array::is_null(id, i)).then(|| id.value(i).to_owned()),
+            );
+        }
+    }
+    assert_eq!(
+        by_text.get("SELECT 41 AS traced_query"),
+        Some(&Some(trace.to_owned()))
+    );
+    assert_eq!(
+        by_text.get("SET spark.sql.shuffle.partitions=3"),
+        Some(&Some(trace.to_owned()))
+    );
+    assert_eq!(by_text.get("SELECT 42 AS plain_query"), Some(&None));
+}
