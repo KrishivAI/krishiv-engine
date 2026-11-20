@@ -637,7 +637,12 @@ impl Session {
                             }
                             rows
                         }
-                        [db] if all.iter().any(|(n, _)| n.eq_ignore_ascii_case(db)) => Vec::new(),
+                        // One the principal may not list answers as a missing one (ADR 0046 §8).
+                        [db] if all.iter().any(|(n, _)| n.eq_ignore_ascii_case(db))
+                            && !self.namespace_hidden(db).await =>
+                        {
+                            Vec::new()
+                        }
                         _ => {
                             return Err(crate::catalog_registry::schema_not_found(
                                 crate::catalog::CATALOG,

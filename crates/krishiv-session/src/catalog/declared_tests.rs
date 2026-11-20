@@ -25,7 +25,8 @@ use crate::catalog_registry::{
     LoadedDeclared, ScanInputs,
 };
 
-/// `db.t (x INT)` holding 1, 2, 3; counts its opens and refreshes.
+/// `db.t (x INT)` holding 1, 2, 3; counts its opens and refreshes. Lists the namespaces `db`
+/// and `ops`, the tables `db.t`, `db.u` and `ops.v` (only `db.t` loads).
 #[derive(Debug, Default)]
 struct Lake {
     opens: Arc<AtomicUsize>,
@@ -116,7 +117,13 @@ impl CallerCatalog for Lake {
         _caller: &'a CatalogCaller,
         parent: &'a [String],
     ) -> BoxFuture<'a, Result<Option<Vec<Vec<String>>>, KrishivError>> {
-        Box::pin(async move { Ok(parent.is_empty().then(|| vec![vec!["db".to_owned()]])) })
+        Box::pin(async move {
+            Ok(match parent {
+                [] => Some(vec![vec!["db".to_owned()], vec!["ops".to_owned()]]),
+                [n] if n == "db" || n == "ops" => Some(Vec::new()),
+                _ => None,
+            })
+        })
     }
 
     fn list_tables<'a>(
@@ -124,7 +131,13 @@ impl CallerCatalog for Lake {
         _caller: &'a CatalogCaller,
         namespace: &'a [String],
     ) -> BoxFuture<'a, Result<Option<Vec<String>>, KrishivError>> {
-        Box::pin(async move { Ok((namespace == ["db"]).then(|| vec!["t".to_owned()])) })
+        Box::pin(async move {
+            Ok(match namespace {
+                [n] if n == "db" => Some(vec!["t".to_owned(), "u".to_owned()]),
+                [n] if n == "ops" => Some(vec!["v".to_owned()]),
+                _ => None,
+            })
+        })
     }
 }
 
@@ -288,20 +301,150 @@ fn strings(s: &Session, sql: &str, col: usize) -> Vec<String> {
 fn declared_listings_reach_the_catalog() {
     let lake = Arc::new(Lake::default());
     let s = session(&lake);
-    assert_eq!(strings(&s, "SHOW NAMESPACES IN lake", 0), ["db"]);
-    assert_eq!(strings(&s, "SHOW TABLES IN lake.db", 1), ["t"]);
+    assert_eq!(strings(&s, "SHOW NAMESPACES IN lake", 0), ["db", "ops"]);
+    assert_eq!(strings(&s, "SHOW TABLES IN lake.db", 1), ["t", "u"]);
     let e =
         block_on(async { s.sql("SHOW TABLES IN lake.nope").await?.collect().await }).unwrap_err();
     assert_eq!(e.error_class().name(), "SCHEMA_NOT_FOUND");
     let tables = block_on(s.catalog().list_tables(Some("lake.db"), None)).unwrap();
     assert_eq!(
         tables.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
-        ["t"]
+        ["t", "u"]
     );
     block_on(s.catalog().set_current_catalog("lake")).unwrap();
     let dbs = block_on(s.catalog().list_databases(None)).unwrap();
     assert_eq!(
         dbs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+        ["db", "ops"]
+    );
+}
+
+/// A runtime declaring `lake`.
+fn lake_runtime(lake: &Arc<Lake>) -> Arc<EngineRuntime> {
+    EngineRuntime::builder()
+        .catalogs(
+            CatalogSetup::new(DeclMode::Embedded)
+                .factory(Arc::new(Factory(Arc::clone(lake))))
+                .setting("krishiv.catalog.lake.type", "memory"),
+        )
+        .build()
+        .unwrap()
+}
+
+/// A session of `name` on `rt` under the `grants` provider (viewer role underneath), as an
+/// admin when `admin`.
+fn grants_session(
+    rt: &Arc<EngineRuntime>,
+    grants: &Arc<crate::grants::Grants>,
+    name: &str,
+    admin: bool,
+) -> Session {
+    use crate::auth::{Role, RolePolicy};
+    use crate::{AccessPolicy, AllowAll, Principal, PrincipalKind};
+    let system: Arc<dyn AccessPolicy> = if admin {
+        Arc::new(AllowAll)
+    } else {
+        Arc::new(RolePolicy::new(
+            Some(Role::Viewer),
+            Role::Admin,
+            krishiv_plan::analyzer::PolicyVersion(1),
+        ))
+    };
+    let policy = Arc::new(crate::grants::GrantsPolicy::new(
+        Arc::clone(grants),
+        system,
+        admin,
+    ));
+    Session::builder()
+        .runtime(Arc::clone(rt))
+        .principal(Principal::new(name, PrincipalKind::User))
+        .access_policy(Arc::clone(&policy) as Arc<dyn AccessPolicy>)
+        .grants(policy)
+        .build()
+        .unwrap()
+}
+
+fn error_class(s: &Session, sql: &str) -> String {
+    let e = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
+    e.error_class().name().to_owned()
+}
+
+/// Under the `grants` provider a declared catalog's listings show only what the principal may
+/// list (review of #902 at 29da71de4, P1): with `none`, `token` and `client-credentials` every
+/// principal reaches the catalog as the server, so the engine policy is the only per-user check
+/// (design P3-T067 §3.1). `SELECT` on `lake.db.t` shows that table and its namespace, never
+/// `db.u` or `ops`; a hidden namespace answers as a missing one, by SQL and by `spark.catalog`.
+#[test]
+fn declared_listings_show_only_what_the_principal_may_list() {
+    let lake = Arc::new(Lake::default());
+    let grants = crate::grants::Grants::new(Arc::new(crate::grants::MemoryGrantStore::new()));
+    let rt = lake_runtime(&lake);
+    let root = grants_session(&rt, &grants, "root", true);
+    for statement in [
+        "GRANT USAGE ON CATALOG lake TO user:ana",
+        "GRANT SELECT ON TABLE lake.db.t TO user:ana",
+    ] {
+        block_on(async { root.sql(statement).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{statement}: {e}"));
+    }
+    // The admin sees everything.
+    assert_eq!(strings(&root, "SHOW TABLES IN lake.db", 1), ["t", "u"]);
+    let ana = grants_session(&rt, &grants, "ana", false);
+    assert_eq!(strings(&ana, "SHOW NAMESPACES IN lake", 0), ["db"]);
+    assert_eq!(strings(&ana, "SHOW TABLES IN lake.db", 1), ["t"]);
+    assert_eq!(
+        error_class(&ana, "SHOW TABLES IN lake.ops"),
+        "SCHEMA_NOT_FOUND"
+    );
+    assert_eq!(
+        error_class(&ana, "SHOW TABLES IN lake.nope"),
+        "SCHEMA_NOT_FOUND"
+    );
+    assert_eq!(
+        error_class(&ana, "SHOW NAMESPACES IN lake.ops"),
+        "SCHEMA_NOT_FOUND"
+    );
+    assert!(strings(&ana, "SHOW NAMESPACES IN lake.db", 0).is_empty());
+    let tables = block_on(ana.catalog().list_tables(Some("lake.db"), None)).unwrap();
+    assert_eq!(
+        tables.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+        ["t"]
+    );
+    let e = block_on(ana.catalog().list_tables(Some("lake.ops"), None)).unwrap_err();
+    assert_eq!(e.error_class().name(), "SCHEMA_NOT_FOUND");
+    block_on(ana.catalog().set_current_catalog("lake")).unwrap();
+    let dbs = block_on(ana.catalog().list_databases(None)).unwrap();
+    assert_eq!(
+        dbs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
         ["db"]
+    );
+    assert_eq!(strings(&ana, "SHOW NAMESPACES", 0), ["db"]);
+}
+
+/// `SHOW NAMESPACES IN <db>` of a session-catalog database the grants provider hides answers as
+/// for a missing one (review of #902 at 29da71de4, P2; ADR 0046 §8).
+#[test]
+fn show_namespaces_in_a_hidden_database_is_schema_not_found() {
+    let lake = Arc::new(Lake::default());
+    let grants = crate::grants::Grants::new(Arc::new(crate::grants::MemoryGrantStore::new()));
+    let rt = lake_runtime(&lake);
+    let root = grants_session(&rt, &grants, "root", true);
+    for statement in [
+        "CREATE NAMESPACE vaultns",
+        // Statement-level `Browse` passes, so only the listing rule hides `vaultns`.
+        "GRANT USAGE ON CATALOG spark_catalog TO user:ana",
+    ] {
+        block_on(async { root.sql(statement).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{statement}: {e}"));
+    }
+    assert!(strings(&root, "SHOW NAMESPACES IN vaultns", 0).is_empty());
+    let ana = grants_session(&rt, &grants, "ana", false);
+    assert_eq!(
+        error_class(&ana, "SHOW NAMESPACES IN vaultns"),
+        "SCHEMA_NOT_FOUND"
+    );
+    assert_eq!(
+        error_class(&ana, "SHOW NAMESPACES IN nope"),
+        "SCHEMA_NOT_FOUND"
     );
 }

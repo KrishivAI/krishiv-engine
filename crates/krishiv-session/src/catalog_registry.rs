@@ -42,7 +42,7 @@ use krishiv_exec::planner::TableProvider;
 use krishiv_io::IoContext;
 use krishiv_io::egress::EgressPolicy;
 use krishiv_plan::TableVersion;
-use krishiv_plan::analyzer::{BoxFuture, Catalog, NameForm, TableIdent, TableMeta};
+use krishiv_plan::analyzer::{BoxFuture, Catalog, NameForm, Securable, TableIdent, TableMeta};
 
 use crate::auth::{InboundCredential, Method};
 use crate::catalog_decl::{
@@ -1086,54 +1086,139 @@ impl crate::Session {
     }
 
     /// The namespaces directly under `parent` of the declared catalog `catalog` (any letter case)
-    /// as the current caller sees them (design P3-T067 §3.5, PR-58b); `None` when `catalog` is no
-    /// declared catalog this principal sees.
+    /// as the current caller sees them (design P3-T067 §3.5, PR-58b), only those this session's
+    /// principal may list (P3-T062 §2.4: the rule of [`Self::declared_namespace_listed`]);
+    /// `None` when `catalog` is no declared catalog this principal sees.
     ///
     /// # Errors
-    /// The catalog's failure; `SCHEMA_NOT_FOUND` for a `parent` it does not have.
+    /// The catalog's failure; `SCHEMA_NOT_FOUND` for a `parent` it does not have or the principal
+    /// may not list (ADR 0046 §8: no existence oracle).
     pub(crate) async fn declared_namespaces(
         &self,
         catalog: &str,
         parent: &[String],
     ) -> Option<Result<Vec<Vec<String>>, KrishivError>> {
         let built = self.declared_catalogs().built(catalog)?;
+        let name = self.declared_catalogs().canonical(catalog)?;
         Some(
             async {
                 let (built, caller) = built?;
-                match built
+                if !parent.is_empty()
+                    && !self
+                        .declared_namespace_listed(&built, &caller, &name, parent)
+                        .await?
+                {
+                    return Err(schema_not_found(catalog, parent));
+                }
+                let Some(found) = built
                     .list_namespaces(&caller, parent)
                     .await
                     .map_err(|e| names_catalog(e, catalog))?
-                {
-                    Some(found) => Ok(found),
-                    None => Err(schema_not_found(catalog, parent)),
+                else {
+                    return Err(schema_not_found(catalog, parent));
+                };
+                let mut out = Vec::with_capacity(found.len());
+                for n in found {
+                    if self
+                        .declared_namespace_listed(&built, &caller, &name, &n)
+                        .await?
+                    {
+                        out.push(n);
+                    }
                 }
+                Ok(out)
             }
             .await,
         )
     }
 
-    /// The tables of `namespace` of the declared catalog `catalog`, as [`Self::declared_namespaces`].
+    /// The tables of `namespace` of the declared catalog `catalog`, as [`Self::declared_namespaces`]:
+    /// only those this session's principal may list ([`Session::may_list`]); `SCHEMA_NOT_FOUND`
+    /// for a namespace it may not list.
     pub(crate) async fn declared_tables(
         &self,
         catalog: &str,
         namespace: &[String],
     ) -> Option<Result<Vec<String>, KrishivError>> {
         let built = self.declared_catalogs().built(catalog)?;
+        let name = self.declared_catalogs().canonical(catalog)?;
         Some(
             async {
                 let (built, caller) = built?;
-                match built
+                let Some(found) = built
                     .list_tables(&caller, namespace)
                     .await
                     .map_err(|e| names_catalog(e, catalog))?
+                else {
+                    return Err(schema_not_found(catalog, namespace));
+                };
+                let listed = self.listed_declared_tables(&name, namespace, found).await;
+                if listed.is_empty()
+                    && self.state.grants.is_some()
+                    && !self.may_list(&declared_namespace(&name, namespace)).await
                 {
-                    Some(found) => Ok(found),
-                    None => Err(schema_not_found(catalog, namespace)),
+                    // Nothing listable in it and no grant on it: as for a missing one.
+                    return Err(schema_not_found(catalog, namespace));
                 }
+                Ok(listed)
             }
             .await,
         )
+    }
+
+    /// The tables among `names` of `namespace` of the declared catalog `catalog` (its canonical
+    /// name) that this session's principal may list.
+    async fn listed_declared_tables(
+        &self,
+        catalog: &str,
+        namespace: &[String],
+        names: Vec<String>,
+    ) -> Vec<String> {
+        let mut out = Vec::with_capacity(names.len());
+        for name in names {
+            let securable = Securable::Table(TableIdent {
+                catalog: catalog.to_owned(),
+                namespace: namespace.to_vec(),
+                name: name.clone(),
+            });
+            if self.may_list(&securable).await {
+                out.push(name);
+            }
+        }
+        out
+    }
+
+    /// Whether this session's principal may see the namespace `namespace` of the declared catalog
+    /// `catalog` (its canonical name) in a listing, by the session catalog's rule
+    /// ([`Session::may_list_namespace`]): it may list the namespace, or, under the `grants`
+    /// provider, any table directly in it (a table grant shows where the table is). Other
+    /// policies decide a table by `Browse` as they decide its namespace, so only `grants` asks
+    /// the catalog for the tables.
+    ///
+    /// # Errors
+    /// The catalog's failure listing the namespace's tables.
+    async fn declared_namespace_listed(
+        &self,
+        built: &Arc<dyn CallerCatalog>,
+        caller: &CatalogCaller,
+        catalog: &str,
+        namespace: &[String],
+    ) -> Result<bool, KrishivError> {
+        if self.may_list(&declared_namespace(catalog, namespace)).await {
+            return Ok(true);
+        }
+        if self.state.grants.is_none() {
+            return Ok(false);
+        }
+        let tables = built
+            .list_tables(caller, namespace)
+            .await
+            .map_err(|e| names_catalog(e, catalog))?
+            .unwrap_or_default();
+        Ok(!self
+            .listed_declared_tables(catalog, namespace, tables)
+            .await
+            .is_empty())
     }
 
     /// Every catalog this session sees, sorted: `spark_catalog`, `system` and the visible
@@ -1185,4 +1270,12 @@ fn names_catalog(e: KrishivError, catalog: &str) -> KrishivError {
         .into();
     }
     e
+}
+
+/// The securable of the namespace `namespace` of the catalog `catalog`.
+fn declared_namespace(catalog: &str, namespace: &[String]) -> Securable {
+    let mut parts = Vec::with_capacity(namespace.len() + 1);
+    parts.push(catalog.to_owned());
+    parts.extend_from_slice(namespace);
+    Securable::Namespace(parts)
 }
