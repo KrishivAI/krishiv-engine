@@ -1398,6 +1398,38 @@ fn a_full_set_learns_new_keys() {
     assert!(r.recurs(), "{:?}", (r.sampled, r.hits));
 }
 
+/// Review 1c5fc2e2c finding 1: a long unique prefix (26M run starts, a
+/// million an interval) leaves the rate where the last two intervals' keys
+/// fit, not where the whole history would, so later recurring keys in 4-row
+/// runs are still sampled often enough to be found.
+#[test]
+fn a_long_unique_prefix_still_learns_recurring_keys() {
+    let h = |k: u64| {
+        let mut z = k.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    let mut r = Recur::new();
+    r.start();
+    for k in 0..26_000_000_u64 {
+        r.add(h(k));
+        if k % 1_000_000 == 999_999 {
+            r.next_interval();
+        }
+    }
+    let (_, _, _, level, _) = r.state();
+    assert!(level <= 5, "{level}");
+    let hashes: Vec<u64> = (0..1_000_000_u64)
+        .map(|i| h((1 << 40) | ((i / 4) % 50_000)))
+        .collect();
+    for _ in 0..2 {
+        r.next_interval();
+        r.add_runs(&hashes, None);
+    }
+    assert!(r.recurs(), "{:?}", (r.sampled, r.hits, r.state().3));
+}
+
 /// Review 91d3ef56f finding 3: a small table allocates no set, and its
 /// projection covers the set's start.
 #[test]

@@ -50,7 +50,9 @@
 //!   [`ADAPT_ROWS`] (TPC-H q13). An append-only table returns to its fixed
 //!   index at a later decision when over half of the interval's sampled
 //!   run starts (at least 32, about 2,000 run starts at the first sample
-//!   rate) are keys it has seen ([`Recur`]): keys unique only in a
+//!   rate) are keys it has seen and the interval's distinct keys fit the
+//!   largest index at load 2/3 ([`RECUR_KEYS`], `Recur::recurs_within`):
+//!   keys unique only in a
 //!   driver's first rows (TPC-DS q22's inventory, the same items every
 //!   week) would otherwise make a partial row per run to the end.
 //!   This is DuckDB's thread-local abandon (fixed-size thread-local tables,
@@ -869,7 +871,8 @@ impl RowTable {
     /// nearly every key is unique, and
     /// grows after it filled ([`grown_limit`](Self::grown_limit)); an
     /// append-only one returns to its fixed index at a decision whose
-    /// interval's keys mostly recur ([`Recur`]).
+    /// interval's keys mostly recur and fit the largest index at load 2/3
+    /// ([`Recur::recurs_within`], [`RECUR_KEYS`]).
     fn next_mode(&self) -> Mode {
         let (Mode::Fixed { limit }, Some(a)) = (self.mode, &self.adapt) else {
             return match (self.mode, &self.adapt) {
@@ -1207,14 +1210,16 @@ impl RowTable {
         self.start_sketches(n);
         let start_recur = self.starts_recur(n);
         if let Some(a) = self.adapt.as_mut() {
-            if start_recur {
-                a.recur.start();
-            }
             a.rows += n;
             // The direct path's keys are one per batch-local id, not per
             // row (and its append pushes every row): every row counts.
             let hashes = p.keys.hashes();
             if hashes.len() == n {
+                // Only a batch whose run starts are sampled starts the set:
+                // a table on the direct path never reads it.
+                if start_recur {
+                    a.recur.start();
+                }
                 a.runs += run_starts(hashes, a.last);
                 a.recur.add_runs(hashes, a.last);
                 a.last = hashes.last().copied();

@@ -26,17 +26,25 @@ const MIN_SAMPLED: usize = 32;
 ///
 /// The set allocates its slots at [`start`](Self::start) (a table's first
 /// [`SKETCH_ROWS`](super::SKETCH_ROWS) rows sample nothing). When it holds
-/// [`FULL`] keys it samples at half the rate from then on and keeps only
-/// the keys that rate would have taken (about half), so keys that stopped
-/// coming give way to new ones: a driver whose first keys never recur
-/// still learns the keys that do, and a driver with more recurring keys
-/// than the set holds samples them sparsely enough to hold them.
+/// [`FULL`] keys it first drops the keys last sampled before the previous
+/// interval, so keys that stopped coming give way to new ones whatever the
+/// driver read before. Only when that frees less than a quarter of [`FULL`]
+/// (the last two intervals alone hold more sampled keys) does it sample at
+/// half the rate from then on, keeping the keys that rate would have taken.
+/// The rate so follows the distinct keys of two intervals, not the driver's
+/// history: a unique stream of an interval of 1M run starts settles near
+/// level 4 (about 1,000 sampled keys an interval), where an interval of
+/// 4-row runs still samples over 200 run starts.
 #[derive(Debug)]
 pub(super) struct Recur {
     slots: Box<[u64]>,
     /// The interval each slot's key was last sampled in.
     stamps: Box<[u16]>,
     /// This interval's stamp (never 0, which no slot holds once filled).
+    /// It wraps to 1 after 65,535 intervals: a key last stamped 65,535
+    /// intervals ago then reads as stamped in this one (counted as touched
+    /// and kept as fresh). At a million rows an interval that is 65 billion
+    /// rows of one driver, so it is left as is.
     epoch: u16,
     /// Distinct keys of the set sampled in this interval.
     touched: usize,
@@ -126,12 +134,104 @@ impl Recur {
             return;
         }
         self.sampled += 1;
-        if !self.insert(h, self.epoch) && self.level < MAX_LEVEL {
-            self.sparser();
+        if !self.insert(h, self.epoch) {
+            self.make_room();
             if (h >> 16) & self.mask() == 0 {
                 self.insert(h, self.epoch);
             }
         }
+    }
+
+    /// The previous interval's stamp.
+    fn previous(&self) -> u16 {
+        match self.epoch.wrapping_sub(1) {
+            0 => u16::MAX,
+            e => e,
+        }
+    }
+
+    /// A full set drops the keys last sampled before the previous interval;
+    /// when that frees less than a quarter of [`FULL`], it also goes one
+    /// level sparser and drops the keys the new rate does not sample.
+    fn make_room(&mut self) {
+        let (epoch, previous) = (self.epoch, self.previous());
+        let fresh = |s: u16| s == epoch || s == previous;
+        let kept = self
+            .slots
+            .iter()
+            .zip(self.stamps.iter())
+            .filter(|&(&k, &s)| k != 0 && fresh(s))
+            .count();
+        let sparser = self.len - kept < FULL / 4 && self.level < MAX_LEVEL;
+        if sparser {
+            self.level += 1;
+        }
+        let mask = self.mask();
+        self.retain(|k, s| fresh(s) && (!sparser || (k >> 16) & mask == 0));
+    }
+
+    /// The slot a key's probe starts at.
+    fn home(key: u64) -> usize {
+        usize::try_from((key ^ (key >> 29)) & SLOT_MASK).unwrap_or(0)
+    }
+
+    /// Keeps the keys `keep` takes (by key and stamp), in place: each
+    /// removed key's slot is refilled by backward-shift deletion, so the
+    /// probes of the keys left stay unbroken and no second set is needed.
+    fn retain(&mut self, keep: impl Fn(u64, u16) -> bool) {
+        let mask = usize::try_from(SLOT_MASK).unwrap_or(0);
+        // Starting just after an empty slot, no probe run crosses the start,
+        // and a shift only moves a later key of a run into the slot being
+        // looked at, which is looked at again.
+        let Some(empty) = self.slots.iter().position(|&k| k == 0) else {
+            return;
+        };
+        let mut i = (empty + 1) & mask;
+        for _ in 0..SLOTS {
+            loop {
+                let key = self.slots[i];
+                if key == 0 || keep(key, self.stamps[i]) {
+                    break;
+                }
+                self.remove(i);
+            }
+            i = (i + 1) & mask;
+        }
+        self.touched = self
+            .stamps
+            .iter()
+            .zip(self.slots.iter())
+            .filter(|&(&s, &k)| k != 0 && s == self.epoch)
+            .count();
+    }
+
+    /// Removes the key in slot `i` (backward-shift deletion).
+    fn remove(&mut self, mut i: usize) {
+        let mask = usize::try_from(SLOT_MASK).unwrap_or(0);
+        let mut j = i;
+        loop {
+            j = (j + 1) & mask;
+            let key = self.slots[j];
+            if key == 0 {
+                break;
+            }
+            // The key at `j` may move to `i` when its home is not in the
+            // cyclic range (i, j].
+            let k = Self::home(key);
+            let stays = if i <= j {
+                i < k && k <= j
+            } else {
+                i < k || k <= j
+            };
+            if !stays {
+                self.slots[i] = key;
+                self.stamps[i] = self.stamps[j];
+                i = j;
+            }
+        }
+        self.slots[i] = 0;
+        self.stamps[i] = 0;
+        self.len -= 1;
     }
 
     /// Looks `h` up and inserts it when new, stamped `stamp`: false when the
@@ -139,7 +239,9 @@ impl Recur {
     fn insert(&mut self, h: u64, stamp: u16) -> bool {
         // 0 marks an empty slot.
         let key = h.max(1);
-        let mut i = usize::try_from((h ^ (h >> 29)) & SLOT_MASK).unwrap_or(0);
+        // The slot comes from the stored key, so a hash of 0 (stored as 1)
+        // probes where the key is found again.
+        let mut i = Self::home(key);
         loop {
             match self.slots.get(i).copied() {
                 Some(s) if s == key => {
@@ -173,30 +275,6 @@ impl Recur {
         }
     }
 
-    /// One level sparser: the keys the new rate does not sample go.
-    fn sparser(&mut self) {
-        self.level += 1;
-        let mask = self.mask();
-        let kept: Vec<(u64, u16)> = self
-            .slots
-            .iter()
-            .zip(self.stamps.iter())
-            .filter(|&(&k, _)| k != 0 && (k >> 16) & mask == 0)
-            .map(|(&k, &s)| (k, s))
-            .collect();
-        self.slots.fill(0);
-        self.stamps.fill(0);
-        self.len = 0;
-        let (sampled, hits) = (self.sampled, self.hits);
-        // The kept keys this interval touched, at the new rate.
-        self.touched = kept.iter().filter(|&&(_, s)| s == self.epoch).count();
-        let touched = self.touched;
-        for (k, s) in kept {
-            self.insert(k, s);
-        }
-        (self.sampled, self.hits, self.touched) = (sampled, hits, touched);
-    }
-
     /// Over half of this interval's sampled run starts were seen before
     /// (and at least [`MIN_SAMPLED`] were sampled).
     pub(super) fn recurs(&self) -> bool {
@@ -212,6 +290,13 @@ impl Recur {
     /// distinct keys fit in `keys`: an index that cannot hold them clears
     /// all the time (TPC-H q13 at SF100: ~10M keys, each about once a
     /// driver's million rows), and appending costs less.
+    ///
+    /// Limit: it reads one interval's keys. Keys that recur only over a
+    /// longer period (2M keys in 4-row runs, 250K of them an interval, each
+    /// back every 8 intervals) pass it, though an index that fits one
+    /// interval's keys holds none of them when they come back; the table then
+    /// pays for lookups that miss (about q13's 1.05x) until the keys recur
+    /// within an interval or stop recurring. No measured query does this.
     pub(super) fn recurs_within(&self, keys: usize) -> bool {
         self.recurs() && self.interval_keys() <= keys
     }
@@ -225,5 +310,56 @@ impl Recur {
     #[cfg(test)]
     pub(super) fn state(&self) -> (usize, usize, usize, u32, &[u64]) {
         (self.sampled, self.hits, self.len, self.level, &self.slots)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FULL, Recur};
+
+    /// After an in-place `retain` every kept key is found again where its
+    /// probe starts (a hit) and no dropped key is (a new insert), with keys
+    /// that wrap around the end of the slots and the hash 0 among them.
+    #[test]
+    fn retain_keeps_every_kept_key_reachable() {
+        let h = |k: u64| {
+            let mut z = k.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z ^ (z >> 31)
+        };
+        for seed in 0..20_u64 {
+            let mut r = Recur::new();
+            r.start();
+            let mut keys: Vec<u64> = (0..u64::try_from(FULL).unwrap())
+                .map(|k| h(k ^ (seed << 32)))
+                .collect();
+            keys[0] = 0;
+            for (n, &k) in keys.iter().enumerate() {
+                assert!(r.insert(k, 1 + u16::try_from(n % 3).unwrap()));
+            }
+            assert_eq!(r.len, FULL);
+            r.retain(|k, s| s != 2 && k % 5 != 0);
+            let kept: Vec<u64> = keys
+                .iter()
+                .enumerate()
+                .filter(|&(n, &k)| n % 3 != 1 && k.max(1) % 5 != 0)
+                .map(|(_, &k)| k)
+                .collect();
+            assert_eq!(r.len, kept.len(), "seed {seed}");
+            let hits = r.hits;
+            for &k in &kept {
+                assert!(r.insert(k, 1));
+            }
+            assert_eq!(
+                r.hits - hits,
+                kept.len(),
+                "seed {seed}: a kept key was lost"
+            );
+            assert_eq!(
+                r.len,
+                kept.len(),
+                "seed {seed}: a kept key was stored twice"
+            );
+        }
     }
 }
