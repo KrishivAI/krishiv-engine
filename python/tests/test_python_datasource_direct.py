@@ -206,7 +206,8 @@ def test_load_read_callback_and_dropped_session(spark: SparkSession, monkeypatch
         def __getattr__(self, name: str) -> Any:
             return getattr(real, name)
 
-    monkeypatch.setattr(spark, "_native", Native())
+    # main keeps the engine session in `_base_native` (`_native` is a read-only property there).
+    monkeypatch.setattr(spark, "_base_native" if hasattr(spark, "_base_native") else "_native", Native())
 
     class Src(DataSource):
         def schema(self) -> str:
