@@ -72,6 +72,18 @@ impl Session {
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        // Metric views arrive in Spark 4.2: older releases fail to parse the statement, at `WITH`
+        // (3.5) or at `METRICS` (4.0, 4.1), the gate goldens of P3 4.2-MV.
+        if let Statement::CreateMetricView(v) = &statement
+            && let Some(span) = metric_view_gate(v, self.state.profile)
+        {
+            let token = query.get(span.start..span.end).unwrap_or_default();
+            let error = krishiv_common::error::ParseSyntaxError {
+                error: format!("'{token}'"),
+                hint: String::new(),
+            };
+            return Err(sql_context(error.into(), &redacted, span.start, span.end));
+        }
         // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
         // clause when it drops it; the parser sees only the evaluated name.
         if named_by_clause
@@ -95,5 +107,20 @@ impl Session {
         // text and class when it runs.
         df.with_statement(&redacted, class.name());
         Ok(Ran::Frame(df, command))
+    }
+}
+
+/// Where a Spark release before 4.2 stops parsing `CREATE VIEW .. WITH METRICS`, if `profile` is
+/// one: 3.5 has no `WITH` there, 4.0 and 4.1 take `WITH` for a schema-binding clause and fail at
+/// the next token.
+fn metric_view_gate(
+    v: &krishiv_sql::ast::CreateMetricView,
+    profile: SparkProfile,
+) -> Option<krishiv_sql::ast::Span> {
+    let [with, metrics] = v.with_metrics.unwrap_or([v.body_span, v.body_span]);
+    match profile {
+        SparkProfile::V3_5 => Some(with),
+        SparkProfile::V4_0 | SparkProfile::V4_1 => Some(metrics),
+        _ => None,
     }
 }

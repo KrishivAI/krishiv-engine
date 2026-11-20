@@ -79,13 +79,6 @@ mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;
 mod memory_table;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the metric-view DDL (P3 4.2-MV step 4) is the first caller"
-    )
-)]
 mod metric_view;
 mod monitor;
 mod nested_value;

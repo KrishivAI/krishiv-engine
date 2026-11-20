@@ -706,6 +706,7 @@ impl Session {
                 // The store sets the version (review r10 M10).
                 revision: 0,
                 author: self.state.principal.name.clone(),
+                kind: crate::store::ViewKind::Sql,
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -982,6 +983,7 @@ impl Session {
                     default: None,
                     comment: None,
                     char_varchar: None,
+                    metric: None,
                 })
             })
             .collect()
@@ -1160,6 +1162,7 @@ impl Session {
                     // A new text: the store gives it a new version (review r10 M10).
                     revision: 0,
                     author: self.state.principal.name.clone(),
+                    kind: crate::store::ViewKind::Sql,
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {
@@ -1782,6 +1785,7 @@ mod writes;
 mod create;
 #[cfg(feature = "delta")]
 mod delta;
+mod metric_view;
 #[cfg(feature = "delta")]
 pub(crate) use delta::{delta_write_refused, is_delta_table};
 #[cfg(feature = "delta")]

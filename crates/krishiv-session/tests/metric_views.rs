@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Metric views (P3 4.2-MV) against the Spark runs in `tests/fixtures/spark-{4.2.1,4.3.0}/metric-views/`
+//! (`tests/scripts/gen_metric_view_goldens.py`; the README there gives the format and the `match`
+//! modes). Each case runs in a fresh session and database, as the generator ran it. A case
+//! matches when every `sql` and `conf` step does: an error by class and SQLSTATE, plus its
+//! parameters unless the step compares by `class_sqlstate_prefix`; a result by its column names
+//! and rows. `api` steps (DataFrame calls) are checked by the Connect test.
+//!
+//! `KNOWN_GAPS` lists the cases not matched yet, by the step that adds them (design note
+//! `P3-metric-views.md` §7): each must still fail, so a fix removes it from the list.
+#![cfg(test)]
+
+use std::collections::BTreeSet;
+
+use arrow_array::cast::AsArray;
+use arrow_array::types::{Float64Type, Int32Type, Int64Type};
+use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_schema::DataType;
+use futures::executor::block_on;
+use krishiv_common::error::KrishivError;
+use krishiv_session::Session;
+use serde_json::Value;
+
+#[path = "metric_views/gaps.rs"]
+mod gaps;
+
+fn fixture(release: &str) -> Value {
+    let path = format!(
+        "{}/../../tests/fixtures/spark-{release}/metric-views/cases.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn cell(c: &ArrayRef, i: usize) -> Value {
+    if c.is_null(i) {
+        return Value::Null;
+    }
+    match c.data_type() {
+        DataType::Boolean => Value::from(c.as_boolean().value(i)),
+        DataType::Int32 => Value::from(c.as_primitive::<Int32Type>().value(i)),
+        DataType::Int64 => Value::from(c.as_primitive::<Int64Type>().value(i)),
+        DataType::Float64 => Value::from(c.as_primitive::<Float64Type>().value(i)),
+        DataType::Utf8 => Value::from(c.as_string::<i32>().value(i)),
+        DataType::Utf8View => Value::from(c.as_string_view().value(i)),
+        DataType::LargeUtf8 => Value::from(c.as_string::<i64>().value(i)),
+        other => Value::from(format!("<{other}>")),
+    }
+}
+
+fn rows(batches: &[RecordBatch]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for b in batches {
+        for i in 0..b.num_rows() {
+            out.push(Value::Array(
+                b.columns().iter().map(|c| cell(c, i)).collect(),
+            ));
+        }
+    }
+    out
+}
+
+/// A row as text, with `<normalized>` cells kept as the fixture wrote them.
+fn normalized(row: &Value, expected: &Value) -> String {
+    match (row, expected) {
+        (Value::Array(r), Value::Array(e)) => {
+            let cells: Vec<String> = r
+                .iter()
+                .zip(e)
+                .map(|(r, e)| {
+                    if e == "<normalized>" {
+                        e.to_string()
+                    } else if let (Some(a), Some(b)) = (r.as_f64(), e.as_f64()) {
+                        if a == b { e.to_string() } else { a.to_string() }
+                    } else {
+                        r.to_string()
+                    }
+                })
+                .collect();
+            format!("[{}]", cells.join(","))
+        }
+        _ => row.to_string(),
+    }
+}
+
+fn error_matches(e: &KrishivError, want: &Value, by_class: bool) -> Result<(), String> {
+    let condition = want["condition"].as_str().unwrap_or("INTERNAL_ERROR");
+    let class = e.error_class().name();
+    if class != condition {
+        return Err(format!("class {class} vs {condition}: {e}"));
+    }
+    if by_class {
+        return Ok(());
+    }
+    for (k, v) in e.message_parameters() {
+        let theirs = want["parameters"][*k].as_str();
+        if theirs != Some(v.as_str()) {
+            return Err(format!("parameter {k}: {v:?} vs {theirs:?}"));
+        }
+    }
+    Ok(())
+}
+
+fn run_step(s: &Session, step: &Value) -> Result<(), String> {
+    let outcome = &step["outcome"];
+    if step["kind"] == "conf" {
+        let (k, v) = (
+            step["key"].as_str().unwrap(),
+            step["value"].as_str().unwrap(),
+        );
+        return s.conf().set(k, v).map_err(|e| e.to_string());
+    }
+    let text = step["sql"].as_str().unwrap();
+    let result = block_on(async {
+        let df = s.sql(text).await?;
+        df.collect().await
+    });
+    let by_class = step["match"] == "class_sqlstate_prefix";
+    match (result, outcome.get("error")) {
+        (Err(e), Some(want)) => error_matches(&e, want, by_class),
+        (Err(e), None) => Err(format!("failed: {e}")),
+        (Ok(_), Some(want)) => Err(format!("succeeded, Spark failed: {}", want["message"])),
+        (Ok(batches), None) => {
+            let want = outcome["rows"].as_array().cloned().unwrap_or_default();
+            let got = rows(&batches);
+            if got.len() != want.len() {
+                return Err(format!("{} rows vs {}: {got:?}", got.len(), want.len()));
+            }
+            let mut got: Vec<String> = got
+                .iter()
+                .zip(&want)
+                .map(|(g, w)| normalized(g, w))
+                .collect();
+            let mut want: Vec<String> = want.iter().map(|w| normalized(w, w)).collect();
+            if outcome["row_order"] == "sorted" {
+                got.sort();
+                want.sort();
+            }
+            if got == want {
+                Ok(())
+            } else {
+                Err(format!("rows {got:?} vs {want:?}"))
+            }
+        }
+    }
+}
+
+/// The first step of `case` that does not match, if any.
+fn run_case(case: &Value) -> Option<String> {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", &dir.path().display().to_string())
+        .unwrap();
+    s.conf().set("spark.sql.session.timeZone", "UTC").unwrap();
+    let db = case["database"].as_str().unwrap_or_default();
+    for setup in [format!("CREATE DATABASE {db}"), format!("USE {db}")] {
+        block_on(async { s.sql(&setup).await?.collect().await }).unwrap();
+    }
+    for (i, step) in case["steps"].as_array().into_iter().flatten().enumerate() {
+        if step["kind"] == "api" {
+            continue;
+        }
+        if let Err(why) = run_step(&s, step) {
+            return Some(format!("step {i}: {why}"));
+        }
+    }
+    None
+}
+
+fn check(release: &str, gaps: &[&str]) {
+    let fixture = fixture(release);
+    let mut failing = BTreeSet::new();
+    let mut report = String::new();
+    for case in fixture["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        if let Some(why) = run_case(case) {
+            failing.insert(name.to_owned());
+            if !gaps.contains(&name) {
+                report.push_str(&format!("{name}: {why}\n"));
+            }
+        }
+    }
+    let gaps: BTreeSet<String> = gaps.iter().map(|g| (*g).to_owned()).collect();
+    let fixed: Vec<_> = gaps.difference(&failing).collect();
+    assert!(
+        report.is_empty() && fixed.is_empty(),
+        "{release}: not matched (and not a known gap):\n{report}\nknown gaps that now match (remove them): {fixed:?}"
+    );
+}
+
+#[test]
+fn spark_4_2_1() {
+    check("4.2.1", gaps::GAPS);
+}
+
+#[test]
+fn spark_4_3_0() {
+    let gaps: Vec<&str> = gaps::GAPS.iter().chain(gaps::GAPS_4_3).copied().collect();
+    check("4.3.0", &gaps);
+}
