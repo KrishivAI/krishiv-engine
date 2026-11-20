@@ -54,8 +54,7 @@ use crate::session::{QueryEnv, Session};
 use crate::sql_functions::Entry;
 use crate::store::{CatalogStore, StoredFunction};
 use crate::variables::{
-    DECLARE_SEARCH_PATH, RESOLVE_SEARCH_PATH, StoredVariable, quote_name, quote_normalized,
-    variable_key,
+    DECLARE_SEARCH_PATH, StoredVariable, quote_name, quote_normalized, variable_key,
 };
 
 /// What `SET key` shows for a key with no value, as in Spark.
@@ -708,7 +707,7 @@ impl Session {
                 let mut keys = Vec::with_capacity(assignments.len());
                 for a in assignments {
                     let Some(key) = variable_key(&a.name) else {
-                        return Err(unresolved_variable(&a.name, RESOLVE_SEARCH_PATH, text));
+                        return Err(unresolved_variable(&a.name, &self.search_path(), text));
                     };
                     keys.push(key);
                 }
@@ -771,7 +770,7 @@ impl Session {
                 let mut keys = Vec::with_capacity(targets.len());
                 for name in targets {
                     let Some(key) = variable_key(name) else {
-                        return Err(unresolved_variable(name, RESOLVE_SEARCH_PATH, text));
+                        return Err(unresolved_variable(name, &self.search_path(), text));
                     };
                     keys.push(key);
                 }
@@ -901,7 +900,7 @@ impl Session {
         text: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
         let Some(key) = variable_key(&v.name) else {
-            return Err(unresolved_variable(&v.name, RESOLVE_SEARCH_PATH, text));
+            return Err(unresolved_variable(&v.name, &self.search_path(), text));
         };
         if self.state.variables.remove(&key).is_none() && !v.if_exists {
             return Err(VariableNotFound {

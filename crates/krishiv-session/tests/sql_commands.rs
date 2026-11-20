@@ -870,3 +870,26 @@ fn a_commands_not_found_error_names_the_current_namespace() {
         "[`system`.`session`, `spark_catalog`.`nsdb`]"
     );
 }
+
+/// An unresolved variable in `SET VARIABLE` / `DROP TEMPORARY VARIABLE` names the current namespace in
+/// its search path, like a missing table.
+#[test]
+fn an_unresolved_variable_error_names_the_current_namespace() {
+    let s = session();
+    block_on(s.sql("CREATE DATABASE vardb")).unwrap();
+    block_on(s.sql("USE vardb")).unwrap();
+    let want = "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`vardb`]";
+    for sql in [
+        "SET VAR a.b.nosuch = 1",
+        "DROP TEMPORARY VARIABLE a.b.nosuch",
+    ] {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::UnresolvedVariable, "{sql}");
+        let found = e
+            .message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "searchPath")
+            .map(|(_, v)| v.clone());
+        assert_eq!(found.as_deref(), Some(want), "{sql}");
+    }
+}
