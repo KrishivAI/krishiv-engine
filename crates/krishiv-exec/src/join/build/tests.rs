@@ -9,6 +9,7 @@ use arrow_schema::DataType;
 use krishiv_io::{ColumnPath, FilterId, FilterSnapshot, KeyFilterOptions, RuntimeFilter};
 use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
 
+use super::spilled::events;
 use super::{Partials, Writing, publish};
 use crate::join::grace::Grace;
 use crate::join::{FilterPublisher, JoinRuntimeFilter};
@@ -110,6 +111,7 @@ fn without_room_for_the_hashes_the_exact_set_stays() {
         // Room for the keys and half the hashes: never both.
         memory: vec![reservation(keys_only + (with_hashes - keys_only) / 2)],
         bloom_lost: Arc::default(),
+        spilled: Arc::default(),
     };
     p.add_keys(&shared, &[Arc::clone(&keys)], None);
     assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
@@ -143,15 +145,16 @@ fn shedding_the_hashes_frees_their_memory_and_keeps_the_keys() {
         )],
         memory: vec![reservation(1 << 24)],
         bloom_lost: Arc::default(),
+        spilled: Arc::default(),
     };
     p.add_keys(&shared, &[Arc::clone(&keys)], None);
     let before = p.memory[0].size();
     assert_eq!(before, p.heap_bytes(), "hashes not reserved");
-    let freed = p.shed_hashes();
-    assert!(freed > 0, "nothing shed");
+    let (freed, moved) = p.shed_hashes();
+    assert!(freed > 0 && moved, "nothing shed");
     assert_eq!(p.memory[0].size(), before - freed);
     assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
-    assert_eq!(p.shed_hashes(), 0, "shed twice");
+    assert_eq!(p.shed_hashes(), (0, false), "shed twice");
     publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
     let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
         unreachable!("not published")
@@ -181,6 +184,7 @@ fn once_one_partial_sheds_the_others_stop_collecting_hashes() {
         )],
         memory: vec![reservation(1 << 24)],
         bloom_lost: Arc::clone(lost),
+        spilled: Arc::default(),
     };
     let (mut a, mut b) = (new(&lost), new(&lost));
     let mut other = new(&flag());
@@ -189,7 +193,7 @@ fn once_one_partial_sheds_the_others_stop_collecting_hashes() {
         assert!(p.hash_bytes() > 0, "no hashes collected");
     }
     let hashes = a.hash_bytes();
-    assert_eq!(a.shed_hashes(), hashes, "the shed is not the hash bytes");
+    assert_eq!(a.shed_hashes().0, hashes, "the shed is not the hash bytes");
     assert_eq!(a.hash_bytes(), 0);
     assert!(b.hash_bytes() > 0, "shed before its next batch");
     b.add_keys(&shared, &[Arc::clone(&keys)], None);
@@ -225,6 +229,7 @@ fn a_refused_merged_partial_releases_from_every_reservation() {
         builders: vec![Some(builder)],
         memory: vec![first, merged],
         bloom_lost: flag(),
+        spilled: Arc::default(),
     };
     p.fit();
     assert_eq!(p.hash_bytes(), 0, "the hashes stayed");
@@ -373,6 +378,7 @@ fn a_merge_past_the_bloom_cap_raises_the_flag() {
         )],
         memory: vec![reservation(1 << 24)],
         bloom_lost: Arc::clone(&lost),
+        spilled: Arc::default(),
     };
     let keys = |from: i64| -> ArrayRef {
         Arc::new(Int64Array::from_iter_values(
@@ -512,6 +518,7 @@ fn memory_pressure_drops_forms_never_fails() {
         )],
         memory: vec![reservation(1024)],
         bloom_lost: Arc::default(),
+        spilled: Arc::default(),
     };
     let spec_keys = [Arc::clone(&keys)];
     p.add_keys(&shared, &spec_keys, None);
@@ -539,6 +546,7 @@ fn memory_pressure_drops_forms_never_fails() {
             )],
             memory: vec![reservation(1 << 20)],
             bloom_lost: Arc::default(),
+            spilled: Arc::default(),
         };
         p.add_keys(&shared, &sparse_keys, None);
         publish(&publisher(&f), &shared, p, &mut reservation(held));
@@ -564,6 +572,7 @@ fn memory_pressure_drops_forms_never_fails() {
         )],
         memory: Vec::new(),
         bloom_lost: Arc::default(),
+        spilled: Arc::default(),
     };
     let wrong: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1]));
     p.add_keys(&shared, &[wrong], None);
@@ -572,4 +581,659 @@ fn memory_pressure_drops_forms_never_fails() {
         f.filter.published().snapshot,
         FilterSnapshot::Disabled(_)
     ));
+}
+
+/// A filter of a guessed build: a fixed Bloom of 64 KiB, no exact set, a
+/// key cap of 1000.
+fn fixed_filter() -> JoinRuntimeFilter {
+    let mut f = filter();
+    f.options.exact_max_values = 0;
+    f.options.bloom_max_items = 1000;
+    f.options.bloom_spill_bytes = Some(64 << 10);
+    f
+}
+
+/// A partial of `f` as the build makes one (its builder kept past the cap).
+fn owned_partial(
+    f: &JoinRuntimeFilter,
+    lost: &Arc<[std::sync::atomic::AtomicBool]>,
+    spilled: &Arc<[super::SpilledBloom]>,
+    limit: usize,
+) -> Partials {
+    let mut b = krishiv_io::KeyFilterBuilder::new(DataType::Int64, f.options);
+    if let Some(b) = b.as_mut() {
+        b.keep_hashes_past_cap();
+    }
+    Partials {
+        builders: vec![b],
+        memory: vec![reservation(limit)],
+        bloom_lost: Arc::clone(lost),
+        spilled: Arc::clone(spilled),
+    }
+}
+
+fn fixed() -> Arc<[super::SpilledBloom]> {
+    Arc::new([super::SpilledBloom::default()])
+}
+
+fn spread(from: i64, n: i64) -> ArrayRef {
+    Arc::new(Int64Array::from_iter_values(
+        (from..from + n).map(|i| i * 1_000_003),
+    ))
+}
+
+fn published_filter(f: &JoinRuntimeFilter) -> Arc<krishiv_io::KeyFilter> {
+    let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
+        unreachable!("not published")
+    };
+    k
+}
+
+/// One partial past `bloom_max_items` creates and reserves the fixed
+/// filter and drains into it; another partial then drains too, and the
+/// published Bloom passes every key, on the filter's own reservation.
+#[test]
+fn partials_past_the_cap_drain_into_one_fixed_bloom() {
+    use std::sync::atomic::Ordering;
+
+    let f = fixed_filter();
+    let shared = vec![f.clone()];
+    let (lost, spilled) = (flag(), fixed());
+    let mut a = owned_partial(&f, &lost, &spilled, 1 << 24);
+    let mut b = owned_partial(&f, &lost, &spilled, 1 << 24);
+    b.add_keys(&shared, &[spread(10_000, 500)], None);
+    assert!(
+        b.hash_bytes() > 0,
+        "drained below the cap with no filter yet"
+    );
+    a.add_keys(&shared, &[spread(0, 2000)], None);
+    assert!(
+        spilled[0].active(),
+        "past the cap the fixed filter was not made"
+    );
+    assert_eq!(a.hash_bytes(), 0, "hashes kept past the cap");
+    assert_eq!(a.memory[0].size(), a.heap_bytes(), "reservation != heap");
+    b.add_keys(&shared, &[spread(20_000, 100)], None);
+    assert_eq!(b.hash_bytes(), 0, "the other partial does not drain");
+    assert!(!lost[0].load(Ordering::Relaxed));
+    a.merge(b);
+    let fixed = publish(&publisher(&f), &shared, a, &mut reservation(1 << 20));
+    assert_eq!(
+        fixed.len(),
+        1,
+        "the fixed filter's reservation not handed over"
+    );
+    assert_eq!(fixed[0].size(), 64 << 10);
+    let k = published_filter(&f);
+    assert_eq!(k.bloom_bytes(), Some(64 << 10), "no fixed Bloom published");
+    for (from, n) in [(0, 2000), (10_000, 500), (20_000, 100)] {
+        let pass = k
+            .evaluate(spread(from, n).as_ref())
+            .unwrap_or_else(|| panic!());
+        assert_eq!(pass.true_count(), usize::try_from(n).unwrap_or(0));
+    }
+}
+
+/// A spill request (`shed_hashes`) creates the filter when the whole
+/// build's keys are big enough, whichever partial is asked, and returns the
+/// bytes freed net of the filter it reserved and whether hashes left; a
+/// small build's hashes are shed as before and its Bloom lost.
+#[test]
+fn a_spill_drains_by_the_builds_size_and_reports_the_net() {
+    use std::sync::atomic::Ordering;
+
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let shared = vec![f.clone()];
+    // A small partial asked first, in a build whose other partial holds
+    // 1,000 keys: 1,100 keys as hashes (8,800 bytes) pass 64 KiB / 16.
+    let (lost, spilled) = (flag(), fixed());
+    let mut big = owned_partial(&f, &lost, &spilled, 1 << 24);
+    let mut small = owned_partial(&f, &lost, &spilled, 1 << 24);
+    big.add_keys(&shared, &[spread(0, 1000)], None);
+    small.add_keys(&shared, &[spread(50_000, 100)], None);
+    assert!(small.hash_bytes() > 0 && !spilled[0].active());
+    // The big partial's batch reserved the filter's memory: the drain
+    // takes nothing more from the pool, so the net is the hashes freed.
+    assert_eq!(spilled[0].outcome().0, events::RESERVED);
+    let freed = small.hash_bytes();
+    assert_eq!(
+        small.shed_hashes(),
+        (freed, true),
+        "reported the filter again or no move"
+    );
+    assert!(
+        spilled[0].active(),
+        "the small partial lost the build's Bloom"
+    );
+    assert_eq!(small.hash_bytes(), 0);
+    assert!(!lost[0].load(Ordering::Relaxed), "the Bloom was lost");
+    // Now the filter exists: the big partial's shed frees its hashes.
+    let freed = big.hash_bytes();
+    assert_eq!(big.shed_hashes(), (freed, true));
+    // A build of 100 keys in all is small: shed as before, Bloom lost.
+    let (lost, spilled) = (flag(), fixed());
+    let mut tiny = owned_partial(&f, &lost, &spilled, 1 << 24);
+    tiny.add_keys(&shared, &[spread(0, 100)], None);
+    assert!(tiny.shed_hashes().0 > 0);
+    assert!(
+        !spilled[0].active(),
+        "a small build reserved the fixed filter"
+    );
+    assert!(lost[0].load(Ordering::Relaxed));
+}
+
+/// More keys than the fixed filter holds within `bloom_max_fpp`: it is
+/// freed at once and hashing stops, and the build
+/// publishes a range.
+#[test]
+fn a_full_fixed_filter_is_freed_and_the_bloom_lost() {
+    use std::sync::atomic::Ordering;
+
+    let mut f = fixed_filter();
+    f.options.bloom_spill_bytes = Some(1 << 10);
+    let shared = vec![f.clone()];
+    let (lost, spilled) = (flag(), fixed());
+    let mut p = owned_partial(&f, &lost, &spilled, 1 << 24);
+    p.add_keys(&shared, &[spread(0, 1001)], None);
+    assert!(spilled[0].active(), "1,001 keys do not fit 1 KiB");
+    p.add_keys(&shared, &[spread(10_000, 20_000)], None);
+    assert!(!spilled[0].active(), "a full filter kept its memory");
+    assert!(lost[0].load(Ordering::Relaxed));
+    assert_eq!(p.hash_bytes(), 0, "still hashing");
+    p.add_keys(&shared, &[spread(40_000, 100)], None);
+    assert_eq!(p.hash_bytes(), 0, "hashing resumed");
+    let fixed = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    assert!(fixed.is_empty());
+    let k = published_filter(&f);
+    assert!(k.bloom_bytes().is_none() && k.has_range());
+    let (bits, keys) = spilled[0].outcome();
+    assert_eq!(bits, events::RESERVED | events::ACTIVE | events::FULL);
+    assert_eq!(keys, 21_101);
+}
+
+/// A Bloom lost after the filter was made (another partial's refused
+/// memory) frees the filter at the next batch of any partial (review
+/// finding 6), and a disabled filter's fixed Bloom is freed at publish.
+#[test]
+fn a_lost_bloom_frees_the_fixed_filter() {
+    use std::sync::atomic::Ordering;
+
+    let f = fixed_filter();
+    let shared = vec![f.clone()];
+    let (lost, spilled) = (flag(), fixed());
+    let mut p = owned_partial(&f, &lost, &spilled, 1 << 24);
+    p.add_keys(&shared, &[spread(0, 2000)], None);
+    assert!(spilled[0].active());
+    lost[0].store(true, Ordering::Relaxed);
+    p.add_keys(&shared, &[spread(10_000, 10)], None);
+    assert!(
+        !spilled[0].active(),
+        "the lost Bloom's filter is still held"
+    );
+    let held = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    assert!(held.is_empty());
+    assert!(published_filter(&f).bloom_bytes().is_none());
+    assert_eq!(
+        spilled[0].outcome().0,
+        events::RESERVED | events::ACTIVE | events::LOST
+    );
+    // A partial dropped (a key of another type) disables the filter and
+    // frees its fixed Bloom.
+    let f = fixed_filter();
+    let shared = vec![f.clone()];
+    let (lost, spilled) = (flag(), fixed());
+    let mut p = owned_partial(&f, &lost, &spilled, 1 << 24);
+    p.add_keys(&shared, &[spread(0, 2000)], None);
+    assert!(spilled[0].active());
+    let wrong: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1]));
+    p.add_keys(&shared, &[wrong], None);
+    assert!(
+        !spilled[0].active(),
+        "a dropped builder's fixed Bloom is held until publish"
+    );
+    let fixed = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    assert!(fixed.is_empty());
+    assert!(
+        !spilled[0].active(),
+        "a disabled filter's Bloom is still held"
+    );
+}
+
+/// Without memory for the fixed filter, past the cap the hashes go and the
+/// other partials are told, as without one; only the range is published.
+#[test]
+fn a_refused_fixed_filter_loses_the_bloom_as_before() {
+    let mut f = fixed_filter();
+    f.options.bloom_spill_bytes = Some(1 << 20);
+    let shared = vec![f.clone()];
+    let (lost, spilled) = (flag(), fixed());
+    // Room for the hashes, not for the 1 MiB filter.
+    let mut p = owned_partial(&f, &lost, &spilled, 256 << 10);
+    p.add_keys(&shared, &[spread(0, 2000)], None);
+    assert!(!spilled[0].active());
+    assert_eq!(spilled[0].outcome().0, events::REFUSED);
+    assert_eq!(p.hash_bytes(), 0, "hashes kept past the cap");
+    assert!(lost[0].load(std::sync::atomic::Ordering::Relaxed));
+    let fixed = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    assert!(fixed.is_empty());
+    let k = published_filter(&f);
+    assert!(k.bloom_bytes().is_none() && k.has_range());
+}
+
+/// A partial of `f` holding `n` keys as hashes, its pool then full: the
+/// rest of the limit taken by another reservation of its consumer. With
+/// `early`, the filter's memory was reserved while the pool had room;
+/// without, the partial is given a fresh fixed filter that saw the same
+/// keys, as if that reservation had been refused.
+fn full_pool_partial(
+    f: &JoinRuntimeFilter,
+    lost: &Arc<[std::sync::atomic::AtomicBool]>,
+    n: i64,
+    early: bool,
+) -> (Partials, Reservation, Arc<[super::SpilledBloom]>) {
+    let limit = 1 << 20;
+    let mut p = owned_partial(f, lost, &fixed(), limit);
+    p.add_keys(std::slice::from_ref(f), &[spread(0, n)], None);
+    assert!(!p.spilled[0].active(), "made below the cap, unforced");
+    assert_eq!(p.spilled[0].outcome().0, events::RESERVED, "not reserved");
+    if !early {
+        let fresh = fixed();
+        fresh[0].saw(u64::try_from(n).unwrap_or(0));
+        p.spilled = fresh;
+    }
+    // The early reservation holds the filter's bytes of the same pool.
+    let filter = if early {
+        f.options.bloom_spill_bytes.map_or(0, |b| b as usize)
+    } else {
+        0
+    };
+    let mut hog = p.memory[0].split(0);
+    assert!(hog.try_grow(limit - p.memory[0].size() - filter).is_ok());
+    assert!(p.memory[0].split(0).try_grow(1).is_err(), "pool not full");
+    let spilled = Arc::clone(&p.spilled);
+    (p, hog, spilled)
+}
+
+/// Review F1 of f574c368f: a spill request when the pool is full and the
+/// partial's hashes (2,000 keys, 16 KB) are far below the filter (64 KiB),
+/// as at q09 SF1000 (160 MB of hashes against 320 MiB) and SF100: the
+/// filter's memory, reserved early, makes it, and the pool is not asked.
+#[test]
+fn a_full_pool_makes_the_reserved_fixed_filter() {
+    use std::sync::atomic::Ordering;
+
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let lost = flag();
+    let (mut p, _hog, spilled) = full_pool_partial(&f, &lost, 2_000, true);
+    let hashes = p.hash_bytes();
+    assert!(hashes < 64 << 10, "the hashes cover the filter");
+    assert_eq!(p.shed_hashes(), (hashes, true), "net freed");
+    assert_eq!(
+        spilled[0].outcome().0,
+        events::RESERVED | events::ACTIVE,
+        "refused"
+    );
+    assert!(!lost[0].load(Ordering::Relaxed), "the Bloom was lost");
+    assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
+    let shared = vec![f.clone()];
+    let fixed = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    assert_eq!(fixed.len(), 1);
+    let k = published_filter(&f);
+    assert_eq!(k.bloom_bytes(), Some(64 << 10), "no fixed Bloom published");
+    let pass = k
+        .evaluate(spread(0, 2_000).as_ref())
+        .unwrap_or_else(|| panic!());
+    assert_eq!(pass.true_count(), 2_000);
+}
+
+/// A reserved filter no partial drained into is freed at publish, and the
+/// build's own Bloom goes out (a guessed build that stayed small).
+#[test]
+fn an_unused_reservation_is_freed_at_publish() {
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let (lost, spilled) = (flag(), fixed());
+    let mut p = owned_partial(&f, &lost, &spilled, 1 << 24);
+    p.add_keys(std::slice::from_ref(&f), &[spread(0, 2_000)], None);
+    assert_eq!(spilled[0].outcome().0, events::RESERVED);
+    let shared = vec![f.clone()];
+    let fixed = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    assert!(fixed.is_empty(), "the unused reservation was handed over");
+    let k = published_filter(&f);
+    assert!(
+        k.bloom_bytes().is_some_and(|b| b < 64 << 10),
+        "not its own Bloom"
+    );
+}
+
+/// An early reservation the pool refuses is tried again: once memory is
+/// freed, the next batch reserves the filter (review nit of 59e0f89df).
+#[test]
+fn a_refused_reservation_is_tried_again_on_the_next_batch() {
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let (lost, spilled) = (flag(), fixed());
+    let limit = 1 << 20;
+    let mut p = owned_partial(&f, &lost, &spilled, limit);
+    // Room for 2,000 keys' hashes, not for the 64 KiB filter.
+    let mut hog = p.memory[0].split(0);
+    assert!(hog.try_grow(limit - (48 << 10)).is_ok());
+    p.add_keys(std::slice::from_ref(&f), &[spread(0, 2_000)], None);
+    assert!(p.hash_bytes() > 0, "the hashes did not fit");
+    assert_eq!(spilled[0].outcome().0, 0, "reserved without room");
+    drop(hog);
+    p.add_keys(std::slice::from_ref(&f), &[spread(10_000, 10)], None);
+    assert_eq!(spilled[0].outcome().0, events::RESERVED, "not tried again");
+    assert!(!spilled[0].active(), "made before any partial needed it");
+}
+
+/// Review F2 of f574c368f: a filter made from the hashes' reservation and
+/// filled by the same drain (capacity below the partial's keys, full
+/// pool) gives its bytes back, so the net is every hash byte freed.
+#[test]
+fn a_filter_made_and_filled_at_once_reports_the_whole_net() {
+    use std::sync::atomic::Ordering;
+
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    f.options.bloom_spill_bytes = Some(1 << 10);
+    let lost = flag();
+    let (mut p, _hog, spilled) = full_pool_partial(&f, &lost, 20_000, false);
+    let held = p.memory[0].size();
+    let (net, moved) = p.shed_hashes();
+    assert!(moved);
+    assert_eq!(spilled[0].outcome().0, events::ACTIVE | events::FULL);
+    assert!(lost[0].load(Ordering::Relaxed));
+    assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
+    assert_eq!(net, held - p.heap_bytes(), "the filled filter's bytes lost");
+}
+
+/// A spill request when the pool is full and the early reservation was
+/// refused: the hashes being drained hold more than the filter, so it is
+/// paid from their reservation, the pool is not asked, and the net freed
+/// is the hashes less the filter.
+#[test]
+fn a_full_pool_funds_the_fixed_filter_from_the_hashes() {
+    use std::sync::atomic::Ordering;
+
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let lost = flag();
+    let (mut p, _hog, spilled) = full_pool_partial(&f, &lost, 10_000, false);
+    let held = p.memory[0].size();
+    let hashes = p.hash_bytes();
+    assert!(hashes >= 64 << 10, "the hashes do not cover the filter");
+    let (net, moved) = p.shed_hashes();
+    assert!(moved, "no hashes left");
+    assert_eq!(spilled[0].outcome().0, events::ACTIVE, "refused");
+    assert!(spilled[0].active());
+    assert!(!lost[0].load(Ordering::Relaxed), "the Bloom was lost");
+    assert_eq!(p.hash_bytes(), 0);
+    assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
+    assert_eq!(net, held - p.heap_bytes() - (64 << 10), "net freed");
+    let shared = vec![f.clone()];
+    let fixed = publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    assert_eq!(fixed.len(), 1);
+    assert_eq!(fixed[0].size(), 64 << 10, "the filter's reservation");
+    let k = published_filter(&f);
+    assert_eq!(k.bloom_bytes(), Some(64 << 10), "no fixed Bloom published");
+    let pass = k
+        .evaluate(spread(0, 10_000).as_ref())
+        .unwrap_or_else(|| panic!());
+    assert_eq!(pass.true_count(), 10_000);
+}
+
+/// A batch the full pool refuses (`fit`) moves the hashes into a filter
+/// they pay for, and the partial's reservation is shrunk to its heap
+/// rather than kept at the size it had before the filter took its share.
+#[test]
+fn a_refused_batch_funds_the_fixed_filter_from_the_hashes() {
+    use std::sync::atomic::Ordering;
+
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let lost = flag();
+    let (mut p, _hog, spilled) = full_pool_partial(&f, &lost, 10_000, false);
+    p.add_keys(&[f], &[spread(20_000, 100)], None);
+    assert_eq!(spilled[0].outcome().0, events::ACTIVE, "refused");
+    assert!(!lost[0].load(Ordering::Relaxed), "the Bloom was lost");
+    assert_eq!(p.hash_bytes(), 0);
+    assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
+}
+
+/// Through the sink: a build with a spill scope and a
+/// fixed filter, asked to spill below its key cap, moves its hashes to the
+/// filter, writes tables for the rest of the request, and after `combine`
+/// and `finalize` publishes the fixed Bloom, which passes every key; the
+/// query pool is empty at the end.
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime via #[tokio::test]; never runs on a compute worker"
+)]
+async fn a_spilling_build_publishes_its_fixed_bloom() {
+    use krishiv_memory::{SpillConfig, SpillManager, SpillOwner};
+
+    use crate::join::{HashJoin, JoinSpec, JoinType};
+
+    let dir = std::env::temp_dir().join(format!("krishiv-build-fixed-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.clone(),
+        ..SpillConfig::default()
+    })
+    .unwrap_or_else(|e| panic!("{e}"));
+    let scope = manager.scope().unwrap_or_else(|e| panic!("{e}"));
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 1_000_000;
+    let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+        "k",
+        DataType::Int64,
+        true,
+    )]));
+    let join = HashJoin::try_new(JoinSpec {
+        join_type: JoinType::Inner,
+        probe_schema: Arc::clone(&schema),
+        build_schema: Arc::clone(&schema),
+        probe_keys: vec![0],
+        build_keys: vec![0],
+        null_safe: vec![false],
+        filter: None,
+        single_match: false,
+        spill: Some(scope),
+    })
+    .and_then(|j| j.with_runtime_filters(vec![f.clone()]))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let sink = join.build_sink();
+    let root = TreePool::new(&MemoryConfig::default());
+    let query = crate::QueryContext::new(
+        crate::QueryId(1),
+        crate::WorkloadClass::Interactive,
+        crate::ExecConfig::default(),
+        root.child("q", None),
+    );
+    let exec: Arc<dyn crate::Executor> =
+        crate::TokioExecutor::new(&crate::ExecutorConfig::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+    let ctx = crate::TaskContext::new(
+        Arc::clone(&query),
+        exec,
+        SpillOwner::new(),
+        crate::OperatorId(1),
+        "b",
+    );
+    let keys = spread(0, 20_000);
+    let batch = krishiv_types::batch::Batch::new(
+        arrow_array::RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&keys)])
+            .unwrap_or_else(|e| panic!("{e}")),
+    );
+    let g = sink.global_state(&ctx).unwrap_or_else(|e| panic!("{e}"));
+    let mut l = sink.local_state(&ctx, &g).unwrap_or_else(|e| panic!("{e}"));
+    assert!(sink.sink(batch, &mut l, &g).is_ok());
+    let hashes = l
+        .downcast_ref::<super::BuildLocal>()
+        .map(|l| l.runtime.hash_bytes())
+        .unwrap_or_else(|| panic!("not a build local"));
+    assert!(
+        hashes > 64 << 10,
+        "too few hashes to pass the filter's size"
+    );
+    // The batch reserved the 64 KiB filter (the build is big enough), so
+    // the hashes free their whole size; a request past them writes tables.
+    let freed = sink
+        .spill(&mut l, hashes + 1, &ctx)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let written = l
+        .downcast_ref::<super::BuildLocal>()
+        .map_or(0, |l| l.file_bytes);
+    assert!(written > 0, "no table written (freed {freed} of {hashes})");
+    assert!(freed > hashes, "the hashes' bytes not all counted");
+    assert!(sink.combine(l, &g).is_ok());
+    sink.finalize(&g, &ctx)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let k = published_filter(&f);
+    assert_eq!(
+        k.bloom_bytes(),
+        Some(64 << 10),
+        "a spilled build lost its Bloom"
+    );
+    let pass = k.evaluate(keys.as_ref()).unwrap_or_else(|| panic!());
+    assert_eq!(pass.true_count(), 20_000);
+    // `EXPLAIN ANALYZE` says what the fixed Bloom did.
+    let extra = sink.extra_metrics();
+    let get = |name: &str| {
+        extra
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, m)| m.clone())
+    };
+    assert_eq!(
+        get("fixed_bloom"),
+        Some(crate::metrics::Metric::Text(
+            "planned; reserved; active; bloom".into()
+        ))
+    );
+    assert_eq!(
+        get("fixed_bloom_keys"),
+        Some(crate::metrics::Metric::Count(20_000))
+    );
+    drop((g, sink, join, ctx));
+    assert_eq!(query.pool().reserved(), 0, "the query pool is not empty");
+    drop(manager);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A build without a spill scope, below its key cap, asked to spill after
+/// `combine`: `spill_global` moves the merged hashes into the fixed filter
+/// the batch reserved, so it returns their bytes; the filter is active and
+/// the spillable-bytes signal no longer offers the hashes (`shed_hashes`'
+/// `moved`, fd8d1dada review finding 2).
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime via #[tokio::test]; never runs on a compute worker"
+)]
+async fn spill_global_moving_hashes_into_a_fixed_filter_updates_the_signal() {
+    use krishiv_memory::{SpillOwner, Spillable as _};
+
+    use crate::join::{HashJoin, JoinSpec, JoinType};
+
+    let mut f = fixed_filter();
+    f.options.bloom_max_items = 100_000;
+    let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+        "k",
+        DataType::Int64,
+        true,
+    )]));
+    let join = HashJoin::try_new(JoinSpec {
+        join_type: JoinType::Inner,
+        probe_schema: Arc::clone(&schema),
+        build_schema: Arc::clone(&schema),
+        probe_keys: vec![0],
+        build_keys: vec![0],
+        null_safe: vec![false],
+        filter: None,
+        single_match: false,
+        spill: None,
+    })
+    .and_then(|j| j.with_runtime_filters(vec![f.clone()]))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let sink = join.build_sink();
+    let root = TreePool::new(&MemoryConfig::default());
+    let query = crate::QueryContext::new(
+        crate::QueryId(1),
+        crate::WorkloadClass::Interactive,
+        crate::ExecConfig::default(),
+        root.child("q", None),
+    );
+    let exec: Arc<dyn crate::Executor> =
+        crate::TokioExecutor::new(&crate::ExecutorConfig::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+    let ctx = crate::TaskContext::new(
+        Arc::clone(&query),
+        exec,
+        SpillOwner::new(),
+        crate::OperatorId(1),
+        "b",
+    );
+    // 2,000 keys as hashes pass a sixteenth of the 64 KiB filter, which
+    // their batch reserves.
+    let keys = spread(0, 2000);
+    let batch = krishiv_types::batch::Batch::new(
+        arrow_array::RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&keys)])
+            .unwrap_or_else(|e| panic!("{e}")),
+    );
+    let g = sink.global_state(&ctx).unwrap_or_else(|e| panic!("{e}"));
+    let mut l = sink.local_state(&ctx, &g).unwrap_or_else(|e| panic!("{e}"));
+    assert!(sink.sink(batch, &mut l, &g).is_ok());
+    let hashes = l
+        .downcast_ref::<super::BuildLocal>()
+        .map(|l| l.runtime.hash_bytes())
+        .unwrap_or_else(|| panic!("not a build local"));
+    assert!(hashes > 0 && hashes < 64 << 10, "{hashes} hash bytes");
+    assert!(sink.combine(l, &g).is_ok());
+    let offered = || ctx.consumer().signal().spillable_bytes();
+    let before = offered();
+    assert!(before >= hashes, "merged hashes not offered");
+    let freed = sink
+        .spill_global(&g, 1, &ctx)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        freed, hashes,
+        "the reserved filter counted against the shed"
+    );
+    assert_eq!(
+        lock(&super::state(&g).unwrap_or_else(|e| panic!("{e}")).runtime).hash_bytes(),
+        0
+    );
+    assert_eq!(
+        offered(),
+        before - hashes,
+        "the signal still offers hashes that sit in the filter"
+    );
+    sink.finalize(&g, &ctx)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let extra = sink.extra_metrics();
+    let state = extra
+        .iter()
+        .find(|(n, _)| n == "fixed_bloom")
+        .map(|(_, m)| m.clone());
+    assert_eq!(
+        state,
+        Some(crate::metrics::Metric::Text(
+            "planned; reserved; active; bloom".into()
+        )),
+        "the fixed filter was not active"
+    );
+    let k = published_filter(&f);
+    assert_eq!(k.bloom_bytes(), Some(64 << 10), "no fixed Bloom published");
+    let pass = k.evaluate(keys.as_ref()).unwrap_or_else(|| panic!());
+    assert_eq!(pass.true_count(), 2000);
+    drop((g, sink, join, ctx));
+    assert_eq!(query.pool().reserved(), 0, "the query pool is not empty");
 }

@@ -58,7 +58,8 @@ impl UiSource for Fake {
                     {"query_id": "q-a", "state": "finished", "principal": "ann", "submitted_at": 100,
                      "wall_ns": 1_000, "peak_memory_bytes": 10, "rows_produced": 5, "spill_bytes": 0},
                     {"query_id": "q-b", "state": "finished", "principal": "ann", "submitted_at": 200,
-                     "wall_ns": 1_500, "peak_memory_bytes": 30, "rows_produced": 5, "spill_bytes": 7},
+                     "wall_ns": 1_500, "peak_memory_bytes": 30, "rows_produced": 5, "spill_bytes": 7,
+                     "hints": [{"code": "SPILL", "node_id": 2, "operator_id": 2, "message": "HashJoin spilled 4.0 KiB"}]},
                     {"query_id": "q-bad", "state": "failed", "principal": "bob", "submitted_at": 300,
                      "error_class": "DIVIDE_BY_ZERO"},
                     {"query_id": "q-min", "state": "finished", "principal": "cy", "submitted_at": 50, "wall_ns": -9_223_372_036_854_775_807_i64},
@@ -235,36 +236,19 @@ async fn the_live_list_has_running_and_queued_queries_oldest_first_and_only_allo
 }
 
 #[tokio::test]
-async fn a_query_detail_names_the_hot_operator_and_explains_spill_skew_and_memory_waits() {
+async fn a_query_detail_names_the_hot_operator_and_carries_the_advisor_hints() {
     let (addr, _) = start(false).await;
     let body = get(addr, "/api/internal/queries/q-b").await;
     assert_eq!(body["hot_operator"]["operator"], "HashJoin");
     let ops = body["operators"].as_array().unwrap();
     assert_eq!(ops.len(), 3, "only this query's operators");
-    let kinds: Vec<(&str, &str)> = body["warnings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|w| (w["operator"].as_str().unwrap(), w["kind"].as_str().unwrap()))
-        .collect();
-    assert!(kinds.contains(&("HashJoin", "spill")), "{kinds:?}");
-    let spill_hint = body["warnings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|w| w["kind"] == "spill")
-        .map(|w| w["hint"].as_str().unwrap().to_owned())
-        .unwrap();
     assert!(
-        spill_hint.contains("spilled 4.0 KiB to disk"),
-        "bytes are written like the pages write them: {spill_hint}"
+        body.get("warnings").is_none(),
+        "the advisor hints replace the old warnings"
     );
-    assert!(kinds.contains(&("HashJoin", "skew")), "{kinds:?}");
-    assert!(kinds.contains(&("Sort", "memory")), "{kinds:?}");
-    assert!(!kinds.iter().any(|(op, _)| *op == "Scan"));
-    assert!(
-        body["warnings"][0]["hint"].as_str().unwrap().len() > 20,
-        "a plain-language hint"
+    assert_eq!(
+        body["query"]["hints"][0]["code"], "SPILL",
+        "the advisor's hints reach the query page as system.queries lists them"
     );
     let (status, _, missing) = request(addr, "GET", "/api/internal/queries/nope", true).await;
     assert_eq!(status, 404);

@@ -327,8 +327,55 @@ pub static SERVER_SHUTDOWN_TIMEOUT: ConfigEntry = startup(
     "krishiv.server.shutdownTimeout",
     ValueType::Duration,
     ConfigValue::Duration(Duration::from_secs(30)),
-    "On SIGTERM or SIGINT, how long running queries may finish before every session is closed \
-     and its queries cancelled. New requests are refused at once.",
+    "On SIGTERM or SIGINT, how long running queries may finish before the rest are cancelled \
+     (`KRISHIV_QUERY_KILLED`; the drain waits up to 10 more seconds for them to stop). `/readyz` \
+     answers 503 and new queries and sessions are refused at once with \
+     `KRISHIV_SERVER_DRAINING`; the admin API's `Drain` uses it as its default grace period. Set \
+     a Kubernetes `terminationGracePeriodSeconds` of at least this plus 15 seconds.",
+    None,
+);
+
+/// How often the server re-runs its readiness checks.
+pub static SERVER_READINESS_INTERVAL: ConfigEntry = startup(
+    "krishiv.server.readiness.interval",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(10)),
+    "How often `krishiv server` re-runs its readiness checks (object store, authentication). \
+     `/readyz` answers from the last result; a result older than three intervals counts as \
+     not ready.",
+    None,
+);
+
+/// Time limit of one readiness check.
+pub static SERVER_READINESS_TIMEOUT: ConfigEntry = startup(
+    "krishiv.server.readiness.timeout",
+    ValueType::Duration,
+    ConfigValue::Duration(Duration::from_secs(2)),
+    "How long one readiness check may take before it counts as failed.",
+    None,
+);
+
+/// Consecutive failures before a readiness check fails `/readyz`.
+pub static SERVER_READINESS_FAILURE_THRESHOLD: ConfigEntry = startup(
+    "krishiv.server.readiness.failureThreshold",
+    ValueType::PositiveInt,
+    ConfigValue::Int(3),
+    "How many consecutive failures of a readiness check make `/readyz` answer 503; one slow \
+     moment is not a failure. The threshold applies after a check has passed once: a required \
+     check that has never passed (authentication keys not yet fetched) fails `/readyz` on its \
+     first failure. A success recovers at once.",
+    None,
+);
+
+/// The readiness checks that can fail `/readyz`.
+pub static SERVER_READINESS_REQUIRED: ConfigEntry = startup(
+    "krishiv.server.readiness.required",
+    ValueType::String,
+    ConfigValue::String(std::borrow::Cow::Borrowed("")),
+    "Comma-separated readiness checks that fail `/readyz` when they fail, besides the always \
+     required `auth`. Only `auth` is wired today; the warehouse object store check follows. Other checks are reported by \
+     the admin API only, because every replica shares them and failing them would remove the \
+     whole fleet at once.",
     None,
 );
 
@@ -363,6 +410,22 @@ pub static SERVER_ALLOWED_HOSTS: ConfigEntry = startup(
      admin API through DNS rebinding. Unset: only the loopback names.",
     None,
 );
+
+/// `krishiv.workload.resourceGroups.file`.
+pub static WORKLOAD_RESOURCE_GROUPS_FILE: ConfigEntry = ConfigEntry {
+    key: "krishiv.workload.resourceGroups.file",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Path of the resource group file (JSON in the shape of Trino's `resource-groups.json`, \
+          restricted to the subset Krishiv supports): the group tree, its concurrency, queue, \
+          per-query memory and scan limits, and the selectors that route a query to a group. Read when \
+          the engine starts; a malformed file stops the start with \
+          `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID`. When unset, every query is admitted at once.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
 
 /// `krishiv.flightSql.enabled` (P3-T101).
 pub static FLIGHT_SQL_ENABLED: ConfigEntry = startup(

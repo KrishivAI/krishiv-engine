@@ -384,6 +384,37 @@ fn commit_info_row(p: &Prepared) -> Result<RecordBatch, KrishivError> {
     .map_err(|e| from_kernel(&e, table))
 }
 
+/// The schema of the commitInfo row of a create: `isolationLevel` and the write id's tag.
+pub(crate) fn write_id_schema() -> Arc<StructType> {
+    Arc::new(StructType::new_unchecked([
+        StructField::nullable("isolationLevel", DataType::STRING),
+        StructField::nullable(
+            "tags",
+            MapType::new(DataType::STRING, DataType::STRING, true),
+        ),
+    ]))
+}
+
+/// The commitInfo row of a create (version 0 has no `readVersion`).
+pub(crate) fn write_id_row(write_id: &str, table: &str) -> Result<RecordBatch, KrishivError> {
+    let tags = MapData::try_new(
+        MapType::new(DataType::STRING, DataType::STRING, true),
+        [(
+            Scalar::String(WRITE_ID_TAG.to_owned()),
+            Scalar::String(write_id.to_owned()),
+        )],
+    )
+    .map_err(|e| from_kernel(&e, table))?;
+    create_many(
+        &write_id_schema(),
+        &[vec![
+            Scalar::String("Serializable".to_owned()),
+            Scalar::Map(tags),
+        ]],
+    )
+    .map_err(|e| from_kernel(&e, table))
+}
+
 /// The partition columns of `snapshot`, in schema order.
 fn partition_columns(
     snapshot: &Snapshot,
@@ -448,7 +479,10 @@ pub(super) fn remove_actions(r: &StagedRemoves) -> Result<Vec<FileAction>, Krish
     Ok(out)
 }
 
-fn map_row(m: &MapArray, row: usize) -> Result<HashMap<String, Option<String>>, KrishivError> {
+pub(crate) fn map_row(
+    m: &MapArray,
+    row: usize,
+) -> Result<HashMap<String, Option<String>>, KrishivError> {
     let entry = m.value(row);
     let keys = strings(entry.column(0))?;
     let values = strings(entry.column(1))?;

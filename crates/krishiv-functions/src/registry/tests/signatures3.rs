@@ -913,3 +913,14 @@ fn slice_wants_an_array_and_sequence_two_or_three_arguments() {
         );
     }
 }
+
+#[test]
+fn to_protobuf_of_a_non_struct_is_a_non_struct_type_mismatch() {
+    let err = result(
+        "to_protobuf",
+        &[ty(DataType::Integer), ty(DataType::String)],
+        &[None, Some(Constant::String("M".to_owned()))],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::DatatypeMismatchNonStructType);
+}

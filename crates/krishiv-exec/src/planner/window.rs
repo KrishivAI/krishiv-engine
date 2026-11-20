@@ -360,6 +360,13 @@ impl Planner<'_> {
                     ignore_nulls: flag(c.f, 2),
                     data_type: c.output.data_type.to_arrow(),
                 },
+                "counter_diff" => WindowFunction::CounterDiff {
+                    counter: *args
+                        .first()
+                        .ok_or_else(|| internal("counter_diff without a counter"))?,
+                    start_time: args.get(1).copied(),
+                    data_type: c.output.data_type.to_arrow(),
+                },
                 other => return Err(unsupported(&format!("the window function {other}"))),
             });
         }
@@ -491,6 +498,7 @@ fn arguments(f: &krishiv_plan::ResolvedFunction) -> Vec<Arc<Expr>> {
                 .cloned()
                 .collect(),
             "nth_value" => f.args.first().into_iter().cloned().collect(),
+            "counter_diff" => f.args.clone(),
             _ => Vec::new(),
         };
     }

@@ -283,6 +283,16 @@ fn the_catalog_api_never_lists_embedded_namespaces_as_a_declared_catalogs() {
     }
     let unsupported = "KRISHIV_UNSUPPORTED_FEATURE";
     assert_eq!(class(block_on(c.list_databases(None))), unsupported);
+    // Flight SQL's listing names `spark_catalog` itself, so it does not follow `USE lake`.
+    let embedded: Vec<_> = block_on(c.list_embedded_databases())
+        .unwrap()
+        .into_iter()
+        .map(|d| (d.catalog, d.name))
+        .collect();
+    assert_eq!(
+        embedded,
+        [("spark_catalog".to_owned(), "default".to_owned())]
+    );
     assert_eq!(class(block_on(c.list_tables(None, None))), unsupported);
     for name in ["default", "lake.db"] {
         assert_eq!(class(block_on(c.get_database(name))), unsupported, "{name}");
