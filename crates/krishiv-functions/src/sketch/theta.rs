@@ -6,12 +6,18 @@
 //! (signed zeros and NaNs canonical), `STRING` and `BINARY` hash their raw bytes with the empty value skipped,
 //! and an array of `INT` or `BIGINT` hashes its elements' little-endian bytes (an empty array is skipped).
 //! Sketches are written compressed, as Spark's `toByteArrayCompressed`.
+//!
+//! Known difference: the crate's `CompactThetaSketch::deserialize` refuses a non-empty sketch built with another
+//! seed; Spark's `CompactSketch.wrap(memory)` does not check the seed, so `theta_sketch_estimate` of such a sketch
+//! works there.
+//! Profiles: the empty-state rule of `theta_intersection_agg` (a group with no sketch) is new in Spark 4.3.0; this
+//! module has one behaviour for every profile until the 4.2.1 and 4.1.4 oracles are run (see the PR notes).
 
 use datasketches::hash::value::{canonical_float, raw_bytes};
 pub use datasketches::theta::{CompactThetaSketch, ThetaIntersection, ThetaSketch, ThetaUnion};
 use datasketches::theta::{ThetaSketchBuilder, ThetaUnionBuilder};
 use krishiv_common::error::{
-    KrishivError, SketchInvalidLgNomEntries, ThetaInvalidInputSketchBuffer,
+    InternalError, KrishivError, SketchInvalidLgNomEntries, ThetaInvalidInputSketchBuffer,
     ThetaInvalidInputSketchBufferFamily,
 };
 
@@ -51,6 +57,29 @@ fn invalid_buffer(function: &str) -> KrishivError {
     .into()
 }
 
+/// A sketch builder refused parameters this module already checked: an engine fault, not a user buffer.
+/// The `datasketches` crate builds no sketch below `lg_k` 5; Spark accepts 4. A size of 4 is refused by name, not
+/// misreported as a buffer or an engine fault.
+fn crate_minimum(k: u8, function: &str) -> Result<(), KrishivError> {
+    if k < CRATE_MIN_LG_K {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!("`{function}` with lgNomEntries {k} (the sketch library's minimum is {CRATE_MIN_LG_K})"),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// Smallest `lg_k` the `datasketches` crate builds.
+const CRATE_MIN_LG_K: u8 = 5;
+
+fn builder_failure(function: &str, e: &dyn std::fmt::Display) -> KrishivError {
+    InternalError {
+        message: format!("`{function}`: the Theta sketch builder failed: {e}"),
+    }
+    .into()
+}
+
 /// Spark's `Family.toString` for a preamble family id (the names of `org.apache.datasketches.common.Family`).
 fn family_name(id: u8) -> Option<&'static str> {
     Some(match id {
@@ -59,19 +88,22 @@ fn family_name(id: u8) -> Option<&'static str> {
         3 => "COMPACT",
         4 => "UNION",
         5 => "INTERSECTION",
-        6 => "A_NOT_B",
+        6 => "ANOTB",
         7 => "HLL",
         8 => "QUANTILES",
-        9 => "RESERVOIR",
-        10 => "RESERVOIR_UNION",
-        11 => "VAROPT",
-        12 => "VAROPT_UNION",
-        13 => "KLL",
-        14 => "FREQUENCY",
-        15 => "COUNTMIN",
-        16 => "TDIGEST",
+        9 => "TUPLE",
+        10 => "FREQUENCY",
+        11 => "RESERVOIR",
+        12 => "RESERVOIR_UNION",
+        13 => "VAROPT",
+        14 => "VAROPT_UNION",
+        15 => "KLL",
+        16 => "CPC",
         17 => "REQ",
-        18 => "CPC",
+        18 => "COUNTMIN",
+        19 => "EBPPS",
+        20 => "TDIGEST",
+        21 => "BLOOMFILTER",
         _ => return None,
     })
 }
@@ -82,10 +114,11 @@ fn family_name(id: u8) -> Option<&'static str> {
 /// `SKETCH_INVALID_LG_NOM_ENTRIES` when `lg_nom` is out of range.
 pub fn new_sketch(lg_nom: i32, function: &str) -> Result<ThetaSketch, KrishivError> {
     let k = check_lg_nom(lg_nom, function)?;
+    crate_minimum(k, function)?;
     ThetaSketchBuilder::default()
         .lg_k(k)
         .build()
-        .map_err(|_| invalid_buffer(function))
+        .map_err(|e| builder_failure(function, &e))
 }
 
 /// A new union of `lg_nom`.
@@ -94,10 +127,11 @@ pub fn new_sketch(lg_nom: i32, function: &str) -> Result<ThetaSketch, KrishivErr
 /// `SKETCH_INVALID_LG_NOM_ENTRIES` when `lg_nom` is out of range.
 pub fn new_union(lg_nom: i32, function: &str) -> Result<ThetaUnion, KrishivError> {
     let k = check_lg_nom(lg_nom, function)?;
+    crate_minimum(k, function)?;
     ThetaUnionBuilder::default()
         .lg_k(k)
         .build()
-        .map_err(|_| invalid_buffer(function))
+        .map_err(|e| builder_failure(function, &e))
 }
 
 /// A new intersection (Spark builds it with the default seed and no size).
@@ -295,6 +329,31 @@ mod tests {
             e.contains("THETA_INVALID_INPUT_SKETCH_BUFFER_FAMILY"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn family_names_are_javas() {
+        for (id, name) in [
+            (6_u8, "ANOTB"),
+            (9, "TUPLE"),
+            (15, "KLL"),
+            (21, "BLOOMFILTER"),
+        ] {
+            let e = from_bytes(&[2_u8, 1, id, 12, 0, 0, 0, 0], F)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains("THETA_INVALID_INPUT_SKETCH_BUFFER_FAMILY"),
+                "{e}"
+            );
+            assert!(e.contains(name), "{id}: {e}");
+        }
+        // 22 is no family: the plain buffer error.
+        let e = from_bytes(&[2_u8, 1, 22, 12, 0, 0, 0, 0], F)
+            .unwrap_err()
+            .to_string();
+        assert!(!e.contains("_FAMILY"), "{e}");
+        assert!(e.contains("THETA_INVALID_INPUT_SKETCH_BUFFER"), "{e}");
     }
 
     #[test]

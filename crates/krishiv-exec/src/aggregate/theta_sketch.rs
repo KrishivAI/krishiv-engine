@@ -30,12 +30,29 @@ use crate::error::{Result, internal};
 /// Header and bookkeeping bytes charged on top of a sketch's table.
 const OVERHEAD: usize = 128;
 
-/// Bytes charged for a group's fresh state, whatever its kind: a header and a small table.
-const NEW_GROUP: usize = OVERHEAD + 512;
+/// The most bytes one raw row adds to a sketch that starts empty. The crate resizes its table by 8 (`ResizeFactor::X8`)
+/// at half load while below nominal size, so right after a resize a retained entry costs up to 16 slots: 128 bytes.
+const FRESH_BYTES_PER_ROW: usize = 128;
 
-/// The most bytes one raw row adds to a sketch that starts empty: a retained hash is 8 bytes, and the table doubles
-/// at 15/16 load, so at most about 17 bytes per entry right after a resize; 24 covers it.
-const FRESH_BYTES_PER_ROW: usize = 24;
+/// One row can grow a table 8 times (and the old table is alive while it is copied): `9 * table`.
+const GROWTH: usize = 9;
+
+/// A state value of `n` bytes holds at most this many table bytes once folded: an entry is at least a byte or so in
+/// the compressed form and a table slot costs up to 32 bytes (a union's table is at most a quarter full after a
+/// resize by 2 and an entry is 8 bytes).
+const TABLE_BYTES_PER_STATE_BYTE: usize = 32;
+
+/// The `binary` column of state rows. Arrow's 32-bit offsets overflow past 2 GiB (and `from_iter_values` wraps
+/// without a check), which a batch of large sketches can reach.
+fn binary_array(rows: Vec<Vec<u8>>) -> Result<BinaryArray> {
+    let total = rows.iter().try_fold(0_usize, |n, r| n.checked_add(r.len()));
+    if total.is_none_or(|n| i32::try_from(n).is_err()) {
+        return Err(internal(
+            "the Theta partial states of one batch hold more than 2 GiB".to_owned(),
+        ));
+    }
+    Ok(BinaryArray::from_iter_values(rows))
+}
 
 /// Which Theta aggregate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +104,10 @@ pub(crate) struct ThetaSketchAcc {
     charges: Vec<usize>,
     total: usize,
     peak: usize,
+    /// What a fresh group's state is charged (measured on a real one).
+    new_group: usize,
+    /// A failure to build a group's state in `resize`, raised when the group is first used.
+    fault: Option<String>,
 }
 
 impl ThetaSketchAcc {
@@ -101,13 +122,17 @@ impl ThetaSketchAcc {
             }
             ThetaSketchOp::Intersection => {}
         }
-        Ok(Self {
+        let mut acc = Self {
             op,
             slots: Vec::new(),
             charges: Vec::new(),
             total: 0,
             peak: 0,
-        })
+            new_group: 0,
+            fault: None,
+        };
+        acc.new_group = acc.fresh()?.charge();
+        Ok(acc)
     }
 
     fn lg_nom(&self) -> u8 {
@@ -134,10 +159,17 @@ impl ThetaSketchAcc {
         })
     }
 
-    /// Adds groups up to `n` with empty states.
+    /// Adds groups up to `n` with empty states. `new` built a fresh state with these parameters, so a failure here
+    /// is an engine fault; it is kept and raised by the next use of a missing group (`slot_mut`), never dropped.
     pub(crate) fn resize(&mut self, n: usize) {
         while self.slots.len() < n {
-            let Ok(s) = self.fresh() else { break };
+            let s = match self.fresh() {
+                Ok(s) => s,
+                Err(e) => {
+                    self.fault = Some(e.to_string());
+                    break;
+                }
+            };
             let c = s.charge();
             self.total = self.total.saturating_add(c);
             self.peak = self.peak.max(c);
@@ -173,49 +205,75 @@ impl ThetaSketchAcc {
     }
 
     /// The size after adding `new` groups (an upper bound; a row table passes the partition's rows) and folding
-    /// `rows` input rows (`states`: partial states, not raw values).
+    /// `rows` input rows. `states` says the rows are partial states, not raw values, and `state_bytes` is the byte
+    /// length of the state column of the whole batch.
     ///
-    /// Groups that exist grow by at most `groups * ceiling - total charged`; per row, raw values at most double the
-    /// table they land in (`2 * peak + header`, capped at the full table), and a state is a whole sketch that can
-    /// fill a union's table. Fresh groups cost `NEW_GROUP`, plus `FRESH_BYTES_PER_ROW` a raw row, or a full table a
-    /// state. An intersection never holds more than its smallest input; it is bounded by the default lgNomEntries
-    /// table here and charged at its real size after each fold.
-    pub(crate) fn projected(&self, new: usize, rows: usize, states: bool) -> usize {
+    /// Raw values: one row can grow the table of the group it lands in 8 times (`GROWTH`), up to the full table, and
+    /// the groups that exist have `ceiling - charged` bytes of room in all. A fresh group costs what a real fresh
+    /// state is charged, plus `FRESH_BYTES_PER_ROW` for each row it may take, up to a full table. States: a folded
+    /// sketch adds at most `TABLE_BYTES_PER_STATE_BYTE` times its bytes (a union also at most a full table), and an
+    /// intersection's table follows its first input, so it is bounded by the input and not by lgNomEntries.
+    pub(crate) fn projected(
+        &self,
+        new: usize,
+        rows: usize,
+        states: bool,
+        state_bytes: usize,
+    ) -> usize {
         let full = self.full();
-        let ceiling = full.max(2 * NEW_GROUP);
+        let raw = matches!(self.op, ThetaSketchOp::Sketch(_)) && !states;
+        let capped = !matches!(self.op, ThetaSketchOp::Intersection);
+        let ceiling = full.max(2 * self.new_group).saturating_mul(GROWTH) / 8;
+        let table = |bytes: usize| {
+            if capped { bytes.min(ceiling) } else { bytes }
+        };
+        let fresh_floor = new.saturating_mul(self.new_group);
         let room = self
             .slots
             .len()
             .saturating_mul(ceiling)
             .saturating_sub(self.total);
-        let raw = matches!(self.op, ThetaSketchOp::Sketch(_)) && !states;
-        let per_row = if raw {
-            self.peak
-                .saturating_mul(2)
-                .saturating_add(OVERHEAD)
-                .min(full)
-        } else {
-            full
-        };
-        let landing = rows.saturating_mul(per_row).min(room);
-        let fresh = if raw {
-            if new > 0 {
+        let (landing, fresh, transient) = if raw {
+            let per_row = table(self.peak.saturating_mul(GROWTH).saturating_add(OVERHEAD));
+            let landing = rows.saturating_mul(per_row).min(room);
+            let fresh = if new > 0 {
                 rows.saturating_mul(FRESH_BYTES_PER_ROW)
+                    .min(new.saturating_mul(ceiling))
             } else {
                 0
-            }
+            };
+            (landing, fresh, 0)
         } else {
-            new.saturating_mul(full)
+            let input = state_bytes
+                .saturating_mul(TABLE_BYTES_PER_STATE_BYTE)
+                .saturating_add(rows.saturating_mul(OVERHEAD));
+            let both = if capped {
+                input.min(self.slots.len().saturating_add(new).saturating_mul(ceiling))
+            } else {
+                input
+            };
+            (both, 0, table(input))
         };
-        let transient = if raw { 0 } else { full };
         self.size()
-            .saturating_add(new.saturating_mul(NEW_GROUP))
+            .saturating_add(fresh_floor)
             .saturating_add(landing)
             .saturating_add(fresh)
             .saturating_add(transient)
     }
 
+    /// The error for a group the accumulator does not have: the engine fault that stopped `resize`, if any.
+    fn missing_group(&self) -> krishiv_common::error::KrishivError {
+        internal(
+            self.fault
+                .clone()
+                .unwrap_or_else(|| "a Theta group past the accumulator's groups".to_owned()),
+        )
+    }
+
     fn slot_mut(&mut self, g: usize) -> Result<&mut Slot> {
+        if g >= self.slots.len() {
+            return Err(self.missing_group());
+        }
         self.slots
             .get_mut(g)
             .ok_or_else(|| internal("a Theta group past the accumulator's groups".to_owned()))
@@ -291,21 +349,15 @@ impl ThetaSketchAcc {
                 .map_err(|_| internal("a Theta union refused its own sketch".to_owned()))?;
             *slot = Slot::Union(u);
         }
+        let invalid = |_| -> krishiv_common::error::KrishivError {
+            krishiv_common::error::ThetaInvalidInputSketchBuffer {
+                function: format!("`{function}`"),
+            }
+            .into()
+        };
         match slot {
-            Slot::Union(u) => u.update(input).map_err(|_| {
-                krishiv_common::error::KrishivError::from(
-                    krishiv_common::error::ThetaInvalidInputSketchBuffer {
-                        function: format!("`{function}`"),
-                    },
-                )
-            })?,
-            Slot::Intersection(i) => i.update(input).map_err(|_| {
-                krishiv_common::error::KrishivError::from(
-                    krishiv_common::error::ThetaInvalidInputSketchBuffer {
-                        function: format!("`{function}`"),
-                    },
-                )
-            })?,
+            Slot::Union(u) => u.update(input).map_err(invalid)?,
+            Slot::Intersection(i) => i.update(input).map_err(invalid)?,
             Slot::Updatable(_) => {}
         }
         Ok(())
@@ -413,7 +465,7 @@ impl ThetaSketchAcc {
         let slot = self
             .slots
             .get(g as usize)
-            .ok_or_else(|| internal("a Theta group past the accumulator's groups".to_owned()))?;
+            .ok_or_else(|| self.missing_group())?;
         Ok(slot
             .compact()
             .map(|c| theta::to_bytes(&c))
@@ -426,9 +478,7 @@ impl ThetaSketchAcc {
             .iter()
             .map(|&g| self.bytes(g))
             .collect::<Result<Vec<_>>>()?;
-        Ok(vec![
-            Arc::new(BinaryArray::from_iter_values(rows)) as ArrayRef
-        ])
+        Ok(vec![Arc::new(binary_array(rows)?) as ArrayRef])
     }
 
     /// The result of groups `ids`, on the `binary` view carrier; an intersection that saw nothing is the empty sketch.

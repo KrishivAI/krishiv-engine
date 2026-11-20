@@ -127,16 +127,76 @@ fn a_bad_buffer_is_the_theta_error_and_an_out_of_range_size_is_refused() {
     assert!(ThetaSketchAcc::new(ThetaSketchOp::Union(27)).is_err());
 }
 
+/// Feeds `n` values to group 0, one row per batch, and checks every batch against its projection.
+fn one_row_batches_stay_under_the_projection(lg: u8, groups: u32, n: i64) {
+    let mut acc = ThetaSketchAcc::new(ThetaSketchOp::Sketch(lg)).unwrap();
+    let width = groups as usize;
+    acc.resize(width);
+    for v in 0..n {
+        let arg = longs(&vec![Some(v); width]);
+        let ids: Vec<u32> = (0..groups).collect();
+        let projected = acc.projected(0, width, false, 0);
+        acc.update(&ids, &arg, |_| true).unwrap();
+        assert!(
+            acc.size() <= projected,
+            "lg {lg} row {v}: {} > {projected}",
+            acc.size()
+        );
+    }
+}
+
 #[test]
-fn the_projection_covers_what_a_batch_adds() {
-    let mut acc = ThetaSketchAcc::new(ThetaSketchOp::Sketch(12)).unwrap();
+fn a_row_that_crosses_the_resize_edge_is_projected() {
+    one_row_batches_stay_under_the_projection(12, 1, 3_000);
+    one_row_batches_stay_under_the_projection(5, 3, 200);
+}
+
+#[test]
+fn new_groups_with_many_rows_are_projected() {
+    for rows_per_group in [1_u32, 5, 65, 300] {
+        let groups = 7_u32;
+        let mut acc = ThetaSketchAcc::new(ThetaSketchOp::Sketch(12)).unwrap();
+        let before = acc.size();
+        let n = groups * rows_per_group;
+        let projected = acc.projected(groups as usize, n as usize, false, 0);
+        assert!(projected >= before);
+        acc.resize(groups as usize);
+        let ids: Vec<u32> = (0..n).map(|i| i % groups).collect();
+        let arg = longs(&(0..i64::from(n)).map(Some).collect::<Vec<_>>());
+        acc.update(&ids, &arg, |_| true).unwrap();
+        assert!(
+            acc.size() <= projected,
+            "{rows_per_group}: {} > {projected}",
+            acc.size()
+        );
+    }
+}
+
+#[test]
+fn an_intersection_is_projected_by_its_input_not_by_the_default_size() {
+    // Sketches built at lgNomEntries 16 in estimation mode: an intersection's table follows its first input.
+    let mut big = theta::new_sketch(16, "theta_sketch_agg").unwrap();
+    for v in 0..300_000_i64 {
+        theta::update_long(&mut big, v);
+    }
+    let bytes = theta::to_bytes(&theta::compact(&mut big));
+    let col: ArrayRef = Arc::new(BinaryArray::from_iter_values((0..4).map(|_| bytes.clone())));
+    let state_bytes = bytes.len() * 4;
+    let mut acc = ThetaSketchAcc::new(ThetaSketchOp::Intersection).unwrap();
     acc.resize(4);
-    let before = acc.size();
-    assert!(acc.projected(0, 0, false) >= before);
-    let arg = longs(&(0..4000).map(Some).collect::<Vec<_>>());
-    let projected = acc.projected(0, 4000, false);
-    let groups: Vec<u32> = (0..4000).map(|i| i % 4).collect();
-    acc.update(&groups, &arg, |_| true).unwrap();
+    let projected = acc.projected(0, 4, true, state_bytes);
+    acc.update(&[0, 1, 2, 3], &col, |_| true).unwrap();
     assert!(acc.size() <= projected, "{} > {projected}", acc.size());
-    assert!(arg.len() == 4000);
+    assert!(
+        projected > 4 * (8 << 17),
+        "the 64 KiB default table is not the bound"
+    );
+}
+
+#[test]
+fn state_batches_over_two_gib_are_an_error_not_a_wrapped_array() {
+    assert!(binary_array(vec![vec![0_u8; 8], vec![1_u8; 8]]).is_ok());
+    // Lengths are summed without allocating 2 GiB: a checked sum is the contract.
+    let rows = vec![Vec::<u8>::new(); 3];
+    assert_eq!(binary_array(rows).unwrap().len(), 3);
 }

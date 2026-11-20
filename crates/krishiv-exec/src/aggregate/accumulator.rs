@@ -704,12 +704,17 @@ impl Accumulator {
     /// the room this partition's groups have left, and (raw values) its largest sketch; from partial states every
     /// row is charged a whole sketch (`states`). The other accumulators read the whole batch's columns instead
     /// (`projected`).
-    pub(crate) fn projected_part(&self, rows: usize, states: bool) -> usize {
+    pub(crate) fn projected_part(&self, rows: usize, states: bool, state_bytes: usize) -> usize {
         match &self.kind {
             Kind::HllSketch(h) => h.projected(rows, rows, states),
-            Kind::ThetaSketch(h) => h.projected(rows, rows, states),
+            Kind::ThetaSketch(h) => h.projected(rows, rows, states, state_bytes),
             _ => self.projected(rows, None, None, false),
         }
+    }
+
+    /// Whether this is a Theta sketch aggregate (its projection reads the byte length of the state column).
+    pub(crate) fn is_theta(&self) -> bool {
+        matches!(self.kind, Kind::ThetaSketch(_))
     }
 
     /// Whether [`projected_part`](Self::projected_part) already covers the rows of a batch (the HLL sketches).
@@ -794,7 +799,17 @@ impl Accumulator {
             Kind::Bitmap(b) => b.projected(new),
             Kind::HllSketch(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len), states),
             Kind::ThetaSketch(h) => {
-                h.projected(new, arg.map_or(0, arrow_array::Array::len), states)
+                let state_bytes = if states {
+                    arg.map_or(0, arrow_array::Array::get_array_memory_size)
+                } else {
+                    0
+                };
+                h.projected(
+                    new,
+                    arg.map_or(0, arrow_array::Array::len),
+                    states,
+                    state_bytes,
+                )
             }
             _ => 0,
         };

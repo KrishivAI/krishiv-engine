@@ -953,7 +953,18 @@ impl RowTable {
             .map(|(part, n)| {
                 part.accs
                     .iter()
-                    .map(|a| a.projected_part(n, states))
+                    .zip(&self.core.ranges)
+                    .map(|(a, r)| {
+                        let state_bytes = match fold {
+                            Fold::States { offset } if a.is_theta() => r
+                                .start
+                                .checked_sub(offset)
+                                .and_then(|i| cols.get(i))
+                                .map_or(0, |c| own_bytes(c.as_ref())),
+                            _ => 0,
+                        };
+                        a.projected_part(n, states, state_bytes)
+                    })
                     .sum::<usize>()
             })
             .sum();
