@@ -67,6 +67,8 @@ struct SourceTable {
     label: String,
     schema: SchemaRef,
     source: BatchSource,
+    /// The most bytes one plan's batches may hold ([`MAX_SOURCE_BYTES`]; a field so a test can lower it).
+    max_bytes: usize,
     /// The session's pool; every scan counts its bytes in a child group of its own, so an abort of
     /// one scan's group never reaches a later plan.
     memory: Arc<dyn MemoryPool>,
@@ -91,11 +93,11 @@ impl TableProvider for SourceTable {
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
         let batches = (self.source)()?;
         let bytes: usize = batches.iter().map(RecordBatch::get_array_memory_size).sum();
-        if bytes > MAX_SOURCE_BYTES {
+        if bytes > self.max_bytes {
             return Err(krishiv_common::error::KrishivPythonDataSourceLimit {
                 source: self.label.clone(),
                 bytes: bytes.to_string(),
-                limit: MAX_SOURCE_BYTES.to_string(),
+                limit: self.max_bytes.to_string(),
             }
             .into());
         }
@@ -172,6 +174,7 @@ impl Session {
                     label: label.to_owned(),
                     schema,
                     source,
+                    max_bytes: MAX_SOURCE_BYTES,
                     memory: Arc::clone(&self.state.memory),
                     held: std::sync::Mutex::new(None),
                 }),
@@ -179,5 +182,42 @@ impl Session {
         );
         self.state.cache.forget_table(name);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::Int32Array;
+    use arrow_schema::{DataType as ArrowType, Field, Schema};
+
+    #[test]
+    fn a_plan_over_the_byte_cap_is_refused_and_the_table_debugs_by_schema() {
+        let session = Session::builder().build().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("k", ArrowType::Int32, true)]));
+        let s = Arc::clone(&schema);
+        let table = SourceTable {
+            label: "demo".to_owned(),
+            schema: Arc::clone(&schema),
+            source: Arc::new(move || {
+                Ok(vec![
+                    RecordBatch::try_new(
+                        Arc::clone(&s),
+                        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+                    )
+                    .unwrap(),
+                ])
+            }),
+            max_bytes: 1,
+            memory: Arc::clone(&session.state.memory),
+            held: std::sync::Mutex::new(None),
+        };
+        let error = table.scan().err().expect("over the cap").to_string();
+        assert!(error.contains("demo"), "{error}");
+        let shown = format!("{table:?}");
+        assert!(
+            shown.contains("SourceTable") && shown.contains("schema"),
+            "{shown}"
+        );
     }
 }
