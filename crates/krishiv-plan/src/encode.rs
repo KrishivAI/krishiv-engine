@@ -977,9 +977,10 @@ impl<'k, 'a> Encoder<'k, 'a> {
                         self.str(to);
                     }
                 }
-                crate::ColumnNamesOp::Drop(names) => {
+                crate::ColumnNamesOp::Drop { names, columns } => {
                     self.u8(2);
                     self.strs(names);
+                    self.strs(columns);
                 }
             },
             PlanNode::CollectMetrics { name, metrics, .. } => {

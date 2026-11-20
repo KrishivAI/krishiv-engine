@@ -643,7 +643,10 @@ impl Gen<'_> {
                 op: match self.pick(3) {
                     0 => crate::ColumnNamesOp::ToDf(self.many(0, 2, Gen::name)),
                     1 => crate::ColumnNamesOp::Rename(self.many(0, 2, |g| (g.name(), g.name()))),
-                    _ => crate::ColumnNamesOp::Drop(self.many(0, 2, Gen::name)),
+                    _ => crate::ColumnNamesOp::Drop {
+                        names: self.many(0, 2, Gen::name),
+                        columns: self.many(0, 2, Gen::name),
+                    },
                 },
             },
             _ => PlanNode::WithCte {

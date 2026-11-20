@@ -8,8 +8,8 @@ use krishiv_common::secret::OptionValue;
 use krishiv_plan::{ColumnNamesOp, PlanNode};
 
 use super::super::testing::{
-    attr, boxed, conf, expr, fails, func, lit, read_files, read_table, relation, show, translate,
-    with_id,
+    attr, attr_with, boxed, conf, expr, fails, func, lit, read_files, read_table, relation, show,
+    translate, with_id,
 };
 use super::super::{TranslateConf, translate_relation};
 use super::*;
@@ -1420,12 +1420,56 @@ fn drop_takes_names_and_plain_columns_and_refuses_other_expressions() {
     })));
     assert_eq!(
         column_names_op(&rel),
-        ColumnNamesOp::Drop(vec!["b".into(), "a".into()])
+        ColumnNamesOp::Drop {
+            names: vec!["b".into()],
+            columns: vec!["a".into()],
+        }
     );
-    let qualified = relation(RelType::Drop(Box::new(pb::Drop {
-        input: input(),
-        columns: vec![lit(LiteralType::Integer(1))],
-        column_names: vec![],
-    })));
-    assert_eq!(code(&qualified), ErrorClass::KrishivUnsupportedFeature);
+    let drop_of = |e: Expression| {
+        relation(RelType::Drop(Box::new(pb::Drop {
+            input: input(),
+            columns: vec![e],
+            column_names: vec![],
+        })))
+    };
+    // A literal, a qualified column and a column tied to a DataFrame drop by attribute in Spark.
+    for e in [
+        lit(LiteralType::Integer(1)),
+        attr("t.a"),
+        attr_with("a", Some(7)),
+    ] {
+        assert_eq!(code(&drop_of(e)), ErrorClass::KrishivUnsupportedFeature);
+    }
+}
+
+#[test]
+fn a_rename_map_whose_result_depends_on_entry_order_is_refused() {
+    let map = |entries: &[(&str, &str)]| {
+        relation(RelType::WithColumnsRenamed(Box::new(
+            pb::WithColumnsRenamed {
+                input: input(),
+                rename_columns_map: entries
+                    .iter()
+                    .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+                    .collect(),
+                renames: vec![],
+            },
+        )))
+    };
+    // A chain, a new name equal to another key ignoring case, and two keys equal ignoring case.
+    for entries in [
+        &[("b", "c"), ("a", "b")][..],
+        &[("a", "B"), ("b", "x")][..],
+        &[("A", "x"), ("a", "y")][..],
+    ] {
+        assert_eq!(
+            code(&map(entries)),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{entries:?}"
+        );
+    }
+    assert_eq!(
+        column_names_op(&map(&[("a", "x"), ("b", "y")])),
+        ColumnNamesOp::Rename(vec![("a".into(), "x".into()), ("b".into(), "y".into())])
+    );
 }

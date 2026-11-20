@@ -252,8 +252,27 @@ impl Translator<'_> {
 
     /// `WithColumnsRenamed`: the `renames` list, or the older `rename_columns_map` when the list is
     /// empty (Spark's own fallback). Names that match no column are ignored, as Spark does.
+    /// Spark applies the map in the order of the decoded Java map, which is wire order and is
+    /// lost once the message is decoded, so a map whose result depends on the order is refused.
     fn with_columns_renamed(&mut self, w: &pb::WithColumnsRenamed) -> Result<PlanNode> {
         let pairs = if w.renames.is_empty() {
+            let keys: Vec<String> = w
+                .rename_columns_map
+                .keys()
+                .map(|k| k.to_lowercase())
+                .collect();
+            let ordered = w.rename_columns_map.iter().all(|(_, to)| {
+                let to = to.to_lowercase();
+                !keys.contains(&to)
+            }) && keys.iter().enumerate().all(|(i, k)| !keys[..i].contains(k));
+            if !ordered {
+                return Err(unsupported_field(
+                    "WithColumnsRenamed",
+                    "rename_columns_map",
+                    "a map whose result depends on the order of its entries (a new name equal to \
+                     another key, or two keys equal ignoring case); use the renames list",
+                ));
+            }
             w.rename_columns_map
                 .iter()
                 .map(|(from, to)| (from.clone(), to.clone()))
@@ -270,14 +289,16 @@ impl Translator<'_> {
         })
     }
 
-    /// `Drop` by name, or by column expressions that are plain one-part column names. A qualified
-    /// column or one tied to a DataFrame (`df["a"]`) drops by attribute in Spark and is refused.
+    /// `Drop` by name, or by column expressions that are plain one-part column names (resolved
+    /// over the input, so an ambiguous one is an error as in Spark). A qualified column or one
+    /// tied to a DataFrame (`df["a"]`) drops by attribute in Spark and is refused.
     fn drop_columns(&mut self, d: &pb::Drop) -> Result<PlanNode> {
-        let mut names = d.column_names.clone();
+        let names = d.column_names.clone();
+        let mut columns = Vec::new();
         for e in self.expressions(&d.columns)? {
             match &e.node {
                 ExprNode::Column(c) if c.name.len() == 1 && c.plan_id.is_none() => {
-                    names.push(c.name[0].clone());
+                    columns.push(c.name[0].clone());
                 }
                 _ => {
                     return Err(unsupported_field(
@@ -290,7 +311,7 @@ impl Translator<'_> {
         }
         Ok(PlanNode::ColumnNames {
             input: self.input("Drop", d.input.as_deref())?,
-            op: ColumnNamesOp::Drop(names),
+            op: ColumnNamesOp::Drop { names, columns },
         })
     }
 

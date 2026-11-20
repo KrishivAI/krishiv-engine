@@ -8,6 +8,7 @@ mod column_names;
 mod dag;
 mod definer_sources;
 mod depth;
+mod display;
 mod display_more;
 mod dsl;
 mod e2_planning_speed;

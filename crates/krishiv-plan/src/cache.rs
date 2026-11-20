@@ -895,7 +895,34 @@ impl Encoder {
             }
             PlanNode::ColumnNames { input, op } => {
                 self.tag("ColumnNames");
-                self.text(&format!("{op:?}"));
+                match op {
+                    crate::ColumnNamesOp::ToDf(names) => {
+                        self.num(0);
+                        self.num(names.len() as u64);
+                        for n in names {
+                            self.text(n);
+                        }
+                    }
+                    crate::ColumnNamesOp::Rename(pairs) => {
+                        self.num(1);
+                        self.num(pairs.len() as u64);
+                        for (from, to) in pairs {
+                            self.text(from);
+                            self.text(to);
+                        }
+                    }
+                    crate::ColumnNamesOp::Drop { names, columns } => {
+                        self.num(2);
+                        self.num(names.len() as u64);
+                        for n in names {
+                            self.text(n);
+                        }
+                        self.num(columns.len() as u64);
+                        for n in columns {
+                            self.text(n);
+                        }
+                    }
+                }
                 self.plan(input, bias);
             }
             PlanNode::Repartition { input, exprs } => {

@@ -1,7 +1,7 @@
 ---
 source: crates/krishiv-connect/tests/goldens.rs
 ---
-RenameColumns `a -> z`
+RenameColumns a -> z
 +- Read parquet [/data/t.parquet]
 -- plan ids --
 ColumnNames plan_id=1

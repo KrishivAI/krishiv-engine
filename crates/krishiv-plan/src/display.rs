@@ -395,13 +395,29 @@ impl Display for NodeLine<'_> {
             }
             PlanNode::PipeOperator { .. } => f.write_str("PipeOperator"),
             PlanNode::ColumnNames { op, .. } => match op {
-                crate::ColumnNamesOp::ToDf(names) => write!(f, "ToDF {}", Name(names)),
+                crate::ColumnNamesOp::ToDf(names) => write!(f, "ToDF {}", Names(names)),
                 crate::ColumnNamesOp::Rename(pairs) => {
-                    let pairs: Vec<String> =
-                        pairs.iter().map(|(a, b)| format!("{a} -> {b}")).collect();
-                    write!(f, "RenameColumns {}", Name(&pairs))
+                    f.write_str("RenameColumns ")?;
+                    for (i, (a, b)) in pairs.iter().enumerate() {
+                        if i > 0 {
+                            f.write_str(", ")?;
+                        }
+                        write!(
+                            f,
+                            "{} -> {}",
+                            Name(std::slice::from_ref(a)),
+                            Name(std::slice::from_ref(b))
+                        )?;
+                    }
+                    Ok(())
                 }
-                crate::ColumnNamesOp::Drop(names) => write!(f, "DropColumns {}", Name(names)),
+                crate::ColumnNamesOp::Drop { names, columns } => {
+                    write!(f, "DropColumns {}", Names(names))?;
+                    if !columns.is_empty() {
+                        write!(f, " (resolved: {})", Names(columns))?;
+                    }
+                    Ok(())
+                }
             },
             PlanNode::Repartition { exprs, .. } => write!(f, "Repartition ({})", List(exprs)),
             PlanNode::CollectMetrics { name, metrics, .. } => {
@@ -722,6 +738,21 @@ impl Display for List<'_> {
 
 /// A multi-part name, back-quoting parts that are not plain identifiers.
 struct Name<'a>(&'a [String]);
+
+/// Several one-part names, each quoted on its own, comma separated.
+struct Names<'a>(&'a [String]);
+
+impl Display for Names<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for (i, n) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}", Name(std::slice::from_ref(n)))?;
+        }
+        Ok(())
+    }
+}
 
 impl Display for Name<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

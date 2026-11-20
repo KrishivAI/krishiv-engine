@@ -105,9 +105,18 @@ pub enum ColumnNamesOp {
     /// name matches `existing` under the session's case rule; names that match nothing are
     /// ignored (Spark's `UnresolvedStarWithColumnsRenames`).
     Rename(Vec<(String, String)>),
-    /// `drop(names)`: the columns whose name matches any of `names` are left out; names that
-    /// match nothing are ignored (Spark's `Dataset.drop(colNames*)`).
-    Drop(Vec<String>),
+    /// `drop`: the columns whose name matches any of `names` are left out, every match, and
+    /// names that match nothing are ignored (Spark's `Dataset.drop(colNames*)`). Each of
+    /// `columns` (a plain one-part column written as an expression, `drop(col("a"))`) is
+    /// resolved like any column reference over the input instead: several matches are
+    /// `AMBIGUOUS_REFERENCE`, none is ignored, and the one found is dropped by id (Spark's
+    /// `ResolveDataFrameDropColumns`).
+    Drop {
+        /// Names dropped by name.
+        names: Vec<String>,
+        /// Column references resolved over the input.
+        columns: Vec<String>,
+    },
 }
 
 /// The relation node kinds.

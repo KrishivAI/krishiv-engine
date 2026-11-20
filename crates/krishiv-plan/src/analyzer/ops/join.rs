@@ -540,7 +540,7 @@ impl Resolver<'_> {
         let inner = if columns.is_empty() {
             c
         } else {
-            self.rename_by_position(p, input, c, columns)?
+            self.rename_by_position(p, input, c, columns, true)?
         };
         let qual: Arc<[String]> = alias
             .split(crate::plan::ALIAS_PART_SEP)
@@ -585,9 +585,17 @@ impl Resolver<'_> {
         input: &Arc<LogicalPlan>,
         c: Rel,
         columns: &[String],
+        sql_table_function_form: bool,
     ) -> Result<Rel, AnalysisError> {
         if columns.len() != c.out.len() {
-            if let Some(func) = generator_relation_name(input) {
+            // Only the SQL `FROM func(..) t(a, b)` form is Spark's `UnresolvedTVFAliases`; a
+            // derived table's column list and `toDF` always raise the arity error below.
+            let generator = if sql_table_function_form {
+                generator_relation_name(input)
+            } else {
+                None
+            };
+            if let Some(func) = generator {
                 return Err(AnalysisError::new(
                     NumTableValueAliasesMismatch {
                         func_name: format!("`{func}`"),
@@ -661,7 +669,7 @@ impl Resolver<'_> {
         let cs = self.ctx.conf.case_sensitive;
         let same = |a: &str, b: &str| crate::analyzer::bind::same(a, b, cs);
         match op {
-            ColumnNamesOp::ToDf(names) => self.rename_by_position(p, input, c, names),
+            ColumnNamesOp::ToDf(names) => self.rename_by_position(p, input, c, names, false),
             ColumnNamesOp::Rename(pairs) => {
                 let mut names: Vec<String> = c.out.iter().map(|a| a.col.name.clone()).collect();
                 let mut changed = vec![false; names.len()];
@@ -690,18 +698,28 @@ impl Resolver<'_> {
                     .collect();
                 self.project_items(p, &c, &exprs, env)
             }
-            ColumnNamesOp::Drop(drops) => {
-                if !c
-                    .out
-                    .iter()
-                    .any(|a| drops.iter().any(|d| same(&a.col.name, d)))
-                {
+            ColumnNamesOp::Drop { names, columns } => {
+                // A column reference resolves like any other (Spark's
+                // `ResolveDataFrameDropColumns`): ambiguous is an error, not found is ignored,
+                // found drops that one attribute by id.
+                let mut dropped_ids = Vec::new();
+                for name in columns {
+                    if let Some((a, _)) =
+                        self.find(&c.out, std::slice::from_ref(name), p.origin, false)?
+                    {
+                        dropped_ids.push(a.col.id);
+                    }
+                }
+                let dropped = |a: &Attr| {
+                    dropped_ids.contains(&a.col.id) || names.iter().any(|d| same(&a.col.name, d))
+                };
+                if !c.out.iter().any(&dropped) {
                     return Ok(c);
                 }
                 let exprs: Vec<Arc<Expr>> = c
                     .out
                     .iter()
-                    .filter(|a| !drops.iter().any(|d| same(&a.col.name, d)))
+                    .filter(|a| !dropped(a))
                     .map(|a| self.pass_expr(&a.col))
                     .collect();
                 self.project_items(p, &c, &exprs, env)
