@@ -761,6 +761,18 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "filters":[],
 "warnings":[]}
 
+-- AlterTable::AlterColumn: COMMENT ON COLUMN d.t.a IS NULL
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","d","t"],"display":"table `spark_catalog`.`d`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","d"],"display":"namespace `spark_catalog`.`d`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
 -- AlterTable::SetTblProperties: ALTER TABLE t SET TBLPROPERTIES ('k' = 'v')
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"DDL",
