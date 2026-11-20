@@ -14,6 +14,7 @@ use super::*;
 mod commands;
 mod function;
 mod golden_syntax;
+mod metric_view;
 mod probe;
 mod sample;
 mod tail;

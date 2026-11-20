@@ -238,7 +238,8 @@ fn class_of(
         | Statement::AlterTable(_)
         | Statement::AlterView(_)
         | Statement::AlterNamespace(_)
-        | Statement::Repair(_) => StatementClass::Ddl,
+        | Statement::Repair(_)
+        | Statement::CreateMetricView(_) => StatementClass::Ddl,
         // `ANALYZE TABLE` writes the table's statistics.
         Statement::Insert(_)
         | Statement::Delete(_)
@@ -427,7 +428,9 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         | Statement::AddResource(_)
         | Statement::LoadData(_)
         | Statement::ListResource(_)
-        | Statement::AccessControl(_) => Vec::new(),
+        | Statement::AccessControl(_)
+        // A metric view's source query is YAML text, parsed when the session creates the view.
+        | Statement::CreateMetricView(_) => Vec::new(),
     })
 }
 
@@ -631,6 +634,9 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
             out
         }
         Statement::DropNamespace(d) => vec![t(O::Namespace(&d.name), Drop)],
+        // Spark's v1 command ignores `OR REPLACE` (`metricViewCommands.scala:80-85`): nothing is
+        // dropped.
+        Statement::CreateMetricView(v) => vec![t(O::ParentOf(&v.name), Create)],
         Statement::CreatePermanentView(v) => {
             let (object, parent) = match (v.temporary, v.global) {
                 (true, false) => return Vec::new(),
