@@ -288,7 +288,7 @@ fn the_manifest_and_the_pages_router_agree() {
 /// A link for a query that ran returns that query's detail (its operators), and the same link is refused once its
 /// life has passed.
 #[tokio::test]
-async fn a_signed_link_opens_a_finished_querys_detail_until_it_expires() {
+async fn a_signed_link_opens_a_finished_query_detail_until_it_expires() {
     let rt = EngineRuntime::builder().build().unwrap();
     let session = krishiv_session::Session::builder()
         .runtime(Arc::clone(&rt))
