@@ -108,7 +108,7 @@ impl PoolConfig {
                 .filter(|n| *n > 0)
                 .unwrap_or(default)
         };
-        PoolConfig {
+        let pool = PoolConfig {
             sandbox: config
                 .get(&UDF_SANDBOX)
                 .and_then(|v| v.as_str())
@@ -139,7 +139,19 @@ impl PoolConfig {
             launcher: Launcher::default(),
             capabilities: None,
             artifact_limit: DEFAULT_ARTIFACT_LIMIT,
+        };
+        if pool.tenant_memory_limit_ignored() {
+            tracing::warn!(
+                "krishiv.python.worker.tenantMemoryLimit is not below krishiv.python.worker.memoryLimit, so it \
+                 changes nothing: it only lowers a tenant's workers' limit"
+            );
         }
+        pool
+    }
+
+    /// Whether `tenant_memory_limit` is set but not below `memory_limit` (the lower of the two applies).
+    pub(crate) fn tenant_memory_limit_ignored(&self) -> bool {
+        matches!((self.tenant_memory_limit, self.memory_limit), (Some(t), Some(m)) if t >= m)
     }
 }
 
@@ -1084,6 +1096,22 @@ fn internal(message: String) -> KrishivError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_tenant_memory_limit_not_below_the_general_one_is_flagged() {
+        let mut config = PoolConfig {
+            memory_limit: Some(1 << 30),
+            tenant_memory_limit: Some(512 << 20),
+            ..PoolConfig::default()
+        };
+        assert!(!config.tenant_memory_limit_ignored());
+        config.tenant_memory_limit = Some(2 << 30);
+        assert!(config.tenant_memory_limit_ignored());
+        config.tenant_memory_limit = Some(1 << 30);
+        assert!(config.tenant_memory_limit_ignored());
+        config.tenant_memory_limit = None;
+        assert!(!config.tenant_memory_limit_ignored());
+    }
+
     use super::*;
 
     fn sleeper() -> (Child, OwnedFd) {

@@ -777,9 +777,9 @@ mod tests {
         // maxPerTenant 2, but every session is the one local principal: eight run at once (the threads).
         let calls = CallThreads::with_tenant_cap(8, 8, 2, Duration::from_secs(60));
         let running = Arc::new(AtomicUsize::new(0));
-        let gate = Arc::new(Barrier::new(9));
+        let release = Arc::new(AtomicUsize::new(0));
         for i in 0..8 {
-            let (running, gate) = (Arc::clone(&running), Arc::clone(&gate));
+            let (running, release) = (Arc::clone(&running), Arc::clone(&release));
             calls
                 .submit(
                     Owner {
@@ -788,14 +788,20 @@ mod tests {
                     },
                     Box::new(move || {
                         running.fetch_add(1, Ordering::SeqCst);
-                        gate.wait();
+                        while release.load(Ordering::SeqCst) == 0 {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
                     }),
                 )
                 .expect("submitted");
         }
-        // All eight are running together (the barrier opens only when they are); a cap of 2 would deadlock it.
-        gate.wait();
+        // All eight run together; with a cap of 2 only two would start. Fails after a deadline, never hangs.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while running.load(Ordering::SeqCst) < 8 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert_eq!(running.load(Ordering::SeqCst), 8);
+        release.store(1, Ordering::SeqCst);
         let waker = futures::task::noop_waker();
         let (take, held) = calls.take_slots(&uncapped_owner("x"), 7, &mut None, &waker);
         assert_eq!((take, held.len()), (SlotTake::Taken, 7));
