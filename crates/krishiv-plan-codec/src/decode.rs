@@ -1744,7 +1744,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         CalendarInterval => DataType::CalendarInterval,
         CollatedString => collated_string(t)?,
         Variant => DataType::Variant,
-        Udt => udt(t)?,
+        Udt => crate::decode_udt::udt(t)?,
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),
@@ -1810,13 +1810,6 @@ fn nested(t: &pb::DataType) -> Result<DataType> {
         Ok(d) if d.is_nested() && d.json() == t.json => Ok(d),
         _ => Err(corrupt("an invalid nested type")),
     }
-}
-
-/// A user-defined type from its JSON form, in the canonical text the encoder writes.
-fn udt(t: &pb::DataType) -> Result<DataType> {
-    let d = DataType::from_canonical_json(&t.json).ok();
-    d.filter(|d| matches!(d, DataType::Udt(_)) && d.json() == t.json)
-        .ok_or_else(|| corrupt("an invalid user-defined type"))
 }
 
 fn decimal(t: &pb::DataType) -> Result<DecimalType> {
