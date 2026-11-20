@@ -1871,6 +1871,30 @@ async fn a_requests_traceparent_names_the_trace_of_its_query_and_update() {
     )
     .await
     .expect("update");
+    // A non-ASCII header is no header: the query runs, with no trace.
+    let mut odd = authed(
+        FlightDescriptor::new_cmd(
+            CommandStatementQuery {
+                query: "SELECT 43 AS odd_header".to_owned(),
+                transaction_id: None,
+            }
+            .as_any()
+            .encode_to_vec(),
+        ),
+        OPS,
+        Some(&cookie),
+    );
+    let mut headers = std::mem::take(odd.metadata_mut()).into_headers();
+    headers.insert(
+        "traceparent",
+        tonic::codegen::http::HeaderValue::from_bytes(b"00-caf\xe9-00f067aa0ba902b7-01")
+            .expect("opaque bytes"),
+    );
+    *odd.metadata_mut() = tonic::metadata::MetadataMap::from_headers(headers);
+    let response = h.client.get_flight_info(odd).await.expect("info");
+    fetch(&mut h, OPS, Some(&cookie), ticket(&response.into_inner()))
+        .await
+        .expect("fetch");
     // A query without the header has no trace.
     let (plain, _) = info(&mut h, OPS, Some(&cookie), "SELECT 42 AS plain_query")
         .await
@@ -1924,4 +1948,5 @@ async fn a_requests_traceparent_names_the_trace_of_its_query_and_update() {
         "a command run by GetFlightInfo"
     );
     assert_eq!(by_text.get("SELECT 42 AS plain_query"), Some(&vec![None]));
+    assert_eq!(by_text.get("SELECT 43 AS odd_header"), Some(&vec![None]));
 }
