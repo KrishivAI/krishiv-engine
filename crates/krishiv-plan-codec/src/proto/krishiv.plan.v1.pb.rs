@@ -1207,6 +1207,10 @@ pub struct KeyFilterOptions {
     /// of several build partitions then merge to their range, and pass more rows.
     #[prost(uint32, optional, tag = "9")]
     pub bloom_bytes: ::core::option::Option<u32>,
+    /// ignorable: a reader that skips it loses the Bloom form of a build past
+    /// `bloom_max_items` or one that sheds its hashes to spill (a range only).
+    #[prost(uint32, optional, tag = "10")]
+    pub bloom_spill_bytes: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnionNode {

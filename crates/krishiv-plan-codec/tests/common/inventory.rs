@@ -787,6 +787,7 @@ pub(crate) fn join_plan(join_type: JoinType) -> HashJoinPlan {
                 bloom_fpp: 0.01,
                 bloom_max_fpp: 0.05,
                 bloom_bytes: None,
+                bloom_spill_bytes: None,
             },
         }],
         distribution: JoinDistribution::Broadcast,
@@ -1396,6 +1397,17 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         ("hash_join", PhysNode::HashJoin(join_plan(JoinType::Inner))),
+        (
+            // A guessed build's fixed Bloom (field 10, ignorable).
+            "hash_join_spill_bloom",
+            PhysNode::HashJoin({
+                let mut j = join_plan(JoinType::Inner);
+                for f in &mut j.runtime_filters {
+                    f.options.bloom_spill_bytes = Some(320 << 20);
+                }
+                j
+            }),
+        ),
         (
             "sort_merge_join",
             PhysNode::SortMergeJoin({
