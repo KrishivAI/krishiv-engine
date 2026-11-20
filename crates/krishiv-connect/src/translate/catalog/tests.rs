@@ -527,3 +527,33 @@ fn a_bad_message_fails_before_the_host_is_asked() {
     );
     assert!(locals.take_requests().is_empty());
 }
+
+#[test]
+fn a_backslash_in_a_nested_field_comment_is_refused_and_a_quote_is_lossy_when_escaped() {
+    let nested = |comment: &str| {
+        let mut schema = struct_of(&["a"]);
+        let Some(Kind::Struct(st)) = &mut schema.kind else {
+            panic!("struct");
+        };
+        let mut inner = struct_of(&["x"]);
+        let Some(Kind::Struct(ist)) = &mut inner.kind else {
+            panic!("struct");
+        };
+        ist.fields[0].metadata = Some(format!(r#"{{"comment":"{comment}"}}"#));
+        st.fields[0].data_type = Some(inner);
+        catalog_call(&msg(CatType::CreateTable(pb::CreateTable {
+            table_name: s("t"),
+            schema: Some(schema),
+            ..pb::CreateTable::default()
+        })))
+    };
+    assert!(nested(r"a\\b").is_err());
+    let CatalogCall::CreateTable(t) = nested("it's").expect("reads") else {
+        panic!("create table");
+    };
+    assert!(t.lossy_in_escaped_mode);
+    let CatalogCall::CreateTable(t) = nested("plain").expect("reads") else {
+        panic!("create table");
+    };
+    assert!(!t.lossy_in_escaped_mode);
+}

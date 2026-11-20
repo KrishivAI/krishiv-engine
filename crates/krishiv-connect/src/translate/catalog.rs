@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_types::DataType;
 
 use super::errors::assertion;
@@ -287,6 +287,27 @@ pub fn catalog_call(catalog: &pb::Catalog) -> Result<CatalogCall, KrishivError> 
     })
 }
 
+/// Visits every comment of the struct fields nested inside `t` (arrays, maps and structs): the type's
+/// `sql()` writes them with only the quote escaped, as Spark's `DataType.sql` does.
+fn nested_comments<'a>(t: &'a DataType, out: &mut Vec<&'a str>) {
+    match t {
+        DataType::Array(a) => nested_comments(a.element_type(), out),
+        DataType::Map(m) => {
+            nested_comments(m.key_type(), out);
+            nested_comments(m.value_type(), out);
+        }
+        DataType::Struct(s) => {
+            for f in s.fields() {
+                if let Some(c) = f.metadata().comment() {
+                    out.push(c);
+                }
+                nested_comments(f.data_type(), out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// `transformCreateTable` / `transformCreateExternalTable`: the `path` becomes the `path` option
 /// (it wins over one in `options`), and the schema must be a struct.
 fn create_table(
@@ -303,7 +324,18 @@ fn create_table(
             DataType::Struct(s) => Ok(s
                 .fields()
                 .iter()
-                .map(|f| {
+                .map(|f| -> Result<String, KrishivError> {
+                    let mut nested = Vec::new();
+                    nested_comments(f.data_type(), &mut nested);
+                    // A nested comment is written with its quote escaped only (Spark's `DataType.sql`):
+                    // a backslash in it would be read as an escape, so it cannot be stored as given.
+                    if nested.iter().any(|c| c.contains('\\')) {
+                        return Err(KrishivError::from(KrishivUnsupportedFeature {
+                            feature: "a backslash in the comment of a nested struct field"
+                                .to_owned(),
+                        }));
+                    }
+                    lossy_in_escaped_mode |= nested.iter().any(|c| c.contains('\''));
                     let mut column =
                         format!("`{}` {}", f.name().replace('`', "``"), f.data_type().sql());
                     if !f.nullable() {
@@ -317,9 +349,9 @@ fn create_table(
                             comment.replace('\\', "\\\\").replace('\'', "\\'")
                         ));
                     }
-                    column
+                    Ok(column)
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, _>>()?
                 .join(", ")),
             _ => Err(assertion("the schema of a table must be a struct")),
         })
