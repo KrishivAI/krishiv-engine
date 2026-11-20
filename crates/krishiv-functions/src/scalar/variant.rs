@@ -540,10 +540,19 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         | "try_variant_array_append" => 1..2,
         _ => 0..0,
     };
+    // `variant_insert`, `variant_set` and `variant_array_append` are null-intolerant in Spark: a NULL literal
+    // argument folds the call to NULL before the path is parsed. `variant_delete` raises regardless.
+    let folds_to_null = listed != "variant_delete"
+        && args.iter().any(|a| match a {
+            BindArg::Literal(a) => *a.data_type() == DataType::Null || a.is_null(0),
+            BindArg::Column { .. } => false,
+        });
     let checked = bound.ok_or_else(|| bad_types(listed, args)).and_then(|b| {
-        for i in literal_paths {
-            if let Some(Some(path)) = string_literal(args, i) {
-                edit_path(&path, listed.trim_start_matches("try_"), allow_root)?;
+        if !folds_to_null {
+            for i in literal_paths {
+                if let Some(Some(path)) = string_literal(args, i) {
+                    edit_path(&path, listed, allow_root)?;
+                }
             }
         }
         Ok(b)

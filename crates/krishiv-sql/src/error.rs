@@ -304,7 +304,7 @@ pub(crate) fn invalid_time_travel_timestamp_format(timestamp: String, span: Span
 pub(crate) fn time_travel_at_syntax(span: Span) -> ParseError {
     at(
         krishiv_common::error::UnsupportedFeatureTimeTravelAtSyntax {
-            config: "spark.sql.timeTravel.atSyntax.enabled".to_owned(),
+            config: "\"spark.sql.timeTravel.atSyntax.enabled\"".to_owned(),
         },
         span,
     )

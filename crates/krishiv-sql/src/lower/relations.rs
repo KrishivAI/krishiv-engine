@@ -856,6 +856,26 @@ impl Lowerer {
                             path_span,
                         ));
                     }
+                    // Spark prints the whole call for a column type no cast reaches, not Krishiv's internal read.
+                    let source = if matches!(c.kind, Kind::Exists { .. }) {
+                        krishiv_types::DataType::Boolean
+                    } else {
+                        krishiv_types::DataType::String
+                    };
+                    let target = data_type
+                        .without_char_varchar()
+                        .to_data_type()
+                        .map_err(|e| err(e, data_type.span))?;
+                    if krishiv_plan::analyzer::cast_always_refused(&source, &target) {
+                        return Err(err(
+                            krishiv_common::error::DatatypeMismatchCastWithoutSuggestion {
+                                sql_expr: format!("\"{call_text}\""),
+                                src_type: format!("\"{}\"", source.sql()),
+                                target_type: format!("\"{}\"", target.sql()),
+                            },
+                            data_type.span,
+                        ));
+                    }
                     let function = if matches!(c.kind, Kind::Exists { .. }) {
                         "__json_table_exists"
                     } else {

@@ -603,6 +603,8 @@ impl Session {
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let case_sensitive = env.analysis.conf.case_sensitive;
         let analysis = df.analyzed_in(env.clone()).await?;
+        env.catalog
+            .check_reference_options(analysis.analyzed.plan.root())?;
         self.refuse_session_objects(&name.quoted(), plan.root(), &env)
             .await?;
         let query_columns: Vec<String> = analysis
@@ -1270,18 +1272,20 @@ impl Session {
                 };
                 self.change_column(&mut changed, column, change, &env)?;
             }
-            AlterTableAction::CommentOnColumns(columns) => {
-                // `AlterTableChangeColumnCommentsCommand`: a column named twice is refused.
-                for (i, (column, _)) in columns.iter().enumerate() {
-                    let at = resolve_column(&changed, column, &env)?;
-                    for (other, _) in &columns[..i] {
-                        if resolve_column(&changed, other, &env)? == at {
-                            return Err(krishiv_common::error::NotSupportedChangeSameColumn {
-                                table: name.quoted(),
-                                field_name: changed.columns[at].name.clone(),
-                            }
-                            .into());
+            AlterTableAction::CommentOnColumns { columns, .. } => {
+                // `AlterTableChangeColumnCommentsCommand`: every column is resolved first, then a column
+                // named twice is refused.
+                let mut resolved = Vec::with_capacity(columns.len());
+                for (column, _) in columns {
+                    resolved.push(resolve_column(&changed, column, &env)?);
+                }
+                for (i, at) in resolved.iter().enumerate() {
+                    if resolved[..i].contains(at) {
+                        return Err(krishiv_common::error::NotSupportedChangeSameColumn {
+                            table: name.quoted(),
+                            field_name: changed.columns[*at].name.clone(),
                         }
+                        .into());
                     }
                 }
                 for (column, comment) in columns {
@@ -1442,9 +1446,14 @@ impl Session {
                 // Spark's error for a view here is not recorded in the goldens yet.
                 return Err(unsupported("COMMENT ON TABLE of a view"));
             }
-            if matches!(a.action, AlterTableAction::CommentOnColumns(_)) {
+            if let AlterTableAction::CommentOnColumns { list_form, .. } = &a.action {
                 return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
-                    operation: "COMMENT ON COLUMN".to_owned(),
+                    operation: if *list_form {
+                        "COMMENT ON TABLE ... COLUMN"
+                    } else {
+                        "COMMENT ON COLUMN"
+                    }
+                    .to_owned(),
                     view_name: name.quoted(),
                 }
                 .into());
@@ -1455,8 +1464,12 @@ impl Session {
             }
             .into());
         }
-        let operation = if matches!(a.action, AlterTableAction::CommentOnColumns(_)) {
-            "COMMENT ON COLUMN"
+        let operation = if let AlterTableAction::CommentOnColumns { list_form, .. } = &a.action {
+            if *list_form {
+                "COMMENT ON TABLE ... COLUMN"
+            } else {
+                "COMMENT ON COLUMN"
+            }
         } else if matches!(a.action, AlterTableAction::SetComment(_)) {
             "COMMENT ON TABLE"
         } else {

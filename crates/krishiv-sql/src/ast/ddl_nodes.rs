@@ -792,7 +792,12 @@ pub enum AlterTableAction {
     SetComment(Option<String>),
     /// `COMMENT ON COLUMN table.column IS 'comment'` or `COMMENT ON TABLE name COLUMN (c IS
     /// 'comment', ...)`: each column with its comment (`None` for `IS NULL`: the comment is removed).
-    CommentOnColumns(Vec<(ColumnName, Option<String>)>),
+    CommentOnColumns {
+        /// Each column with its comment.
+        columns: Vec<(ColumnName, Option<String>)>,
+        /// Written as `COMMENT ON TABLE name COLUMN (...)` (Spark names that command in a view's error).
+        list_form: bool,
+    },
     /// `UNSET TBLPROPERTIES [IF EXISTS] (...)`.
     UnsetTblProperties {
         /// `IF EXISTS`.

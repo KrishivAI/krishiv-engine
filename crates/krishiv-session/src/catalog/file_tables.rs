@@ -146,7 +146,7 @@ impl QueryCatalog {
     /// Refuses a reference whose option has the key (any case) of one the catalog table stores
     /// with another value, as Spark's `DataSourceUtils.generateDatasourceOptions` does
     /// (`_LEGACY_ERROR_TEMP_1151`); the same value is accepted and the table's own is kept.
-    fn check_reference_options(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
+    pub(crate) fn check_reference_options(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
         let mut scans = Vec::new();
         collect_scans(plan, &mut scans);
         for scan in scans {

@@ -225,10 +225,10 @@ impl<'s> Parser<'s> {
                 p.command_end()?;
                 return Ok(Statement::AlterTable(Box::new(AlterTable {
                     table: DdlName::Parts(parts),
-                    action: AlterTableAction::CommentOnColumns(vec![(
-                        ColumnName::Ident(column),
-                        comment,
-                    )]),
+                    action: AlterTableAction::CommentOnColumns {
+                        columns: vec![(ColumnName::Ident(column), comment)],
+                        list_form: false,
+                    },
                     span,
                 })));
             }
@@ -245,7 +245,10 @@ impl<'s> Parser<'s> {
                 p.command_end()?;
                 return Ok(Statement::AlterTable(Box::new(AlterTable {
                     table,
-                    action: AlterTableAction::CommentOnColumns(columns),
+                    action: AlterTableAction::CommentOnColumns {
+                        columns,
+                        list_form: true,
+                    },
                     span,
                 })));
             }

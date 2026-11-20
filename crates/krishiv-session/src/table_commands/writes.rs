@@ -64,9 +64,15 @@ impl Session {
                 env.analysis.conf.case_sensitive,
             );
         if self.temp_entry_of(name, env) || global {
+            // A temporary view is named as written.
+            let view_name = if global {
+                name.quoted()
+            } else {
+                format!("`{}`", name.name)
+            };
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
                 operation: operation.to_owned(),
-                view_name: name.quoted(),
+                view_name,
             }
             .into());
         }
@@ -125,7 +131,12 @@ impl Session {
         let table = self.table_for_write(&name, "INSERT", &env)?;
         if replace {
             // A session-catalog table has no replace-by-condition write (Spark: the table lacks the capability).
-            return Err(table_operation(&name, "INSERT ... REPLACE"));
+            let operation = if c.replace_where.is_some() {
+                "INSERT INTO ... REPLACE WHERE"
+            } else {
+                "INSERT INTO ... REPLACE ON/USING"
+            };
+            return Err(table_operation(&name, operation));
         }
         let statics = match &c.partition {
             None => Vec::new(),

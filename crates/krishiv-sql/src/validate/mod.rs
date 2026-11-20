@@ -768,7 +768,7 @@ impl Checker<'_> {
             }
             AlterTableAction::SetLocation(_)
             | AlterTableAction::SetComment(_)
-            | AlterTableAction::CommentOnColumns(_)
+            | AlterTableAction::CommentOnColumns { .. }
             | AlterTableAction::RecoverPartitions => Ok(()),
         }
     }

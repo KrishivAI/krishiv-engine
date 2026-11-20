@@ -334,6 +334,7 @@ fn a_literal_path_is_checked_at_bind_and_a_column_path_per_row() {
     let bad_lit: BindArg = BindArg::Literal(text_col(&[Some("bad")]));
     let v = variants(&[None]);
     let val = variants(&[Some("1")]);
+    let doc0 = variants(&[Some("{}")]);
     let bind = |name: &str, args: &[BindArg]| bind_scalar(name, args, &BindOptions::default());
     for (name, args) in [
         ("variant_delete", vec![arg(&v), bad_lit.clone()]),
@@ -346,6 +347,31 @@ fn a_literal_path_is_checked_at_bind_and_a_column_path_per_row() {
             "{name}"
         );
     }
+    // A NULL literal folds insert/set/append to NULL before the path is parsed; `variant_delete` still raises.
+    let bad_lit = || BindArg::Literal(text_col(&[Some("bad")]));
+    let null_variant = || BindArg::Literal(variants(&[None]));
+    let null_int = || BindArg::Literal(Arc::new(arrow_array::Int32Array::from(vec![None::<i32>])));
+    for (name, args) in [
+        ("variant_insert", vec![null_variant(), bad_lit(), arg(&val)]),
+        ("variant_set", vec![null_variant(), bad_lit(), arg(&val)]),
+        (
+            "variant_array_append",
+            vec![null_variant(), bad_lit(), arg(&val)],
+        ),
+        ("variant_insert", vec![arg(&doc0), bad_lit(), null_int()]),
+    ] {
+        assert!(bind(name, &args).is_ok(), "{name}");
+    }
+    assert_eq!(
+        bind("variant_delete", &[null_variant(), bad_lit()])
+            .err()
+            .map(|e| e.error_class()),
+        Some(ErrorClass::InvalidVariantPath)
+    );
+    // The name in the message is the listed one, `try_` included.
+    let err =
+        bind("try_variant_insert", &[arg(&doc0), bad_lit(), arg(&val)]).expect_err("bad path");
+    assert!(err.to_string().contains("`try_variant_insert`"), "{err}");
     // A column path over a NULL variant is NULL, whatever it holds.
     let bad = text_col(&[Some("bad")]);
     assert_eq!(

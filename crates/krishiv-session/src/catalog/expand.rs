@@ -132,6 +132,65 @@ fn view_read(
 }
 
 impl Expander<'_> {
+    /// Refuses the time travel clause where the relation it rides on resolves to something Spark cannot travel:
+    /// a `WITH` definition and a temporary view (named as written), and a path (`format`.`path`). A table and a
+    /// permanent view are refused where they resolve (`expand_stored`, and the read check for a table).
+    fn refuse_time_travel_here(
+        &self,
+        plan: &LogicalPlan,
+        scope: &[String],
+    ) -> Result<(), KrishivError> {
+        let PlanNode::Read(source) = &plan.node else {
+            return Ok(());
+        };
+        let relation_id = match source {
+            ReadSource::Files {
+                format,
+                paths,
+                options,
+                ..
+            } if options.contains_key(krishiv_plan::TIME_TRAVEL_OPTION) => {
+                let path = paths
+                    .first()
+                    .and_then(|p| p.as_plain())
+                    .unwrap_or("<redacted>");
+                format!("{}.{}", quote(format), quote(path))
+            }
+            ReadSource::Table { name, options }
+                if options.contains_key(krishiv_plan::TIME_TRAVEL_OPTION) =>
+            {
+                let bare = match name.as_slice() {
+                    [bare] => bare,
+                    [namespace, view] if namespace.eq_ignore_ascii_case(GLOBAL_NAMESPACE) => {
+                        if self
+                            .catalog
+                            .get(&global_key(view), self.case_sensitive)
+                            .is_none()
+                        {
+                            return Ok(());
+                        }
+                        return Err(krishiv_common::error::UnsupportedFeatureTimeTravel {
+                            relation_id: format!("{}.{}", quote(GLOBAL_NAMESPACE), quote(view)),
+                        }
+                        .into());
+                    }
+                    _ => return Ok(()),
+                };
+                let cte = scope
+                    .iter()
+                    .any(|c| same_name(c, bare, self.case_sensitive));
+                let temporary =
+                    self.view_namespace.is_none() && self.catalog.exists(bare, self.case_sensitive);
+                if !cte && !temporary {
+                    return Ok(());
+                }
+                quote(bare)
+            }
+            _ => return Ok(()),
+        };
+        Err(krishiv_common::error::UnsupportedFeatureTimeTravel { relation_id }.into())
+    }
+
     /// `plan` with its views inlined; `scope` holds the `WITH`
     /// definitions visible where `plan` reads.
     pub(super) fn go(
@@ -139,6 +198,7 @@ impl Expander<'_> {
         plan: Arc<LogicalPlan>,
         scope: &mut Vec<String>,
     ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        self.refuse_time_travel_here(&plan, scope)?;
         // Snapshot pins and cached snapshots are unreachable from user
         // input however a read spells them: a read of one behaves exactly
         // as a missing table, with or without read options. (The pins
@@ -328,7 +388,10 @@ impl Expander<'_> {
         let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node else {
             return Ok(plan);
         };
-        if !options.is_empty()
+        let travel = options.contains_key(krishiv_plan::TIME_TRAVEL_OPTION);
+        if options
+            .keys()
+            .any(|k| k != krishiv_plan::TIME_TRAVEL_OPTION)
             || scope
                 .iter()
                 .any(|c| name.len() == 1 && same_name(c, &name[0], self.case_sensitive))
@@ -402,6 +465,18 @@ impl Expander<'_> {
         let Some((entry, view)) = entry.as_ref().and_then(|e| Some((e, e.view.as_ref()?))) else {
             return Ok(plan);
         };
+        if travel {
+            // Spark's `failTimeTravel` names the view in full.
+            return Err(krishiv_common::error::UnsupportedFeatureTimeTravel {
+                relation_id: format!(
+                    "{}.{}.{}",
+                    quote(CATALOG),
+                    quote(&entry.namespace),
+                    quote(&entry.name)
+                ),
+            }
+            .into());
+        }
         match self.inline_stored(&plan, entry, view, &namespace, &table_key, scope) {
             Ok(done) => Ok(done),
             Err(e) => {

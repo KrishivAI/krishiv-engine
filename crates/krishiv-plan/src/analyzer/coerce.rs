@@ -1468,6 +1468,16 @@ pub(super) enum BadCast {
     Conf,
 }
 
+/// Whether Spark refuses a cast of `from` to `to` in every mode, with no suggestion (`CAST_WITHOUT_SUGGESTION`):
+/// what a lowering can check before the analyzer runs (the most lenient mode refuses it).
+#[must_use]
+pub fn cast_always_refused(from: &DataType, to: &DataType) -> bool {
+    matches!(
+        can_cast(Some(from), to, CastMode::Legacy),
+        Err(BadCast::Without)
+    )
+}
+
 /// Whether Spark casts `from` to `to` in `mode` (`Cast.canCast`,
 /// `canAnsiCast`, `canTryCast`), checked against a Spark 4.2 run of every
 /// pair of the types here in each mode.

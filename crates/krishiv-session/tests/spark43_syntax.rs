@@ -123,6 +123,12 @@ fn the_suffix_is_off_with_its_config() {
         run(&s, "select * from tbl@v1"),
         Err("UNSUPPORTED_FEATURE.TIME_TRAVEL_AT_SYNTAX".to_owned())
     );
+    assert!(
+        message(&s, "select * from tbl@v1")
+            .contains("Set \"spark.sql.timeTravel.atSyntax.enabled\" to true to enable it."),
+        "{}",
+        message(&s, "select * from tbl@v1")
+    );
     // The clause is not the suffix: it still parses.
     assert_eq!(
         run(&s, "select * from tbl version as of 1"),
@@ -182,8 +188,45 @@ fn comment_on_column_names_its_own_command_for_a_view() {
             Err("EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE".to_owned()),
             "{sql}"
         );
-        assert!(message(&s, sql).contains("COMMENT ON COLUMN"), "{sql}");
     }
+    let text = |sql: &str| message(&s, sql);
+    assert!(
+        text("comment on column v.a is 'x'").contains(
+            "'COMMENT ON COLUMN' expects a table but `spark_catalog`.`default`.`v` is a view"
+        ),
+        "{}",
+        text("comment on column v.a is 'x'")
+    );
+    assert!(
+        text("comment on column tv.a is 'x'")
+            .contains("'COMMENT ON COLUMN' expects a table but `tv` is a view"),
+        "{}",
+        text("comment on column tv.a is 'x'")
+    );
+    for view in ["v", "tv"] {
+        let sql = format!("comment on table {view} column (a is 'x')");
+        assert!(
+            message(&s, &sql).contains("'COMMENT ON TABLE ... COLUMN' expects a table"),
+            "{}",
+            message(&s, &sql)
+        );
+    }
+}
+
+#[test]
+fn comment_on_columns_resolves_every_column_before_looking_for_a_repeat() {
+    let s = session_with_table();
+    assert_eq!(
+        run(
+            &s,
+            "comment on table tbl column (id is 'a', id is 'b', nope is 'c')"
+        ),
+        Err("UNRESOLVED_COLUMN.WITH_SUGGESTION".to_owned())
+    );
+    assert_eq!(
+        run(&s, "comment on table tbl column (id is 'a', id is 'b')"),
+        Err("NOT_SUPPORTED_CHANGE_SAME_COLUMN".to_owned())
+    );
 }
 
 #[test]
@@ -204,6 +247,22 @@ fn replace_where_and_target_options_are_refused_by_the_table() {
             run(&s, sql),
             Err("UNSUPPORTED_FEATURE.TABLE_OPERATION".to_owned()),
             "{sql}"
+        );
+    }
+    for (sql, operation) in [
+        (
+            "insert into tbl (id, name) replace where id = 1 values (1, 'a')",
+            "INSERT INTO ... REPLACE WHERE",
+        ),
+        (
+            "insert into tbl replace on tbl.id = 1 values (1, 'a')",
+            "INSERT INTO ... REPLACE ON/USING",
+        ),
+    ] {
+        assert!(
+            message(&s, sql).contains(operation),
+            "{sql}: {}",
+            message(&s, sql)
         );
     }
     // The operation is the statement's, as without options.
@@ -229,5 +288,61 @@ fn replace_where_and_target_options_are_refused_by_the_table() {
     assert_eq!(
         run(&s, "update tbl with ('k' = 'v') set nope = 1"),
         Err("UNRESOLVED_COLUMN.WITH_SUGGESTION".to_owned())
+    );
+}
+
+/// The clause is refused where each kind of relation resolves, with the relation as Spark names it.
+#[test]
+fn the_clause_is_refused_for_every_kind_of_relation() {
+    let s = session_with_table();
+    run(&s, "create view pv as select 1 as a").expect("view");
+    run(&s, "create temporary view tv as select 1 as a").expect("temp view");
+    let dir = std::env::temp_dir().join("krishiv_tt_path_dir");
+    std::fs::create_dir_all(&dir).expect("dir");
+    for (sql, relation) in [
+        ("with c as (select 1 a) select * from c@v1", "`c`"),
+        (
+            "with c as (select 1 a) select * from c timestamp as of '2024-01-01'",
+            "`c`",
+        ),
+        ("select * from tv@v1", "`tv`"),
+        ("select * from pv@v1", "`spark_catalog`.`default`.`pv`"),
+        (
+            "create view v2 as select * from tbl@v1",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
+        (
+            "delete from tbl where id in (select id from tbl@v1)",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
+        (
+            "update tbl set name = (select max(name) from tbl@v1)",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
+        (
+            &format!("select * from parquet.`{}` version as of 1", dir.display()),
+            &format!("`parquet`.`{}`", dir.display()),
+        ),
+        (
+            &format!("select * from parquet.`{}`@v1", dir.display()),
+            &format!("`parquet`.`{}`", dir.display()),
+        ),
+    ] {
+        assert_eq!(
+            run(&s, sql),
+            Err("UNSUPPORTED_FEATURE.TIME_TRAVEL".to_owned()),
+            "{sql}: {}",
+            message(&s, sql)
+        );
+        assert!(
+            message(&s, sql).contains(relation),
+            "{sql}: {}",
+            message(&s, sql)
+        );
+    }
+    // A view that was refused at creation does not exist.
+    assert_eq!(
+        run(&s, "select * from v2"),
+        Err("TABLE_OR_VIEW_NOT_FOUND".to_owned())
     );
 }

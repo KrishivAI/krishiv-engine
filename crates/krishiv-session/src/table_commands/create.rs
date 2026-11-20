@@ -915,9 +915,15 @@ impl Session {
         }
         // Spark 4.2 does not resolve a running script's local variables in these statements (the
         // record shows `UNRESOLVED_COLUMN` for one), so the analysis does not see them either.
-        self.with_locals(Vec::new())
+        let analysis = self
+            .with_locals(Vec::new())
             .analyze_variable_query(&sql)
             .await?;
+        // A time travel clause in the condition or a value's subquery is refused where the relation resolves.
+        analysis
+            .env
+            .catalog
+            .check_reference_options(analysis.analyzed.plan.root())?;
         // A table whose provider offers a row-level table runs the statement (PR-DML).
         // The target's `WITH (...)` options reach the table's scan builder, and no table of the
         // session catalog takes them: the statement is refused as Spark refuses it for such a table.
