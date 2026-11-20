@@ -93,7 +93,8 @@ impl Conf {
         let version = match profile {
             SparkProfile::V3_5 | SparkProfile::V4_0 => SparkVersion::V4_0,
             SparkProfile::V4_1 => SparkVersion::V4_1,
-            _ => SparkVersion::V4_2,
+            SparkProfile::V4_2 => SparkVersion::V4_2,
+            _ => SparkVersion::V4_3,
         };
         Self {
             ansi,

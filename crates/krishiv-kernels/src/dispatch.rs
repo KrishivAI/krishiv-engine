@@ -259,7 +259,7 @@ mod tests {
         let v40 = KernelCtx::new().with_spark_version(SparkVersion::V4_0);
         assert_eq!(
             (v40.spark_version(), KernelCtx::new().spark_version()),
-            (SparkVersion::V4_0, SparkVersion::V4_2)
+            (SparkVersion::V4_0, SparkVersion::V4_3)
         );
         for t in Target::ALL {
             match KernelCtx::with_target(t) {

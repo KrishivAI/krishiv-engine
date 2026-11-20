@@ -205,7 +205,10 @@ fn check(s: &Session, case: &Value, report: &mut String) {
 #[test]
 fn pivot_cells_match_spark() {
     let fx = fixture();
-    let s = Session::builder().build().unwrap();
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_2)
+        .build()
+        .unwrap();
     for (name, sql) in fx["views"].as_object().unwrap() {
         block_on(async {
             s.sql(&format!(
@@ -322,11 +325,14 @@ fn binary_pivot_columns_match_by_identity_before_4_2() {
     );
 }
 
-/// Duplicate values with ANSI off and several aggregates: Spark writes the repeated value into the next aggregate's
+/// Duplicate values with ANSI off and several aggregates (Spark 4.2; 4.3 fixed the slots): Spark writes the repeated value into the next aggregate's
 /// slots (its last index is past `indexSize`), which the engine refuses instead of returning.
 #[test]
 fn duplicate_values_with_ansi_off_and_several_aggregates_are_refused() {
-    let s = Session::builder().build().unwrap();
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_2)
+        .build()
+        .unwrap();
     s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
     let e = block_on(async {
         s.sql("SELECT * FROM VALUES (1, 10, 5) AS g(g, p, v) PIVOT (sum(v) AS s, max(v) AS m FOR p IN (10, 20, 10))")
