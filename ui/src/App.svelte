@@ -20,16 +20,17 @@
 
   // The embedded view (`?embed=1` on /queries/{id}/profile) has no session: its signed link is the credential.
   const embed = embedLink(window.location.search);
-  let hideAttribution = $state(false);
+  // The mark shows only once the config says it may (no flash in an embed that hides it).
+  let hideAttribution = $state(true);
   let session = $state<"checking" | "yes" | "no">(embed ? "yes" : "checking");
   if (!embed) initSession().then((ok) => (session = ok ? "yes" : "no"), () => (session = "no"));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-  let hash = $state(window.location.hash || "#/health");
+  let hash = $state(window.location.hash);
   let menuOpen = $state(false);
   $effect(() => {
     const on = () => {
-      hash = window.location.hash || "#/health";
+      hash = window.location.hash;
       menuOpen = false;
     };
     window.addEventListener("hashchange", on);
@@ -48,15 +49,14 @@
         console.warn("krishiv: ignored the theme in the link: not JSON");
       }
     }
-    let stop = () => {};
-    api<{ allowed_origins: string[]; hide_attribution: boolean }>("/api/internal/embed/config").then(
+    const config = api<{ allowed_origins: string[]; hide_attribution: boolean }>("/api/internal/embed/config");
+    config.then(
       (c) => {
         hideAttribution = c.hide_attribution;
-        stop = listenForTheme(c.allowed_origins);
       },
       () => {},
     );
-    return () => stop();
+    return listenForTheme(config.then((c) => c.allowed_origins));
   });
 
   const route = $derived(parseRoute(window.location.pathname, hash));

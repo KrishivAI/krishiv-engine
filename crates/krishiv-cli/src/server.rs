@@ -754,7 +754,10 @@ fn admin_router(
                 .unwrap_or(false),
             match config.get(&UI_EMBED_LINK_TTL) {
                 Some(ConfigValue::Duration(d)) => *d,
-                _ => std::time::Duration::from_secs(900),
+                _ => match UI_EMBED_LINK_TTL.default {
+                    Some(ConfigValue::Duration(d)) => d,
+                    _ => std::time::Duration::from_secs(300),
+                },
             },
         );
         let policy = krishiv_server::pages::UiPolicy::for_listener(

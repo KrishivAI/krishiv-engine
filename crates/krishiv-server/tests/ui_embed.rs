@@ -24,7 +24,10 @@ use tokio::net::{TcpListener, TcpStream};
 const TOKEN: &str = "embed-token";
 
 async fn start(origins: &[&str]) -> std::net::SocketAddr {
-    let rt = EngineRuntime::builder().build().unwrap();
+    start_on(EngineRuntime::builder().build().unwrap(), origins).await
+}
+
+async fn start_on(rt: Arc<EngineRuntime>, origins: &[&str]) -> std::net::SocketAddr {
     let source = SessionSource::new(rt).unwrap();
     let embed = EmbedPolicy::new(
         origins.iter().map(|o| (*o).to_owned()).collect(),
@@ -280,4 +283,63 @@ fn the_manifest_and_the_pages_router_agree() {
     // Only the profile view is embeddable.
     let embeddable: Vec<_> = paths.iter().filter(|p| p.2).map(|p| p.0.as_str()).collect();
     assert_eq!(embeddable, ["/queries/{id}/profile"]);
+}
+
+/// A link for a query that ran returns that query's detail (its operators), and the same link is refused once its
+/// life has passed.
+#[tokio::test]
+async fn a_signed_link_opens_a_finished_querys_detail_until_it_expires() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let session = krishiv_session::Session::builder()
+        .runtime(Arc::clone(&rt))
+        .build()
+        .unwrap();
+    session
+        .sql("SELECT id % 3 AS k, count(*) AS n FROM range(0, 300) GROUP BY id % 3")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let addr = start_on(rt, &["https://console.example.com"]).await;
+    let (status, _, body) = get(addr, "/api/internal/history", true).await;
+    assert_eq!(status, 200, "{body}");
+    let queries: Value = serde_json::from_str(&body).unwrap();
+    let id = queries["queries"][0]["query_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let issue = |ttl: u32| format!("/api/internal/queries/{id}/embed-link?ttl={ttl}");
+    let link_query = |body: &str| {
+        let v: Value = serde_json::from_str(body).unwrap();
+        v["url"]
+            .as_str()
+            .unwrap()
+            .split_once('?')
+            .unwrap()
+            .1
+            .to_owned()
+    };
+    let (_, _, body) = get(addr, &issue(60), true).await;
+    let query = link_query(&body);
+    let (status, _, body) = get(
+        addr,
+        &format!("/api/internal/embed/queries/{id}?{query}"),
+        false,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let detail: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(detail["query"]["query_id"], Value::String(id.clone()));
+    assert!(
+        !detail["operators"].as_array().unwrap().is_empty(),
+        "{detail}"
+    );
+    // A one-second link works now and is refused after its second.
+    let (_, _, body) = get(addr, &issue(1), true).await;
+    let short = link_query(&body);
+    let path = format!("/api/internal/embed/queries/{id}?{short}");
+    assert_eq!(get(addr, &path, false).await.0, 200);
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(get(addr, &path, false).await.0, 401);
 }

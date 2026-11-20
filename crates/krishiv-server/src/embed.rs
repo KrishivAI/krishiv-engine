@@ -39,7 +39,7 @@ impl std::fmt::Debug for EmbedPolicy {
 
 impl Default for EmbedPolicy {
     fn default() -> Self {
-        Self::new(Vec::new(), false, Duration::from_secs(900))
+        Self::new(Vec::new(), false, Duration::from_secs(300))
     }
 }
 
@@ -99,7 +99,7 @@ impl EmbedPolicy {
     }
 
     /// Whether `sig` is the signature of a link for `query_id` ending at `expires`, and `expires` is after `now`
-    /// and no more than the policy's life away (so a stolen key-less forgery of a far-future expiry fails too).
+    /// and no more than the policy's life away (a link cannot outlive the life this process issues links for).
     #[must_use]
     pub fn verify(&self, query_id: &str, expires: u64, sig: &str, now: u64) -> bool {
         if expires <= now || expires > now.saturating_add(self.ttl.as_secs()) {
@@ -169,6 +169,12 @@ pub fn parse_origins(list: &str) -> Result<Vec<String>, String> {
                 "krishiv.ui.allowedOrigins: `{o}` is not an origin (scheme://host[:port])"
             ));
         }
+        // The browser reports an origin without its default port, so the theme check compares without it.
+        let o = o
+            .strip_suffix(":443")
+            .filter(|_| o.starts_with("https://"))
+            .or_else(|| o.strip_suffix(":80").filter(|_| o.starts_with("http://")))
+            .unwrap_or(o);
         if !out.iter().any(|x| x == o) {
             out.push(o.to_owned());
         }
@@ -198,20 +204,24 @@ pub fn is_origin(o: &str) -> bool {
     };
     let host_ok = if host.starts_with('[') {
         host.len() > 2
+            && host.contains(':')
             && host[1..host.len() - 1]
                 .bytes()
                 .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.')
     } else {
         !host.is_empty()
             && !host.starts_with(['.', '-'])
+            && !host.contains("..")
             && host
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
     };
     let port_ok = port.is_empty()
-        || port
-            .strip_prefix(':')
-            .is_some_and(|p| (1..=5).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()));
+        || port.strip_prefix(':').is_some_and(|p| {
+            p.len() <= 5
+                && p.bytes().all(|b| b.is_ascii_digit())
+                && p.parse::<u32>().is_ok_and(|n| (1..=65535).contains(&n))
+        });
     host_ok && port_ok
 }
 
@@ -358,6 +368,9 @@ pub fn percent_decode(s: &str) -> Option<String> {
         match b[i] {
             b'%' => {
                 let h = s.get(i + 1..i + 3)?;
+                if !h.bytes().all(|c| c.is_ascii_hexdigit()) {
+                    return None;
+                }
                 out.push(u8::from_str_radix(h, 16).ok()?);
                 i += 3;
             }
@@ -456,6 +469,28 @@ mod tests {
     }
 
     #[test]
+    fn odd_origins_are_refused_and_default_ports_are_dropped() {
+        for bad in [
+            "https://[.]",
+            "https://a..b",
+            "https://a.example:0",
+            "https://a.example:99999",
+        ] {
+            assert!(!is_origin(bad), "{bad}");
+        }
+        assert_eq!(
+            parse_origins("https://c.example:443, http://d.example:80,http://e.example:443,https://f.example:8443")
+                .unwrap(),
+            vec![
+                "https://c.example",
+                "http://d.example",
+                "http://e.example:443",
+                "https://f.example:8443"
+            ]
+        );
+    }
+
+    #[test]
     fn origins_are_checked() {
         assert_eq!(
             parse_origins("https://a.example.com, HTTP://B.example:8080,,https://a.example.com")
@@ -516,6 +551,7 @@ mod tests {
         let s = "{\"a\":\"b c\"}&x=é";
         assert_eq!(percent_decode(&percent_encode(s)).as_deref(), Some(s));
         assert_eq!(percent_decode("%zz"), None);
+        assert_eq!(percent_decode("%+f"), None, "a sign is not a hex digit");
         assert_eq!(percent_decode("%e9"), None, "not UTF-8");
         assert_eq!(percent_decode("a+b").as_deref(), Some("a b"));
     }

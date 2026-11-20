@@ -62,11 +62,10 @@ export function embedLink(search: string): EmbedLink | null {
   return { exp: p.get("exp") ?? "", sig: p.get("sig") ?? "", theme: p.get("theme") };
 }
 
-/** Takes theme messages from the embedding page: only from an allowed origin, only valid ones; the rest is logged. */
-export function listenForTheme(allowedOrigins: string[], parentWindow: Window = window): () => void {
-  // The browser reports an origin without a default port; serialize the configured ones the same way.
-  const allowed = new Set(
-    allowedOrigins.map((o) => {
+/** The origins as the browser reports them (`MessageEvent.origin` has no default port). */
+function canonicalOrigins(origins: string[]): Set<string> {
+  return new Set(
+    origins.map((o) => {
       try {
         return new URL(o).origin;
       } catch {
@@ -74,9 +73,21 @@ export function listenForTheme(allowedOrigins: string[], parentWindow: Window = 
       }
     }),
   );
-  const on = (e: MessageEvent) => {
-    if (e.source !== parentWindow.parent) return;
-    if (!allowed.has(e.origin)) {
+}
+
+/**
+ * Takes theme messages from the embedding page: only from an allowed origin, only valid ones; the rest is logged.
+ * The listener is installed at once; messages from the parent that arrive before the allowed origins are known
+ * (`origins` still pending) are held and checked then, so a theme sent when the frame loads is not lost.
+ */
+export function listenForTheme(
+  origins: string[] | Promise<string[]>,
+  parentWindow: Window = window,
+): () => void {
+  let allowed: Set<string> | null = null;
+  let held: MessageEvent[] = [];
+  const handle = (e: MessageEvent) => {
+    if (allowed === null || !allowed.has(e.origin)) {
       console.warn(`krishiv: ignored a theme message from ${e.origin} (not in krishiv.ui.allowedOrigins)`);
       return;
     }
@@ -89,6 +100,20 @@ export function listenForTheme(allowedOrigins: string[], parentWindow: Window = 
     }
     applyTheme(r.theme);
   };
+  const on = (e: MessageEvent) => {
+    if (e.source !== parentWindow.parent) return;
+    if (allowed === null) held.push(e);
+    else handle(e);
+  };
   parentWindow.addEventListener("message", on);
+  const ready = (list: string[]) => {
+    allowed = canonicalOrigins(list);
+    const queued = held;
+    held = [];
+    for (const e of queued) handle(e);
+  };
+  if (Array.isArray(origins)) ready(origins);
+  // If the origins never arrive, every message stays held (and is never applied).
+  else origins.then(ready, () => {});
   return () => parentWindow.removeEventListener("message", on);
 }

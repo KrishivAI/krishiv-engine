@@ -32,7 +32,8 @@ pub static UI_ALLOWED_ORIGINS: ConfigEntry = ConfigEntry {
     doc: "Comma-separated origins (`https://console.example.com`, scheme and host, an optional \
           port) that may put the UI's embeddable views (`?embed=1`) in a frame: they become the \
           `frame-ancestors` of those pages, and the same origins may send the embed theme with \
-          `postMessage`. Unset, the default, is `'none'`: no page can be framed. Every other \
+          `postMessage`. The page reads the list from `GET /api/internal/embed/config`, which needs no \
+          token (the embedded view has no session), so the origins are not secret. Unset, the default, is `'none'`: no page can be framed. Every other \
           page of the UI is never framable. An entry that is not an origin (a path, a wildcard, \
           a quote or a space inside it) makes the server refuse to start.",
     scope: Scope::Cluster,
@@ -58,7 +59,7 @@ pub static UI_EMBED_HIDE_ATTRIBUTION: ConfigEntry = ConfigEntry {
 pub static UI_EMBED_LINK_TTL: ConfigEntry = ConfigEntry {
     key: "krishiv.ui.embed.linkTtl",
     value_type: ValueType::Duration,
-    default: Some(ConfigValue::Duration(Duration::from_secs(900))),
+    default: Some(ConfigValue::Duration(Duration::from_secs(300))),
     doc: "How long a signed embed link stays valid, at most. A link grants read-only access to \
           one query's profile and nothing else; a request for a longer life gets this one. The \
           signing key is made at start-up, so every link also ends when the server restarts.",
