@@ -36,6 +36,24 @@ pub static EXEC_JOIN_FUSE_PROBE_SELECT: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Hybrid hash join (TPC-H q09 at SF1000, lever a1): a spilling build keeps the
+/// partitions that fit in memory instead of spilling every one.
+pub static EXEC_JOIN_HYBRID_RESIDENT: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.hybridResident",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: when a hash join's build side does not fit in memory, the partitions \
+          that still fit stay in memory and only the rest go to disk, so probe rows of the \
+          partitions in memory are joined at once instead of being written and read back. \
+          The partitions kept are limited so that the disk phase still has room to load \
+          one partition per thread beside them. Results are the same either way; turn it \
+          off to send every partition to disk once one has to go.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
 /// How long a finished hash join build waits for its probe before the
 /// memory arbitrator spills it ahead of running consumers (study 30, M2).
 pub static EXEC_JOIN_IDLE_SPILL_AFTER: ConfigEntry = ConfigEntry {

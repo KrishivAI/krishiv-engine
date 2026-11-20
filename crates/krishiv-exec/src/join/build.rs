@@ -28,6 +28,8 @@ use crate::rows::Hll;
 use crate::sync::{Event, Mutex, lock};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
+mod hybrid;
+
 /// The build sink.
 #[derive(Debug)]
 pub(crate) struct BuildSink(pub(crate) Arc<Shared>);
@@ -853,6 +855,37 @@ impl BuildSink {
 /// tails' copy, which replaces chunks dropped once the arena is built
 /// ([`RowArena::reblock_bytes`]); kept is the tails' part of lasting.
 /// `None` if no rows are in memory.
+impl BuildSink {
+    /// The level-0 partitions a build that spilled keeps in memory
+    /// ([`hybrid::keep`]), at finalize: the budget is the query's memory
+    /// limit less what other consumers hold (this build's chunks count as
+    /// free, they are what is decided on).
+    fn resident(&self, g: &BuildGlobal, ctx: &TaskContext) -> u64 {
+        let pool = ctx.query().pool();
+        let Some(limit) = pool.effective_limit() else {
+            return 0;
+        };
+        let c = lock(&g.collect);
+        let spilled = g.spilled.load(Ordering::Acquire);
+        let marks = self.0.join_type.builds_preserved();
+        let mine: usize = c.parts.iter().map(Part::bytes).sum();
+        let budget = limit.saturating_sub(pool.reserved().saturating_sub(mine));
+        let parts: Vec<hybrid::Partition> = c
+            .parts
+            .iter()
+            .enumerate()
+            .map(|(p, part)| hybrid::Partition {
+                rows: part.rows,
+                resident_cost: (spilled & (1 << p) == 0)
+                    .then(|| build_need(part, g.hashing.rows(), marks))
+                    .flatten()
+                    .map(|(lasting, _, _)| part.bytes().saturating_add(lasting)),
+            })
+            .collect();
+        hybrid::keep(&parts, budget, ctx.executor().parallelism())
+    }
+}
+
 fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize, usize)> {
     if part.chunks.is_empty() {
         return None;
@@ -1215,13 +1248,24 @@ impl Sink for BuildSink {
             let mut index = ctx.consumer().reservation();
             let mut held_copy = 0;
             if s.spill.is_some() {
+                let mut decided = false;
                 held_copy = loop {
-                    // Once memory ran short, every partition goes to disk: the
-                    // probe phase then holds one partition's table per driver,
-                    // never tables that fill the budget and cannot spill.
-                    if g.spilled.load(Ordering::Acquire) != 0 {
-                        g.spilled
-                            .store(u64::MAX >> (64 - g.hashing.fanout0()), Ordering::Release);
+                    // Once memory ran short, the partitions that do not fit
+                    // go to disk: the probe phase then holds the resident
+                    // tables and one partition's table per driver, never
+                    // tables that fill the budget and cannot spill
+                    // (`hybrid::keep`; with `hybridResident` off, every
+                    // partition goes). Decided once: a later refusal below
+                    // spills one more partition at a time.
+                    if !decided && g.spilled.load(Ordering::Acquire) != 0 {
+                        decided = true;
+                        let all = u64::MAX >> (64 - g.hashing.fanout0());
+                        let keep = if ctx.query().config().join_hybrid_resident {
+                            self.resident(g, ctx)
+                        } else {
+                            0
+                        };
+                        g.spilled.fetch_or(all & !keep, Ordering::AcqRel);
                     }
                     let spilled = g.spilled.load(Ordering::Acquire);
                     let remnants = {

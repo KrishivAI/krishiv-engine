@@ -9,6 +9,7 @@
 
 mod existence;
 mod fused_probe;
+mod hybrid;
 mod idle;
 mod merge;
 mod payload_rows;

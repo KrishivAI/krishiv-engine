@@ -80,6 +80,9 @@ pub struct ExecConfig {
     /// arbitrator asks it to spill ahead of running consumers
     /// (`krishiv.exec.join.idleSpillAfter`).
     pub join_idle_spill_after: Duration,
+    /// A spilling hash join build keeps the partitions that fit in memory
+    /// (`krishiv.exec.join.hybridResident`), else it spills every one.
+    pub join_hybrid_resident: bool,
     /// Every pipeline runs on one driver, so the order of merges and of the
     /// output rows does not depend on how the drivers interleave, and the key
     /// hashes take a fixed seed (a constant unless
@@ -119,6 +122,7 @@ impl Default for ExecConfig {
             join_merge_buffer_bytes: 0,
             shared_broadcast_bytes: None,
             join_idle_spill_after: Duration::from_secs(1),
+            join_hybrid_resident: true,
             deterministic_order: false,
             union_output_partitioning: true,
             coalesce_input: true,
@@ -170,6 +174,10 @@ impl ExecConfig {
             .get(&krishiv_common::config::EXEC_JOIN_IDLE_SPILL_AFTER)
             .and_then(krishiv_common::config::ConfigValue::as_duration)
             .unwrap_or(Duration::from_secs(1));
+        let join_hybrid_resident = config
+            .get(&krishiv_common::config::EXEC_JOIN_HYBRID_RESIDENT)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
         let deterministic_order = config
             .get(&krishiv_common::config::DETERMINISTIC_ORDER)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
@@ -203,6 +211,7 @@ impl ExecConfig {
             join_merge_buffer_bytes,
             shared_broadcast_bytes,
             join_idle_spill_after,
+            join_hybrid_resident,
             union_output_partitioning,
             coalesce_input,
             ..Self::default()

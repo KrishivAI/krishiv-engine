@@ -307,6 +307,9 @@ struct Settings {
     /// `krishiv.exec.coalesceInput`; absent: the default.
     #[prost(bool, optional, tag = "18")]
     coalesce_input: Option<bool>,
+    /// `krishiv.exec.join.hybridResident`; absent: the default.
+    #[prost(bool, optional, tag = "19")]
+    join_hybrid_resident: Option<bool>,
 }
 
 fn wide(v: usize) -> u64 {
@@ -336,6 +339,7 @@ impl Settings {
             join_merge_buffer_bytes,
             shared_broadcast_bytes,
             join_idle_spill_after,
+            join_hybrid_resident,
             deterministic_order,
             union_output_partitioning,
             coalesce_input,
@@ -361,6 +365,7 @@ impl Settings {
             agg_direct_keys: Some(agg_direct_keys),
             union_output_partitioning: Some(union_output_partitioning),
             coalesce_input: Some(coalesce_input),
+            join_hybrid_resident: Some(join_hybrid_resident),
         }
     }
 
@@ -396,6 +401,9 @@ impl Settings {
             coalesce_input: self
                 .coalesce_input
                 .unwrap_or(ExecConfig::default().coalesce_input),
+            join_hybrid_resident: self
+                .join_hybrid_resident
+                .unwrap_or(ExecConfig::default().join_hybrid_resident),
         })
     }
 }

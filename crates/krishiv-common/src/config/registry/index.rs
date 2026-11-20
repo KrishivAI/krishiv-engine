@@ -140,6 +140,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_DEBUG_PLAN_ROUND_TRIP,
     ),
     (
+        "krishiv.exec.join.hybridResident",
+        &EXEC_JOIN_HYBRID_RESIDENT,
+    ),
+    (
         "krishiv.exec.join.idleSpillAfter",
         &EXEC_JOIN_IDLE_SPILL_AFTER,
     ),
