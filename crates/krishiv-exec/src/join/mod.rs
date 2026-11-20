@@ -441,7 +441,7 @@ const BUILD_COUNTERS: [(Counter, &str); 16] = [
     (Counter::MaxPartitionNs, "finalize_max_partition_ns"),
 ];
 /// The probe operator's counters, by name.
-const PROBE_COUNTERS: [(Counter, &str); 12] = [
+const PROBE_COUNTERS: [(Counter, &str); 10] = [
     (Counter::ProbeRows, "probe_rows"),
     (Counter::ProbeSpilledRows, "probe_spilled_rows"),
     (Counter::ProbeSpillBytes, "spill_file_bytes"),
@@ -452,8 +452,6 @@ const PROBE_COUNTERS: [(Counter, &str); 12] = [
     (Counter::GraceHashBuckets, "grace_hash_buckets"),
     (Counter::ReversedPartitions, "reversed_partitions"),
     (Counter::ProbeTableNs, "probe_table_ns"),
-    (Counter::GraceLoadsRefused, "grace_loads_refused"),
-    (Counter::GraceRefusedBytes, "grace_refused_bytes"),
 ];
 /// The probe operator's per-lookup counters (detailed metrics only).
 const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
@@ -537,6 +535,13 @@ impl Counters {
             out.extend(self.report(&[
                 (Counter::IdleSpills, "idle_spills"),
                 (Counter::IdleSpilledBytes, "idle_spilled_bytes"),
+            ]));
+        }
+        // Only a grace join that had a partition load refused reports it.
+        if self.get(Counter::GraceLoadsRefused) > 0 {
+            out.extend(self.report(&[
+                (Counter::GraceLoadsRefused, "grace_loads_refused"),
+                (Counter::GraceRefusedBytes, "grace_refused_bytes"),
             ]));
         }
         // Only a join that fell back to sort-merge reports it.

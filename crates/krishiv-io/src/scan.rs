@@ -461,11 +461,15 @@ impl ScanStream {
         if target > held {
             // Over-committed bytes are counted when the share drops them
             // (`settle_share`, `end_unit`), which also covers revoked ones.
-            let waiting = tokio::time::Instant::now();
-            let got = gate.acquire(id, target - held).await;
-            let waited = u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX);
-            self.gate_wait_ns = self.gate_wait_ns.saturating_add(waited);
-            got?;
+            // Only an acquire that could not be granted at once is a wait
+            // (`decode_gate_wait_ns`).
+            if !gate.try_acquire(id, target - held) {
+                let waiting = tokio::time::Instant::now();
+                let got = gate.acquire(id, target - held).await;
+                let waited = u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX);
+                self.gate_wait_ns = self.gate_wait_ns.saturating_add(waited);
+                got?;
+            }
         }
         Ok(())
     }

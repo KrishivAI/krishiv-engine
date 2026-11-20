@@ -265,6 +265,28 @@ impl ScanGate {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Grows stream `id`'s share by `bytes` when that needs no wait: the
+    /// share stays within the budget (or no other stream is active) and the
+    /// pool has room. `false` leaves the share as it was.
+    pub(crate) fn try_acquire(&self, id: u64, bytes: usize) -> bool {
+        let inner = &self.inner;
+        let mut st = inner.state();
+        Self::grant_now(inner, &mut st, id, bytes)
+    }
+
+    /// The fast path of [`acquire`](Self::acquire) under the state lock.
+    fn grant_now(inner: &Inner, st: &mut State, id: u64, bytes: usize) -> bool {
+        let mut share = st.get(id);
+        let others = st.active - usize::from(share.active());
+        let within = st.bytes.saturating_add(bytes) <= inner.budget;
+        if (within || others == 0) && inner.try_reserve(bytes) {
+            share.reserved = share.reserved.saturating_add(bytes);
+            inner.set(st, id, share);
+            return true;
+        }
+        false
+    }
+
     /// Grows stream `id`'s share by `bytes` (module docs, admission), and
     /// returns how many of them are over-committed.
     ///
@@ -279,14 +301,11 @@ impl ScanGate {
             released.as_mut().enable();
             let claimed = {
                 let mut st = inner.state();
-                let mut share = st.get(id);
-                let others = st.active - usize::from(share.active());
-                let within = st.bytes.saturating_add(bytes) <= inner.budget;
-                if (within || others == 0) && inner.try_reserve(bytes) {
-                    share.reserved = share.reserved.saturating_add(bytes);
-                    inner.set(&mut st, id, share);
+                if Self::grant_now(inner, &mut st, id, bytes) {
                     return Ok(0);
                 }
+                let mut share = st.get(id);
+                let others = st.active - usize::from(share.active());
                 if others > 0 && share.bytes() == 0 {
                     false
                 } else {

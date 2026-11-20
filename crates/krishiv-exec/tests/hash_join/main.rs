@@ -735,6 +735,8 @@ async fn a_partition_that_fits_after_others_spill_is_not_repartitioned() {
     // The load next to the hog's memory was refused once, then retried
     // alone with the arbitrator.
     assert!(metric(&q, "HashJoinProbe", "grace_loads_refused") > 0);
+    // That load had read rows before it was refused.
+    assert!(metric(&q, "HashJoinProbe", "grace_refused_bytes") > 0);
     hog.abort();
     assert_eq!(spill_files(&scope), 0);
 }
