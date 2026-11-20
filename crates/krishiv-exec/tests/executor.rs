@@ -2068,5 +2068,7 @@ async fn a_flush_step_on_the_blocking_pool_is_compute_time() {
     assert_eq!(rows(&out), 1_000);
     let m = waiting_flush_metrics(&q);
     assert!(m.compute_time >= Duration::from_millis(300), "{m:?}");
+    // The pool work is not pending time.
+    assert!(m.blocked_on_io < Duration::from_millis(300), "{m:?}");
     assert_released(&root);
 }
