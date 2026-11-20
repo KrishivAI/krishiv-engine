@@ -7,6 +7,7 @@
 #![cfg(not(loom))]
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
+mod columnar_payload;
 mod existence;
 mod fused_probe;
 mod idle;
@@ -771,36 +772,41 @@ async fn skewed_fails_at_the_depth_limit(join_row_layout: bool) {
 async fn deterministic_mode_replays_spilling_joins() {
     let build = skewed(20_000, 8_000);
     let probe = skewed(20_000, 9_000);
-    let once = || async {
-        let runner = QueryRunner::new(TokioExecutor::deterministic(3).unwrap());
-        let root = root(2 * MIB);
-        let (_manager, scope) = spill();
-        let config = ExecConfig {
-            seed: Some(42),
-            ..ExecConfig::default()
+    // Both build payload forms: arrow rows under 2 MiB, Arrow columns (a
+    // smaller build) under 1 MiB, so each spills.
+    for (columnar, limit) in [(false, 2 * MIB), (true, MIB)] {
+        let once = || async {
+            let runner = QueryRunner::new(TokioExecutor::deterministic(3).unwrap());
+            let root = root(limit);
+            let (_manager, scope) = spill();
+            let config = ExecConfig {
+                seed: Some(42),
+                join_columnar_payload: columnar,
+                ..ExecConfig::default()
+            };
+            let q = query(&root, 1, config);
+            let plan = join(
+                case(JoinType::LeftOuter, 1, true, true).spec(Some(scope)),
+                scan(&schema(), batches(&data(&build), 500)),
+                scan(&schema(), batches(&data(&probe), 500)),
+            );
+            let out = run(&runner, plan, &q).await.unwrap();
+            assert_released(&root);
+            let seq: Vec<String> = out
+                .iter()
+                .flat_map(|b| render(std::slice::from_ref(b)))
+                .collect();
+            let spilled = metric(&q, "HashJoinBuild", "spilled_partitions");
+            (
+                seq,
+                spilled,
+                metric(&q, "HashJoinProbe", "probe_spilled_rows"),
+            )
         };
-        let q = query(&root, 1, config);
-        let plan = join(
-            case(JoinType::LeftOuter, 1, true, true).spec(Some(scope)),
-            scan(&schema(), batches(&data(&build), 500)),
-            scan(&schema(), batches(&data(&probe), 500)),
-        );
-        let out = run(&runner, plan, &q).await.unwrap();
-        assert_released(&root);
-        let seq: Vec<String> = out
-            .iter()
-            .flat_map(|b| render(std::slice::from_ref(b)))
-            .collect();
-        let spilled = metric(&q, "HashJoinBuild", "spilled_partitions");
-        (
-            seq,
-            spilled,
-            metric(&q, "HashJoinProbe", "probe_spilled_rows"),
-        )
-    };
-    let a = once().await;
-    assert!(a.1 > 0, "the run spills");
-    assert_eq!(a, once().await);
+        let a = once().await;
+        assert!(a.1 > 0, "the run spills (columnar: {columnar})");
+        assert_eq!(a, once().await);
+    }
 }
 
 /// Cancelling while the grace phase runs releases memory and files.
@@ -938,7 +944,14 @@ async fn run_self_join(
     spill: Option<SpillScope>,
 ) -> (Result<Vec<String>>, Arc<krishiv_exec::QueryContext>) {
     let root = root(limit);
-    let q = query(&root, 1, ExecConfig::default());
+    // The limits below are calibrated on the arrow-row payload: a columnar
+    // build of this schema is ~40% smaller in one chunk, so the same
+    // per-chunk overhead of many small chunks is a larger share of it.
+    let config = ExecConfig {
+        join_columnar_payload: false,
+        ..ExecConfig::default()
+    };
+    let q = query(&root, 1, config);
     let plan = join(
         case(JoinType::Inner, 1, false, false).spec(spill),
         scan(&schema(), batches(&data(build), chunk)),

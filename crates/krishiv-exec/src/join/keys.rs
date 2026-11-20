@@ -67,6 +67,9 @@ pub(crate) struct Hashing {
     /// Seeds `g` in the row layout.
     raw: u64,
     rows: bool,
+    /// The build payload is kept as Arrow columns (row layout only; design
+    /// `perf1-join-columnar-string-payload`).
+    columnar: bool,
     /// Level-0 radix bits (row layout).
     radix: u32,
 }
@@ -81,6 +84,7 @@ impl Hashing {
             seed: HashSeed::new(Some(raw)),
             raw,
             rows,
+            columnar: false,
             radix: PARTITION_BITS,
         }
     }
@@ -95,6 +99,18 @@ impl Hashing {
     /// Whether keys are in the row layout.
     pub(crate) fn rows(&self) -> bool {
         self.rows
+    }
+
+    /// The same keeping the build payload as Arrow columns when `columnar`
+    /// (only with keys in the row layout).
+    pub(crate) fn with_columnar(mut self, columnar: bool) -> Self {
+        self.columnar = columnar && self.rows;
+        self
+    }
+
+    /// Whether the build payload is kept as Arrow columns.
+    pub(crate) fn columnar(&self) -> bool {
+        self.columnar
     }
 
     /// Level-0 partitions of a join instance: `2^radix` in the row layout

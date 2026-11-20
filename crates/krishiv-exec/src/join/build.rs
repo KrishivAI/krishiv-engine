@@ -825,6 +825,8 @@ fn local_mut(local: &mut LocalState) -> Result<&mut BuildLocal> {
 pub(crate) enum Payload {
     Arrow(Rows),
     Rows(crate::rows::EncodedKeys),
+    /// The build columns themselves (an arena with Arrow payload columns).
+    Columns(Vec<ArrayRef>),
 }
 
 /// `hashes`: each row's stored hash (its key's, or a spread value for a
@@ -854,6 +856,19 @@ pub(crate) fn arena_chunk(
         }
         (Some(Payload::Rows(_)), None) => {
             return Err(internal("payload rows without a layout".to_owned()));
+        }
+        (Some(Payload::Columns(cols)), _) => {
+            let ids = rows
+                .iter()
+                .map(|&i| {
+                    u32::try_from(i).map_err(|_| internal("a build batch too large".to_owned()))
+                })
+                .collect::<Result<arrow_array::UInt32Array>>()?;
+            for c in cols {
+                let taken = arrow_select::take::take(c.as_ref(), &ids, None)
+                    .map_err(|e| internal(e.to_string()))?;
+                columns.push(super::compact_view(taken));
+            }
         }
         (None, _) => {}
     }
@@ -1221,6 +1236,7 @@ impl Sink for BuildSink {
             g.null_key.store(true, Ordering::Release);
         }
         let payload = match (s.row_payload(g.hashing.rows()), &s.payload) {
+            _ if g.hashing.columnar() => Some(Payload::Columns(columns.to_vec())),
             (Some(layout), _) => Some(Payload::Rows(layout.encode(columns)?)),
             (None, Some((conv, _))) => Some(Payload::Arrow(
                 conv.convert_columns(columns)
