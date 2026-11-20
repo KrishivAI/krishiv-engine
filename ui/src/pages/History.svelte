@@ -2,6 +2,7 @@
   import { createQuery } from "@tanstack/svelte-query";
   import { api, type Compare, type Query } from "../api";
   import { bytes, count, nanos, oneLine, when } from "../format";
+  import { consoleInfo } from "../console.svelte";
   import { Badge, stateVariant } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { fieldClass } from "$lib/components/ui/input";
@@ -23,7 +24,8 @@
       if (principal) p.set("principal", principal);
       return api(`/api/internal/history?${p}`);
     },
-    refetchInterval: 5000,
+    // Stored profiles do not change while the console is open.
+    refetchInterval: consoleInfo.mode === "profiles" ? false : 5000,
   }));
 
   function toggle(id: string) {
@@ -50,7 +52,7 @@
   ];
   const sign = (n: number) => (n > 0 ? "text-error" : n < 0 ? "text-success" : "");
 
-  const columns: Column[] = [
+  const allColumns: Column[] = [
     { key: "query", label: "Query", title: true },
     { key: "state", label: "State" },
     { key: "principal", label: "Principal" },
@@ -58,10 +60,16 @@
     { key: "wall", label: "Wall time", num: true },
     { key: "memory", label: "Peak memory", num: true },
   ];
+  // One session has one user: no principal column and no principal filter in an embedded console.
+  const onePrincipal = $derived(consoleInfo.mode === "embedded");
+  const columns = $derived(onePrincipal ? allColumns.filter((c) => c.key !== "principal") : allColumns);
   const numeric = (r: Query | Compare["a"], key: string) => (r as unknown as Record<string, number | null | undefined>)[key];
 </script>
 
 <h1 class="mb-4">History</h1>
+{#if consoleInfo.mode === "profiles"}
+  <p class="mb-3 text-muted-foreground">Saved profiles, read once when this console started. Nothing here is running.</p>
+{/if}
 <div class="mb-3 flex flex-wrap items-center gap-3">
   <label class="flex w-full items-center gap-2 sm:w-auto">State
     <select class={cn(fieldClass, "flex-1")} bind:value={stateFilter}>
@@ -71,9 +79,11 @@
       <option value="cancelled">cancelled</option>
     </select>
   </label>
-  <label class="flex w-full items-center gap-2 sm:w-auto">Principal
-    <input class={cn(fieldClass, "flex-1")} bind:value={principal} placeholder="any" size="14" />
-  </label>
+  {#if !onePrincipal}
+    <label class="flex w-full items-center gap-2 sm:w-auto">Principal
+      <input class={cn(fieldClass, "flex-1")} bind:value={principal} placeholder="any" size="14" />
+    </label>
+  {/if}
   <Button class="w-full sm:w-auto" disabled={picked.length !== 2} onclick={compare}>Compare the two selected</Button>
   {#if compareError}<span class="text-error">{compareError}</span>{/if}
 </div>

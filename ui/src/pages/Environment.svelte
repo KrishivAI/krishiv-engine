@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createQuery } from "@tanstack/svelte-query";
   import { api, type Environment } from "../api";
+  import { consoleInfo } from "../console.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { fieldClass } from "$lib/components/ui/input";
   import ResponsiveTable, { type Column } from "$lib/components/responsive-table.svelte";
@@ -23,7 +24,9 @@
 {#if q.isError}
   <p class="text-destructive wrap-anywhere">{(q.error as Error).message}</p>
 {:else if q.data}
-  <p class="mb-3 text-muted-foreground">Version {q.data.version}. Secrets show as <code>***</code>.</p>
+  <p class="mb-3 text-muted-foreground">
+    Version {q.data.version}. {consoleInfo.mode === "embedded" ? "The settings of this session. " : ""}Secrets show as <code>***</code>.
+  </p>
   <label class="mb-3 block">
     <span class="mb-1 block text-sm font-medium">Filter settings</span>
     <input class={fieldClass} type="search" bind:value={filter} placeholder="spark.sql" />

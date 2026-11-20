@@ -102,6 +102,10 @@ export interface CacheRow {
 
 export interface Health {
   version: string;
+  /** Which console this is; absent from a server older than the modes. */
+  mode?: "server" | "embedded" | "profiles";
+  /** The one session an `embedded` console shows. */
+  session_id?: string | null;
   uptime_seconds: number;
   workers: number;
   running_queries: number;

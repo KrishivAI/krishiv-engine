@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Snapshot check of the eight UI pages at phone, tablet and desktop widths, dark and light.
+"""Snapshot check of the eight UI pages at phone, tablet and desktop widths, dark and light, and of the pages the
+embedded and the profiles console show.
 
     uv run --with playwright python ui/tests/check_pages.py [SHOT_DIR]
 
@@ -282,14 +283,127 @@ def page_checks(origin: str) -> list[str]:
     return problems
 
 
+# What each mode's console shows and leaves out, beyond the server console the checks above cover:
+# (page, text that must be there, text that must not be).
+MODE_PAGES = {
+    "embedded": [
+        (
+            "#/health",
+            ["This session", "This process and the session", "Uptime"],
+            ["Workers"],
+        ),
+        ("#/queries", ["SELECT l_returnflag", "Cancel"], ["Principal"]),
+        ("#/history", ["DIVIDE_BY_ZERO", "State"], ["Principal"]),
+        ("#/resources", ["Memory pools and caches of this process"], []),
+        ("#/sql", ["Statements run in your session", "Run"], []),
+        ("#/environment", ["The settings of this session", "***"], []),
+    ],
+    # Every address but a query's own page opens the history: the mode has no other page.
+    "profiles": [
+        ("", ["Saved profiles", "History", "DIVIDE_BY_ZERO", "Principal"], ["Health"]),
+        ("#/health", ["DIVIDE_BY_ZERO"], ["Uptime", "Caches"]),
+        ("#/queries", ["DIVIDE_BY_ZERO"], ["Refreshes once a second"]),
+        ("#/sql", ["DIVIDE_BY_ZERO"], ["Ctrl or Cmd"]),
+        ("#/environment", ["DIVIDE_BY_ZERO"], ["Secrets show"]),
+        (
+            "#/queries/01932a40-1a00-7a01-8001-aaaaaaaaaa02",
+            ["HashJoin", "← History"],
+            ["← Queries"],
+        ),
+    ],
+}
+# The requests a console over stored profiles never makes: the pages behind them are not in the mode.
+PROFILES_NEVER = ("/events", "/environment", "/catalog", "/sql", "/resources")
+
+
+def mode_checks() -> list[str]:
+    """The embedded and the profiles console: each shows its own pages and marks which console it is."""
+    problems: list[str] = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        for mode, pages in MODE_PAGES.items():
+            server = fixture_server.serve(mode=mode)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            origin = f"http://127.0.0.1:{server.server_address[1]}"
+            for label, width, height in (VIEWPORTS[0], VIEWPORTS[-1]):
+                ctx = browser.new_context(
+                    viewport={"width": width, "height": height},
+                    has_touch=label in PHONES,
+                    is_mobile=label in PHONES,
+                )
+                page = ctx.new_page()
+                errors: list[str] = []
+                page.on("pageerror", lambda e, errors=errors: errors.append(str(e)))
+                page.goto(f"{origin}/?token=fixture")
+                page.locator(f'[data-console-mode="{mode}"]').wait_for(timeout=10000)
+                for frag, wanted, unwanted in pages:
+                    view = f"{mode} {frag or '(no page)'} {label}"
+                    page.evaluate(f"window.location.hash = {frag!r}")
+                    page.wait_for_timeout(700)
+                    body = page.inner_text("main").lower()
+                    if label == "desktop":
+                        body += page.inner_text("header").lower()
+                        problems += [
+                            f"{view}: missing text {t!r}"
+                            for t in wanted
+                            if t.lower() not in body
+                        ]
+                    main = page.inner_text("main").lower()
+                    problems += [
+                        f"{view}: shows {t!r}, which this mode does not have"
+                        for t in unwanted
+                        if t.lower() in main
+                    ]
+                    wide = page.evaluate(
+                        "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+                    )
+                    if wide > 0:
+                        problems.append(
+                            f"{view}: the page scrolls sideways ({wide}px too wide)"
+                        )
+                    if label in PHONES:
+                        problems += [
+                            f"{view}: touch target under 40 px: {s}"
+                            for s in page.evaluate(SMALL_TARGETS)
+                        ]
+                if label == "desktop":
+                    links = page.locator("header nav a").all_inner_texts()
+                    if mode == "profiles" and links != ["History"]:
+                        problems.append(
+                            f"profiles: the menu lists {links}, not only History"
+                        )
+                    if mode == "embedded" and len(links) != len(PAGES) - 1:
+                        problems.append(f"embedded: the menu lists {links}")
+                    tail = fixture_server.SESSION_ID[-8:]
+                    if mode == "embedded" and tail not in page.inner_text("header"):
+                        problems.append(
+                            "embedded: the header does not show the session's id"
+                        )
+                problems += [f"{mode} {label}: page error: {e}" for e in errors]
+                ctx.close()
+            if mode == "profiles":
+                problems += [
+                    f"profiles: the page asked for {path}"
+                    for path in sorted(set(server.asked))
+                    if path.endswith(PROFILES_NEVER)
+                    or "/catalog/" in path
+                    or path == "/api/internal/queries"
+                ]
+            server.shutdown()
+        browser.close()
+    return problems
+
+
 if __name__ == "__main__":
     found = check(Path(sys.argv[1]) if len(sys.argv) > 1 else None)
     server = fixture_server.serve()
     threading.Thread(target=server.serve_forever, daemon=True).start()
     found += page_checks(f"http://127.0.0.1:{server.server_address[1]}")
+    found += mode_checks()
     print(
         "\n".join(found)
         if found
-        else "ui pages: ok (8 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe)"
+        else "ui pages: ok (8 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, "
+        "embedded and profiles consoles)"
     )
     sys.exit(1 if found else 0)

@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Serves the built UI and a fixture `/api/internal/*`, for the page snapshot check and for looking at the pages.
 
-    python ui/tests/fixture_server.py [--port 0]    # prints the port; the token is `fixture`
+    python ui/tests/fixture_server.py [--port 0] [--mode server|embedded|profiles]
+    # prints the address; the token is `fixture`
 
 The routes and JSON shapes are those of `krishiv_server::internal`; the data is `fixtures.json`. The event stream
-sends the live list once a second, as the real one does.
+sends the live list once a second, as the real one does. `--mode` chooses which console the fixture is: `embedded`
+reports one session and lists only its queries; `profiles` has the history and a query's page and refuses the rest,
+as the real sources do.
 """
 
 from __future__ import annotations
@@ -79,11 +82,22 @@ CATALOG = {
 }
 # Editor runs: a statement containing `sleep` stays running until it is cancelled.
 RUNS: dict[str, dict] = {}
+MODES = ("server", "embedded", "profiles")
+SESSION_ID = "01932a40-1a00-7a01-8001-5e5510000001"
+# What a console over stored profiles answers: the history, a query's page and the health the page reads its mode from.
+PROFILES_ROUTES = (
+    "/api/internal/health",
+    "/api/internal/history",
+    "/api/internal/queries/",
+    "/api/internal/compare",
+)
 
 
-def route(path: str) -> object | None:
+def route(path: str, mode: str = "server") -> object | None:
     d = DATA
     parts = path.split("/")
+    if mode == "profiles" and not path.startswith(PROFILES_ROUTES):
+        return None
     if path == "/api/internal/environment":
         return ENVIRONMENT
     if path == "/api/internal/catalog/catalogs":
@@ -97,7 +111,10 @@ def route(path: str) -> object | None:
     if path.startswith("/api/internal/sql/") and parts[-1] in RUNS:
         return RUNS[parts[-1]]
     if path == "/api/internal/health":
-        return d["health"]
+        return d["health"] | {
+            "mode": mode,
+            "session_id": SESSION_ID if mode == "embedded" else None,
+        }
     if path == "/api/internal/queries":
         return {"queries": d["live"]}
     if path == "/api/internal/history":
@@ -112,6 +129,10 @@ def route(path: str) -> object | None:
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_: object) -> None:
         pass
+
+    @property
+    def mode(self) -> str:
+        return self.server.mode  # type: ignore[attr-defined]
 
     def end_headers(self) -> None:
         self.send_header("Content-Security-Policy", CSP)
@@ -141,7 +162,8 @@ class Handler(BaseHTTPRequestHandler):
                         "message": "a valid UI token is required",
                     },
                 )
-            if url.path == "/api/internal/events":
+            self.server.asked.append(url.path)  # type: ignore[attr-defined]
+            if url.path == "/api/internal/events" and self.mode != "profiles":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-store")
@@ -158,7 +180,7 @@ class Handler(BaseHTTPRequestHandler):
                         time.sleep(1)
                 except (BrokenPipeError, ConnectionResetError):
                     return None
-            body = route(url.path)
+            body = route(url.path, self.mode)
             return (
                 self.send_json(200, body)
                 if body is not None
@@ -221,13 +243,21 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"cancelled": True})
 
 
-def serve(port: int = 0) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+def serve(port: int = 0, mode: str = "server") -> ThreadingHTTPServer:
+    """The fixture server as a console of `mode`; `asked` collects the `/api/internal/*` paths pages requested."""
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server.mode = mode  # type: ignore[attr-defined]
+    server.asked = []  # type: ignore[attr-defined]
+    return server
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=0)
-    server = serve(ap.parse_args().port)
+    ap.add_argument("--mode", choices=MODES, default="server")
+    args = ap.parse_args()
+    server = serve(args.port, args.mode)
     print(f"http://127.0.0.1:{server.server_address[1]}/?token={TOKEN}", flush=True)
     server.serve_forever()

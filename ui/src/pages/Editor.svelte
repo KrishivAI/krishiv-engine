@@ -4,6 +4,7 @@
   import { keymap } from "@codemirror/view";
   import { sql } from "@codemirror/lang-sql";
   import { api, type SqlRun } from "../api";
+  import { consoleInfo } from "../console.svelte";
   import { Badge, stateVariant } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
 
@@ -110,6 +111,12 @@
 </script>
 
 <h1 class="mb-4">SQL</h1>
+{#if consoleInfo.mode === "embedded"}
+  <p class="mb-3 text-muted-foreground">
+    Statements run in your session: its temporary views, settings and variables are here, and what a statement
+    changes stays changed for your program.
+  </p>
+{/if}
 <div bind:this={host} class="mb-3 overflow-hidden rounded-md border border-border"></div>
 <div class="mb-3 flex flex-wrap items-center gap-3">
   <Button onclick={start} disabled={run?.state === "running"}>Run</Button>
