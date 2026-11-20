@@ -186,3 +186,96 @@ fn rename_and_drop_keep_the_qualifier_of_untouched_columns_and_to_df_clears_it()
     let to_df = ColumnNamesOp::ToDf(strings(&["a", "year", "c"]));
     assert!(run_on(false, input(), to_df, read_year).is_err());
 }
+
+fn literal(l: crate::Literal) -> Arc<Expr> {
+    Arc::new(Expr::literal(l))
+}
+
+fn fill(cols: &[&str], values: Vec<Arc<Expr>>) -> ColumnNamesOp {
+    ColumnNamesOp::FillNa {
+        cols: strings(cols),
+        values,
+    }
+}
+
+#[test]
+fn drop_na_keeps_the_columns_and_filters() {
+    for min in [None, Some(1), Some(0)] {
+        let op = ColumnNamesOp::DropNa {
+            subset: vec![],
+            min_non_nulls: min,
+        };
+        assert_eq!(
+            names(run(false, op)),
+            strings(&["course", "year", "earnings"])
+        );
+    }
+    let op = ColumnNamesOp::DropNa {
+        subset: strings(&["YEAR"]),
+        min_non_nulls: None,
+    };
+    let plan = run(false, op).expect("a subset by name");
+    assert!(
+        format!("{plan:?}").contains("Filter"),
+        "a filter over the input: {plan:?}"
+    );
+}
+
+#[test]
+fn drop_na_of_an_unknown_column_is_unresolved() {
+    let op = ColumnNamesOp::DropNa {
+        subset: strings(&["nope"]),
+        min_non_nulls: None,
+    };
+    let Err(e) = run(false, op) else {
+        panic!("expected UNRESOLVED_COLUMN")
+    };
+    assert!(e.to_string().contains("UNRESOLVED_COLUMN"), "{e}");
+}
+
+#[test]
+fn fill_na_keeps_names_and_types_and_reaches_by_type() {
+    use crate::Literal;
+    let all = |v| run(false, fill(&[], vec![literal(v)])).expect("fill all columns");
+    // A number reaches the two integer columns; a string only `course`.
+    for plan in [all(Literal::Long(0)), all(Literal::String("x".into()))] {
+        let types: Vec<_> = plan.output.iter().map(|c| c.data_type.clone()).collect();
+        assert_eq!(
+            types,
+            vec![DataType::String, DataType::Integer, DataType::Integer]
+        );
+    }
+    let numeric = format!("{:?}", all(Literal::Long(0)));
+    let text = format!("{:?}", all(Literal::String("x".into())));
+    assert!(numeric.contains("coalesce") && text.contains("coalesce"));
+    assert_ne!(numeric, text);
+    // A named column, case-insensitively; a boolean reaches none, so the input is unchanged.
+    let named = run(false, fill(&["YEAR"], vec![literal(Literal::Long(7))])).expect("named");
+    assert_eq!(named.output.len(), 3);
+    let none = run(false, fill(&[], vec![literal(Literal::Boolean(true))])).expect("no target");
+    assert!(!format!("{none:?}").contains("coalesce"), "{none:?}");
+}
+
+#[test]
+fn fill_na_pairs_values_with_columns() {
+    use crate::Literal;
+    let op = fill(
+        &["course", "year"],
+        vec![
+            literal(Literal::String("none".into())),
+            literal(Literal::Long(1)),
+        ],
+    );
+    assert_eq!(
+        names(run(false, op)),
+        strings(&["course", "year", "earnings"])
+    );
+}
+
+#[test]
+fn fill_na_of_an_untyped_value_is_unsupported() {
+    let Err(e) = run(false, fill(&[], vec![literal(crate::Literal::Null(None))])) else {
+        panic!("expected an error")
+    };
+    assert!(e.to_string().contains("UNSUPPORTED"), "{e}");
+}

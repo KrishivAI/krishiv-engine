@@ -982,6 +982,25 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     self.strs(names);
                     self.strs(columns);
                 }
+                crate::ColumnNamesOp::DropNa {
+                    subset,
+                    min_non_nulls,
+                } => {
+                    self.u8(3);
+                    self.strs(subset);
+                    match min_non_nulls {
+                        Some(n) => {
+                            self.u8(1);
+                            self.u32(*n);
+                        }
+                        None => self.u8(0),
+                    }
+                }
+                crate::ColumnNamesOp::FillNa { cols, values } => {
+                    self.u8(4);
+                    self.strs(cols);
+                    self.exprs(values);
+                }
             },
             PlanNode::CollectMetrics { name, metrics, .. } => {
                 self.str(name);

@@ -121,6 +121,17 @@ impl Translator<'_> {
                 name: h.name.clone(),
                 params: self.expressions(&h.parameters)?,
             },
+            RelType::FillNa(n) => self.na_fill(n)?,
+            RelType::DropNa(n) => {
+                let min = n.min_non_nulls.map(|m| u32::try_from(m).unwrap_or(0));
+                PlanNode::ColumnNames {
+                    input: self.input("NaDrop", n.input.as_deref())?,
+                    op: ColumnNamesOp::DropNa {
+                        subset: n.cols.clone(),
+                        min_non_nulls: min,
+                    },
+                }
+            }
             RelType::Repartition(r) => PlanNode::Hint {
                 input: self.input("Repartition", r.input.as_deref())?,
                 // Spark's own hint forms: `repartition(n)` is `REPARTITION(n)`, and
@@ -196,6 +207,33 @@ impl Translator<'_> {
                 upper: s.upper_bound,
             },
             seed: s.seed,
+        })
+    }
+
+    /// `NAFill`: Spark's `transformFillNa`. No values, or several values that don't pair with
+    /// the columns, are `CONNECT_INVALID_PLAN` errors; the type each value fills is decided by
+    /// the analyzer, which knows the columns' types.
+    fn na_fill(&mut self, n: &pb::NaFill) -> Result<PlanNode> {
+        use krishiv_common::error::{
+            ConnectInvalidPlanNaFillValuesEmpty, ConnectInvalidPlanNaFillValuesLengthMismatch,
+        };
+        if n.values.is_empty() {
+            return Err(ConnectInvalidPlanNaFillValuesEmpty {}.into());
+        }
+        if n.values.len() > 1 && n.values.len() != n.cols.len() {
+            return Err(ConnectInvalidPlanNaFillValuesLengthMismatch {}.into());
+        }
+        let values = n
+            .values
+            .iter()
+            .map(|l| self.literal_expression(l))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(PlanNode::ColumnNames {
+            input: self.input("NaFill", n.input.as_deref())?,
+            op: ColumnNamesOp::FillNa {
+                cols: n.cols.clone(),
+                values,
+            },
         })
     }
 

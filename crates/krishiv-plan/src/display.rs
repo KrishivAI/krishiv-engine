@@ -418,6 +418,26 @@ impl Display for NodeLine<'_> {
                     }
                     Ok(())
                 }
+                crate::ColumnNamesOp::DropNa {
+                    subset,
+                    min_non_nulls,
+                } => {
+                    f.write_str("DropNa")?;
+                    if let Some(n) = min_non_nulls {
+                        write!(f, " min {n}")?;
+                    }
+                    if !subset.is_empty() {
+                        write!(f, " {}", Names(subset))?;
+                    }
+                    Ok(())
+                }
+                crate::ColumnNamesOp::FillNa { cols, values } => {
+                    write!(f, "FillNa ({})", List(values))?;
+                    if !cols.is_empty() {
+                        write!(f, " {}", Names(cols))?;
+                    }
+                    Ok(())
+                }
             },
             PlanNode::Repartition { exprs, .. } => write!(f, "Repartition ({})", List(exprs)),
             PlanNode::CollectMetrics { name, metrics, .. } => {

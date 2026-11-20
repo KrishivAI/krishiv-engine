@@ -1346,6 +1346,48 @@ fn repartition_and_coalesce_plan_as_their_hints() {
 }
 
 #[test]
+fn na_fill_and_na_drop_translate_and_check_their_values() {
+    let long = |v: i64| pb::expression::Literal {
+        literal_type: Some(pb::expression::literal::LiteralType::Long(v)),
+        data_type: None,
+    };
+    let fill = |cols: Vec<&str>, values: Vec<pb::expression::Literal>| {
+        relation(RelType::FillNa(Box::new(pb::NaFill {
+            input: input(),
+            cols: cols.into_iter().map(String::from).collect(),
+            values,
+        })))
+    };
+    let PlanNode::ColumnNames { op, .. } = node(&fill(vec!["a"], vec![long(1)])) else {
+        panic!("not a ColumnNames node")
+    };
+    assert!(matches!(op, ColumnNamesOp::FillNa { .. }));
+    assert_eq!(
+        code(&fill(vec!["a"], vec![])),
+        ErrorClass::ConnectInvalidPlanNaFillValuesEmpty
+    );
+    assert_eq!(
+        code(&fill(vec!["a"], vec![long(1), long(2)])),
+        ErrorClass::ConnectInvalidPlanNaFillValuesLengthMismatch
+    );
+    let drop = relation(RelType::DropNa(Box::new(pb::NaDrop {
+        input: input(),
+        cols: vec!["a".into()],
+        min_non_nulls: Some(2),
+    })));
+    let PlanNode::ColumnNames { op, .. } = node(&drop) else {
+        panic!("not a ColumnNames node")
+    };
+    assert_eq!(
+        op,
+        ColumnNamesOp::DropNa {
+            subset: vec!["a".into()],
+            min_non_nulls: Some(2)
+        }
+    );
+}
+
+#[test]
 fn unpivot_plans_as_unpivot_include_nulls() {
     let rel = relation(RelType::Unpivot(Box::new(pb::Unpivot {
         input: input(),

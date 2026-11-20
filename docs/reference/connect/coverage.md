@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 13 done, 17 partial, 28 missing, 4 out of scope.
+62 arms: 15 done, 17 partial, 26 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -60,8 +60,8 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 46 | relation_changes | missing |  | CDC read (DataFrameReader.changes()): Delta change data feed through table_changes; the Iceberg changelog and is_streaming come later | P3-T021b | 8 |
 | 47 | nearest_by_join | missing |  | top-k per left row by a ranking expression: new NearestByJoin, planned on T077's top-k (num_results 1–100,000) | P3-T077 | 8 |
 | 48 | zip | missing |  | new Zip (columns of two inputs side by side, by row position) | P3-T012 | 3 |
-| 90 | fill_na | missing |  | lowering: Project of coalesce / nanvl by type; NA_FILL_VALUES_EMPTY, NA_FILL_VALUES_LENGTH_MISMATCH | P3-T012 | 5 |
-| 91 | drop_na | missing |  | lowering: Filter on non-null counts (how, thresh, subset) | P3-T012 | 5 |
+| 90 | fill_na | done |  | ColumnNames(FillNa): the analyzer projects coalesce / nanvl of the cast value in the columns the value's type reaches; NA_FILL_VALUES_EMPTY, NA_FILL_VALUES_LENGTH_MISMATCH | P3-T012 | 5 |
+| 91 | drop_na | done |  | ColumnNames(DropNa): the analyzer filters on the count of values that are neither NULL nor NaN (min_non_nulls, else every column of the subset) | P3-T012 | 5 |
 | 92 | replace | missing |  | lowering: Project of CASE per column | P3-T012 | 5 |
 | 100 | summary | missing |  | lowering as Spark's StatFunctions.summary: Aggregate then a stack to rows | P3-T012 | 5 |
 | 101 | crosstab | missing |  | lowering: Aggregate count + Pivot | P3-T012 | 5 |

@@ -922,6 +922,25 @@ impl Encoder {
                             self.text(n);
                         }
                     }
+                    crate::ColumnNamesOp::DropNa {
+                        subset,
+                        min_non_nulls,
+                    } => {
+                        self.num(3);
+                        self.num(subset.len() as u64);
+                        for n in subset {
+                            self.text(n);
+                        }
+                        self.num(min_non_nulls.map_or(0, |n| u64::from(n) + 1));
+                    }
+                    crate::ColumnNamesOp::FillNa { cols, values } => {
+                        self.num(4);
+                        self.num(cols.len() as u64);
+                        for n in cols {
+                            self.text(n);
+                        }
+                        self.exprs(values, bias);
+                    }
                 }
                 self.plan(input, bias);
             }

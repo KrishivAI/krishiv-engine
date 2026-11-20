@@ -132,6 +132,29 @@ pub enum ColumnNamesOp {
         /// Column references resolved over the input.
         columns: Vec<String>,
     },
+    /// `na.drop`: keeps the rows with at least `min_non_nulls` values that are neither NULL
+    /// nor, for a float or double column, NaN, among the columns `subset` names (all of the
+    /// input's columns when it is empty), as Spark's `AtLeastNNonNulls`. `None` is Spark's
+    /// `how = "any"`: every column of the subset must hold one. A name that matches no column
+    /// is `UNRESOLVED_COLUMN`.
+    DropNa {
+        /// The columns looked at.
+        subset: Vec<String>,
+        /// The least count of values that count.
+        min_non_nulls: Option<u32>,
+    },
+    /// `na.fill`: a NULL (and a NaN, in a float or double column) becomes the value, in the
+    /// columns whose type the value's matches (Spark's `DataFrameNaFunctions.fillValue`: a
+    /// number fills a numeric column, a string a string column, a boolean a boolean column; the
+    /// value is cast to the column's type). With no `cols` the single value goes to every
+    /// column; with one value it goes to the named `cols`; otherwise `values[i]` goes to
+    /// `cols[i]`.
+    FillNa {
+        /// The named columns.
+        cols: Vec<String>,
+        /// Literal expressions.
+        values: Vec<Arc<Expr>>,
+    },
 }
 
 /// The relation node kinds.
