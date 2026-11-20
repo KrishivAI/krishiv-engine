@@ -24,7 +24,7 @@ fn strings(f: &Arc<dyn super::ScalarFunction>, rows: usize, partition: u32) -> V
 fn version_reports_the_kernels_release_line() {
     let f = bind("version", &[]);
     assert_eq!(f.return_type(), &DataType::Utf8);
-    assert_eq!(strings(&f, 3, 0), vec!["4.2.0"; 3]);
+    assert_eq!(strings(&f, 3, 0), vec!["4.3.0"; 3]);
     // The line follows the kernels' Spark version.
     let opts = BindOptions::new().with_kernel(
         krishiv_kernels::KernelCtx::new().with_spark_version(krishiv_kernels::SparkVersion::V4_0),

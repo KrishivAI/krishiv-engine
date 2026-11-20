@@ -68,6 +68,7 @@ fn release(kernel: SparkVersion) -> Result<&'static str, KrishivError> {
         SparkVersion::V4_0 => Ok("4.0.0"),
         SparkVersion::V4_1 => Ok("4.1.0"),
         SparkVersion::V4_2 => Ok("4.2.0"),
+        SparkVersion::V4_3 => Ok("4.3.0"),
         _ => Err(internal(
             "a Spark version with no release string".to_owned(),
         )),
