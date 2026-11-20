@@ -856,3 +856,26 @@ fn max_records_per_file_reaches_a_catalog_append() {
     );
     assert_eq!(rows(), 15);
 }
+
+#[test]
+fn a_bucketed_save_as_table_of_delta_is_refused_before_the_table_exists() {
+    let s = Session::new().unwrap();
+    let e = block_on(
+        block_on(s.sql("SELECT CAST(1 AS BIGINT) AS id"))
+            .unwrap()
+            .write()
+            .format("delta")
+            .bucket_by(4, ["id"])
+            .save_as_table("bt"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::UnsupportedFeatureTableOperation,
+        "{e}"
+    );
+    assert!(
+        block_on(s.sql("SELECT * FROM bt")).is_err(),
+        "no table was registered"
+    );
+}

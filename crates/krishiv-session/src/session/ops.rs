@@ -461,7 +461,7 @@ impl Session {
                 dynamic,
             )
             .await?
-            .map(|w| w.partitioned(!partitions.is_empty())) else {
+            .map(|w| w.partitioned(!partitions.is_empty() || bucket.is_some())) else {
                 // `ignore` found the path: nothing is written.
                 return Ok(Vec::new());
             };

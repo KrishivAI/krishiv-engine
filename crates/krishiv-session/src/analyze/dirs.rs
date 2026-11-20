@@ -9,7 +9,7 @@
 //!   partition, a directory that is not inside the warehouse);
 //! - `INSERT INTO|OVERWRITE` (each clause, a multi-table insert too): `MODIFY` and `CREATE` on the table's
 //!   location, existing or not, as the writer asks them (`Session::authorize_write_path`); not for a
-//!   clause the run refuses before it writes (`REPLACE`, `OVERWRITE ... PARTITION`, a bucketed table). A
+//!   clause the run refuses before it writes (`REPLACE`, `OVERWRITE ... PARTITION`). A
 //!   multi-table insert with a table that cannot be found lists none: the run resolves every target before
 //!   any clause writes, so it fails before it asks. A Delta table's clause lists nothing: its writer
 //!   commits to the log the table's own `MODIFY` covers and asks about no directory (`insert_delta`);
@@ -20,7 +20,7 @@
 //!   then `CREATE` on the new table's location as `add_table` asks it (`location_asked`: a managed table's directory, a `LOCATION` or `path` option, a relative one
 //!   qualified against the working directory, an object store's URL); a managed CTAS asks `MODIFY` and
 //!   `CREATE` on its directory first, then its write asks both on the location as the writer locates it
-//!   (not for a bucketed table, which the writer refuses); nothing when the table exists (`IF NOT EXISTS`
+//!   (a bucketed table's too); nothing when the table exists (`IF NOT EXISTS`
 //!   too), when a managed table's directory is already there, or for a refusal before (`OR REPLACE` and
 //!   `REPLACE TABLE`, a missing namespace, a managed table without columns, a clause Krishiv refuses);
 //! - `ALTER TABLE ... RENAME TO` of a managed table: `MODIFY` on its directory (when it exists) and `CREATE`
@@ -133,7 +133,7 @@ impl Session {
                     let delta = crate::table_commands::is_delta_table(table);
                     #[cfg(not(feature = "delta"))]
                     let delta = false;
-                    if !refused && !delta && table.layout.bucket.is_none() {
+                    if !refused && !delta {
                         self.push_location(table, env, &mut out);
                     }
                 }

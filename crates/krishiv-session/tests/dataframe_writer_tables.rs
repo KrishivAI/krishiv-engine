@@ -742,3 +742,23 @@ fn rows_land_in_the_bucket_spark_puts_them_in() {
         Some(3)
     );
 }
+
+#[test]
+fn an_empty_bucketed_write_leaves_no_file_with_the_helper_column() {
+    let s = session();
+    let none = s.table("people").filter(col("id").gt(lit(100)));
+    block_on(none.write().bucket_by(2, ["id"]).save_as_table("eb")).unwrap();
+    assert_eq!(count(&s, "eb"), 0);
+    // An append of an empty frame to it is the same.
+    let none = s.table("people").filter(col("id").gt(lit(100)));
+    block_on(
+        none.write()
+            .bucket_by(2, ["id"])
+            .mode("append")
+            .save_as_table("eb"),
+    )
+    .unwrap();
+    assert_eq!(count(&s, "eb"), 0);
+    let schema = block_on(s.table("eb").schema()).unwrap();
+    assert_eq!(schema.fields().len(), 2, "no bucket id column: {schema:?}");
+}
