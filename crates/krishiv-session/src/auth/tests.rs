@@ -1092,7 +1092,7 @@ fn basic(user: &str, password: &str) -> super::BasicCredentials {
     let encoded = basic_b64(format!("{user}:{password}").as_bytes());
     match basic_header(&format!("Basic {encoded}")) {
         BasicHeader::Credentials(c) => c,
-        other => panic!("{other:?}"),
+        _ => panic!("not credentials"),
     }
 }
 
@@ -1144,7 +1144,7 @@ fn basic_binds_the_user_name_to_the_token_principal() {
             &Credentials::new(peer(21), Surface::FlightSql).with_basic(c),
             now,
         );
-        assert_eq!(r, Err(AuthFailure::Invalid), "{c:?}");
+        assert_eq!(r, Err(AuthFailure::Invalid), "user {}", c.user());
     }
     // Off the Flight surface: refused even with the right pair, not counted as a guess.
     let r = auth.authenticate_at(
@@ -1182,6 +1182,6 @@ fn basic_binds_the_user_name_to_the_token_principal() {
     );
     assert!(
         shown.contains("alice") && !shown.contains(TOKEN_A),
-        "{shown}"
+        "Debug shows the user name and never the password"
     );
 }

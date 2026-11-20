@@ -841,6 +841,37 @@ mod tests {
     use super::*;
     use krishiv_common::error::{ErrorClass, KrishivSpillIoError};
 
+    /// Note §17 A3: each top-level decimal column of an announced schema carries Flight SQL's
+    /// precision and scale; other columns, and the metadata a field had, are kept as they were.
+    #[test]
+    fn described_decimals_carry_precision_and_scale() {
+        let kept = std::collections::HashMap::from([("k".to_owned(), "v".to_owned())]);
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("d", DataType::Decimal128(25, 2), true).with_metadata(kept.clone()),
+                Field::new("w", DataType::Decimal256(40, 0), true),
+                Field::new("s", DataType::Utf8, true),
+            ],
+            kept.clone(),
+        );
+        let out = described(&schema);
+        let meta = |i: usize, key: &str| out.field(i).metadata().get(key).cloned();
+        assert_eq!(meta(0, "ARROW:FLIGHT:SQL:PRECISION").as_deref(), Some("25"));
+        assert_eq!(meta(0, "ARROW:FLIGHT:SQL:SCALE").as_deref(), Some("2"));
+        assert_eq!(meta(0, "k").as_deref(), Some("v"));
+        assert_eq!(meta(1, "ARROW:FLIGHT:SQL:PRECISION").as_deref(), Some("40"));
+        assert_eq!(meta(1, "ARROW:FLIGHT:SQL:SCALE").as_deref(), Some("0"));
+        assert!(out.field(2).metadata().is_empty());
+        assert_eq!(out.metadata(), &kept);
+        let types: Vec<_> = out.fields().iter().map(|f| f.data_type().clone()).collect();
+        let before: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect();
+        assert_eq!(types, before, "types unchanged");
+    }
+
     /// An operation that would join a handle after `CancelFlightInfo` took its live set is refused,
     /// so a fetch between `begin` and its registration never streams (review of 15c4ffa75, 5).
     #[test]

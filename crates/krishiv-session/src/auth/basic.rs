@@ -135,7 +135,7 @@ mod tests {
     fn creds(value: &str) -> (String, String) {
         match basic_header(value) {
             BasicHeader::Credentials(c) => (c.user().to_owned(), c.password().to_owned()),
-            other => panic!("{value}: {other:?}"),
+            _ => panic!("{value}: not credentials"),
         }
     }
 
@@ -191,7 +191,7 @@ mod tests {
         let shown = format!("{c:?}");
         assert!(
             shown.contains("ops") && !shown.contains("secret-token"),
-            "{shown}"
+            "Debug shows the user name and never the password"
         );
     }
 }

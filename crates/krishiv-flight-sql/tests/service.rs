@@ -405,8 +405,12 @@ async fn basic_binds_the_user_to_the_token() {
     let ops = "Basic b3BzOmZsaWdodC1vcGVyYXRvci10b2tlbi0wMTIzNDU2Nzg5YWJjZGVm";
     for value in [ops.to_owned(), ops.replacen("Basic", "BASIC", 1)] {
         let value = value.as_str();
-        let info = h.client.get_flight_info(with(value)).await.expect(value);
-        assert_eq!(info.get_ref().endpoint.len(), 1, "{value}");
+        let info = h
+            .client
+            .get_flight_info(with(value))
+            .await
+            .expect("a Basic login");
+        assert_eq!(info.get_ref().endpoint.len(), 1);
     }
     // base64("other:" + OPS): the token is ops's.
     let e = h

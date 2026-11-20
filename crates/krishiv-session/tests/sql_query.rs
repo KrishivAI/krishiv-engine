@@ -250,3 +250,96 @@ fn marker_types_match_only_the_bound_literal() {
     assert_eq!(typed(one, 12..13, BoundAs::Null), [None]);
     assert_eq!(typed(null, 12..16, BoundAs::One), [None]);
 }
+
+/// `insert_parameter_types` (P3-T101 note §17 A1): a whole `INSERT ... VALUES` cell takes its
+/// target column's type, by position or by the column list; every other shape types nothing.
+#[test]
+fn insert_parameter_types_follow_the_target_columns() {
+    use krishiv_types::DataType;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let session = Session::builder()
+        .config(
+            "spark.sql.warehouse.dir",
+            dir.path().join("wh").to_str().expect("utf-8"),
+        )
+        .build()
+        .expect("session");
+    for sql in [
+        "CREATE TABLE t (a INT, d DATE, s STRING) USING parquet",
+        "CREATE TABLE p (a INT, k STRING) USING parquet PARTITIONED BY (k)",
+        "CREATE VIEW v AS SELECT 1 AS a",
+    ] {
+        block_on(async { session.sql(sql).await?.collect().await }).expect(sql);
+    }
+    let types = |sql: &str, markers: usize| block_on(session.insert_parameter_types(sql, markers));
+    let (int, date) = (Some(DataType::Integer), Some(DataType::Date));
+    assert_eq!(
+        types("INSERT INTO t VALUES (?, ?, 'x')", 2),
+        [int.clone(), date.clone()]
+    );
+    assert_eq!(
+        types("INSERT INTO t (d, a) VALUES (?, (?)), (?, 1)", 3),
+        [date.clone(), int.clone(), date]
+    );
+    assert_eq!(types("INSERT OVERWRITE t VALUES (?, NULL, NULL)", 1), [int]);
+    for (sql, markers) in [
+        // Not a whole cell, not VALUES, or not an INSERT.
+        ("INSERT INTO t VALUES (? + 1, NULL, NULL)", 1),
+        ("INSERT INTO t SELECT ?, NULL, NULL", 1),
+        ("SELECT ?", 1),
+        ("not sql at all ?", 1),
+        // A PARTITION clause, rows of different widths, a column list that does not fit.
+        ("INSERT INTO p PARTITION (k = 'x') VALUES (?)", 1),
+        ("INSERT INTO t VALUES (?, NULL, NULL), (1, NULL)", 1),
+        ("INSERT INTO t (a, nope) VALUES (?, ?)", 2),
+        ("INSERT INTO t (a) VALUES (?, ?)", 2),
+        // A missing table, a view, a multi-table INSERT.
+        ("INSERT INTO missing VALUES (?)", 1),
+        ("INSERT INTO v VALUES (?)", 1),
+        (
+            "FROM t INSERT INTO t SELECT ?, d, s INSERT INTO t SELECT a, d, ?",
+            2,
+        ),
+    ] {
+        assert!(
+            types(sql, markers).iter().all(Option::is_none),
+            "{sql}: {:?}",
+            types(sql, markers)
+        );
+    }
+    // More markers than the statement has: the extra ones stay untyped.
+    assert_eq!(types("INSERT INTO t VALUES (?, NULL, NULL)", 2)[1], None);
+}
+
+/// `insert_parameter_types` says nothing about a table the caller may not write: the quiet
+/// target check comes before any catalog read.
+#[test]
+fn insert_parameter_types_need_the_write() {
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wh = dir.path().join("wh");
+    let owner = Session::builder()
+        .config("spark.sql.warehouse.dir", wh.to_str().expect("utf-8"))
+        .build()
+        .expect("session");
+    block_on(async {
+        owner
+            .sql("CREATE TABLE t (a INT) USING parquet")
+            .await?
+            .collect()
+            .await
+    })
+    .expect("create");
+    let reader = owner.new_session_as(
+        krishiv_session::Principal::new("reader", krishiv_session::PrincipalKind::User),
+        Arc::new(krishiv_session::ReadOnlyPolicy::new(Arc::new(
+            krishiv_session::AllowAll,
+        ))),
+    );
+    assert_eq!(
+        block_on(reader.insert_parameter_types("INSERT INTO t VALUES (?)", 1)),
+        [None]
+    );
+}
