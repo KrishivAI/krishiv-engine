@@ -307,6 +307,9 @@ struct Settings {
     /// `krishiv.exec.coalesceInput`; absent: the default.
     #[prost(bool, optional, tag = "18")]
     coalesce_input: Option<bool>,
+    /// `krishiv.exec.join.columnarPayload`; absent: the default.
+    #[prost(bool, optional, tag = "19")]
+    join_columnar_payload: Option<bool>,
 }
 
 fn wide(v: usize) -> u64 {
@@ -339,6 +342,7 @@ impl Settings {
             deterministic_order,
             union_output_partitioning,
             coalesce_input,
+            join_columnar_payload,
         } = c.clone();
         Self {
             batch_size: wide(batch_size),
@@ -361,6 +365,7 @@ impl Settings {
             agg_direct_keys: Some(agg_direct_keys),
             union_output_partitioning: Some(union_output_partitioning),
             coalesce_input: Some(coalesce_input),
+            join_columnar_payload: Some(join_columnar_payload),
         }
     }
 
@@ -396,6 +401,9 @@ impl Settings {
             coalesce_input: self
                 .coalesce_input
                 .unwrap_or(ExecConfig::default().coalesce_input),
+            join_columnar_payload: self
+                .join_columnar_payload
+                .unwrap_or(ExecConfig::default().join_columnar_payload),
         })
     }
 }

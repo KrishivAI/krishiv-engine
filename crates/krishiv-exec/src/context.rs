@@ -63,6 +63,9 @@ pub struct ExecConfig {
     /// Hash joins use the row layout and its size-adaptive index
     /// (`krishiv.exec.join.rowLayout`; P2-T158).
     pub join_row_layout: bool,
+    /// A row-layout join build keeps a variable-width payload as Arrow
+    /// columns (`krishiv.exec.join.columnarPayload`).
+    pub join_columnar_payload: bool,
     /// Level-0 radix bits of a row-layout join build
     /// (`krishiv.exec.join.radixBits`, 3 to 6).
     pub join_radix_bits: u32,
@@ -114,6 +117,7 @@ impl Default for ExecConfig {
             agg_direct_keys: true,
             detailed_metrics: false,
             join_row_layout: true,
+            join_columnar_payload: true,
             join_radix_bits: 3,
             sort_hash_buckets: true,
             join_merge_buffer_bytes: 0,
@@ -145,6 +149,10 @@ impl ExecConfig {
             .unwrap_or(true);
         let join_row_layout = config
             .get(&EXEC_JOIN_ROW_LAYOUT)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
+        let join_columnar_payload = config
+            .get(&krishiv_common::config::EXEC_JOIN_COLUMNAR_PAYLOAD)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
         let join_radix_bits = config
@@ -199,6 +207,7 @@ impl ExecConfig {
             agg_row_layout,
             agg_direct_keys,
             join_row_layout,
+            join_columnar_payload,
             join_radix_bits,
             join_merge_buffer_bytes,
             shared_broadcast_bytes,

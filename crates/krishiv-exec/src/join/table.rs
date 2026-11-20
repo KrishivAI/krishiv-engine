@@ -47,13 +47,24 @@ pub(crate) enum ArenaFormat<'a> {
     /// Arrow-row keys, and arrow-row payload when `payload`.
     Arrow { payload: bool },
     /// Rows of `keys`, and the build columns as rows of `payload` or, when
-    /// `payload` is `None` and `arrow_payload`, as arrow rows.
+    /// `payload` is `None`, as the Arrow columns `columnar` when given, else
+    /// as arrow rows when `arrow_payload`.
     Rows {
         keys: &'a RowLayout,
         payload: Option<&'a RowLayout>,
         arrow_payload: bool,
+        columnar: Option<&'a [Field]>,
     },
 }
+
+/// The name of build column `i` in an arena that keeps its payload as
+/// Arrow columns ([`ArenaFormat::Rows`] with `columnar`).
+pub(crate) fn payload_column(i: usize) -> String {
+    format!("{PAYLOAD_COLUMN}{i}")
+}
+
+/// The prefix of an arena's Arrow payload columns.
+const PAYLOAD_COLUMN: &str = "payload_c";
 
 /// The fields holding rows of `layout` as `name` (and `name_heap`).
 fn row_fields(name: &str, layout: &RowLayout, fields: &mut Vec<Field>) -> Result<()> {
@@ -84,14 +95,20 @@ pub(crate) fn arena_schema(format: ArenaFormat<'_>) -> Result<SchemaRef> {
             keys,
             payload,
             arrow_payload,
+            columnar,
         } => {
             row_fields("key", keys, &mut fields)?;
-            match payload {
-                Some(p) => row_fields("payload", p, &mut fields)?,
-                None if arrow_payload => {
+            match (payload, columnar) {
+                (Some(p), _) => row_fields("payload", p, &mut fields)?,
+                (None, Some(cols)) => fields.extend(
+                    cols.iter()
+                        .enumerate()
+                        .map(|(i, f)| f.clone().with_name(payload_column(i))),
+                ),
+                (None, None) if arrow_payload => {
                     fields.push(Field::new("payload", DataType::LargeBinary, false));
                 }
-                None => {}
+                (None, None) => {}
             }
         }
     }
@@ -231,6 +248,8 @@ struct ArenaPart {
     hashes: UInt64Array,
     keys: Cols,
     payload: Option<Cols>,
+    /// The build columns, when the arena keeps them as Arrow columns.
+    columns: Option<Vec<arrow_array::ArrayRef>>,
     /// Rows with a NULL `=` key that a right anti or right outer join
     /// keeps: stored, never indexed (column `null_key`, when present).
     null_key: Option<arrow_array::BooleanArray>,
@@ -247,6 +266,16 @@ impl ArenaPart {
             .clone();
         let keys = Cols::of(&batch, "key")?.ok_or_else(bad)?;
         let payload = Cols::of(&batch, "payload")?;
+        let columns: Vec<arrow_array::ArrayRef> = batch
+            .data()
+            .schema_ref()
+            .fields()
+            .iter()
+            .zip(batch.data().columns())
+            .filter(|(f, _)| f.name().starts_with(PAYLOAD_COLUMN))
+            .map(|(_, c)| Arc::clone(c))
+            .collect();
+        let columns = (!columns.is_empty()).then_some(columns);
         let null_key = match batch.data().column_by_name(NULL_KEY) {
             Some(c) => Some(c.as_boolean_opt().ok_or_else(bad)?.clone()),
             None => None,
@@ -257,6 +286,7 @@ impl ArenaPart {
             hashes,
             keys,
             payload,
+            columns,
             null_key,
         })
     }
@@ -574,6 +604,26 @@ impl RowArena {
             )) if (i as usize) < p.len() => p.value(i as usize),
             _ => &[],
         }
+    }
+
+    /// Whether the arena keeps its build columns as Arrow columns.
+    pub(crate) fn has_columns(&self) -> bool {
+        self.parts.first().is_some_and(|p| p.columns.is_some())
+    }
+
+    /// Row `row` as (block, row within the block), for
+    /// [`RowArena::block_columns`].
+    pub(crate) fn locate(&self, row: u32) -> Option<(usize, usize)> {
+        self.at(row)?;
+        Some((
+            (row >> self.shift) as usize,
+            (row & ((1u32 << self.shift) - 1)) as usize,
+        ))
+    }
+
+    /// The build columns of block `block` (Arrow payload columns).
+    pub(crate) fn block_columns(&self, block: usize) -> Option<&[arrow_array::ArrayRef]> {
+        self.parts.get(block)?.columns.as_deref()
     }
 
     /// The row's payload row and its heap (empty if the arena has none or
@@ -1113,6 +1163,7 @@ mod tests {
                         keys,
                         payload: None,
                         arrow_payload: false,
+                        columnar: None,
                     },
                     None => ArenaFormat::Arrow { payload: false },
                 };

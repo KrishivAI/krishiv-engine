@@ -202,6 +202,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_JOIN_BUILD_PROJECTION,
     ),
     (
+        "krishiv.exec.join.columnarPayload",
+        &EXEC_JOIN_COLUMNAR_PAYLOAD,
+    ),
+    (
         "krishiv.exec.join.fuseProbeSelect",
         &EXEC_JOIN_FUSE_PROBE_SELECT,
     ),

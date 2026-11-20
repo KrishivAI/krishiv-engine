@@ -20,6 +20,23 @@ pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Hash join builds keep a payload with string or binary columns as
+/// Arrow columns, gathered by view (design
+/// `perf1-join-columnar-string-payload`).
+pub static EXEC_JOIN_COLUMNAR_PAYLOAD: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.columnarPayload",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: a hash join whose build columns include a variable-width column keeps \
+          them as Arrow columns next to its key rows, and the probe gathers them without \
+          decoding each row. Results are the same either way; turn it off to store the \
+          build columns as encoded rows.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// Fuse a filter and a scan's row stage into the hash probe above them
 /// (design P2-E3 U2).
 pub static EXEC_JOIN_FUSE_PROBE_SELECT: ConfigEntry = ConfigEntry {

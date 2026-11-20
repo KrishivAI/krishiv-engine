@@ -1416,6 +1416,27 @@ fn fuse_probe_select_defaults_on_and_parses() {
 }
 
 #[test]
+fn columnar_payload_defaults_on_and_parses() {
+    let mut config = Config::new();
+    assert_eq!(
+        config.get(&EXEC_JOIN_COLUMNAR_PAYLOAD),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert!(
+        config
+            .set("krishiv.exec.join.columnarPayload", "maybe")
+            .is_err()
+    );
+    config
+        .set("krishiv.exec.join.columnarPayload", "false")
+        .unwrap();
+    assert_eq!(
+        config.get(&EXEC_JOIN_COLUMNAR_PAYLOAD),
+        Some(&ConfigValue::Bool(false))
+    );
+}
+
+#[test]
 fn late_payload_join_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(
