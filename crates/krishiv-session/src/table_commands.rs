@@ -201,10 +201,11 @@ impl TableName {
     }
 
     /// Spark's `TABLE_OR_VIEW_NOT_FOUND` for this name: as written, with the search path.
-    pub(crate) fn not_found(&self) -> KrishivError {
+    /// `current` is the current namespace: the search path ends at it.
+    pub(crate) fn not_found(&self, current: &str) -> KrishivError {
         TableOrViewNotFound {
             relation_name: self.written.clone(),
-            search_path: crate::catalog::search_path(),
+            search_path: crate::catalog::search_path_in(current),
         }
         .into()
     }
@@ -1011,7 +1012,9 @@ impl Session {
         } else {
             Err(TableOrViewNotFound {
                 relation_name: format!("`{}`.`{name}`", crate::catalog::GLOBAL_NAMESPACE),
-                search_path: crate::catalog::search_path(),
+                search_path: crate::catalog::search_path_in(
+                    &self.state.catalog.current_namespace(),
+                ),
             }
             .into())
         })
@@ -1049,7 +1052,7 @@ impl Session {
             }
             .into()),
             None if if_exists => Ok(()),
-            None => Err(name.not_found()),
+            None => Err(name.not_found(&self.state.catalog.current_namespace())),
         }
     }
 
@@ -1080,7 +1083,7 @@ impl Session {
             );
         }
         let Some(existing) = self.state.catalog.store.table(&name.namespace, &name.name) else {
-            return Err(name.not_found());
+            return Err(name.not_found(&self.state.catalog.current_namespace()));
         };
         if existing.view.is_none() {
             return Err(krishiv_common::error::ExpectViewNotTableUseAlterTable {

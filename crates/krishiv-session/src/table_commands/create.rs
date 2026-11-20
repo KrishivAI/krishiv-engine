@@ -633,7 +633,7 @@ impl Session {
                 None,
             )
         } else {
-            return Err(source.not_found());
+            return Err(source.not_found(&self.state.catalog.current_namespace()));
         };
         let (provider, provider_written) = match &t.using {
             Some(u) => {
@@ -734,7 +734,7 @@ impl Session {
                 remove_dir(&dir)?;
             }
         } else if !if_exists {
-            return Err(name.not_found());
+            return Err(name.not_found(&self.state.catalog.current_namespace()));
         }
         Ok(())
     }

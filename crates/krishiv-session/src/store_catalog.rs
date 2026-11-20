@@ -179,7 +179,7 @@ impl StoreCatalog {
     fn not_found(id: &TableIdent) -> KrishivError {
         TableOrViewNotFound {
             relation_name: id.to_string(),
-            search_path: crate::catalog::search_path(),
+            search_path: crate::catalog::search_path_in(crate::catalog::NAMESPACE),
         }
         .into()
     }

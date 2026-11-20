@@ -1555,7 +1555,9 @@ impl Session {
         {
             return Err(krishiv_common::error::TableOrViewNotFound {
                 relation_name: format!("`{}`", parts.join("`.`")),
-                search_path: crate::catalog::search_path(),
+                search_path: crate::catalog::search_path_in(
+                    &self.state.catalog.current_namespace(),
+                ),
             }
             .into());
         }
