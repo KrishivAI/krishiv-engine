@@ -704,3 +704,89 @@ async fn na_drop_how_all_keeps_a_row_with_any_value() {
         strings(&[&["NULL", "3"], &["a", "5"]])
     );
 }
+
+fn project(input: pb::Relation, expressions: Vec<pb::Expression>) -> pb::Relation {
+    relation(RelType::Project(Box::new(pb::Project {
+        input: Some(Box::new(input)),
+        expressions,
+    })))
+}
+
+/// `left + right AS name`.
+fn plus(left: &str, right: i32, name: &str) -> pb::Expression {
+    use pb::expression::{Alias, ExprType, Literal, UnresolvedFunction, literal::LiteralType};
+    let literal = pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Literal(Literal {
+            literal_type: Some(LiteralType::Integer(right)),
+            data_type: None,
+        })),
+    };
+    let call = pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::UnresolvedFunction(UnresolvedFunction {
+            function_name: "+".to_owned(),
+            arguments: vec![attr(left), literal],
+            is_distinct: false,
+            is_user_defined_function: false,
+            is_internal: None,
+        })),
+    };
+    pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Alias(Box::new(Alias {
+            expr: Some(Box::new(call)),
+            name: vec![name.to_owned()],
+            metadata: None,
+        }))),
+    }
+}
+
+fn zip(left: pb::Relation, right: pb::Relation) -> pb::Relation {
+    relation(RelType::Zip(Box::new(pb::Zip {
+        left: Some(Box::new(left)),
+        right: Some(Box::new(right)),
+    })))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_puts_the_columns_of_two_projections_of_one_source_side_by_side() {
+    let server = start().await;
+    let left = project(source(), vec![attr("id"), plus("a", 1, "a1")]);
+    let right = project(source(), vec![attr("b"), plus("a", 2, "a2")]);
+    assert_eq!(
+        run(&server, zip(left, right)).await.expect("runs"),
+        strings(&[
+            &["1", "11", "100", "12"],
+            &["1", "11", "100", "12"],
+            &["2", "21", "NULL", "22"],
+        ])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_of_a_source_with_a_projection_of_it_keeps_both_sets_of_columns() {
+    let server = start().await;
+    let right = project(source(), vec![plus("id", 100, "big")]);
+    assert_eq!(
+        run(&server, zip(source(), right)).await.expect("runs"),
+        strings(&[
+            &["1", "10", "100", "101"],
+            &["1", "10", "100", "101"],
+            &["2", "20", "NULL", "102"],
+        ])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_of_different_sources_is_not_mergeable() {
+    let server = start().await;
+    let other = relation(RelType::Sql(pb::Sql {
+        query: "SELECT 1 AS x".to_owned(),
+        ..Default::default()
+    }));
+    let status = run(&server, zip(source(), other))
+        .await
+        .expect_err("refused");
+    assert_eq!(error_class(&status), "ZIP_PLANS_NOT_MERGEABLE");
+}

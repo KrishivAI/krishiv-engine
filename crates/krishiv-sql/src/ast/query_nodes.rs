@@ -740,6 +740,14 @@ pub enum TableFactorKind {
     Nested(Box<Relation>),
     /// `VALUES ...` (its alias is the factor's alias).
     Values(Vec<Expr>),
+    /// `UNNEST(array, ...) [WITH ORDINALITY]` (Spark 4.3): one row per element, the arrays side by
+    /// side padded with NULLs, the 1-based position last with `ORDINALITY`.
+    Unnest {
+        /// The array arguments.
+        args: Vec<Expr>,
+        /// `WITH ORDINALITY`.
+        ordinality: bool,
+    },
     /// A table-valued function call.
     TableFunction {
         /// The function name.

@@ -671,6 +671,30 @@ impl Lowerer {
             }
             TableFactorKind::Values(rows) => self.inline_table(rows, tf.alias.as_ref(), tf.span)?,
             TableFactorKind::JsonTable(t) => self.json_table(t, tf.span)?,
+            TableFactorKind::Unnest { args, ordinality } => {
+                // Spark's `Generate(Unnest(..))` over one row; the analyzer types the arrays and
+                // expands them as `inline` of an array of structs (as `stack`).
+                let lowered = args.iter().map(|a| self.arg(a)).collect::<R<Vec<_>>>()?;
+                let name = if *ordinality {
+                    krishiv_plan::UNNEST_ORDINALITY_FUNCTION
+                } else {
+                    krishiv_plan::UNNEST_FUNCTION
+                };
+                let call = self.call(name, lowered, tf.span);
+                let one_row = self.node(PlanNode::OneRowRelation, tf.span);
+                self.node(
+                    PlanNode::Generate {
+                        input: arc(one_row),
+                        kind: krishiv_plan::GeneratorKind::Inline,
+                        outer: false,
+                        arg: Arc::new(call),
+                        output: Vec::new(),
+                        names: Vec::new(),
+                        qualifier: None,
+                    },
+                    tf.span,
+                )
+            }
             TableFactorKind::TableFunction {
                 name,
                 dynamic_name,

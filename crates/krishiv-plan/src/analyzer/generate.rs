@@ -177,6 +177,7 @@ impl Resolver<'_> {
                 .collect();
         let cx = Self::cx(&scope, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
+        let arg = &self.unnest_rows(arg, &cx)?;
         let mut b = self.bind(arg, &cx)?;
         // `variant_explode` expects a VARIANT: an untyped NULL is cast to one
         // (and gives no rows), as `ExpectsInputTypes` casts it.
@@ -428,6 +429,105 @@ impl Resolver<'_> {
             .collect();
         Ok(Arc::new(
             Expr::function("array", structs).with_origin(origin),
+        ))
+    }
+
+    /// `UNNEST(a, b, ..) [WITH ORDINALITY]` (lowered as the call [`crate::UNNEST_FUNCTION`]) as the
+    /// array of structs `inline` generates its rows from, after Spark's `Unnest` check that every
+    /// argument is an array. A NULL array counts as empty, the arrays are zipped to the longest
+    /// (the shorter padded with NULL), the fields are `col` (one array) or `col0`, `col1`, ..., and
+    /// `ordinality` is the 1-based BIGINT position. Any other argument is returned as it is.
+    fn unnest_rows(&mut self, arg: &Arc<Expr>, cx: &Cx<'_>) -> Result<Arc<Expr>, AnalysisError> {
+        let ExprNode::Function(f) = &arg.node else {
+            return Ok(Arc::clone(arg));
+        };
+        let ordinality = if f.name == crate::UNNEST_ORDINALITY_FUNCTION {
+            true
+        } else if f.name == crate::UNNEST_FUNCTION {
+            false
+        } else {
+            return Ok(Arc::clone(arg));
+        };
+        let origin = arg.origin;
+        let bound = f
+            .args
+            .iter()
+            .map(|a| self.bind(a, cx))
+            .collect::<Result<Vec<_>, _>>()?;
+        let zone = self.ctx.conf.session_zone;
+        for (i, b) in bound.iter().enumerate() {
+            if !matches!(b.ty.data_type, Some(DataType::Array(_))) {
+                let shown = bound
+                    .iter()
+                    .map(|b| pretty(&b.expr, zone))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(AnalysisError::new(
+                    DatatypeMismatchUnexpectedInputType {
+                        sql_expr: format!("\"unnest({shown})\""),
+                        param_index: super::coerce::ordinal(i),
+                        required_type: "\"ARRAY\"".to_owned(),
+                        input_sql: format!("\"{}\"", pretty(&b.expr, zone)),
+                        input_type: quoted_type(b.ty.data_type.as_ref()),
+                    },
+                    origin,
+                ));
+            }
+        }
+        let width = f.args.len();
+        let name_of = |i: usize| {
+            if width == 1 {
+                "col".to_owned()
+            } else {
+                format!("col{i}")
+            }
+        };
+        // Each array with NULL read as empty.
+        let arrays: Vec<Expr> = f
+            .args
+            .iter()
+            .zip(&bound)
+            .map(|(a, b)| {
+                let ty = b.ty.data_type.clone().unwrap_or(DataType::Null);
+                let empty = Expr::new(ExprNode::Cast {
+                    expr: Arc::new(Expr::function("array", Vec::new()).with_origin(origin)),
+                    to: ty,
+                    mode: crate::CastMode::Legacy,
+                })
+                .with_origin(origin);
+                Expr::function("coalesce", vec![(**a).clone(), empty]).with_origin(origin)
+            })
+            .collect();
+        let mut zipped: Vec<Expr> = arrays
+            .iter()
+            .enumerate()
+            .map(|(i, a)| a.clone().alias(name_of(i)).with_origin(origin))
+            .collect();
+        if ordinality {
+            // `slice(sequence(1, n), 1, n)`: the positions 1..=n, empty for n = 0 (where
+            // `sequence(1, 0)` counts down).
+            let big = |e: Expr| {
+                Expr::new(ExprNode::Cast {
+                    expr: Arc::new(e),
+                    to: DataType::Long,
+                    mode: crate::CastMode::Legacy,
+                })
+                .with_origin(origin)
+            };
+            let lit = |n: i32| Expr::literal(Literal::Integer(n)).with_origin(origin);
+            let mut sizes: Vec<Expr> = arrays
+                .iter()
+                .map(|a| Expr::function("size", vec![a.clone()]).with_origin(origin))
+                .collect();
+            sizes.push(lit(0));
+            let n = Expr::function("greatest", sizes).with_origin(origin);
+            let sequence =
+                Expr::function("sequence", vec![big(lit(1)), big(n.clone())]).with_origin(origin);
+            let positions = Expr::function("slice", vec![sequence, lit(1), n]).with_origin(origin);
+            zipped.push(positions.alias("ordinality").with_origin(origin));
+        }
+        Ok(Arc::new(
+            Expr::function("arrays_zip", zipped).with_origin(origin),
         ))
     }
 

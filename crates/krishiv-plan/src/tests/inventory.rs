@@ -54,6 +54,7 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Union { .. } => "PlanNode::Union",
         PlanNode::Distinct { .. } => "PlanNode::Distinct",
         PlanNode::SetOp { .. } => "PlanNode::SetOp",
+        PlanNode::Zip { .. } => "PlanNode::Zip",
         PlanNode::ReplicateRows { .. } => "PlanNode::ReplicateRows",
         PlanNode::Sample { .. } => "PlanNode::Sample",
         PlanNode::Expand { .. } => "PlanNode::Expand",

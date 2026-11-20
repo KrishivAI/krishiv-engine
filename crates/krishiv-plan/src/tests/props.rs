@@ -1489,6 +1489,7 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             site!(w, columns.push("x".to_owned()));
             rows.iter_mut().any(|r| m_exprs(r, w)) || m_strings(columns, w)
         }
+        PlanNode::Zip { left, right } => m_plan(left, w) || m_plan(right, w),
         PlanNode::SetOp {
             left,
             right,
