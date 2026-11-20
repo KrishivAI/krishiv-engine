@@ -32,7 +32,9 @@
 //! directions. Without a residual the farthest pair of a key decides (the distance only grows
 //! away from the match): backward its last matched left row with the first right row that passed
 //! one, forward its first matched left row with the group's last right row (the group is read to
-//! its end); with a residual every passing pair is checked.
+//! its end); with a residual every passing pair is checked. Backward's first passing right row
+//! is kept for the whole key, so one read chunk stays alive beside the one being read, as the
+//! candidate's does (unreserved when the group is spilled; one chunk, not one per left row).
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -195,10 +197,10 @@ pub(crate) struct AsOfCursor {
     chunk_values: Option<(u64, Rows)>,
     /// Every right row of the group was read.
     exhausted: bool,
-    /// Forward with a distance: left rows matched at `awaiting_at` whose next passing right row
-    /// is still to come (Spark evaluates the distance there before it stops).
-    awaiting: Vec<(Arc<Keyed>, usize)>,
-    awaiting_at: Option<(u64, usize)>,
+    /// Forward with a distance (SQL form): the one left row whose next passing right row is still
+    /// to come (Spark evaluates the distance there before it stops). One at most: only the first
+    /// row of a run matched at one right row waits, so one left batch at most is kept.
+    awaiting: Option<Awaiting>,
     /// Pairs (left batch, left row, right row) whose distance is to be evaluated.
     checks: Vec<(Arc<Keyed>, usize, Pick)>,
     /// Every-pair distance without a residual: the left row of the key's farthest passing pair
@@ -207,6 +209,28 @@ pub(crate) struct AsOfCursor {
     /// Its right row: backward the first right row that passed a left row, forward the group's
     /// last right row with a value (read to the group's end at the key's end).
     extreme_right: Option<Pick>,
+}
+
+/// A left row matched at a right row, waiting for the next right row with a value.
+struct Awaiting {
+    left: Arc<Keyed>,
+    row: usize,
+    /// The right row it matched, as (chunk serial, row).
+    at: (u64, usize),
+}
+
+impl AsOfCursor {
+    /// The waiting row's check against `pick`, when `pick` is not the row it matched.
+    fn take_awaiting(&mut self, pick: &Pick) {
+        if self
+            .awaiting
+            .as_ref()
+            .is_some_and(|w| w.at != (pick.serial, pick.row))
+            && let Some(w) = self.awaiting.take()
+        {
+            self.checks.push((w.left, w.row, pick.clone()));
+        }
+    }
 }
 
 /// Left rows `start..end` of the current left batch being matched.
@@ -298,7 +322,7 @@ impl Merge {
         if self.as_of_cursor.exhausted || !self.next_chunk().await? {
             // No next right row: nothing left to check for the rows that wait for one.
             self.as_of_cursor.exhausted = true;
-            self.as_of_cursor.awaiting.clear();
+            self.as_of_cursor.awaiting = None;
             return self.as_of_end(&a, slice);
         }
         let Some(c) = self.chunks.current.clone() else {
@@ -362,17 +386,14 @@ impl Merge {
                 serial: c.serial,
                 row: r,
             };
-            // The first right row after the waiting rows' match passes them too (forward values
-            // only grow): their distance is checked there.
-            if !self.as_of_cursor.awaiting.is_empty()
-                && self.as_of_cursor.awaiting_at != Some((c.serial, r))
-            {
-                for (left, i) in std::mem::take(&mut self.as_of_cursor.awaiting) {
-                    self.as_of_cursor.checks.push((left, i, pick()));
-                }
+            // The first right row after the waiting row's match passes it too (forward values
+            // only grow): its distance is checked there.
+            if self.as_of_cursor.awaiting.is_some() {
+                self.as_of_cursor.take_awaiting(&pick());
             }
-            if a.distance.is_some() && a.every_pair && !a.backward {
-                // Forward's farthest right row so far.
+            if a.distance.is_some() && a.every_pair && !a.backward && r + 1 == c.end {
+                // Forward's farthest right row so far: a chunk's last row has the largest value
+                // of the chunk (NULLs sort first, so it has one when any row has).
                 self.as_of_cursor.extreme_right = Some(pick());
             }
             let passes = a.passes(
@@ -408,14 +429,17 @@ impl Merge {
                     // at the next row; if it does not raise, none of the others does.
                     if a.distance.is_some()
                         && !a.every_pair
-                        && self.as_of_cursor.awaiting.is_empty()
+                        && self.as_of_cursor.awaiting.is_none()
                         && let Some(l) = self.left.current.clone()
                     {
                         self.as_of_cursor
                             .checks
                             .push((Arc::clone(&l), slice.next, pick()));
-                        self.as_of_cursor.awaiting.push((l, slice.next));
-                        self.as_of_cursor.awaiting_at = Some((c.serial, r));
+                        self.as_of_cursor.awaiting = Some(Awaiting {
+                            left: l,
+                            row: slice.next,
+                            at: (c.serial, r),
+                        });
                     }
                     slice.next += 1;
                 }
@@ -601,7 +625,8 @@ impl Merge {
             && !a.backward
             && self.shared.filter.is_none()
             && self.as_of_cursor.extreme_left.is_some();
-        while (to_end || !self.as_of_cursor.awaiting.is_empty()) && !self.as_of_cursor.exhausted {
+        let mut visited = 0;
+        while (to_end || self.as_of_cursor.awaiting.is_some()) && !self.as_of_cursor.exhausted {
             self.query.check_cancelled()?;
             if !self.next_chunk().await? {
                 self.as_of_cursor.exhausted = true;
@@ -619,25 +644,25 @@ impl Merge {
                         serial: c.serial,
                         row: r,
                     };
-                    if !self.as_of_cursor.awaiting.is_empty()
-                        && self.as_of_cursor.awaiting_at != Some((c.serial, r))
-                    {
-                        for (left, i) in std::mem::take(&mut self.as_of_cursor.awaiting) {
-                            self.as_of_cursor.checks.push((left, i, pick.clone()));
-                        }
-                    }
+                    self.as_of_cursor.take_awaiting(&pick);
                     if to_end {
-                        self.as_of_cursor.extreme_right = Some(pick);
-                    } else if self.as_of_cursor.awaiting.is_empty() {
+                        if r + 1 == c.end {
+                            self.as_of_cursor.extreme_right = Some(pick);
+                        }
+                    } else if self.as_of_cursor.awaiting.is_none() {
                         break;
                     }
                 }
                 self.chunks.row += 1;
+                visited += 1;
             }
             // The checks gathered here pin their chunks: evaluate them before the next one.
             self.as_of_checks(&a)?;
         }
-        self.as_of_cursor.awaiting.clear();
+        self.counters
+            .as_of_right_rows
+            .fetch_add(visited, Ordering::Relaxed);
+        self.as_of_cursor.awaiting = None;
         if let (Some((left, i)), Some(right)) = (
             self.as_of_cursor.extreme_left.take(),
             self.as_of_cursor.extreme_right.take(),

@@ -46,13 +46,21 @@ fn data(rows: &[Row]) -> RecordBatch {
     .unwrap()
 }
 
-/// `(left.w + right.w) % 3 != 0`, NULL when the sum is a multiple of 5.
+/// `(left.w + right.w) % 3 != 0`, NULL when the sum is a multiple of 5; or, `sparse`,
+/// `right.w % 2000 == left.w * 50` (one right row in 2,000 passes a left row, at another place
+/// for each left row).
 #[derive(Debug)]
-struct Residual;
+struct Residual {
+    sparse: bool,
+}
 
 impl Residual {
     fn eval(l: i64, r: i64) -> bool {
         (l + r) % 5 != 0 && (l + r) % 3 != 0
+    }
+
+    fn sparse(l: i64, r: i64) -> bool {
+        r % 2000 == l * 50
     }
 }
 
@@ -63,7 +71,11 @@ impl Predicate for Residual {
         Ok(l.iter()
             .zip(r.iter())
             .map(|(l, r)| {
-                let s = l.unwrap_or(0) + r.unwrap_or(0);
+                let (l, r) = (l.unwrap_or(0), r.unwrap_or(0));
+                if self.sparse {
+                    return Some(Residual::sparse(l, r));
+                }
+                let s = l + r;
                 (s % 5 != 0).then_some(s % 3 != 0)
             })
             .collect())
@@ -107,9 +119,21 @@ struct Case {
     backward: bool,
     exact: bool,
     residual: bool,
+    /// The residual is [`Residual::sparse`].
+    sparse: bool,
 }
 
 impl Case {
+    /// Whether the residual (if any) keeps the pair.
+    fn allows(&self, l: i64, r: i64) -> bool {
+        !self.residual
+            || if self.sparse {
+                Residual::sparse(l, r)
+            } else {
+                Residual::eval(l, r)
+            }
+    }
+
     fn passes(&self, l: i64, r: i64) -> bool {
         match (self.backward, self.exact) {
             (true, true) => r <= l,
@@ -132,7 +156,7 @@ impl Case {
                     l.k.is_some()
                         && r.k == l.k
                         && r.t.is_some_and(|rt| self.passes(lt, rt))
-                        && (!self.residual || Residual::eval(l.w, r.w))
+                        && self.allows(l.w, r.w)
                 });
                 if self.backward {
                     candidates.max_by_key(|r| r.t)
@@ -164,9 +188,11 @@ impl Case {
             probe_keys: vec![0],
             build_keys: vec![0],
             null_safe: vec![false],
-            filter: self
-                .residual
-                .then(|| Arc::new(Residual) as Arc<dyn Predicate>),
+            filter: self.residual.then(|| {
+                Arc::new(Residual {
+                    sparse: self.sparse,
+                }) as Arc<dyn Predicate>
+            }),
             single_match: false,
             spill: Some(scope),
         };
@@ -254,6 +280,7 @@ fn cases() -> Vec<Case> {
                         backward,
                         exact,
                         residual,
+                        sparse: false,
                     });
                 }
             }
@@ -323,6 +350,7 @@ async fn a_group_is_read_once_across_left_batches() {
                 backward,
                 exact: true,
                 residual: false,
+                sparse: false,
             };
             let got = run_case(case, &left, &right, 16, group_bytes, None)
                 .await
@@ -357,6 +385,7 @@ async fn a_residual_over_a_spilled_group() {
             backward,
             exact: false,
             residual: true,
+            sparse: false,
         };
         let got = run_case(case, &left, &right, 64, 2048, None).await.unwrap();
         assert_eq!(got.rows, case.oracle(&left, &right), "{case:?}");
@@ -369,15 +398,35 @@ async fn a_residual_over_a_spilled_group() {
             "{case:?}: peak {} of a {group_bytes}-byte group",
             got.peak
         );
-        if backward {
-            // The open rows' best rows live in one compact copy, not in the chunks they came
-            // from (each read chunk is copied out at its end).
-            assert!(
-                got.held_chunks <= 1,
-                "{case:?}: {} chunks held at once",
-                got.held_chunks
-            );
-        }
+    }
+}
+
+/// Backward with a residual over a spilled group, the residual passing one right row in 2,000 at
+/// another place for each left row, and every left value past the group's last: each open row's
+/// best row lies in another chunk of the group, yet the open rows keep one chunk alive, their
+/// compact copy (each read chunk is copied out at its end).
+#[tokio::test]
+async fn open_rows_keep_one_copied_chunk_of_a_spilled_group() {
+    let left: Vec<Row> = (0..40).map(|i| row(Some(1), Some(30_000 + i), i)).collect();
+    let right: Vec<Row> = (0..20_000)
+        .map(|i| row(Some(1), Some(i), 50_000 + i))
+        .collect();
+    for join_type in [JoinType::Inner, JoinType::LeftOuter] {
+        let case = Case {
+            join_type,
+            backward: true,
+            exact: false,
+            residual: true,
+            sparse: true,
+        };
+        let got = run_case(case, &left, &right, 64, 2048, None).await.unwrap();
+        assert_eq!(got.rows, case.oracle(&left, &right), "{case:?}");
+        assert!(got.groups_spilled > 0, "{case:?}: the group spilled");
+        assert_eq!(
+            got.held_chunks, 1,
+            "{case:?}: {} chunks held at once",
+            got.held_chunks
+        );
     }
 }
 
@@ -404,6 +453,7 @@ async fn the_forward_distance_runs_on_the_match_and_the_next_passing_row() {
             backward: false,
             exact: true,
             residual,
+            sparse: false,
         };
         // Right values 9..=14; left 10: the match is the first passing row (10, or a later one
         // the residual keeps), then the next passing one.
@@ -493,9 +543,7 @@ fn raises(case: &Case, left: &[Row], right: &[Row], every: bool, limit: i64) -> 
         let mut passing: Vec<i64> = right
             .iter()
             .filter(|r| {
-                r.k == Some(k)
-                    && r.t.is_some_and(|rt| case.passes(lt, rt))
-                    && (!case.residual || Residual::eval(l.w, r.w))
+                r.k == Some(k) && r.t.is_some_and(|rt| case.passes(lt, rt)) && case.allows(l.w, r.w)
             })
             .filter_map(|r| r.t)
             .collect();
@@ -519,7 +567,9 @@ async fn the_distance_raises_where_spark_raises() {
     let mut left: Vec<Row> = (0..24).map(|i| row(Some(1), Some(10 + i % 3), i)).collect();
     left.extend((0..6).map(|i| row(Some(1), Some(30 + i), 40 + i)));
     left.extend((0..9).map(|i| row(Some(2), Some(4 + i), 60 + i)));
-    left.push(row(Some(3), Some(50), 90));
+    // Key 3's only left row passes its right row backward only, at a distance of 1,000; a row
+    // left waiting at key 2's end that took key 3's right row would be 48,990 away.
+    left.push(row(Some(3), Some(50_000), 90));
     let right = vec![
         row(Some(1), None, 100),
         row(Some(1), Some(3), 101),
@@ -530,11 +580,11 @@ async fn the_distance_raises_where_spark_raises() {
         row(Some(2), Some(1), 106),
         row(Some(2), Some(9), 107),
         row(Some(2), Some(40), 108),
-        row(Some(3), Some(49), 109),
+        row(Some(3), Some(49_000), 109),
     ];
     for case in cases().into_iter().filter(|c| c.exact) {
         for every in [false, true] {
-            for limit in [0, 2, 6, 9, 20, 35, 60, 100] {
+            for limit in [0, 2, 6, 9, 20, 35, 60, 100, 1_000] {
                 let expected = raises(&case, &left, &right, every, limit);
                 for batch_rows in [1, 4, 7] {
                     for group_bytes in [usize::MAX, 64] {
