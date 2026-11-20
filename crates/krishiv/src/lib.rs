@@ -26,6 +26,20 @@
 //!
 //! Actions are `async` and run on the session's own executor, so any
 //! runtime (or none, with `futures::executor::block_on`) can await them.
+//!
+//! # Errors
+//!
+//! An [`Error`] carries Spark's error class and SQLSTATE. Match on them by name, for example
+//! `e.error_class().name() == "TABLE_OR_VIEW_NOT_FOUND"` and `e.sql_state()`; the class type itself is not
+//! re-exported here, so the names are the stable surface.
+//!
+//! # Features
+//!
+//! Features are additive. `cloud`, `delta`, `ui`, `collations-icu` (on by default), `unstable-ir`,
+//! `tokio-console`, `telemetry-logs` and `telemetry-otlp` switch code on. **Reserved, with no effect yet:**
+//! `kafka`, `iceberg`, `cdc`, `connect`, `flight-sql`, `mcp`, `python`, `wasm-udf`, `celeborn` and `mimalloc`
+//! (those engines are separate crates or binaries today); they exist so that turning them on later is not a
+//! breaking change.
 
 #![forbid(unsafe_code)]
 
