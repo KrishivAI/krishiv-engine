@@ -544,9 +544,11 @@ def cases(spark, root):
         "parquet pdec2/p schema v STRING, k DECIMAL(5,2) filter k = 1.5",
         lambda: read("parquet", "pdec2/p", "v STRING, k DECIMAL(5,2)")().where("k = 1.5"),
     )
+
     # Date and timestamp shapes (perf-4, KN-1 follow-up): Spark casts the value with `Cast` in the read's zone
-    # (the `timeZone` option, else the session zone) and the session's ANSI mode; a timestamp that does not cast
-    # falls back to the value cast as a date. `us` is the instant (`unix_micros`), independent of the display zone.
+    # (the `timeZone` option, else the session zone) and the session's ANSI mode; under ANSI a TIMESTAMP_NTZ that
+    # does not cast falls back to the value cast as a date (a zoned TIMESTAMP's fallback has no zone and raises).
+    # `us` is the instant (`unix_micros`), independent of the display zone.
     def with_micros(fmt, path, schema, **opts):
         return lambda: read(fmt, path, schema, **opts)().selectExpr("v", "k", "unix_micros(k) AS us")
 
@@ -566,11 +568,15 @@ def cases(spark, root):
         add(
             f"typed parquet {values} as TIMESTAMP_NTZ",
             f"parquet {tree}/p schema v STRING, k TIMESTAMP_NTZ",
-            read("parquet", f"{tree}/p", f"v STRING, k TIMESTAMP_NTZ"),
+            read("parquet", f"{tree}/p", "v STRING, k TIMESTAMP_NTZ"),
         )
     la = {"spark.sql.session.timeZone": "America/Los_Angeles"}
-    for tree, values in (("pyear", "k=2024"), ("ptsfull", "k=2024-01-02 03:04:05"), ("pdtail", "k=2024-01-02 xyz"),
-                         ("ptsz", "k=2024-01-02T03:04:05Z")):
+    for tree, values in (
+        ("pyear", "k=2024"),
+        ("ptsfull", "k=2024-01-02 03:04:05"),
+        ("pdtail", "k=2024-01-02 xyz"),
+        ("ptsz", "k=2024-01-02T03:04:05Z"),
+    ):
         add(
             f"typed parquet {values} as TIMESTAMP, session zone America/Los_Angeles",
             f"parquet {tree}/p schema v STRING, k TIMESTAMP, session zone America/Los_Angeles, with unix_micros",
