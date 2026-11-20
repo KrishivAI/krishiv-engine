@@ -49,14 +49,6 @@ const REFUSED: &[(&str, &str)] = &[
         "typed parquet k=1.5 as DECIMAL(5,2), where k = 0.15",
         "as above: Spark drops the row",
     ),
-    (
-        "typed parquet k=2024 as DATE",
-        "Spark reads a bare year as January 1st; date shapes other than yyyy-MM-dd are not pinned",
-    ),
-    (
-        "typed parquet k=2024 as TIMESTAMP",
-        "as above, and a readable timestamp needs the session zone at the scan",
-    ),
 ];
 
 fn fixture() -> Value {
@@ -187,6 +179,17 @@ fn review_layout(s: &Session, root: &Path) {
         ("pone", "1"),
     ] {
         parquet(s, "SELECT 'v' AS v", &root.join(format!("{tree}/p/k={k}")));
+    }
+    // Date and timestamp shapes; a value with `:` is renamed into place, so the name on disk is the escaped form.
+    for (tree, k) in [
+        ("ptsfull", "2024-01-02 03%3A04%3A05"),
+        ("pdtail", "2024-01-02 xyz"),
+        ("pmonth", "2024-1"),
+        ("ptsz", "2024-01-02T03%3A04%3A05Z"),
+    ] {
+        let tmp = root.join(format!("{tree}/p/tmp"));
+        parquet(s, "SELECT 'v' AS v", &tmp);
+        std::fs::rename(&tmp, root.join(format!("{tree}/p/k={k}"))).unwrap();
     }
     for tree in ["pva", "pvb"] {
         for k in ["1", "2"] {
@@ -344,6 +347,7 @@ fn review_cases(add: &mut impl FnMut(String, Read)) {
             ),
         );
     }
+    datetime_cases(&mut *add);
     add(
         "text partitioned, schema line".into(),
         read("text", "tp/p", "line STRING"),
@@ -416,6 +420,8 @@ enum Read {
     },
     /// The read, then a filter.
     Where(Box<Read>, &'static str),
+    /// The read, then `v`, `k` and `unix_micros(k) AS us`.
+    WithMicros(Box<Read>),
     /// `CREATE TEMPORARY VIEW v (v STRING, k INT) USING parquet OPTIONS (path ..)`, then a Parquet file with
     /// `v = 'v3'` written to `added`, then `SELECT * FROM v`.
     ViewThenAdd {
@@ -847,6 +853,7 @@ fn frame(s: &Session, root: &Path, r: &Read) -> Result<DataFrame, KrishivError> 
             Ok(reader.format(format).load([abs(path)]))
         }
         Read::Where(r, condition) => frame(s, root, r)?.filter_expr(condition),
+        Read::WithMicros(r) => frame(s, root, r)?.select_expr(["v", "k", "unix_micros(k) AS us"]),
         Read::View {
             name,
             columns,
@@ -1017,4 +1024,74 @@ fn reads_with_a_user_schema_match_spark() {
         want.len(),
         failures.join("\n")
     );
+}
+
+/// The date and timestamp shapes of the generator (perf-4, KN-1 follow-up), in its order.
+fn datetime_cases(add: &mut impl FnMut(String, Read)) {
+    let typed = |tree: &str, ty: &str| {
+        read(
+            "parquet",
+            &format!("{tree}/p"),
+            &format!("v STRING, k {ty}"),
+        )
+    };
+    for (tree, values) in [
+        ("pmonth", "k=2024-1"),
+        ("pdtail", "k=2024-01-02 xyz"),
+        ("ptsfull", "k=2024-01-02 03:04:05"),
+        ("ptsz", "k=2024-01-02T03:04:05Z"),
+    ] {
+        for ty in ["DATE", "TIMESTAMP", "TIMESTAMP_NTZ"] {
+            add(format!("typed parquet {values} as {ty}"), typed(tree, ty));
+        }
+    }
+    for (tree, values) in [("pyear", "k=2024"), ("pabc", "k=abc"), ("pone", "k=1")] {
+        add(
+            format!("typed parquet {values} as TIMESTAMP_NTZ"),
+            typed(tree, "TIMESTAMP_NTZ"),
+        );
+    }
+    for (tree, values) in [
+        ("pyear", "k=2024"),
+        ("ptsfull", "k=2024-01-02 03:04:05"),
+        ("pdtail", "k=2024-01-02 xyz"),
+        ("ptsz", "k=2024-01-02T03:04:05Z"),
+    ] {
+        add(
+            format!("typed parquet {values} as TIMESTAMP, session zone America/Los_Angeles"),
+            Read::WithMicros(Box::new(typed(tree, "TIMESTAMP"))),
+        );
+    }
+    add(
+        "typed parquet k=2024 as DATE, session zone America/Los_Angeles".into(),
+        typed("pyear", "DATE"),
+    );
+    add(
+        "typed parquet k=2024 as TIMESTAMP, timeZone option America/Los_Angeles".into(),
+        Read::WithMicros(Box::new(with(
+            typed("pyear", "TIMESTAMP"),
+            &[("timeZone", "America/Los_Angeles")],
+        ))),
+    );
+    add(
+        "typed parquet k=2024 as TIMESTAMP, timeZone option +05:30, session zone America/Los_Angeles".into(),
+        Read::WithMicros(Box::new(with(
+            typed("pyear", "TIMESTAMP"),
+            &[("timeZone", "+05:30")],
+        ))),
+    );
+    for (tree, values, ty) in [
+        ("pabc", "k=abc", "DATE"),
+        ("pabc", "k=abc", "TIMESTAMP"),
+        ("pone", "k=1", "DATE"),
+        ("pone", "k=1", "TIMESTAMP"),
+        ("pdtail", "k=2024-01-02 xyz", "TIMESTAMP"),
+        ("pyear", "k=2024", "TIMESTAMP"),
+        ("pabc", "k=abc", "INT"),
+    ] {
+        add(
+            format!("typed parquet {values} as {ty}, ansi=false"),
+            typed(tree, ty),
+        );
+    }
 }

@@ -11,19 +11,33 @@
 //! | `float`, `double` | `Double.parseDouble` (`1.5`, `-2`, `1e3`) |
 //! | `decimal(p,s)` | the value's `BigDecimal`; a row-based reader (CSV) reads its value (`1.5` as `decimal(5,2)` is `1.50`); Parquet's vectorized reader shows its *unscaled* digits at scale `s` (`0.15`) but filters on the value, so only a value written at the column's scale (`1.50`) reads alike both ways there |
 //! | `boolean` | `true` / `false`, any case |
-//! | `date` | `yyyy-MM-dd`; `1` and `abc` do not read, `2024` does (as `2024-01-01`, not pinned here: refused) |
+//! | `date` | `CAST(raw AS DATE)`: `2024`, `2024-1`, `2024-01-02 xyz` read; `1` and `abc` do not |
 //! | `binary` | the value's UTF-8 bytes |
-//! | `timestamp` | `1` and `abc` do not read; readable shapes (`2024`) need the session zone: refused |
+//! | `timestamp` | `CAST(value AS TIMESTAMP)` in the read's zone (the `timeZone` option, else the session zone); no fallback: the date fallback Spark tries has no zone and always fails |
+//! | `timestamp_ntz` | `CAST(value AS TIMESTAMP_NTZ)`, else (ANSI) `CAST(CAST(raw AS DATE) AS TIMESTAMP_NTZ)` |
+//!
+//! Dates and timestamps are SQL casts (`castPartValueToDesiredType`), so the
+//! session's ANSI mode decides: under ANSI a value that does not read raises,
+//! otherwise the cast gives NULL and nothing is raised (even with
+//! `validatePartitionColumns`). `raw` is the directory's escaped text,
+//! `value` its unescaped form; a value whose two forms cast differently is
+//! refused. The zone and the mode travel in the field's metadata
+//! ([`PARTITION_VALUE_ZONE_KEY`], [`PARTITION_VALUE_ANSI_KEY`]), so the scan
+//! reads values as listing checked them.
 //!
 //! A value that does not read is `INVALID_PARTITION_VALUE`, or NULL under
 //! `spark.sql.sources.validatePartitionColumns=false`. Values whose reading
 //! the goldens do not pin (Java's `NaN`, `Infinity`, `1d`, padded numbers,
 //! a `tinyint` past its range, decimals that do not fit, a decimal on a
-//! vectorized reader not written at the column's scale, date shapes other
-//! than `yyyy-MM-dd`, readable timestamps) and other types are refused, never
-//! cast another way.
+//! vectorized reader not written at the column's scale) and other types are
+//! refused, never cast another way.
 
-use arrow_schema::{DataType, Field};
+use arrow_array::cast::AsArray;
+use arrow_array::types::{Date32Type, TimestampMicrosecondType};
+use arrow_array::{Array, StringArray};
+use arrow_schema::{DataType, Field, TimeUnit};
+use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, TimeZoneRules, cast};
+use krishiv_kernels::datetime::{ZoneRef, resolve_zone};
 
 /// Field-metadata key on a partition column whose values read as a user
 /// type: [`USER_VALUE`] or [`USER_VALUE_EXACT_SCALE`]. [`super::discover::constant_column`]
@@ -35,6 +49,17 @@ pub const USER_VALUE: &str = "user";
 /// the column's scale (Spark's vectorized Parquet and ORC readers show their
 /// unscaled digits but filter on their value; the two agree only then).
 pub const USER_VALUE_EXACT_SCALE: &str = "user_exact_scale";
+/// Field-metadata key on a user-typed date or timestamp partition column:
+/// the zone id its values are cast in (the read's `timeZone` option, else
+/// `spark.sql.session.timeZone`). Absent: UTC.
+pub const PARTITION_VALUE_ZONE_KEY: &str = "krishiv.partition_value_zone";
+/// Field-metadata key on a user-typed date or timestamp partition column:
+/// `false` when `spark.sql.ansi.enabled` was off for the read (a value that
+/// does not cast is NULL, not an error). Absent: ANSI.
+pub const PARTITION_VALUE_ANSI_KEY: &str = "krishiv.partition_value_ansi";
+
+/// Microseconds in a day.
+const MICROS_PER_DAY: i64 = 86_400_000_000;
 
 /// One partition value read as a user type.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,16 +69,34 @@ pub enum UserPartitionValue {
     /// The value, as text the type reads exactly (a legacy cast of it gives
     /// Spark's value).
     Text(String),
+    /// A `DATE`: days since the epoch.
+    Date(i32),
+    /// A `TIMESTAMP` or `TIMESTAMP_NTZ`: microseconds since the epoch.
+    Timestamp(i64),
     /// Spark cannot read it as the type: `INVALID_PARTITION_VALUE`.
     Invalid,
     /// Not pinned to Spark: refused.
     Unsupported,
 }
 
-/// `field` marked to read its partition values as a user type.
+/// `field` marked to read its partition values as a user type; a date or
+/// timestamp column also records the zone id it casts in (`zone`) and
+/// whether the read ran under ANSI (`ansi`).
 #[must_use]
-pub fn user_partition_field(field: Field, exact_scale_decimals: bool) -> Field {
+pub fn user_partition_field(
+    field: Field,
+    exact_scale_decimals: bool,
+    zone: &str,
+    ansi: bool,
+) -> Field {
     let mut metadata = field.metadata().clone();
+    if matches!(
+        field.data_type(),
+        DataType::Date32 | DataType::Timestamp(..)
+    ) {
+        metadata.insert(PARTITION_VALUE_ZONE_KEY.to_owned(), zone.to_owned());
+        metadata.insert(PARTITION_VALUE_ANSI_KEY.to_owned(), ansi.to_string());
+    }
     metadata.insert(
         PARTITION_VALUE_KEY.to_owned(),
         if exact_scale_decimals {
@@ -136,36 +179,93 @@ pub fn user_partition_value(
                 V::Invalid
             }
         }
-        DataType::Date32 => {
-            if iso_date(v) {
-                text()
-            } else if unreadable_date(v) {
-                V::Invalid
-            } else {
-                // `2024`, `2024-1-2`, `2024-01-02 03:04`: shapes Spark may
-                // read that the goldens do not pin.
-                V::Unsupported
-            }
-        }
-        DataType::Timestamp(..) => {
-            if unreadable_date(v) {
-                V::Invalid
-            } else {
-                // Readable as a timestamp in the session zone, which the
-                // scan does not have, or not pinned.
-                V::Unsupported
+        DataType::Date32 | DataType::Timestamp(..) => datetime(field, v),
+        _ => V::Unsupported,
+    }
+}
+
+/// A date or timestamp partition value, as Spark 4.2.0's
+/// `castPartValueToDesiredType` casts it.
+fn datetime(field: &Field, v: &str) -> UserPartitionValue {
+    use UserPartitionValue as V;
+    let metadata = field.metadata();
+    let ansi = metadata
+        .get(PARTITION_VALUE_ANSI_KEY)
+        .is_none_or(|a| a != "false");
+    let zone = match metadata.get(PARTITION_VALUE_ZONE_KEY) {
+        None => ZoneRef::Fixed(FixedOffset(0)),
+        Some(z) => match resolve_zone(z) {
+            Ok(zone) => zone,
+            // Spark fails the read on a zone id it cannot resolve.
+            Err(_) => return V::Unsupported,
+        },
+    };
+    // Not under ANSI, the cast gives NULL and nothing is raised.
+    let unread = if ansi { V::Invalid } else { V::Null };
+    match field.data_type() {
+        DataType::Date32 => match raw_date(v) {
+            Raw::Date(d) => V::Date(d),
+            Raw::None => unread,
+            Raw::Differs => V::Unsupported,
+        },
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            match cast_one(v, field.data_type(), &zone) {
+                Some(us) => V::Timestamp(us),
+                None if !ansi => V::Null,
+                // `TIMESTAMP`: Spark's fallback casts the date to a zoned
+                // timestamp without a zone, which always raises.
+                None if tz.is_some() => V::Invalid,
+                None => match raw_date(v) {
+                    Raw::Date(d) => V::Timestamp(i64::from(d) * MICROS_PER_DAY),
+                    Raw::None => V::Invalid,
+                    Raw::Differs => V::Unsupported,
+                },
             }
         }
         _ => V::Unsupported,
     }
 }
 
-/// A value Spark 4.2.0 is pinned not to read as a date or timestamp: up to
-/// three ASCII digits (`1`; four or more are a year), or ASCII letters only
-/// (`abc`).
-fn unreadable_date(v: &str) -> bool {
-    (!v.is_empty() && v.len() < 4 && v.bytes().all(|b| b.is_ascii_digit()))
-        || (!v.is_empty() && v.bytes().all(|b| b.is_ascii_alphabetic()))
+/// `CAST(raw AS DATE)` of a value, where `raw` is the directory's escaped
+/// text.
+enum Raw {
+    Date(i32),
+    None,
+    /// The escaped and unescaped forms cast differently: the escaped text on
+    /// disk is not known here.
+    Differs,
+}
+
+fn raw_date(v: &str) -> Raw {
+    let utc = FixedOffset(0);
+    let plain = cast_one(v, &DataType::Date32, &utc);
+    let escaped = super::escape_partition_value(v);
+    if escaped != v && cast_one(&escaped, &DataType::Date32, &utc) != plain {
+        return Raw::Differs;
+    }
+    plain.map_or(Raw::None, |d| {
+        i32::try_from(d).map_or(Raw::Differs, Raw::Date)
+    })
+}
+
+/// The legacy cast of the string `v` to `to` (`Date32` or `Timestamp(µs)`)
+/// in `zone`: the days or microseconds, or `None` where Spark's cast gives
+/// NULL (and ANSI raises).
+fn cast_one(v: &str, to: &DataType, zone: &dyn TimeZoneRules) -> Option<i64> {
+    let opts = CastOptions {
+        mode: CastMode::Legacy,
+        time_zone: zone,
+    };
+    let out = cast(&StringArray::from(vec![v]), to, &opts).ok()?;
+    if out.is_null(0) {
+        return None;
+    }
+    match to {
+        DataType::Date32 => Some(i64::from(out.as_primitive::<Date32Type>().value(0))),
+        _ => out
+            .as_primitive_opt::<TimestampMicrosecondType>()
+            .map(|a| a.value(0)),
+    }
 }
 
 /// Java's `Integer.parseInt` / `Long.parseLong` (`bits` 32 or 64): an
@@ -226,31 +326,6 @@ fn java_double_only(v: &str) -> bool {
             let b = v.trim_start_matches(['+', '-']);
             b.starts_with("0x") || b.starts_with("0X")
         }
-}
-
-/// `yyyy-MM-dd`, a valid date.
-fn iso_date(v: &str) -> bool {
-    let b = v.as_bytes();
-    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
-        return false;
-    }
-    let num = |s: &[u8]| -> Option<u32> {
-        s.iter().try_fold(0_u32, |acc, c| {
-            c.is_ascii_digit().then(|| acc * 10 + u32::from(c - b'0'))
-        })
-    };
-    let (Some(y), Some(m), Some(d)) = (num(&b[..4]), num(&b[5..7]), num(&b[8..])) else {
-        return false;
-    };
-    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let days = match m {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap => 29,
-        2 => 28,
-        _ => return false,
-    };
-    (1..=days).contains(&d)
 }
 
 /// A decimal partition value: Java's `BigDecimal` of `v`, at the column's
@@ -331,13 +406,11 @@ mod tests {
         assert_eq!(read(DataType::Boolean, "1", false), Invalid);
         assert_eq!(
             read(DataType::Date32, "2024-01-02", false),
-            text("2024-01-02")
+            UserPartitionValue::Date(19_724)
         );
         assert_eq!(read(DataType::Date32, "1", false), Invalid);
-        assert_eq!(read(DataType::Date32, "2024-1-2", false), Unsupported);
         let ts = DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None);
-        assert_eq!(read(ts.clone(), "1", false), Invalid);
-        assert_eq!(read(ts, "2024-01-02 03:04:05", false), Unsupported);
+        assert_eq!(read(ts, "1", false), Invalid);
         assert_eq!(read(DataType::Binary, "1", false), text("1"));
         let list = DataType::List(std::sync::Arc::new(Field::new("e", DataType::Int32, true)));
         assert_eq!(read(list, "1", false), Unsupported);
@@ -368,18 +441,90 @@ mod tests {
         assert_eq!(read(d52, "x", false), Invalid);
     }
 
+    fn typed(t: DataType, zone: &str, ansi: bool) -> Field {
+        user_partition_field(Field::new("k", t, true), true, zone, ansi)
+    }
+
+    fn at(field: &Field, v: &str) -> UserPartitionValue {
+        user_partition_value(field, Some(v), true)
+    }
+
+    const JAN_1_2024: i32 = 19_723;
+    const DAY: i64 = 86_400_000_000;
+
     #[test]
-    fn dates_and_timestamps_are_invalid_only_in_pinned_shapes() {
-        use UserPartitionValue::{Invalid, Unsupported};
-        let ts = DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None);
-        for t in [DataType::Date32, ts] {
-            assert_eq!(read(t.clone(), "1", false), Invalid);
-            assert_eq!(read(t.clone(), "abc", false), Invalid);
-            // Spark reads `2024` as 2024-01-01: not pinned here, refused.
-            assert_eq!(read(t.clone(), "2024", false), Unsupported);
-            assert_eq!(read(t.clone(), "2024-1-2", false), Unsupported);
-            assert_eq!(read(t, "a1", false), Unsupported);
-        }
-        assert_eq!(read(DataType::Int32, "١", false), Unsupported);
+    fn dates_read_as_spark_casts_the_raw_text() {
+        use UserPartitionValue::{Date, Invalid, Null, Unsupported};
+        let date = typed(DataType::Date32, "UTC", true);
+        assert_eq!(at(&date, "2024"), Date(JAN_1_2024));
+        assert_eq!(at(&date, "2024-1"), Date(JAN_1_2024));
+        assert_eq!(at(&date, "2024-01-02 xyz"), Date(JAN_1_2024 + 1));
+        assert_eq!(at(&date, "2024-01-02 03:04:05"), Date(JAN_1_2024 + 1));
+        assert_eq!(at(&date, "abc"), Invalid);
+        assert_eq!(at(&date, "1"), Invalid);
+        // The zone does not move a date.
+        let la = typed(DataType::Date32, "America/Los_Angeles", true);
+        assert_eq!(at(&la, "2024"), Date(JAN_1_2024));
+        // Not under ANSI the cast gives NULL, never an error.
+        let legacy = typed(DataType::Date32, "UTC", false);
+        assert_eq!(at(&legacy, "abc"), Null);
+        assert_eq!(at(&legacy, "2024"), Date(JAN_1_2024));
+        // A control character Spark escapes on disk: `2024%09` does not
+        // read, `2024\t` would.
+        assert_eq!(at(&date, "2024\t"), Unsupported);
+        // An unknown zone id.
+        assert_eq!(
+            at(&typed(DataType::Date32, "Nowhere/x", true), "2024"),
+            Unsupported
+        );
+        assert_eq!(at(&date, "2024-01-02T03"), Date(JAN_1_2024 + 1));
+        assert_eq!(
+            at(&Field::new("k", DataType::Date32, true), "2024"),
+            Date(JAN_1_2024)
+        );
+    }
+
+    #[test]
+    fn timestamps_cast_in_the_recorded_zone() {
+        use UserPartitionValue::{Invalid, Null, Timestamp};
+        let ltz = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let ntz = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let jan1 = i64::from(JAN_1_2024) * DAY;
+        let utc = typed(ltz.clone(), "UTC", true);
+        assert_eq!(at(&utc, "2024"), Timestamp(jan1));
+        assert_eq!(
+            at(&utc, "2024-01-02 03:04:05"),
+            Timestamp(jan1 + DAY + 11_045_000_000)
+        );
+        // Spark 4.2.0: a zoned timestamp has no working date fallback.
+        assert_eq!(at(&utc, "2024-01-02 xyz"), Invalid);
+        assert_eq!(at(&utc, "abc"), Invalid);
+        let la = typed(ltz.clone(), "America/Los_Angeles", true);
+        assert_eq!(at(&la, "2024"), Timestamp(jan1 + 8 * 3_600_000_000));
+        assert_eq!(
+            at(&la, "2024-01-02T03:04:05Z"),
+            Timestamp(jan1 + DAY + 11_045_000_000)
+        );
+        let legacy = typed(ltz, "UTC", false);
+        assert_eq!(at(&legacy, "2024-01-02 xyz"), Null);
+        assert_eq!(at(&legacy, "1"), Null);
+        // TIMESTAMP_NTZ: the zone does not apply; under ANSI a value that
+        // does not cast falls back to its date.
+        let n = typed(ntz.clone(), "America/Los_Angeles", true);
+        assert_eq!(at(&n, "2024"), Timestamp(jan1));
+        assert_eq!(at(&n, "2024-01-02 xyz"), Timestamp(jan1 + DAY));
+        assert_eq!(at(&n, "abc"), Invalid);
+        assert_eq!(at(&typed(ntz, "UTC", false), "2024-01-02 xyz"), Null);
+        // Other timestamp units are not partition types.
+        let ms = typed(
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            "UTC",
+            true,
+        );
+        assert_eq!(at(&ms, "2024"), UserPartitionValue::Unsupported);
+        assert_eq!(
+            read(DataType::Int32, "١", false),
+            UserPartitionValue::Unsupported
+        );
     }
 }

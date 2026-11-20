@@ -77,6 +77,16 @@ def layout(spark, root):
     # names follows its listing order, which varies between runs.
     for tree, k in (("pyear", "2024"), ("pabc", "abc"), ("pdec2", "1.50"), ("pdec2", "-3.25"), ("pone", "1")):
         spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
+    # Date and timestamp shapes Spark reads through its string casts (`castPartValueToDesiredType`): one value per
+    # tree. A value with `:` is written by renaming a directory, so the name on disk is the escaped form Spark lists.
+    for tree, k in (
+        ("ptsfull", "2024-01-02 03%3A04%3A05"),
+        ("pdtail", "2024-01-02 xyz"),
+        ("pmonth", "2024-1"),
+        ("ptsz", "2024-01-02T03%3A04%3A05Z"),
+    ):
+        spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/tmp")
+        os.rename(f"{root}/{tree}/p/tmp", f"{root}/{tree}/p/k={k}")
     # KN-1 merge review nit 3: trees a case adds a partition directory to after CREATE TEMPORARY VIEW.
     for tree in ("pva", "pvb"):
         for k in ("1", "2"):
@@ -534,6 +544,72 @@ def cases(spark, root):
         "parquet pdec2/p schema v STRING, k DECIMAL(5,2) filter k = 1.5",
         lambda: read("parquet", "pdec2/p", "v STRING, k DECIMAL(5,2)")().where("k = 1.5"),
     )
+    # Date and timestamp shapes (perf-4, KN-1 follow-up): Spark casts the value with `Cast` in the read's zone
+    # (the `timeZone` option, else the session zone) and the session's ANSI mode; a timestamp that does not cast
+    # falls back to the value cast as a date. `us` is the instant (`unix_micros`), independent of the display zone.
+    def with_micros(fmt, path, schema, **opts):
+        return lambda: read(fmt, path, schema, **opts)().selectExpr("v", "k", "unix_micros(k) AS us")
+
+    for tree, values in (
+        ("pmonth", "k=2024-1"),
+        ("pdtail", "k=2024-01-02 xyz"),
+        ("ptsfull", "k=2024-01-02 03:04:05"),
+        ("ptsz", "k=2024-01-02T03:04:05Z"),
+    ):
+        for ty in ("DATE", "TIMESTAMP", "TIMESTAMP_NTZ"):
+            add(
+                f"typed parquet {values} as {ty}",
+                f"parquet {tree}/p schema v STRING, k {ty}",
+                read("parquet", f"{tree}/p", f"v STRING, k {ty}"),
+            )
+    for tree, values in (("pyear", "k=2024"), ("pabc", "k=abc"), ("pone", "k=1")):
+        add(
+            f"typed parquet {values} as TIMESTAMP_NTZ",
+            f"parquet {tree}/p schema v STRING, k TIMESTAMP_NTZ",
+            read("parquet", f"{tree}/p", f"v STRING, k TIMESTAMP_NTZ"),
+        )
+    la = {"spark.sql.session.timeZone": "America/Los_Angeles"}
+    for tree, values in (("pyear", "k=2024"), ("ptsfull", "k=2024-01-02 03:04:05"), ("pdtail", "k=2024-01-02 xyz"),
+                         ("ptsz", "k=2024-01-02T03:04:05Z")):
+        add(
+            f"typed parquet {values} as TIMESTAMP, session zone America/Los_Angeles",
+            f"parquet {tree}/p schema v STRING, k TIMESTAMP, session zone America/Los_Angeles, with unix_micros",
+            with_micros("parquet", f"{tree}/p", "v STRING, k TIMESTAMP"),
+            la,
+        )
+    add(
+        "typed parquet k=2024 as DATE, session zone America/Los_Angeles",
+        "parquet pyear/p schema v STRING, k DATE, session zone America/Los_Angeles",
+        read("parquet", "pyear/p", "v STRING, k DATE"),
+        la,
+    )
+    add(
+        "typed parquet k=2024 as TIMESTAMP, timeZone option America/Los_Angeles",
+        "parquet pyear/p schema v STRING, k TIMESTAMP, option timeZone=America/Los_Angeles, with unix_micros",
+        with_micros("parquet", "pyear/p", "v STRING, k TIMESTAMP", timeZone="America/Los_Angeles"),
+    )
+    add(
+        "typed parquet k=2024 as TIMESTAMP, timeZone option +05:30, session zone America/Los_Angeles",
+        "parquet pyear/p schema v STRING, k TIMESTAMP, option timeZone=+05:30, session LA, with unix_micros",
+        with_micros("parquet", "pyear/p", "v STRING, k TIMESTAMP", timeZone="+05:30"),
+        la,
+    )
+    off = {"spark.sql.ansi.enabled": "false"}
+    for tree, values, ty in (
+        ("pabc", "k=abc", "DATE"),
+        ("pabc", "k=abc", "TIMESTAMP"),
+        ("pone", "k=1", "DATE"),
+        ("pone", "k=1", "TIMESTAMP"),
+        ("pdtail", "k=2024-01-02 xyz", "TIMESTAMP"),
+        ("pyear", "k=2024", "TIMESTAMP"),
+        ("pabc", "k=abc", "INT"),
+    ):
+        add(
+            f"typed parquet {values} as {ty}, ansi=false",
+            f"parquet {tree}/p schema v STRING, k {ty} ansi=false",
+            read("parquet", f"{tree}/p", f"v STRING, k {ty}"),
+            off,
+        )
     add("text partitioned, schema line", "text tp/p schema line STRING", read("text", "tp/p", "line STRING"))
     add(
         "text partitioned, schema line,k",

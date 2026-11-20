@@ -98,8 +98,8 @@ pub use partition::{
     escape_partition_value, partition_dir_name, partition_segment, partition_segments,
     partition_texts, partition_texts_in, renders_as_string, spark_partitioned_file_name,
     user_value::{
-        PARTITION_VALUE_KEY, UserPartitionValue, user_partition_field, user_partition_value,
-        user_value_mode,
+        PARTITION_VALUE_ANSI_KEY, PARTITION_VALUE_KEY, PARTITION_VALUE_ZONE_KEY,
+        UserPartitionValue, user_partition_field, user_partition_value, user_value_mode,
     },
 };
 pub use request::{

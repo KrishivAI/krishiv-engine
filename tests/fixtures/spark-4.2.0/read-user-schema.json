@@ -3183,6 +3183,653 @@
    ]
   },
   {
+   "name": "typed parquet k=2024-1 as DATE",
+   "input": "parquet pmonth/p schema v STRING, k DATE",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "date",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-01"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-1 as TIMESTAMP",
+   "input": "parquet pmonth/p schema v STRING, k TIMESTAMP",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-01 00:00:00"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-1 as TIMESTAMP_NTZ",
+   "input": "parquet pmonth/p schema v STRING, k TIMESTAMP_NTZ",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp_ntz",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-01 00:00:00"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-01-02 xyz as DATE",
+   "input": "parquet pdtail/p schema v STRING, k DATE",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "date",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-02"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-01-02 xyz as TIMESTAMP",
+   "input": "parquet pdtail/p schema v STRING, k TIMESTAMP",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"TIMESTAMP\"",
+    "value": "'2024-01-02 xyz'"
+   }
+  },
+  {
+   "name": "typed parquet k=2024-01-02 xyz as TIMESTAMP_NTZ",
+   "input": "parquet pdtail/p schema v STRING, k TIMESTAMP_NTZ",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp_ntz",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-02 00:00:00"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-01-02 03:04:05 as DATE",
+   "input": "parquet ptsfull/p schema v STRING, k DATE",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "date",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-02"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-01-02 03:04:05 as TIMESTAMP",
+   "input": "parquet ptsfull/p schema v STRING, k TIMESTAMP",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-02 03:04:05"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-01-02 03:04:05 as TIMESTAMP_NTZ",
+   "input": "parquet ptsfull/p schema v STRING, k TIMESTAMP_NTZ",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp_ntz",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-02 03:04:05"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-01-02T03:04:05Z as DATE",
+   "input": "parquet ptsz/p schema v STRING, k DATE",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "date",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-02"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-01-02T03:04:05Z as TIMESTAMP",
+   "input": "parquet ptsz/p schema v STRING, k TIMESTAMP",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-02 03:04:05"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-01-02T03:04:05Z as TIMESTAMP_NTZ",
+   "input": "parquet ptsz/p schema v STRING, k TIMESTAMP_NTZ",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp_ntz",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-02 03:04:05"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024 as TIMESTAMP_NTZ",
+   "input": "parquet pyear/p schema v STRING, k TIMESTAMP_NTZ",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp_ntz",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-01 00:00:00"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=abc as TIMESTAMP_NTZ",
+   "input": "parquet pabc/p schema v STRING, k TIMESTAMP_NTZ",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"TIMESTAMP_NTZ\"",
+    "value": "'abc'"
+   }
+  },
+  {
+   "name": "typed parquet k=1 as TIMESTAMP_NTZ",
+   "input": "parquet pone/p schema v STRING, k TIMESTAMP_NTZ",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"TIMESTAMP_NTZ\"",
+    "value": "'1'"
+   }
+  },
+  {
+   "name": "typed parquet k=2024 as TIMESTAMP, session zone America/Los_Angeles",
+   "input": "parquet pyear/p schema v STRING, k TIMESTAMP, session zone America/Los_Angeles, with unix_micros",
+   "conf": {
+    "spark.sql.session.timeZone": "America/Los_Angeles"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "us",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-01 00:00:00",
+     "1704096000000000"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-01-02 03:04:05 as TIMESTAMP, session zone America/Los_Angeles",
+   "input": "parquet ptsfull/p schema v STRING, k TIMESTAMP, session zone America/Los_Angeles, with unix_micros",
+   "conf": {
+    "spark.sql.session.timeZone": "America/Los_Angeles"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "us",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-02 03:04:05",
+     "1704193445000000"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-01-02 xyz as TIMESTAMP, session zone America/Los_Angeles",
+   "input": "parquet pdtail/p schema v STRING, k TIMESTAMP, session zone America/Los_Angeles, with unix_micros",
+   "conf": {
+    "spark.sql.session.timeZone": "America/Los_Angeles"
+   },
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"TIMESTAMP\"",
+    "value": "'2024-01-02 xyz'"
+   }
+  },
+  {
+   "name": "typed parquet k=2024-01-02T03:04:05Z as TIMESTAMP, session zone America/Los_Angeles",
+   "input": "parquet ptsz/p schema v STRING, k TIMESTAMP, session zone America/Los_Angeles, with unix_micros",
+   "conf": {
+    "spark.sql.session.timeZone": "America/Los_Angeles"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "us",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-01 19:04:05",
+     "1704164645000000"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024 as DATE, session zone America/Los_Angeles",
+   "input": "parquet pyear/p schema v STRING, k DATE, session zone America/Los_Angeles",
+   "conf": {
+    "spark.sql.session.timeZone": "America/Los_Angeles"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "date",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-01"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024 as TIMESTAMP, timeZone option America/Los_Angeles",
+   "input": "parquet pyear/p schema v STRING, k TIMESTAMP, option timeZone=America/Los_Angeles, with unix_micros",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "us",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-01 08:00:00",
+     "1704096000000000"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024 as TIMESTAMP, timeZone option +05:30, session zone America/Los_Angeles",
+   "input": "parquet pyear/p schema v STRING, k TIMESTAMP, option timeZone=+05:30, session LA, with unix_micros",
+   "conf": {
+    "spark.sql.session.timeZone": "America/Los_Angeles"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "us",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2023-12-31 10:30:00",
+     "1704047400000000"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=abc as DATE, ansi=false",
+   "input": "parquet pabc/p schema v STRING, k DATE ansi=false",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "date",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=abc as TIMESTAMP, ansi=false",
+   "input": "parquet pabc/p schema v STRING, k TIMESTAMP ansi=false",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1 as DATE, ansi=false",
+   "input": "parquet pone/p schema v STRING, k DATE ansi=false",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "date",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1 as TIMESTAMP, ansi=false",
+   "input": "parquet pone/p schema v STRING, k TIMESTAMP ansi=false",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024-01-02 xyz as TIMESTAMP, ansi=false",
+   "input": "parquet pdtail/p schema v STRING, k TIMESTAMP ansi=false",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024 as TIMESTAMP, ansi=false",
+   "input": "parquet pyear/p schema v STRING, k TIMESTAMP ansi=false",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-01 00:00:00"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=abc as INT, ansi=false",
+   "input": "parquet pabc/p schema v STRING, k INT ansi=false",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"INT\"",
+    "value": "'abc'"
+   }
+  },
+  {
    "name": "text partitioned, schema line",
    "input": "text tp/p schema line STRING",
    "schema": [

@@ -405,6 +405,21 @@ pub fn constant_column(field: &Field, value: Option<&str>, rows: usize) -> Resul
                     converted = t;
                     Some(converted.as_str())
                 }
+                V::Date(days) => {
+                    return Ok(Arc::new(arrow_array::Date32Array::from(vec![days; rows])));
+                }
+                V::Timestamp(micros) => {
+                    let DataType::Timestamp(_, tz) = field.data_type() else {
+                        return Err(internal(format!(
+                            "partition value {value:?}: a timestamp for {}",
+                            field.data_type()
+                        )));
+                    };
+                    return Ok(Arc::new(
+                        arrow_array::TimestampMicrosecondArray::from(vec![micros; rows])
+                            .with_timezone_opt(tz.clone()),
+                    ));
+                }
                 V::Unsupported => {
                     return Err(internal(format!(
                         "partition value {value:?} as {}: not read as a user type",

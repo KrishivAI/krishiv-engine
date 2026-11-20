@@ -46,7 +46,7 @@ pub(super) fn check_user_schema(format: &str, data: &[&krishiv_types::StructFiel
 
 /// How a read with a user schema types its partition columns.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct UserPartitions {
+pub(super) struct UserPartitions<'a> {
     /// `spark.sql.sources.partitionColumnTypeInference.enabled`, for the
     /// partition columns the schema does not name.
     pub(super) infer: bool,
@@ -59,6 +59,12 @@ pub(super) struct UserPartitions {
     /// The format is one Spark reads vectorized (Parquet, ORC): a decimal
     /// partition value reads only when written at the column's scale.
     pub(super) exact_scale_decimals: bool,
+    /// The zone id date and timestamp values are cast in: the read's
+    /// `timeZone` option, else `spark.sql.session.timeZone`.
+    pub(super) zone: &'a str,
+    /// `spark.sql.ansi.enabled`: under ANSI a date or timestamp value that
+    /// does not cast raises; otherwise it is NULL.
+    pub(super) ansi: bool,
 }
 
 /// The schema of a read with the user's `schema` and the partition columns
@@ -79,7 +85,7 @@ pub(super) struct UserPartitions {
 pub(super) fn user_schema_columns<'a>(
     schema: &'a StructType,
     discovered: &[(String, Vec<Segment>)],
-    rules: UserPartitions,
+    rules: UserPartitions<'_>,
 ) -> Result<(
     SchemaRef,
     Vec<FieldRef>,
@@ -122,6 +128,8 @@ pub(super) fn user_schema_columns<'a>(
         let field = krishiv_io::user_partition_field(
             data_type.to_arrow_field(named.name(), true),
             rules.exact_scale_decimals,
+            rules.zone,
+            rules.ansi,
         );
         let mut checked: HashSet<&str> = HashSet::new();
         for (_, segs) in discovered {
@@ -131,7 +139,7 @@ pub(super) fn user_schema_columns<'a>(
             }
             use krishiv_io::UserPartitionValue as V;
             match krishiv_io::user_partition_value(&field, value, rules.exact_scale_decimals) {
-                V::Null | V::Text(_) => {}
+                V::Null | V::Text(_) | V::Date(_) | V::Timestamp(_) => {}
                 V::Invalid if !rules.validate => {}
                 V::Invalid => {
                     return Err(InvalidPartitionValue {
@@ -210,12 +218,14 @@ mod tests {
         v.iter().collect()
     }
 
-    fn rules(case_sensitive: bool, validate: bool) -> UserPartitions {
+    fn rules(case_sensitive: bool, validate: bool) -> UserPartitions<'static> {
         UserPartitions {
             infer: true,
             case_sensitive,
             validate,
             exact_scale_decimals: false,
+            zone: "UTC",
+            ansi: true,
         }
     }
 

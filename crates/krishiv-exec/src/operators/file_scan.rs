@@ -766,11 +766,19 @@ fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
             scan.table.field_with_name(f.name()).map_or_else(
                 |_| Arc::clone(f),
                 |t| {
-                    // The listing's mark of a column a user schema typed
-                    // (how its values read) stays on the table's field.
+                    // The listing's marks of a column a user schema typed
+                    // (how its values read: the mode, and a date's or
+                    // timestamp's zone and ANSI mode) stay on the table's
+                    // field.
                     let mut metadata = t.metadata().clone();
-                    if let Some(mark) = f.metadata().get(krishiv_io::PARTITION_VALUE_KEY) {
-                        metadata.insert(krishiv_io::PARTITION_VALUE_KEY.to_owned(), mark.clone());
+                    for key in [
+                        krishiv_io::PARTITION_VALUE_KEY,
+                        krishiv_io::PARTITION_VALUE_ZONE_KEY,
+                        krishiv_io::PARTITION_VALUE_ANSI_KEY,
+                    ] {
+                        if let Some(mark) = f.metadata().get(key) {
+                            metadata.insert(key.to_owned(), mark.clone());
+                        }
                     }
                     Arc::new(t.clone().with_metadata(metadata))
                 },

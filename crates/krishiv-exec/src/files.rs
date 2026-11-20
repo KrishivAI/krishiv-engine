@@ -557,6 +557,7 @@ impl FileReads {
             }
         };
         let merge = self.merges_schemas(format.name(), options);
+        let partition_zone = self.partition_zone(options);
         let (options, _) = format.options().parse(options, &self.session)?;
         let discovered: Vec<(String, Vec<Segment>)> = listed
             .iter()
@@ -572,6 +573,8 @@ impl FileReads {
                 case_sensitive: self.case_sensitive(),
                 validate: self.validates_partition_columns(),
                 exact_scale_decimals: matches!(format.name(), "parquet" | "orc"),
+                zone: &partition_zone,
+                ansi: self.ansi(),
             };
             let (schema, partition_columns, data) = user_schema_columns(user, &discovered, rules)?;
             check_user_schema(format.name(), &data)?;
@@ -693,6 +696,31 @@ impl FileReads {
         self.session
             .get_unregistered("spark.sql.sources.partitionColumnTypeInference.enabled")
             .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
+    }
+
+    /// The zone id partition values are cast in: the read's `timeZone`
+    /// option, else `spark.sql.session.timeZone` (Spark 4.2.0
+    /// `PartitioningAwareFileIndex.inferPartitioning`), else UTC.
+    fn partition_zone(&self, options: &BTreeMap<String, OptionValue>) -> String {
+        options
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("timeZone"))
+            .and_then(|(_, v)| v.as_plain())
+            .map(str::to_owned)
+            .or_else(|| {
+                self.session
+                    .get(&krishiv_common::config::SESSION_TIME_ZONE)
+                    .and_then(|v| v.as_str().map(str::to_owned))
+            })
+            .unwrap_or_else(|| "UTC".to_owned())
+    }
+
+    /// `spark.sql.ansi.enabled` (default true).
+    fn ansi(&self) -> bool {
+        self.session
+            .get(&krishiv_common::config::ANSI_ENABLED)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true)
     }
 
     /// Whether the read asks to merge the files' schemas: the
