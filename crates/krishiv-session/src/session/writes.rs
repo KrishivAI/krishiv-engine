@@ -41,6 +41,80 @@ pub(crate) fn partition_overwrite_is_dynamic(
 /// `krishiv.sql.files.commitProtocol` `LOG`, or `AUTO` where the store
 /// creates objects only if absent (probed once per write; a store that
 /// fails the probe falls back to the plain commit with a warning).
+/// The write's `krishiv.write.idempotencyKey` (E34): the write option, else the session setting.
+///
+/// # Errors
+/// `INVALID_CONF_VALUE` for an empty key.
+pub(super) fn write_idempotency_key(
+    config: &Config,
+    options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+) -> Result<Option<String>, KrishivError> {
+    use krishiv_common::secret::OptionValue;
+    let name = krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION;
+    let key = options
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .and_then(|(_, v)| match v {
+            OptionValue::Plain(s) => Some(s.clone()),
+            _ => None,
+        })
+        .or_else(|| {
+            config
+                .get(&krishiv_common::config::WRITE_IDEMPOTENCY_KEY)
+                .and_then(ConfigValue::as_str)
+                .map(str::to_owned)
+        });
+    match key {
+        Some(k) if k.is_empty() => Err(krishiv_common::error::KrishivInvalidConfigValue {
+            key: name.to_owned(),
+            value: k,
+            reason: "an idempotency key must not be empty".to_owned(),
+        }
+        .into()),
+        k => Ok(k),
+    }
+}
+
+/// The refusal of an idempotency key on a write that goes through no commit log.
+#[cold]
+#[inline(never)]
+pub(super) fn unlogged_key(display: &str) -> KrishivError {
+    krishiv_common::error::KrishivUnsupportedFeature {
+        feature: format!(
+            "krishiv.write.idempotencyKey on a directory without a commit log ({display}); set krishiv.sql.files.commitProtocol"
+        ),
+    }
+    .into()
+}
+
+/// `write`, through the commit log when the directory uses one (with the write's idempotency key,
+/// E34), else as it is.
+///
+/// # Errors
+/// The probe's and the log's errors; an idempotency key on a directory without a log.
+#[expect(clippy::too_many_arguments, reason = "the pieces of one write's setup")]
+pub(super) async fn logged_or_plain(
+    write: krishiv_io::DirectoryWrite,
+    config: &Config,
+    probes: &Mutex<HashMap<String, bool>>,
+    io: &krishiv_io::IoContext,
+    store: &StoreId,
+    at: &krishiv_exec::files::LocatedPath,
+    job: &str,
+    options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+) -> Result<krishiv_io::DirectoryWrite, KrishivError> {
+    let key = write_idempotency_key(config, options)?;
+    if Box::pin(uses_commit_log(config, probes, io, store, at, job)).await? {
+        // Boxed: the statement futures are on the recursion of nested scripts.
+        Ok(Box::pin(write.logged(io)).await?.with_idempotency_key(key))
+    } else if key.is_some() {
+        // Only the commit log records a key: a plain directory write would append twice.
+        Err(unlogged_key(&at.display))
+    } else {
+        Ok(write)
+    }
+}
+
 pub(super) async fn uses_commit_log(
     config: &Config,
     probes: &Mutex<HashMap<String, bool>>,

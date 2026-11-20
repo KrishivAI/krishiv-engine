@@ -47,6 +47,7 @@ fn foreign_removal(c: &Case, name: &str, id: i64) -> Foreign {
                 branch: "main",
                 write_id: &uuid,
                 query_id: None,
+                idempotency_key: None,
             };
             let a = prepare_attempt(&io, &m, &mut new, ids, ts, MAX)
                 .await

@@ -271,6 +271,7 @@ impl Session {
             .ok_or_else(|| internal("a row-level rewrite that reads no table".to_owned()))?;
         let mut request =
             RowLevelWrite::new(op, quoted, Arc::clone(physical.schema()), touched, None);
+        apply_idempotency_key(&analysis.env.config, &mut request.options)?;
         request.write_id = Some(crate::session::job_uuid());
         let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
         let mut stream = self.run(&plan, &analysis.env).await?;
@@ -434,3 +435,38 @@ fn touched_files(batches: &[RecordBatch]) -> Result<(Vec<Vec<u8>>, u64), Krishiv
 
 #[cfg(test)]
 mod tests;
+
+/// Puts `krishiv.write.idempotencyKey` into a write's `options` when it names none (the per-write
+/// option wins over the session setting). E34.
+///
+/// # Errors
+/// `INVALID_CONF_VALUE` for an empty key.
+pub(super) fn apply_idempotency_key(
+    config: &krishiv_common::config::Config,
+    options: &mut std::collections::BTreeMap<String, String>,
+) -> Result<(), KrishivError> {
+    use krishiv_exec::planner::{IDEMPOTENCY_KEY_OPTION, idempotency_key_option};
+    let key = match idempotency_key_option(options) {
+        Some(k) => k,
+        None => {
+            match config
+                .get(&krishiv_common::config::WRITE_IDEMPOTENCY_KEY)
+                .and_then(krishiv_common::config::ConfigValue::as_str)
+            {
+                Some(k) => k.to_owned(),
+                None => return Ok(()),
+            }
+        }
+    };
+    if key.is_empty() {
+        return Err(krishiv_common::error::KrishivInvalidConfigValue {
+            key: IDEMPOTENCY_KEY_OPTION.to_owned(),
+            value: key,
+            reason: "an idempotency key must not be empty".to_owned(),
+        }
+        .into());
+    }
+    options.retain(|k, _| !k.eq_ignore_ascii_case(IDEMPOTENCY_KEY_OPTION));
+    options.insert(IDEMPOTENCY_KEY_OPTION.to_owned(), key);
+    Ok(())
+}

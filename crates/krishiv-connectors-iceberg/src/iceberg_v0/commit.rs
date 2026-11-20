@@ -108,7 +108,9 @@ use krishiv_common::error::{
     KrishivUnsupportedFeature,
 };
 
-use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare};
+use super::append::{
+    Attempt, IDEMPOTENCY_KEY_PROP, NewManifests, WRITE_ID_PROP, WriteIds, prepare,
+};
 use super::filter::FilterError;
 use super::scan::{read_manifest_files, snapshot_refs};
 use super::statistics_file::skipped;
@@ -651,10 +653,14 @@ impl Loop<'_> {
     /// nowhere (R:N3): never "committed".
     fn found<'m>(&self, m: &'m TableMetadata) -> Result<Option<&'m Snapshot>, End> {
         let ours = |s: &Snapshot| {
-            s.summary()
-                .additional_properties
+            let props = &s.summary().additional_properties;
+            props
                 .get(WRITE_ID_PROP)
                 .is_some_and(|w| w == self.ids.write_id)
+                || self
+                    .ids
+                    .idempotency_key
+                    .is_some_and(|k| props.get(IDEMPOTENCY_KEY_PROP).is_some_and(|v| v == k))
         };
         let by_id = m.snapshot_by_id(self.snapshot_id).map(AsRef::as_ref);
         if let Some(s) = by_id.filter(|s| ours(s)) {

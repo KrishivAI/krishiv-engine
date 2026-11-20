@@ -117,6 +117,9 @@ pub async fn commit(
         staged,
     });
     let start_version = read_version + 1;
+    if let Some(version) = keyed_version(engine, &snapshot, &prepared).await? {
+        return Ok(deduplicated(version));
+    }
     let mut snapshot = snapshot;
     let mut attempts: u64 = 0;
     let mut conflicts: u32 = 0;
@@ -134,6 +137,7 @@ pub async fn commit(
                     attempts,
                     found_by_landed_check: false,
                     commits_since_checkpoint: Some(since_checkpoint),
+                    deduplicated: false,
                 });
             }
             Outcome::Conflicted(version) => {
@@ -158,6 +162,10 @@ pub async fn commit(
                     Round::Clear(last) => last,
                 };
                 snapshot = snapshot_at(engine, last, &prepared.staged.table).await?;
+                // The race may have been lost to the same statement (a retry that overlapped it).
+                if let Some(version) = keyed_version(engine, &snapshot, &prepared).await? {
+                    return Ok(deduplicated(version));
+                }
                 conflicts = conflicts.saturating_add(1);
                 backoff(engine, &limits, &prepared.staged.write_id, conflicts).await?;
             }
@@ -207,7 +215,42 @@ fn landed(version: u64, attempts: u64) -> Committed {
         attempts,
         found_by_landed_check: true,
         commits_since_checkpoint: None,
+        deduplicated: false,
     }
+}
+
+fn deduplicated(version: u64) -> Committed {
+    Committed {
+        version,
+        attempts: 0,
+        found_by_landed_check: false,
+        commits_since_checkpoint: None,
+        deduplicated: true,
+    }
+}
+
+/// The version of `snapshot` when it already has this statement's idempotency key.
+async fn keyed_version(
+    engine: &DeltaEngine,
+    snapshot: &SnapshotRef,
+    p: &Arc<Prepared>,
+) -> Result<Option<u64>, KrishivError> {
+    let Some(key) = &p.staged.idempotency_key else {
+        return Ok(None);
+    };
+    let (s, app, table) = (
+        Arc::clone(snapshot),
+        super::idempotency_app_id(key),
+        p.staged.table.clone(),
+    );
+    let found = engine
+        .delta_blocking(move |e| {
+            s.get_app_id_version(&app, e)
+                .map(|v| v.map(|_| s.version()))
+                .map_err(|err| from_kernel(&err, &table))
+        })
+        .await??;
+    Ok(found)
 }
 
 /// One attempt, on the log pool.
@@ -232,6 +275,9 @@ fn attempt(e: &DeltaEngine, snapshot: SnapshotRef, p: &Prepared) -> Result<Outco
     let mut txn = builder
         .build(e, Box::new(FileSystemCommitter::new()))
         .map_err(|err| kernel(&err))?;
+    if let Some(key) = &p.staged.idempotency_key {
+        txn = txn.with_transaction_id(super::idempotency_app_id(key), 1);
+    }
     for add in &p.staged.adds {
         txn.add_files(Box::new(KrishivEngineData::new(add.clone())));
     }

@@ -496,6 +496,7 @@ pub(super) fn foreign_full(
                 branch: &branch,
                 write_id: &key,
                 query_id: None,
+                idempotency_key: None,
             };
             let a = prepare_attempt(&io, &m, &mut new, ids, ts, MAX)
                 .await

@@ -100,7 +100,7 @@ pub struct DirectoryWrite {
     /// The commit log state, when the write goes through the log.
     log: Option<LogState>,
     /// The caller's idempotency key (E34), recorded in the log entry.
-    idempotency_key: Option<String>,
+    idempotency_key: Option<Box<str>>,
 }
 
 /// What a logged write read before it started.
@@ -240,7 +240,8 @@ impl DirectoryWrite {
     /// (its files are deleted and no file is returned). Only a logged write can be deduplicated.
     #[must_use]
     pub fn with_idempotency_key(mut self, key: Option<String>) -> Self {
-        self.idempotency_key = key;
+        // Boxed: the write sits in the statement futures, which are near their size limit.
+        self.idempotency_key = key.map(String::into_boxed_str);
         self
     }
 
@@ -412,10 +413,10 @@ impl DirectoryWrite {
                 },
                 add,
                 remove,
-                idempotency_key: self.idempotency_key.clone(),
+                idempotency_key: self.idempotency_key.as_deref().map(str::to_owned),
             };
             if let Keyed::Replayed(version) =
-                self.commit_log(io).commit_keyed(state.base, &entry).await?
+                Box::pin(self.commit_log(io).commit_keyed(state.base, &entry)).await?
             {
                 // The statement committed before: this attempt's files are all orphans.
                 tracing::info!(

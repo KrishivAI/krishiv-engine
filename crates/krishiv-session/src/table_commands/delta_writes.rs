@@ -186,9 +186,10 @@ impl Session {
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let mut request = WriteRequest::new(mode, quoted, Arc::clone(physical.schema()));
         request.options = options;
+        super::row_level::apply_idempotency_key(&analysis.env.config, &mut request.options)?;
         request.write_id = Some(crate::session::job_uuid());
         let plan = physical.into_table_write(scan, TableWriteRequest::Write(request));
-        let mut stream = self.run(&plan, &analysis.env).await?;
+        let mut stream = Box::pin(self.run(&plan, &analysis.env)).await?;
         while let Some(batch) = stream.next().await {
             batch?;
         }
@@ -425,7 +426,10 @@ impl Session {
             Some(o) => {
                 let read: BTreeMap<String, OptionValue> = o
                     .iter()
-                    .filter(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
+                    .filter(|(k, _)| {
+                        k.eq_ignore_ascii_case("maxRecordsPerFile")
+                            || k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION)
+                    })
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
                 writer_options(plain_options(&read)?.iter().map(|(k, v)| (k, v)))
