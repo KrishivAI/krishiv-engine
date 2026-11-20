@@ -15,6 +15,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_types::StructType;
 
 use super::commit::CommitTable;
+use super::rest_commit::RestCommitTable;
 use super::scan;
 use super::storage::{Registered, StorageRegistration, from_iceberg};
 use super::types::spark_schema;
@@ -22,6 +23,7 @@ use crate::plan::deletes::DeleteIndex;
 use crate::plan::{
     ManifestFilter, PruneOptions, ScanPlan, TableSnapshot, VersionSpec, WriterMetrics,
 };
+use crate::rest_commit::RestCommitTransport;
 use krishiv_common::config::{
     CATALOG_MAX_METADATA_BYTES, Config, ConfigValue, ICEBERG_MANIFEST_CACHE_BYTES,
 };
@@ -241,16 +243,23 @@ impl IcebergTable {
     }
 
     /// The same table committing through `committer`: providers opened over
-    /// it declare `BATCH_WRITE` and append ([`super::sink`]). Crate-private
-    /// until the catalog clients (PR-17) build a `CommitTable`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "PR-17's catalog clients attach their committer")
-    )]
+    /// it declare `BATCH_WRITE` and append ([`super::sink`]).
     #[must_use]
     pub(crate) fn with_committer(mut self, committer: Arc<dyn CommitTable>) -> Self {
         self.committer = Some(committer);
         self
+    }
+
+    /// The same table committing through an Iceberg REST catalog's commit
+    /// endpoint (`transport`, [`crate::rest_commit`]): providers opened over
+    /// it at the current version declare `BATCH_WRITE`, `TRUNCATE`,
+    /// `OVERWRITE_BY_FILTER` and `OVERWRITE_DYNAMIC` and offer copy-on-write
+    /// row-level changes; each commit is the spec's `CommitTableRequest` for
+    /// this table's identifier, its answers mapped as design note §7.2 says.
+    #[must_use]
+    pub fn with_rest_commit(self, transport: Arc<dyn RestCommitTransport>) -> Self {
+        let ident = self.table.identifier().clone();
+        self.with_committer(Arc::new(RestCommitTable::new(transport, ident)))
     }
 
     /// The current schema as Spark's Iceberg integration shows it.

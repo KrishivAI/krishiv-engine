@@ -506,6 +506,7 @@ impl Delegated {
             url: endpoint.clone(),
             bearer: None,
             form: Some(SecretString::new(form_body(&pairs))),
+            json: None,
             headers: Vec::new(),
         };
         let mut response = http.call(request, deadline)?;

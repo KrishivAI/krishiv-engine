@@ -7,7 +7,9 @@
 //! declared token endpoint or `delegated` (the caller's own token or an RFC 8693 exchange of it,
 //! design P3-T067 §3.3; each call carries the session's caller), every request on the egress policy client scoped to the catalog's
 //! declared hosts with no redirect followed (§5.2). [`table`] maps a loaded table to the
-//! analyzer's metadata and opens its scans through the Iceberg connector (PR-58b).
+//! analyzer's metadata and opens its scans through the Iceberg connector (PR-58b), and, with
+//! `option.write = true` (default `false`), commits its writes through the catalog (PR-36c
+//! part 2).
 
 use std::sync::Arc;
 
@@ -39,6 +41,21 @@ fn unsupported(feature: String) -> KrishivError {
     KrishivUnsupportedFeature { feature }.into()
 }
 
+/// `option.write` of `decl` (default `false`: the catalog's tables are read-only; PR-36c part 2).
+fn writes(decl: &CatalogDecl) -> Result<bool, KrishivError> {
+    match decl.options.get("write").map(|v| v.trim()) {
+        None => Ok(false),
+        Some(v) if v.eq_ignore_ascii_case("true") => Ok(true),
+        Some(v) if v.eq_ignore_ascii_case("false") => Ok(false),
+        Some(v) => Err(KrishivInvalidConfigValue {
+            value: format!("'{v}'"),
+            key: format!("\"{}\"", key_of(decl, "option.write")),
+            reason: "expected true or false".to_owned(),
+        }
+        .into()),
+    }
+}
+
 impl IcebergRestFactory {
     /// The client configuration `decl` declares; secrets are resolved only with `resolve`
     /// (startup validation checks the shape without reading them again).
@@ -47,6 +64,7 @@ impl IcebergRestFactory {
         deps: &CatalogDeps,
         resolve: bool,
     ) -> Result<RestConfig, KrishivError> {
+        writes(decl)?;
         if decl.options.contains_key("prefix") {
             // The client takes the prefix from the catalog's `/v1/config` only.
             return Err(unsupported(format!(
@@ -159,7 +177,12 @@ impl IcebergRestFactory {
                 Arc::new(RemoteLocationPolicy::default())
             };
         let client = RestClient::new(decl.name.clone(), config, policy)?;
-        Ok(Arc::new(RestCatalog::new(decl, Arc::new(client), ttl)))
+        Ok(Arc::new(RestCatalog::new(
+            decl,
+            Arc::new(client),
+            ttl,
+            writes(decl)?,
+        )))
     }
 }
 
@@ -235,3 +258,5 @@ pub(crate) use table::RestCatalog;
 mod read_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_tests;

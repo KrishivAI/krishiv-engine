@@ -21,6 +21,7 @@
 //! krishiv.catalog.<name>.allowConfigKeys = s3.endpoint
 //! krishiv.catalog.<name>.allowInsecure   = true                                  (an http:// uri, server mode)
 //! krishiv.catalog.<name>.option.<key>    = <value>                               (per type, fixed list)
+//! krishiv.catalog.<name>.option.write    = true | false                          (iceberg-rest; default false: read-only)
 //! krishiv.catalog.default                = <name>
 //! ```
 //!
@@ -129,7 +130,7 @@ impl CatalogType {
     /// The `option.<key>` names this type takes (§2.1: anything else fails startup).
     fn options(self) -> &'static [&'static str] {
         match self {
-            Self::IcebergRest => &["prefix"],
+            Self::IcebergRest => &["prefix", "write"],
             Self::Hive => &["requestTimeout"],
             Self::Glue => &["region", "endpoint", "catalogId"],
             Self::Unity | Self::Sqlite | Self::Memory => &[],
