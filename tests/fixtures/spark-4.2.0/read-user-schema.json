@@ -3765,6 +3765,34 @@
    }
   },
   {
+   "name": "files at the root beside a partition directory, mergeSchema",
+   "input": "parquet cdm/p with mergeSchema (a in cdm/p, b in cdm/p/k=1)",
+   "schema": [
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     null,
+     "1"
+    ]
+   ]
+  },
+  {
    "name": "partition column names differing in non-ASCII case",
    "input": "parquet cdu/p (files in cdu/p/É=1 and cdu/p/é=2)",
    "schema": [

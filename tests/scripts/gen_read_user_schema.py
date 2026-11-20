@@ -88,6 +88,9 @@ def layout(spark, root):
     spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cda/p/k=2")
     spark.sql("SELECT 'v0' AS v").coalesce(1).write.parquet(f"{root}/cdc/p")
     spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdc/p/k=1")
+    # Review of the follow-up: a root file's columns still count for the data schema (`allFiles()`).
+    spark.sql("SELECT 1 AS a").coalesce(1).write.parquet(f"{root}/cdm/p")
+    spark.sql("SELECT 'v1' AS b").coalesce(1).write.parquet(f"{root}/cdm/p/k=1")
     spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cde/a/k=1")
     spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cde/b/k=2")
     spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdg/p/k=1/j=1")
@@ -727,6 +730,11 @@ def cases(spark, root):
         "parquet cde/a, cde/b with option ignoreInvalidPartitionPaths=false and the conf true",
         lambda: spark.read.option("ignoreInvalidPartitionPaths", "false").parquet(p("cde/a"), p("cde/b")),
         conf={"spark.sql.files.ignoreInvalidPartitionPaths": "true"},
+    )
+    add(
+        "files at the root beside a partition directory, mergeSchema",
+        "parquet cdm/p with mergeSchema (a in cdm/p, b in cdm/p/k=1)",
+        lambda: spark.read.option("mergeSchema", "true").parquet(p("cdm/p")),
     )
     add(
         "partition column names differing in non-ASCII case",

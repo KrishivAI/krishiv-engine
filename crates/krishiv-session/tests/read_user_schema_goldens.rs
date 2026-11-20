@@ -226,6 +226,8 @@ fn review_layout(s: &Session, root: &Path) {
         ("SELECT 'v2' AS v", "cda/p/k=2"),
         ("SELECT 'v0' AS v", "cdc/p"),
         ("SELECT 'v1' AS v", "cdc/p/k=1"),
+        ("SELECT 1 AS a", "cdm/p"),
+        ("SELECT 'v1' AS b", "cdm/p/k=1"),
         ("SELECT 'v1' AS v", "cde/a/k=1"),
         ("SELECT 'v2' AS v", "cde/b/k=2"),
         ("SELECT 'v1' AS v", "cdg/p/k=1/j=1"),
@@ -580,6 +582,10 @@ fn review_cases(add: &mut impl FnMut(String, Read)) {
             &["cde/a", "cde/b"],
             &[("ignoreInvalidPartitionPaths", "false")],
         ),
+    );
+    add(
+        "files at the root beside a partition directory, mergeSchema".into(),
+        parquet_with(&["cdm/p"], &[("mergeSchema", "true")]),
     );
     add(
         "partition column names differing in non-ASCII case".into(),

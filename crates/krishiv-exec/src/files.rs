@@ -562,6 +562,9 @@ impl FileReads {
         let (options, _) = format.options().parse(options, &self.session)?;
         // A read's layout is checked per leaf directory as Spark's partition discovery checks it; files
         // beside its partition directories are not read. A catalog table's listing kept its own files.
+        // The data schema is still inferred from every listed file, as Spark's `allFiles()` keeps the
+        // files beside partition directories (`PartitioningAwareFileIndex`, `DataSource`).
+        let mut all_files: Option<Vec<FileRef>> = None;
         if known.is_none() {
             // The listing is sorted by store, then path, so the files of one directory are neighbours: its two
             // texts are computed once per directory, not per file (views re-list per query, ADR 0023).
@@ -608,6 +611,9 @@ impl FileReads {
                 self.case_sensitive(),
                 ignore_invalid_partition_paths,
             )?;
+            if read.iter().any(|kept| !kept) {
+                all_files = Some(listed.iter().map(|(f, _)| f.clone()).collect());
+            }
             let mut read = read.into_iter();
             listed.retain(|_| read.next().unwrap_or(true));
         }
@@ -649,7 +655,8 @@ impl FileReads {
                 path_roots,
             });
         }
-        if files.is_empty() {
+        let inferred_from: &[FileRef] = all_files.as_deref().unwrap_or(&files);
+        if inferred_from.is_empty() {
             return Err(UnableToInferSchema {
                 format: display_name(format.name()),
             }
@@ -661,7 +668,7 @@ impl FileReads {
             // under `spark.sql.caseSensitive` (default false), so `id` and `ID` are one column.
             let case_sensitive = self.case_sensitive();
             let mut merged: Option<SchemaRef> = None;
-            for file in &files {
+            for file in inferred_from {
                 let one = match krishiv_io::infer_schema_cached(
                     format.as_ref(),
                     &self.io,
@@ -693,7 +700,13 @@ impl FileReads {
                 })
             })?
         } else {
-            match krishiv_io::infer_schema_cached(format.as_ref(), &self.io, &files, &options).await
+            match krishiv_io::infer_schema_cached(
+                format.as_ref(),
+                &self.io,
+                inferred_from,
+                &options,
+            )
+            .await
             {
                 Ok(schema) => schema,
                 Err(e) => {
@@ -702,11 +715,11 @@ impl FileReads {
                     // error, nothing is left to infer from. Other formats
                     // read every file (CSV, JSON) or keep their own rule,
                     // so their errors stand.
-                    let e = e.into_error(&files[0].display_path());
+                    let e = e.into_error(&inferred_from[0].display_path());
                     if format.name() != "parquet" || !scan_options.skips(&e) {
                         return Err(e);
                     }
-                    tracing::warn!(path = files[0].display_path(), error = %e, "skipped a file whose schema cannot be read");
+                    tracing::warn!(path = inferred_from[0].display_path(), error = %e, "skipped a file whose schema cannot be read");
                     return Err(UnableToInferSchema {
                         format: display_name(format.name()),
                     }
