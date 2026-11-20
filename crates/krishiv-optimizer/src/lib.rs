@@ -47,6 +47,10 @@
 //!    A5): an aggregate grouping by a dimension's proven-unique key and its
 //!    payload groups by the other side's key, the dimension joined above it;
 //!    then join order, eager aggregation, prune and tidy again when it moved.
+//!    While the rule is on, eager aggregation leaves it the joins whose other
+//!    side's keys the aggregate groups by and are proven unique, and runs once
+//!    more without that
+//!    after it, so a join the rule refuses is still pushed.
 //!    **Late payload join**, once, with statistics (`late_payload`): a
 //!    dimension's payload columns join above the semi, anti and outer joins
 //!    that never read them, a key-only semi join left in place; then join
@@ -577,8 +581,17 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(true)
             });
+        // Read here: eager aggregation leaves the joins that rule moves to it
+        // until it has run.
+        let above = options.payload_above_aggregate
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&PAYLOAD_ABOVE_AGGREGATE)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
         let root = match stats {
-            Some(stats) if eager => eager_pass(&root, stats, options, joins, &mut t)?,
+            Some(stats) if eager => eager_pass(&root, stats, options, joins, above, &mut t)?,
             _ => root,
         };
         // After eager aggregation (which may pre-empt it) and the final join
@@ -644,13 +657,6 @@ fn run(
         // ordering cannot undo it), eager aggregation and the group-key code
         // see the new aggregate, and the plan is pruned and tidied again
         // (design P2b A5).
-        let above = options.payload_above_aggregate
-            && udfs.is_some_and(|(_, config)| {
-                config
-                    .get(&PAYLOAD_ABOVE_AGGREGATE)
-                    .and_then(ConfigValue::as_bool)
-                    .unwrap_or(false)
-            });
         let root = match stats {
             Some(stats) if above => {
                 // To a fixed point: a move gives a new aggregate, which the
@@ -677,7 +683,7 @@ fn run(
                     }
                     let mut ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, joins, &mut t)?;
+                        ordered = eager_pass(&ordered, stats, options, joins, true, &mut t)?;
                     }
                     if coded {
                         let (after, notes) = group_code::rewrite(
@@ -693,6 +699,14 @@ fn run(
                         }
                     }
                     root = prune_and_tidy(&ordered, Some(stats), &mut t)?;
+                }
+                // The joins eager aggregation left to the rule and the rule
+                // refused.
+                if eager {
+                    let pushed = eager_pass(&root, stats, options, joins, false, &mut t)?;
+                    if !Arc::ptr_eq(&pushed, &root) {
+                        root = prune_and_tidy(&pushed, Some(stats), &mut t)?;
+                    }
                 }
                 root
             }
@@ -726,7 +740,7 @@ fn run(
                     // the shape eager aggregation reads (where its gates allow,
                     // the aggregate then runs by the dimension's key below it).
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, joins, &mut t)?;
+                        ordered = eager_pass(&ordered, stats, options, joins, false, &mut t)?;
                     }
                     prune_and_tidy(&ordered, Some(stats), &mut t)?
                 }
@@ -907,14 +921,16 @@ fn prune_and_tidy(
 }
 
 /// Eager aggregation, then join ordering again when it moved an aggregate.
+/// `defer`: leave `PayloadAboveAggregate`'s joins alone ([`eager::rewrite`]).
 fn eager_pass(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
     options: &Options,
     joins: join_order::Settings,
+    defer: bool,
     t: &mut Trace,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let (after, notes) = eager::rewrite(Arc::clone(root), stats, options.stats_propagation)?;
+    let (after, notes) = eager::rewrite(Arc::clone(root), stats, options.stats_propagation, defer)?;
     t.notes("EagerAggregate", &after, notes);
     // The moved aggregate changes what its join's inputs estimate, and so
     // their canonical order.

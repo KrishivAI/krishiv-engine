@@ -970,4 +970,11 @@ fn magnitude(e: &Expr, rel: &RelStats) -> Option<f64> {
 
 #[cfg(test)]
 mod tests;
+/// Whether `p` is proven unique on a subset of `cols` (by the plan or a
+/// [`Statistics::unique_keys`] fact; a count that is only wanted does not
+/// count). Eager aggregation leaves such a join to this rule.
+pub(crate) fn proven_unique(p: &Arc<LogicalPlan>, cols: &Attrs, stats: &dyn Statistics) -> bool {
+    matches!(unique(p, cols, stats), Some(Key::Proven(_)))
+}
+
 mod unique;

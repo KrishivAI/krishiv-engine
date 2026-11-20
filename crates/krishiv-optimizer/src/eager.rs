@@ -71,6 +71,7 @@ use crate::expr::{
     Attrs, builtin, column, conjuncts, data_type, has_outer_reference, has_subquery,
     is_deterministic, lit, output_of, references, references_into, same,
 };
+use crate::payload_above::proven_unique;
 use crate::restrict::{MAX_ID, max_id};
 use crate::stats::{RelStats, Statistics};
 
@@ -92,26 +93,37 @@ const ROW_MARGIN: f64 = 8.0;
 /// Pushes aggregates below joins, entering subquery plans. Also returns one
 /// line per aggregate over a join: why it was pushed, or the gate that refused
 /// it (`EXPLAIN VERBOSE`).
+///
+/// With `defer`, a join whose other side's join keys are all group keys of the
+/// aggregate and proven unique (by the plan or a key fact) is left alone: that
+/// is the join `PayloadAboveAggregate` moves, and its plan needs no aggregate
+/// above the join. The optimizer runs this pass again without `defer` after
+/// that rule, so a join it refuses is still pushed here; without a proof
+/// nothing is deferred.
 pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
+    defer: bool,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let mut memo = Default::default();
     let mut next = max_id(&root, &mut memo).saturating_add(1);
     let mut est = Estimator::with_propagation(stats, propagate);
     let mut notes = Vec::new();
+    let defer = defer.then_some(stats);
     let out = dag::rewrite_up(root, &mut |p| {
         let Some(shape) = Shape::of(&p) else {
             return Ok(p);
         };
-        let tried = shape.push(shape.join, &mut est, &mut next).or_else(|why| {
-            // The dimension the keys need may sit below another one.
-            shape
-                .rotated()
-                .and_then(|join| shape.push(&join, &mut est, &mut next).ok())
-                .ok_or(why)
-        });
+        let tried = shape
+            .push(shape.join, defer, &mut est, &mut next)
+            .or_else(|why| {
+                // The dimension the keys need may sit below another one.
+                shape
+                    .rotated()
+                    .and_then(|join| shape.push(&join, defer, &mut est, &mut next).ok())
+                    .ok_or(why)
+            });
         match tried {
             Ok((pushed, note)) => {
                 // Out of attribute ids: leave the plan as it is, as CSE and the sum rewrite do.
@@ -177,6 +189,7 @@ impl<'a> Shape<'a> {
     fn push(
         &self,
         join: &Arc<LogicalPlan>,
+        defer: Option<&dyn Statistics>,
         est: &mut Estimator<'_>,
         next: &mut u64,
     ) -> Result<(Arc<LogicalPlan>, String), String> {
@@ -231,6 +244,24 @@ impl<'a> Shape<'a> {
         let other = if left_side { right } else { left };
         if !plain_scan(other) {
             return Err("the other side is filtered or joined: its runtime filter is worth more than the aggregate".to_owned());
+        }
+        if let Some(stats) = defer {
+            let other_cols = if left_side { &right_cols } else { &left_cols };
+            let other_keys = equi_columns(on, other_cols);
+            let grouped = |id: &AttrId| {
+                self.keys.iter().any(|k| {
+                    matches!(&k.node, ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == *id)
+                })
+            };
+            if !other_keys.is_empty()
+                && other_keys.iter().all(grouped)
+                && proven_unique(other, &other_keys, stats)
+            {
+                return Err(
+                    "deferred: the other side's join keys are grouped and unique (PayloadAboveAggregate first)"
+                        .to_owned(),
+                );
+            }
         }
         let null_supplying = matches!(
             (kind, left_side),
