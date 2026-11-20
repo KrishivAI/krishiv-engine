@@ -96,7 +96,7 @@ class DataFrameReader:
                 if isinstance(path, list) and len(path) != 1:
                     raise not_expected_type("path", "str", path)
                 opts["path"] = path if isinstance(path, str) else path[0]
-            user_schema = self._schema[0] or self._schema[1]
+            user_schema: StructType | str | None = self._schema[0] or self._schema[1]
             if self._schema[0] is not None:
                 user_schema = StructType.fromJson(json.loads(self._schema[0]))
             return datasource.load(self._session, entry, opts, user_schema)
