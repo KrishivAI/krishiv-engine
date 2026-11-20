@@ -359,4 +359,15 @@ fn a_created_value_past_the_size_limit_is_refused() {
         edit("variant_set", "[1]", "$[100000000]", "1", None),
         Err(ErrorClass::VariantSizeLimit)
     );
+    // inside an existing array the filler nulls are refused up front, not written until the limit
+    assert_eq!(
+        edit(
+            "variant_insert",
+            "{\"a\":[1]}",
+            "$.a[2147483647]",
+            "1",
+            None
+        ),
+        Err(ErrorClass::VariantSizeLimit)
+    );
 }
