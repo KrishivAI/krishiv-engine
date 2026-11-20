@@ -326,10 +326,11 @@ impl GrantsPolicy {
         Some(self.grants.store.snapshot().0.lists(principal, &key, cs))
     }
 
-    /// Whether a listing shows the namespace `securable` to `principal` because of something under
-    /// it (`model::GrantState::holds_under`): admin always; `None` for a securable the `system`
-    /// policy decides. Answered from the grant state alone, with no catalog call.
-    pub(crate) fn listable_under(
+    /// Whether a listing shows the namespace `securable` to `principal`: by [`Self::listable`]'s
+    /// rule or because of something under it (`model::GrantState::lists_namespace`), from one
+    /// grant snapshot; admin always; `None` for a securable the `system` policy decides.
+    /// Answered from the grant state alone, with no catalog call.
+    pub(crate) fn namespace_listable(
         &self,
         principal: &Principal,
         securable: &Securable,
@@ -349,7 +350,7 @@ impl GrantsPolicy {
                 .store
                 .snapshot()
                 .0
-                .holds_under(principal, &key, cs),
+                .lists_namespace(principal, &key, cs),
         )
     }
 

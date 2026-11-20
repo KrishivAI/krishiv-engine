@@ -361,31 +361,40 @@ impl GrantState {
             })
     }
 
-    /// Whether `principal` owns, or holds any grant on, some key strictly under the namespace
-    /// `namespace` (a nested namespace, a relation, a column or a function in it at any depth).
-    /// Every such key is one a listing shows ([`Self::lists`]), so a namespace holding one is
-    /// listed too, however deep it sits (P3-T067 PR-58b: Iceberg REST namespaces nest).
-    pub(crate) fn holds_under(
+    /// Whether a listing shows the namespace `namespace` to `principal`: [`Self::lists`] does, or
+    /// it owns, or holds any grant on, some key strictly under the namespace (a nested namespace,
+    /// a relation, a column or a function in it at any depth). Every such key is one a listing
+    /// shows, so a namespace holding one is listed too, however deep it sits (P3-T067 PR-58b:
+    /// Iceberg REST namespaces nest). The principal's grantees are computed once, since a
+    /// `SHOW NAMESPACES` asks this per namespace.
+    pub(crate) fn lists_namespace(
         &self,
         principal: &Principal,
         namespace: &ObjectKey,
         cs: bool,
     ) -> bool {
-        let under = |k: &ObjectKey| k.covered_by(namespace, cs) && !k.same(namespace, cs);
-        if namespace.kind != KeyKind::Namespace {
-            return false;
+        if self.owns(principal, namespace, cs) {
+            return true;
         }
-        if self
-            .owners
-            .iter()
-            .any(|(k, owner)| *owner == principal.name && under(k))
+        let under = |k: &ObjectKey| k.covered_by(namespace, cs) && !k.same(namespace, cs);
+        let is_namespace = namespace.kind == KeyKind::Namespace;
+        if is_namespace
+            && self
+                .owners
+                .iter()
+                .any(|(k, owner)| *owner == principal.name && under(k))
         {
             return true;
         }
         let grantees = self.effective(principal);
-        self.grants
-            .iter()
-            .any(|g| grantees.contains(&g.grantee) && under(&g.object))
+        self.covering(&grantees, namespace, cs)
+            .any(|g| g.privilege == Privilege::Select)
+            || self.grants.iter().any(|g| {
+                grantees.contains(&g.grantee)
+                    && (g.object.same(namespace, cs)
+                        || g.object.is_column_of(namespace, cs)
+                        || (is_namespace && under(&g.object)))
+            })
     }
 
     /// Whether `principal` may grant `privilege` on `key` to others: it owns the key (or a

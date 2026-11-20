@@ -1247,18 +1247,19 @@ impl crate::Session {
     /// `catalog` (its canonical name) in a listing, by the session catalog's rule
     /// ([`Session::may_list_namespace`]): it may list the namespace, or, under the `grants`
     /// provider, it owns or holds a grant on something under it at any depth (a nested
-    /// namespace, a table, a column; `GrantsPolicy::listable_under`). Decided from the grant
+    /// namespace, a table, a column; `GrantsPolicy::namespace_listable`). Decided from the grant
     /// state alone: no catalog call, so one namespace the catalog refuses cannot fail a listing.
     async fn declared_namespace_listed(&self, catalog: &str, namespace: &[String]) -> bool {
         let securable = declared_namespace(catalog, namespace);
-        if self.may_list(&securable).await {
-            return true;
-        }
-        self.state
+        if let Some(listed) = self
+            .state
             .grants
             .as_ref()
-            .and_then(|g| g.listable_under(&self.state.principal, &securable))
-            .unwrap_or(false)
+            .and_then(|g| g.namespace_listable(&self.state.principal, &securable))
+        {
+            return listed;
+        }
+        self.may_list(&securable).await
     }
 
     /// Every catalog this session sees, sorted: `spark_catalog`, `system` and the visible
