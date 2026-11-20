@@ -42,7 +42,7 @@ def test_builder_options(spark: SparkSession) -> None:
     assert SparkSession.builder is not SparkSession.builder
     configured = SparkSession.builder.appName("x").config(map={"spark.sql.ansi.enabled": "false"}).create()
     assert configured.conf.get("spark.sql.ansi.enabled") == "false"
-    assert configured.version == "4.2.0"
+    assert configured.version == "4.3.0"
     assert spark.conf.get("no.such.key", None) is None
     assert spark.conf.get("no.such.key", 5) == "5"
     with pytest.raises(errors.SparkNoSuchElementException) as missing:
