@@ -25,7 +25,7 @@ export RUSTFLAGS="--cfg tokio_unstable"
 cargo run -p krishiv-cli --features tokio-console -- sql -e 'SELECT ...'
 ```
 
-From a crates.io install (no engine checkout needed), build the CLI with the feature and the cfg:
+From a checkout of the repository (the crates are not on crates.io yet), build the CLI with the feature and the cfg:
 
 ```sh
 RUSTFLAGS="--cfg tokio_unstable" cargo install --path crates/krishiv-cli --features tokio-console
