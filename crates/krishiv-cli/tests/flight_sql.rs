@@ -353,19 +353,17 @@ fn parse_jdbc(stdout: &str) -> JdbcRun {
 }
 
 /// TPC-H q1 through the Arrow Flight SQL JDBC driver (arrow-java 19) with a bearer token equals
-/// the Rust Flight SQL client's answer, rows and decimal types; the parameterized prepared q1
-/// takes the query path (m11); each `executeUpdate` runs once; `getTables` and `getTypeInfo`
-/// answer (design §0, §4.4, §5, §11; `tests/scripts/flight_sql_jdbc.sh`). Needs Java 21 or
-/// Docker, and the network the first time (the driver jar is cached, checked against its pinned
-/// SHA-256). Ignored until prepared-statement parameters have types the driver can bind: run
-/// 2026-11-20, the plain statement passes, but the driver refuses a `Null` parameter ("Can't set
-/// non-null value on NullVector") and an empty parameter schema ("parameter ordinal 1 out of
-/// range"), the two answers design §4.4 allowed. Then un-ignore it (it runs where `flight-sql` is
-/// built, the nightly all-features job): `cargo nextest run -p krishiv-cli --features flight-sql
-/// --test flight_sql --run-ignored only jdbc`.
+/// the Rust Flight SQL client's answer, rows and decimal types (precision and scale from the
+/// Flight SQL column metadata); the parameterized prepared q1 takes the query path (m11) and
+/// binds `setDate` into the `DATE` parameter its analysis gives the marker (§4.4, amended
+/// 2026-11-20); each `executeUpdate` runs once (an update without a count answers `0`: the driver
+/// reads `-1` as a result set and would run it again), `setInt` binds the `INSERT ... VALUES`
+/// cell's `INT` column; `getTables`, `getCatalogs`, `getSchemas` and `getColumns` answer (design
+/// §0, §4.3, §4.4, §5, §11, §17; `tests/scripts/flight_sql_jdbc.sh`). Needs Java 21 or Docker,
+/// and the network the first time (the driver jar is cached, checked against its pinned SHA-256).
+/// It runs where `flight-sql` is built, the nightly all-features job.
 #[cfg(unix)]
 #[test]
-#[ignore = "JDBC cannot bind a Null-typed prepared parameter (design §4.4 check failed): --run-ignored only"]
 fn jdbc_flight_sql_tpch_q1() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (mut conf, _) = auth_conf(dir.path(), false);
@@ -410,13 +408,15 @@ fn jdbc_flight_sql_tpch_q1() {
     );
     assert_eq!(run.update, Some(3), "each executeUpdate ran once\n{stdout}");
     assert_eq!(run.tables, Some(1), "getTables lists the table\n{stdout}");
-    for t in ["INT", "DECIMAL", "STRING", "TIMESTAMP"] {
-        assert!(
-            run.types.iter().any(|n| n == t),
-            "getTypeInfo: {t} in {:?}",
-            run.types
-        );
-    }
+    // arrow-java 19 does not implement `getTypeInfo` (neither `ArrowDatabaseMetadata` nor
+    // `ArrowFlightMetaImpl` overrides it): Avatica's default answers no rows and the driver never
+    // sends `GetXdbcTypeInfo`, which krishiv-flight-sql's own tests cover. Seeing rows here means
+    // a driver that asks: then check them.
+    assert!(
+        run.types.iter().all(String::is_empty),
+        "the driver now reads GetXdbcTypeInfo: assert INT, DECIMAL, STRING, TIMESTAMP in {:?}",
+        run.types
+    );
     assert!(
         run.catalogs.iter().any(|c| c == "spark_catalog"),
         "getCatalogs: {:?}",

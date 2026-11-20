@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use arrow_array::RecordBatch;
 use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt, TicketStatementQuery};
 use arrow_flight::{FlightData, FlightEndpoint, FlightInfo, Ticket};
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::stream::{self, BoxStream, Stream, StreamExt};
 use krishiv_common::error::{
     InternalError, InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError,
@@ -334,6 +334,35 @@ pub(crate) fn not_found() -> KrishivError {
     .into()
 }
 
+/// `schema` as a `FlightInfo` or a prepared statement announces it: each top-level decimal column
+/// with the Flight SQL column metadata `ARROW:FLIGHT:SQL:PRECISION` and `ARROW:FLIGHT:SQL:SCALE`
+/// (FlightSql.proto `CommandStatementQuery`). Arrow's JDBC driver reads `ResultSetMetaData`
+/// precision and scale only from these, never from the Arrow type. The streamed batches carry
+/// none (the keys are optional; a client's schema check compares types).
+pub(crate) fn described(schema: &Schema) -> Schema {
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let (precision, scale) = match f.data_type() {
+                DataType::Decimal32(p, s)
+                | DataType::Decimal64(p, s)
+                | DataType::Decimal128(p, s)
+                | DataType::Decimal256(p, s) => (*p, *s),
+                _ => return f.as_ref().clone(),
+            };
+            let mut metadata = f.metadata().clone();
+            metadata.insert(
+                "ARROW:FLIGHT:SQL:PRECISION".to_owned(),
+                precision.to_string(),
+            );
+            metadata.insert("ARROW:FLIGHT:SQL:SCALE".to_owned(), scale.to_string());
+            f.as_ref().clone().with_metadata(metadata)
+        })
+        .collect();
+    Schema::new_with_metadata(fields, schema.metadata().clone())
+}
+
 /// The `FlightInfo` of a statement handle (design §4.1).
 pub(crate) fn flight_info(
     schema: &SchemaRef,
@@ -344,7 +373,7 @@ pub(crate) fn flight_info(
         statement_handle: id.as_bytes().to_vec().into(),
     };
     FlightInfo::new()
-        .try_with_schema(schema)
+        .try_with_schema(&described(schema))
         .map_err(|e| internal(format!("encoding a schema: {e}")))
         .map(|info| {
             info.with_endpoint(
