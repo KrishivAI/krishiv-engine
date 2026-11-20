@@ -536,10 +536,10 @@ fn a_backslash_in_a_nested_field_comment_is_refused_and_a_quote_is_lossy_when_es
             panic!("struct");
         };
         let mut inner = struct_of(&["x"]);
-        let Some(Kind::Struct(ist)) = &mut inner.kind else {
+        let Some(Kind::Struct(inner_st)) = &mut inner.kind else {
             panic!("struct");
         };
-        ist.fields[0].metadata = Some(format!(r#"{{"comment":"{comment}"}}"#));
+        inner_st.fields[0].metadata = Some(format!(r#"{{"comment":"{comment}"}}"#));
         st.fields[0].data_type = Some(inner);
         catalog_call(&msg(CatType::CreateTable(pb::CreateTable {
             table_name: s("t"),
