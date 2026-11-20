@@ -568,6 +568,65 @@ async fn an_editor_result_is_cut_at_the_row_cap_and_says_so() {
 }
 
 #[tokio::test]
+async fn a_query_id_stored_twice_is_listed_once_as_its_newest_profile() {
+    use krishiv_server::internal::{SystemTable, UiSource};
+    use krishiv_server::session_source::{ProfilesSource, SessionSource};
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let rt = EngineRuntime::builder()
+            .config("krishiv.history.path", dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let session = krishiv_session::Session::builder()
+            .runtime(Arc::clone(&rt))
+            .build()
+            .unwrap();
+        let df = session
+            .sql("SELECT id % 3 AS k, count(*) AS n FROM range(0, 300) GROUP BY id % 3")
+            .await
+            .unwrap();
+        df.collect().await.unwrap();
+    }
+    // The same id stored by two runs of a server (a client that reuses its operation id): an older profile
+    // that finished, a newer one that failed.
+    let older = krishiv_session::read_profile_history(dir.path())
+        .unwrap()
+        .remove(0);
+    let mut newer = older.clone();
+    newer.state = "failed".to_owned();
+    newer.finished_at_ms += 60_000;
+    let stored = [older.clone(), newer];
+    let doc: Value = serde_json::from_str(&older.profile).unwrap();
+    let operators = doc["operators"].as_array().unwrap().len();
+    assert!(operators > 0);
+
+    let profiles = ProfilesSource::from_profiles(&stored);
+    let restarted = SessionSource::new(EngineRuntime::builder().build().unwrap())
+        .unwrap()
+        .with_stored_history(&stored);
+    let sources: [(&str, &dyn UiSource); 2] = [("profiles", &profiles), ("server", &restarted)];
+    for (name, source) in sources {
+        let queries: Vec<_> = source
+            .rows(SystemTable::Queries)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|q| q["query_id"] == json!(older.query_id))
+            .collect();
+        assert_eq!(queries.len(), 1, "{name}: {queries:?}");
+        assert_eq!(queries[0]["state"], json!("failed"), "{name}");
+        let of_query = source
+            .rows(SystemTable::Operators)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|o| o["query_id"] == json!(older.query_id))
+            .count();
+        assert_eq!(of_query, operators, "{name}");
+    }
+}
+
+#[tokio::test]
 async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() {
     use krishiv_server::internal::{SystemTable, UiSource};
     use krishiv_server::session_source::ProfilesSource;

@@ -139,8 +139,7 @@ impl SessionSource {
     pub fn with_stored_history(mut self, stored: &[krishiv_session::StoredProfile]) -> Self {
         // The console's own reads are stored like any query (about two a second while a page is open): they
         // are dropped before the cut, or they would take every place in it.
-        let users: Vec<&krishiv_session::StoredProfile> =
-            stored.iter().filter(|p| !of_console(p)).collect();
+        let users = newest_per_query(stored.iter().filter(|p| !of_console(p)));
         let newest = &users[users.len().saturating_sub(MAX_STORED_QUERIES)..];
         self.stored = Some(ProfilesSource::of(newest.iter().copied()));
         self
@@ -768,11 +767,13 @@ impl ProfilesSource {
         Ok(Self::from_profiles(&stored))
     }
 
-    /// The source over profiles already read. The profiles of a console's own reads ([`UI_PRINCIPAL`], which a
-    /// server's store holds too) are left out, as they are from every list the UI serves.
+    /// The source over profiles already read (oldest first, as [`krishiv_session::read_profile_history`] gives
+    /// them). The profiles of a console's own reads ([`UI_PRINCIPAL`], which a server's store holds too) are left
+    /// out, as they are from every list the UI serves, and a query id stored more than once is listed once, as
+    /// its newest profile.
     #[must_use]
     pub fn from_profiles(stored: &[krishiv_session::StoredProfile]) -> Self {
-        Self::of(stored.iter().filter(|p| !of_console(p)))
+        Self::of(newest_per_query(stored.iter().filter(|p| !of_console(p))).into_iter())
     }
 
     fn of<'a>(stored: impl Iterator<Item = &'a krishiv_session::StoredProfile>) -> Self {
@@ -839,6 +840,21 @@ impl ProfilesSource {
         }
         Self { queries, operators }
     }
+}
+
+/// `stored` (oldest first) with one profile per query id, the newest, in the same order. A client may reuse an
+/// operation id across runs of a server, so a store can hold several profiles of one id; listing them all would
+/// repeat the id in the history and mix the operators of different runs on the query's page.
+fn newest_per_query<'a>(
+    stored: impl DoubleEndedIterator<Item = &'a krishiv_session::StoredProfile>,
+) -> Vec<&'a krishiv_session::StoredProfile> {
+    let mut seen = std::collections::HashSet::new();
+    let mut newest: Vec<_> = stored
+        .rev()
+        .filter(|p| seen.insert(p.query_id.as_str()))
+        .collect();
+    newest.reverse();
+    newest
 }
 
 /// Whether `profile` is of a query a console's own session ran.
