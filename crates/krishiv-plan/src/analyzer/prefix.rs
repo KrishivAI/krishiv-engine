@@ -64,6 +64,7 @@ impl Resolver<'_> {
         if self.uncacheable
             || self.b.reads_files
             || !self.ctx.variables.locals.is_empty()
+            || !self.view_nodes.is_empty()
             || self.pending_nondeterministic.is_some()
             || self.sql_calls != 0
         {
@@ -138,6 +139,7 @@ impl Resolver<'_> {
             || self.uncacheable
             || b.reads_files
             || !self.ctx.variables.locals.is_empty()
+            || !self.view_nodes.is_empty()
             || !self.loops.is_empty()
             || !self.lambdas.is_empty()
             || self.frame.is_some()
