@@ -82,6 +82,7 @@ mod join_order;
 mod late_payload;
 mod limit;
 mod narrow;
+mod one_row_scalar;
 mod partition_advice;
 mod payload_above;
 mod plan_stats;
@@ -590,6 +591,11 @@ fn run(
             Some(stats) if eager => eager_pass(&root, stats, options, joins, &mut t)?,
             _ => root,
         };
+        // After the final join order (the cross join with a one-row relation is placed), before
+        // pruning, which drops what the rewrite leaves unread.
+        let root = t.once("OneRowAbove", &root, |r| {
+            one_row_scalar::rewrite(Arc::clone(r))
+        })?;
         // After eager aggregation (which may pre-empt it) and the final join
         // order, before pruning: an aggregate's dimension keys travel as one
         // code (design P2b D2).
