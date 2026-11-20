@@ -45,6 +45,14 @@
 //! | an added DV for a data file this write writes a DV for | `overwrite`, `delete`, `replace` | `validateAddedDVs`, `:869-955` |
 //! | a data file this write removes or references removed | `overwrite`, `replace`, `delete` (`delete` skipped for references when asked) | `validateDataFilesExist`, `:817-860` |
 //! | a delete file added that applies to a data file this write replaces | `overwrite`, `delete` | `validateNoNewDeletesForDataFiles`, `:519-559` |
+//! | a data file matching the filter (or of the partitions) removed | `overwrite`, `replace`, `delete` | `validateDeletedDataFiles`, `:680-771` |
+//!
+//! INSERT OVERWRITE (PR-36b part 2b, `overwrite.rs`) sets an explicit start
+//! ([`Validation::start`]: `validate-from-snapshot-id`, or the whole history)
+//! validated on every attempt, the first included, and for a
+//! `ReplacePartitions` a [`PartitionSet`] as the scope instead of the filter
+//! (Java's `PartitionSet` overloads: membership by spec id and tuple, and
+//! their "matching partitions %s" texts).
 //!
 //! A check that fires names the intervening snapshot that held the file, the
 //! check and Java's message text; the loop turns it into
@@ -90,6 +98,7 @@ use iceberg::spec::{FormatVersion, Operation, TableMetadata};
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::PushdownExpr;
 
+use super::filter::{PartitionKey, partition_key};
 use super::scan::{
     parse_manifest, partition_specs, read_capped, read_manifest_list, schema_fields,
 };
@@ -114,6 +123,8 @@ pub(crate) const CHECK_ADDED_DELETES: &str = "added delete files";
 pub(crate) const CHECK_ADDED_DVS: &str = "added DVs";
 /// See [`CHECK_HISTORY`].
 pub(crate) const CHECK_REMOVED: &str = "removed data files";
+/// See [`CHECK_HISTORY`].
+pub(crate) const CHECK_DELETED_DATA: &str = "deleted data files";
 /// See [`CHECK_HISTORY`].
 pub(crate) const CHECK_NEW_DELETES: &str = "new deletes for replaced data files";
 
@@ -160,6 +171,20 @@ pub(crate) struct Checks {
     /// A delete file added that applies to a data file of
     /// [`Validation::replaced`] (Java's `validateNoNewDeletesForDataFiles`).
     pub(crate) new_deletes_for_replaced: bool,
+    /// A data file matching the filter (or of [`Validation::partitions`])
+    /// removed (Java's `validateDeletedDataFiles`; INSERT OVERWRITE).
+    pub(crate) deleted_data_files: bool,
+}
+
+/// Java's `PartitionSet`: the conflict scope of a `ReplacePartitions`
+/// (instead of a filter), each partition by spec id and tuple.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PartitionSet {
+    /// The partitions.
+    pub(crate) keys: HashSet<PartitionKey>,
+    /// As the messages print it (Java's `PartitionSet.toString`; Krishiv
+    /// prints the partition paths, unverified).
+    pub(crate) text: String,
 }
 
 /// What one write validates on a rebase.
@@ -188,6 +213,17 @@ pub(crate) struct Validation {
     pub(crate) replaced: Vec<DataFileEntry>,
     /// `krishiv.iceberg.commit.maxIntervening`.
     pub(crate) max_intervening: usize,
+    /// Where validation starts, overriding the write's base (S0) and run
+    /// on **every** attempt, the first included (Java's
+    /// `validateFromSnapshot`, set by INSERT OVERWRITE's
+    /// `validate-from-snapshot-id`; `Some(None)`: the whole history, Java's
+    /// null starting snapshot). `None`: S0, on every rebase.
+    pub(crate) start: Option<Option<i64>>,
+    /// The conflict scope as partitions (a `ReplacePartitions`); the filter
+    /// is then unused.
+    pub(crate) partitions: Option<PartitionSet>,
+    /// Appended to the message of a check that fires.
+    pub(crate) hint: Option<String>,
 }
 
 impl Default for Validation {
@@ -210,6 +246,9 @@ impl Validation {
             dvs_for: BTreeSet::new(),
             replaced: Vec::new(),
             max_intervening: DEFAULT_MAX_INTERVENING,
+            start: None,
+            partitions: None,
+            hint: None,
         }
     }
 
@@ -237,7 +276,8 @@ impl Validation {
 
     /// Whether any check runs (else the walk is skipped, as for an append).
     pub(crate) fn runs(&self) -> bool {
-        self.added_data()
+        self.checks.deleted_data_files
+            || self.added_data()
             || self.checks.added_delete_files
             || self.added_dvs()
             || self.removed()
@@ -249,7 +289,11 @@ impl Validation {
         let any = |on: bool, ops: &[Operation]| on && ops.contains(op);
         match content {
             ManifestContent::Data => {
-                any(self.added_data(), ADDED_FILES_OPS) || any(self.removed(), FILES_EXIST_OPS)
+                any(self.added_data(), ADDED_FILES_OPS)
+                    || any(
+                        self.removed() || self.checks.deleted_data_files,
+                        FILES_EXIST_OPS,
+                    )
             }
             ManifestContent::Deletes => {
                 any(
@@ -464,19 +508,25 @@ fn listed<'a>(paths: impl IntoIterator<Item = &'a str>) -> String {
 pub(crate) fn check(history: &History, v: &Validation, judge: &Judge) -> Option<Fired> {
     let always = PushdownExpr::Constant(true);
     let pruner = judge.pruner(v.filter.as_ref().unwrap_or(&always));
-    let matches = |c: &Change, f: &ContentFile| {
-        pruner.manifest_may_match(&c.manifest) && pruner.file_may_match(&judged(f))
+    let matches = |c: &Change, f: &ContentFile| match &v.partitions {
+        Some(set) => partition_key(&judge.specs, f.spec_id, &f.partition)
+            .is_some_and(|k| set.keys.contains(&k)),
+        None => pruner.manifest_may_match(&c.manifest) && pruner.file_may_match(&judged(f)),
     };
     if v.added_data() {
         let found: Vec<_> = history
             .entries(ADDED_FILES_OPS, ManifestContent::Data, EntryStatus::Added)
             .filter(|(c, e)| matches(c, &data_entry(e).file))
             .collect();
-        let text = |p: String| {
-            format!(
+        let text = |p: String| match &v.partitions {
+            Some(set) => format!(
+                "Found conflicting files that can contain records matching partitions {}: {p}",
+                set.text
+            ),
+            None => format!(
                 "Found conflicting files that can contain records matching {}: {p}",
                 v.filter_text
-            )
+            ),
         };
         if let Some(f) = fired(CHECK_ADDED_DATA, &found, text) {
             return Some(f);
@@ -508,13 +558,35 @@ pub(crate) fn check(history: &History, v: &Validation, judge: &Judge) -> Option<
             // A `LinkedHashSet` of locations.
             .filter(|(_, e)| seen.insert(data_entry(e).file.path.clone()))
             .collect();
+        let scope = v.partitions.as_ref().map_or(&v.filter_text, |s| &s.text);
         let text = |p: String| {
             format!(
-                "Found new conflicting delete files that can apply to records matching {}: {p}",
-                v.filter_text
+                "Found new conflicting delete files that can apply to records matching {scope}: {p}"
             )
         };
         if let Some(f) = fired(CHECK_ADDED_DELETES, &found, text) {
+            return Some(f);
+        }
+    }
+    // `validateDeletedDataFiles` (`MergingSnapshotProducer.java:680-727`):
+    // a data file matching the filter (or of the partitions) that an
+    // intervening `overwrite`, `replace` or `delete` removed.
+    if v.checks.deleted_data_files {
+        let found: Vec<_> = history
+            .entries(FILES_EXIST_OPS, ManifestContent::Data, EntryStatus::Deleted)
+            .filter(|(c, e)| matches(c, &data_entry(e).file))
+            .collect();
+        let text = |p: String| match &v.partitions {
+            Some(set) => format!(
+                "Found conflicting deleted files that can apply to records matching {}: {p}",
+                set.text
+            ),
+            None => format!(
+                "Found conflicting deleted files that can contain records matching {}: {p}",
+                v.filter_text
+            ),
+        };
+        if let Some(f) = fired(CHECK_DELETED_DATA, &found, text) {
             return Some(f);
         }
     }
@@ -856,11 +928,19 @@ pub(crate) async fn validate(
     let parent_of = |id: i64| m.snapshot_by_id(id).map(|s| s.parent_snapshot_id());
     let walked = match walk(head, s0, v.max_intervening, parent_of) {
         Ok(w) => w,
-        Err(f) => return Ok(Some(f)),
+        Err(f) => return Ok(Some(with_hint(f, v))),
     };
     if walked.is_empty() {
         return Ok(None);
     }
     let history = read_history(io, m, &walked, s0, v, max_bytes).await?;
-    Ok(check(&history, v, &Judge::of(m)))
+    Ok(check(&history, v, &Judge::of(m)).map(|f| with_hint(f, v)))
+}
+
+/// `f` with the validation's hint after its message.
+fn with_hint(mut f: Fired, v: &Validation) -> Fired {
+    if let Some(h) = &v.hint {
+        f.message = format!("{} ({h})", f.message);
+    }
+    f
 }
