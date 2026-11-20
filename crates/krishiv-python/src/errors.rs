@@ -97,14 +97,76 @@ fn convert(py: Python<'_>, error: &KrishivError, rendered: Option<String>) -> Py
     })
 }
 
-/// Runs the engine future `work` to completion with the GIL released.
+/// The sessions made in this process, weakly: a Ctrl-C cancels through them ([`wait_for_signals`]).
+static LIVE_SESSIONS: std::sync::Mutex<Vec<std::sync::Weak<krishiv_session::Session>>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Registers `session` for [`interrupt_live_sessions`]; sessions that have since been dropped are forgotten.
+pub(crate) fn register_session(session: &std::sync::Arc<krishiv_session::Session>) {
+    let mut live = LIVE_SESSIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    live.retain(|s| s.strong_count() > 0);
+    live.push(std::sync::Arc::downgrade(session));
+}
+
+/// Interrupts every action of every live session in the process, other threads' sessions included, through
+/// the session (`Session::interrupt_all`, as `interruptAll` does); PySpark classic's SIGINT handler does the
+/// same (`cancelAllJobs` on the shared context). Whether there was a live session to ask.
+fn interrupt_live_sessions() -> bool {
+    let sessions: Vec<_> = LIVE_SESSIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter_map(std::sync::Weak::upgrade)
+        .collect();
+    for session in &sessions {
+        session.interrupt_all();
+    }
+    !sessions.is_empty()
+}
+
+/// Waits for `work` with the GIL released; every [`SIGNAL_POLL`] the thread attaches again and asks
+/// Python for its pending signals (`Python::check_signals`: a Ctrl-C, a Jupyter kernel interrupt,
+/// `_thread.interrupt_main`). On a signal that raises (`KeyboardInterrupt`) `work` is not dropped: a
+/// drop would skip the session's commit guard (`krishiv-session` `action::commit_point`), so an
+/// overwrite could be left with the old table gone and the new one not written. The sessions
+/// cancel their actions instead (`interrupt_all`: an action before its commit point ends at once, one
+/// past it finishes), `work` is polled to its end, and the signal's error is returned in place of
+/// its output. A second Ctrl-C while a past-commit action finishes waits too: Python raises it after the
+/// first. With no live session to ask, `work` simply runs to its end. Off the main thread
+/// `check_signals` never raises, so such a call waits as `stream::wait_for` does.
+fn wait_for_signals<F: std::future::Future + Send>(py: Python<'_>, work: F) -> PyResult<F::Output>
+where
+    F::Output: Send,
+{
+    let mut waiter = crate::stream::Waiter::new();
+    let mut work = std::pin::pin!(work);
+    let mut raised: Option<PyErr> = None;
+    loop {
+        if let Some(out) =
+            py.detach(|| waiter.step(work.as_mut(), Some(crate::stream::SIGNAL_POLL)))
+        {
+            return raised.map_or(Ok(out), Err);
+        }
+        if raised.is_none()
+            && let Err(e) = py.check_signals()
+        {
+            interrupt_live_sessions();
+            raised = Some(e);
+        }
+    }
+}
+
+/// Runs the engine future `work` to completion with the GIL released, looking at Python's signals
+/// meanwhile: a Ctrl-C or kernel interrupt cancels the session's actions and raises
+/// `KeyboardInterrupt` once `work` has ended (NB-1).
 pub(crate) fn block_on<T: Send>(
     py: Python<'_>,
     work: impl std::future::Future<Output = Result<T, KrishivError>> + Send,
 ) -> PyResult<T> {
     crate::udf::runtime::refuse_inside_udf(py)?;
-    py.detach(|| crate::stream::wait_for(work))
-        .map_err(|e| to_py(py, &e))
+    wait_for_signals(py, work)?.map_err(|e| to_py(py, &e))
 }
 
 /// [`block_on`] for the query `sql`, whose errors are converted by
@@ -115,6 +177,5 @@ pub(crate) fn block_on_sql<T: Send>(
     work: impl std::future::Future<Output = Result<T, KrishivError>> + Send,
 ) -> PyResult<T> {
     crate::udf::runtime::refuse_inside_udf(py)?;
-    py.detach(|| crate::stream::wait_for(work))
-        .map_err(|e| to_py_for_sql(py, &e, sql))
+    wait_for_signals(py, work)?.map_err(|e| to_py_for_sql(py, &e, sql))
 }

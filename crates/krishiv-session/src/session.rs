@@ -120,6 +120,8 @@ pub struct Session {
     /// The statement's fixed query start ([`crate::QueryOptions::query_start`]); `None`: each
     /// plan reads the clock.
     pub(crate) query_start: Option<i64>,
+    /// The statement is work accepted before a drain ([`crate::QueryOptions::admitted_before_drain`]).
+    pub(crate) drain_exempt: bool,
     /// The statement's request tags ([`crate::QueryOptions::tags`]).
     pub(crate) request_tags: Arc<[Arc<str>]>,
     /// The trace of the request that started the statement ([`crate::QueryOptions::inbound_trace`]):
@@ -1277,6 +1279,7 @@ impl Session {
             Arc::clone(&paths),
             Arc::clone(&config),
         ));
+        let declared_paths = Arc::clone(&paths);
         let delta = Arc::new(crate::delta::DeltaReads::new(crate::delta::DeltaInputs {
             io: io.clone(),
             paths,
@@ -1304,6 +1307,14 @@ impl Session {
             relations: Arc::clone(&self.state.relations),
             memory: Arc::clone(&self.state.memory),
         };
+        let declared =
+            self.declared_catalogs()
+                .for_query(crate::catalog_registry::ScanInputs::new(
+                    io.clone(),
+                    declared_paths,
+                    Arc::clone(&config),
+                    scans.slots,
+                ));
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
             Arc::clone(&self.state.cache),
@@ -1326,7 +1337,7 @@ impl Session {
                     self.state.runtime.profile_history.clone(),
                     Arc::clone(&self.state.runtime.executor),
                 )),
-                catalogs: self.declared_catalogs(),
+                catalogs: declared,
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),

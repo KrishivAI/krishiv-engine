@@ -461,6 +461,24 @@ impl Session {
                         .ordered_frame(cols::SHOW_TABLES, &["isTemporary"], rows)
                         .await;
                 }
+                // `SHOW TABLES IN cat.ns` of a declared catalog: the catalog's own listing.
+                if let Some(n) = namespace {
+                    let parts = crate::access::ddl_parts(n, &self.query_env())?;
+                    if let [catalog, ns @ ..] = parts.as_slice()
+                        && !ns.is_empty()
+                        && let Some(found) = self.declared_tables(catalog, ns).await
+                    {
+                        let label = ns.join(".");
+                        let rows: Vec<Vec<Cell>> = found?
+                            .iter()
+                            .filter(|t| keep(pattern.as_ref(), t))
+                            .map(|t| vec![s(&label), s(t), s("false")])
+                            .collect();
+                        return self
+                            .ordered_frame(cols::SHOW_TABLES, &["isTemporary"], rows)
+                            .await;
+                    }
+                }
                 let ns = self.show_namespace(namespace.as_ref()).await?;
                 if is_global_namespace(&ns) {
                     return self
@@ -572,18 +590,67 @@ impl Session {
                 self.frame_with_order(cols::SHOW_COLUMNS, &[], rows, false)
                     .await
             }
-            ShowKind::Namespaces { pattern, .. } => {
-                // `system` has no namespaces; never list the session catalog's under it.
-                let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
-                self.refuse_declared_current()?;
-                let mut rows = Vec::new();
-                for (n, _) in store.namespaces() {
-                    // Only what the principal may see (P3-T062 §2.4).
-                    if !in_system && keep(pattern.as_ref(), &n) && self.may_list_namespace(&n).await
-                    {
-                        rows.push(vec![s(n)]);
-                    }
+            ShowKind::Namespaces {
+                pattern, namespace, ..
+            } => {
+                // Spark's `CatalogAndNamespace`: a first part naming a catalog is that catalog,
+                // anything else a namespace of the current catalog (`LookupCatalog`, v4.2.0).
+                let parts = match namespace {
+                    Some(n) => crate::access::ddl_parts(n, &self.query_env())?,
+                    None => Vec::new(),
+                };
+                let (catalog, parent) = match parts.split_first() {
+                    Some((first, rest)) if self.is_catalog_name(first) => (first.clone(), rest),
+                    _ => (self.state.catalog.current_catalog(), parts.as_slice()),
+                };
+                if let Some(found) = self.declared_namespaces(&catalog, parent).await {
+                    let rows: Vec<Vec<Cell>> = found?
+                        .iter()
+                        .map(|n| n.join("."))
+                        .filter(|n| keep(pattern.as_ref(), n))
+                        .map(|n| vec![s(n)])
+                        .collect();
+                    return self.ordered_frame(cols::SHOW_NAMESPACES, &[], rows).await;
                 }
+                let rows = if crate::system::is_system(&catalog) {
+                    // `system` has no namespaces; never list the session catalog's under it.
+                    if !parent.is_empty() {
+                        return Err(crate::catalog_registry::schema_not_found("system", parent));
+                    }
+                    Vec::new()
+                } else {
+                    if !catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) {
+                        // The current catalog is a declared one that lists nothing here.
+                        self.refuse_declared_current()?;
+                    }
+                    // `V2SessionCatalog.listNamespaces`: every database at the top, none under an
+                    // existing one, `SCHEMA_NOT_FOUND` for anything else.
+                    let all = store.namespaces();
+                    match parent {
+                        [] => {
+                            let mut rows = Vec::new();
+                            for (n, _) in all {
+                                // Only what the principal may see (P3-T062 §2.4).
+                                if keep(pattern.as_ref(), &n) && self.may_list_namespace(&n).await {
+                                    rows.push(vec![s(n)]);
+                                }
+                            }
+                            rows
+                        }
+                        // One the principal may not list answers as a missing one (ADR 0046 §8).
+                        [db] if all.iter().any(|(n, _)| n.eq_ignore_ascii_case(db))
+                            && !self.namespace_hidden(db).await =>
+                        {
+                            Vec::new()
+                        }
+                        _ => {
+                            return Err(crate::catalog_registry::schema_not_found(
+                                crate::catalog::CATALOG,
+                                parent,
+                            ));
+                        }
+                    }
+                };
                 self.ordered_frame(cols::SHOW_NAMESPACES, &[], rows).await
             }
             ShowKind::TblProperties { name, key, .. } => {
