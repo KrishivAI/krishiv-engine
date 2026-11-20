@@ -81,6 +81,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.resultCache.maxBytes", &RESULT_CACHE_MAX_BYTES),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
+    ("krishiv.exec.agg.outputFilter", &EXEC_AGG_OUTPUT_FILTER),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
     ("krishiv.io.coalesceWasteBytes", &IO_COALESCE_WASTE_BYTES),
     ("krishiv.io.local.allowedRoots", &IO_LOCAL_ALLOWED_ROOTS),
@@ -284,6 +285,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.python.worker.maxPerTenant",
         &PYTHON_WORKER_MAX_PER_TENANT,
+    ),
+    (
+        "krishiv.runtimeFilter.equatedSites",
+        &RUNTIME_FILTER_EQUATED_SITES,
     ),
     (
         "krishiv.sql.avro.compression.codec",
