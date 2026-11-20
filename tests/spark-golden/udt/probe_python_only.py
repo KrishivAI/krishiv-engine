@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: BLE001, UP031  (a probe script: it prints what Spark does, including its errors)
+import tempfile
+
 from pyspark.sql import SparkSession
 from pyspark.sql.types import (
     ArrayType,
@@ -52,9 +54,12 @@ print(
     j.sql(),
 )
 df.printSchema()
-df.write.mode("overwrite").parquet("/tmp/udt_pq_pyonly")
-
-print("PARQUET reread:", spark.read.parquet("/tmp/udt_pq_pyonly").schema.simpleString())
+with tempfile.TemporaryDirectory() as tmp:
+    df.write.mode("overwrite").parquet(tmp + "/udt_pq_pyonly")
+    print(
+        "PARQUET reread:",
+        spark.read.parquet(tmp + "/udt_pq_pyonly").schema.simpleString(),
+    )
 DT = spark._jvm.org.apache.spark.sql.types.DataType
 sql = '{"type":"array","elementType":"double","containsNull":false}'
 for name, js in [

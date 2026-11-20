@@ -31,10 +31,20 @@ fn a_literal_query_vector_is_not_copied_per_row() {
         Field::new("v", DataType::List(Arc::clone(&field)), true),
     ]));
     let mut vectors = ListBuilder::new(Float32Builder::new()).with_field(field);
+    let query = random_vector(DIM, 8000, 1, 1.0);
+    // The oracle: the sum over the rows of the L2 distance to the query, in plain Rust (f64 accumulation).
+    let mut expected = 0.0_f64;
     for i in 0..ROWS {
-        for x in random_vector(DIM, 7000 + u64::try_from(i).unwrap(), 0, 1.0) {
+        let mut squares = 0.0_f64;
+        for (x, q) in random_vector(DIM, 7000 + u64::try_from(i).unwrap(), 0, 1.0)
+            .into_iter()
+            .zip(&query)
+        {
             vectors.values().append_option(x);
+            let d = f64::from(x.unwrap()) - f64::from(q.unwrap());
+            squares += d * d;
         }
+        expected += squares.sqrt();
         vectors.append(true);
     }
     let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(0..ROWS));
@@ -42,7 +52,7 @@ fn a_literal_query_vector_is_not_copied_per_row() {
         RecordBatch::try_new(Arc::clone(&schema), vec![ids, Arc::new(vectors.finish())]).unwrap();
     let s = Session::new().unwrap();
     s.register_batches("vt", schema, vec![batch]).unwrap();
-    let items: Vec<String> = random_vector(DIM, 8000, 1, 1.0)
+    let items: Vec<String> = query
         .iter()
         .map(|x| format!("CAST({:?} AS FLOAT)", f64::from(x.unwrap())))
         .collect();
@@ -54,8 +64,21 @@ fn a_literal_query_vector_is_not_copied_per_row() {
     block_on(async { s.sql(&sql).await?.collect().await }).unwrap();
     let base = heap::live();
     heap::reset_peak();
-    block_on(async { s.sql(&sql).await?.collect().await }).unwrap();
+    let batches = block_on(async { s.sql(&sql).await?.collect().await }).unwrap();
     let added = heap::peak().saturating_sub(base);
+    let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(rows, 1);
+    let column = batches[0].column(0);
+    let got = arrow_cast::cast(column, &DataType::Float64).unwrap();
+    let got = got
+        .as_any()
+        .downcast_ref::<arrow_array::Float64Array>()
+        .unwrap()
+        .value(0);
+    assert!(
+        (got - expected).abs() <= expected * 1e-3,
+        "sum of distances {got}, expected {expected}"
+    );
     let broadcast = usize::try_from(ROWS).unwrap() * DIM * 4;
     assert!(
         added < broadcast / 4,

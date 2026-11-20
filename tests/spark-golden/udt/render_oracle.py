@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Spark 4.2.0 oracle for UDT rendering (P3-T079): spark-submit render_oracle.py in apache/spark:4.2.0."""
 
+import tempfile
+
 from pyspark.sql import SparkSession
 from pyspark.sql.types import (
     ArrayType,
@@ -64,5 +66,6 @@ df.createOrReplaceTempView("t")
 for r in spark.sql("describe t").collect():
     print("describe:", tuple(r))
 print("collect:", df.collect()[0][0].x)
-df.write.mode("overwrite").parquet("/tmp/udt_pq")
-print("reread:", spark.read.parquet("/tmp/udt_pq").schema.simpleString())
+with tempfile.TemporaryDirectory() as tmp:
+    df.write.mode("overwrite").parquet(tmp + "/udt_pq")
+    print("reread:", spark.read.parquet(tmp + "/udt_pq").schema.simpleString())

@@ -1415,3 +1415,29 @@ fn a_udt_field_reads_back_as_the_udt() {
         nested
     );
 }
+
+/// A JVM UDT and a Python-only one with the same class name and storage are different types (Spark's
+/// `PythonUserDefinedType` is its own class), and a hash set keeps both.
+#[test]
+fn a_jvm_and_a_python_only_udt_of_one_class_name_are_not_equal() {
+    let jvm = udt("pkg.PointUDT", DataType::Integer);
+    let python = DataType::Udt(Arc::new(UdtType::python(
+        DataType::Integer,
+        "pkg.PointUDT".to_owned(),
+        "gAWV".to_owned(),
+    )));
+    assert_ne!(jvm, python);
+    let set: std::collections::HashSet<DataType> = [jvm, python].into_iter().collect();
+    assert_eq!(set.len(), 2);
+}
+
+/// The field tag of a UDT over an INDETERMINATE collation reads back (`string collate null`).
+#[test]
+fn a_udt_over_an_indeterminate_collation_reads_back_from_its_arrow_field() {
+    let t = udt(
+        "pkg.TextUDT",
+        DataType::CollatedString(crate::Collation::INDETERMINATE),
+    );
+    let field = t.to_arrow_field("p", true);
+    assert_eq!(DataType::from_arrow_field(&field).unwrap(), t);
+}

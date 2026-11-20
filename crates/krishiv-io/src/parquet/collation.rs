@@ -276,12 +276,28 @@ mod tests {
         let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
         let sql = r#"{"type":"array","elementType":"double","containsNull":false}"#;
         let schema = Schema::new(vec![storage.to_arrow_field("p", true)]);
-        for udt in [
-            format!(
-                r#"{{"type":"udt","class":"org.example.PointUDT","pyClass":null,"sqlType":{sql}}}"#
+        let jvm = DataType::Udt(Arc::new(UdtType::jvm(
+            storage.clone(),
+            "org.example.PointUDT".to_owned(),
+            None,
+        )));
+        let python = DataType::Udt(Arc::new(UdtType::python(
+            storage,
+            "__main__.PyOnlyUDT".to_owned(),
+            "gAWV".to_owned(),
+        )));
+        for (udt, want) in [
+            (
+                format!(
+                    r#"{{"type":"udt","class":"org.example.PointUDT","pyClass":null,"sqlType":{sql}}}"#
+                ),
+                jvm,
             ),
-            format!(
-                r#"{{"type":"udt","pyClass":"__main__.PyOnlyUDT","serializedClass":"gAWV","sqlType":{sql}}}"#
+            (
+                format!(
+                    r#"{{"type":"udt","pyClass":"__main__.PyOnlyUDT","serializedClass":"gAWV","sqlType":{sql}}}"#
+                ),
+                python,
             ),
         ] {
             let footer = format!(
@@ -289,7 +305,16 @@ mod tests {
             );
             let restored = restore(&schema, Some(&kv(&footer))).expect("tagged");
             let got = DataType::from_arrow_field(restored.field(0)).unwrap();
-            assert!(matches!(got, DataType::Udt(_)), "{footer}");
+            assert_eq!(got, want, "{footer}");
+            let (DataType::Udt(g), DataType::Udt(w)) = (&got, &want) else {
+                panic!("{footer}")
+            };
+            assert_eq!(g.python_class(), w.python_class(), "{footer}");
+            assert_eq!(
+                g.serialized_python_class(),
+                w.serialized_python_class(),
+                "{footer}"
+            );
         }
     }
 

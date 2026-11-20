@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+import tempfile
+
 from pyspark.sql import SparkSession
 from pyspark.sql.types import (
     ArrayType,
@@ -69,11 +71,12 @@ for name, u in (("string", LUDT()), ("array", AUDT())):
     show("STRUCTFIELD-" + name + " ", df._jdf.schema())
     inner = StructType([StructField("s", StructType([StructField("p", u)]))])
     show("NESTED-" + name + " ", spark.createDataFrame([], inner)._jdf.schema())
-    df.write.mode("overwrite").parquet("/tmp/udt_coll_" + name)
+    with tempfile.TemporaryDirectory() as tmp:
+        df.write.mode("overwrite").parquet(tmp + "/udt_coll_" + name)
 
-    rd = spark.read.parquet("/tmp/udt_coll_" + name)
-    print(
-        "REREAD-" + name,
-        rd.schema.simpleString(),
-        rd._jdf.schema().json()[:300].replace("\n", " "),
-    )
+        rd = spark.read.parquet(tmp + "/udt_coll_" + name)
+        print(
+            "REREAD-" + name,
+            rd.schema.simpleString(),
+            rd._jdf.schema().json()[:300].replace("\n", " "),
+        )

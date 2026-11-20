@@ -102,8 +102,13 @@ impl UdtType {
 
     /// The class that names this type for equality: the JVM class (Spark's `UserDefinedType.equals` compares
     /// classes), else the Python class of a Python-only type.
-    fn identity(&self) -> Option<&str> {
-        self.jvm_class().or_else(|| self.python_class())
+    /// A Python-only type is kept apart from a JVM one that happens to share the class name
+    /// (`PythonUserDefinedType` is its own Spark class).
+    fn identity(&self) -> (bool, Option<&str>) {
+        (
+            self.jvm_class.is_some(),
+            self.jvm_class().or_else(|| self.python_class()),
+        )
     }
 }
 

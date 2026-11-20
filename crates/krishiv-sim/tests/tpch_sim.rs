@@ -242,6 +242,20 @@ impl Tpch {
         self.plan_sql_with(text, Arc::clone(&self.config)).await
     }
 
+    /// As `plan_sql`, with the optimizer's UDF folding on (`optimize_with_udfs`), which is where a `vector_*`
+    /// call's `array(literals)` argument folds to one array literal.
+    async fn plan_sql_folded(&self, text: &str) -> Result<PhysicalPlan, KrishivError> {
+        let plan =
+            krishiv_sql::parse_and_lower(text, &krishiv_sql::ParserOptions::default(), SourceId(0))
+                .map_err(KrishivError::from)?;
+        let plan: Plan = DefaultAnalyzer.analyze(&plan, &self.ctx).await?.plan;
+        let stats = ProviderStatistics(Arc::clone(&self.tables) as _);
+        let udfs = krishiv_udf_sdk::UdfLibrary::new();
+        let plan = krishiv_optimizer::optimize_with_udfs(&plan, &stats, &udfs, &self.config)?;
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        DefaultPlanner.plan(&plan, &cx)
+    }
+
     async fn plan_sql_with(
         &self,
         text: &str,
@@ -358,6 +372,22 @@ async fn rows(
     rows_with(config, scheduler, plan, worker, pool, id).await
 }
 
+/// `plan`'s rows through `scheduler`, as text, in the order the query emits them (a top-k's order is its result).
+async fn ordered_rows(
+    seed: u64,
+    scheduler: &dyn Scheduler,
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+    pool: &Arc<dyn MemoryPool>,
+    id: u64,
+) -> Result<Vec<String>, KrishivError> {
+    let config = ExecConfig {
+        seed: Some(seed),
+        ..ExecConfig::default()
+    };
+    rows_in_order(config, scheduler, plan, worker, pool, id, false).await
+}
+
 /// `plan`'s rows through `scheduler` under `config`, as text, sorted.
 async fn rows_with(
     config: ExecConfig,
@@ -366,6 +396,19 @@ async fn rows_with(
     worker: &WorkerContext,
     pool: &Arc<dyn MemoryPool>,
     id: u64,
+) -> Result<Vec<String>, KrishivError> {
+    rows_in_order(config, scheduler, plan, worker, pool, id, true).await
+}
+
+/// `rows_with`, sorting the text only when `sort`.
+async fn rows_in_order(
+    config: ExecConfig,
+    scheduler: &dyn Scheduler,
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+    pool: &Arc<dyn MemoryPool>,
+    id: u64,
+    sort: bool,
 ) -> Result<Vec<String>, KrishivError> {
     let query = QueryContext::new(
         QueryId(id),
@@ -390,7 +433,9 @@ async fn rows_with(
     }
     drop(stream);
     query.finished().await;
-    out.sort();
+    if sort {
+        out.sort();
+    }
     Ok(out)
 }
 
@@ -538,10 +583,10 @@ fn a_vector_top_k_on_two_workers_equals_one_worker() {
             let pool: Arc<dyn MemoryPool> =
                 TreePool::with_clock(&MemoryConfig::default(), Arc::new(TokioClock));
             for (i, sql) in queries.iter().enumerate() {
-                let plan = tpch.plan_sql(sql).await?;
+                let plan = tpch.plan_sql_folded(sql).await?;
                 let id = 2 * i as u64;
-                let want = rows(7, &plain, &plan, &worker, &pool, id).await?;
-                let got = rows(7, &coordinator, &plan, &worker, &pool, id + 1).await?;
+                let want = ordered_rows(7, &plain, &plan, &worker, &pool, id).await?;
+                let got = ordered_rows(7, &coordinator, &plan, &worker, &pool, id + 1).await?;
                 out.lock().unwrap().push((sql.clone(), got, want));
             }
             Ok(())

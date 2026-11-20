@@ -99,9 +99,8 @@ fn order_by_group_by_equality_and_a_join_key_run_on_the_storage_type() {
 #[test]
 fn a_udt_column_keeps_its_type_through_a_parquet_write_and_read() {
     let s = session();
-    let dir = std::env::temp_dir().join(format!("krishiv-udt-{}", std::process::id()));
-    let path = dir.join("p.parquet");
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("p.parquet");
     block_on(async {
         s.sql("select * from t")
             .await?
@@ -116,5 +115,4 @@ fn a_udt_column_keeps_its_type_through_a_parquet_write_and_read() {
     let field = back[0].schema().field_with_name("p").unwrap().clone();
     assert_eq!(DataType::from_arrow_field(&field).unwrap(), point());
     assert_eq!(back.iter().map(RecordBatch::num_rows).sum::<usize>(), 4);
-    std::fs::remove_dir_all(&dir).ok();
 }

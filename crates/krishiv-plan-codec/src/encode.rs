@@ -1748,6 +1748,12 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
             if u.sql_type().any_type(&DataType::is_nested) {
                 nested.set(true);
             }
+            // The decoder reads the UDT object as one depth level: refuse here what it would refuse there.
+            if t.nesting_depth() > DataType::MAX_NESTING_DEPTH {
+                return Err(CodecError::Unsupported(
+                    "a user-defined type nested deeper than the decoder reads".to_owned(),
+                ));
+            }
             return Ok(pb::DataType {
                 kind: Kind::Udt as i32,
                 json: t.json(),

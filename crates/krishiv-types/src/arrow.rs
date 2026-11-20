@@ -556,7 +556,8 @@ impl DataType {
             None => Self::from_arrow_at(field.data_type(), depth),
             Some(tag) => {
                 let t = if tag.starts_with('{') {
-                    Self::from_json(tag)?
+                    // The tag is the engine's own `json()`, which writes INDETERMINATE as `string collate null`.
+                    Self::from_canonical_json(tag)?
                 } else {
                     crate::parse_data_type(tag)?
                 };

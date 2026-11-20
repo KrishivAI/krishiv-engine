@@ -2717,3 +2717,39 @@ fn a_python_udtf_table_of_uneven_shape_is_corrupt() {
         corrupt(&m, "a Python UDTF TABLE argument of uneven shape");
     }
 }
+
+/// The decoder reads a UDT object as one depth level, so a UDT whose storage nests as deep as the cap does not
+/// encode (it would not decode: "invalid user-defined type").
+#[test]
+fn a_udt_whose_storage_is_too_deep_for_the_decoder_does_not_encode() {
+    use krishiv_types::{ArrayType, DataType, UdtType};
+    let udt_over = |arrays: usize| {
+        let mut storage = DataType::Integer;
+        for _ in 0..arrays {
+            storage = ArrayType::new(storage, true).into();
+        }
+        DataType::Udt(std::sync::Arc::new(UdtType::jvm(
+            storage,
+            "pkg.PointUDT".to_owned(),
+            None,
+        )))
+    };
+    let plan_with = |t: DataType| {
+        plan_of(PhysNode::Project {
+            input: Box::new(PhysNode::OneRow),
+            layout: Vec::new(),
+            items: vec![krishiv_exec::physical::ProjectItemPlan::Expr {
+                name: "x".to_owned(),
+                expr: inventory::lit(krishiv_plan::Literal::Null(Some(t))),
+            }],
+            nullable: None,
+            subqueries: Vec::new(),
+        })
+    };
+    let deepest = DataType::MAX_NESTING_DEPTH - 1;
+    assert!(encode(&plan_with(udt_over(deepest))).is_ok());
+    assert!(matches!(
+        encode(&plan_with(udt_over(deepest + 1))),
+        Err(CodecError::Unsupported(_))
+    ));
+}

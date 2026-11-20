@@ -3622,6 +3622,7 @@ dependencies = [
  "krishiv-shuffle",
  "krishiv-sql",
  "krishiv-types",
+ "krishiv-udf-sdk",
  "object_store",
  "parquet 60.1.0",
  "prost",
