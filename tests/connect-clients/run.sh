@@ -66,7 +66,7 @@ for c in ${clients//,/ }; do
       ;;
     scala)
       docker run --rm --network host -v "$here:/src:ro" -v "$out:/out" -v krishiv-smoke-scala:/root/.cache \
-        virtuslab/scala-cli:latest run /src/scala/Smoke.scala -- "$remote" /src/queries.json /out/scala.json \
+        virtuslab/scala-cli:latest run --workspace /tmp/scala-ws /src/scala/Smoke.scala -- "$remote" /src/queries.json /out/scala.json \
         || echo "scala client run failed" >&2
       ;;
     *) echo "unknown client: $c" >&2 ;;
