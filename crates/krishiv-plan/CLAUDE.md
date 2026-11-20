@@ -39,7 +39,7 @@ Paths are relative to this crate.
 - `src/tests/inventory.rs` node inventory checked by the tests
 
 ## Extension points
-- New IR node: add it to `src/plan.rs` or `src/expr.rs`, bump `ENCODING_VERSION` if the layout changes, and update the inventory table, the printers and the mutation sites.
+- New IR node: add it to `src/plan.rs` or `src/expr.rs`, give a new node kind the next `encode::plan_tag` number (bump `ENCODING_VERSION` only when an existing tag or layout changes), and update the inventory table, the printers and the mutation sites.
 - New analyzer rule: in `src/analyzer/resolve.rs` (or `bind.rs` if it needs metadata), with a golden from the Spark run.
 
 ## Invariants

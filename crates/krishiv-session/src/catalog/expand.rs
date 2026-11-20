@@ -630,9 +630,10 @@ impl Expander<'_> {
             }
         }
         if let Some(filter) = &spec.filter {
+            // On a line of its own: a filter ending in a `--` comment leaves the parenthesis.
             text.push_str(" WHERE (");
             text.push_str(filter);
-            text.push(')');
+            text.push_str("\n)");
         }
         let query = krishiv_sql::parse_query(&text, &def.parser).map_err(|e| e.error)?;
         let lowered = krishiv_sql::lower_identified(
@@ -647,10 +648,29 @@ impl Expander<'_> {
             PlanNode::Project { input, .. } => Arc::clone(input),
             _ => Arc::clone(lowered.root()),
         };
+        // Its version and its own lookups, for the definer view whose text holds it (review r10 M10),
+        // as a SQL view's; the side table of `analyzer/views.rs` keys by a `SubqueryAlias` this read
+        // has none of, so lineage shows its source as opaque instead (`lineage/walk.rs`).
+        self.reached.push((
+            self.in_definer.last().copied(),
+            ReachedView {
+                view: (entry.namespace.clone(), entry.name.clone()),
+                revision: view.revision,
+                author: view.author.clone(),
+                reads: Vec::new(),
+                query: None,
+            },
+        ));
+        let reached = self.reached.len() - 1;
+        self.open_views.push(reached);
         self.path.push(key);
         let source = self.go(source, &mut Vec::new());
         self.path.pop();
+        self.open_views.pop();
         let source = source?;
+        if let Some((_, r)) = self.reached.get_mut(reached) {
+            r.query = Some(Arc::clone(&source));
+        }
         let mut columns = entry.columns.iter();
         let mut parsed = |c: &crate::metric_view::MetricViewColumn| {
             let item =

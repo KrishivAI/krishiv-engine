@@ -60,6 +60,14 @@ impl Resolver<'_> {
         output: &[BoundColumn],
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
+        for m in dimensions.iter().chain(measures) {
+            if let Some(feature) = self.unsupported_in(&m.expr) {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::KrishivUnsupportedFeature { feature },
+                    m.expr.origin,
+                ));
+            }
+        }
         let c = self.child(input, env)?;
         let qual: Arc<[String]> = Arc::from(Vec::new());
         let mut out = Vec::with_capacity(dimensions.len() + measures.len());
@@ -121,8 +129,7 @@ impl Resolver<'_> {
         else {
             return Ok(first);
         };
-        let (dims, meas) = output.split_at(dimensions.len().min(output.len()));
-        let dim_ids: HashSet<AttrId> = dims.iter().map(|c| c.id).collect();
+        let meas = output.get(dimensions.len()..).unwrap_or_default();
         let meas_ids: HashSet<AttrId> = meas.iter().map(|c| c.id).collect();
         let source_names: Vec<String> = source
             .resolved_output()
@@ -179,9 +186,10 @@ impl Resolver<'_> {
             ..
         }) = aggregate_of(&first.plan).map(|a| &a.node)
         {
-            // `measure(<dimension>)`: Spark's rule looks the attribute up among the measures.
+            // `measure(<column>)` of a column that is not a measure: Spark's rule looks the
+            // attribute up among the measures.
             let mut allowed = HashSet::new();
-            let mut of_dimension = None;
+            let mut not_measure = None;
             for e in items {
                 let _ = visit_distinct(Node::Expr(e), |n| {
                     if let Node::Expr(x) = n
@@ -193,10 +201,11 @@ impl Resolver<'_> {
                             {
                                 allowed.insert(std::ptr::from_ref::<Expr>(arg) as usize);
                             }
-                            ExprNode::Resolved(ResolvedExpr::Column(c))
-                                if dim_ids.contains(&c.id) =>
-                            {
-                                of_dimension.get_or_insert(c.id);
+                            // Any other attribute is looked up among the measures and fails
+                            // (`measuresMap(a.exprId)`): a dimension, or a column a projection
+                            // above the read made.
+                            ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                                not_measure.get_or_insert(c.id);
                             }
                             _ => {}
                         }
@@ -204,7 +213,7 @@ impl Resolver<'_> {
                     std::ops::ControlFlow::Continue(())
                 });
             }
-            if let Some(id) = of_dimension {
+            if let Some(id) = not_measure {
                 return Err(AnalysisError::new(
                     KrishivError::from(InternalError {
                         message: format!("key not found: ExprId({},{})", id.0, "metric-view"),
@@ -274,6 +283,50 @@ impl Resolver<'_> {
                 _ => return false,
             }
         }
+    }
+
+    /// What a dimension or measure `e` (unresolved) holds that a read does not support yet: a
+    /// subquery, or a call of a SQL function or a UDF. Bind and the session's lookups never see
+    /// these expressions, so the tables and functions they reach would enter the plan without the
+    /// reader being asked: they are refused (fail closed, review 2026-11-20 finding 1).
+    fn unsupported_in(&self, e: &Expr) -> Option<String> {
+        let mut found = None;
+        let _ = visit_distinct(Node::Expr(e), |n| {
+            if let Node::Expr(x) = n {
+                match &x.node {
+                    ExprNode::Subquery { .. } => {
+                        found =
+                            Some("a subquery in a metric view's dimension or measure".to_owned());
+                    }
+                    ExprNode::Function(f) => {
+                        let mut name = f.qualifier.clone();
+                        name.push(f.name.clone());
+                        let other = match self.ctx.functions.lookup(&name, self.ctx.profile) {
+                            super::FunctionLookup::Sql(_) => true,
+                            super::FunctionLookup::Found(entry) => !matches!(
+                                entry.id,
+                                FunctionId::Builtin(_) | FunctionId::Registry { .. }
+                            ),
+                            super::FunctionLookup::KnownUnsupported
+                            | super::FunctionLookup::NotFound => false,
+                        };
+                        if other {
+                            found = Some(format!(
+                                "calling `{}` (not a built-in function) in a metric view's dimension or measure",
+                                name.join(".")
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if found.is_some() {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        });
+        found
     }
 
     /// Whether two column names are the same under the session's case rule.

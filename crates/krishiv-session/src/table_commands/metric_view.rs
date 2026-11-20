@@ -75,7 +75,8 @@ impl Aggregate {
         if let Some(filter) = &spec.filter {
             out.text.push_str(" WHERE (");
             out.push_expr(filter);
-            out.text.push(')');
+            // On a line of its own: a filter ending in a `--` comment leaves the parenthesis.
+            out.text.push_str("\n)");
         }
         for (i, d) in spec.dimensions.iter().enumerate() {
             out.text
