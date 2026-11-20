@@ -862,4 +862,11 @@ fn a_commands_not_found_error_names_the_current_namespace() {
     let want = "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`nsdb`]";
     assert_eq!(path("DESCRIBE TABLE nosuch"), want);
     assert_eq!(path("UNCACHE TABLE nosuch"), want);
+    // `SET PATH` changes what the error names, as it does for a query.
+    block_on(s.sql("SET spark.sql.path.enabled = true")).unwrap();
+    block_on(s.sql("SET PATH = system.session, CURRENT_SCHEMA")).unwrap();
+    assert_eq!(
+        path("UNCACHE TABLE nosuch"),
+        "[`system`.`session`, `spark_catalog`.`nsdb`]"
+    );
 }

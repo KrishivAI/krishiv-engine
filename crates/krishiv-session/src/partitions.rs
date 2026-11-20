@@ -1723,7 +1723,7 @@ impl Session {
             .catalog
             .store
             .table(&name.namespace, &name.name)
-            .ok_or_else(|| name.not_found(&self.state.catalog.current_namespace()))?;
+            .ok_or_else(|| name.not_found(self.search_path()))?;
         if table.view.is_some() {
             return Err(forbidden("VIEW"));
         }
