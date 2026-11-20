@@ -7,7 +7,7 @@
 use arrow_array::cast::AsArray;
 use arrow_cast::cast;
 use arrow_schema::DataType;
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_sql::ast::{Show, ShowKind};
 use serde_json::Value;
 
@@ -31,11 +31,28 @@ impl Session {
                 pattern,
                 span,
                 ..
-            } => ShowKind::Tables {
-                namespace: namespace.clone(),
-                pattern: Some(pattern.clone()),
-                span: *span,
-            },
+            } => {
+                // The JSON names the session catalog and a stored table type; the `system` tables are
+                // neither, so their metadata would be made up. Refused rather than answered wrong.
+                let in_system = match namespace {
+                    Some(n) => self
+                        .namespace_name(n, &self.query_env())
+                        .is_ok_and(|name| crate::system::is_system(&name)),
+                    None => crate::system::is_system(&self.state.catalog.current_catalog()),
+                };
+                if in_system {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: "SHOW TABLE EXTENDED ... AS JSON over the system catalog"
+                            .to_owned(),
+                    }
+                    .into());
+                }
+                ShowKind::Tables {
+                    namespace: namespace.clone(),
+                    pattern: Some(pattern.clone()),
+                    span: *span,
+                }
+            }
             kind => kind.clone(),
         };
         let plain = Show {

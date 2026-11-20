@@ -96,3 +96,18 @@ fn json_keeps_partition_escapes_lists_views_and_refuses_a_partition() {
         "UNSUPPORTED_FEATURE.SHOW_TABLE_EXTENDED_JSON_WITH_PARTITION"
     );
 }
+
+/// The `system` tables have no session-catalog identity or stored type, so the extended JSON form is refused there.
+#[test]
+fn show_table_extended_as_json_over_the_system_catalog_is_refused() {
+    let s = Session::new().unwrap();
+    let e = block_on(async {
+        s.sql("show table extended in system like 'queries' as json")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
+    assert!(one(&s, "show tables in system like 'queries' as json").contains("\"queries\""));
+}
