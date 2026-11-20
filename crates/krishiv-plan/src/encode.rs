@@ -973,6 +973,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 dimensions,
                 measures,
                 output,
+                ansi,
                 ..
             } => {
                 self.strs(name);
@@ -987,6 +988,11 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 self.len(output.len());
                 output.iter().for_each(|c| self.bound(c));
+                self.u8(match ansi {
+                    None => 0,
+                    Some(false) => 1,
+                    Some(true) => 2,
+                });
             }
             PlanNode::JoinHint { strategy, .. } => {
                 self.str(strategy.name());

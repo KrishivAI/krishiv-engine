@@ -442,7 +442,10 @@ impl Session {
                 functions: None,
                 revision: 0,
                 author: self.state.principal.name.clone(),
-                kind: ViewKind::Metric(MetricViewDef { parser: env.parser }),
+                kind: ViewKind::Metric(MetricViewDef {
+                    parser: env.parser,
+                    ansi: env.analysis.conf.ansi,
+                }),
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),

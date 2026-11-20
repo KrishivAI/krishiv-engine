@@ -235,3 +235,28 @@ $$",
     .unwrap();
     assert_eq!(longs(&rows, 1), vec![3, 5]);
 }
+
+/// A metric view's operators keep the creator's ANSI mode, the functions under them the reader's
+/// (a Spark 4.2.1 run, 2026-11-21: created under ANSI, read without it, `abs(i) + 0` of
+/// `INT_MIN` is `INT_MIN`, `-i` overflows).
+#[test]
+fn an_operator_keeps_the_creators_mode_and_its_operand_the_readers() {
+    let (s, _dir) = session();
+    run(&s, "CREATE TABLE t (k STRING, i INT) USING parquet").unwrap();
+    run(&s, "INSERT INTO t VALUES ('a', -2147483648), ('b', 1)").unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "true").unwrap();
+    run(
+        &s,
+        "CREATE VIEW mvo WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsource: t\ndimensions:\n  - name: a\n    expr: abs(i) + 0\n  - name: n\n    expr: -i\nmeasures:\n  - name: c\n    expr: count(1)\n$$",
+    )
+    .unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    let got = run(
+        &s,
+        "SELECT CAST(a AS BIGINT), measure(c) FROM mvo GROUP BY a",
+    )
+    .unwrap();
+    assert_eq!(longs(&got, 0), vec![-2_147_483_648, 1]);
+    let e = run(&s, "SELECT n, measure(c) FROM mvo GROUP BY n").unwrap_err();
+    assert_eq!(class(&e), "ARITHMETIC_OVERFLOW");
+}

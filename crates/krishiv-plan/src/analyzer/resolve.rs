@@ -1034,7 +1034,8 @@ impl Resolver<'_> {
                 dimensions,
                 measures,
                 output,
-            } => self.metric_view_read(p, input, name, dimensions, measures, output, env),
+                ansi,
+            } => self.metric_view_read(p, input, name, dimensions, measures, output, *ansi, env),
             // Listed, not wildcarded: a new `PlanNode` variant must be
             // placed here or in `leaf_node` to compile.
             PlanNode::Read(ReadSource::Files { .. } | ReadSource::Local(_))

@@ -567,6 +567,7 @@ impl Gen<'_> {
                 dimensions: self.many(0, 2, Gen::metric_column),
                 measures: self.many(0, 2, Gen::metric_column),
                 output: self.many(0, 2, Gen::bound),
+                ansi: self.flag().then(|| self.flag()),
             },
             30 => PlanNode::Repartition {
                 input: self.input(d),
@@ -1377,7 +1378,9 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             dimensions,
             measures,
             output,
+            ansi,
         } => {
+            site!(w, *ansi = Some(!ansi.unwrap_or(false)));
             m_strings(name, w)
                 || dimensions.iter_mut().chain(measures.iter_mut()).any(|c| {
                     m_string(&mut c.name, w) || m_expr(&mut c.expr, w) || {

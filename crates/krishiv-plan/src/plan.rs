@@ -631,6 +631,11 @@ pub enum PlanNode {
         measures: Vec<MetricColumn>,
         /// The output attributes; empty until resolved.
         output: Vec<BoundColumn>,
+        /// `spark.sql.ansi.enabled` when the view was created: the arithmetic operators its
+        /// dimensions and measures write evaluate in it whatever the reader's mode is (Spark's parser
+        /// builds them with the mode it parses the view's expressions under). `None` follows the
+        /// reader's. Casts carry their mode in [`CastMode`](crate::CastMode) already.
+        ansi: Option<bool>,
     },
 }
 

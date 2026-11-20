@@ -29,6 +29,7 @@ fn read() -> LogicalPlan {
         dimensions: vec![column("brand", c("p_brand"), DataType::String)],
         measures: vec![column("total", f("sum", vec![c("p_size")]), DataType::Long)],
         output: Vec::new(),
+        ansi: None,
     })
 }
 

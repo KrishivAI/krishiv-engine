@@ -206,6 +206,11 @@ pub(crate) struct MetricViewDef {
     /// The parse options when the view was created (Spark's captured `view.sqlConfig.*` apply only
     /// while its YAML and expressions are parsed, design note `P3-metric-views.md` §4).
     pub(crate) parser: krishiv_sql::ParserOptions,
+    /// `spark.sql.ansi.enabled` when the view was created: the operators and casts its YAML
+    /// expressions write (`+`, `/`, `CAST`, which Spark's parser builds with the mode it parses
+    /// under) evaluate in it at every read; functions resolved at a read (`sum`) and the casts the
+    /// analyzer inserts follow the reader's mode (design note `P3-metric-views.md`, golden results 1).
+    pub(crate) ansi: bool,
 }
 
 /// [`ViewDef::functions`]: what a definer view bound when it was created or last altered.

@@ -914,8 +914,14 @@ impl Encoder {
                 dimensions,
                 measures,
                 output,
+                ansi,
             } => {
                 self.tag("MetricViewRead");
+                self.num(match ansi {
+                    None => 0,
+                    Some(false) => 1,
+                    Some(true) => 2,
+                });
                 self.num(name.len() as u64);
                 name.iter().for_each(|n| self.text(n));
                 for cols in [dimensions, measures] {

@@ -28,11 +28,14 @@ use krishiv_common::error::{
 
 use super::AnalysisError;
 use super::resolve::{Attr, Env, Rel, Resolver};
+use crate::function::Builtin;
+use crate::origin::SourceId;
 use crate::walk::{Node, visit_distinct};
 use crate::{
-    AttrId, BoundColumn, Expr, ExprNode, FunctionId, Grouping, LogicalPlan, MetricColumn, PlanNode,
-    ResolvedExpr,
+    AttrId, BoundColumn, Expr, ExprNode, FunctionId, FunctionKind, Grouping, LogicalPlan,
+    MetricColumn, PlanNode, ResolvedExpr,
 };
+use krishiv_types::DataType;
 
 /// The name of Spark's `Measure` aggregate.
 const MEASURE: &str = "measure";
@@ -58,6 +61,7 @@ impl Resolver<'_> {
         dimensions: &[MetricColumn],
         measures: &[MetricColumn],
         output: &[BoundColumn],
+        ansi: Option<bool>,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         for m in dimensions.iter().chain(measures) {
@@ -94,6 +98,7 @@ impl Resolver<'_> {
             dimensions: dimensions.to_vec(),
             measures: measures.to_vec(),
             output: out.iter().map(|a| a.col.clone()).collect(),
+            ansi,
         };
         Ok(self.make(p.origin, node, out, &[&c]))
     }
@@ -124,6 +129,7 @@ impl Resolver<'_> {
             dimensions,
             measures,
             output,
+            ansi,
             ..
         } = &read.node
         else {
@@ -265,7 +271,19 @@ impl Resolver<'_> {
             })
             .with_origin(p.origin),
         );
-        self.rel(&agg, env)
+        let mut rel = self.rel(&agg, env)?;
+        if let Some(creator) = ansi.filter(|a| *a != self.ctx.conf.ansi) {
+            // The operators the view's text wrote: its expressions' and its source's sources.
+            let sources: HashSet<SourceId> = dimensions
+                .iter()
+                .chain(measures)
+                .map(|m| m.expr.origin)
+                .chain(std::iter::once(source.origin))
+                .filter_map(|o| o.sql.map(|(s, _)| s))
+                .collect();
+            rel.plan = pin_written_operators(&rel.plan, &sources, creator, self.ctx.conf.ansi);
+        }
+        Ok(rel)
     }
 
     /// Whether the unresolved chain from `input` down to its metric-view read passes the inlined
@@ -420,6 +438,79 @@ impl Resolver<'_> {
             _ => return None,
         };
         Some(Arc::new(LogicalPlan::new(node).with_origin(plan.origin)))
+    }
+}
+
+/// `plan` with each arithmetic operator lowered from one of `sources` (a metric view's own text)
+/// evaluating in ANSI mode `creator`, its operands in the reader's (`reader`): Spark's parser builds
+/// `+`, `-`, `*`, `/`, `%`, `div` and unary minus with the mode it parses the view's text under,
+/// while the functions a read resolves (`sum`, `abs`) take the reader's. An aggregate or window call
+/// is an operand as it is: it reads its operator's mode, which is the reader's.
+fn pin_written_operators(
+    plan: &Arc<LogicalPlan>,
+    sources: &HashSet<SourceId>,
+    creator: bool,
+    reader: bool,
+) -> Arc<LogicalPlan> {
+    let done: Result<Arc<LogicalPlan>, std::convert::Infallible> =
+        Arc::clone(plan).transform_up(&mut |n| {
+            n.map_expressions(|e| e.transform_up(&mut |x| Ok(pin(x, sources, creator, reader))))
+        });
+    done.unwrap_or_else(|never| match never {})
+}
+
+/// `e` evaluated in ANSI mode `ansi`.
+fn in_mode(e: Arc<Expr>, ansi: bool, data_type: DataType, nullable: bool) -> Arc<Expr> {
+    let origin = e.origin;
+    Arc::new(
+        Expr::new(ExprNode::Resolved(ResolvedExpr::EvalMode {
+            ansi,
+            expr: e,
+            data_type,
+            nullable,
+        }))
+        .with_origin(origin),
+    )
+}
+
+/// [`pin_written_operators`] of one expression node.
+fn pin(x: Arc<Expr>, sources: &HashSet<SourceId>, creator: bool, reader: bool) -> Arc<Expr> {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node else {
+        return x;
+    };
+    let written = x.origin.sql.is_some_and(|(s, _)| sources.contains(&s));
+    let arithmetic = matches!(
+        f.id,
+        FunctionId::Builtin(
+            Builtin::Add
+                | Builtin::Subtract
+                | Builtin::Multiply
+                | Builtin::Divide
+                | Builtin::Remainder
+                | Builtin::IntegralDivide
+                | Builtin::Negative
+        )
+    );
+    if !written || !arithmetic {
+        return x;
+    }
+    let mut f = f.clone();
+    f.args = f.args.iter().map(|a| operand(a, reader)).collect();
+    let (data_type, nullable) = (f.data_type.clone(), f.nullable);
+    let call =
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))).with_origin(x.origin));
+    in_mode(call, creator, data_type, nullable)
+}
+
+/// An operand of a pinned operator, evaluating in the reader's mode `reader`: a scalar call or a
+/// cast is wrapped; a column, a literal, an aggregate or window call or a pinned operator is not.
+fn operand(a: &Arc<Expr>, reader: bool) -> Arc<Expr> {
+    match &a.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Scalar => {
+            in_mode(Arc::clone(a), reader, f.data_type.clone(), f.nullable)
+        }
+        ExprNode::Cast { to, .. } => in_mode(Arc::clone(a), reader, to.clone(), true),
+        _ => Arc::clone(a),
     }
 }
 

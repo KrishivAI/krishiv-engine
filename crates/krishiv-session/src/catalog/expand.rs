@@ -4,6 +4,7 @@
 use super::*;
 use crate::sql_functions::CallRule;
 use krishiv_plan::analyzer::views::{ViewExpansion, ViewSecurity};
+use krishiv_plan::{CastMode, Expr, ExprNode};
 
 /// [`expand_temp_views`]: the views on the current expansion path, by
 /// lower-case name, for cycle detection.
@@ -648,6 +649,7 @@ impl Expander<'_> {
             PlanNode::Project { input, .. } => Arc::clone(input),
             _ => Arc::clone(lowered.root()),
         };
+        let source = with_cast_modes(&source, def.ansi);
         // Its version and its own lookups, for the definer view whose text holds it (review r10 M10),
         // as a SQL view's; the side table of `analyzer/views.rs` keys by a `SubqueryAlias` this read
         // has none of, so lineage shows its source as opaque instead (`lineage/walk.rs`).
@@ -677,10 +679,11 @@ impl Expander<'_> {
                 krishiv_sql::parse_named_expression(&c.expr, &def.parser).map_err(|e| e.error)?;
             let expr = krishiv_sql::lower_expression(&item.expr, (stored.next_source)())
                 .map_err(|e| e.error)?;
+            let expr = cast_modes(Arc::new(expr), def.ansi);
             let stored_column = columns.next();
             Ok::<_, KrishivError>(krishiv_plan::MetricColumn {
                 name: stored_column.map_or_else(|| c.name.clone(), |s| s.name.clone()),
-                expr: Arc::new(expr),
+                expr,
                 data_type: stored_column
                     .map_or(krishiv_types::DataType::Null, |s| s.data_type.clone()),
                 nullable: stored_column.is_none_or(|s| s.nullable),
@@ -707,6 +710,7 @@ impl Expander<'_> {
                 dimensions,
                 measures,
                 output: Vec::new(),
+                ansi: Some(def.ansi),
             })
             .with_origin(plan.origin),
         ))
@@ -791,3 +795,37 @@ impl Expander<'_> {
 #[cfg(test)]
 #[path = "expand_tests.rs"]
 mod view_side_table;
+
+/// `e` with each `CAST` it writes in the mode `ansi` gives (a metric view's casts take the mode
+/// captured when it was created, as Spark's parser builds them; `TRY_CAST` stays).
+fn cast_modes(e: Arc<Expr>, ansi: bool) -> Arc<Expr> {
+    let done: Result<Arc<Expr>, std::convert::Infallible> = e.transform_up(&mut |x| {
+        Ok(match &x.node {
+            ExprNode::Cast {
+                expr,
+                to,
+                mode: CastMode::Default,
+            } => Arc::new(
+                Expr::new(ExprNode::Cast {
+                    expr: Arc::clone(expr),
+                    to: to.clone(),
+                    mode: if ansi {
+                        CastMode::Ansi
+                    } else {
+                        CastMode::Legacy
+                    },
+                })
+                .with_origin(x.origin),
+            ),
+            _ => x,
+        })
+    });
+    done.unwrap_or_else(|never| match never {})
+}
+
+/// [`cast_modes`] of every expression of `plan` (a metric view's source and filter).
+fn with_cast_modes(plan: &Arc<LogicalPlan>, ansi: bool) -> Arc<LogicalPlan> {
+    let done: Result<Arc<LogicalPlan>, std::convert::Infallible> =
+        Arc::clone(plan).transform_up(&mut |n| n.map_expressions(|e| Ok(cast_modes(e, ansi))));
+    done.unwrap_or_else(|never| match never {})
+}
