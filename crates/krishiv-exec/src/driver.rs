@@ -657,11 +657,13 @@ impl Driver {
             self.boundary().await?;
             let start = run.executor.now();
             let ctx = Arc::clone(&self.slots.get_mut().slot(k)?.ctx);
+            let ran = ctx.blocking_time();
             let finalize = sink.finalize(&run.sink_global, &ctx);
-            pause(&run, Some((&self.owner, &self.slots)), finalize)
-                .await?
-                .0?;
-            self.metrics(k).compute_time += since(&*run.executor, start);
+            let (out, waited) = pause(&run, Some((&self.owner, &self.slots)), finalize).await?;
+            let elapsed = since(&*run.executor, start);
+            self.metrics(k)
+                .step(elapsed, waited, ctx.blocking_time().saturating_sub(ran));
+            out?;
         }
         Ok(())
     }
@@ -857,11 +859,14 @@ impl Driver {
             self.boundary().await?;
             let start = run.executor.now();
             let (ctx, mut local) = self.take_local(i)?;
+            let ran = ctx.blocking_time();
             let spill = Some((&*self.owner, &self.slots));
             let out = pause(&run, spill, op.flush(&mut local, &ctx)).await;
             self.put_local(i, local)?;
-            let out = out?.0;
-            self.metrics(i + 1).compute_time += since(&*run.executor, start);
+            let (out, waited) = out?;
+            let elapsed = since(&*run.executor, start);
+            self.metrics(i + 1)
+                .step(elapsed, waited, ctx.blocking_time().saturating_sub(ran));
             match out? {
                 FlushOutput::Done => break,
                 FlushOutput::Continue => {}
