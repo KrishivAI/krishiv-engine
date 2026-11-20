@@ -261,7 +261,7 @@ impl Session {
         if temp {
             // Spark 4.2 keeps a temporary view's `CHAR(n)` / `VARCHAR(n)` output types (3.5 to 4.1
             // print `string`): read them off the analyzed view (review of #496 M1).
-            if self.state.profile != krishiv_plan::analyzer::SparkProfile::V4_2 {
+            if self.state.profile < krishiv_plan::analyzer::SparkProfile::V4_2 {
                 return Ok(std::collections::HashMap::new());
             }
             let env = self.query_env();
@@ -377,7 +377,7 @@ impl Session {
     /// (`Created By`, `COLLATE UTF8_BINARY`); other profiles are refused rather
     /// than shown 4.2 output.
     fn require_current_profile(&self, what: &str) -> Result<(), KrishivError> {
-        if self.state.profile == krishiv_plan::analyzer::SparkProfile::V4_2 {
+        if self.state.profile >= krishiv_plan::analyzer::SparkProfile::V4_2 {
             Ok(())
         } else {
             Err(unsupported(&format!("{what} under this Spark profile")))

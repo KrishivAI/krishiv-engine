@@ -10,7 +10,7 @@
 //! - `is_local`: whether the translated root is a local relation (Spark's
 //!   `LocalRelation`); `is_streaming`: always false (no streaming sources);
 //! - `input_files`: the paths of the file scans, as written;
-//! - `spark_version`: the session profile's release (`4.2.0` for 4.2);
+//! - `spark_version`: the session profile's release (`4.3.0` for 4.3, the default);
 //! - `ddl_parse`, `json_to_ddl`: Spark's type parsers and `toDDL`;
 //! - `same_semantics`, `semantic_hash`: the semantic hash of the analyzed
 //!   plans (`krishiv_plan::semantic_plan_hash`: attribute ids renumbered,
