@@ -62,6 +62,19 @@ pub fn health_routes(ready: Arc<AtomicBool>) -> Router {
     )
 }
 
+/// `/healthz` and `/readyz`, with `/readyz` answering from the cached
+/// [`Readiness`](crate::readiness::Readiness) (design P3-T066 §5.2); the
+/// bodies stay the fixed ones of the simple form.
+pub fn health_routes_cached(readiness: Arc<crate::readiness::Readiness>) -> Router {
+    Router::new().route("/healthz", get(healthz)).route(
+        "/readyz",
+        get(move || {
+            let ready = readiness.is_ready();
+            async move { readyz(ready) }
+        }),
+    )
+}
+
 async fn healthz() -> Response {
     json(StatusCode::OK, r#"{"status":"ok"}"#)
 }

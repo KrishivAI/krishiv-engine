@@ -32,6 +32,37 @@ use super::{
     ListQueriesRequest, ListQueriesResponse, ListSessionsRequest, ListSessionsResponse, PREVIEW,
     Query, Session,
 };
+use super::{
+    DrainRequest, DrainResponse, DrainStatus, GetDrainStatusResponse, GetReadinessResponse,
+    ReadinessCheck, ResumeServingRequest, ResumeServingResponse,
+};
+use crate::drain::{DrainController, DrainState, Exiting, MAX_GRACE, MIN_GRACE};
+use crate::readiness::{CheckState, Readiness};
+
+/// What the drain and readiness RPCs act on (design P3-T066 §5.1, §5.2). The closures belong to the
+/// process that owns the engine and the listeners: `start` begins (or shortens) a drain and makes
+/// sure something drives it to `DRAINED`; `resume` undoes the engine side of a drain; `load` is
+/// `(queries running or queued, sessions open)`.
+pub struct DrainOps {
+    /// The state machine.
+    pub drain: Arc<DrainController>,
+    /// The cached readiness checks.
+    pub readiness: Arc<Readiness>,
+    /// Starts or shortens a drain: the grace period and `exit_when_drained`.
+    pub start: Box<dyn Fn(std::time::Duration, bool) + Send + Sync>,
+    /// Resumes serving: the controller and the engine, together; refused once exiting.
+    pub resume: Box<dyn Fn() -> Result<(), Exiting> + Send + Sync>,
+    /// `(queries held, sessions open)`.
+    pub load: Box<dyn Fn() -> (i64, i64) + Send + Sync>,
+    /// The grace period a `Drain` without one gets (`krishiv.server.shutdownTimeout`).
+    pub default_grace: std::time::Duration,
+}
+
+impl std::fmt::Debug for DrainOps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DrainOps").finish_non_exhaustive()
+    }
+}
 
 /// The admin API of a `krishiv server` process. Creating it records the `admin.v1` surface row
 /// in `system.capabilities` (`("surface", "admin.v1", <revision>, "preview" | "")`), so a client
@@ -40,6 +71,7 @@ use super::{
 pub struct SessionAdmin {
     runtime: Arc<EngineRuntime>,
     denials: Option<Arc<DeniedCounts>>,
+    ops: Option<Arc<DrainOps>>,
 }
 
 impl std::fmt::Debug for SessionAdmin {
@@ -60,7 +92,15 @@ impl SessionAdmin {
         Self {
             runtime,
             denials: None,
+            ops: None,
         }
+    }
+
+    /// The same, serving the drain and readiness RPCs over `ops`.
+    #[must_use]
+    pub fn with_ops(mut self, ops: Arc<DrainOps>) -> Self {
+        self.ops = Some(ops);
+        self
     }
 
     /// The same, counting its denials into `denials` (`krishiv_auth_denied_total`, ADR 0046 §8).
@@ -80,6 +120,7 @@ struct Who {
     monitor: bool,
     operate_sessions: bool,
     operate_queries: bool,
+    manage: bool,
 }
 
 impl Who {
@@ -97,6 +138,7 @@ impl Who {
                 monitor: policy.allows(&system("system"), Privilege::Monitor),
                 operate_sessions: policy.allows(&system("sessions"), Privilege::Operate),
                 operate_queries: policy.allows(&system("queries"), Privilege::Operate),
+                manage: policy.allows(&system("cluster"), Privilege::Manage),
             };
         }
         // The local administrator of a server without authentication (its start-up token).
@@ -117,6 +159,7 @@ impl Who {
             monitor: admin,
             operate_sessions: admin,
             operate_queries: admin,
+            manage: admin,
         }
     }
 }
@@ -503,5 +546,184 @@ impl AdminApi for SessionAdmin {
             Ok(CancelQueriesByTagResponse { query_ids: ids })
         }
         .boxed()
+    }
+
+    fn get_readiness(&self, call: &Call) -> BoxFuture<'_, AdminResult<GetReadinessResponse>> {
+        let who = Who::of(call);
+        let call = call.clone();
+        async move {
+            let ops = self.ops_for("GetReadiness")?;
+            self.require(
+                &call,
+                who.monitor,
+                Privilege::Monitor,
+                "GetReadiness",
+                "system",
+            )?;
+            let (ready, report) = ops.readiness.snapshot();
+            let checks = report
+                .into_iter()
+                .map(|c| ReadinessCheck {
+                    name: c.name,
+                    state: match c.state {
+                        CheckState::Ok => "ok",
+                        CheckState::Failed => "failed",
+                        CheckState::Unknown => "unknown",
+                    }
+                    .to_owned(),
+                    required: c.required,
+                    consecutive_failures: i32::try_from(c.consecutive_failures).unwrap_or(i32::MAX),
+                })
+                .collect();
+            Ok(GetReadinessResponse { ready, checks })
+        }
+        .boxed()
+    }
+
+    fn get_drain_status(&self, call: &Call) -> BoxFuture<'_, AdminResult<GetDrainStatusResponse>> {
+        let who = Who::of(call);
+        let call = call.clone();
+        async move {
+            let ops = self.ops_for("GetDrainStatus")?;
+            self.require(
+                &call,
+                who.monitor,
+                Privilege::Monitor,
+                "GetDrainStatus",
+                "system",
+            )?;
+            Ok(GetDrainStatusResponse {
+                status: Some(drain_status(ops)),
+            })
+        }
+        .boxed()
+    }
+
+    fn drain(
+        &self,
+        call: &Call,
+        request: DrainRequest,
+    ) -> BoxFuture<'_, AdminResult<DrainResponse>> {
+        let who = Who::of(call);
+        let call = call.clone();
+        async move {
+            let ops = self.ops_for("Drain")?;
+            self.require(&call, who.manage, Privilege::Manage, "Drain", "cluster")?;
+            let grace = match request.grace_period {
+                None => ops.default_grace,
+                Some(d) => u64::try_from(d.seconds)
+                    .ok()
+                    .filter(|_| (0..1_000_000_000).contains(&d.nanos))
+                    .map(|s| std::time::Duration::new(s, d.nanos.unsigned_abs()))
+                    .filter(|g| (MIN_GRACE..=MAX_GRACE).contains(g))
+                    .ok_or_else(|| {
+                        let e = AdminError::invalid_argument(
+                            "grace_period must be between 1 second and 24 hours",
+                        );
+                        self.log(&call, "Drain", "", false, "failed", &e.error_class);
+                        e
+                    })?,
+            };
+            (ops.start)(grace, request.exit_when_drained);
+            self.log(&call, "Drain", "", false, "ok", "");
+            Ok(DrainResponse {
+                status: Some(drain_status(ops)),
+            })
+        }
+        .boxed()
+    }
+
+    fn resume_serving(
+        &self,
+        call: &Call,
+        _request: ResumeServingRequest,
+    ) -> BoxFuture<'_, AdminResult<ResumeServingResponse>> {
+        let who = Who::of(call);
+        let call = call.clone();
+        async move {
+            let ops = self.ops_for("ResumeServing")?;
+            self.require(
+                &call,
+                who.manage,
+                Privilege::Manage,
+                "ResumeServing",
+                "cluster",
+            )?;
+            if (ops.resume)().is_err() {
+                let e = AdminError::new(
+                    ErrorKind::FailedPrecondition,
+                    "KRISHIV_ADMIN_PRECONDITION_FAILED",
+                    "55000",
+                    "The change was refused because the object is not in the state the request \
+                     expects (exiting).",
+                )
+                .with_parameter("reason", "exiting");
+                self.log(&call, "ResumeServing", "", false, "failed", &e.error_class);
+                return Err(e);
+            }
+            self.log(&call, "ResumeServing", "", false, "ok", "");
+            Ok(ResumeServingResponse {
+                status: Some(drain_status(ops)),
+            })
+        }
+        .boxed()
+    }
+}
+
+impl SessionAdmin {
+    fn ops_for(&self, rpc: &str) -> AdminResult<&DrainOps> {
+        self.ops.as_deref().ok_or_else(|| {
+            AdminError::new(
+                ErrorKind::FailedPrecondition,
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "0A000",
+                format!("{rpc} is not available on this server."),
+            )
+        })
+    }
+
+    /// Fails with the denial (counted, audited, recorded) unless `allowed`.
+    fn require(
+        &self,
+        call: &Call,
+        allowed: bool,
+        privilege: Privilege,
+        rpc: &str,
+        securable: &str,
+    ) -> AdminResult<()> {
+        if allowed {
+            return Ok(());
+        }
+        let error = AdminError::new(
+            ErrorKind::PermissionDenied,
+            "KRISHIV_INSUFFICIENT_PERMISSIONS",
+            "42501",
+            "Permission denied.",
+        );
+        Err(self.denied(call, privilege, rpc, securable, "", error))
+    }
+}
+
+fn drain_status(ops: &DrainOps) -> DrainStatus {
+    let s = ops.drain.status();
+    let (queries, sessions) = (ops.load)();
+    let deadline = s.deadline_at.map(|at| {
+        let since = at.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        Timestamp {
+            seconds: i64::try_from(since.as_secs()).unwrap_or(i64::MAX),
+            nanos: i32::try_from(since.subsec_nanos()).unwrap_or(0),
+        }
+    });
+    DrainStatus {
+        state: match s.state {
+            DrainState::Serving => "serving",
+            DrainState::Draining => "draining",
+            DrainState::Drained => "drained",
+        }
+        .to_owned(),
+        deadline,
+        exit_when_drained: s.exit_when_drained,
+        queries_running: queries,
+        sessions_open: sessions,
     }
 }
