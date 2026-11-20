@@ -33,9 +33,12 @@ use crate::table::DeltaTable;
 /// `(id, file)` of every live row, by the row-level scan.
 fn row_files(env: &Env, table: &DeltaTable, op: RowLevelOperation) -> Vec<(i64, Vec<u8>, i64)> {
     let rl = table.row_level(op).unwrap();
-    let source = rl
-        .scan()
-        .unwrap()
+    scan_rows(env, &*rl.scan().unwrap())
+}
+
+/// `(id, file, position)` of every row `scan` reads.
+fn scan_rows(env: &Env, scan: &dyn krishiv_exec::ScanPushdown) -> Vec<(i64, Vec<u8>, i64)> {
+    let source = scan
         .build(ScanPushdowns {
             projection: Some(vec![
                 ColumnPath::new("id"),
@@ -177,6 +180,34 @@ fn the_row_id_is_the_logged_path_and_the_position_in_the_file_past_deletion_vect
         assert_eq!(*pos, *id, "row {id}");
         assert!(paths.iter().any(|p| p.as_bytes() == file.as_slice()));
     }
+    assert_eq!(env.query_pool.reserved(), 0);
+}
+
+#[test]
+fn the_scan_of_the_touched_files_reads_only_their_rows() {
+    let env = Env::new();
+    two_file_table(&env, &[]);
+    let table = env.open().unwrap();
+    let all = row_files(&env, &table, RowLevelOperation::Update);
+    let touched = the_file_of(&all, 5);
+    let rl = table.row_level(RowLevelOperation::Update).unwrap();
+    let read = scan_rows(
+        &env,
+        &*rl.scan_files(std::slice::from_ref(&touched)).unwrap(),
+    );
+    let expected: Vec<_> = all
+        .iter()
+        .filter(|(_, f, _)| *f == touched)
+        .cloned()
+        .collect();
+    assert_eq!(read, expected);
+    assert_eq!(
+        read.iter().map(|(id, ..)| *id).collect::<Vec<_>>(),
+        [4, 5, 6],
+        "the second append's file"
+    );
+    // No file named: nothing is read.
+    assert!(scan_rows(&env, &*rl.scan_files(&[]).unwrap()).is_empty());
     assert_eq!(env.query_pool.reserved(), 0);
 }
 

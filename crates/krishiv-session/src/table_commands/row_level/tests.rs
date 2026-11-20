@@ -11,6 +11,7 @@ use arrow_array::{ArrayRef, BinaryViewArray, Int64Array, RecordBatch, StringView
 use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use futures::executor::block_on;
 use futures::future::BoxFuture;
+use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::planner::{
     CardinalityRule, MemoryTable, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
     RowLevelTable, RowLevelWrite, TableProvider,
@@ -486,4 +487,165 @@ fn assignments_are_checked_before_anything_runs() {
         ErrorClass::KrishivUnsupportedFeature
     );
     assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+}
+
+/// `has_subquery` finds a subquery at any depth of a condition, and only then.
+#[test]
+fn a_condition_holds_a_subquery_only_when_one_is_written() {
+    let parsed = |c: &str| crate::functions::expr(c).map(|e| e.expr);
+    for c in [
+        "id IN (SELECT 1)",
+        "s = 'a' AND NOT EXISTS (SELECT 1)",
+        "id > (SELECT max(1))",
+    ] {
+        assert!(super::has_subquery(&parsed(c).unwrap()), "{c}");
+    }
+    for c in ["id = 1", "s IN ('a', 'b') OR id > 2"] {
+        assert!(!super::has_subquery(&parsed(c).unwrap()), "{c}");
+    }
+}
+
+fn overflow() -> KrishivError {
+    krishiv_common::error::ArithmeticOverflow {
+        message: "overflow".to_owned(),
+        alternative: String::new(),
+        config: "\"spark.sql.ansi.enabled\"".to_owned(),
+    }
+    .into()
+}
+
+fn cols() -> Vec<TableColumn> {
+    use krishiv_types::DataType;
+    vec![
+        TableColumn::new("s", DataType::String, true),
+        TableColumn::new("small", DataType::Short, true),
+        TableColumn::new(
+            "`d`",
+            DataType::Decimal(krishiv_types::DecimalType::try_new(5, 2).unwrap()),
+            true,
+        ),
+    ]
+}
+
+/// A Delta rewrite's own errors stay as they came: the commit's `DELTA_*` conflicts, Krishiv's
+/// refusals, `UNSUPPORTED_FEATURE`, internal errors and cancellations.
+#[test]
+fn delta_rewrite_errors_that_are_not_the_tasks_are_not_wrapped() {
+    use krishiv_common::error::{
+        DeltaUnsupportedSubquery, InternalError, KrishivUnsupportedFeature, OperationCanceled,
+    };
+    let kept: Vec<KrishivError> = vec![
+        DeltaUnsupportedSubquery {
+            operation: "DELETE".into(),
+            cond: "x".into(),
+        }
+        .into(),
+        KrishivUnsupportedFeature {
+            feature: "f".into(),
+        }
+        .into(),
+        InternalError {
+            message: "m".into(),
+        }
+        .into(),
+        OperationCanceled {}.into(),
+    ];
+    for e in kept {
+        let class = e.error_class();
+        let out = super::delta_task_write_failed(e, "file:/t", &cols(), &[]);
+        assert_eq!(out.error_class(), class);
+        assert!(out.cause().is_none());
+    }
+}
+
+/// Any other error of the rewrite is `TASK_WRITE_FAILED` naming the root, caused by the error.
+#[test]
+fn a_delta_rewrite_error_is_task_write_failed_caused_by_it() {
+    let e: KrishivError = krishiv_common::error::DivideByZero {
+        config: "\"spark.sql.ansi.enabled\"".into(),
+    }
+    .into();
+    // No assigned value under a cast that can overflow: the cause is the error itself.
+    let out = super::delta_task_write_failed(
+        e,
+        "file:/t",
+        &cols(),
+        &[("s".into(), krishiv_types::DataType::String)],
+    );
+    assert_eq!(out.error_class(), ErrorClass::TaskWriteFailed);
+    assert!(
+        out.message_parameters()
+            .iter()
+            .any(|(k, v)| *k == "path" && v == "file:/t")
+    );
+    assert_eq!(
+        out.cause().map(KrishivError::error_class),
+        Some(ErrorClass::DivideByZero)
+    );
+}
+
+/// An arithmetic error with an assigned value whose store-assignment cast can overflow (a
+/// narrowing integral cast, or into a decimal) is `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE` naming
+/// the first such column in table order; an up-cast or the same type never is.
+#[test]
+fn an_overflow_under_a_narrowing_store_cast_is_delta_cast_overflow() {
+    use krishiv_types::DataType;
+    let out = super::delta_task_write_failed(
+        overflow(),
+        "file:/t",
+        &cols(),
+        &[
+            ("SMALL".into(), DataType::Integer),
+            ("`d`".into(), DataType::Long),
+        ],
+    );
+    assert_eq!(out.error_class(), ErrorClass::TaskWriteFailed);
+    let cause = out.cause().unwrap();
+    assert_eq!(
+        cause.error_class(),
+        ErrorClass::DeltaCastOverflowInTableWrite
+    );
+    let p = |k: &str| {
+        cause
+            .message_parameters()
+            .iter()
+            .find(|(n, _)| *n == k)
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(p("columnName").as_deref(), Some("`small`"));
+    assert_eq!(p("sourceType").as_deref(), Some("\"INT\""));
+    assert_eq!(p("targetType").as_deref(), Some("\"SMALLINT\""));
+
+    // Into a decimal from an integer: can overflow; a backquote in the name is doubled.
+    let cause =
+        super::store_assignment_overflow(&overflow(), &cols(), &[("`d`".into(), DataType::Long)])
+            .unwrap();
+    assert!(
+        cause
+            .message_parameters()
+            .iter()
+            .any(|(k, v)| *k == "columnName" && v == "```d```")
+    );
+
+    // An up-cast, the same type, a non-integral target, or a non-arithmetic error: no rewrap.
+    for values in [
+        vec![("small".to_owned(), DataType::Byte)],
+        vec![("small".to_owned(), DataType::Short)],
+        vec![("s".to_owned(), DataType::Integer)],
+        vec![],
+    ] {
+        assert!(super::store_assignment_overflow(&overflow(), &cols(), &values).is_none());
+    }
+    let not_arith: KrishivError = krishiv_common::error::InternalError {
+        message: "m".into(),
+    }
+    .into();
+    assert!(
+        super::store_assignment_overflow(
+            &not_arith,
+            &cols(),
+            &[("small".into(), DataType::Integer)]
+        )
+        .is_none()
+    );
 }
