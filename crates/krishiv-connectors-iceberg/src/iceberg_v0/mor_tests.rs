@@ -665,6 +665,32 @@ fn a_v3_delete_absorbs_the_old_dv() {
     live(&env, &m);
 }
 
+/// v3: two data files whose old DVs share one Puffin file, both touched by one UPDATE: each blob
+/// is its own removal (the filter tells DVs apart by blob, not by file), so the statement does
+/// not fail with "Missing required files to delete", and the summary counts two removed DVs.
+#[test]
+fn an_update_absorbs_old_dvs_that_share_a_puffin_file() {
+    let env = env();
+    let t = create(&env, 3, false, &[]);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 10));
+    append(&env, &catalog, range(10, 20));
+    add_deletes(&env, &catalog, |files| {
+        dvs_in_one_puffin(&env, "old.puffin", files, &[0, 1])
+    });
+    let m = Mor::open(&env, &catalog, RowLevelOperation::Update)
+        .update("id IN (5, 15)", "'u'")
+        .unwrap();
+    assert_eq!(get(&summary(&m).1, "removed-dvs"), Some("2"));
+    let mut want = without(0..20, &[0, 1, 10, 11, 5, 15]);
+    want.extend(["5|2|u".to_owned(), "15|0|u".to_owned()]);
+    want.sort();
+    let mut got = read_back(&env, &catalog);
+    got.sort();
+    assert_eq!(got, want);
+    live(&env, &m);
+}
+
 /// v2: a data file's earlier file-scoped position delete file (Krishiv's)
 /// is absorbed into the new one and removed; a position delete file
 /// covering two data files is neither merged nor removed.

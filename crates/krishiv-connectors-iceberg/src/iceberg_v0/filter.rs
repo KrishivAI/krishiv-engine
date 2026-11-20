@@ -793,7 +793,9 @@ async fn rewrite(
         m.content,
     )?;
     let mut removed: Vec<DataFile> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    // A DV's identity is its blob (one Puffin file holds many), as `DeleteKey`; a data file's is
+    // its path (its other fields are `None`).
+    let mut seen: HashSet<DeleteKey> = HashSet::new();
     let mut duplicates = 0;
     for l in &live {
         let Some(e) = entries.get(l.index) else {
@@ -819,7 +821,7 @@ async fn rewrite(
         let data_seq = explicit(l.data_seq, "data")?;
         let file_seq = explicit(l.file_seq, "file")?;
         if l.marked {
-            if seen.insert(file.file_path().to_owned()) {
+            if seen.insert(DeleteKey::of(&file)) {
                 removed.push(file.clone());
             } else {
                 duplicates += 1;
