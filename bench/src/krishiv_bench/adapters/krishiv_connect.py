@@ -106,6 +106,13 @@ class KrishivConnectEngine(SparkConnectEngine):
                 self.teardown()
             raise
 
+    def _register_table(self, name: str, path: str) -> None:
+        # `krishiv server` does not implement CREATE_DATAFRAME_VIEW yet (coverage row create_dataframe_view, P3-T012),
+        # so a table is a SQL view over the file instead of createOrReplaceTempView.
+        assert self.spark is not None
+        quoted = path.replace("'", "''")
+        self.spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {name} USING parquet OPTIONS (path '{quoted}')")
+
     def begin_measure(self) -> None:
         self.end_measure()
         if self._proc is not None:
