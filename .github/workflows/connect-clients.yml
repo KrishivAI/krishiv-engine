@@ -38,12 +38,13 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: $/.github/actions/setup-mold
       - name: Build the server
-        run: cargo build -p krishiv-cli --features server --locked
+        run: cargo build -p krishiv-cli --features server,delta --locked
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - name: Run the clients
         run: tests/connect-clients/run.sh --server-bin target/debug/krishiv --out target/connect-clients
       - name: Job summary
         if: always()
-        run: cat target/connect-clients/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+        run: cat target/connect-clients/summary.md target/connect-clients/delta-read-summary.md >> "$GITHUB_STEP_SUMMARY" || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

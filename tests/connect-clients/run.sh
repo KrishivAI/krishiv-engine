@@ -7,13 +7,17 @@
 #   tests/connect-clients/run.sh --server-bin target/debug/krishiv       # start `krishiv server`
 #   tests/connect-clients/run.sh --remote sc://localhost:15002           # an already running server
 #
-# Options: --clients go,scala (default both)   --out DIR (default target/connect-clients)
+# Options: --clients go,scala,delta,tpcds (default go,scala,delta)   --out DIR (default target/connect-clients)
+#          --tpcds-data DIR   the TPC-DS Parquet files (<table>.parquet) for the `tpcds` run
+# `delta` and `tpcds` drive the pinned pyspark client of bench/ (uv); `delta` reads the Spark-written tables of
+# tests/fixtures/delta-4.4.1 (the server needs the `delta` cargo feature).
 # The clients run in containers (golang, virtuslab/scala-cli) on the host network, so Docker is
 # the only tool needed. See README.md.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-clients="go,scala"
+clients="go,scala,delta"
+tpcds_data=""
 out="target/connect-clients"
 remote=""
 server_bin=""
@@ -23,6 +27,7 @@ while [ $# -gt 0 ]; do
     --remote) remote="$2"; shift 2 ;;
     --clients) clients="$2"; shift 2 ;;
     --out) out="$2"; shift 2 ;;
+    --tpcds-data) tpcds_data="$2"; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -68,6 +73,15 @@ for c in ${clients//,/ }; do
       docker run --rm --network host -v "$here:/src:ro" -v "$out:/out" -v krishiv-smoke-scala:/root/.cache \
         virtuslab/scala-cli:latest run --workspace /tmp/scala-ws /src/scala/Smoke.scala -- "$remote" /src/queries.json /out/scala.json \
         || echo "scala client run failed" >&2
+      ;;
+    delta)
+      (cd "$here/../../bench" && uv run python "$here/delta_read.py" --remote "$remote" --out "$out") \
+        || echo "delta read run failed" >&2
+      ;;
+    tpcds)
+      [ -n "$tpcds_data" ] || { echo "tpcds needs --tpcds-data DIR" >&2; continue; }
+      (cd "$here/../../bench" && uv run python "$here/tpcds_connect.py" --remote "$remote" --data "$tpcds_data" --out "$out") \
+        || echo "tpcds run failed" >&2
       ;;
     *) echo "unknown client: $c" >&2 ;;
   esac

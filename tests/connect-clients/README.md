@@ -33,6 +33,21 @@ appear in the client's exception). Each client renders a value as `NULL` or its 
 the expected rows are strings. Four API checks per client are not SQL strings: row count, schema field
 names, a config round trip and a collect.
 
+## Delta reads and TPC-DS (pyspark client)
+
+Two more runs use the pinned pyspark client of `bench/` (run with `uv`, no Docker) and write their own summaries:
+
+- `delta` (`delta_read.py`, default in `run.sh`): reads the Spark-written tables of `tests/fixtures/delta-4.4.1`
+  three ways (`SELECT` from ``delta.`path` ``, `read.format("delta").load`, `read.load(format=...)`) and compares the
+  rows with what Spark recorded in each `EXPECTED.json`; the table Krishiv refuses on purpose must fail with an error
+  class. Needs a server built with the `delta` cargo feature (`cargo build -p krishiv-cli --features server,delta`);
+  without it every read says `DATA_SOURCE_NOT_FOUND`. Output: `delta-read.json`, `delta-read-summary.md`.
+- `tpcds` (`tpcds_connect.py`, `--clients tpcds --tpcds-data DIR`): registers the TPC-DS tables with
+  `CREATE TEMPORARY VIEW .. USING parquet` and runs the 99 queries of `bench/queries/tpcds`; the report lists each
+  failing query's error class. `--reference sc://..` adds a second server (Spark) on the same files and compares row
+  counts. Output: `tpcds.json`, `tpcds-summary.md`. It is not in the weekly workflow (no TPC-DS data on the runner).
+  For timings use `krishiv-bench run --engine krishiv-connect --suite tpcds` (`bench/README.md`).
+
 To add a check, add an entry to `queries.json` (`rows`, or `error` for a failing statement); both
 clients pick it up. Keep values to integers, strings and booleans (cast anything else to a string in
 the query) so the two clients' renderings agree.
