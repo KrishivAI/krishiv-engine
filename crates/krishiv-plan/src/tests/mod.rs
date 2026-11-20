@@ -5,6 +5,7 @@
 
 mod analyzer;
 mod dag;
+mod definer_sources;
 mod depth;
 mod display;
 mod display_more;

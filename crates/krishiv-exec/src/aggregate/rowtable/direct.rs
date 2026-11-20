@@ -572,6 +572,31 @@ mod tests {
         }
     }
 
+    /// Review IMPORTANT-1 (2026-11-19): direct batches whose 16 keys are new
+    /// in every batch but not clustered (each row's key differs from the
+    /// row before) must not turn the table append-only: the direct path's
+    /// keys are one per id, so run starts count every row.
+    #[test]
+    fn direct_batches_of_new_unclustered_keys_stay_indexed() {
+        let core = core();
+        let seed = HashSeed::new(Some(3));
+        let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS)
+            .unwrap()
+            .with_direct(true);
+        let firsts: Vec<String> = (b'!'..=b'~').map(|c| char::from(c).to_string()).collect();
+        let seconds = "ABCDEFGHIJKLMNOP";
+        let batches = 2 * crate::aggregate::rowtable::FIRST_ADAPT_ROWS / 4096 + 1;
+        for (s, first) in firsts.iter().take(batches).enumerate() {
+            let a = vec![first.as_str(); 4096];
+            let b: Vec<&str> = (0..4096).map(|i| &seconds[i % 16..i % 16 + 1]).collect();
+            let p = t.prepare(&batch(&core, a, b), false).unwrap();
+            assert!(p.local.is_some(), "batch {s} took the direct path");
+            t.apply(&p).unwrap();
+        }
+        assert_ne!(t.mode, Mode::Append);
+        assert!(t.groups <= 16 * batches + 1024, "{}", t.groups);
+    }
+
     /// A key column of `t` with `n` rows over a five-key domain, cut from a
     /// longer array at offset 3 (a sliced column).
     fn typed(t: &DataType, n: usize, start: usize) -> ArrayRef {
