@@ -10,7 +10,7 @@ use krishiv_common::error::KrishivError;
 
 use crate::collation::Collation;
 use crate::error::{self, Result};
-use crate::nested::{ArrayType, MapType, StructField, StructType};
+use crate::nested::{ArrayType, MapType, StructField, StructType, UdtType};
 
 /// A Spark SQL data type.
 ///
@@ -110,6 +110,9 @@ pub enum DataType {
     /// Variant v1 encoding (`crate::variant`), held unshredded in memory as
     /// a `(metadata, value)` byte pair. Not orderable and not hashable.
     Variant,
+    /// A user-defined type (Spark's `UserDefinedType`): stored as its underlying SQL type, which is what the
+    /// engine computes on; the type keeps the class names a client needs to rebuild the object.
+    Udt(Arc<UdtType>),
 }
 
 impl PartialEq for DataType {
@@ -134,6 +137,7 @@ impl PartialEq for DataType {
             (Self::Array(a), Self::Array(b)) => a == b,
             (Self::Map(a), Self::Map(b)) => a == b,
             (Self::Struct(a), Self::Struct(b)) => a == b,
+            (Self::Udt(a), Self::Udt(b)) => a == b,
             (a, b) => a.is_payload_free() && std::mem::discriminant(a) == std::mem::discriminant(b),
         }
     }
@@ -165,6 +169,7 @@ impl std::hash::Hash for DataType {
             Self::Array(a) => a.hash(state),
             Self::Map(m) => m.hash(state),
             Self::Struct(st) => st.hash(state),
+            Self::Udt(u) => u.hash(state),
             _ => {}
         }
     }
@@ -199,7 +204,8 @@ impl DataType {
             | Self::DayTimeInterval { .. }
             | Self::Array(_)
             | Self::Map(_)
-            | Self::Struct(_) => false,
+            | Self::Struct(_)
+            | Self::Udt(_) => false,
         }
     }
 }
@@ -375,6 +381,7 @@ impl DataType {
                 .fields()
                 .iter()
                 .any(|f| f.data_type().contains_collation()),
+            Self::Udt(u) => u.sql_type().contains_collation(),
             _ => false,
         }
     }
@@ -475,6 +482,8 @@ impl DataType {
             Self::Struct(s) => Self::Struct(StructType::new(s.fields().iter().map(|f| {
                 StructField::new(f.name(), f.data_type().collation_key_type(), f.nullable())
             }))),
+            // A user-defined type is physically its storage type.
+            Self::Udt(u) => u.sql_type().collation_key_type(),
             other => other.clone(),
         }
     }
@@ -637,6 +646,12 @@ impl DataType {
                 });
                 out.push_str(&c.to_string());
             }
+            // Spark 4.2.0 (checked on a real run): `simpleString` is the type name, `catalogString` and `sql` are the
+            // storage type's.
+            Self::Udt(u) => match how {
+                Render::Simple => out.push_str(&u.type_name()),
+                Render::Catalog | Render::Sql => u.sql_type().render_into(how, out),
+            },
             atomic if sql => out.push_str(&atomic.atomic_simple_string().to_ascii_uppercase()),
             atomic => out.push_str(&atomic.atomic_simple_string()),
         }
@@ -669,6 +684,7 @@ impl DataType {
             Self::Map(_) => "map",
             Self::Struct(_) => "struct",
             Self::Variant => "variant",
+            Self::Udt(_) => "udt",
         }
     }
 }

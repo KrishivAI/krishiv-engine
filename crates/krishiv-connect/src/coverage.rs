@@ -298,7 +298,7 @@ oneof! { data_kind, DATA_KIND_ROWS, data_type::Kind, "DataType.kind";
     Struct => ("struct", 21, Done, "", "DataType", "P2-T091a", 1),
     Map => ("map", 22, Done, "", "DataType", "P2-T091a", 1),
     Variant => ("variant", 25, Done, "", "DataType", "P2-T091a", 1),
-    Udt => ("udt", 23, Missing, "", "no IR type", "P3-T012", 1),
+    Udt => ("udt", 23, Partial, "a JVM UDT with no sql_type (Spark builds it from the JVM class alone; Krishiv cannot load JVM classes, so `sql_type` is required and the answer is INVALID_ONE_OF_FIELD_NOT_SET)", "DataType::Udt", "P3-T079", 1),
     Geometry => ("geometry", 26, Done, "", "DataType", "P2-T091a", 1),
     Geography => ("geography", 27, Done, "", "DataType", "P2-T091a", 1),
     Unparsed => ("unparsed", 24, Missing, "", "a type string parsed by the SQL type parser", "P3-T012", 1),

@@ -73,6 +73,7 @@ rustix.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
+krishiv-alloc = { path = "../krishiv-alloc", features = ["heap-stats"] }
 krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", features = ["testing"] }
 arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }

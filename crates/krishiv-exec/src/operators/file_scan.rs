@@ -1604,10 +1604,25 @@ fn constant_string(value: &str, rows: usize) -> Result<ArrayRef> {
 /// `java.net.URI` quotes it (Spark 4.2: `file:/tmp/données%20x/é%2541/...`
 /// for `/tmp/données x/é%41/...`).
 fn spark_file_path(file: &FileRef, roots: &PathRoots) -> String {
+    spark_location(
+        &file.store,
+        &file.path,
+        roots,
+        &uri_path(&decode_store_path(file.path.as_ref())),
+    )
+}
+
+/// The directory `dir` of `store` as Spark's errors print a Hadoop `Path` (`Path.toString`): as
+/// [`spark_file_path`] prints a file, the path not quoted (`file:/tmp/données x/k=1`).
+pub(crate) fn spark_dir_text(store: &StoreId, dir: &Path, roots: &PathRoots) -> String {
+    spark_location(store, dir, roots, &decode_store_path(dir.as_ref()))
+}
+
+/// `path` (the key `key` of `store`, decoded) under the root Spark prints it with.
+fn spark_location(store: &StoreId, key: &Path, roots: &PathRoots, path: &str) -> String {
     let store = roots
-        .root(&file.store, &file.path)
-        .map_or_else(|| file.store.to_string(), str::to_owned);
-    let path = uri_path(&decode_store_path(file.path.as_ref()));
+        .root(store, key)
+        .map_or_else(|| store.to_string(), str::to_owned);
     // A local store names itself `file://` or, for a session's tables, `file`.
     match store
         .strip_prefix("file://")

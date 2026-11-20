@@ -185,7 +185,7 @@
   {"oneof": "DataType.kind", "field": "array", "number": 20, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
   {"oneof": "DataType.kind", "field": "struct", "number": 21, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
   {"oneof": "DataType.kind", "field": "map", "number": 22, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
-  {"oneof": "DataType.kind", "field": "udt", "number": 23, "status": "missing", "refused": "", "target": "no IR type", "task": "P3-T012", "group": 1},
+  {"oneof": "DataType.kind", "field": "udt", "number": 23, "status": "partial", "refused": "a JVM UDT with no sql_type (Spark builds it from the JVM class alone; Krishiv cannot load JVM classes, so `sql_type` is required and the answer is INVALID_ONE_OF_FIELD_NOT_SET)", "target": "DataType::Udt", "task": "P3-T079", "group": 1},
   {"oneof": "DataType.kind", "field": "unparsed", "number": 24, "status": "missing", "refused": "", "target": "a type string parsed by the SQL type parser", "task": "P3-T012", "group": 1},
   {"oneof": "DataType.kind", "field": "variant", "number": 25, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
   {"oneof": "DataType.kind", "field": "geometry", "number": 26, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},

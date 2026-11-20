@@ -406,6 +406,8 @@ jobs:
         run: "cargo test -p krishiv-testkit --release --locked --test golden_ratchet serialize_through_matches_the_frozen_baseline -- --ignored"
       - name: ICU collation goldens (collations-icu)
         run: "cargo test -p krishiv-testkit --release --locked --features collations-icu --test golden_icu"
+      - name: Exact vector top-k at 100k x 768 (P3-T077 design 8.3)
+        run: "cargo test -p krishiv-session --release --locked --test vector_topk top_k_brute_force_at_100k_by_768 -- --ignored"
 
   # Object stores against throw-away emulators (P2-T084): krishiv-io's S3 (MinIO) and Azure (Azurite) round trips,
   # then TPC-H SF1 uploaded to MinIO and read back over `s3a://`, equal to the local answers. The script names and
