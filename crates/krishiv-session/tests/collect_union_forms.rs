@@ -85,3 +85,20 @@ fn an_array_of_maps_is_refused() {
     assert!(e.to_string().contains("collect_union"), "{sql}: {e}");
     assert!(e.to_string().contains("COLLATED STRING"), "{sql}: {e}");
 }
+
+#[test]
+fn a_user_written_second_argument_is_an_arity_error() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "select collect_union(x, false) from values (array(1,null)),(array(2)) t(x)",
+        "select collect_union(x, true) respect nulls from values (array(1)) t(x)",
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::WrongNumArgsWithoutSuggestion,
+            "{sql}: {e}"
+        );
+        assert!(e.to_string().contains("collect_union"), "{sql}: {e}");
+    }
+}
