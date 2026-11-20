@@ -1169,13 +1169,10 @@ impl Loading {
         }
     }
 
-    /// The build bytes read so far (given back if the load is refused).
+    /// The bytes reserved for the build rows read so far (given back if the
+    /// load is refused).
     fn read_bytes(&self) -> usize {
-        self.chunks
-            .iter()
-            .chain(&self.pending)
-            .map(|b| b.data().get_array_memory_size())
-            .sum()
+        self.memory.size()
     }
 
     /// Gives the task back; what was read is released.
