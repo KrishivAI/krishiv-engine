@@ -26,7 +26,6 @@ pub use python::{
 mod access;
 mod advisor;
 mod connect_client;
-mod history_ui;
 mod lakehouse;
 mod optimizer;
 mod result_cache;
@@ -34,6 +33,7 @@ mod runtime_filter;
 mod runtime_filter_bloom;
 mod server;
 mod sql_session;
+mod ui_embed;
 pub use access::{
     ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
 };
@@ -52,9 +52,6 @@ pub use connect_client::{
     PYSPARK_INFER_NESTED_DICT_AS_STRUCT, PYSPARK_LEGACY_INFER_ARRAY_FROM_FIRST,
     PYSPARK_LEGACY_INFER_MAP_FROM_FIRST, REPL_EAGER_EVAL_ENABLED, REPL_EAGER_EVAL_MAX_NUM_ROWS,
     REPL_EAGER_EVAL_TRUNCATE, SQL_TIMESTAMP_TYPE,
-};
-pub use history_ui::{
-    HISTORY_LITERALS, HISTORY_MAX_BYTES, HISTORY_PATH, UI_ALLOWED_HOSTS, UI_ENABLED,
 };
 pub use lakehouse::{
     CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
@@ -83,6 +80,9 @@ pub use server::*;
 pub use sql_session::{
     ANSI_ENABLED, CTE_PRECEDENCE_POLICY, MAP_KEY_DEDUP_POLICY, SCHEMA_LEVEL_COLLATIONS_ENABLED,
     SESSION_TIME_ZONE, SQL_DEFAULT_PATH, SQL_PATH_ENABLED, STORE_ASSIGNMENT_POLICY,
+};
+pub use ui_embed::{
+    UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS, UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -162,6 +162,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &HISTORY_MAX_BYTES,
     &UI_ENABLED,
     &UI_ALLOWED_HOSTS,
+    &UI_ALLOWED_ORIGINS,
+    &UI_EMBED_HIDE_ATTRIBUTION,
+    &UI_EMBED_LINK_TTL,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
     &QUERY_MAX_EXECUTION_TIME,
@@ -646,6 +649,68 @@ pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
           principal holding 1000 rows loses its oldest finished row first; at this capacity the \
           oldest finished row of the principal holding the most finished rows goes. Running \
           queries are never dropped.",
+    scope: Scope::Cluster,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::Startup,
+};
+
+/// Where finished queries' profiles are kept (P3-T051).
+pub static HISTORY_PATH: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.path",
+    value_type: ValueType::String,
+    default: None,
+    doc: "A directory where the engine keeps one compact profile for every finished query, as \
+          Parquet files, so `system.queries` history survives a restart and a stored profile can \
+          be opened later. A profile has the plan, the operators' counters and the query's \
+          identity, and no result data; literals are masked unless `krishiv.history.literals` \
+          is `keep`. Every query that reached execution is stored, as the engine metrics count \
+          them: a statement refused in parsing, analysis or an access check is not. Writing happens after the result stream \
+          ends and never fails the query; a failed write is counted in \
+          `krishiv_history_write_failures`. When unset, nothing is stored.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Whether the persisted history keeps literals (P3-T051).
+pub static HISTORY_LITERALS: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.literals",
+    value_type: ValueType::Enum(&["keep", "mask"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("mask"))),
+    doc: "`mask` (the default) replaces every string and number literal with `?` in the \
+          statement text and in the plan lines of the profiles stored under \
+          `krishiv.history.path`, so a stored profile carries no data values. `keep` stores \
+          them as `EXPLAIN ANALYZE` prints them. Credentials in a statement are redacted either \
+          way.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Most bytes the profile history keeps (P3-T051).
+pub static HISTORY_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(256 << 20)),
+    doc: "Most bytes the profile history under `krishiv.history.path` keeps. When a new file \
+          takes the store past this, the oldest files go first, so the newest queries stay.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Whether `krishiv server` serves the web UI backend (design T133).
+pub static UI_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.ui.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "When false, `krishiv server` refuses to start: there is no listener and no UI \
+          backend, and nothing is recorded beyond the `system` tables. The UI reads those \
+          tables and keeps no state of its own.",
     scope: Scope::Cluster,
     version_added: "0.2.0",
     spark_alias: None,

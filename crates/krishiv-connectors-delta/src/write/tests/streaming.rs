@@ -542,6 +542,19 @@ fn a_checkpoint_follows_the_interval() {
     assert_eq!(ids(&env.read(&env.open().unwrap())).len(), 16);
 }
 
+/// The checkpoint's engine reserves nothing from the statement's pool: it runs after the
+/// statement has ended, and once charged its reads there (`delta_stats_match_spark` saw the pool
+/// at 1 MiB just after the write returned, when its tenth commit started a checkpoint).
+#[test]
+fn a_detached_engine_reserves_nothing_from_the_statement() {
+    let env = Env::new();
+    assert!(env.engine.io().memory_pool().is_some());
+    let detached = env
+        .engine
+        .detached(Arc::new(krishiv_exec::CancellationToken::new()));
+    assert!(detached.io().memory_pool().is_none());
+}
+
 /// No write into an oracle table, of any mode, raises `INTERNAL_ERROR` (design section 3.7:
 /// every user-reachable refusal is named).
 #[test]

@@ -9,16 +9,17 @@ use std::collections::BTreeMap;
 
 use arrow_array::cast::AsArray as _;
 use arrow_array::types::{
-    Date32Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    TimestampMicrosecondType,
+    Date32Type, DurationMicrosecondType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
-use arrow_schema::{DataType as Arrow, Field, TimeUnit};
+use arrow_schema::{DataType as Arrow, Field, IntervalUnit, TimeUnit};
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_connect::proto::v4_3::execute_plan_response::ObservedMetrics;
 use krishiv_connect::proto::v4_3::expression::Literal;
 use krishiv_connect::proto::v4_3::expression::literal::{
-    Array as ArrayLiteral, Decimal, LiteralType,
+    Array as ArrayLiteral, CalendarInterval, Decimal, LiteralType, Map as MapLiteral,
+    Struct as StructLiteral,
 };
 use krishiv_plan::{LogicalPlan, PlanNode};
 use krishiv_types::DataType;
@@ -86,6 +87,10 @@ fn null(field: &Field) -> Result<Literal, KrishivError> {
     )?)))
 }
 
+#[expect(
+    deprecated,
+    reason = "Spark's clients still read the struct, map and array element types"
+)]
 fn literal(field: &Field, a: &dyn Array, i: usize) -> Result<Literal, KrishivError> {
     if a.is_null(i) {
         return null(field);
@@ -100,6 +105,8 @@ fn literal(field: &Field, a: &dyn Array, i: usize) -> Result<Literal, KrishivErr
         Arrow::Float64 => LiteralType::Double(a.as_primitive::<Float64Type>().value(i)),
         Arrow::Utf8 => LiteralType::String(a.as_string::<i32>().value(i).to_owned()),
         Arrow::LargeUtf8 => LiteralType::String(a.as_string::<i64>().value(i).to_owned()),
+        Arrow::Utf8View => LiteralType::String(a.as_string_view().value(i).to_owned()),
+        Arrow::BinaryView => LiteralType::Binary(a.as_binary_view().value(i).to_vec()),
         Arrow::Binary => LiteralType::Binary(a.as_binary::<i32>().value(i).to_vec()),
         Arrow::LargeBinary => LiteralType::Binary(a.as_binary::<i64>().value(i).to_vec()),
         Arrow::Date32 => LiteralType::Date(a.as_primitive::<Date32Type>().value(i)),
@@ -123,15 +130,86 @@ fn literal(field: &Field, a: &dyn Array, i: usize) -> Result<Literal, KrishivErr
             let elements = (0..list.len())
                 .map(|j| literal(item, list.as_ref(), j))
                 .collect::<Result<Vec<_>, _>>()?;
-            #[expect(deprecated, reason = "Spark's clients still read element_type")]
             let array = ArrayLiteral {
                 element_type: Some(proto_type(&DataType::from_arrow_field(item)?)?),
                 elements,
             };
             LiteralType::Array(array)
         }
+        // Spark's client raises `UNSUPPORTED_LITERAL` for the year-month and calendar
+        // forms (the server sends them), so they are sent as Spark's server sends them.
+        Arrow::Duration(TimeUnit::Microsecond) => {
+            LiteralType::DayTimeInterval(a.as_primitive::<DurationMicrosecondType>().value(i))
+        }
+        Arrow::Interval(IntervalUnit::YearMonth) => {
+            LiteralType::YearMonthInterval(a.as_primitive::<IntervalYearMonthType>().value(i))
+        }
+        Arrow::Interval(IntervalUnit::MonthDayNano) => {
+            let v = a.as_primitive::<IntervalMonthDayNanoType>().value(i);
+            LiteralType::CalendarInterval(CalendarInterval {
+                months: v.months,
+                days: v.days,
+                microseconds: v.nanoseconds / 1_000,
+            })
+        }
+        Arrow::Struct(fields) => {
+            let st = a.as_struct();
+            if is_calendar(fields) {
+                return calendar_struct(st, i);
+            }
+            let elements = fields
+                .iter()
+                .zip(st.columns())
+                .map(|(f, c)| literal(f, c.as_ref(), i))
+                .collect::<Result<Vec<_>, _>>()?;
+            LiteralType::Struct(StructLiteral {
+                struct_type: Some(proto_type(&DataType::from_arrow_field(field)?)?),
+                elements,
+            })
+        }
+        Arrow::Map(entries, _) => {
+            let Arrow::Struct(kv) = entries.data_type() else {
+                return Err(unsupported(a.data_type()));
+            };
+            let (key, value) = (&kv[0], &kv[1]);
+            let map = a.as_map();
+            let slice = map.value(i);
+            let keys = (0..slice.len())
+                .map(|j| literal(key, slice.column(0).as_ref(), j))
+                .collect::<Result<Vec<_>, _>>()?;
+            let values = (0..slice.len())
+                .map(|j| literal(value, slice.column(1).as_ref(), j))
+                .collect::<Result<Vec<_>, _>>()?;
+            LiteralType::Map(MapLiteral {
+                key_type: Some(proto_type(&DataType::from_arrow_field(key)?)?),
+                value_type: Some(proto_type(&DataType::from_arrow_field(value)?)?),
+                keys,
+                values,
+            })
+        }
         other => return Err(unsupported(other)),
     }))
+}
+
+/// Whether `fields` are the session's calendar-interval carrier (`months`, `days`, `microseconds`).
+fn is_calendar(fields: &arrow_schema::Fields) -> bool {
+    fields.len() == 3
+        && fields.iter().any(|f| {
+            f.metadata()
+                .contains_key(krishiv_types::arrow::CALENDAR_CHILD_METADATA_KEY)
+        })
+}
+
+fn calendar_struct(st: &arrow_array::StructArray, i: usize) -> Result<Literal, KrishivError> {
+    let col = |n: &str| {
+        st.column_by_name(n)
+            .ok_or_else(|| unsupported(st.data_type()))
+    };
+    Ok(lit(LiteralType::CalendarInterval(CalendarInterval {
+        months: col("months")?.as_primitive::<Int32Type>().value(i),
+        days: col("days")?.as_primitive::<Int32Type>().value(i),
+        microseconds: col("microseconds")?.as_primitive::<Int64Type>().value(i),
+    })))
 }
 
 #[cfg(test)]
@@ -165,6 +243,46 @@ mod tests {
             m.values[1].literal_type,
             Some(LiteralType::Null(_))
         ));
+    }
+
+    #[test]
+    fn interval_forms_are_spark_s() {
+        use arrow_array::{
+            DurationMicrosecondArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+        };
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", Arrow::Duration(TimeUnit::Microsecond), true),
+            Field::new("y", Arrow::Interval(IntervalUnit::YearMonth), true),
+            Field::new("c", Arrow::Interval(IntervalUnit::MonthDayNano), true),
+        ]));
+        let row = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(DurationMicrosecondArray::from(vec![172_800_000_000])),
+                Arc::new(IntervalYearMonthArray::from(vec![2])),
+                Arc::new(IntervalMonthDayNanoArray::from(vec![
+                    arrow_array::types::IntervalMonthDayNano::new(1, 2, 3_723_500_000_000),
+                ])),
+            ],
+        )
+        .unwrap();
+        let m = observed_metrics("obs", 1, &row).unwrap();
+        assert_eq!(
+            m.values[0].literal_type,
+            Some(LiteralType::DayTimeInterval(172_800_000_000))
+        );
+        assert_eq!(
+            m.values[1].literal_type,
+            Some(LiteralType::YearMonthInterval(2))
+        );
+        assert_eq!(
+            m.values[2].literal_type,
+            Some(LiteralType::CalendarInterval(CalendarInterval {
+                months: 1,
+                days: 2,
+                microseconds: 3_723_500_000
+            }))
+        );
     }
 
     #[test]
