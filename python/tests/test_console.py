@@ -204,3 +204,9 @@ def test_a_profile_source_still_gives_the_offline_view(spark: SparkSession) -> N
     view = krishiv.ui(spark.sql("SELECT 1"))
     assert isinstance(view, krishiv.ProfileView)
     assert spark._console is None
+
+
+def test_port_is_refused_for_a_profile_view() -> None:
+    untyped: Any = krishiv.ui  # no overload takes a profile and a port
+    with pytest.raises(TypeError, match="port belongs to the console"):
+        untyped({"operators": []}, port=4041)

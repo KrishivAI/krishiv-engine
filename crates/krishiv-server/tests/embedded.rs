@@ -39,6 +39,13 @@ fn texts(rows: &[Row]) -> Vec<String> {
         .collect()
 }
 
+/// Whether the query `row` is a statement of the SQL editor: it carries the tag of an editor run.
+fn of_editor(row: &Row) -> bool {
+    row["tags"]
+        .as_object()
+        .is_some_and(|tags| tags.keys().any(|k| k.starts_with("krishiv-ui-run-")))
+}
+
 /// The editor run `id` once it has left `running`.
 async fn ended(source: &EmbeddedSource, id: &str) -> Value {
     let start = Instant::now();
@@ -199,9 +206,15 @@ async fn the_editor_shares_the_sessions_views_and_the_catalog_lists_them() {
     run(&mine, "SELECT y FROM from_editor").await;
     assert!(other.sql("SELECT y FROM from_editor").await.is_err());
 
-    // The editor's statements are the session's own queries.
-    let seen = texts(&source.rows(SystemTable::Queries).await.unwrap());
-    assert!(seen.iter().any(|t| t.contains("from_program")), "{seen:?}");
+    // The editor's statements are the session's own queries. A row of the editor is known by its run's tag
+    // (the program's statements above carry none): both statements are listed, under this session.
+    let queries = source.rows(SystemTable::Queries).await.unwrap();
+    let from_editor: Vec<_> = queries.iter().filter(|r| of_editor(r)).collect();
+    assert_eq!(from_editor.len(), 2, "{queries:?}");
+    assert!(
+        from_editor.iter().all(|r| r["session_id"] == mine.id()),
+        "{from_editor:?}"
+    );
 
     // The catalog shows the session's temporary views; listing them is not one of the session's queries.
     let before = source.rows(SystemTable::Queries).await.unwrap().len();
@@ -219,8 +232,31 @@ async fn the_editor_shares_the_sessions_views_and_the_catalog_lists_them() {
 
     // A running editor statement can be cancelled from the editor.
     let id = source.sql_start(ENDLESS, None).await.unwrap();
+    let start = Instant::now();
+    loop {
+        let queries = source.rows(SystemTable::Queries).await.unwrap();
+        if queries
+            .iter()
+            .any(|r| of_editor(r) && r["state"] == "running")
+        {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(20), "{queries:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert!(source.sql_cancel(&id, None).await.unwrap());
     assert_eq!(ended(&source, &id).await["state"], "cancelled");
+    // It ends as the session's own cancel, not as an operator's kill: this process has no operator.
+    let queries = source.rows(SystemTable::Queries).await.unwrap();
+    let cancelled: Vec<_> = queries
+        .iter()
+        .filter(|r| of_editor(r) && r["state"] == "cancelled")
+        .collect();
+    assert_eq!(cancelled.len(), 1, "{queries:?}");
+    assert_eq!(cancelled[0]["cancel_reason"], "user", "{cancelled:?}");
+    // (The row's error class is not asserted: the run also drops the statement once the cancel is accepted, and
+    // a query dropped before its error surfaces records the reason alone.)
+    assert_eq!(cancelled[0]["session_id"], mine.id());
 }
 
 #[tokio::test]

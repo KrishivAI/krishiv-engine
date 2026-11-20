@@ -9,7 +9,9 @@
 //! - **Cancel:** the session's own running queries only, as the session's own cancel (`OPERATION_CANCELED`).
 //! - **SQL editor:** runs in the session itself: it sees the session's temporary views, settings and
 //!   variables, and what it creates is there for the host program.
-//! - **Catalog:** what the session sees, its temporary views included.
+//! - **Catalog:** what the session sees, its temporary views included. The statements that list it run in a copy
+//!   of the session, under the session's principal: they are not in the console's lists, but they are rows of
+//!   `system.queries` for that principal, which the host program sees if it reads the table itself.
 //! - **Environment:** the session's settings.
 //! - **Resources and Health:** this process (its memory pools without other sessions' queries, its caches).
 //!

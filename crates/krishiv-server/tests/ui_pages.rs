@@ -639,6 +639,14 @@ async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() 
     assert!(source.rows(SystemTable::Caches).await.unwrap().is_empty());
     assert!(!source.cancel("anything").await.unwrap());
     assert!(ProfilesSource::open(std::path::Path::new("/nonexistent/krishiv-profiles")).is_err());
+
+    // The page asks the server which mode it is in, and hides what saved profiles cannot give (ADR 0024).
+    assert_eq!(source.mode(), "profiles");
+    assert_eq!(source.session_id(), None);
+    let addr = serve(router_with_ui(Arc::new(source), TOKEN)).await;
+    let health = get(addr, "/api/internal/health").await;
+    assert_eq!(health["mode"], json!("profiles"), "{health}");
+    assert!(health["session_id"].is_null(), "{health}");
 }
 
 struct Bare;

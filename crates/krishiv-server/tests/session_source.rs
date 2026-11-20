@@ -250,6 +250,66 @@ async fn a_servers_history_lists_what_ran_before_its_restart() {
     assert!(of(&alone, "before_restart").is_empty(), "{alone:?}");
 }
 
+/// The console's own reads are stored like any query, about two a second while a page is open. A restarted
+/// server must still list what its users ran: the console's profiles take no place among the newest it shows, and
+/// none of them is listed.
+#[tokio::test]
+async fn the_consoles_own_reads_do_not_push_the_users_history_out_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let with_store = || {
+        EngineRuntime::builder()
+            .config("krishiv.history.path", dir.path().to_str().unwrap())
+            .build()
+            .unwrap()
+    };
+    {
+        let rt = with_store();
+        let user = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+        let df = user.sql("SELECT 5 AS the_users_query").await.unwrap();
+        df.collect().await.unwrap();
+        // An open page: each read is two stored queries, so these are more than the 1,000 a server lists.
+        let console = SessionSource::new(Arc::clone(&rt)).unwrap();
+        for _ in 0..520 {
+            console.rows(SystemTable::Queries).await.unwrap();
+        }
+        // Dropping the runtime flushes the history writer.
+    }
+    let stored = krishiv_session::read_profile_history(dir.path()).unwrap();
+    let of_console = stored
+        .iter()
+        .filter(|p| p.principal == UI_PRINCIPAL)
+        .count();
+    assert!(
+        of_console > 1,
+        "{} stored, none the console's",
+        stored.len()
+    );
+
+    let principals = |rows: &[krishiv_server::internal::Row]| -> Vec<String> {
+        rows.iter()
+            .filter_map(|r| r["principal"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let source = SessionSource::new(with_store())
+        .unwrap()
+        .with_stored_history(&stored);
+    let queries = source.rows(SystemTable::Queries).await.unwrap();
+    // The store keeps the statement as `system.queries` shows it, its literals replaced.
+    let texts: Vec<_> = queries.iter().map(|r| &r["query_text"]).collect();
+    assert_eq!(
+        texts,
+        ["SELECT ? AS the_users_query"],
+        "{of_console} stored"
+    );
+    assert!(!principals(&queries).iter().any(|p| p == UI_PRINCIPAL));
+
+    // `krishiv ui --profiles` over a server's folder leaves them out too.
+    let saved = krishiv_server::session_source::ProfilesSource::from_profiles(&stored);
+    let saved = saved.rows(SystemTable::Queries).await.unwrap();
+    assert_eq!(saved.len(), 1, "{saved:?}");
+    assert!(!principals(&saved).iter().any(|p| p == UI_PRINCIPAL));
+}
+
 /// A query's row carries its tags (the session's and the request's) and the client type of its session, so the
 /// server console can filter on them.
 #[tokio::test]

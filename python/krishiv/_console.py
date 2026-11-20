@@ -162,4 +162,6 @@ def ui(source: Any = None, *, path: str | Path | None = None, port: int = 0) -> 
         if path is not None:
             raise TypeError("path belongs to a profile view: the console is a server, not a page to write")
         return _start(SparkSession.builder.getOrCreate() if source is None else source, port)
+    if port != 0:
+        raise TypeError("port belongs to the console: a profile view is a page, not a server")
     return profile_view.ui(source, path=path)

@@ -44,6 +44,9 @@ pub struct SessionSource {
     /// The queries the history store held when the source was built ([`Self::with_stored_history`]): what ran
     /// before the server's last start, which the runtime's own tables no longer list.
     stored: Option<ProfilesSource>,
+    /// Whether [`Self::anonymous`] is the one session the console shows ([`Self::over_session`]): a cancel from
+    /// the editor is then that session's own.
+    own_session: bool,
 }
 
 /// Stored queries a server's history shows beside its own (the newest; the History page lists at most 1,000).
@@ -103,6 +106,7 @@ impl SessionSource {
             caller_sessions: None,
             sessions: Mutex::new(std::collections::HashMap::new()),
             stored: None,
+            own_session: false,
         })
     }
 
@@ -115,6 +119,7 @@ impl SessionSource {
     pub(crate) fn over_session(session: &Session) -> Result<Self, UiError> {
         let mut source = Self::new(Arc::clone(session.runtime()))?;
         source.anonymous = session.clone();
+        source.own_session = true;
         Ok(source)
     }
 
@@ -132,8 +137,12 @@ impl SessionSource {
     /// tables; a query in both is shown as the runtime has it.
     #[must_use]
     pub fn with_stored_history(mut self, stored: &[krishiv_session::StoredProfile]) -> Self {
-        let newest = &stored[stored.len().saturating_sub(MAX_STORED_QUERIES)..];
-        self.stored = Some(ProfilesSource::from_profiles(newest));
+        // The console's own reads are stored like any query (about two a second while a page is open): they
+        // are dropped before the cut, or they would take every place in it.
+        let users: Vec<&krishiv_session::StoredProfile> =
+            stored.iter().filter(|p| !of_console(p)).collect();
+        let newest = &users[users.len().saturating_sub(MAX_STORED_QUERIES)..];
+        self.stored = Some(ProfilesSource::of(newest.iter().copied()));
         self
     }
 
@@ -694,10 +703,12 @@ impl UiSource for SessionSource {
                 r.cancel_requested = true;
                 (r.tag.clone(), r.principal.clone())
             };
-            // The caller's own query ends as a user's cancel (`OPERATION_CANCELED`); an unidentified caller's
+            // The caller's own query ends as a user's cancel (`OPERATION_CANCELED`), and so does a statement of
+            // the embedded session, through the session's own interrupt; an unidentified caller's on a server
             // (the all-powerful start-up token) as an operator's kill, which the run reports as cancelled too.
             match principal {
                 Some(p) => self.runtime.cancel_by_tag(&tag, &p, false),
+                None if self.own_session => self.anonymous.interrupt_tag(&tag),
                 None => {
                     self.runtime
                         .cancel_by_tag(&tag, &Principal::new("", PrincipalKind::User), true)
@@ -757,9 +768,14 @@ impl ProfilesSource {
         Ok(Self::from_profiles(&stored))
     }
 
-    /// The source over profiles already read.
+    /// The source over profiles already read. The profiles of a console's own reads ([`UI_PRINCIPAL`], which a
+    /// server's store holds too) are left out, as they are from every list the UI serves.
     #[must_use]
     pub fn from_profiles(stored: &[krishiv_session::StoredProfile]) -> Self {
+        Self::of(stored.iter().filter(|p| !of_console(p)))
+    }
+
+    fn of<'a>(stored: impl Iterator<Item = &'a krishiv_session::StoredProfile>) -> Self {
         let mut queries = Vec::new();
         let mut operators = Vec::new();
         for p in stored {
@@ -823,6 +839,11 @@ impl ProfilesSource {
         }
         Self { queries, operators }
     }
+}
+
+/// Whether `profile` is of a query a console's own session ran.
+fn of_console(profile: &krishiv_session::StoredProfile) -> bool {
+    profile.principal == UI_PRINCIPAL
 }
 
 impl UiSource for ProfilesSource {

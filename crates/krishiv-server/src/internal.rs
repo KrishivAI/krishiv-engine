@@ -221,8 +221,8 @@ pub fn router_with_ui(source: Arc<dyn UiSource>, token: &str) -> Router {
 }
 
 /// [`router_with_ui`] behind `guard`: reading other principals' work needs [`Access::Monitor`], a cancel
-/// [`Access::Operate`] (ADR 0046 §3: both operator), the settings [`Access::Manage`] (admin). The token is taken from the same places as with a start-up
-/// token, so the page works unchanged with a configured token.
+/// [`Access::Operate`] (ADR 0046 §3: both operator), the settings [`Access::Manage`] (admin). The token is taken
+/// from the same places as with a start-up token, so the page works unchanged with a configured token.
 pub fn router_with_ui_guard(source: Arc<dyn UiSource>, guard: Arc<dyn Guard>) -> Router {
     router_with_ui_policy(source, guard, crate::pages::UiPolicy::loopback())
 }
