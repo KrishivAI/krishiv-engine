@@ -355,6 +355,12 @@ mod tests {
         assert_eq!(value("2", "$.a"), None);
         assert_eq!(value(r#""x""#, "$").as_deref(), Some("x"));
         assert_eq!(value("null", "$"), None);
+        assert_eq!(value("true", "$").as_deref(), Some("true"));
+        assert_eq!(value("false", "$").as_deref(), Some("false"));
+        assert_eq!(
+            value(r#"{"a":[true,false,null]}"#, "$.a").as_deref(),
+            Some("[true,false,null]")
+        );
     }
 
     #[test]
@@ -373,5 +379,10 @@ mod tests {
         assert!(ex(r#"{"a":true,"b":null}"#, "$.b"));
         assert!(!ex(r#"{"a":true,"b":null}"#, "$.c"));
         assert!(ex(r#"{"a":true}"#, "$"));
+        let nulls = json_table_exists(
+            &StringArray::from(vec![None, Some("{}")]),
+            &StringArray::from(vec![Some("$"), None]),
+        );
+        assert_eq!(nulls.null_count(), 2);
     }
 }

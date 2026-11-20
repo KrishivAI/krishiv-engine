@@ -347,3 +347,16 @@ fn delete_validates_its_paths_for_a_null_variant() {
         Ok(None)
     );
 }
+
+/// A path that creates more levels than the variant parser's depth bound, or an index past the size limit, is
+/// refused before anything is built.
+#[test]
+fn a_created_value_past_the_size_limit_is_refused() {
+    let deep = format!("${}", ".a".repeat(1002));
+    let r = edit("variant_set", "{}", &deep, "1", None);
+    assert_eq!(r, Err(ErrorClass::VariantSizeLimit), "deep");
+    assert_eq!(
+        edit("variant_set", "[1]", "$[100000000]", "1", None),
+        Err(ErrorClass::VariantSizeLimit)
+    );
+}

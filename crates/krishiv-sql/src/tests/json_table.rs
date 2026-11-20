@@ -58,6 +58,7 @@ fn what_spark_rejects_does_not_parse() {
     parse_fails("SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$.a')) NULL ON ERROR");
     parse_fails("SELECT * FROM json_table('{}', 5 COLUMNS (a INT PATH '$.a'))");
     parse_fails("SELECT * FROM json_table('{}', '$' COLUMNS ())");
+    parse_fails("SELECT * FROM json_table('{}', '$' COLUMNS (e INT EXISTS PATH 5))");
     parse_fails("SELECT * FROM json_table('{}', '$', COLUMNS (a INT PATH '$.a'))");
 }
 
@@ -126,6 +127,15 @@ fn unsupported_paths_and_duplicate_columns_fail_when_lowered() {
         "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$.\"a\"'))",
         "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$[\"a\"]'))",
         "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH 'a'))",
+        "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$[\\'a'))",
+        "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$[\\'a\\'x'))",
+        "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$[x]'))",
+        "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$[1'))",
+        "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$[]'))",
+        "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$.a.'))",
+        "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$ x'))",
+        "SELECT * FROM json_table('{}', '$' COLUMNS (a INT PATH '$[99999999999999999999999]'))",
+        "SELECT * FROM json_table('{}', '$' COLUMNS (a INT EXISTS PATH '$.a[*]'))",
     ] {
         assert_eq!(
             class(sql),
@@ -157,5 +167,28 @@ fn the_allowed_paths_lower() {
     for path in ["$", "$[*]", "$.a[*]", "$.a.b[*]", "$[1]"] {
         let sql = format!("SELECT * FROM json_table('{{}}', '{path}' COLUMNS (a INT))");
         lowered(&sql).unwrap_or_else(|e| panic!("{path}: {e:?}"));
+    }
+}
+
+#[test]
+fn an_exists_column_lowers() {
+    lowered(
+        "SELECT * FROM json_table('{}', '$' COLUMNS (e INT EXISTS PATH '$.z', f BOOLEAN EXISTS))",
+    )
+    .unwrap();
+}
+
+#[test]
+fn collect_union_takes_one_argument() {
+    for sql in [
+        "SELECT collect_union(a, b) FROM VALUES (array(1), 1) AS t(a, b)",
+        "SELECT system.builtin.collect_union(a, b) FROM VALUES (array(1), 1) AS t(a, b)",
+    ] {
+        let e = lowered(sql).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::WrongNumArgsWithoutSuggestion,
+            "{sql}"
+        );
     }
 }
