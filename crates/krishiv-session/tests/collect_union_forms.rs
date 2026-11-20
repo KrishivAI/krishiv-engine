@@ -26,13 +26,13 @@ const VALUES: &str = "from values (array(1,null)),(array(2)) t(x)";
 fn ignore_nulls_is_the_default() {
     let s = Session::new().unwrap();
     assert_eq!(
-        text(&s, &format!("select collect_union(x) {VALUES}")),
+        text(&s, &format!("select sort_array(collect_union(x)) {VALUES}")),
         "[1, 2]"
     );
     assert_eq!(
         text(
             &s,
-            &format!("select collect_union(x) ignore nulls {VALUES}")
+            &format!("select sort_array(collect_union(x) ignore nulls) {VALUES}")
         ),
         "[1, 2]"
     );

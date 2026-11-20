@@ -700,7 +700,7 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("schema_of_variant", "v: ColumnOrName"),
         Row::new("to_variant_object", "col: ColumnOrName"),
         Row::new("collect_union", "col: ColumnOrName"),
-        Row::new("variant_delete", "v: ColumnOrName, *paths: ColumnOrName"),
+        Row::new("variant_delete", "v: ColumnOrName, *paths: str"),
         Row::new(
             "variant_insert",
             "v: ColumnOrName, path: Column | str, value: ColumnOrName",

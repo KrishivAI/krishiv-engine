@@ -389,6 +389,13 @@ impl Resolver<'_> {
                     return Ok(b);
                 }
                 if !session_qualified
+                    && lookup_name.eq_ignore_ascii_case("collect_union")
+                    && matches!(
+                        self.ctx
+                            .functions
+                            .lookup(&["collect_union".to_owned()], self.ctx.profile),
+                        FunctionLookup::Found(_)
+                    )
                     && let Some(b) =
                         self.collect_union_call(window_fn, lookup_name, e, f, &kids, cx)?
                 {

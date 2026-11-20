@@ -3063,9 +3063,9 @@ def variant_array_append(v: ColumnOrName, path: Column | str, value: ColumnOrNam
     return _call("variant_array_append", _named(v, "v"), _lit(path, "path"), _named(value, "value"))
 
 
-def variant_delete(v: ColumnOrName, *paths: ColumnOrName) -> Column:
+def variant_delete(v: ColumnOrName, *paths: str) -> Column:
     """Calls the registry function ``variant_delete``."""
-    return _call("variant_delete", _named(v, "v"), *_cols(paths))
+    return _call("variant_delete", _named(v, "v"), *[_lit(value, "paths") for value in paths])
 
 
 def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column:
