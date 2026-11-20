@@ -524,6 +524,18 @@ fn nested_namespace_grants_show_their_parents_without_table_listings() {
         error_class(&ana, "SHOW NAMESPACES IN lake.db"),
         "SCHEMA_NOT_FOUND"
     );
+    // A namespace the grants hide answers as a missing one, without asking the catalog (whose
+    // answer for `locked` is a 403): review of #902 at 6e8137e80.
+    let listings = lake.table_listings.load(Ordering::SeqCst);
+    assert_eq!(
+        error_class(&ana, "SHOW TABLES IN lake.locked"),
+        "SCHEMA_NOT_FOUND"
+    );
+    assert_eq!(
+        error_class(&ana, "SHOW TABLES IN lake.nope"),
+        "SCHEMA_NOT_FOUND"
+    );
+    assert_eq!(lake.table_listings.load(Ordering::SeqCst), listings);
 }
 
 /// A grant on a namespace alone shows the namespace, and `SHOW TABLES` in it is empty (review of
