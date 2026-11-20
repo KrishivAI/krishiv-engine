@@ -256,13 +256,15 @@ impl DeltaEngine {
 
     /// This engine with its kernel calls ended by `cancel` alone: the work after a commit has
     /// landed (the checkpoint), which neither the statement's cancellation nor its end may cut
-    /// short; its owner cancels `cancel` at its time budget or when it is dropped.
+    /// short; its owner cancels `cancel` at its time budget or when it is dropped. It does not
+    /// keep the statement's memory consumer either: the statement has ended when this work
+    /// runs, so nothing may be reserved from its pool.
     #[must_use]
     pub(crate) fn detached(&self, cancel: Arc<CancellationToken>) -> Self {
         let s = &self.shared;
         Self {
             shared: Arc::new(Shared {
-                io: s.io.clone(),
+                io: s.io.clone().without_memory(),
                 store: s.store.clone(),
                 root: s.root.clone(),
                 handle: s.handle.clone(),

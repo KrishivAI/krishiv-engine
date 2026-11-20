@@ -932,6 +932,15 @@ impl IoContext {
         self
     }
 
+    /// This context without the query's memory consumer: for work that outlives the query
+    /// (a table format's post-commit checkpoint), which must not reserve from the pool of a
+    /// query that has ended.
+    #[must_use]
+    pub fn without_memory(mut self) -> Self {
+        self.memory = None;
+        self
+    }
+
     /// The query's pool this context reserves metadata reads from, when it
     /// has one ([`Self::with_memory`]).
     #[must_use]
