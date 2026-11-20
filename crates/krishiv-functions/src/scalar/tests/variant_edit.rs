@@ -359,4 +359,9 @@ fn a_created_value_past_the_size_limit_is_refused() {
         edit("variant_set", "[1]", "$[100000000]", "1", None),
         Err(ErrorClass::VariantSizeLimit)
     );
+    // An existing array padded past the limit: refused before any filler null is written.
+    assert_eq!(
+        edit("variant_insert", "[1]", "$[2000000000]", "1", None),
+        Err(ErrorClass::VariantSizeLimit)
+    );
 }
