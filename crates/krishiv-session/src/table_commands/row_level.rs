@@ -319,8 +319,19 @@ impl Session {
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let target = first_scan(physical.root())
             .ok_or_else(|| internal("a row-level rewrite that reads no table".to_owned()))?;
-        // The rewrite's own read is the hidden provider: a scan of the target's name or path in it
-        // is a subquery's (or a view's) read of the table.
+        // The rewrite's own read is the hidden provider: a scan of the target in it is a subquery's
+        // (or a view's) read of the table. A Delta target is compared by its resolved root, so
+        // `/t`, `/t/`, `file:/t` and the catalog table over that location are one table.
+        #[cfg(feature = "delta")]
+        let rereads_target = match &delta_root {
+            Some(root) => crate::catalog::reads_delta_root(
+                analysis.analyzed.plan.root(),
+                root,
+                &analysis.env.catalog,
+            ),
+            None => crate::catalog::reads_source(analysis.analyzed.plan.root(), &scan.source),
+        };
+        #[cfg(not(feature = "delta"))]
         let rereads_target =
             crate::catalog::reads_source(analysis.analyzed.plan.root(), &scan.source);
         let read_filter = read_filter(condition, rereads_target)?;

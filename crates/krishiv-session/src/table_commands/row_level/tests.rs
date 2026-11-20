@@ -746,3 +746,67 @@ fn a_cast_can_overflow_as_delta_spark_decides() {
         assert_eq!(out.is_some(), rewrap, "{value:?} into {target:?}");
     }
 }
+
+/// Review of #909 (055310eb4, P1): a Delta target is the table at its resolved root, so a subquery that
+/// reads it under another spelling (`/t/`, `file:/t`) or by the catalog name over that location is a
+/// re-read of the target (the read set is then the whole table), while another table, or no read at
+/// all, is not.
+#[cfg(feature = "delta")]
+#[test]
+fn a_delta_target_is_compared_by_its_root_not_its_spelling() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, other) = (dir.path().join("t"), dir.path().join("o"));
+    let s = Session::builder().build().unwrap();
+    s.conf()
+        .set(
+            "spark.sql.warehouse.dir",
+            &dir.path().join("wh").display().to_string(),
+        )
+        .unwrap();
+    for (name, path) in [("dt", &root), ("ot", &other)] {
+        let create = format!(
+            "CREATE TABLE {name} USING delta LOCATION '{}' AS SELECT 1 AS p, 2 AS v",
+            path.display()
+        );
+        block_on(async { s.sql(&create).await?.collect().await }).unwrap();
+    }
+    let t = root.display().to_string();
+    let target = block_on(async {
+        let a = s
+            .analyze_variable_query(&format!("SELECT * FROM delta.`{t}`"))
+            .await?;
+        let (_, physical) = s.physical(&a.analyzed, &a.env).await?;
+        let scan = super::first_scan(physical.root()).unwrap();
+        a.env.catalog.delta.hadoop_root(&scan.source)
+    })
+    .unwrap();
+    let rereads = |subquery: &str| {
+        block_on(async {
+            let a = s
+                .analyze_variable_query(&format!("SELECT 1 AS x WHERE 2 = ({subquery})"))
+                .await?;
+            s.physical(&a.analyzed, &a.env).await?;
+            Ok::<_, KrishivError>(crate::catalog::reads_delta_root(
+                a.analyzed.plan.root(),
+                &target,
+                &a.env.catalog,
+            ))
+        })
+        .unwrap()
+    };
+    for same in [
+        format!("SELECT max(v) FROM delta.`{t}`"),
+        format!("SELECT max(v) FROM delta.`{t}/`"),
+        format!("SELECT max(v) FROM delta.`file:{t}`"),
+        "SELECT max(v) FROM dt".to_owned(),
+    ] {
+        assert!(rereads(&same), "{same}");
+    }
+    for different in [
+        format!("SELECT max(v) FROM delta.`{}`", other.display()),
+        "SELECT max(v) FROM ot".to_owned(),
+        "SELECT 2".to_owned(),
+    ] {
+        assert!(!rereads(&different), "{different}");
+    }
+}
