@@ -17,7 +17,7 @@ import threading
 from pathlib import Path
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
 import fixture_server
@@ -394,6 +394,58 @@ def mode_checks() -> list[str]:
     return problems
 
 
+def filter_checks() -> list[str]:
+    """History's filters by client type and tag: a server console has them and they narrow the list; the console
+    of one session has neither."""
+    problems: list[str] = []
+    # One link per listed query; the layout for the other width is in the page too, hidden.
+    rows = "main a[href^='#/queries/']:visible"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        for mode in ("server", "embedded"):
+            server = fixture_server.serve(mode=mode)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors: list[str] = []
+            page.on("pageerror", lambda e, errors=errors: errors.append(str(e)))
+            page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
+            # A server console carries no mode mark: its menu is the sign that the mode is read.
+            page.locator("header nav a").first.wait_for(timeout=10000)
+            page.evaluate("window.location.hash = '#/history'")
+            page.locator(rows).first.wait_for(timeout=10000)
+            fields = [page.get_by_label(n, exact=True) for n in ("Client", "Tag")]
+            if mode == "embedded":
+                if any(f.count() for f in fields):
+                    problems.append("embedded: History has a Client or Tag filter")
+            else:
+                main = page.inner_text("main")
+                for shown in ("krishiv-cli/0.2.1", "team=risk", "nightly"):
+                    if shown not in main:
+                        problems.append(f"history: a row does not show {shown!r}")
+                for field, typed, want in (
+                    (fields[0], "PYTHON", 1),
+                    (fields[1], "team=risk", 2),
+                    (fields[1], "team", 3),
+                    (fields[1], "no-such-tag", 0),
+                ):
+                    field.fill(typed)
+                    # Counted through a locator: the console's policy refuses a script given as text.
+                    try:
+                        expect(page.locator(rows)).to_have_count(want, timeout=5000)
+                    except AssertionError:
+                        got = page.locator(rows).count()
+                        problems.append(
+                            f"history: {typed!r} lists {got} queries, not {want}"
+                        )
+                    field.fill("")
+                    expect(page.locator(rows)).to_have_count(4, timeout=5000)
+            problems += [f"{mode} filters: page error: {e}" for e in errors]
+            page.close()
+            server.shutdown()
+        browser.close()
+    return problems
+
+
 def role_checks() -> list[str]:
     """A server console opened by an operator: no Environment page, and its address opens the first page."""
     problems: list[str] = []
@@ -429,10 +481,11 @@ if __name__ == "__main__":
     found += page_checks(f"http://127.0.0.1:{server.server_address[1]}")
     found += mode_checks()
     found += role_checks()
+    found += filter_checks()
     print(
         "\n".join(found)
         if found
         else "ui pages: ok (8 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, "
-        "embedded and profiles consoles, operator)"
+        "embedded and profiles consoles, operator, history filters)"
     )
     sys.exit(1 if found else 0)

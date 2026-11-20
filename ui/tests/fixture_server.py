@@ -17,7 +17,7 @@ import json
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).parent
 ASSETS = HERE.parent.parent / "crates" / "krishiv-ui-assets" / "assets"
@@ -93,7 +93,25 @@ PROFILES_ROUTES = (
 )
 
 
-def route(path: str, mode: str = "server", role: str = "admin") -> object | None:
+def history(query: str) -> list[dict]:
+    """The history under the page's filters, as `krishiv_server::internal` applies them: any part of the client's
+    name, a tag by its key or as `key=value`."""
+    asked = {k: v[0] for k, v in parse_qs(query).items()}
+    client, tag = asked.get("client", "").lower(), asked.get("tag", "")
+    return [
+        q
+        for q in DATA["history"]
+        if client in (q.get("client_type") or "").lower()
+        and (
+            not tag
+            or any(tag in (k, f"{k}={v}") for k, v in (q.get("tags") or {}).items())
+        )
+    ]
+
+
+def route(
+    path: str, mode: str = "server", role: str = "admin", query: str = ""
+) -> object | None:
     d = DATA
     parts = path.split("/")
     if mode == "profiles" and not path.startswith(PROFILES_ROUTES):
@@ -119,7 +137,7 @@ def route(path: str, mode: str = "server", role: str = "admin") -> object | None
     if path == "/api/internal/queries":
         return {"queries": d["live"]}
     if path == "/api/internal/history":
-        return {"queries": d["history"]}
+        return {"queries": history(query)}
     if path == "/api/internal/resources":
         return {"memory": d["resources"]["memory"], "caches": d["health"]["caches"]}
     if path.startswith("/api/internal/queries/"):
@@ -194,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
                         "message": "the principal's role does not allow this",
                     },
                 )
-            body = route(url.path, self.mode, self.role)
+            body = route(url.path, self.mode, self.role, url.query)
             return (
                 self.send_json(200, body)
                 if body is not None

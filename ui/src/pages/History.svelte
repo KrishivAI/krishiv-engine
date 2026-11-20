@@ -12,16 +12,20 @@
 
   let stateFilter = $state("");
   let principal = $state("");
+  let client = $state("");
+  let tag = $state("");
   let picked = $state<string[]>([]);
   let compared = $state<Compare | null>(null);
   let compareError = $state("");
 
   const q = createQuery<{ queries: Query[] }>(() => ({
-    queryKey: ["history", stateFilter, principal],
+    queryKey: ["history", stateFilter, principal, client, tag],
     queryFn: () => {
       const p = new URLSearchParams({ limit: "200" });
       if (stateFilter) p.set("state", stateFilter);
       if (principal) p.set("principal", principal);
+      if (client.trim()) p.set("client", client.trim());
+      if (tag.trim()) p.set("tag", tag.trim());
       return api(`/api/internal/history?${p}`);
     },
     // Stored profiles do not change while the console is open.
@@ -63,6 +67,9 @@
   // One session has one user: no principal column and no principal filter in an embedded console.
   const onePrincipal = $derived(consoleInfo.mode === "embedded");
   const columns = $derived(onePrincipal ? allColumns.filter((c) => c.key !== "principal") : allColumns);
+  // Queries of every client are a server's: only its console filters by client type and by tag.
+  const manyClients = $derived(consoleInfo.mode === "server");
+  const tagsOf = (r: Query) => Object.entries(r.tags ?? {}).map(([k, v]) => (v ? `${k}=${v}` : k));
   const numeric = (r: Query | Compare["a"], key: string) => (r as unknown as Record<string, number | null | undefined>)[key];
 </script>
 
@@ -82,6 +89,14 @@
   {#if !onePrincipal}
     <label class="flex w-full items-center gap-2 sm:w-auto">Principal
       <input class={cn(fieldClass, "flex-1")} bind:value={principal} placeholder="any" size="14" />
+    </label>
+  {/if}
+  {#if manyClients}
+    <label class="flex w-full items-center gap-2 sm:w-auto">Client
+      <input class={cn(fieldClass, "flex-1")} bind:value={client} placeholder="any" size="14" />
+    </label>
+    <label class="flex w-full items-center gap-2 sm:w-auto">Tag
+      <input class={cn(fieldClass, "flex-1")} bind:value={tag} placeholder="key or key=value" size="16" />
     </label>
   {/if}
   <Button class="w-full sm:w-auto" disabled={picked.length !== 2} onclick={compare}>Compare the two selected</Button>
@@ -130,9 +145,13 @@
         </label>
         <a class="inline-block min-h-10 py-2 align-middle underline underline-offset-4" href={`#/queries/${encodeURIComponent(r.query_id)}`}>{oneLine(r.query_text, 90)}</a>
         <div><Id id={r.query_id} /></div>
+        {#if tagsOf(r).length}
+          <div class="mono text-xs break-all text-muted-foreground">{tagsOf(r).join(" · ")}</div>
+        {/if}
       {:else if c.key === "state"}
         <Badge variant={stateVariant(r.state)}>{r.state}</Badge>{#if r.error_class} <span class="mono text-muted-foreground">{r.error_class}</span>{/if}
       {:else if c.key === "principal"}{r.principal ?? "–"}
+        {#if r.client_type}<div class="ml-auto max-w-48 truncate text-xs text-muted-foreground md:ml-0" title={r.client_type}>{r.client_type}</div>{/if}
       {:else if c.key === "submitted"}{when(r.submitted_at)}
       {:else if c.key === "wall"}{nanos(r.wall_ns)}
       {:else}{bytes(r.peak_memory_bytes)}{/if}

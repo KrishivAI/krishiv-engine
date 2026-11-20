@@ -249,3 +249,52 @@ async fn a_servers_history_lists_what_ran_before_its_restart() {
     let alone = plain.rows(SystemTable::Queries).await.unwrap();
     assert!(of(&alone, "before_restart").is_empty(), "{alone:?}");
 }
+
+/// A query's row carries its tags (the session's and the request's) and the client type of its session, so the
+/// server console can filter on them.
+#[tokio::test]
+async fn a_query_row_carries_its_tags_and_its_sessions_client_type() {
+    let rt = runtime();
+    let user = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    user.set_client_info(
+        krishiv_session::Transport::Connect,
+        Some("_SPARK_CONNECT_PYTHON spark/4.2.0"),
+        None,
+        None,
+    );
+    user.set_tag("team", "risk").unwrap();
+    user.sql_with(
+        "SELECT 7 AS tagged",
+        krishiv_session::QueryOptions::new().tags(["nightly"]),
+    )
+    .await
+    .unwrap()
+    .collect()
+    .await
+    .unwrap();
+    let plain = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    plain
+        .sql("SELECT 8 AS plain")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let rows = SessionSource::new(rt)
+        .unwrap()
+        .rows(SystemTable::Queries)
+        .await
+        .unwrap();
+    let of = |text: &str| {
+        rows.iter()
+            .find(|r| r["query_text"].as_str().is_some_and(|t| t.contains(text)))
+            .unwrap_or_else(|| panic!("{text}: {rows:?}"))
+    };
+    let tagged = of("7 AS tagged");
+    assert_eq!(tagged["client_type"], "_SPARK_CONNECT_PYTHON spark/4.2.0");
+    assert_eq!(tagged["tags"]["team"], "risk");
+    assert_eq!(tagged["tags"]["nightly"], "");
+    let plain = of("8 AS plain");
+    assert_eq!(plain["client_type"], Value::Null);
+    assert_eq!(plain["tags"], serde_json::json!({}));
+}

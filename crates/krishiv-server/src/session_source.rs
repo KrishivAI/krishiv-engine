@@ -5,7 +5,7 @@
 //! [`UI_PRINCIPAL`]. That session's queries are recorded like any other, so they are left out of every list the
 //! UI serves (and, history being capped per principal, they can only push out each other, never a user's rows).
 //! Only the columns a page can show are converted: text, integers, floats, booleans and timestamps (as
-//! microseconds since the epoch); maps and lists become `null`.
+//! microseconds since the epoch) and maps of those (a query's tags); lists become `null`.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -153,6 +153,31 @@ impl SessionSource {
                 .cloned(),
         );
         rows
+    }
+
+    /// Adds `client_type` to each query row: what the client of the query's session said it is
+    /// (`system.sessions`). A query whose session is no longer listed has none.
+    async fn add_client_types(&self, queries: &mut [Row]) -> Result<(), UiError> {
+        let sql = "SELECT session_id, client_type FROM system.sessions";
+        let df = self.session.sql(sql).await.map_err(ui_error)?;
+        let batches = df.collect().await.map_err(ui_error)?;
+        let clients: std::collections::HashMap<String, Value> = batches_to_rows(&batches)
+            .into_iter()
+            .filter_map(|mut s| match s.remove("session_id") {
+                Some(Value::String(id)) => Some((id, s.remove("client_type")?)),
+                _ => None,
+            })
+            .collect();
+        for query in queries {
+            let client = query
+                .get("session_id")
+                .and_then(Value::as_str)
+                .and_then(|id| clients.get(id));
+            if let Some(client) = client {
+                query.insert("client_type".to_owned(), client.clone());
+            }
+        }
+        Ok(())
     }
 
     /// The session `caller` runs statements in, built on first use.
@@ -401,6 +426,18 @@ fn cell(column: &dyn Array, row: usize) -> Value {
                 .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
                 .value(row),
         ),
+        DataType::Map(_, _) => {
+            let entries = column.as_map().value(row);
+            let (keys, values) = (entries.column(0), entries.column(1));
+            Value::Object(
+                (0..entries.len())
+                    .filter_map(|i| match cell(keys.as_ref(), i) {
+                        Value::String(key) => Some((key, cell(values.as_ref(), i))),
+                        _ => None,
+                    })
+                    .collect(),
+            )
+        }
         _ => Value::Null,
     }
 }
@@ -485,6 +522,7 @@ impl UiSource for SessionSource {
             let mut rows = batches_to_rows(&batches);
             if table == SystemTable::Queries {
                 rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
+                self.add_client_types(&mut rows).await?;
             }
             Ok(self.with_stored(table, rows))
         })
@@ -545,7 +583,7 @@ impl UiSource for SessionSource {
                 .get(..32)
                 .ok_or_else(|| UiError::new("no run id"))?
                 .to_owned();
-            let tag = format!("krishiv-ui-run-{id}");
+            let tag = format!("{}{id}", crate::internal::EDITOR_TAG_PREFIX);
             let run = Arc::new(Mutex::new(Run {
                 tag: tag.clone(),
                 owner: owner.clone(),
@@ -1018,7 +1056,7 @@ mod tests {
         assert!(rows[1].values().all(Value::is_null), "{:?}", rows[1]);
     }
 
-    /// A column of a type the pages never show (a map, a list) becomes null instead of failing the table.
+    /// A column of a type the pages never show (a list) becomes null instead of failing the table.
     #[test]
     fn a_type_the_pages_do_not_show_is_null() {
         use arrow_array::builder::{Int32Builder, ListBuilder};

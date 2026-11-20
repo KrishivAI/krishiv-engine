@@ -43,6 +43,10 @@ export interface Query {
   query_id: string;
   state: string;
   principal?: string;
+  /** What the client of the query's session said it is; a server console only. */
+  client_type?: string | null;
+  /** The session's tags and the request's (a request tag has an empty value). */
+  tags?: Record<string, string> | null;
   statement_class?: string | null;
   query_text?: string | null;
   query_text_truncated?: boolean;

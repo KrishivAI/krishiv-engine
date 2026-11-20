@@ -316,6 +316,28 @@ fn param<'a>(uri: &'a Uri, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v)
 }
 
+/// A filter's value as the page sent it (`URLSearchParams`): `+` is a space and every `%XX` its byte. A value
+/// that does not decode is no filter.
+fn filter_param(uri: &Uri, name: &str) -> Option<String> {
+    percent_decode(&param(uri, name)?.replace('+', " ")).filter(|v| !v.is_empty())
+}
+
+/// Whether a `system.queries` row carries `tag`: a tag's key, or `key=value`. A request tag (Spark Connect's
+/// `addTag`) is a key with an empty value.
+fn has_tag(row: &Row, tag: &str) -> bool {
+    row.get("tags")
+        .and_then(Value::as_object)
+        .is_some_and(|tags| {
+            tags.iter().any(|(k, v)| {
+                k == tag
+                    || tag
+                        .strip_prefix(k.as_str())
+                        .and_then(|rest| rest.strip_prefix('='))
+                        .is_some_and(|value| v.as_str() == Some(value))
+            })
+        })
+}
+
 /// The presented token. `Authorization: Bearer` is accepted for every method. The cookie and `?token=` (an
 /// `EventSource` cannot set headers) are accepted for `GET` only, so a request that changes something (cancel)
 /// cannot be made by a link or a cross-site form that carries the token in its address or a cookie.
@@ -521,9 +543,16 @@ fn mask_pass(text: &str) -> String {
     out
 }
 
-/// [`pick`] for a `system.queries` row, with the literals of its text masked.
+/// What the tag of a statement run from the console's editor starts with (the editor cancels its run by this
+/// tag). It is the console's own bookkeeping: a query's row is sent without it.
+pub(crate) const EDITOR_TAG_PREFIX: &str = "krishiv-ui-run-";
+
+/// [`pick`] for a `system.queries` row, with the literals of its text masked and without the editor's own tag.
 fn pick_query(row: &Row) -> Row {
     let mut picked = pick(row, QUERY_COLUMNS);
+    if let Some(Value::Object(tags)) = picked.get_mut("tags") {
+        tags.retain(|key, _| !key.starts_with(EDITOR_TAG_PREFIX));
+    }
     if let Some(Value::String(text)) = picked.get("query_text") {
         let masked = mask_literals(text);
         picked.insert("query_text".to_owned(), Value::String(masked));
@@ -543,6 +572,8 @@ const QUERY_COLUMNS: &[&str] = &[
     "query_id",
     "state",
     "principal",
+    "client_type",
+    "tags",
     "statement_class",
     "query_text",
     "query_text_truncated",
@@ -834,13 +865,27 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(100)
         .clamp(1, 1000);
-    let state = param(&uri, "state");
-    let principal = param(&uri, "principal");
+    let state = filter_param(&uri, "state");
+    let principal = filter_param(&uri, "principal");
+    // A client names itself at length (`_SPARK_CONNECT_PYTHON spark/4.2.0 os/linux python/3.12`): any part
+    // of the name finds it, in either case.
+    let client = filter_param(&uri, "client").map(|c| c.to_lowercase());
+    let tag = filter_param(&uri, "tag");
     let mut done: Vec<&Row> = rows
         .iter()
         .filter(|r| !is_live(r))
-        .filter(|r| state.is_none_or(|s| text(r, "state") == s))
-        .filter(|r| principal.is_none_or(|p| text(r, "principal") == p))
+        .filter(|r| state.as_deref().is_none_or(|s| text(r, "state") == s))
+        .filter(|r| {
+            principal
+                .as_deref()
+                .is_none_or(|p| text(r, "principal") == p)
+        })
+        .filter(|r| {
+            client
+                .as_deref()
+                .is_none_or(|c| text(r, "client_type").to_lowercase().contains(c))
+        })
+        .filter(|r| tag.as_deref().is_none_or(|t| has_tag(r, t)))
         .collect();
     done.sort_by_key(|r| std::cmp::Reverse(int(r, "submitted_at")));
     done.truncate(limit);
