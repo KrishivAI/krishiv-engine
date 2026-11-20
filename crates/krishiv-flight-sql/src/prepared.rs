@@ -430,7 +430,7 @@ impl FlightSqlServer {
             .bound
             .clone()
             .unwrap_or_else(|| Arc::clone(&used.payload.sql));
-        let (schema, mut slot) = self.run_statement(&mut call, sql).await?;
+        let (schema, mut slot) = self.run_statement(&mut call, sql, metadata).await?;
         let response = Response::new(flight_info(&schema, &slot.id, descriptor)?);
         slot.answered = true;
         Ok(response)
@@ -548,7 +548,7 @@ impl FlightSqlServer {
         }
         let mut counts = Vec::with_capacity(texts.len());
         for (ran, sql) in texts.iter().enumerate() {
-            match self.run_update(&call, sql).await {
+            match self.run_update(&call, sql, metadata).await {
                 Ok((count, _)) => counts.push(count),
                 Err(s) if ran > 0 => return Err(partly_ran(&s, ran, texts.len())),
                 Err(s) => return Err(s),

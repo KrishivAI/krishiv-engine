@@ -11,6 +11,28 @@ pub(super) fn put_of<M: ProstMessageExt>(cmd: &M) -> FlightData {
     FlightData::new().with_descriptor(FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec()))
 }
 
+/// `DoPut(CommandStatementUpdate{sql})` carrying a `traceparent`: the record count.
+pub(super) async fn update_with_trace(
+    h: &mut Harness,
+    token: &str,
+    cookie: &str,
+    sql: &str,
+    traceparent: &str,
+) -> Result<i64, Status> {
+    let cmd = CommandStatementUpdate {
+        query: sql.to_owned(),
+        transaction_id: None,
+    };
+    let mut request = authed(futures::stream::iter([put_of(&cmd)]), token, Some(cookie));
+    request
+        .metadata_mut()
+        .insert("traceparent", traceparent.parse().expect("header"));
+    let response = h.client.do_put(request).await?;
+    let results: Vec<_> = response.into_inner().try_collect().await?;
+    let result = DoPutUpdateResult::decode(results[0].app_metadata.as_ref()).expect("result");
+    Ok(result.record_count)
+}
+
 /// `DoPut(CommandStatementUpdate{sql})`: the record count and the session id set.
 pub(super) async fn update(
     h: &mut Harness,
