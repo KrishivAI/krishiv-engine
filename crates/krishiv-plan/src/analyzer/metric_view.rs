@@ -299,7 +299,21 @@ impl Resolver<'_> {
                             Some("a subquery in a metric view's dimension or measure".to_owned());
                     }
                     ExprNode::Function(f) => {
-                        let mut name = f.qualifier.clone();
+                        // Looked up as Resolve looks it up: `builtin.f` / `system.builtin.f` by
+                        // the bare name (whatever that answers is refused unless built in).
+                        let builtin = match f.qualifier.as_slice() {
+                            [b] => b.eq_ignore_ascii_case("builtin"),
+                            [s, b] => {
+                                s.eq_ignore_ascii_case("system")
+                                    && b.eq_ignore_ascii_case("builtin")
+                            }
+                            _ => false,
+                        };
+                        let mut name = if builtin {
+                            Vec::new()
+                        } else {
+                            f.qualifier.clone()
+                        };
                         name.push(f.name.clone());
                         let other = match self.ctx.functions.lookup(&name, self.ctx.profile) {
                             super::FunctionLookup::Sql(_) => true,
