@@ -226,13 +226,15 @@ impl RestCatalog {
         }
         let who = rest_caller(caller);
         let (ns, table) = (namespace.to_vec(), name.to_owned());
+        // Read before the request: a `REFRESH TABLE` after it keeps this answer out of the vended cache.
+        let drops = self.vended.drops();
         let Some(found) = self
             .blocking(move |c| c.load_table_as(&who, &ns, &table))
             .await?
         else {
             return Ok(None);
         };
-        let loaded = Arc::new(self.keep(namespace, name, found)?);
+        let loaded = Arc::new(self.keep(namespace, name, found, drops)?);
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         if cache.len() >= MAX_ENTRIES && !cache.contains_key(&key) {
             let oldest = cache
@@ -256,6 +258,7 @@ impl RestCatalog {
         namespace: &[String],
         name: &str,
         found: LoadedTable,
+        drops: u64,
     ) -> Result<Loaded, KrishivError> {
         let what = self.relation(namespace, name);
         let Some(metadata_location) = found.metadata_location.clone() else {
@@ -263,7 +266,7 @@ impl RestCatalog {
         };
         let signing = asks_for_signing(&found);
         let vended = (self.storage == CatalogStorage::Vended)
-            .then(|| Arc::new(VendedAnswer::of_table(&found)));
+            .then(|| Arc::new(VendedAnswer::of_table(&found, drops)));
         let metadata = IcebergMetadata::from_json(found.metadata)
             .map_err(|_| self.fault(&what, "table metadata that does not parse"))?;
         Ok(Loaded {

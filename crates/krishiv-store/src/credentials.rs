@@ -58,7 +58,7 @@ pub const DEFAULT_REFRESH_SKEW: Duration = Duration::from_secs(300);
 /// lifetime, so a credential that lives less than twice the skew (a 60 s session token, an aged STS key) is still
 /// used for half its life instead of refreshed on every request.
 #[must_use]
-pub(crate) fn effective_skew(skew: Duration, issued: SystemTime, expiry: SystemTime) -> Duration {
+pub fn effective_skew(skew: Duration, issued: SystemTime, expiry: SystemTime) -> Duration {
     let half_life = expiry.duration_since(issued).unwrap_or(Duration::ZERO) / 2;
     skew.min(half_life)
 }

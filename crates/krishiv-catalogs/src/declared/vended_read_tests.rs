@@ -53,8 +53,8 @@ fn vended(prefix: &str, key_id: &str, ttl: Duration) -> String {
 /// A short-lived credential's lifetime, and how long to wait until it is past half of it: a credential is used for
 /// at most half its lifetime when that is shorter than the refresh skew (review c27440b53 F1), so a test that needs
 /// a credential "about to expire" reads once while it is fresh, waits [`AGE`], and reads again.
-const SHORT: Duration = Duration::from_secs(4);
-const AGE: Duration = Duration::from_millis(2500);
+const SHORT: Duration = Duration::from_secs(10);
+const AGE: Duration = Duration::from_secs(6);
 
 /// The `loadTable` answer for `table` with `config` and `storage-credentials`.
 fn load_body(table: &WrittenTable, config: &str, credentials: &[String]) -> String {

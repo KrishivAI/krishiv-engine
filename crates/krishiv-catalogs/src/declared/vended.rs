@@ -37,7 +37,7 @@ use krishiv_exec::files::{LocatedPath, PathLocator};
 use krishiv_session::catalog_registry::IdentityKey;
 use krishiv_store::{
     CacheScope, CredentialScope, CredentialSource, ObjectScheme, ParsedUrl, ScopedCredential,
-    parse_object_url,
+    effective_skew, parse_object_url,
 };
 
 use crate::iceberg_rest::types::StorageCredential;
@@ -59,6 +59,10 @@ pub(crate) struct VendedAnswer {
     fetched: SystemTime,
     /// The table's own bearer token from the `loadTable` answer (§4.1), when the catalog sent one.
     table_token: Option<SecretString>,
+    /// [`VendedCache::drops`] read before the `loadTable` request this answer came from: the answer is offered
+    /// when a read opens the table, which may be after a `REFRESH TABLE`, and is then kept nowhere
+    /// ([`VendedCache::put_if_newer`]). 0 for a refresh's answer, which [`VendedCache::publish`] checks instead.
+    drops: u64,
 }
 
 impl std::fmt::Debug for VendedAnswer {
@@ -70,14 +74,16 @@ impl std::fmt::Debug for VendedAnswer {
 }
 
 impl VendedAnswer {
-    /// The vended part of a `loadTable` answer.
-    pub(crate) fn of_table(t: &LoadedTable) -> Self {
+    /// The vended part of a `loadTable` answer requested after `drops` `REFRESH TABLE` drops
+    /// ([`VendedCache::drops`] read before the request).
+    pub(crate) fn of_table(t: &LoadedTable, drops: u64) -> Self {
         let mut answer = Self::new(
             t.storage_credentials.clone(),
             t.config.clone(),
             t.location.clone(),
         );
         answer.table_token = table_token(&t.config);
+        answer.drops = drops;
         answer
     }
 
@@ -88,6 +94,7 @@ impl VendedAnswer {
     ) -> Self {
         Self {
             table_token: None,
+            drops: 0,
             credentials: credentials
                 .into_iter()
                 .map(|c| StorageCredential {
@@ -223,8 +230,10 @@ impl VendedCache {
         self.lock().put(key, answer, expires, max);
     }
 
-    /// Keeps `answer` for `key` unless the entry held was fetched later (a `loadTable` answer that raced a refresh),
-    /// under one lock.
+    /// Keeps the `loadTable` answer `answer` for `key` unless the entry held was fetched later (an answer that raced
+    /// a refresh) or a `REFRESH TABLE` dropped answers since its request (`answer.drops`: a query analyzed before
+    /// the refresh and run after it must not put back what the refresh discarded), under one lock. Any
+    /// `REFRESH TABLE` counts, as for [`Self::publish`].
     pub(crate) fn put_if_newer(
         &self,
         key: Key,
@@ -234,6 +243,9 @@ impl VendedCache {
     ) {
         let expires = answer.expires_at(default_ttl);
         let mut state = self.lock();
+        if state.drops != answer.drops {
+            return;
+        }
         let newer = state
             .entries
             .get(&key)
@@ -338,7 +350,8 @@ impl Refetch {
             ns,
             t,
         )? {
-            Some(table) => Ok(VendedAnswer::of_table(&table)),
+            // A refresh's answer: `publish` checks the drops it read.
+            Some(table) => Ok(VendedAnswer::of_table(&table, 0)),
             None => Err(self.refused(LocationRule::NoVendedCredential)),
         };
         match self
@@ -495,13 +508,6 @@ fn scheme_scope(url: &ParsedUrl) -> String {
     }
 }
 
-/// The refresh skew of a credential fetched at `issued` that expires at `expiry`: `skew`, at most half its lifetime,
-/// as the store's credential cache counts it, so a credential that lives less than twice the skew (a short session
-/// token, or `vendedDefaultTtl` below the skew) is reused for half its life instead of asked for on every request.
-fn effective_skew(skew: Duration, issued: SystemTime, expiry: SystemTime) -> Duration {
-    skew.min(expiry.duration_since(issued).unwrap_or(Duration::ZERO) / 2)
-}
-
 /// The `CredentialSource` of one vended scope of one query (module docs).
 #[derive(Debug)]
 pub(crate) struct VendedSource {
@@ -513,7 +519,7 @@ pub(crate) struct VendedSource {
 
 impl VendedSource {
     /// The credential now, fetching a new answer when the cached one gives none, one about to expire (within the
-    /// refresh skew, at most half its lifetime: [`effective_skew`]), or is the one this source served before (the
+    /// refresh skew, at most half its lifetime: the store's [`effective_skew`], so the two agree), or is the one this source served before (the
     /// store asks again only when it refused it or it is about to expire, by the same rule).
     pub(crate) async fn current(&self) -> Result<ScopedCredential, KrishivError> {
         let t = &self.table;

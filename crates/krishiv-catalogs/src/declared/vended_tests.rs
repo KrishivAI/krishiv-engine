@@ -364,6 +364,28 @@ fn vended_cache_publish_keeps_the_newer_and_respects_refresh_table() {
     assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/after");
 }
 
+/// A `loadTable` answer requested before a `REFRESH TABLE` and offered after it (a query analyzed before the refresh
+/// and run after it) is kept nowhere; one requested after it is kept (review 7e24f4a71 F1).
+#[test]
+fn vended_cache_keeps_no_load_answer_across_refresh_table() {
+    let cache = VendedCache::default();
+    let k = || key(IdentityKey::of("cat", &user("ana", None)), "t");
+    let loaded = |location: &str, drops: u64| {
+        let mut a = VendedAnswer::new(Vec::new(), BTreeMap::new(), location.to_owned());
+        a.drops = drops;
+        Arc::new(a)
+    };
+    let before = cache.drops();
+    cache.drop_table(1, &["db".to_owned()], "t");
+    cache.put_if_newer(k(), loaded("s3://b/old", before), TTL, 10);
+    assert!(
+        cache.get(&k()).is_none(),
+        "the pre-refresh answer is not put back"
+    );
+    cache.put_if_newer(k(), loaded("s3://b/new", cache.drops()), TTL, 10);
+    assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/new");
+}
+
 /// A bare-scheme Azure prefix keeps the host of the table location (`blob` here), where the catalog keyed the SAS
 /// token, not the store id's `dfs` alias.
 #[test]
@@ -377,4 +399,121 @@ fn azure_scheme_scope_keeps_the_location_host() {
     assert_eq!(reparsed.host.as_deref(), Some("acct.blob.core.windows.net"));
     let s3 = krishiv_store::parse_object_url("s3://b/t").unwrap();
     assert_eq!(super::scheme_scope(&s3), s3.store_id.key());
+}
+
+/// Review 7e24f4a71 F2: once the answer a source served is evicted from the cache (another table's answer, past
+/// `vended.maxEntries = 1`), the source's next refresh still sends that answer's table token, not the caller's.
+#[test]
+fn a_refresh_after_eviction_sends_the_served_answers_table_token() {
+    use crate::declared::tests::{decl, deps, path};
+    use crate::iceberg_rest::test_server::{Reply, serve};
+    use krishiv_session::catalog_decl::DeclMode;
+    use krishiv_store::egress::PrivateAddresses;
+
+    let long = ms(SystemTime::now() + Duration::from_secs(3600));
+    let credential = |key_id: &str| {
+        format!(
+            r#"{{"prefix": "s3://bucket/wh", "config": {{"s3.access-key-id": "{key_id}", "s3.secret-access-key": "s",
+                "s3.session-token-expires-at-ms": "{long}"}}}}"#
+        )
+    };
+    let refreshed = credential("AKIANEWKEY");
+    let config = r#"{"defaults": {}, "overrides": {}, "endpoints": ["GET /v1/{prefix}/namespaces/{namespace}/tables/{table}",
+        "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"]}"#;
+    let server = serve(move |r| match path(r) {
+        "/v1/config" => Reply::Json(200, config.into()),
+        "/v1/namespaces/db/tables/t/credentials" => {
+            Reply::Json(200, format!(r#"{{"storage-credentials": [{refreshed}]}}"#))
+        }
+        _ => Reply::Json(
+            404,
+            r#"{"error": {"message": "no", "type": "NoSuchTableException", "code": 404}}"#.into(),
+        ),
+    });
+    let d = decl(
+        &[
+            ("krishiv.catalog.lake.type", "iceberg-rest"),
+            ("krishiv.catalog.lake.uri", server.base.as_str()),
+        ],
+        DeclMode::Embedded,
+    );
+    let config = super::super::IcebergRestFactory::config(
+        &d,
+        &deps(DeclMode::Embedded, PrivateAddresses::Allow),
+        true,
+    )
+    .unwrap();
+    let client = crate::iceberg_rest::RestClient::new(
+        "lake",
+        config,
+        Arc::new(super::super::table::EmbeddedLocations::default()),
+    )
+    .unwrap();
+    let cache = Arc::new(VendedCache::default());
+    let table = super::VendedTable {
+        cache: Arc::clone(&cache),
+        key: key_of(1, IdentityKey::server("lake".to_owned()), "t"),
+        max_entries: 1,
+        default_ttl: TTL,
+        skew: Duration::from_secs(300),
+        refetch: super::Refetch {
+            client: Arc::new(client),
+            caller: crate::iceberg_rest::RestCaller::server(),
+            namespace: vec!["db".to_owned()],
+            table: "t".to_owned(),
+            catalog: "lake".to_owned(),
+            relation: "`lake`.`db`.`t`".to_owned(),
+            location: "s3://bucket/wh/db/t".to_owned(),
+        },
+    };
+    // The `loadTable` answer, with the table's own token.
+    let first: crate::iceberg_rest::types::StorageCredential =
+        crate::iceberg_rest::types::StorageCredential {
+            prefix: "s3://bucket/wh".to_owned(),
+            config: BTreeMap::from([
+                (
+                    "s3.access-key-id".to_owned(),
+                    SecretString::new("AKIAOLDKEY"),
+                ),
+                ("s3.secret-access-key".to_owned(), SecretString::new("s")),
+                (
+                    "s3.session-token-expires-at-ms".to_owned(),
+                    SecretString::new(long.to_string()),
+                ),
+            ]),
+        };
+    let mut loaded = VendedAnswer::new(
+        vec![first],
+        BTreeMap::new(),
+        "s3://bucket/wh/db/t".to_owned(),
+    );
+    loaded.table_token = Some(SecretString::new("table-token"));
+    table.offer(Arc::new(loaded));
+    let source = table.source("s3://bucket/wh/db/t").unwrap();
+    futures::executor::block_on(source.current()).unwrap();
+    assert!(
+        server.seen().iter().all(|r| path(r) == "/v1/config"),
+        "served from the cache"
+    );
+    // Another table's answer evicts this one (one entry at most).
+    cache.put_if_newer(
+        key_of(1, IdentityKey::server("lake".to_owned()), "u"),
+        answer("s3://bucket/wh/db/u"),
+        TTL,
+        1,
+    );
+    assert!(
+        cache
+            .get(&key_of(1, IdentityKey::server("lake".to_owned()), "t"))
+            .is_none()
+    );
+    // The store asks again (it refused the credential): the refresh carries the served answer's token.
+    futures::executor::block_on(source.current()).unwrap();
+    let bearers: Vec<Option<String>> = server
+        .seen()
+        .iter()
+        .filter(|r| path(r) == "/v1/namespaces/db/tables/t/credentials")
+        .map(|r| r.header("authorization").map(str::to_owned))
+        .collect();
+    assert_eq!(bearers, vec![Some("Bearer table-token".to_owned())]);
 }

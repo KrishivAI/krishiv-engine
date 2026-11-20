@@ -47,6 +47,7 @@ mod stores;
 
 pub use credentials::{
     CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, RefreshingProvider, ScopedCredential,
+    effective_skew,
 };
 pub use error::Result;
 #[cfg(feature = "cloud")]
