@@ -188,6 +188,9 @@ const SINK_SLOTS_FEW_THREADS: usize = 1 << 18;
 /// 3-5 LLC misses a row in a growing table): TPC-DS q67, about 5.8M groups,
 /// ran 8% slower growing to 2^22 slots.
 const MAX_SINK_SLOTS: usize = 1 << 19;
+/// The most distinct keys an interval may hold for an append-only table to
+/// return to its index: what the largest index holds at load 2/3.
+const RECUR_KEYS: usize = MAX_SINK_SLOTS * 2 / 3;
 /// Input rows between append decisions of a fixed index.
 pub(crate) const ADAPT_ROWS: usize = 1 << 20;
 /// Input rows before a fixed index's first append decision. A driver of a
@@ -870,7 +873,9 @@ impl RowTable {
     fn next_mode(&self) -> Mode {
         let (Mode::Fixed { limit }, Some(a)) = (self.mode, &self.adapt) else {
             return match (self.mode, &self.adapt) {
-                (Mode::Append, Some(a)) if a.rows >= a.next && a.fixed > 0 && a.recur.recurs() => {
+                (Mode::Append, Some(a))
+                    if a.rows >= a.next && a.fixed > 0 && a.recur.recurs_within(RECUR_KEYS) =>
+                {
                     Mode::Fixed { limit: a.fixed }
                 }
                 _ => self.mode,
@@ -882,7 +887,7 @@ impl RowTable {
             // rows a key) is appended a row per run, without an index.
             #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
             let rows = a.runs.max(1) as f64;
-            if Self::distinct(a) / rows > 0.95 && !a.recur.recurs() {
+            if Self::distinct(a) / rows > 0.95 && !a.recur.recurs_within(RECUR_KEYS) {
                 return Mode::Append;
             }
         }

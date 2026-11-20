@@ -34,6 +34,12 @@ const MIN_SAMPLED: usize = 32;
 #[derive(Debug)]
 pub(super) struct Recur {
     slots: Box<[u64]>,
+    /// The interval each slot's key was last sampled in.
+    stamps: Box<[u16]>,
+    /// This interval's stamp (never 0, which no slot holds once filled).
+    epoch: u16,
+    /// Distinct keys of the set sampled in this interval.
+    touched: usize,
     len: usize,
     /// The sample rate is one run start in 2^(6 + level).
     level: u32,
@@ -44,11 +50,14 @@ pub(super) struct Recur {
 
 impl Recur {
     /// Bytes of a started set.
-    pub(super) const BYTES: usize = SLOTS * size_of::<u64>();
+    pub(super) const BYTES: usize = SLOTS * (size_of::<u64>() + size_of::<u16>());
 
     pub(super) fn new() -> Self {
         Self {
             slots: Box::default(),
+            stamps: Box::default(),
+            epoch: 1,
+            touched: 0,
             len: 0,
             level: 0,
             sampled: 0,
@@ -65,11 +74,12 @@ impl Recur {
     pub(super) fn start(&mut self) {
         if !self.started() {
             self.slots = vec![0; SLOTS].into_boxed_slice();
+            self.stamps = vec![0; SLOTS].into_boxed_slice();
         }
     }
 
     pub(super) fn bytes(&self) -> usize {
-        self.slots.len() * size_of::<u64>()
+        self.slots.len() * size_of::<u64>() + self.stamps.len() * size_of::<u16>()
     }
 
     /// The sample mask over hash bits 16.. at the current level.
@@ -116,16 +126,17 @@ impl Recur {
             return;
         }
         self.sampled += 1;
-        if !self.insert(h) && self.level < MAX_LEVEL {
+        if !self.insert(h, self.epoch) && self.level < MAX_LEVEL {
             self.sparser();
             if (h >> 16) & self.mask() == 0 {
-                self.insert(h);
+                self.insert(h, self.epoch);
             }
         }
     }
 
-    /// Looks `h` up and inserts it when new: false when the set is full.
-    fn insert(&mut self, h: u64) -> bool {
+    /// Looks `h` up and inserts it when new, stamped `stamp`: false when the
+    /// set is full. A key first stamped in this interval counts as touched.
+    fn insert(&mut self, h: u64, stamp: u16) -> bool {
         // 0 marks an empty slot.
         let key = h.max(1);
         let mut i = usize::try_from((h ^ (h >> 29)) & SLOT_MASK).unwrap_or(0);
@@ -133,6 +144,7 @@ impl Recur {
             match self.slots.get(i).copied() {
                 Some(s) if s == key => {
                     self.hits += 1;
+                    self.stamp(i, stamp);
                     return true;
                 }
                 Some(0) => {
@@ -141,6 +153,7 @@ impl Recur {
                     }
                     self.slots[i] = key;
                     self.len += 1;
+                    self.stamp(i, stamp);
                     return true;
                 }
                 Some(_) => i = (i + 1) & usize::try_from(SLOT_MASK).unwrap_or(0),
@@ -149,23 +162,39 @@ impl Recur {
         }
     }
 
+    fn stamp(&mut self, i: usize, stamp: u16) {
+        if let Some(s) = self.stamps.get_mut(i)
+            && *s != stamp
+        {
+            *s = stamp;
+            if stamp == self.epoch {
+                self.touched += 1;
+            }
+        }
+    }
+
     /// One level sparser: the keys the new rate does not sample go.
     fn sparser(&mut self) {
         self.level += 1;
         let mask = self.mask();
-        let kept: Vec<u64> = self
+        let kept: Vec<(u64, u16)> = self
             .slots
             .iter()
-            .copied()
-            .filter(|&k| k != 0 && (k >> 16) & mask == 0)
+            .zip(self.stamps.iter())
+            .filter(|&(&k, _)| k != 0 && (k >> 16) & mask == 0)
+            .map(|(&k, &s)| (k, s))
             .collect();
         self.slots.fill(0);
+        self.stamps.fill(0);
         self.len = 0;
         let (sampled, hits) = (self.sampled, self.hits);
-        for k in kept {
-            self.insert(k);
+        // The kept keys this interval touched, at the new rate.
+        self.touched = kept.iter().filter(|&&(_, s)| s == self.epoch).count();
+        let touched = self.touched;
+        for (k, s) in kept {
+            self.insert(k, s);
         }
-        (self.sampled, self.hits) = (sampled, hits);
+        (self.sampled, self.hits, self.touched) = (sampled, hits, touched);
     }
 
     /// Over half of this interval's sampled run starts were seen before
@@ -174,9 +203,23 @@ impl Recur {
         self.sampled >= MIN_SAMPLED && self.hits * 2 > self.sampled
     }
 
+    /// The distinct keys of this interval, estimated from those sampled.
+    pub(super) fn interval_keys(&self) -> usize {
+        self.touched << (BASE_BITS + self.level)
+    }
+
+    /// The keys recur ([`recurs`](Self::recurs)) and this interval's
+    /// distinct keys fit in `keys`: an index that cannot hold them clears
+    /// all the time (TPC-H q13 at SF100: ~10M keys, each about once a
+    /// driver's million rows), and appending costs less.
+    pub(super) fn recurs_within(&self, keys: usize) -> bool {
+        self.recurs() && self.interval_keys() <= keys
+    }
+
     /// Starts a new interval.
     pub(super) fn next_interval(&mut self) {
-        (self.sampled, self.hits) = (0, 0);
+        (self.sampled, self.hits, self.touched) = (0, 0, 0);
+        self.epoch = self.epoch.wrapping_add(1).max(1);
     }
 
     #[cfg(test)]

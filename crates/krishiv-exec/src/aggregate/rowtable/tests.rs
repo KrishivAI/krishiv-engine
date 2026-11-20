@@ -1354,6 +1354,21 @@ fn recurring_keys_after_a_unique_prefix_return_to_the_index() {
     );
 }
 
+/// Keys that recur but are more than the largest index holds (TPC-H q13 at
+/// SF100: ~10M keys) stay append-only: an index over them would clear all
+/// the time.
+#[test]
+fn recurring_keys_beyond_the_largest_index_stay_append_only() {
+    let core = core();
+    let seed = HashSeed::new(Some(3));
+    let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    let keys = 600_000_i64;
+    feed(&mut t, &core, 3 * ADAPT_ROWS, |i| i % keys);
+    assert_eq!(t.mode, Mode::Append);
+    let r = &t.adapt.as_ref().unwrap().recur;
+    assert!(r.interval_keys() > RECUR_KEYS, "{}", r.interval_keys());
+}
+
 /// A full set keeps learning: after its first keys stop coming, keys that
 /// repeat are found again (hits) at a sparser rate.
 #[test]
