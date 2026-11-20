@@ -882,6 +882,31 @@ async fn a_silent_set_warning_hides_a_secret_value() {
     assert!(w.contains("KRISHIV_INSUFFICIENT_PERMISSIONS"), "{w}");
 }
 
+/// A non-silent `Config.set` that fails returns the error without the value when the pair is
+/// redacted (a credential in a URL here), as `RuntimeConf::set` hides it; the class stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_set_error_hides_a_secret_value() {
+    use krishiv_connect::proto::v4_3::config_request::{self as creq, operation::OpType as Op};
+    let run = start().await;
+    let e = config_as(
+        &run,
+        ADMIN,
+        Op::Set(creq::Set {
+            pairs: vec![pb::KeyValue {
+                key: "spark.sql.session.timeZone".to_owned(),
+                value: Some("postgres://u:canary-pw-8e1@db.local/x".to_owned()),
+            }],
+            silent: Some(false),
+        }),
+    )
+    .await
+    .expect_err("not a zone");
+    let shown = format!("{e:?}");
+    assert!(!shown.contains("canary-pw-8e1"), "{shown}");
+    assert!(shown.contains("INVALID_CONF_VALUE.TIME_ZONE"), "{shown}");
+    assert!(shown.contains("*********(redacted)"), "{shown}");
+}
+
 // ---------------------------------------------------- cache rows (P3-T083, ADR 0046 §3b)
 
 fn rel_range(end: i64) -> pb::Relation {
