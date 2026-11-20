@@ -78,7 +78,11 @@ pub static WRITE_IDEMPOTENCY_KEY: ConfigEntry = ConfigEntry {
           property, a commit-log entry) writes nothing and succeeds, so a job that retries a \
           statement appends once. The key is scoped to the table. The per-write option of the \
           same name wins over this setting. An empty key is invalid. When unset, writes are not \
-          deduplicated across statements.",
+          deduplicated across statements. Set it per logical write: while it is set on a session, \
+          every later write to the same table with the same key writes nothing. A key lasts as long \
+          as the commit that holds it (Delta `txn` retention, Iceberg snapshot expiry, the \
+          commit log). A directory without a commit log refuses a key. A writer from before this \
+          setting drops the keys of a commit-log checkpoint it writes.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.0",

@@ -67,3 +67,19 @@ async fn an_entry_without_a_key_commits_as_before() {
         Keyed::Committed(1)
     );
 }
+
+/// A retry that checked the key before a concurrent retry committed it finds the key when its
+/// slot is taken, instead of appending at the next version.
+#[tokio::test]
+async fn an_append_that_loses_its_slot_looks_for_its_key_again() {
+    let s = setup();
+    let l = log(&s);
+    l.commit_keyed(None, &keyed("a", "k")).await.unwrap();
+    // The stale retry: its base is the empty log, so version 0 is taken.
+    assert_eq!(
+        l.commit_inner(None, &keyed("b", "k"), true).await.unwrap(),
+        Keyed::Replayed(0)
+    );
+    let snap = l.snapshot().await.unwrap();
+    assert_eq!(snap.files.keys().collect::<Vec<_>>(), ["a"]);
+}

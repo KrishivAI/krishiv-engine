@@ -37,10 +37,6 @@ pub(crate) fn partition_overwrite_is_dynamic(
         == Some("DYNAMIC"))
 }
 
-/// Whether this write goes through the commit log:
-/// `krishiv.sql.files.commitProtocol` `LOG`, or `AUTO` where the store
-/// creates objects only if absent (probed once per write; a store that
-/// fails the probe falls back to the plain commit with a warning).
 /// The write's `krishiv.write.idempotencyKey` (E34): the write option, else the session setting.
 ///
 /// # Errors
@@ -115,6 +111,10 @@ pub(super) async fn logged_or_plain(
     }
 }
 
+/// Whether this write goes through the commit log:
+/// `krishiv.sql.files.commitProtocol` `LOG`, or `AUTO` where the store
+/// creates objects only if absent (probed once per write; a store that
+/// fails the probe falls back to the plain commit with a warning).
 pub(super) async fn uses_commit_log(
     config: &Config,
     probes: &Mutex<HashMap<String, bool>>,

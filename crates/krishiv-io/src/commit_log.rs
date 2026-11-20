@@ -299,6 +299,20 @@ impl<'a> CommitLog<'a> {
     /// `KRISHIV_CONCURRENT_COMMIT` for an overwrite that lost a race, or an
     /// append that lost `MAX_RACES` times; storage failures.
     pub async fn commit(&self, base: Option<u64>, entry: &LogEntry) -> Result<u64> {
+        match self.commit_inner(base, entry, false).await? {
+            Keyed::Committed(v) | Keyed::Replayed(v) => Ok(v),
+        }
+    }
+
+    /// [`Self::commit`]; with `recheck_key` an append that loses a slot looks for its idempotency
+    /// key in the log before it takes the next one (a concurrent retry of the same statement may
+    /// have committed it).
+    async fn commit_inner(
+        &self,
+        base: Option<u64>,
+        entry: &LogEntry,
+        recheck_key: bool,
+    ) -> Result<Keyed> {
         let bytes = Bytes::from(encode_entry(entry));
         let mut version = base.map_or(0, |b| b + 1);
         for _ in 0..=MAX_RACES {
@@ -314,7 +328,7 @@ impl<'a> CommitLog<'a> {
                             tracing::warn!(%e, version, "commit log checkpoint failed");
                         }
                     }
-                    return Ok(version);
+                    return Ok(Keyed::Committed(version));
                 }
                 PutIfAbsent::Unsupported => {
                     return Err(crate::error::unsupported(format!(
@@ -325,6 +339,11 @@ impl<'a> CommitLog<'a> {
                 PutIfAbsent::Exists => {
                     if entry.mode == CommitMode::Overwrite {
                         return Err(self.conflict(version));
+                    }
+                    if let Some(key) = entry.idempotency_key.as_deref().filter(|_| recheck_key)
+                        && let Some(v) = self.key_version(key).await?
+                    {
+                        return Ok(Keyed::Replayed(v));
                     }
                     // One listing finds the newest version, instead of one
                     // put_if_absent per commit that overtook this append.
@@ -345,14 +364,14 @@ impl<'a> CommitLog<'a> {
     /// As [`Self::commit`].
     pub async fn commit_keyed(&self, base: Option<u64>, entry: &LogEntry) -> Result<Keyed> {
         let Some(key) = &entry.idempotency_key else {
-            return self.commit(base, entry).await.map(Keyed::Committed);
+            return self.commit_inner(base, entry, false).await;
         };
         for _ in 0..=MAX_RACES {
             if let Some(v) = self.key_version(key).await? {
                 return Ok(Keyed::Replayed(v));
             }
-            match self.commit(base, entry).await {
-                Ok(v) => return Ok(Keyed::Committed(v)),
+            match self.commit_inner(base, entry, true).await {
+                Ok(k) => return Ok(k),
                 // An overwrite that lost a race may have lost it to the same statement: look again
                 // before reporting the conflict.
                 Err(e) => {
