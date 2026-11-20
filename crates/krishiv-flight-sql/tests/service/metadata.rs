@@ -686,6 +686,11 @@ async fn a_hidden_namespace_is_absent_from_table_listings() {
             .map(|b| rows(&b)),
         Err(e) => Err(e),
     };
+    // The policy refuses `global_temp` to `other`, so the refusal path below is reached.
+    assert!(
+        show.is_err(),
+        "SHOW TABLES IN global_temp is refused: {show:?}"
+    );
     let exact = listing(
         &mut h,
         OTHER,
@@ -698,18 +703,14 @@ async fn a_hidden_namespace_is_absent_from_table_listings() {
         exact.as_ref().map_err(Status::code).err(),
         "SHOW {show:?} vs listing"
     );
-    // Whether or not `global_temp` may be listed, an unfiltered `GetDbSchemas` answers (a refused
-    // one hides the temporary views' schemas, review of 969a350b4 nit 1) and lists the rest.
+    // With `global_temp` refused, an unfiltered `GetDbSchemas` answers (it hides the temporary
+    // views' schemas, review of 969a350b4 nit 1) and lists the rest.
     let l = listing(&mut h, OTHER, None, &schemas(None, None))
         .await
         .expect("schemas");
     let names = column(&l.batches, "db_schema_name");
     assert!(names.iter().any(|n| n == "sales"), "{names:?}");
-    assert_eq!(
-        names.iter().any(|n| n == "global_temp"),
-        show.is_ok(),
-        "{names:?}"
-    );
+    assert!(!names.iter().any(|n| n == "global_temp"), "{names:?}");
 }
 
 /// A listing past `metadataTimeout` is `DEADLINE_EXCEEDED` with its class (design §6).
