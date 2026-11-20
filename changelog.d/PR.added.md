@@ -1,1 +1,1 @@
-Flight SQL queries and updates, and statements started through the server's HTTP SQL route, join the W3C trace in the request's `traceparent` and `baggage` headers, shown in `system.queries.trace_id` (P3-T068).
+Flight SQL queries and updates, and statements started through the server's HTTP SQL route, join the W3C trace in the request's `traceparent` and `baggage` headers, shown in `system.queries.trace_id`.

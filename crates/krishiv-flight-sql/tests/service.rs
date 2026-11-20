@@ -1821,7 +1821,7 @@ async fn a_requests_traceparent_names_the_trace_of_its_query_and_update() {
     let mut h = start(FlightSqlConfig::default()).await;
     let trace = "4bf92f3577b34da6a3ce929d0e0e4736";
     let header = format!("00-{trace}-00f067aa0ba902b7-01");
-    // A query: the trace rides GetFlightInfo (the analysis) and DoGet (the run).
+    // A query: only the DoGet header names its trace (the GetFlightInfo classification runs nothing).
     let cmd = CommandStatementQuery {
         query: "SELECT 41 AS traced_query".to_owned(),
         transaction_id: None,
@@ -1847,6 +1847,20 @@ async fn a_requests_traceparent_names_the_trace_of_its_query_and_update() {
         .await
         .expect("fetch");
     assert_eq!(rows(&batches), 1);
+    // A command run by GetFlightInfo (a `SET` sent as a statement query) takes the header there.
+    let set = CommandStatementQuery {
+        query: "SET spark.sql.shuffle.partitions=4".to_owned(),
+        transaction_id: None,
+    };
+    h.client
+        .get_flight_info(traced(
+            FlightDescriptor::new_cmd(set.as_any().encode_to_vec()),
+            OPS,
+            Some(&cookie),
+            &header,
+        ))
+        .await
+        .expect("command info");
     // An update.
     updates::update_with_trace(
         &mut h,
@@ -1889,19 +1903,25 @@ async fn a_requests_traceparent_names_the_trace_of_its_query_and_update() {
             .downcast_ref::<StringArray>()
             .expect("trace");
         for i in 0..b.num_rows() {
-            by_text.insert(
-                text.value(i).to_owned(),
-                (!arrow_array::Array::is_null(id, i)).then(|| id.value(i).to_owned()),
-            );
+            by_text
+                .entry(text.value(i).to_owned())
+                .or_insert_with(Vec::new)
+                .push((!arrow_array::Array::is_null(id, i)).then(|| id.value(i).to_owned()));
         }
     }
     assert_eq!(
         by_text.get("SELECT 41 AS traced_query"),
-        Some(&Some(trace.to_owned()))
+        Some(&vec![Some(trace.to_owned())]),
+        "one row, in the request's trace"
     );
     assert_eq!(
         by_text.get("SET spark.sql.shuffle.partitions=3"),
-        Some(&Some(trace.to_owned()))
+        Some(&vec![Some(trace.to_owned())])
     );
-    assert_eq!(by_text.get("SELECT 42 AS plain_query"), Some(&None));
+    assert_eq!(
+        by_text.get("SET spark.sql.shuffle.partitions=4"),
+        Some(&vec![Some(trace.to_owned())]),
+        "a command run by GetFlightInfo"
+    );
+    assert_eq!(by_text.get("SELECT 42 AS plain_query"), Some(&vec![None]));
 }
