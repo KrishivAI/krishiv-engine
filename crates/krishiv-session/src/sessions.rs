@@ -161,6 +161,16 @@ impl Activity {
             .store(ms.unwrap_or(NO_TIMEOUT), Ordering::Relaxed);
     }
 
+    /// The client type the client reported (client-asserted; a routing hint for the `source`
+    /// selector of a resource group, never an identity).
+    pub(crate) fn client_type(&self) -> Option<String> {
+        self.client
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .client_type
+            .clone()
+    }
+
     /// The user id the client reported (client-asserted, never an identity).
     pub(crate) fn client_user_id(&self) -> Option<String> {
         self.client

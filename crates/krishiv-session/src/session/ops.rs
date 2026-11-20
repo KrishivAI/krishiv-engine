@@ -605,6 +605,14 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// The class `StatementClass::name` returned, for the admission request.
+fn statement_class_named(name: &str) -> Option<krishiv_sql::StatementClass> {
+    use krishiv_sql::StatementClass as C;
+    [C::Read, C::Write, C::Ddl, C::Session, C::Admin]
+        .into_iter()
+        .find(|c| c.name() == name)
+}
+
 impl Session {
     /// Asks the admission controller for a permit for the query whose
     /// `system.queries` row is `log_id`. A controller that answers at once
@@ -625,8 +633,8 @@ impl Session {
             principal: Arc::clone(&self.state.principal),
             tags: self.effective_tags(),
             class: WorkloadClass::Interactive,
-            source: None,
-            statement_class: None,
+            source: self.state.activity.client_type(),
+            statement_class: env.statement_class.and_then(statement_class_named),
             estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);

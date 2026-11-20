@@ -246,6 +246,7 @@ pub struct SessionBuilder {
     functions: Option<Arc<dyn FunctionRegistry>>,
     runtime: Option<Arc<EngineRuntime>>,
     admission: Option<Arc<dyn AdmissionController>>,
+    source: Option<String>,
 }
 
 impl fmt::Debug for SessionBuilder {
@@ -293,6 +294,20 @@ impl SessionBuilder {
     /// ```
     pub fn principal(mut self, principal: Principal) -> Self {
         self.principal = Some(principal);
+        self
+    }
+
+    /// Who the session says its client is, shown as `system.sessions.client_type` and matched by
+    /// the `source` selector of a resource group (design P3-T003 §4; Python sets
+    /// `krishiv-python`). Client-asserted: a routing hint, never an identity. A front end that
+    /// reports its own client type later does not replace it.
+    ///
+    /// ```
+    /// let s = krishiv_session::Session::builder().source("etl-job").build()?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
         self
     }
 
@@ -435,7 +450,11 @@ impl SessionBuilder {
             functions: self.functions,
             admission: self.admission,
         };
-        Ok(Session::on_runtime(runtime, config, parts))
+        let session = Session::on_runtime(runtime, config, parts);
+        if let Some(source) = self.source.as_deref() {
+            session.state.activity.set_client(Some(source), None, None);
+        }
+        Ok(session)
     }
 }
 
@@ -477,6 +496,7 @@ impl Session {
             functions: None,
             runtime: None,
             admission: None,
+            source: None,
         }
     }
 

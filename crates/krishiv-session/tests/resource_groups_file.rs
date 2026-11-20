@@ -362,3 +362,79 @@ async fn system_resource_groups_lists_the_tree_with_its_counters() {
     );
     drop(held);
 }
+
+const ROUTED: &str = r#"{
+  "rootGroups": [{"name": "root", "hardConcurrencyLimit": 8, "maxQueued": 8,
+    "subGroups": [
+      {"name": "agent", "hardConcurrencyLimit": 4, "maxQueued": 4},
+      {"name": "writes", "hardConcurrencyLimit": 4, "maxQueued": 4},
+      {"name": "rest", "hardConcurrencyLimit": 4, "maxQueued": 4}]}],
+  "selectors": [
+    {"source": "krishiv-agent.*", "group": "root.agent"},
+    {"queryType": "DDL", "group": "root.writes"}],
+  "defaultGroup": "root.rest"
+}"#;
+
+/// The group of the one `system.queries` row whose text starts with `prefix`.
+async fn group_of(s: &Session, prefix: &str) -> Option<String> {
+    use arrow_array::cast::AsArray;
+    let batches = s
+        .sql(&format!(
+            "select resource_group from system.queries where query_text like '{prefix}%' \
+             and resource_group is not null"
+        ))
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    batches
+        .iter()
+        .find(|b| b.num_rows() > 0)
+        .map(|b| b.column(0).as_string::<i32>().value(0).to_owned())
+}
+
+#[tokio::test]
+async fn the_source_and_the_statement_class_route_a_query() {
+    let path = write_file("routed", ROUTED);
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let agent = Session::builder()
+        .runtime(std::sync::Arc::clone(&rt))
+        .source("krishiv-agent-7")
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let plain = Session::builder()
+        .runtime(rt)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    for (s, text) in [(&agent, "select 11 as a"), (&plain, "select 12 as b")] {
+        s.sql(text)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+            .collect()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    plain
+        .sql("create table routed_t (a int) using parquet")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        group_of(&agent, "select 11").await.as_deref(),
+        Some("root.agent")
+    );
+    assert_eq!(
+        group_of(&plain, "select 12").await.as_deref(),
+        Some("root.rest")
+    );
+    assert_eq!(
+        group_of(&plain, "create table routed_t").await.as_deref(),
+        Some("root.writes")
+    );
+}
