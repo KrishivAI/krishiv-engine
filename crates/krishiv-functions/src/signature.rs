@@ -46,14 +46,16 @@ pub enum SparkProfile {
     V4_0,
     /// Spark 4.1.
     V4_1,
-    /// Spark 4.2 (the default).
-    #[default]
+    /// Spark 4.2.
     V4_2,
+    /// Spark 4.3 (the default: P3's primary target).
+    #[default]
+    V4_3,
 }
 
 impl SparkProfile {
     /// Every profile, oldest first.
-    pub const ALL: [Self; 4] = [Self::V3_5, Self::V4_0, Self::V4_1, Self::V4_2];
+    pub const ALL: [Self; 5] = [Self::V3_5, Self::V4_0, Self::V4_1, Self::V4_2, Self::V4_3];
 
     /// The release line, as `"4.2"`.
     #[must_use]
@@ -63,6 +65,7 @@ impl SparkProfile {
             Self::V4_0 => "4.0",
             Self::V4_1 => "4.1",
             Self::V4_2 => "4.2",
+            Self::V4_3 => "4.3",
         }
     }
 
@@ -74,6 +77,7 @@ impl SparkProfile {
             Self::V4_0 => 40,
             Self::V4_1 => 41,
             Self::V4_2 => 42,
+            Self::V4_3 => 43,
         }
     }
 

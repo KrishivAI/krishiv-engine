@@ -10,7 +10,7 @@
 //!
 //! Known gap (Spark 4.3.0): 4.3 exempts an empty sketch from the lgConfigK check in `hll_union_agg` and
 //! `hll_union` and takes the non-empty side's lgK; this module applies the 4.2 rules everywhere because
-//! `SparkProfile` has no `V4_3` yet. Key both by profile when it lands (queue row "P3-T086 HLL union 4.3").
+//! `SparkProfile::V4_3` exists now; key both by profile (queue row "P3-T086 HLL union 4.3").
 
 use datasketches::hash::value::raw_bytes;
 pub use datasketches::hll::{HllSketch, HllType, HllUnion};
