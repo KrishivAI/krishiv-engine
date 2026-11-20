@@ -199,7 +199,7 @@ fn ci_policy_wiring() {
             "{name} must not run in the merge queue"
         );
     }
-    for name in ["miri-kernels", "wheels"] {
+    for name in ["miri-kernels", "miri-bridges", "wheels"] {
         let body = job(&ci, name);
         assert!(
             body.contains("github.event_name != 'merge_group'"),
