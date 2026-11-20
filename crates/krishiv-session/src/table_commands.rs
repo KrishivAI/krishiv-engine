@@ -1050,7 +1050,7 @@ impl Session {
             }
             .into()),
             None if if_exists => Ok(()),
-            None => Err(name.not_found(self.search_path())),
+            None => Err(self.drop_view_not_found(&name.name)),
         }
     }
 
