@@ -88,6 +88,10 @@ fn one_bool(value: bool) -> Result<RecordBatch, KrishivError> {
 }
 
 /// Spark's `emptyLocalRelation`: no rows, a `value` string column that is not nullable.
+///
+/// `createTable` / `createExternalTable` answer this too; Spark answers a read of the new table.
+/// The PySpark client discards the eager result, so the difference shows only on a second use of
+/// the returned frame.
 fn nothing() -> Result<RecordBatch, KrishivError> {
     batch(
         vec![string_field("value", false)],
@@ -186,8 +190,8 @@ fn named(db: Option<&str>, name: &str) -> String {
 ///
 /// # Errors
 /// The call's own (`TABLE_OR_VIEW_NOT_FOUND`, `SCHEMA_NOT_FOUND`, the access errors of the SQL
-/// statement that stands for it, ...), and the operator floor for the calls that change the
-/// cache.
+/// statement that stands for it, ...), and the operator floor (`Check::SideEffect`) for the
+/// calls that change the cache.
 async fn rows(session: &Session, call: CatalogCall) -> Result<RecordBatch, KrishivError> {
     let c = session.catalog();
     match call {
@@ -344,6 +348,7 @@ async fn rows(session: &Session, call: CatalogCall) -> Result<RecordBatch, Krish
             tables(&c.list_views(db.as_deref(), pattern.as_deref()).await?)
         }
         CatalogCall::GetTableProperties(table) => {
+            // Rows come in key order; Spark's come from a `HashMap` (unordered), so the order is Krishiv's.
             let props = c.get_table_properties(&table).await?;
             batch(
                 vec![string_field("key", false), string_field("value", true)],
