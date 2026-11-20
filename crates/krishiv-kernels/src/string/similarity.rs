@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `jaro_winkler_similarity` (Spark 4.3): Apache Commons Text's `JaroWinklerSimilarity` over the strings' UTF-16
-//! code units, as the JVM compares them (an emoji is two units).
+//! `jaro_winkler_similarity` (Spark 4.3): Spark's own `ExpressionImplUtils.jaroWinklerSimilarity` over the strings'
+//! UTF-16 code units, as the JVM compares them (an emoji is two units).
 //!
 //! The match window is `max(longer / 2 - 1, 0)`, the prefix bonus counts at most four equal leading units with
-//! the scaling factor `0.1`, and the bonus applies only from a Jaro score of 0.7. Equal strings
+//! the scaling factor `0.1`, and the bonus always applies (`jaro + prefix * 0.1 * (1 - jaro)`; Spark has no
+//! minimum Jaro score, unlike Commons Text). Equal strings
 //! (also two empty ones) are `1.0`; no match is `0.0`. The comparison is binary: case and collation do not matter.
 
 use arrow_array::{Float64Array, OffsetSizeTrait};
@@ -11,7 +12,7 @@ use arrow_array::{Float64Array, OffsetSizeTrait};
 use super::{Slot, StrOperand, all_valid, row_count};
 use crate::error::KernelError;
 
-/// The prefix length the bonus counts (Commons Text's `PREFIX_LENGTH_LIMIT`).
+/// The prefix length the bonus counts (Spark's prefix limit).
 const PREFIX_LIMIT: usize = 4;
 
 /// The similarity of `a` and `b` in `[0, 1]`.
@@ -54,11 +55,7 @@ fn jaro_winkler(a: &[u16], b: &[u16]) -> f64 {
     let m = matches as f64;
     let jaro =
         (m / a.len() as f64 + m / b.len() as f64 + (m - transpositions as f64 / 2.0) / m) / 3.0;
-    if jaro < 0.7 {
-        jaro
-    } else {
-        jaro + 0.1 * prefix as f64 * (1.0 - jaro)
-    }
+    jaro + 0.1 * prefix as f64 * (1.0 - jaro)
 }
 
 /// `jaro_winkler_similarity(a, b)`: NULL when either operand is NULL.

@@ -89,3 +89,14 @@ fn jaro_winkler_matches_spark() {
         ]
     );
 }
+
+/// Spark's own `jaroWinklerSimilarity` adds the prefix bonus at every Jaro score (no 0.7 threshold, unlike
+/// Commons Text); the values are from a Spark 4.3.0 run.
+#[test]
+fn jaro_winkler_has_no_minimum_score_for_the_prefix_bonus() {
+    let a: ArrayRef = Arc::new(StringArray::from(vec![Some("abcd"), Some("aa")]));
+    let b: ArrayRef = Arc::new(StringArray::from(vec![Some("axyz"), Some("abca")]));
+    let out = run("jaro_winkler_similarity", &[&a, &b]);
+    let out: Vec<_> = out.as_primitive::<Float64Type>().iter().collect();
+    assert_eq!(out, vec![Some(0.55), Some(0.625)]);
+}

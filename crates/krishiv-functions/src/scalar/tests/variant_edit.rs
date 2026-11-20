@@ -326,3 +326,24 @@ fn a_value_of_another_type_is_cast_to_variant() {
     let out = run("variant_insert", &[&v, &p, &text], None).unwrap();
     assert_eq!(show(&out), vec![Some(r#"{"a":1,"b":"x"}"#.to_owned())]);
 }
+
+/// Spark checks the paths of `variant_delete` even for a NULL variant; `variant_insert` returns NULL first.
+#[test]
+fn delete_validates_its_paths_for_a_null_variant() {
+    let v = variants(&[None]);
+    let bad = text_col(&[Some("$[-1]")]);
+    assert_eq!(
+        run("variant_delete", &[&v, &bad], None).map(|o| show(&o).remove(0)),
+        Err(ErrorClass::InvalidVariantPath)
+    );
+    let good = text_col(&[Some("$.a")]);
+    assert_eq!(
+        run("variant_delete", &[&v, &good], None).map(|o| show(&o).remove(0)),
+        Ok(None)
+    );
+    let val = variants(&[Some("1")]);
+    assert_eq!(
+        run("variant_insert", &[&v, &bad, &val], None).map(|o| show(&o).remove(0)),
+        Ok(None)
+    );
+}

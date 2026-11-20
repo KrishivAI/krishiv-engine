@@ -1686,6 +1686,7 @@ fn takes_null_treatment(name: &str) -> bool {
         "lag",
         "lead",
         "nth_value",
+        "collect_union",
     ]
     .iter()
     .any(|n| name.eq_ignore_ascii_case(n))

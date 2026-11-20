@@ -388,8 +388,10 @@ impl Resolver<'_> {
                     ));
                     return Ok(b);
                 }
-                let plain = !session_qualified && !window_fn;
-                if let Some(b) = self.collect_union_call(plain, lookup_name, e, f, &kids, cx)? {
+                if !session_qualified
+                    && let Some(b) =
+                        self.collect_union_call(window_fn, lookup_name, e, f, &kids, cx)?
+                {
                     return Ok(b);
                 }
                 // Under `spark.sql.timestampType = TIMESTAMP_NTZ`, `to_timestamp`

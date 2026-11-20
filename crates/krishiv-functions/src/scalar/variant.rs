@@ -330,6 +330,10 @@ fn delete_rows(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivError> {
     let mut out = VariantColumnBuilder::with_capacity(col.len());
     for i in 0..col.len() {
         let Some(root) = col.get(i)? else {
+            // Spark checks the paths of `variant_delete` even for a NULL variant.
+            for path in paths.iter().flatten().filter(|p| !p.is_null(i)) {
+                edit_path(path.value(i), "variant_delete", false)?;
+            }
             out.append_null();
             continue;
         };
