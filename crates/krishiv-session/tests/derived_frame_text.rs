@@ -69,5 +69,5 @@ fn a_frame_no_sql_started_still_has_no_text() {
         .downcast_ref::<arrow_array::Int64Array>()
         .unwrap()
         .value(0);
-    assert!(n >= 1, "the range frame's run keeps a null text");
+    assert_eq!(n, 1, "the range frame's run keeps a null text");
 }

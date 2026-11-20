@@ -47,7 +47,7 @@ fn a_join_read_twice_narrows_each_instance_to_its_parent() {
     Plan::try_new(Arc::clone(&narrowed)).unwrap();
 }
 
-/// The pass reads a graph with shared subtrees once per node, and a second run changes nothing.
+/// A second run over a graph with shared subtrees changes nothing (a fixed point).
 #[test]
 fn narrowing_is_a_fixed_point() {
     let plan = q11();

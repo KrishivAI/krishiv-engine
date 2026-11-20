@@ -110,6 +110,7 @@ class KrishivConnectEngine(SparkConnectEngine):
         # `krishiv server` does not implement CREATE_DATAFRAME_VIEW yet (coverage row create_dataframe_view, P3-T012),
         # so a table is a SQL view over the file instead of createOrReplaceTempView.
         assert self.spark is not None
+        assert "\\" not in path, path  # read as an escape inside the SQL literal
         quoted = path.replace("'", "''")
         self.spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {name} USING parquet OPTIONS (path '{quoted}')")
 
