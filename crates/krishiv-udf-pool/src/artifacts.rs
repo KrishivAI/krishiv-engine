@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A session's Python artifacts (P3-T014 PR-26c-3): the pyfiles and archives a Connect client added
 //! (`addArtifacts(pyfile=True)`, `addArtifacts(archive=True)`), as its workers see them once the server sets
-//! them (`SessionUdfs::set_artifacts`; the Connect server's forward to it is a later change, so today only a
-//! caller of that method sets any).
+//! them (`SessionUdfs::set_artifacts`, which the Connect server calls when the session's artifacts change).
 //!
 //! Spark's worker puts its files directory and each `.zip`/`.egg` include on `sys.path` (`add_path`, at index
 //! 1, `worker_util.py` L59-65 and L133-154 at v4.2.0). Its executor unpacks each archive into that same
@@ -50,7 +49,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use krishiv_common::error::{
@@ -151,14 +150,22 @@ struct State {
 pub(crate) struct ArtifactSet {
     /// The pool key's part: a worker started for one set never serves another.
     pub(crate) id: u64,
-    pyfiles: Vec<Artifact>,
-    archives: Vec<Artifact>,
-    /// Why the paths given are refused (checked when they are set; raised by the calls that need them).
-    refused: Option<KrishivError>,
+    /// The paths as given, until the first caller that needs them checks them (file I/O, so not when they
+    /// are set: that is on an async worker under a session lock).
+    raw: Mutex<Option<(Vec<PathBuf>, Vec<PythonArchive>)>>,
+    /// The paths checked, or why they are refused (raised by the calls that need them).
+    checked: OnceLock<Checked>,
     /// The prepared directory, made by the first worker start that needs it (or why it could not be made).
     prepared: Mutex<State>,
     /// Told when an attempt ends.
     made: Condvar,
+}
+
+/// A set's paths after the check.
+struct Checked {
+    pyfiles: Vec<Artifact>,
+    archives: Vec<Artifact>,
+    refused: Option<KrishivError>,
 }
 
 /// A set's prepared directory: what a worker of the set reads.
@@ -209,36 +216,59 @@ impl ArtifactSet {
     pub(crate) fn empty() -> Self {
         ArtifactSet {
             id: 0,
-            pyfiles: Vec::new(),
-            archives: Vec::new(),
-            refused: None,
+            raw: Mutex::new(None),
+            checked: OnceLock::from(Checked {
+                pyfiles: Vec::new(),
+                archives: Vec::new(),
+                refused: None,
+            }),
             prepared: new_state(),
             made: Condvar::new(),
         }
     }
 
-    /// The set of `pyfiles` and `archives`, their paths and names checked now (a refusal is raised by the
-    /// calls).
+    /// The set of `pyfiles` and `archives`. Nothing is read here: the paths and names are checked by the first
+    /// call that needs them ([`Self::refused`], [`Self::prepare`]), before any copy, which refuses any other
+    /// file than the one the check opened.
     pub(crate) fn new(pyfiles: Vec<PathBuf>, archives: Vec<PythonArchive>) -> Self {
         if pyfiles.is_empty() && archives.is_empty() {
             return Self::empty();
         }
-        let mut names = HashSet::new();
-        let checked = check(pyfiles.into_iter().map(|p| (p, None)), &mut names).and_then(|p| {
-            check(archives.into_iter().map(|a| (a.path, a.alias)), &mut names).map(|a| (p, a))
-        });
-        let (pyfiles, archives, refused) = match checked {
-            Ok((p, a)) => (p, a, None),
-            Err(e) => (Vec::new(), Vec::new(), Some(e)),
-        };
         ArtifactSet {
             id: NEXT_SET.fetch_add(1, Ordering::Relaxed),
-            pyfiles,
-            archives,
-            refused,
+            raw: Mutex::new(Some((pyfiles, archives))),
+            checked: OnceLock::new(),
             prepared: new_state(),
             made: Condvar::new(),
         }
+    }
+
+    /// The paths checked (once; a refusal is kept).
+    fn checked(&self) -> &Checked {
+        self.checked.get_or_init(|| {
+            let (pyfiles, archives) = self
+                .raw
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+                .unwrap_or_default();
+            let mut names = HashSet::new();
+            let result = check(pyfiles.into_iter().map(|p| (p, None)), &mut names).and_then(|p| {
+                check(archives.into_iter().map(|a| (a.path, a.alias)), &mut names).map(|a| (p, a))
+            });
+            match result {
+                Ok((pyfiles, archives)) => Checked {
+                    pyfiles,
+                    archives,
+                    refused: None,
+                },
+                Err(e) => Checked {
+                    pyfiles: Vec::new(),
+                    archives: Vec::new(),
+                    refused: Some(e),
+                },
+            }
+        })
     }
 
     /// Whether the set has no artifacts.
@@ -246,9 +276,9 @@ impl ArtifactSet {
         self.id == 0
     }
 
-    /// Why the set's paths are refused, if they are.
+    /// Why the set's paths are refused, if they are (checks them now if no call has).
     pub(crate) fn refused(&self) -> Option<&KrishivError> {
-        self.refused.as_ref()
+        self.checked().refused.as_ref()
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -266,7 +296,8 @@ impl ArtifactSet {
         unpack: &Unpack<'_>,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Arc<Prepared>, KrishivError> {
-        if let Some(e) = &self.refused {
+        let checked = self.checked();
+        if let Some(e) = &checked.refused {
             return Err(e.clone());
         }
         let (mut attempt, timeouts) = {
@@ -330,14 +361,14 @@ impl ArtifactSet {
         }
         let mut used = 0u64;
         let mut sys_path = vec![py.clone()];
-        for file in &self.pyfiles {
+        for file in &self.checked().pyfiles {
             let to = py.join(&file.name);
             used = used.saturating_add(copy_capped(file, &to, limit.saturating_sub(used))?);
             if !file.name.ends_with(".py") {
                 sys_path.push(to);
             }
         }
-        for (i, archive) in self.archives.iter().enumerate() {
+        for (i, archive) in self.checked().archives.iter().enumerate() {
             let file = file_name(&archive.path).map_err(Failure::lasting)?;
             // The unpacker reads this copy only, never a path the client named; its name keeps the file's
             // (the format is read from it), made unique since two aliases may name one file.
@@ -358,9 +389,10 @@ impl ArtifactSet {
         fs::remove_dir(&incoming)
             .map_err(|e| server_io("cannot remove the UDF archive copies' directory", &e))?;
         let entries = self
+            .checked()
             .pyfiles
             .iter()
-            .chain(&self.archives)
+            .chain(&self.checked().archives)
             .map(|a| a.name.clone())
             .collect();
         Ok(Prepared {
@@ -922,6 +954,7 @@ mod tests {
         fs::write(root.join("m.py"), "X = 1\n").unwrap();
         let pyfiles = ArtifactSet::new(vec![root.join("m.py")], Vec::new());
         let archives = ArtifactSet::new(Vec::new(), vec![file(root.join("m.py"))]);
+        assert!(pyfiles.refused().is_none() && archives.refused().is_none());
         // A new file (made while the old one still exists, so its inode differs) renamed over it.
         fs::write(root.join("other.py"), "X = 2\n").unwrap();
         fs::rename(root.join("other.py"), root.join("m.py")).unwrap();

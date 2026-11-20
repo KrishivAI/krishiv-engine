@@ -2023,3 +2023,36 @@ async fn a_udf_imports_from_an_archive_under_its_fragment() {
     .expect("the UDF imports from the unpacked archive");
     assert_eq!(longs(&responses), [Some(0), Some(5), Some(10)]);
 }
+
+/// An archive added without a `#fragment` is unpacked under its file name (`alias: None`), as Spark does:
+/// the worker reaches it by that name from its working directory.
+const READS_ARCHIVE_BY_NAME: &str =
+    "def f(x):\n    import os\n    return x + len(os.listdir('dep.zip/pkg'))";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_archive_without_a_fragment_is_unpacked_under_its_file_name() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    add_artifact(&run.channel, ADMIN, "archives/dep.zip", &package_zip(&py)).await;
+    let responses = execute(
+        &run.channel,
+        select(
+            3,
+            alias(
+                call(udf(
+                    Some(&py),
+                    "reads_archive",
+                    READS_ARCHIVE_BY_NAME,
+                    long(),
+                    vec![id()],
+                )),
+                "r",
+            ),
+        ),
+        ADMIN,
+    )
+    .await
+    .expect("the UDF finds the archive under its file name");
+    // `pkg/` holds `__init__.py` only.
+    assert_eq!(longs(&responses), [Some(1), Some(2), Some(3)]);
+}
