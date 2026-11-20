@@ -179,3 +179,34 @@ fn a_second_plan_of_the_table_needs_one_copy_not_two() {
     assert_eq!(count(&session, "SELECT count(*) FROM twice"), 600_000);
     assert_eq!(count(&session, "SELECT count(*) FROM twice"), 600_000);
 }
+
+#[test]
+fn a_narrow_decimal_source_and_a_self_join_read() {
+    let session = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "d",
+        DataType::Decimal128(10, 2),
+        true,
+    )]));
+    let s = Arc::clone(&schema);
+    let source: BatchSource = Arc::new(move || {
+        let values = arrow_array::Decimal128Array::from(vec![125, 250])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        Ok(vec![
+            RecordBatch::try_new(Arc::clone(&s), vec![Arc::new(values)]).unwrap(),
+        ])
+    });
+    session
+        .register_batch_source("dec", "dec", schema, source)
+        .unwrap();
+    assert_eq!(count(&session, "SELECT count(*) FROM dec"), 2);
+    // two scans of one source are alive together
+    assert_eq!(
+        count(
+            &session,
+            "SELECT count(*) FROM dec a JOIN dec b ON a.d = b.d"
+        ),
+        2
+    );
+}

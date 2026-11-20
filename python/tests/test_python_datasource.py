@@ -714,3 +714,71 @@ def test_python_source_matches_parquet(spark: SparkSession, tmp_path: Path) -> N
         got = _canonical(spark.sql(statement.format(t="src")))
         want = _canonical(spark.sql(statement.format(t="pq")))
         assert got == want, statement
+
+def test_the_last_spelling_of_a_repeated_option_wins(spark: SparkSession) -> None:
+    seen: dict[str, Any] = {}
+
+    class Opts(DataSource):
+        def schema(self) -> str:
+            return "a INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            seen.update(self.options)
+
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield (1,)
+
+            return R()
+
+    spark.dataSource.register(Opts)
+    spark.read.format("Opts").option("Path", "first").option("path", "second").option("Path", "third").load().collect()
+    assert seen["path"] == "third"
+
+
+def test_a_source_without_columns_keeps_its_rows(spark: SparkSession) -> None:
+    class NoColumns(DataSource):
+        def schema(self) -> Any:
+            from krishiv.sql.types import StructType
+
+            return StructType([])
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def read(self, partition: InputPartition) -> Any:
+                    yield ()
+                    yield ()
+
+            return R()
+
+    spark.dataSource.register(NoColumns)
+    assert spark.read.format("NoColumns").load().count() == 2
+
+
+def test_a_bucketed_save_through_a_python_sink_is_refused(spark: SparkSession) -> None:
+    Log.events = []
+    spark.dataSource.register(Sink)
+    df = spark.range(3).selectExpr("cast(id as int) as a")
+    with pytest.raises(AnalysisException) as bucketed:
+        df.write.format("sink").mode("append").bucketBy(2, "a").save()
+    assert bucketed.value.getCondition() == "_LEGACY_ERROR_TEMP_1312"
+    with pytest.raises(AnalysisException) as both:
+        df.write.format("sink").mode("append").bucketBy(2, "a").sortBy("a").save()
+    assert both.value.getCondition() == "_LEGACY_ERROR_TEMP_1313"
+    with pytest.raises(AnalysisException) as sort_only:
+        df.write.format("sink").mode("append").sortBy("a").save()
+    assert sort_only.value.getCondition() == "SORT_BY_WITHOUT_BUCKETING"
+    assert Log.events == []
+
+
+def test_a_partitioned_save_through_a_python_sink_is_refused_before_the_writer_runs(spark: SparkSession) -> None:
+    from krishiv.errors import UnsupportedOperationException
+
+    Log.events = []
+    spark.dataSource.register(Sink)
+    df = spark.range(3).selectExpr("cast(id as int) as a")
+    with pytest.raises(UnsupportedOperationException):
+        df.write.format("sink").mode("append").partitionBy("a").save()
+    with pytest.raises(UnsupportedOperationException):
+        df.write.format("sink").mode("append").save(partitionBy="nonexistent")
+    assert Log.events == []

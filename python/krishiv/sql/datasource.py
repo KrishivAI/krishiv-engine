@@ -114,7 +114,11 @@ class CaseInsensitiveDict(dict):  # type: ignore[type-arg]
         return super().setdefault(key.lower(), default)
 
     def update(self, *args: Any, **kwargs: Any) -> None:
-        for key, value in dict(*args, **kwargs).items():
+        # Pairs are applied in order, so of ``Path`` then ``path`` the later one wins.
+        for arg in args:
+            for key, value in arg.items() if hasattr(arg, "items") else arg:
+                self[key] = value
+        for key, value in kwargs.items():
             self[key] = value
 
     def copy(self) -> CaseInsensitiveDict:
@@ -431,6 +435,9 @@ def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession,
         for i, field in enumerate(schema.fields):
             values = [_cell(r[i], field.dataType, session) for r in rows]
             columns.append(pa.array(values, type=_pa_type(field.dataType, pa)))
+        if not columns:
+            # No array carries a length, so a batch without columns would lose its rows.
+            return pa.RecordBatch.from_struct_array(pa.array([{} for _ in rows], type=pa.struct([])))
         return pa.RecordBatch.from_arrays(columns, schema=arrow_schema)
 
     try:
