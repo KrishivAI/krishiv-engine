@@ -168,12 +168,6 @@ fn a_clause_that_does_not_resolve_writes_nothing() {
             "FROM src INSERT INTO a SELECT k, k INSERT INTO b SELECT zz",
             "INSERT_COLUMN_ARITY_MISMATCH.TOO_MANY_DATA_COLUMNS",
         ),
-        // A write the engine refuses before writing (Spark writes bucketed tables; Krishiv does not
-        // yet) refuses the statement before an earlier clause writes.
-        (
-            "FROM src INSERT INTO a SELECT k INSERT INTO bk SELECT k",
-            "KRISHIV_UNSUPPORTED_FEATURE",
-        ),
     ] {
         assert_eq!(class(&s, sql), want, "{sql}");
         assert_eq!(rows(&s, "SELECT count(*) FROM a"), ["0"], "{sql}");

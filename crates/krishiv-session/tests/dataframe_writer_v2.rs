@@ -193,7 +193,7 @@ fn invalid_frame_reports_analysis_error() {
 }
 
 #[test]
-fn overwrites_partitioned_and_clustered_tables_are_unsupported() {
+fn overwrites_and_clustered_creates_are_unsupported() {
     let s = session();
     block_on(s.table("people").write_to_table("t").create()).unwrap();
     assert_eq!(
@@ -208,16 +208,22 @@ fn overwrites_partitioned_and_clustered_tables_are_unsupported() {
         )),
         ErrorClass::KrishivUnsupportedFeature
     );
-    for w in [
+    // A partitioned create is supported; clustering is still refused.
+    block_on(
         s.table("people")
             .write_to_table("p")
-            .partitioned_by(["name"]),
-        s.table("people").write_to_table("p").cluster_by(["name"]),
-    ] {
-        let err = block_on(w.create()).unwrap_err();
-        assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
-        assert!(err.to_string().contains("partitioned tables"), "{err}");
-    }
+            .partitioned_by(["name"])
+            .create(),
+    )
+    .unwrap();
+    let err = block_on(
+        s.table("people")
+            .write_to_table("c")
+            .cluster_by(["name"])
+            .create(),
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
 
 #[test]
