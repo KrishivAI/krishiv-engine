@@ -28,6 +28,7 @@ prost-types = { workspace = true, features = ["std"], optional = true }
 tonic = { workspace = true, features = ["server", "router", "codegen"], optional = true }
 tonic-prost = { workspace = true, optional = true }
 getrandom.workspace = true
+sha2.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync"] }
 tokio-rustls = { workspace = true, optional = true }
@@ -56,7 +57,7 @@ tower = { workspace = true, features = ["util"] }
 tonic = { workspace = true, features = ["channel", "server", "router", "codegen"] }
 tonic-prost.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros", "time", "test-util"] }
 
 [lints]
 workspace = true

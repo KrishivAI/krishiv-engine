@@ -430,6 +430,231 @@ CASES: list[tuple[str, str, list[str], str, str]] = [
         "select * from explode(array(abs(-1), length('ab')))",
         "rows",
     ),
+    # --- Spark 4.3 functions the engine takes in plan row 4.3-A: jaro_winkler_similarity, counter_diff, JSON_TABLE ---
+    (
+        "fn_jaro_winkler_similarity",
+        "function",
+        [],
+        "select jaro_winkler_similarity('martha', 'marhta'), jaro_winkler_similarity('dixon', 'dicksonx'), "
+        "jaro_winkler_similarity('abc', 'xyz'), jaro_winkler_similarity('', ''), jaro_winkler_similarity('', 'a'), "
+        "jaro_winkler_similarity('ABC', 'abc'), jaro_winkler_similarity('a', null)",
+        "rows",
+    ),
+    (
+        "fn_jaro_winkler_similarity_prefix",
+        "function",
+        [],
+        "select jaro_winkler_similarity('prefixabcdefg', 'prefixabcdxfg'), "
+        "jaro_winkler_similarity('aaaaaaaa', 'aaaaaaab'), "
+        "jaro_winkler_similarity('\U0001f600a', '\U0001f600b'), jaro_winkler_similarity('ab', 'ba'), "
+        "jaro_winkler_similarity('\u00e9', 'e')",
+        "rows",
+    ),
+    ("fn_jaro_winkler_similarity_args", "function", [], "select jaro_winkler_similarity('a')", "rows"),
+    (
+        "fn_counter_diff",
+        "function",
+        [],
+        "select t, c, counter_diff(c) over (partition by m order by t) as diff from values "
+        "('a', 1, 100), ('a', 2, 200), ('a', 3, 400), ('a', 4, 50), ('a', 5, 100) as v(m, t, c) order by t",
+        "rows",
+    ),
+    (
+        "fn_counter_diff_start_time",
+        "function",
+        [],
+        "select t, c, counter_diff(c, s) over (partition by m order by t) as diff from values "
+        "('a', 1, 100, timestamp_ntz '2026-01-01 00:00:00'), ('a', 2, 200, timestamp_ntz '2026-01-01 00:00:00'), "
+        "('a', 3, 400, timestamp_ntz '2026-01-01 00:00:00'), ('a', 4, 500, timestamp_ntz '2026-01-01 00:02:15'), "
+        "('a', 5, 600, timestamp_ntz '2026-01-01 00:02:15') as v(m, t, c, s) order by t",
+        "rows",
+    ),
+    (
+        "fn_counter_diff_nulls",
+        "function",
+        [],
+        "select k, o, v, counter_diff(v) over (partition by k order by o) as d from values "
+        "(1, 1, 10), (1, 2, 15), (1, 3, 3), (1, 4, 7), (2, 1, 5), (2, 2, null), (2, 3, 9) as t(k, o, v) order by k, o",
+        "rows",
+    ),
+    (
+        "fn_counter_diff_double",
+        "function",
+        [],
+        "select o, counter_diff(cast(v as double)) over (order by o) "
+        "from values (1, 10.5), (2, 15.0), (3, 4.0) as t(o, v) "
+        "order by o",
+        "rows",
+    ),
+    (
+        "fn_counter_diff_negative",
+        "function",
+        [],
+        "select counter_diff(v) over (order by o) from values (1, 5), (2, -1) as t(o, v)",
+        "rows",
+    ),
+    (
+        "fn_counter_diff_no_over",
+        "function",
+        [],
+        "select counter_diff(v) from values (1) as t(v)",
+        "rows",
+    ),
+    (
+        "fn_counter_diff_start_time_type",
+        "function",
+        [],
+        "select counter_diff(v, st) over (order by o) from values (1, 10, 0), (2, 15, 0) as t(o, v, st)",
+        "rows",
+    ),
+    (
+        "syn_json_table_rows",
+        "syntax",
+        [],
+        'select * from json_table(\'[{"a":1,"b":"x"},{"a":2,"b":"y"}]\', \'$[*]\' '
+        "columns (a int path '$.a', b string path '$.b'))",
+        "rows",
+    ),
+    (
+        "syn_json_table_default_path_and_missing",
+        "syntax",
+        [],
+        'select * from json_table(\'{"a":1,"b":"x"}\', \'$\' columns (a int, b string, c int))',
+        "rows",
+    ),
+    (
+        "syn_json_table_ordinality_and_exists",
+        "syntax",
+        [],
+        'select * from json_table(\'[{"a":1},{"a":null},{"z":2}]\', \'$[*]\' columns (rn for ordinality, '
+        "a int, e int exists path '$.a', f boolean exists path '$.z')) order by rn",
+        "rows",
+    ),
+    (
+        "syn_json_table_row_kinds",
+        "syntax",
+        [],
+        "select * from json_table('[{\"a\":1},2,\"x\",null,[3]]', '$[*]' columns (rn for ordinality, "
+        "a int path '$.a', s string path '$')) order by rn",
+        "rows",
+    ),
+    (
+        "syn_json_table_value_text",
+        "syntax",
+        [],
+        'select * from json_table(\'{"a": [ 1.50 , 1e2, "x" ], "b": { "k" : 1.50 }, "c":1.50, "d":1e2, '
+        '"e":-0.0, "f":"\\\\u00e9", "n":null, "t":true}\', \'$\' columns ('
+        "a string path '$.a', b string path '$.b', "
+        "c string path '$.c', d string path '$.d', e string path '$.e', f string path '$.f', n string path '$.n', "
+        "t string path '$.t', m string path '$.m'))",
+        "rows",
+    ),
+    (
+        "syn_json_table_casts",
+        "syntax",
+        [],
+        'select * from json_table(\'{"d":"2020-01-02","b":"true","n":"1.5","i":"7"}\', \'$\' '
+        "columns (d date, b boolean, n decimal(3,1), i bigint, x int path '$.nope'))",
+        "rows",
+    ),
+    (
+        "syn_json_table_nested_row_path",
+        "syntax",
+        [],
+        "select * from json_table('{\"a\":{\"b\":[1,2]}}', '$.a.b[*]' columns (v int path '$')), "
+        "json_table('{\"a\":{\"b\":[1,2]}}', '$.a.b' columns (w string path '$')) order by 1",
+        "rows",
+    ),
+    (
+        "syn_json_table_no_rows",
+        "syntax",
+        [],
+        "select * from json_table('{\"a\":1}', '$.q' columns (a int path '$.a')) union all "
+        "select * from json_table('not json', '$' columns (a int path '$.a')) union all "
+        "select * from json_table(null, '$' columns (a int path '$.a')) union all "
+        "select * from json_table('{\"a\":1} trailing', '$' columns (a int path '$.a'))",
+        "rows",
+    ),
+    (
+        "syn_json_table_error_on_error",
+        "syntax",
+        [],
+        "select * from json_table('not json', '$' columns (a int path '$.a') error on error)",
+        "rows",
+    ),
+    (
+        "syn_json_table_lateral",
+        "syntax",
+        [],
+        'select js, a, b from values (\'{"a":1,"b":"x"}\'), (\'[{"a":2}]\'), (null) as t(js), '
+        "lateral json_table(js, '$' columns (a int path '$.a', b string path '$.b')) order by js, a",
+        "rows",
+    ),
+    (
+        "syn_json_table_alias",
+        "syntax",
+        [],
+        "select z, j.z from json_table('{\"a\":1}', '$' columns (a int path '$.a')) as j(z) where j.z = 1",
+        "rows",
+    ),
+    (
+        "syn_json_table_cast_error",
+        "syntax",
+        [],
+        "select * from json_table('{\"a\":\"x\"}', '$' columns (a int path '$.a'))",
+        "rows",
+    ),
+    (
+        "syn_json_table_invalid_column_path",
+        "syntax",
+        [],
+        "select * from json_table('{\"a\":[1,2]}', '$' columns (a int path '$.a[*]'))",
+        "rows",
+    ),
+    (
+        "syn_json_table_invalid_row_path",
+        "syntax",
+        [],
+        "select * from json_table('{\"a\":1}', '$.*' columns (a int path '$.a'))",
+        "rows",
+    ),
+    (
+        "syn_json_table_duplicate_column",
+        "syntax",
+        [],
+        "select * from json_table('{\"a\":1}', '$' columns (a int path '$.a', a int path '$.a'))",
+        "rows",
+    ),
+    (
+        "beh_ceil_float_overflow",
+        "behaviour",
+        [],
+        "select ceil(cast(9.3e18 as float))",
+        "rows",
+    ),
+    (
+        "beh_ceil_infinity_overflow",
+        "behaviour",
+        [],
+        "select floor(cast('Infinity' as double))",
+        "rows",
+    ),
+    (
+        "beh_ceil_double_edges",
+        "behaviour",
+        [],
+        "select ceil(cast(9223372036854774784 as double)), floor(cast(-9223372036854775808 as double)), "
+        "ceil(cast('NaN' as double)), floor(cast('NaN' as float))",
+        "rows",
+    ),
+    (
+        "beh_ceil_saturates_without_ansi",
+        "behaviour",
+        ["set spark.sql.ansi.enabled=false"],
+        "select ceil(cast(9.3e18 as double)), floor(cast(-9.3e18 as double)), ceil(cast('Infinity' as double)), "
+        "floor(cast('-Infinity' as double)), ceil(cast('NaN' as double))",
+        "rows",
+    ),
 ]
 
 

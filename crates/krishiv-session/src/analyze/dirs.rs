@@ -11,7 +11,10 @@
 //!   location, existing or not, as the writer asks them (`Session::authorize_write_path`); not for a
 //!   clause the run refuses before it writes (`REPLACE`, `OVERWRITE ... PARTITION`, a bucketed table). A
 //!   multi-table insert with a table that cannot be found lists none: the run resolves every target before
-//!   any clause writes, so it fails before it asks;
+//!   any clause writes, so it fails before it asks. A Delta table's clause lists nothing: its writer
+//!   commits to the log the table's own `MODIFY` covers and asks about no directory (`insert_delta`);
+//!   each statement finds its table with the lookup its run uses, so a `DROP TABLE` of a managed Delta
+//!   table lists its directory and a `TRUNCATE TABLE` of one (refused by name) lists none;
 //! - `CREATE TABLE` (`table_commands/questions.rs`): `MANAGE` on the cluster first when its `OPTIONS` hold
 //!   a server-scoped store key or the session changed one (`Session::authorize_store_options`, review D2),
 //!   then `CREATE` on the new table's location as `add_table` asks it (`location_asked`: a managed table's directory, a `LOCATION` or `path` option, a relative one
@@ -100,12 +103,14 @@ impl Session {
                 asked(&mut out, self.drop_namespace_questions(n, env));
             }
             Statement::DropTable(d) => {
-                if let Some(table) = self.stored_table(&d.name, env, true) {
+                if let Some(table) = self.stored_table(&d.name, env, Lookup::Drop) {
                     self.push_deletable(&table, &mut out);
                 }
             }
             Statement::Truncate(t) if t.partition.is_none() => {
-                if let Some(table) = self.stored_table(&t.table, env, false) {
+                if let Some(table) =
+                    self.stored_table(&t.table, env, Lookup::Write("TRUNCATE TABLE"))
+                {
                     self.push_deletable(&table, &mut out);
                 }
             }
@@ -113,7 +118,8 @@ impl Session {
                 // The run resolves every clause's table before any clause writes (review m4).
                 let mut tables = Vec::with_capacity(i.clauses.len());
                 for c in &i.clauses {
-                    let Some(table) = self.stored_table(&c.name, env, false) else {
+                    let Some(table) = self.stored_table(&c.name, env, Lookup::Write("INSERT"))
+                    else {
                         return Vec::new();
                     };
                     tables.push(table);
@@ -123,7 +129,11 @@ impl Session {
                         || c.replace_on.is_some()
                         || c.replace_using.is_some()
                         || (c.partition.is_some() && (c.overwrite || c.if_not_exists));
-                    if !refused && table.layout.bucket.is_none() {
+                    #[cfg(feature = "delta")]
+                    let delta = crate::table_commands::is_delta_table(table);
+                    #[cfg(not(feature = "delta"))]
+                    let delta = false;
+                    if !refused && !delta && table.layout.bucket.is_none() {
                         self.push_location(table, env, &mut out);
                     }
                 }
@@ -133,19 +143,22 @@ impl Session {
         out
     }
 
-    /// The stored table `name` resolves to for a write (not a temporary view, not a view), or `None`.
-    /// With `drop`, a bare name that a temporary view shadows is that view (`DROP TABLE` drops it).
+    /// The stored table `name` resolves to for `lookup` (not a temporary view, not a view), as the
+    /// run finds it, or `None` where the run fails first.
     fn stored_table(
         &self,
         name: &DdlName,
         env: &QueryEnv,
-        drop: bool,
+        lookup: Lookup,
     ) -> Option<std::sync::Arc<CatalogTable>> {
         let name = self.table_name(name, env).ok()?;
-        if drop && self.temp_entry_of(&name, env) {
-            return None;
+        match lookup {
+            // A bare name that a temporary view shadows is that view (`DROP TABLE` drops it); the run
+            // drops any stored table, a Delta one too.
+            Lookup::Drop if self.temp_entry_of(&name, env) => None,
+            Lookup::Drop => self.table_for_read_command(&name, "DROP TABLE", env).ok(),
+            Lookup::Write(operation) => self.table_for_write(&name, operation, env).ok(),
         }
-        self.table_for_write(&name, "ANALYZE", env).ok()
     }
 
     /// `MODIFY` on the directory a `DROP TABLE` or `TRUNCATE TABLE` of `table` deletes, if the run asks it.
@@ -210,6 +223,15 @@ pub(super) const fn may_list(statement: &Statement) -> bool {
         Statement::DropNamespace(n) => matches!(n.behavior, Some(DropBehavior::Cascade)),
         _ => false,
     }
+}
+
+/// How a run finds the stored table it acts on.
+#[derive(Clone, Copy)]
+enum Lookup {
+    /// `DROP TABLE`: any stored table.
+    Drop,
+    /// A write by this operation name (`Session::table_for_write`: a Delta table only for `INSERT`).
+    Write(&'static str),
 }
 
 /// Adds each of `privileges` on the path `display` to `out`, once.

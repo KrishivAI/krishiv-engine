@@ -11,7 +11,7 @@ use crate::arrow::{
 };
 use crate::{
     ArrayType, DataType, DecimalStorage, DecimalType, MapType, Metadata, Srid, StructField,
-    StructType, parse_data_type,
+    StructType, UdtType, parse_data_type,
 };
 
 fn dec(p: u32, s: u32) -> DataType {
@@ -1192,4 +1192,252 @@ fn only_a_top_level_float_vector_stays_a_carrier_and_edges_read_lists() {
         edge_arrow_type(&fixed(ArrowType::Float32, 4)),
         list(ArrowType::Float32)
     );
+}
+
+fn udt(py: &str, storage: DataType) -> DataType {
+    DataType::Udt(Arc::new(UdtType::jvm(storage, py.to_owned(), None)))
+}
+
+/// P3-T079: a UDT is equal to another by its class, computes as its storage type, and is not its storage type.
+#[test]
+fn a_udt_is_equal_by_class_and_stored_as_its_sql_type() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let a = udt("pyspark.ml.linalg.VectorUDT", storage.clone());
+    assert_eq!(a, udt("pyspark.ml.linalg.VectorUDT", storage.clone()));
+    assert_ne!(a, udt("pyspark.ml.linalg.MatrixUDT", storage.clone()));
+    assert_ne!(a, storage);
+    assert_eq!(a.to_arrow(), storage.to_arrow());
+    let set: std::collections::HashSet<DataType> =
+        [a, udt("pyspark.ml.linalg.VectorUDT", storage)].into();
+    assert_eq!(set.len(), 1);
+}
+
+/// Spark 4.2.0, real run (a PySpark UDT over `array<double>`): `simpleString`/`DESCRIBE` show the type name,
+/// `catalogString` and `sql` the storage type.
+#[test]
+fn a_udt_renders_as_spark_does() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let u = DataType::Udt(Arc::new(UdtType::jvm(
+        storage,
+        "org.apache.spark.sql.test.ExamplePointUDT".to_owned(),
+        Some("pyspark.sql.tests.ExamplePointUDT".to_owned()),
+    )));
+    assert_eq!(u.simple_string(), "examplepoint");
+    assert_eq!(u.catalog_string(), "array<double>");
+    assert_eq!(u.sql(), "ARRAY<DOUBLE>");
+}
+
+/// Spark 4.2.0's JSON of a UDT (`tests/spark-golden/udt`): `type`, `class`, `pyClass`, `sqlType`, and it parses back.
+#[test]
+fn a_udt_json_round_trips_in_sparks_key_order() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let u = DataType::Udt(Arc::new(UdtType::jvm(
+        storage,
+        "org.apache.spark.sql.test.ExamplePointUDT".to_owned(),
+        Some("pyspark.testing.objects.ExamplePointUDT".to_owned()),
+    )));
+    let json = u.json();
+    assert_eq!(
+        json,
+        r#"{"type":"udt","class":"org.apache.spark.sql.test.ExamplePointUDT","pyClass":"pyspark.testing.objects.ExamplePointUDT","sqlType":{"type":"array","elementType":"double","containsNull":false}}"#
+    );
+    assert_eq!(DataType::from_json(&json).unwrap(), u);
+    assert!(DataType::from_json(r#"{"type":"udt","class":"x"}"#).is_err());
+    assert!(DataType::from_json(r#"{"type":"udt","sqlType":"integer","extra":1}"#).is_err());
+}
+
+/// Spark 4.2.0 (`tests/spark-golden/udt/spark-4.2.0-probe.txt`): a JVM UDT with no Python class writes
+/// `"pyClass":null` and parses back; a Python-only UDT is `PythonUserDefinedType` (`pyClass`, `serializedClass`),
+/// named `pythonuserdefined`; `fromJson` refuses a JVM UDT with no `pyClass` key and a Python one with no
+/// `serializedClass`, so Krishiv writes neither.
+#[test]
+fn a_jvm_only_and_a_python_only_udt_use_sparks_exact_json_forms() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let sql = r#"{"type":"array","elementType":"double","containsNull":false}"#;
+    let jvm = format!(
+        r#"{{"type":"udt","class":"org.apache.spark.sql.test.ExamplePointUDT","pyClass":null,"sqlType":{sql}}}"#
+    );
+    let parsed = DataType::from_json(&jvm).unwrap();
+    assert_eq!(
+        parsed,
+        DataType::Udt(Arc::new(UdtType::jvm(
+            storage.clone(),
+            "org.apache.spark.sql.test.ExamplePointUDT".to_owned(),
+            None
+        )))
+    );
+    assert_eq!(parsed.json(), jvm);
+    assert_eq!(parsed.simple_string(), "examplepoint");
+
+    let py = format!(
+        r#"{{"type":"udt","pyClass":"__main__.PyOnlyUDT","serializedClass":"gAWV","sqlType":{sql}}}"#
+    );
+    let parsed = DataType::from_json(&py).unwrap();
+    assert_eq!(
+        parsed,
+        DataType::Udt(Arc::new(UdtType::python(
+            storage,
+            "__main__.PyOnlyUDT".to_owned(),
+            "gAWV".to_owned()
+        )))
+    );
+    assert_eq!(parsed.json(), py);
+    assert_eq!(parsed.simple_string(), "pythonuserdefined");
+    assert_eq!(parsed.catalog_string(), "array<double>");
+}
+
+/// Spark 4.2.0's `fromJson` refuses every shape but its two (`spark-4.2.0-probe.txt`); so does Krishiv's reader.
+#[test]
+fn a_udt_json_with_any_other_key_set_does_not_parse() {
+    for json in [
+        r#"{"type":"udt","sqlType":"integer"}"#,
+        r#"{"type":"udt","class":"c","serializedClass":"s","sqlType":"integer"}"#,
+        r#"{"type":"udt","class":"c","sqlType":"integer"}"#,
+        r#"{"type":"udt","pyClass":"p","sqlType":"integer"}"#,
+        r#"{"type":"udt","class":null,"pyClass":null,"sqlType":"integer"}"#,
+        r#"{"type":"udt","class":"c","pyClass":"p","serializedClass":"s","sqlType":"integer"}"#,
+        r#"{"type":"udt","pyClass":null,"serializedClass":"s","sqlType":"integer"}"#,
+        r#"{"type":"udt","pyClass":"p","serializedClass":null,"sqlType":"integer"}"#,
+    ] {
+        assert!(DataType::from_json(json).is_err(), "{json}");
+    }
+    for json in [
+        r#"{"type":"udt","class":"c","pyClass":"p","sqlType":"integer"}"#,
+        r#"{"type":"udt","class":"c","pyClass":null,"sqlType":"integer"}"#,
+        r#"{"type":"udt","pyClass":"p","serializedClass":"s","sqlType":"integer"}"#,
+    ] {
+        assert_eq!(DataType::from_json(json).unwrap().json(), json);
+    }
+}
+
+/// Two JVM UDTs of one class are equal whatever Python class they carry (Spark compares the JVM class).
+#[test]
+fn a_jvm_udt_is_equal_by_its_jvm_class_alone() {
+    let a = DataType::Udt(Arc::new(UdtType::jvm(
+        DataType::Integer,
+        "c.PointUDT".to_owned(),
+        Some("p.One".to_owned()),
+    )));
+    let b = DataType::Udt(Arc::new(UdtType::jvm(
+        DataType::Integer,
+        "c.PointUDT".to_owned(),
+        None,
+    )));
+    assert_eq!(a, b);
+}
+
+/// A UDT inside a struct that needs a tag for another reason keeps its class: the tag is the whole type's JSON.
+#[test]
+fn a_udt_inside_a_tagged_struct_reads_back_as_the_udt() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let u = udt("pkg.PointUDT", storage.clone());
+    let outer = DataType::Struct(StructType::new(vec![
+        StructField::new("s", DataType::String, true),
+        StructField::new("p", u, true),
+    ]));
+    let arrow = ArrowType::Struct(
+        vec![
+            Field::new("s", ArrowType::Binary, true),
+            Field::new("p", storage.to_arrow(), true),
+        ]
+        .into(),
+    );
+    let field = outer.to_arrow_field_with_storage("c", arrow, true).unwrap();
+    assert_eq!(DataType::from_arrow_field(&field).unwrap(), outer);
+}
+
+/// Spark 4.2.0 (`tests/spark-golden/udt/spark-4.2.0-collated-probe.txt`): a collation under a UDT is written inline
+/// in the UDT's `sqlType`, also when the UDT is a struct field (whose own metadata stays empty), and reads back.
+#[test]
+fn a_collation_under_a_udt_in_a_struct_field_survives_the_json() {
+    let lcase = DataType::CollatedString(crate::Collation::parse("UTF8_LCASE").unwrap());
+    let array = DataType::Array(Arc::new(ArrayType::new(lcase.clone(), false)));
+    for storage in [lcase, array] {
+        let outer = DataType::Struct(StructType::new(vec![StructField::new(
+            "p",
+            udt("pkg.TextUDT", storage),
+            true,
+        )]));
+        let json = outer.json();
+        assert!(!json.contains("__COLLATIONS"), "{json}");
+        assert!(json.contains("collate UTF8_LCASE"), "{json}");
+        assert_eq!(DataType::from_json(&json).unwrap(), outer, "{json}");
+    }
+}
+
+/// A UDT at any depth is its storage type to the engine.
+#[test]
+fn without_udts_replaces_a_udt_at_any_depth_by_its_storage_type() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let nested = DataType::Struct(StructType::new(vec![StructField::new(
+        "p",
+        DataType::Array(Arc::new(ArrayType::new(
+            udt("pkg.PointUDT", storage.clone()),
+            true,
+        ))),
+        true,
+    )]));
+    let expected = DataType::Struct(StructType::new(vec![StructField::new(
+        "p",
+        DataType::Array(Arc::new(ArrayType::new(storage, true))),
+        true,
+    )]));
+    assert_eq!(nested.without_udts(), expected);
+}
+
+/// A collated string inside a UDT's storage counts.
+#[test]
+fn a_udt_over_a_collated_string_contains_a_collation() {
+    let lcase = DataType::CollatedString(crate::Collation::parse("UTF8_LCASE").unwrap());
+    assert!(udt("pkg.TextUDT", lcase).contains_collation());
+    assert!(!udt("pkg.TextUDT", DataType::String).contains_collation());
+}
+
+/// A UDT field is stored as its SQL type and reads back as the UDT through the field tag.
+#[test]
+fn a_udt_field_reads_back_as_the_udt() {
+    let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+    let u = DataType::Udt(Arc::new(UdtType::jvm(
+        storage.clone(),
+        "pkg.PointUDT".to_owned(),
+        None,
+    )));
+    let field = u.to_arrow_field("p", true);
+    assert_eq!(field.data_type(), &storage.to_arrow());
+    assert_eq!(DataType::from_arrow_field(&field).unwrap(), u);
+    // Without the tag the column is just its storage type.
+    let bare = Field::new("p", storage.to_arrow(), true);
+    assert_eq!(DataType::from_arrow_field(&bare).unwrap(), storage);
+    // A UDT nested in an array keeps its class too.
+    let nested = DataType::Array(Arc::new(ArrayType::new(u, true)));
+    assert_eq!(
+        DataType::from_arrow_field(&nested.to_arrow_field("a", true)).unwrap(),
+        nested
+    );
+}
+
+/// A JVM UDT and a Python-only one with the same class name and storage are different types (Spark's
+/// `PythonUserDefinedType` is its own class), and a hash set keeps both.
+#[test]
+fn a_jvm_and_a_python_only_udt_of_one_class_name_are_not_equal() {
+    let jvm = udt("pkg.PointUDT", DataType::Integer);
+    let python = DataType::Udt(Arc::new(UdtType::python(
+        DataType::Integer,
+        "pkg.PointUDT".to_owned(),
+        "gAWV".to_owned(),
+    )));
+    assert_ne!(jvm, python);
+    let set: std::collections::HashSet<DataType> = [jvm, python].into_iter().collect();
+    assert_eq!(set.len(), 2);
+}
+
+/// The field tag of a UDT over an INDETERMINATE collation reads back (`string collate null`).
+#[test]
+fn a_udt_over_an_indeterminate_collation_reads_back_from_its_arrow_field() {
+    let t = udt(
+        "pkg.TextUDT",
+        DataType::CollatedString(crate::Collation::INDETERMINATE),
+    );
+    let field = t.to_arrow_field("p", true);
+    assert_eq!(DataType::from_arrow_field(&field).unwrap(), t);
 }

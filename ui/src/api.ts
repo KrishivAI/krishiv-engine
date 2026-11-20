@@ -59,6 +59,15 @@ export interface Query {
   cancel_reason?: string | null;
   rows_read?: number | null;
   workers?: number | null;
+  hints?: AdvisorHint[] | null;
+}
+
+/** One advisor hint (the same code, node, operator and message as EXPLAIN ANALYZE and system.queries). */
+export interface AdvisorHint {
+  code: string;
+  node_id: number | null;
+  operator_id: number | null;
+  message: string;
 }
 
 export interface Operator {
@@ -75,18 +84,10 @@ export interface Operator {
   spilled_bytes?: number;
 }
 
-export interface Warning {
-  operator_id: number;
-  operator: string;
-  kind: "spill" | "skew" | "memory";
-  hint: string;
-}
-
 export interface QueryDetail {
   query: Query;
   operators: Operator[];
   hot_operator: { operator_id: number; operator: string; compute_ns: number } | null;
-  warnings: Warning[];
 }
 
 export interface CacheRow {

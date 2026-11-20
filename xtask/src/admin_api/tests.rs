@@ -372,9 +372,21 @@ fn a_removed_field_against_the_base_fails_unless_allowed_while_preview() {
     assert!(err.contains("ADMIN_V1_REVISION"), "{err}");
     // Raise the revision: now only the flag lets the removal through.
     let source = root.join("crates/krishiv-server/src/admin_v1/mod.rs");
-    let text = std::fs::read_to_string(&source)
-        .unwrap_or_default()
-        .replace("ADMIN_V1_REVISION: i64 = 2;", "ADMIN_V1_REVISION: i64 = 3;");
+    let text = std::fs::read_to_string(&source).unwrap_or_default();
+    // One more than whatever the source says now, so the test outlives revision bumps.
+    let marker = "ADMIN_V1_REVISION: i64 = ";
+    let at = text.find(marker).unwrap_or_else(|| panic!("no revision"));
+    let digits_at = at + marker.len();
+    let digits: String = text[digits_at..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    let next = digits.parse::<i64>().unwrap_or_default() + 1;
+    let text = format!(
+        "{}{next}{}",
+        &text[..digits_at],
+        &text[digits_at + digits.len()..]
+    );
     std::fs::write(&source, &text).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(run(root, &["--write"]), Ok(()));
     let err = run(root, &["--base", "base"]).err().unwrap_or_default();

@@ -32,7 +32,10 @@ pub(super) struct Reads {
 }
 
 /// The reads of `root` per [`Bindings::securables`] entry (see the module docs). `hinted` is
-/// what the plan's hints read before they were removed ([`hint_reads`]).
+/// what the plan's hints read before they were removed ([`hint_reads`]). The inlined queries
+/// of definer views are walked too: their reads are attributed by name, so a table both the
+/// principal and a definer text read is asked for the union of the columns (over-denies, never
+/// under; the definer-only uses themselves are skipped by the column pass).
 pub(super) fn column_reads(
     root: &LogicalPlan,
     b: &Bindings,

@@ -35,6 +35,9 @@ pub(crate) struct AggCore {
     /// The decimal `(avg, sum)` pairs folded in one pass
     /// ([`paired::fold_pairs`]).
     pub(crate) pairs: Vec<(usize, usize)>,
+    /// A `HAVING` over the values, evaluated before the keys are decoded
+    /// (`output_filter.rs`); set by instantiation, `None` by default.
+    pub(crate) output_filter: Option<super::output_filter::OutputFilter>,
 }
 
 impl AggCore {
@@ -79,10 +82,11 @@ impl AggCore {
             ranges,
             rows,
             pairs,
+            output_filter: None,
         })
     }
 
-    fn keys(&self) -> usize {
+    pub(crate) fn keys(&self) -> usize {
         self.spec.group_by.len()
     }
 
@@ -355,11 +359,12 @@ impl AggTable {
         if self.core.spec.output == AggregateOutput::Partial {
             return self.state_batch(ids);
         }
-        let mut cols = self.key_columns(ids)?;
-        for a in &self.accs {
-            cols.push(a.evaluate(ids)?);
-        }
-        batch(&self.core.output_schema, cols, ids.len())
+        let values = self
+            .accs
+            .iter()
+            .map(|a| a.evaluate(ids))
+            .collect::<Result<_>>()?;
+        super::output_filter::output_rows(&self.core, ids, values, |ids| self.key_columns(ids))
     }
 
     fn key_columns(&self, ids: &[u32]) -> Result<Vec<ArrayRef>> {

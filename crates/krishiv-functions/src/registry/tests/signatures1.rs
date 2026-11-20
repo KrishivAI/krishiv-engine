@@ -7,7 +7,7 @@ use super::*;
 fn every_definition_is_in_sparks_catalog() {
     let r = builtins();
     assert!(r.unlisted().is_empty(), "{:?}", r.unlisted());
-    assert_eq!(r.spark_function_count(), 574);
+    assert_eq!(r.spark_function_count(), 588);
     assert_eq!(r.version(), 0);
     let names: Vec<&str> = r.functions().iter().map(|d| d.name).collect();
     assert!(names.windows(2).all(|w| w[0] < w[1]));
@@ -25,8 +25,11 @@ fn every_definition_is_in_sparks_catalog() {
         if d.name == "raise_error" {
             assert!(s.deterministic.is_none() && s.kind.is_none());
             assert!(!d.deterministic);
-        } else if matches!(d.name, "from_avro" | "to_avro") {
-            // The `spark-avro` module is not on the probe image's classpath, so Spark rejected every probe of these two: the
+        } else if matches!(
+            d.name,
+            "from_avro" | "to_avro" | "from_protobuf" | "to_protobuf"
+        ) {
+            // The `spark-avro` and `spark-protobuf` modules are not on the probe image's classpath, so Spark rejected every probe of these: the
             // catalog has their arity and first release but not their determinism or kind. Both are deterministic in Spark
             // (a golden runs `count(from_avro(..))`), so the registry says so.
             assert!(s.deterministic.is_none() && s.kind.is_none(), "{}", d.name);

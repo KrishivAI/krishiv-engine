@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: Apache-2.0
+// Krishiv-authored proto2 fixtures: required fields, defaults, groups, extensions.
+// Build: protoc --include_imports --descriptor_set_out=krishiv_golden_p2.desc krishiv_golden_p2.proto
+syntax = "proto2";
+
+package krishiv.golden.p2;
+
+enum Hue {
+  HUE_A = 0;
+  HUE_B = 1;
+  HUE_C = 2;
+}
+
+message Item {
+  optional string label = 1;
+}
+
+message P2 {
+  required int32 req = 1;
+  optional string opt = 2 [default = "dflt"];
+  optional int32 n = 3;
+  repeated int32 r = 4;
+  optional Hue hue = 5 [default = HUE_C];
+  optional bytes b = 6 [default = "ab"];
+  optional double d = 7 [default = inf];
+  optional bool flag = 8 [default = true];
+  optional group Grp = 9 {
+    optional int32 x = 1;
+  }
+  optional Item item = 10;
+  extensions 100 to 199;
+}
+
+extend P2 {
+  optional int32 ext_i = 100;
+  optional string ext_s = 101;
+  optional Item ext_item = 102;
+  repeated int32 ext_r = 103;
+}
+
+message P2Nest {
+  optional P2 p = 1;
+  repeated P2 ps = 2;
+}
+
+message P2Required {
+  required string a = 1;
+  required Item b = 2;
+  optional int32 c = 3;
+}
+
+message CaseClash {
+  optional string abc = 1;
+  optional string ABC = 2;
+}

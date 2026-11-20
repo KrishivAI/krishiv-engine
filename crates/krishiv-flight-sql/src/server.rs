@@ -11,13 +11,15 @@ use std::time::{Duration, Instant};
 
 use arrow_array::RecordBatch;
 use arrow_flight::flight_service_server::FlightServiceServer;
-use arrow_flight::sql::metadata::SqlInfoData;
+use arrow_flight::sql::metadata::{SqlInfoData, XdbcTypeInfoData};
 use arrow_schema::SchemaRef;
 use krishiv_common::config::{
     CONNECT_MAX_INBOUND_MESSAGE_SIZE, Config, ConfigEntry, ConfigValue,
-    FLIGHT_SQL_FETCH_IDLE_TIMEOUT, FLIGHT_SQL_HANDLE_TTL, FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES,
-    FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL, FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL,
-    FLIGHT_SQL_MAX_HANDLES_PER_SESSION, FLIGHT_SQL_MAX_STATEMENT_BYTES, FLIGHT_SQL_PROVISIONAL_TTL,
+    FLIGHT_SQL_FETCH_IDLE_TIMEOUT, FLIGHT_SQL_HANDLE_TTL, FLIGHT_SQL_MAX_BATCH_ROWS,
+    FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES, FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
+    FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL, FLIGHT_SQL_MAX_HANDLES_PER_SESSION,
+    FLIGHT_SQL_MAX_SCHEMA_TABLES, FLIGHT_SQL_MAX_STATEMENT_BYTES, FLIGHT_SQL_METADATA_TIMEOUT,
+    FLIGHT_SQL_PROVISIONAL_TTL,
 };
 use krishiv_common::error::KrishivError;
 use krishiv_connect_server::execute::ResponseBudget;
@@ -31,6 +33,7 @@ use crate::metrics::Requests;
 use crate::sessions::{Holds, Release, Sessions};
 use crate::sql_info::{ServerInfo, sql_info_data};
 use crate::statement::FetchCell;
+use crate::xdbc_info::xdbc_type_info_data;
 
 /// The limits of a [`FlightSqlServer`], from the `krishiv.flightSql.*` keys (all Startup).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +57,12 @@ pub struct FlightSqlConfig {
     /// The most operations one session holds (`krishiv.connect.maxOperationsPerSession`): a
     /// `DoGet` and a running command register one each, as Connect's `ExecutePlan` does.
     pub max_operations_per_session: usize,
+    /// `maxBatchRows`: the most parameter rows one prepared update binds (design §4.4).
+    pub max_batch_rows: usize,
+    /// `metadataTimeout`: the time limit of one metadata listing (design §5).
+    pub metadata_timeout: Duration,
+    /// `maxSchemaTables`: the most tables a `GetTables` with `include_schema` loads (design §5).
+    pub max_schema_tables: usize,
 }
 
 impl Default for FlightSqlConfig {
@@ -67,6 +76,9 @@ impl Default for FlightSqlConfig {
             max_inbound_message_size: 128 << 20,
             encode: EncodeLimits::default(),
             max_operations_per_session: ExecuteLimits::default().max_operations_per_session,
+            max_batch_rows: 10_000,
+            metadata_timeout: Duration::from_secs(60),
+            max_schema_tables: 1_000,
         }
     }
 }
@@ -127,6 +139,9 @@ impl FlightSqlConfig {
             encode: d.encode,
             max_operations_per_session: ExecuteLimits::from_config(config)
                 .max_operations_per_session,
+            max_batch_rows: size(config, &FLIGHT_SQL_MAX_BATCH_ROWS, d.max_batch_rows),
+            metadata_timeout: duration(config, &FLIGHT_SQL_METADATA_TIMEOUT, d.metadata_timeout),
+            max_schema_tables: size(config, &FLIGHT_SQL_MAX_SCHEMA_TABLES, d.max_schema_tables),
         }
     }
 }
@@ -142,6 +157,9 @@ pub(crate) struct Payload {
     /// The operations running for this handle (its `GetFlightInfo` run and its fetches), so
     /// `CancelFlightInfo` cancels these and nothing else of the session (§4.5).
     pub(crate) live: Arc<LiveOps>,
+    /// Whether a fetch of this ticket has begun: until then it is work the server accepted and a
+    /// client has not collected, which a drain waits for (design P3-T066 §5.1).
+    pub(crate) fetched: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The operations live on one handle (design §4.1, §4.5), shared by every copy of its payload.
@@ -198,6 +216,19 @@ pub(crate) enum Kind {
     /// A command that ran: its stored rows (Spark's Arrow shapes, the session time zone fixed
     /// when it ran), held in the pool as `flight_sql_handles` while the handle lives.
     Command(Arc<Stored>),
+    /// A prepared statement (design §4.4): never a ticket itself; each execution makes a
+    /// statement handle (`GetFlightInfo`) or runs it (`DoPut` update).
+    Prepared(Arc<Prepared>),
+}
+
+/// A prepared statement's handle (design §4.4).
+pub(crate) struct Prepared {
+    /// A query (analyzed at create); else a command, stored as text and run per execution.
+    pub(crate) query: bool,
+    /// Its positional parameter markers.
+    pub(crate) markers: usize,
+    /// The statement with the literals of the last row a `DoPut` bound (a query's binding).
+    pub(crate) bound: Option<Arc<str>>,
 }
 
 /// A command's stored result.
@@ -224,6 +255,7 @@ pub(crate) struct Inner {
     pub(crate) handles: Handles<SessionOwner, Payload>,
     pub(crate) requests: Requests,
     pub(crate) sql_info: SqlInfoData,
+    pub(crate) xdbc_type_info: XdbcTypeInfoData,
     pub(crate) config: FlightSqlConfig,
     /// The live `DoGet` streams' idle cells, for the sweep (design §4.2).
     pub(crate) fetches: Mutex<Vec<Weak<FetchCell>>>,
@@ -251,7 +283,7 @@ impl FlightSqlServer {
     /// `info` for `GetSqlInfo`.
     ///
     /// # Errors
-    /// What building the `GetSqlInfo` table fails with (`INTERNAL_ERROR`).
+    /// What building the `GetSqlInfo` or `GetXdbcTypeInfo` table fails with (`INTERNAL_ERROR`).
     pub fn new(
         manager: Arc<SessionManager>,
         auth: Arc<ConnectAuth>,
@@ -270,6 +302,7 @@ impl FlightSqlServer {
                 handles: Handles::new(config.handles),
                 requests: Requests::default(),
                 sql_info: sql_info_data(info)?,
+                xdbc_type_info: xdbc_type_info_data()?,
                 config,
                 fetches: Mutex::new(Vec::new()),
             }),
@@ -396,6 +429,25 @@ impl FlightSqlServer {
         n
     }
 
+    /// The work a drain waits for (design P3-T066 §5.1): tickets issued and not yet fetched (a
+    /// statement the server accepted whose client has not collected it) plus the `DoGet` streams
+    /// still running. A ticket fetched once stays refetchable but no longer counts; the sweep
+    /// drops one nobody fetches after the handle TTL, and the drain's deadline and stop bound
+    /// end the wait regardless.
+    #[must_use]
+    pub fn held(&self) -> usize {
+        let unfetched = self
+            .inner
+            .handles
+            .count_where(|p| !p.fetched.load(std::sync::atomic::Ordering::Acquire));
+        let streaming = self
+            .fetches()
+            .iter()
+            .filter(|cell| cell.strong_count() > 0)
+            .count();
+        unfetched + streaming
+    }
+
     /// Watches a `DoGet` stream's idle cell (the sweep holds it weakly).
     pub(crate) fn watch_fetch(&self, cell: &Arc<FetchCell>) {
         self.fetches().push(Arc::downgrade(cell));
@@ -426,7 +478,8 @@ impl FlightSqlServer {
         n
     }
 
-    /// Whether the server is shutting down (`ConnectServer::draining`).
+    /// Whether the server refuses new work: the drain controller's flag (`ConnectServer::draining`,
+    /// design P3-T066 §5.1). Fetches of existing tickets and cancels are still served.
     pub(crate) fn draining(&self) -> bool {
         self.inner.draining.load(Ordering::Acquire)
     }

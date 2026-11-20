@@ -50,8 +50,9 @@ fn session_of(token: &str) -> &'static str {
 type Seen = Arc<Mutex<Vec<(String, String, String)>>>;
 
 /// A fake IdP and Iceberg REST catalog on one loopback port: `/token` exchanges `<subject>` for
-/// `x-<subject>`; `db.t` exists only for `x-alice-jwt`.
-fn fake_catalog() -> (String, Seen) {
+/// `x-<subject>`; `db.t` exists only for `x-alice-jwt`, answered with `table` (a `loadTable`
+/// body) when given, else with a table on `s3://b/t` this test never reads.
+fn fake_catalog(table: Option<String>) -> (String, Seen) {
     let listener = StdListener::bind("127.0.0.1:0").expect("bind");
     let base = format!("http://{}", listener.local_addr().expect("addr"));
     let seen: Seen = Arc::default();
@@ -99,10 +100,12 @@ fn fake_catalog() -> (String, Seen) {
                 "/v1/config" => (200, r#"{"defaults": {}, "overrides": {}}"#.to_owned()),
                 "/v1/namespaces/db/tables/t" if auth == "Bearer x-alice-jwt" => (
                     200,
-                    r#"{"metadata-location": "s3://b/t/metadata/v1.metadata.json",
+                    table.clone().unwrap_or_else(|| {
+                        r#"{"metadata-location": "s3://b/t/metadata/v1.metadata.json",
                         "metadata": {"format-version": 2, "table-uuid": "u", "location": "s3://b/t"},
                         "config": {}}"#
-                        .to_owned(),
+                            .to_owned()
+                    }),
                 ),
                 _ => (
                     404,
@@ -156,14 +159,19 @@ impl Authenticator for TestAuth {
 }
 
 /// The session manager `krishiv server` builds, over a runtime declaring the delegated catalog
-/// `lake` at `base`.
+/// `lake` at `base` in `mode`.
 fn manager(
     base: &str,
+    mode: DeclMode,
 ) -> (
     Arc<SessionManager>,
     Arc<krishiv_session::auth::DeniedCounts>,
 ) {
     let token_endpoint = format!("{base}/token");
+    // The row reads of the embedded case use the session's own storage, not vended credentials
+    // (unit 3); the server-mode cases keep the declaration's default.
+    let storage = (mode == DeclMode::Embedded)
+        .then_some(("krishiv.catalog.lake.storage", "allowed-prefixes"));
     let setup = [
         ("krishiv.catalog.lake.type", "iceberg-rest"),
         ("krishiv.catalog.lake.uri", base),
@@ -177,8 +185,9 @@ fn manager(
         ),
     ]
     .into_iter()
+    .chain(storage)
     .fold(
-        CatalogSetup::new(DeclMode::Server).factory(Arc::new(IcebergRestFactory)),
+        CatalogSetup::new(mode).factory(Arc::new(IcebergRestFactory)),
         |s, (k, v)| s.setting(k, v),
     );
     let runtime = EngineRuntime::builder()
@@ -198,8 +207,8 @@ fn manager(
     )
 }
 
-async fn start(base: &str) -> (Channel, oneshot::Sender<()>) {
-    let (manager, denials) = manager(base);
+async fn start(base: &str, mode: DeclMode) -> (Channel, oneshot::Sender<()>) {
+    let (manager, denials) = manager(base, mode);
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let server = ConnectServer::new(manager, ConnectServerConfig::default())
@@ -228,7 +237,11 @@ fn sql(query: &str) -> pb::Plan {
     }
 }
 
-async fn execute(channel: &Channel, query: &str, token: &str) -> Result<(), tonic::Status> {
+async fn execute(
+    channel: &Channel,
+    query: &str,
+    token: &str,
+) -> Result<Vec<pb::ExecutePlanResponse>, tonic::Status> {
     let request = pb::ExecutePlanRequest {
         session_id: session_of(token).to_owned(),
         user_context: Some(pb::UserContext {
@@ -255,8 +268,37 @@ async fn execute(channel: &Channel, query: &str, token: &str) -> Result<(), toni
         )
         .await?
         .into_inner();
-    while s.message().await?.is_some() {}
-    Ok(())
+    let mut out = Vec::new();
+    while let Some(m) = s.message().await? {
+        out.push(m);
+    }
+    Ok(out)
+}
+
+/// The `(id, name)` rows of `responses`, sorted.
+fn rows(responses: &[pb::ExecutePlanResponse]) -> Vec<(i64, String)> {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Int64Type;
+    use krishiv_connect::proto::v4_3::execute_plan_response::ResponseType;
+    let mut out = Vec::new();
+    for r in responses {
+        let Some(ResponseType::ArrowBatch(b)) = &r.response_type else {
+            continue;
+        };
+        let reader =
+            arrow_ipc::reader::StreamReader::try_new(std::io::Cursor::new(b.data.clone()), None)
+                .expect("ipc");
+        for batch in reader {
+            let batch = batch.expect("batch");
+            let ids = batch.column(0).as_primitive::<Int64Type>();
+            let names = batch.column(1).as_string::<i32>();
+            for i in 0..batch.num_rows() {
+                out.push((ids.value(i), names.value(i).to_owned()));
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -291,8 +333,8 @@ fn error_class(status: &tonic::Status) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oidc_session_reaches_delegated_catalog_with_the_exchanged_token() {
-    let (base, seen) = fake_catalog();
-    let (channel, _stop) = start(&base).await;
+    let (base, seen) = fake_catalog(None);
+    let (channel, _stop) = start(&base, DeclMode::Server).await;
     // Alice is granted `db.t` in the catalog: it is found (and not readable until the table
     // provider over declared catalogs exists; the analyzer reports a catalog's refusal as
     // `KRISHIV_CATALOG_FAILURE`, hiding its text).
@@ -342,8 +384,8 @@ async fn oidc_session_reaches_delegated_catalog_with_the_exchanged_token() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn analyze_plan_uses_its_own_requests_token() {
     use krishiv_connect::proto::v4_3::analyze_plan_request::{self as areq, Analyze};
-    let (base, seen) = fake_catalog();
-    let (manager, _) = manager(&base);
+    let (base, seen) = fake_catalog(None);
+    let (manager, _) = manager(&base, DeclMode::Server);
     let credential = |token: &str| {
         InboundCredential::new(
             CredentialKind::Oidc,
@@ -391,4 +433,111 @@ async fn analyze_plan_uses_its_own_requests_token() {
         .map(|(_, a, _)| a.clone())
         .collect();
     assert_eq!(loads, ["Bearer x-alice-jwt"]);
+}
+
+/// Rows of a declared table through Connect: Alice reads `lake.db.t` (a local Iceberg table the
+/// connector's `testing::write_table` wrote) with the token the IdP exchanged hers for; Bob, for
+/// whom the catalog has no such table, gets `TABLE_OR_VIEW_NOT_FOUND`. Embedded mode, as a
+/// server-mode declaration refuses `file:` table locations (`RemoteLocationPolicy`; server-mode
+/// confinement is tested in krishiv-catalogs `declared/read_tests.rs`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oidc_session_reads_rows_of_a_delegated_catalog_table() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // `write_table` runs a runtime of its own, so not on this test's.
+    let path = dir.path().to_owned();
+    let table = tokio::task::spawn_blocking(move || {
+        krishiv_connectors_iceberg::testing::write_table(&path)
+    })
+    .await
+    .expect("join")
+    .expect("table");
+    let body = format!(
+        r#"{{"metadata-location": {}, "metadata": {}, "config": {{}}}}"#,
+        serde_json::Value::String(table.metadata_location.clone()),
+        table.metadata
+    );
+    let (base, seen) = fake_catalog(Some(body));
+    let (channel, _stop) = start(&base, DeclMode::Embedded).await;
+    let got = execute(&channel, "SELECT id, name FROM lake.db.t", "alice-jwt")
+        .await
+        .expect("alice reads");
+    assert_eq!(
+        rows(&got),
+        [(1, "a"), (2, "b"), (3, "c")].map(|(i, n)| (i, n.to_owned()))
+    );
+    let s = execute(&channel, "SELECT id, name FROM lake.db.t", "bob-jwt")
+        .await
+        .expect_err("absent for bob");
+    assert_eq!(error_class(&s), "TABLE_OR_VIEW_NOT_FOUND", "{s:?}");
+    let loads: Vec<String> = seen
+        .lock()
+        .expect("seen")
+        .iter()
+        .filter(|(p, _, _)| p == "/v1/namespaces/db/tables/t")
+        .map(|(_, a, _)| a.clone())
+        .collect();
+    assert_eq!(loads, ["Bearer x-alice-jwt", "Bearer x-bob-jwt"]);
+}
+
+/// Review 58b2 F5 (§3.3): `spark.readStream.table("lake.db.t")` is refused before the catalog is
+/// asked: no streaming read of a declared table exists, so none can reach a delegated catalog
+/// without the user's token rules. When streaming reads land, this test fails first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_stream_of_a_delegated_catalog_table_refused() {
+    use krishiv_connect::proto::v4_3::read::{NamedTable, ReadType};
+    let (base, seen) = fake_catalog(None);
+    let (channel, _stop) = start(&base, DeclMode::Server).await;
+    let plan = pb::Plan {
+        op_type: Some(OpType::Root(Box::new(pb::Relation {
+            common: None,
+            rel_type: Some(RelType::Read(pb::Read {
+                read_type: Some(ReadType::NamedTable(NamedTable {
+                    unparsed_identifier: "lake.db.t".to_owned(),
+                    ..Default::default()
+                })),
+                is_streaming: true,
+            })),
+        }))),
+    };
+    let request = pb::ExecutePlanRequest {
+        session_id: session_of("alice-jwt").to_owned(),
+        user_context: Some(pb::UserContext {
+            user_id: "anyone".to_owned(),
+            ..Default::default()
+        }),
+        plan: Some(plan),
+        ..Default::default()
+    };
+    let mut r = tonic::Request::new(request);
+    r.metadata_mut()
+        .insert("authorization", "Bearer alice-jwt".parse().expect("ascii"));
+    let mut grpc = tonic::client::Grpc::new(channel.clone());
+    grpc.ready().await.expect("ready");
+    let result = async {
+        let mut s = grpc
+            .server_streaming(
+                r,
+                "/spark.connect.SparkConnectService/ExecutePlan"
+                    .parse()
+                    .expect("path"),
+                tonic_prost::ProstCodec::<pb::ExecutePlanRequest, pb::ExecutePlanResponse>::default(
+                ),
+            )
+            .await?
+            .into_inner();
+        while s.message().await?.is_some() {}
+        Ok::<(), tonic::Status>(())
+    }
+    .await;
+    let s = result.expect_err("a streaming read is refused");
+    assert_eq!(error_class(&s), "KRISHIV_UNSUPPORTED_FEATURE", "{s:?}");
+    assert!(s.message().contains("is_streaming"), "{s:?}");
+    assert!(
+        !seen
+            .lock()
+            .expect("seen")
+            .iter()
+            .any(|(p, _, _)| p.starts_with("/v1/namespaces")),
+        "the catalog was asked for a table"
+    );
 }

@@ -67,6 +67,13 @@ jobs:
         env:
           KRISHIV_TIGHT_MEMORY_CASES: "256"
         run: cargo nextest run --workspace --all-features --locked --no-tests=pass
+      # Needs Java 21 or Docker and the network (the driver jar), so it is ignored in the
+      # workspace run above (P3-T101 note §17). The Java toolcache is removed above; the
+      # script falls back to Docker.
+      - name: Flight SQL JDBC end to end
+        run: >-
+          cargo nextest run -p krishiv-cli --features flight-sql --locked --test flight_sql
+          --run-ignored only -E 'test(jdbc)'
       - name: doctests (all features)
         run: cargo test --workspace --doc --all-features --locked
       - name: docs (all features)
@@ -399,6 +406,8 @@ jobs:
         run: "cargo test -p krishiv-testkit --release --locked --test golden_ratchet serialize_through_matches_the_frozen_baseline -- --ignored"
       - name: ICU collation goldens (collations-icu)
         run: "cargo test -p krishiv-testkit --release --locked --features collations-icu --test golden_icu"
+      - name: Exact vector top-k at 100k x 768 (P3-T077 design 8.3)
+        run: "cargo test -p krishiv-session --release --locked --test vector_topk top_k_brute_force_at_100k_by_768 -- --ignored"
 
   # Object stores against throw-away emulators (P2-T084): krishiv-io's S3 (MinIO) and Azure (Azurite) round trips,
   # then TPC-H SF1 uploaded to MinIO and read back over `s3a://`, equal to the local answers. The script names and
@@ -450,6 +459,111 @@ jobs:
           ICEBERG_REST_IMAGE: apache/iceberg-rest-fixture@sha256:df2e9dd421928b7aab01557678ce8e2bb73064d0e253baebd72adad3439ffc2e # 1.10.0
         run: tests/scripts/iceberg_rest_fixture.sh
 
+  # Iceberg write conformance (P3-T028b, PR-53b): Krishiv's append sink writes tables, Spark 4.1.0 + Iceberg 1.12.0
+  # (Docker, apache/spark:4.1.0; the runtime jar from Maven Central) reads them and appends on top, Krishiv reads
+  # the result. The Rust steps are `#[ignore]`d tests, so the PR gate never needs Docker.
+  iceberg-write-conformance:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (nextest)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Krishiv writes, Spark reads and appends, Krishiv reads back
+        env:
+          OUT: ${{ runner.temp }}/iceberg-write-conformance
+        run: |
+          mkdir -p "$OUT"
+          tests/scripts/iceberg_write_conformance.sh
+      - name: Keep the tables and both JSON files of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iceberg-write-conformance
+          path: ${{ runner.temp }}/iceberg-write-conformance
+          retention-days: 7
+
+  # Iceberg round trip (P3-T028b, PR-53b): Spark 4.1.0 + Iceberg 1.12.0 makes tables with position deletes, a DV and an
+  # evolved schema and spec; Krishiv appends and runs copy-on-write DELETE/UPDATE; Spark reads, time travels and runs
+  # merge-on-read DML on top; Krishiv reads the result. The Rust steps are `#[ignore]`d tests.
+  iceberg-roundtrip:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (nextest)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Spark makes, Krishiv writes, Spark writes on top, Krishiv reads
+        env:
+          OUT: ${{ runner.temp }}/iceberg-roundtrip
+        run: |
+          mkdir -p "$OUT"
+          tests/scripts/iceberg_roundtrip.sh
+      - name: Keep the tables and the JSON records of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iceberg-roundtrip
+          path: ${{ runner.temp }}/iceberg-roundtrip
+          retention-days: 7
+
+  # Delta round trip (P3-T028b, PR-53b): Spark 4.2.0 + delta-spark 4.4.1 makes tables (partitioned, DVs, CDF); Krishiv
+  # commits appends and a whole-file DELETE; Spark reads history, time travel and the change feed and runs DML on
+  # top; Krishiv reads the result. The Rust steps are `#[ignore]`d tests.
+  delta-roundtrip:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (nextest)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Spark makes, Krishiv commits, Spark writes on top, Krishiv reads
+        env:
+          OUT: ${{ runner.temp }}/delta-roundtrip
+        run: |
+          mkdir -p "$OUT"
+          tests/scripts/delta_roundtrip.sh
+      - name: Keep the tables and the JSON records of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: delta-roundtrip
+          path: ${{ runner.temp }}/delta-roundtrip
+          retention-days: 7
+
   # The Spark golden ratchet for other Spark versions (P3-T090): the upstream goldens of the tag are fetched
   # here (they are not committed, only v4.2.0 is), the baseline of failing statements is committed under
   # `tests/spark-golden/profiles/<tag>/`, with the phase gate's result rate and a floor (`gate.json`); each
@@ -476,6 +590,39 @@ jobs:
         run: "for t in v4.3.0 v4.2.1 v4.1.4 v4.0.5 v3.5.9; do bash tests/scripts/import_spark_golden.sh $t; done"
       - name: Golden ratchet per Spark version
         run: "cargo test -p krishiv-testkit --release --locked --test golden_profiles -- --ignored"
+
+  # Apache's Rust Spark Connect client against `krishiv server` (P3-T089, PR-40). A standalone crate
+  # with its own lockfile (tests/rust-client): the client pulls an Arrow major the workspace does not.
+  rust-client:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: "" # sccache is not installed in this job
+    timeout-minutes: 90
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: protoc (the client's build script compiles the Connect protos)
+        run: sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
+      - name: Build the server
+        run: cargo build --locked -p krishiv-cli --features server
+      - name: Start the server
+        run: |
+          target/debug/krishiv server --port 0 --connect-port 15002 > server.log 2>&1 &
+          for _ in $(seq 60); do (echo > /dev/tcp/127.0.0.1/15002) 2>/dev/null && exit 0; sleep 1; done
+          cat server.log; exit 1
+      # `blocked_*` tests wait on a Connect gap that the coverage table lists (see the test's note).
+      - name: Drive it with the Apache Rust client
+        env:
+          KRISHIV_CONNECT_URL: sc://127.0.0.1:15002
+        run: cargo test --locked --manifest-path tests/rust-client/Cargo.toml -- --ignored --skip blocked_ --test-threads=1
 
   # The vendored Spark Connect protos still equal apache/spark at their tags (P3-T010).
   connect-proto-upstream:

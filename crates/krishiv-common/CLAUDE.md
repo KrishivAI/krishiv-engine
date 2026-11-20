@@ -11,7 +11,9 @@ Paths are relative to this crate.
 - `src/config/registry.rs` typed registry of the `krishiv.*` keys (the source for the generated config docs)
 - `src/config/registry/python.rs` the Python UDF entries (`maxRecordsPerBatch`, `pythonUDF.arrow.enabled`, `krishiv.python.udf.threads`), re-exported by `registry.rs`
 - `src/config/registry/result_cache.rs` the `krishiv.resultCache.*` entries, re-exported by `registry.rs` (moved out to keep `registry.rs` under 2,000 lines)
+- `src/config/registry/runtime_filter.rs` the core `krishiv.runtimeFilter.*` entries (enabled, IN-list and exact-set sizes, Bloom caps, adaptive pass rate), re-exported by `registry.rs` (same reason)
 - `src/config/registry/runtime_filter_bloom.rs` the at-scale runtime Bloom entries (`krishiv.runtimeFilter.bloom.atScale`, `memoryTier`), re-exported by `registry.rs` (same reason)
+- `src/config/registry/server.rs` the `krishiv.server.*` and Connect listener entries, and `krishiv.workload.resourceGroups.file` (moved here to keep `registry.rs` under 2,000 lines)
 - `src/config/registry_join.rs` join entries re-exported by `config`: hash join (`rowLayout`, `fuseProbeSelect`, `idleSpillAfter`, `coalesceInput`), sort-merge join (`strategy`, `smj.bufferBytes`), Spark 4.3 ASOF JOIN (`spark.sql.join.asofJoin.enabled`, `sortMergeAsOfJoin.enabled`)
 - `src/config/mod.rs` configuration types and lookup
 - `src/experimental.rs` `krishiv.experimental.*` gating

@@ -20,6 +20,7 @@ mod case;
 mod ddl;
 mod expr;
 mod function;
+pub(crate) mod jvm_udf;
 mod names;
 pub(crate) use function::check_temporary_function_name;
 mod script;

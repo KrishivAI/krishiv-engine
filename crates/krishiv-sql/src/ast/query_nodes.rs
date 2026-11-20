@@ -750,6 +750,55 @@ pub enum TableFactorKind {
         /// The arguments (`TABLE(...)` ones included).
         args: Vec<FunctionArg>,
     },
+    /// `JSON_TABLE(input, 'path' COLUMNS (...) [NULL | ERROR ON ERROR])` (Spark 4.3, the flat form: no `NESTED PATH`).
+    JsonTable(Box<JsonTable>),
+}
+
+/// The call of [`TableFactorKind::JsonTable`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct JsonTable {
+    /// The JSON text.
+    pub input: Expr,
+    /// The row path, as written (a string literal).
+    pub path: String,
+    /// Where the row path was written.
+    pub path_span: Span,
+    /// The `COLUMNS` list.
+    pub columns: Vec<JsonTableColumn>,
+    /// `ERROR ON ERROR` (`true`) or `NULL ON ERROR` / nothing (`false`): what a malformed input does.
+    pub error_on_error: bool,
+}
+
+/// One column of `JSON_TABLE`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct JsonTableColumn {
+    /// The column name.
+    pub name: Ident,
+    /// What it holds.
+    pub kind: JsonTableColumnKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`JsonTableColumn`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum JsonTableColumnKind {
+    /// `name FOR ORDINALITY`: the 1-based row number.
+    Ordinality,
+    /// `name type [PATH 'path']`: the value at the path, cast to the type (`$.name` without a path).
+    Value {
+        /// The column type.
+        data_type: DataTypeSpec,
+        /// The path, as written, with where it was.
+        path: Option<(String, Span)>,
+    },
+    /// `name type EXISTS [PATH 'path']`: whether the path exists.
+    Exists {
+        /// The column type.
+        data_type: DataTypeSpec,
+        /// The path, as written, with where it was.
+        path: Option<(String, Span)>,
+    },
 }
 
 /// `TABLESAMPLE [SYSTEM | BERNOULLI] ([method]) [REPEATABLE (seed)]`, as a
