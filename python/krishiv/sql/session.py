@@ -27,8 +27,8 @@ from krishiv.sql.types import DataType, StructType
 from krishiv.storagelevel import StorageLevel
 
 if TYPE_CHECKING:
-    from krishiv.sql.datasource import DataSourceRegistration
     from krishiv._udf.profiler import Profile
+    from krishiv.sql.datasource import DataSourceRegistration
     from krishiv.sql.udf import UDFRegistration
 
 #: The Spark version this engine is compatible with.
