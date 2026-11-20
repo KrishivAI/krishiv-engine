@@ -262,21 +262,28 @@ pub(crate) fn table_token(config: &BTreeMap<String, SecretString>) -> Option<Sec
         .cloned()
 }
 
-/// When the credential keys of `config` stop being good: the earliest expiry key that parses, else `fetched` plus
-/// the default TTL. An expiry that does not parse counts as the default TTL here (the read refuses it anyway).
+/// When the credential keys of `config` stop being good: the earliest deadline of the credentials it holds, each its
+/// own expiry key, else `fetched` plus the default TTL (an S3 key pair without `s3.session-token-expires-at-ms`
+/// beside a GCS token expiring later lives the default TTL). An expiry that does not parse counts as the default TTL
+/// here (the read refuses it anyway). A map with no credential at all is `fetched` plus the default TTL.
 fn expires_at(
     config: &BTreeMap<String, SecretString>,
     fetched: SystemTime,
     default_ttl: Duration,
 ) -> SystemTime {
-    let parsed = config
-        .iter()
-        .filter(|(k, _)| {
-            matches!(k.as_str(), S3_EXPIRES | GCS_EXPIRES) || k.starts_with(ADLS_EXPIRES)
-        })
-        .filter_map(|(k, _)| expiry(config, k, fetched, default_ttl).ok())
-        .min();
-    parsed.unwrap_or(fetched + default_ttl)
+    let deadline =
+        |key: &str| expiry(config, key, fetched, default_ttl).unwrap_or(fetched + default_ttl);
+    let mut deadlines = Vec::new();
+    if config.contains_key(S3_KEY_ID) || config.contains_key(S3_SECRET) {
+        deadlines.push(deadline(S3_EXPIRES));
+    }
+    if config.contains_key(GCS_TOKEN) {
+        deadlines.push(deadline(GCS_EXPIRES));
+    }
+    for host in config.keys().filter_map(|k| k.strip_prefix(ADLS_SAS)) {
+        deadlines.push(deadline(&format!("{ADLS_EXPIRES}{host}")));
+    }
+    deadlines.into_iter().min().unwrap_or(fetched + default_ttl)
 }
 
 /// When a vended answer stops being good (design §4.3: its cache entry is dropped then): the earliest expiry of any

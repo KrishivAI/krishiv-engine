@@ -302,6 +302,8 @@ enum Credentials {
     NotAdvertised,
     /// Advertised, answered 404 `NoSuchTableException`.
     Missing,
+    /// Advertised, answered a 404 of another error type (`NotFoundException`).
+    PlainNotFound,
 }
 
 /// A catalog whose `n`-th `loadTable` (from 0) answers `load(n)`.
@@ -311,7 +313,7 @@ fn reloading_catalog(
 ) -> Server {
     let endpoints = match credentials {
         Credentials::NotAdvertised => "",
-        Credentials::Missing => {
+        Credentials::Missing | Credentials::PlainNotFound => {
             r#", "endpoints": ["GET /v1/{prefix}/namespaces/{namespace}/tables/{table}",
             "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"]"#
         }
@@ -319,8 +321,13 @@ fn reloading_catalog(
     let config = format!(r#"{{"defaults": {{}}, "overrides": {{}}{endpoints}}}"#);
     let loads = std::sync::atomic::AtomicUsize::new(0);
     let missing = r#"{"error": {"message": "no", "type": "NoSuchTableException", "code": 404}}"#;
+    let plain = r#"{"error": {"message": "no", "type": "NotFoundException", "code": 404}}"#;
+    let plain_not_found = matches!(credentials, Credentials::PlainNotFound);
     serve(move |r| match path(r) {
         "/v1/config" => Reply::Json(200, config.clone()),
+        "/v1/namespaces/db/tables/t/credentials" if plain_not_found => {
+            Reply::Json(404, plain.into())
+        }
         "/v1/namespaces/db/tables/t" => Reply::Json(
             200,
             load(loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst)),
@@ -333,12 +340,17 @@ fn count(server: &Server, p: &str) -> usize {
     server.seen().iter().filter(|r| path(r) == p).count()
 }
 
-/// Design §4.1: a catalog without `loadCredentials`, or one that answers it 404, refreshes by reloading the table.
+/// Design §4.1: a catalog without `loadCredentials`, or one that answers it 404 (of any error type), refreshes by
+/// reloading the table.
 /// The first answer's credential is inside the refresh skew; the reload's is good, and every storage request is
 /// signed with it.
 #[test]
 fn vended_credential_refreshed_by_table_reload() {
-    for mode in [Credentials::NotAdvertised, Credentials::Missing] {
+    for mode in [
+        Credentials::NotAdvertised,
+        Credentials::Missing,
+        Credentials::PlainNotFound,
+    ] {
         let s3 = serve_s3();
         let table = s3_table(&s3);
         let t = table.clone();
@@ -372,7 +384,7 @@ fn vended_credential_refreshed_by_table_reload() {
         let asked = count(&server, "/v1/namespaces/db/tables/t/credentials");
         match mode {
             Credentials::NotAdvertised => assert_eq!(asked, 0),
-            Credentials::Missing => assert_eq!(asked, 1),
+            Credentials::Missing | Credentials::PlainNotFound => assert_eq!(asked, 1),
         }
         // The reload is sent with the table's token, the first load with the caller's (here: none).
         let bearers: Vec<Option<String>> = server
@@ -490,6 +502,15 @@ fn vended_prefix_does_not_open_path_reads() {
             .all(|r| r.key_id.as_deref() == Some("AKIASESSIONKEY")),
         "{seen:?} ({read:?})"
     );
+    // The path is inside the allowed prefixes and the stand-in accepts the session's key: the read succeeds with
+    // the rows of that one data file (some of the table's 3), signed by the session alone.
+    let rows: usize = read
+        .unwrap()
+        .iter()
+        .map(arrow_array::RecordBatch::num_rows)
+        .sum();
+    assert!((1..=3).contains(&rows), "{rows} rows");
+    assert!(!seen.is_empty(), "the path read reached storage");
 }
 
 /// All text of the batches `sql` returns (every column displayed).

@@ -758,7 +758,13 @@ impl RestClient {
             .map(types::credentials)
             .transpose()
         };
-        let Some(creds) = run().map_err(self.fail(&what))? else {
+        // Any 404 of the credentials route is `None`, not only a `NoSuch*` one: the caller reloads the table, which
+        // tells whether it is really gone (a catalog may advertise the route and answer it with a plain 404).
+        let found = match run() {
+            Err(RestError::Status { status: 404, .. }) => None,
+            r => r.map_err(self.fail(&what))?,
+        };
+        let Some(creds) = found else {
             return Ok(None);
         };
         for c in &creds {

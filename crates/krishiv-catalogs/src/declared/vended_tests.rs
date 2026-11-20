@@ -43,6 +43,13 @@ fn answer(location: &str) -> Arc<VendedAnswer> {
     ))
 }
 
+/// An answer for `location` fetched at `fetched`.
+fn answer_fetched(location: &str, fetched: SystemTime) -> Arc<VendedAnswer> {
+    let mut a = VendedAnswer::new(Vec::new(), BTreeMap::new(), location.to_owned());
+    a.fetched = fetched;
+    Arc::new(a)
+}
+
 #[test]
 fn vended_cache_per_identity() {
     let cache = VendedCache::default();
@@ -84,9 +91,9 @@ fn vended_cache_per_identity() {
 fn vended_cache_keeps_the_newer_answer() {
     let cache = VendedCache::default();
     let k = || key(IdentityKey::of("cat", &user("ana", None)), "t");
-    let older = answer("s3://b/old");
-    std::thread::sleep(std::time::Duration::from_millis(5));
-    let newer = answer("s3://b/new");
+    let now = SystemTime::now();
+    let older = answer_fetched("s3://b/old", now - Duration::from_secs(10));
+    let newer = answer_fetched("s3://b/new", now);
     cache.put_if_newer(k(), Arc::clone(&older), TTL, 10);
     cache.put_if_newer(k(), Arc::clone(&newer), TTL, 10);
     assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/new");
@@ -146,16 +153,25 @@ fn ms(t: SystemTime) -> u128 {
 fn vended_cache_drops_expired_entries() {
     let cache = VendedCache::default();
     let id = |n: &str| key(IdentityKey::of("cat", &user(n, None)), "t");
-    let past = ms(SystemTime::now() - Duration::from_secs(1));
+    let soon = || ms(SystemTime::now() + Duration::from_millis(300));
     let future = ms(SystemTime::now() + Duration::from_secs(3600));
-    cache.put(id("expired"), s3_answer(Some(past)), TTL, 10);
-    assert!(cache.get(&id("expired")).is_none());
+    // Live when kept, expired by the time of the lookup: dropped on get.
+    cache.put(id("expiring"), s3_answer(Some(soon())), TTL, 10);
+    assert_eq!(cache.len(), 1, "kept while live");
+    std::thread::sleep(Duration::from_millis(600));
+    assert!(cache.get(&id("expiring")).is_none());
     assert_eq!(cache.len(), 0, "dropped on get");
-    // Dropped by a later put of another key, without a get.
-    cache.put(id("old"), s3_answer(Some(past)), TTL, 10);
+    // Live when kept, expired by the time of a later put of another key: dropped there, without a get.
+    cache.put(id("old"), s3_answer(Some(soon())), TTL, 10);
+    assert_eq!(cache.len(), 1, "kept while live");
+    std::thread::sleep(Duration::from_millis(600));
     cache.put(id("live"), s3_answer(Some(future)), TTL, 10);
     assert_eq!(cache.len(), 1);
     assert!(cache.get(&id("live")).is_some());
+    // An answer already expired when offered is not kept at all.
+    let past = ms(SystemTime::now() - Duration::from_secs(1));
+    cache.put(id("expired"), s3_answer(Some(past)), TTL, 10);
+    assert!(cache.get(&id("expired")).is_none());
     // No expiry key: the default TTL counts from the fetch.
     cache.put(id("ttl"), s3_answer(None), Duration::ZERO, 10);
     assert!(cache.get(&id("ttl")).is_none());
@@ -303,4 +319,62 @@ fn data_file_outside_vended_prefix_refused() {
         assert_eq!(e.error_class(), ErrorClass::InternalError, "{inside}");
     }
     assert_eq!(inner.0.load(Ordering::SeqCst), 3);
+}
+
+/// A refresh publishes under one lock: a live answer fetched later wins and is returned; a `REFRESH TABLE` since the
+/// refresh began keeps the refreshed answer out of the cache (it serves only the refresh that fetched it).
+#[test]
+fn vended_cache_publish_keeps_the_newer_and_respects_refresh_table() {
+    let cache = VendedCache::default();
+    let k = || key(IdentityKey::of("cat", &user("ana", None)), "t");
+    let now = SystemTime::now();
+    let late = answer_fetched("s3://b/late", now);
+    cache.put_if_newer(k(), Arc::clone(&late), TTL, 10);
+    let drops = cache.drops();
+    let slow = answer_fetched("s3://b/slow", now - Duration::from_secs(5));
+    let kept = cache.publish(k(), slow, TTL, 10, drops);
+    assert_eq!(
+        kept.location(),
+        "s3://b/late",
+        "the newer answer is returned"
+    );
+    assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/late");
+    // A refresh newer than the held one replaces it.
+    let fresh = answer_fetched("s3://b/fresh", now + Duration::from_secs(1));
+    assert_eq!(
+        cache.publish(k(), fresh, TTL, 10, drops).location(),
+        "s3://b/fresh"
+    );
+    assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/fresh");
+    // A refresh that began before a REFRESH TABLE is served, never kept.
+    let before = cache.drops();
+    cache.drop_table(1, &["db".to_owned()], "t");
+    let stale = answer_fetched("s3://b/stale", now + Duration::from_secs(2));
+    assert_eq!(
+        cache.publish(k(), stale, TTL, 10, before).location(),
+        "s3://b/stale"
+    );
+    assert!(
+        cache.get(&k()).is_none(),
+        "nothing kept across the REFRESH TABLE"
+    );
+    // One that began after it is kept.
+    let after = answer_fetched("s3://b/after", now + Duration::from_secs(3));
+    cache.publish(k(), after, TTL, 10, cache.drops());
+    assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/after");
+}
+
+/// A bare-scheme Azure prefix keeps the host of the table location (`blob` here), where the catalog keyed the SAS
+/// token, not the store id's `dfs` alias.
+#[test]
+fn azure_scheme_scope_keeps_the_location_host() {
+    let url = krishiv_store::parse_object_url("abfss://c@acct.blob.core.windows.net/t").unwrap();
+    assert_eq!(
+        super::scheme_scope(&url),
+        "abfss://c@acct.blob.core.windows.net"
+    );
+    let reparsed = krishiv_store::parse_object_url(&super::scheme_scope(&url)).unwrap();
+    assert_eq!(reparsed.host.as_deref(), Some("acct.blob.core.windows.net"));
+    let s3 = krishiv_store::parse_object_url("s3://b/t").unwrap();
+    assert_eq!(super::scheme_scope(&s3), s3.store_id.key());
 }

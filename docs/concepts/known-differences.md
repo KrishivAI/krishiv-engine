@@ -519,7 +519,7 @@ shared by every session of the application.
   a multi-part name first names it, even in a lookup that then fails, or with `SHOW NAMESPACES IN <catalog>`.
   Setting `spark.sql.defaultCatalog` to it does not load it by itself. So a fresh Spark session answers
   `spark_catalog` only, and Krishiv answers `spark_catalog` plus its declared catalogs. A catalog declared for other
-  tenants is never listed. The `system` catalog is not listed either.
+  tenants is never listed. `SHOW CATALOGS` also lists `system`; `spark.catalog.listCatalogs()` does not.
 - **In `krishiv server`, a session cannot declare or change a catalog.** `SET`, `RESET` and `spark.conf.set` of
   `spark.sql.catalog.<name>`, `spark.sql.catalog.<name>.*` or `krishiv.catalog.<name>.*` fail with
   `CANNOT_MODIFY_STATIC_CONFIG` for every role. So does a session builder that sets one. Declare catalogs in the

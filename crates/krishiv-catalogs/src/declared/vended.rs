@@ -36,7 +36,8 @@ use krishiv_common::secret::SecretString;
 use krishiv_exec::files::{LocatedPath, PathLocator};
 use krishiv_session::catalog_registry::IdentityKey;
 use krishiv_store::{
-    CacheScope, CredentialScope, CredentialSource, ParsedUrl, ScopedCredential, parse_object_url,
+    CacheScope, CredentialScope, CredentialSource, ObjectScheme, ParsedUrl, ScopedCredential,
+    parse_object_url,
 };
 
 use crate::iceberg_rest::types::StorageCredential;
@@ -133,6 +134,8 @@ struct State {
     /// Catalog instances that were dropped: an answer fetched for one by a query still running is never kept.
     /// Instance ids are never reused, so this only grows by one id per dropped catalog.
     dead: HashSet<u64>,
+    /// Moved by every `REFRESH TABLE` ([`VendedCache::drop_table`]): a refresh fetched across one is not kept.
+    drops: u64,
 }
 
 impl State {
@@ -206,7 +209,9 @@ impl VendedCache {
     }
 
     /// Keeps `answer` for `key` until its expiry (`default_ttl` for a credential without one), the least recently
-    /// used entry out first past `max` entries; expired entries are dropped first.
+    /// used entry out first past `max` entries; expired entries are dropped first. Tests only: a refresh goes
+    /// through [`Self::publish`], a `loadTable` answer through [`Self::put_if_newer`].
+    #[cfg(test)]
     pub(crate) fn put(
         &self,
         key: Key,
@@ -238,11 +243,48 @@ impl VendedCache {
         }
     }
 
-    /// Drops every identity's answer for `namespace.name` of the catalog `instance` (`REFRESH TABLE`).
+    /// Drops every identity's answer for `namespace.name` of the catalog `instance` (`REFRESH TABLE`), and moves
+    /// [`Self::drops`], so a refresh that started before it keeps nothing.
     pub(crate) fn drop_table(&self, instance: u64, namespace: &[String], name: &str) {
-        self.lock()
+        let mut state = self.lock();
+        state.drops += 1;
+        state
             .entries
             .retain(|(i, _, ns, n), _| !(*i == instance && ns == namespace && n == name));
+    }
+
+    /// The count of `REFRESH TABLE` drops so far: read before a refresh fetches, given to [`Self::publish`].
+    pub(crate) fn drops(&self) -> u64 {
+        self.lock().drops
+    }
+
+    /// Keeps the refreshed `answer` for `key` and returns it, under one lock, unless a live entry fetched later is
+    /// held (another query's newer answer: that one is returned and kept) or a `REFRESH TABLE` dropped answers
+    /// since `drops` was read (the answer is returned for this use only, so no later query reads credentials the
+    /// refresh discarded). Any `REFRESH TABLE` counts, not only this table's: a refresh across one is merely not
+    /// cached.
+    pub(crate) fn publish(
+        &self,
+        key: Key,
+        answer: Arc<VendedAnswer>,
+        default_ttl: Duration,
+        max: usize,
+        drops: u64,
+    ) -> Arc<VendedAnswer> {
+        let expires = answer.expires_at(default_ttl);
+        let mut state = self.lock();
+        if state.drops != drops {
+            return answer;
+        }
+        let now = SystemTime::now();
+        if let Some((held, _, held_expires)) = state.entries.get(&key)
+            && *held_expires > now
+            && held.fetched > answer.fetched
+        {
+            return Arc::clone(held);
+        }
+        state.put(key, Arc::clone(&answer), expires, max);
+        answer
     }
 
     /// Drops every answer of the catalog `instance` (the catalog was dropped); none is kept for it later.
@@ -357,14 +399,15 @@ impl VendedTable {
         previous: Option<&VendedAnswer>,
     ) -> Result<Arc<VendedAnswer>, KrishivError> {
         let token = previous.and_then(|p| p.table_token.clone());
+        let drops = self.cache.drops();
         let fresh = Arc::new(self.refetch.fetch(token).await?);
-        self.cache.put(
+        Ok(self.cache.publish(
             self.key.clone(),
-            Arc::clone(&fresh),
+            fresh,
             self.default_ttl,
             self.max_entries,
-        );
-        Ok(fresh)
+            drops,
+        ))
     }
 
     /// Keeps the `loadTable` answer `answer` unless the cache holds a newer one.
@@ -416,7 +459,7 @@ impl VendedTable {
                         if let Ok(url) = parse_object_url(own)
                             && url.scheme == family
                         {
-                            add(url.store_id.key().to_owned());
+                            add(scheme_scope(&url));
                         }
                     }
                 }
@@ -438,6 +481,16 @@ impl VendedTable {
     }
 }
 
+/// The scope a bare-scheme prefix gives the table location `url`: its store, except that an Azure location keeps its
+/// own host (`blob` or `dfs`), since the store id names the `dfs` alias and the SAS key is looked up by the host the
+/// catalog wrote (`adls.sas-token.<host>`).
+fn scheme_scope(url: &ParsedUrl) -> String {
+    match (&url.scheme, &url.host) {
+        (ObjectScheme::Azure, Some(host)) => format!("{}://{}@{host}", url.scheme_text, url.bucket),
+        _ => url.store_id.key().to_owned(),
+    }
+}
+
 /// The `CredentialSource` of one vended scope of one query (module docs).
 #[derive(Debug)]
 pub(crate) struct VendedSource {
@@ -453,9 +506,10 @@ impl VendedSource {
     pub(crate) async fn current(&self) -> Result<ScopedCredential, KrishivError> {
         let t = &self.table;
         let held = t.cache.get(&t.key);
-        let served_before = {
+        let (served_before, served) = {
             let served = self.served.lock().unwrap_or_else(PoisonError::into_inner);
-            matches!((&*served, &held), (Some(s), Some(h)) if Arc::ptr_eq(s, h))
+            let before = matches!((&*served, &held), (Some(s), Some(h)) if Arc::ptr_eq(s, h));
+            (before, served.clone())
         };
         if let Some(a) = &held
             && !served_before
@@ -466,7 +520,9 @@ impl VendedSource {
             self.serve(a);
             return Ok(c);
         }
-        let fresh = t.refreshed(held.as_deref()).await?;
+        // The answer replaced carries the table token: the held one, else (it expired or was evicted) the one this
+        // source served, whose token may still be good when its storage credential is not.
+        let fresh = t.refreshed(held.as_deref().or(served.as_deref())).await?;
         let c = t
             .pick(&fresh, &self.url)?
             .ok_or_else(|| t.refetch.refused(LocationRule::NoVendedCredential))?;

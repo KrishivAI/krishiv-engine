@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use krishiv_common::secret::SecretString;
 use krishiv_store::parse_object_url;
 
-use super::{VendedFault, VendedPrefix, covering, credential, keep_credentials};
+use super::{VendedFault, VendedPrefix, answer_expires_at, covering, credential, keep_credentials};
 use crate::iceberg_rest::types::StorageCredential;
 
 const TTL: Duration = Duration::from_secs(900);
@@ -224,4 +224,40 @@ fn catalog_config_token_is_secret() {
     for k in kept {
         assert!(out.contains_key(k), "{k}");
     }
+}
+
+/// An answer expires at its earliest credential deadline, each credential's own expiry key or else the fetch plus
+/// the default TTL: an S3 key pair without an expiry beside a GCS token expiring later lives the default TTL.
+#[test]
+fn answer_expiry_counts_a_credential_without_an_expiry_key() {
+    let fetched = UNIX_EPOCH + Duration::from_secs(1_000_000);
+    let later = fetched + Duration::from_secs(7200);
+    let later_ms = later
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .to_string();
+    let mixed = map(&[
+        ("s3.access-key-id", "AKIA"),
+        ("s3.secret-access-key", "secret"),
+        ("gcs.oauth2.token", "tok"),
+        ("gcs.oauth2.token-expires-at", &later_ms),
+    ]);
+    assert_eq!(answer_expires_at([&mixed], fetched, TTL), fetched + TTL);
+    // A GCS token alone keeps its own, later expiry.
+    let gcs = map(&[
+        ("gcs.oauth2.token", "tok"),
+        ("gcs.oauth2.token-expires-at", &later_ms),
+    ]);
+    assert_eq!(answer_expires_at([&gcs], fetched, TTL), later);
+    // Each Azure host counts on its own: one without an expiry key lives the default TTL.
+    let azure = map(&[
+        ("adls.sas-token.a.dfs.core.windows.net", "sas"),
+        (
+            "adls.sas-token-expires-at-ms.a.dfs.core.windows.net",
+            &later_ms,
+        ),
+        ("adls.sas-token.b.dfs.core.windows.net", "sas"),
+    ]);
+    assert_eq!(answer_expires_at([&azure], fetched, TTL), fetched + TTL);
 }
