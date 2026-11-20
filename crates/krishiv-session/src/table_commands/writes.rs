@@ -119,11 +119,31 @@ impl Session {
         dry: bool,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
-        if c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some() {
+        if c.replace_on.is_some() || c.replace_using.is_some() {
             return Err(unsupported("INSERT ... REPLACE"));
         }
         let name = self.table_name(&c.name, &env)?;
         let table = self.table_for_write(&name, "INSERT", &env)?;
+        // `REPLACE WHERE` is an overwrite by filter: only a table that takes one (Delta) has it, as
+        // a V1 file table does not (`unsupportedInsertReplaceWhere`).
+        let replace_where = match &c.replace_where {
+            None => None,
+            Some(cond) => {
+                #[cfg(feature = "delta")]
+                let delta = is_delta_table(&table);
+                #[cfg(not(feature = "delta"))]
+                let delta = false;
+                if !delta {
+                    return Err(table_operation(&name, "INSERT INTO ... REPLACE WHERE"));
+                }
+                let text = original
+                    .get(cond.span.start..cond.span.end)
+                    .ok_or_else(|| {
+                        internal("a REPLACE WHERE condition outside its statement".to_owned())
+                    })?;
+                Some(text.to_owned())
+            }
+        };
         let statics = match &c.partition {
             None => Vec::new(),
             Some(spec) => {
@@ -191,6 +211,7 @@ impl Session {
                 by_name: c.by_name,
                 overwrite: c.overwrite,
                 statics: &statics,
+                replace_where: replace_where.as_deref(),
                 dry,
                 options: None,
             },
@@ -685,6 +706,7 @@ impl Session {
             listed: &[],
             by_name: false,
             overwrite,
+            replace_where: None,
             statics: &[],
             dry: false,
             options: Some(options),
@@ -718,6 +740,7 @@ impl Session {
                     listed: &[],
                     by_name: false,
                     overwrite: false,
+                    replace_where: None,
                     statics: &[],
                     dry: false,
                     options: Some(&spec.options),

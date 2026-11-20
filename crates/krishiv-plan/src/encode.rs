@@ -119,6 +119,7 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::CoGroupMap { .. } => 39,
         PlanNode::PythonTableFunction { .. } => 40,
         PlanNode::CollectMetrics { .. } => 41,
+        PlanNode::Zip { .. } => 42,
     }
 }
 
@@ -961,6 +962,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
             // Only the tag.
             PlanNode::OneRowRelation
             | PlanNode::PipeOperator { .. }
+            | PlanNode::Zip { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Repartition { exprs, .. } => self.exprs(exprs),
             PlanNode::CollectMetrics { name, metrics, .. } => {

@@ -959,6 +959,7 @@ impl Resolver<'_> {
             } => self.set_op(p, left, right, *op, *all, env),
             PlanNode::InlineTable { rows, columns } => self.inline_table(p, rows, columns, env),
             PlanNode::WithColumns { input, columns } => self.with_columns(p, input, columns, env),
+            PlanNode::Zip { left, right } => self.zip_relations(p, left, right, env),
             PlanNode::Limit { input, limit } => self.limit_node(p, input, limit, false, env),
             PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
             PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
@@ -1240,6 +1241,7 @@ impl Resolver<'_> {
             | PlanNode::Pivot { .. }
             | PlanNode::Unpivot { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Zip { .. }
             | PlanNode::TableFunction { .. }
             | PlanNode::InlineTable { .. }
             | PlanNode::Generate { .. }

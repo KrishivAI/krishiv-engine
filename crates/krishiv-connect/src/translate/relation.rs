@@ -122,6 +122,12 @@ impl Translator<'_> {
             },
             RelType::RepartitionByExpression(r) => self.repartition_by_expression(r)?,
             RelType::Unpivot(u) => self.unpivot(u)?,
+            // Spark 4.3's `Zip`: the columns of two DataFrames side by side (the analyzer merges the two
+            // projection chains over their shared base, or refuses with `ZIP_PLANS_NOT_MERGEABLE`).
+            RelType::Zip(z) => PlanNode::Zip {
+                left: self.input("Zip", z.left.as_deref())?,
+                right: self.input("Zip", z.right.as_deref())?,
+            },
             RelType::Extension(any) => match resolve(any, Slot::Relation)? {
                 // One row, one string column: `SELECT '<message>' AS message`.
                 Extension::Echo(echo) => PlanNode::Project {

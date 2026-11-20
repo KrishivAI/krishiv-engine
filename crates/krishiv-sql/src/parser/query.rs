@@ -1191,6 +1191,21 @@ impl Parser<'_> {
                     TableFactorKind::Nested(Box::new(r))
                 }
             }
+        } else if self.kw_at(0, "UNNEST") && self.sym_at(1, Sym::LParen) {
+            // ANSI `UNNEST(array, ...) [WITH ORDINALITY]` (Spark 4.3; `unnest` is non-reserved, so
+            // a quoted name stays a table function).
+            self.bump();
+            self.bump();
+            let args = self.comma_sep(Self::expr)?;
+            self.expect_sym(Sym::RParen)?;
+            let ordinality = if self.kw_at(0, "WITH") && self.kw_at(1, "ORDINALITY") {
+                self.bump();
+                self.bump();
+                true
+            } else {
+                false
+            };
+            TableFactorKind::Unnest { args, ordinality }
         } else {
             let name = self.ddl_name()?;
             if self.sym_at(0, Sym::LParen) {

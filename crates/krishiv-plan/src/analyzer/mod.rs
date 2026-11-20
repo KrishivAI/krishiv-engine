@@ -139,6 +139,7 @@ mod view_ctes;
 pub mod views;
 mod windows;
 mod written;
+mod zip;
 
 use krishiv_kernels::datetime::{TimeZoneRules, ZoneRef, resolve_zone};
 use std::collections::{BTreeMap, BTreeSet};
