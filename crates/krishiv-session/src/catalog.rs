@@ -1714,8 +1714,13 @@ fn quote(name: &str) -> String {
 }
 
 /// Spark's search path, as analysis reports it for a missing table.
-pub(crate) fn search_path() -> String {
-    format!("[`system`.`builtin`, `system`.`session`, `{CATALOG}`.`{NAMESPACE}`]")
+///
+/// The last entry is the current namespace, as `USE` left it.
+pub(crate) fn search_path_in(namespace: &str) -> String {
+    format!(
+        "[`system`.`builtin`, `system`.`session`, `{CATALOG}`.`{}`]",
+        namespace.replace('`', "``")
+    )
 }
 
 /// `name` rejected as a temporary table or view name: it starts with the

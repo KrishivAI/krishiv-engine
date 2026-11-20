@@ -841,3 +841,27 @@ fn unexecuted_commands_parse_and_report_unsupported() {
             .unwrap_or_else(|e| panic!("{sql}: {e}"));
     }
 }
+
+/// A command's `TABLE_OR_VIEW_NOT_FOUND` ends its search path at the current namespace, as Spark 4.2.1
+/// does after `USE db`.
+#[test]
+fn a_commands_not_found_error_names_the_current_namespace() {
+    let s = session();
+    block_on(s.sql("CREATE DATABASE nsdb")).unwrap();
+    block_on(s.sql("USE nsdb")).unwrap();
+    let path = |sql: &str| {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound, "{sql}");
+        let found = e
+            .message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "searchPath")
+            .map(|(_, v)| v.clone());
+        found.unwrap()
+    };
+    let want = "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`nsdb`]";
+    assert_eq!(path("DROP VIEW nosuch"), want);
+    assert_eq!(path("DESCRIBE TABLE nosuch"), want);
+    assert_eq!(path("UNCACHE TABLE nosuch"), want);
+    assert_eq!(path("SELECT * FROM nosuch"), want);
+}
