@@ -49,7 +49,8 @@
 //!   unique. The early first decision serves drivers too small to reach
 //!   [`ADAPT_ROWS`] (TPC-H q13). An append-only table returns to its fixed
 //!   index at a later decision when over half of the interval's sampled
-//!   run starts are keys it has seen ([`Recur`]): keys unique only in a
+//!   run starts (at least 32, about 2,000 run starts at the first sample
+//!   rate) are keys it has seen ([`Recur`]): keys unique only in a
 //!   driver's first rows (TPC-DS q22's inventory, the same items every
 //!   week) would otherwise make a partial row per run to the end.
 //!   This is DuckDB's thread-local abandon (fixed-size thread-local tables,
@@ -122,6 +123,9 @@ use crate::rows::{EncodedKeys, FLAT_MAX_BYTES, Hll, RowLayout};
 
 mod direct;
 mod local;
+mod recur;
+
+use recur::Recur;
 
 /// Radix bits of `h` of a partitioned table (DuckDB's initial 4 bits; the
 /// final phase merges ranges of these partitions, see [`final_tasks`]).
@@ -323,107 +327,6 @@ struct Adapt {
     recur: Recur,
     /// The fixed index's limit when the table turned append-only.
     fixed: usize,
-}
-
-/// Slots of [`Recur`]'s set (a quarter stay empty, so a probe ends).
-const RECUR_SLOTS: usize = 1 << 12;
-/// `RECUR_SLOTS - 1`, for a hash.
-const RECUR_MASK: u64 = (1 << 12) - 1;
-/// One run start in `RECUR_SAMPLE` is sampled (by hash bits HLL and
-/// partitions do not use).
-const RECUR_SAMPLE_BITS: u64 = 63;
-/// Sampled run starts an interval needs before it can call keys recurring.
-const RECUR_MIN: usize = 32;
-
-/// An exact set of sampled run-start hashes (the first 3,072 sampled: about
-/// 196K keys) and, per adaptation interval, how many sampled run starts it
-/// had already seen. An append-only table's [`Hll`] cannot say whether one
-/// interval's run starts are new keys: its error over millions of keys is
-/// as large as an interval's keys. TPC-H q18's `l_orderkey` never recurs
-/// (the table stays append-only); TPC-DS q22's items recur every week.
-#[derive(Debug)]
-struct Recur {
-    slots: Box<[u64]>,
-    len: usize,
-    /// Sampled run starts in this interval, and those already in the set.
-    sampled: usize,
-    hits: usize,
-}
-
-impl Recur {
-    fn new() -> Self {
-        Self {
-            slots: vec![0; RECUR_SLOTS].into_boxed_slice(),
-            len: 0,
-            sampled: 0,
-            hits: 0,
-        }
-    }
-
-    fn bytes(&self) -> usize {
-        self.slots.len() * size_of::<u64>()
-    }
-
-    /// Samples the run starts of `hashes` (`last`: the previous batch's
-    /// last hash). One hash in 64 is sampled, so a chunk of 8 holds none
-    /// about 7 times in 8 and is skipped after a vectorizable test (an
-    /// all-rows scalar loop cost TPC-H q18 2% more instructions).
-    fn add_runs(&mut self, hashes: &[u64], last: Option<u64>) {
-        const CHUNK: usize = 8;
-        let sampled = |h: u64| (h >> 16) & RECUR_SAMPLE_BITS == 0;
-        for (c, chunk) in hashes.chunks(CHUNK).enumerate() {
-            if !chunk.iter().fold(false, |any, &h| any | sampled(h)) {
-                continue;
-            }
-            for (j, &h) in chunk.iter().enumerate() {
-                if !sampled(h) {
-                    continue;
-                }
-                let i = c * CHUNK + j;
-                let prev = match i.checked_sub(1) {
-                    Some(p) => hashes.get(p).copied(),
-                    None => last,
-                };
-                if prev != Some(h) {
-                    self.add(h);
-                }
-            }
-        }
-    }
-
-    fn add(&mut self, h: u64) {
-        self.sampled += 1;
-        // 0 marks an empty slot.
-        let key = h.max(1);
-        let mut i = usize::try_from((h ^ (h >> 29)) & RECUR_MASK).unwrap_or(0);
-        loop {
-            match self.slots.get(i).copied() {
-                Some(s) if s == key => {
-                    self.hits += 1;
-                    return;
-                }
-                Some(0) => {
-                    if self.len < RECUR_SLOTS * 3 / 4 {
-                        self.slots[i] = key;
-                        self.len += 1;
-                    }
-                    return;
-                }
-                Some(_) => i = (i + 1) & (RECUR_SLOTS - 1),
-                None => return,
-            }
-        }
-    }
-
-    /// Over half of this interval's sampled run starts were seen before.
-    fn recurs(&self) -> bool {
-        self.sampled >= RECUR_MIN && self.hits * 2 > self.sampled
-    }
-
-    /// Starts a new interval.
-    fn next_interval(&mut self) {
-        (self.sampled, self.hits) = (0, 0);
-    }
 }
 
 /// Share of input rows that must make new rows, once a fixed index has
@@ -861,7 +764,21 @@ impl RowTable {
         } else {
             0
         };
-        self.sketch_bytes() + new
+        let recur = if self.starts_recur(n) {
+            Recur::BYTES
+        } else {
+            0
+        };
+        self.sketch_bytes() + new + recur
+    }
+
+    /// Whether an apply of `n` more rows starts the run-start set: from
+    /// [`SKETCH_ROWS`] input rows, as the sketches (a small table's set
+    /// would cost more than its rows).
+    fn starts_recur(&self, n: usize) -> bool {
+        self.adapt
+            .as_ref()
+            .is_some_and(|a| !a.recur.started() && a.rows + n >= SKETCH_ROWS)
     }
 
     /// Starts the per-partition sketches from the rows so far, if an apply
@@ -1283,7 +1200,11 @@ impl RowTable {
         self.rows_in = self.rows_in.saturating_add(n);
         self.switch(self.next_mode());
         self.start_sketches(n);
+        let start_recur = self.starts_recur(n);
         if let Some(a) = self.adapt.as_mut() {
+            if start_recur {
+                a.recur.start();
+            }
             a.rows += n;
             // The direct path's keys are one per batch-local id, not per
             // row (and its append pushes every row): every row counts.
