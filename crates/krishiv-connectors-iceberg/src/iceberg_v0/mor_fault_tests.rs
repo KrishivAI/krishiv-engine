@@ -17,7 +17,9 @@ use krishiv_exec::planner::RowLevelOperation;
 use krishiv_memory::{ConsumerHandle, MemoryConfig, MemoryPool, TreePool};
 
 use super::commit::{CommitOutcome, CommitTable};
-use super::cow_tests::{add_deletes, append, create, dvs_in_one_puffin, position_delete, summary};
+use super::cow_tests::{
+    add_deletes, append, create, dvs_in_one_puffin, position_delete_scoped, summary,
+};
 use super::mor_tests::{Mor, Task, files_ending, only_data_file};
 use super::provider_tests::{Env, env};
 use super::sink_tests::{Catalog, expected, parquet_files, range, read_back};
@@ -336,7 +338,7 @@ fn a_dropped_finish_and_an_uncommitted_output_leave_no_file() {
             if version == 3 {
                 dvs_in_one_puffin(&env, "old.puffin", std::slice::from_ref(&first), &[0])
             } else {
-                vec![position_delete(&env, "old.parquet", &first, 0)]
+                vec![position_delete_scoped(&env, "old.parquet", &first, 0, true)]
             }
         });
         let before = all_files(&env);

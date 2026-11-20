@@ -1047,6 +1047,17 @@ pub(super) fn position_delete(
     of: &str,
     pos: i64,
 ) -> iceberg::spec::DataFile {
+    position_delete_scoped(env, name, of, pos, false)
+}
+
+/// [`position_delete`], with `referenced_data_file` set to `of` when `scoped` (a file-scoped delete).
+pub(super) fn position_delete_scoped(
+    env: &Env,
+    name: &str,
+    of: &str,
+    pos: i64,
+    scoped: bool,
+) -> iceberg::spec::DataFile {
     let path = env.at(name);
     let b = super::provider_tests::batch(
         vec![
@@ -1067,6 +1078,9 @@ pub(super) fn position_delete(
         .record_count(1)
         .partition(Struct::empty())
         .partition_spec_id(0);
+    if scoped {
+        d.referenced_data_file(Some(of.to_owned()));
+    }
     d.build().unwrap()
 }
 
