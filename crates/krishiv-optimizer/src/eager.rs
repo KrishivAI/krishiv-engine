@@ -16,7 +16,8 @@
 //!
 //! 1. Its arguments read only `S`, are deterministic, hold no subquery and
 //!    cannot raise under ANSI: the join may drop a row Spark never evaluated
-//!    the argument on.
+//!    the argument on. Exact decimal `+`, `-` and `*` ([`exact_decimal`]: the
+//!    result type holds every value) never raise.
 //! 2. It cannot be affected by summation order. Spark checks overflow in
 //!    processing order, so a sum runs here only where no buffer can overflow:
 //!    `sum` of at most 32-bit integers into `bigint` (fewer than 2^32 rows per
@@ -42,7 +43,8 @@
 //! - the groups, the product of the keys' distinct counts, are at most
 //!   `1 / `[`MIN_REDUCTION`] of `S`'s rows;
 //! - at most one key beyond the join's own;
-//! - the other side is a table read whole. A filtered dimension prunes the
+//! - the other side is a table read whole (filters that only drop nulls of a
+//!   column, as `InferJoinFilters` adds them, count as whole). A filtered dimension prunes the
 //!   aggregated side through a runtime filter, which pays more than grouping
 //!   and which a smaller aggregate could take away by becoming the join's build
 //!   side; estimates cannot see this, as they read a key's matches from its
@@ -58,7 +60,7 @@ use std::sync::Arc;
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionKind, Grouping, JoinCondition, JoinKind,
-    Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, may_raise,
+    Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, exact_decimal, may_raise,
     partial_state_columns,
 };
 use krishiv_types::DataType;
@@ -437,10 +439,23 @@ impl<'a> Shape<'a> {
     }
 }
 
-/// Whether `p` is a table read whole, under projections.
+/// Whether `p` is a table read whole, under projections and filters that only
+/// drop null columns. Those filters are what `InferJoinFilters` adds to a join
+/// key (and to the keys of joins above): the join drops a null key anyway, so
+/// such a filter gives no runtime filter worth more than the aggregate (TPC-DS
+/// q11, q74 and q04's `customer`).
 fn plain_scan(p: &LogicalPlan) -> bool {
     match &p.node {
         PlanNode::Project { input, .. } => plain_scan(input),
+        PlanNode::Filter { input, predicate } => {
+            conjuncts(predicate).iter().all(|c| {
+                matches!(
+                    builtin(c),
+                    Some((Builtin::IsNotNull, [a], _))
+                        if matches!(&a.node, ExprNode::Resolved(ResolvedExpr::Column(_)))
+                )
+            }) && plain_scan(input)
+        }
         PlanNode::Scan(_) => true,
         _ => false,
     }
@@ -630,7 +645,7 @@ pub(crate) fn refusal_of_call(
             || has_subquery(a)
             || has_outer_reference(a)
             || is_state(a)
-            || may_raise(a, true)
+            || (may_raise(a, true) && !exact_decimal(a))
     }) {
         return Err(format!("{name}'s argument can raise or is not plain"));
     }
