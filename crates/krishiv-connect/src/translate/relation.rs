@@ -311,9 +311,11 @@ impl Translator<'_> {
                 .keys()
                 .map(|k| k.to_lowercase())
                 .collect();
-            let ordered = w.rename_columns_map.iter().all(|(_, to)| {
-                let to = to.to_lowercase();
-                !keys.contains(&to)
+            // A new name equal to *another* entry's key makes the result depend on order; equal
+            // to its own key (`a -> a`, `name -> Name`) it cannot.
+            let ordered = w.rename_columns_map.iter().all(|(from, to)| {
+                let (from, to) = (from.to_lowercase(), to.to_lowercase());
+                from == to || !keys.contains(&to)
             }) && keys.iter().enumerate().all(|(i, k)| !keys[..i].contains(k));
             if !ordered {
                 return Err(unsupported_field(

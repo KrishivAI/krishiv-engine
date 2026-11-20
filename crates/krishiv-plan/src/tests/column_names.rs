@@ -184,7 +184,10 @@ fn rename_and_drop_keep_the_qualifier_of_untouched_columns_and_to_df_clears_it()
         ["year"]
     );
     let to_df = ColumnNamesOp::ToDf(strings(&["a", "year", "c"]));
-    assert!(run_on(false, input(), to_df, read_year).is_err());
+    let Err(e) = run_on(false, input(), to_df, read_year) else {
+        panic!("toDF drops the qualifier")
+    };
+    assert!(e.to_string().contains("UNRESOLVED_COLUMN"), "{e}");
 }
 
 fn literal(l: crate::Literal) -> Arc<Expr> {

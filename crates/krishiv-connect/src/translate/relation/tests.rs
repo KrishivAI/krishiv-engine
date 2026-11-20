@@ -1525,6 +1525,13 @@ fn a_rename_map_whose_result_depends_on_entry_order_is_refused() {
             "{entries:?}"
         );
     }
+    // A case-only rename and a no-op depend on nothing.
+    for entries in [&[("name", "Name")][..], &[("a", "a")][..]] {
+        assert!(
+            matches!(column_names_op(&map(entries)), ColumnNamesOp::Rename(_)),
+            "{entries:?}"
+        );
+    }
     assert_eq!(
         column_names_op(&map(&[("a", "x"), ("b", "y")])),
         ColumnNamesOp::Rename(vec![("a".into(), "x".into()), ("b".into(), "y".into())])
