@@ -4,9 +4,9 @@ description: "Read and write Parquet, CSV and other files on local disk and on S
 
 # Data sources
 
-Krishiv reads and writes files from your own disk (below) and, from 0.2.0, from cloud object stores: Amazon S3 (`s3://`, `s3a://`),
-Google Cloud Storage (`gs://`) and Azure Blob Storage (`az://`, `abfs://`, `abfss://`). The wheels from PyPI include the
-object-store support; the 0.2.0 wheels did not, and failed with `KRISHIV_UNSUPPORTED_FEATURE` on these URLs.
+Krishiv reads and writes files from your own disk (below) and, in a build with the object-store support, from cloud object stores: Amazon S3 (`s3://`, `s3a://`),
+Google Cloud Storage (`gs://`) and Azure Blob Storage (`az://`, `abfs://`, `abfss://`). The 0.2.0 wheels do not include it:
+reading object stores from Python is not available in 0.2.0, and these URLs fail with `KRISHIV_UNSUPPORTED_FEATURE`.
 
 ```python
 import krishiv

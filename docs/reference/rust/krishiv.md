@@ -1,8 +1,4 @@
----
-description: "Krishiv: a Spark-compatible query engine, embedded."
----
-
-**Version:** 0.2.0
+**Version:** 0.2.0-alpha
 
 # Module `krishiv`
 

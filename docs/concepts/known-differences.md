@@ -28,12 +28,6 @@ both off (the default) nothing differs. See [result cache](../reference/result-c
 what is cached, when entries go, and the one staleness the cache accepts (a change made outside the
 engine, until the entry expires or `REFRESH TABLE`).
 
-## `EXPLAIN FORMAT JSON`, `EXPLAIN ANALYZE`, `EXPLAIN VERBOSE` (Krishiv extensions)
-
-Spark 4.2 has none of these forms, and its parser rejects each with a syntax error. Krishiv accepts them:
-`EXPLAIN FORMAT JSON <statement>` returns the statement's analysis as JSON without running it (see the
-[SQL reference](../reference/sql/index.md)); any other `EXPLAIN FORMAT ...` is a syntax error, as in Spark.
-
 ## Writers leave a `_krishiv_log` directory
 
 A write to a plain directory records each commit in `<path>/_krishiv_log/` (one `<version>.json` per commit), so that
@@ -299,7 +293,7 @@ Krishiv also infers at the semi and anti joins that `IN`/`EXISTS`/`NOT EXISTS` s
 q22: `isnotnull` on their keys); Spark rewrites those subqueries after its inference and adds none there. A null key
 never matches, so these filters drop only rows the join drops.
 
-The rows returned are the same. ADR 0023 (update 2026-11-06).
+The rows returned are the same.
 
 ## A multi-table `INSERT` that fails while it runs keeps the clauses written before
 
@@ -340,12 +334,11 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
 
 Spark's `CacheManager` lives in the `SharedState` of a `SparkContext` (believed shared by every session of it, not
 yet confirmed against a Spark run): a frame cached in one session reads as cached, and is reused, in another.
-Krishiv keeps `cache()` / `persist()` registrations and their data per session (owner decision 2026-11-12, design
-P3-T083 §3.7), because each session can have its own memory pool (`krishiv.session.memoryLimit`) and a shared
+Krishiv keeps `cache()` / `persist()` registrations and their data per session, because each session can have its own memory pool (`krishiv.session.memoryLimit`) and a shared
 entry would charge one tenant for another's cache. `isCached` and `storageLevel` in one session do not see a
 `cache()` made in another, and closing a session drops its entries (memory and spill files). Invalidation does
 cross sessions: a write or `REFRESH TABLE` in one session drops what every session cached over the table, as in
-Spark. To be revisited with multi-tenant resource groups (P3-T003).
+Spark.
 
 Storage levels: `_2`/`_3` replication and `OFF_HEAP` are accepted and reported as asked, but one copy is kept, in
 the engine's memory or one local spill file. Spilled and `DISK_ONLY` entries are scratch data in the spill
@@ -362,15 +355,6 @@ the rows in the session's memory whatever it is. With `eager = false` the rows a
 result is first analyzed (its first action, or the first call that needs its schema), not at its
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
-
-## `remote("local")` is not supported
-
-In Spark 4.3, `SparkSession.builder.remote("local")` starts a JVM `SparkContext` with the Connect plugin and
-needs the full `pyspark` package; `pyspark-client` cannot do it. Krishiv has no JVM and does not accept
-`remote("local")`. Use `krishiv.start_local()`, which starts an in-process Connect server and returns the
-connection string for a stock `pyspark-client` (see [the guide](../guides/embedded-connect.md)). Like Spark's
-local mode, it protects the port with a token made for each start; unlike it, the URL has the host `localhost`
-and the token in the connection string.
 
 ## A declared schema on a Delta read
 
@@ -489,7 +473,7 @@ the table, and the first action fails.
   remembered after it ends, so the same id may be reused (Spark refuses a reused id with `OPERATION_ABANDONED`;
   clients send fresh ids). Every other `ml_command` fails with SQLSTATE 56K00.
 
-## `Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)
+## `Dataset.observe`: where the counts differ from Spark's
 
 `DataFrame::observe` / PySpark `Observation` match Spark 4.2.0 on every case of
 `tests/fixtures/spark-4.2.0/observe-goldens.json` except the ones below
@@ -499,9 +483,9 @@ or above projections only, counts exactly the rows it takes, as Spark's `Collect
 its consumer pulled; the cap is one budget per node instance, so over several partitions the rows
 counted are the first the racing drivers hand over (Spark's are partition 0's: a `sum` metric can differ).
 The budget is per instantiation, not global: in a staged or distributed run every task that instantiates the
-observed node has its own, so the count can exceed `n` (P3-T084c).
+observed node has its own, so the count can exceed `n`.
 
-- **Limit not last, or a filter in between:** `observe(..).limit(n).count()`, a limit under a join, or a filter between the observed node and the limit: Spark's per-partition `LocalLimit` can pull up to `n` rows per partition, and a filter changes how many rows the node saw per row taken; the engine applies one cap of `n` rows per instance of the node (see above). Not yet backed by a golden (P3-T084c).
+- **Limit not last, or a filter in between:** `observe(..).limit(n).count()`, a limit under a join, or a filter between the observed node and the limit: Spark's per-partition `LocalLimit` can pull up to `n` rows per partition, and a filter changes how many rows the node saw per row taken; the engine applies one cap of `n` rows per instance of the node (see above). Not yet backed by a golden.
 - **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` reads every row in the engine (`n` = the input);
   Spark's `TakeOrderedAndProject` pulls a partition-dependent subset (20 of 1000 in the golden).
 - **ANSI `sum` overflow:** Spark's metric aggregate returns the saturated `9223372036854775807` for a long

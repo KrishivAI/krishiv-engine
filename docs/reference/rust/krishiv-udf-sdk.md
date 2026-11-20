@@ -1,8 +1,4 @@
----
-description: "Native Rust scalar and aggregate UDFs (layer SDK)."
----
-
-**Version:** 0.2.0
+**Version:** 0.2.0-alpha
 
 # Module `krishiv_udf_sdk`
 
@@ -20,8 +16,8 @@ The boundary is plain data: a UDF sees Arrow arrays and an
 [`InvokeContext`] of plain values (partition index, ANSI flag, session
 time zone). It never sees a session or catalog handle, never loads code,
 and never casts its own arguments (the analyzer already did). Plans
-reference a UDF by `name` and
-`version` only, so a plan stays pure data that any
+reference a UDF by [`name`](ScalarUdf::name) and
+[`version`](ScalarUdf::version) only, so a plan stays pure data that any
 worker holding the same registration can run.
 
 ```
