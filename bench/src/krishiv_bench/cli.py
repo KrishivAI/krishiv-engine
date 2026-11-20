@@ -13,7 +13,13 @@ from .paths import data_root
 from .report import write_report
 from .runner import run_suite
 
-ABBA_DATASET = {"tpch": "tpch-duckdb", "tpcds": "tpcds", "clickbench": "clickbench", "dsb": "dsb@v1"}
+ABBA_DATASET = {
+    "tpch": "tpch-duckdb",
+    "tpcds": "tpcds",
+    "clickbench": "clickbench",
+    "dsb": "dsb@v1",
+    "asof": "asof",
+}
 
 
 def _add_memcap_args(p: argparse.ArgumentParser) -> None:
@@ -134,7 +140,9 @@ def main(argv=None) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a suite on an engine, write JSON to $KRISHIV_DATA/results")
     r.add_argument("--engine", required=True, choices=[*ENGINES, "spark"])
-    r.add_argument("--suite", default="tpch", choices=["tpch", "tpch-nested", "tpcds", "dsb", "memcap", *H2O_SUITES])
+    r.add_argument(
+        "--suite", default="tpch", choices=["tpch", "tpch-nested", "tpcds", "dsb", "memcap", "asof", *H2O_SUITES]
+    )
     add_h2o_args(r)
     r.add_argument("--sf", type=float, default=1)
     r.add_argument(
@@ -192,7 +200,7 @@ def main(argv=None) -> None:
     ab = sub.add_parser(
         "abba", help="interleaved ABBA Krishiv vs DuckDB (P2-T142); needs the dist-profile runner binary"
     )
-    ab.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    ab.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench", "asof"])
     ab.add_argument("--sf", type=float, default=10)
     ab.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
     ab.add_argument("--reps", type=int, default=3, help="ABBA blocks per query (2 samples per engine each)")

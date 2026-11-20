@@ -265,6 +265,15 @@ class KrishivEngine(Engine):
     def setup(self, dataset: Dataset) -> None:
         self._tmp.mkdir(parents=True, exist_ok=True)  # `teardown()` removes it; setup may run again
         self._dataset = dataset
+        # Settings the dataset's queries need (the asof suite's `spark.sql.join.asofJoin.enabled`); an explicit
+        # `--conf` of the same key wins.
+        conf_file = Path(dataset.root) / "session.conf"
+        if conf_file.is_file():
+            given = {k for k, _ in self.conf}
+            for line in conf_file.read_text().splitlines():
+                k, sep, v = line.strip().partition("=")
+                if sep and k not in given:
+                    self.conf.append((k, v))
         self._start()
 
     def timed_run(self, query: Query) -> tuple[int, float]:

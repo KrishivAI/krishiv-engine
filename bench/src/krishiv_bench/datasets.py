@@ -340,6 +340,10 @@ def main(argv=None) -> None:
         "micro-verify", help="recompute a generated micro dataset's content digests against MANIFEST.json"
     )
     p.add_argument("directory", type=Path)
+    p = sub.add_parser("asof", help="asof suite data (seeded trades and quotes) under $KRISHIV_DATA/asof/sf<N>")
+    p.add_argument("--sf", type=int, default=1, help="N million trades, 5 N million quotes")
+    p = sub.add_parser("asof-verify", help="recompute a generated asof dataset's content digests")
+    p.add_argument("directory", type=Path)
     p = sub.add_parser("memcap", help="memcap suite data (seeded star schema) under $KRISHIV_DATA/memcap/v1/<rows>")
     p.add_argument("--rows", nargs="+", default=["10m"], metavar="N", help="whole millions, e.g. 10m 50m 150m")
     p = sub.add_parser("remote-filter", help="download the FineWeb-Edu sample/10BT mirror (~28 GB)")
@@ -397,6 +401,22 @@ def main(argv=None) -> None:
         d = {"tpch": gen_tpch, "tpch-dbgen": gen_tpch_dbgen, "tpcds": gen_tpcds}[a.cmd](a.sf, a.force)
         if not a.no_manifest:
             print("manifest:", write_manifest(d, f"{d.parent.name}-{d.name}"))
+    elif a.cmd == "asof":
+        from . import asof_data
+
+        try:
+            d = asof_data.generate(a.sf)
+        except (ValueError, FileExistsError) as e:
+            ap.error(str(e))
+        print(d)
+        print("manifest:", write_manifest(d, f"asof-{d.name}"))
+    elif a.cmd == "asof-verify":
+        from . import asof_data
+
+        problems = asof_data.verify(a.directory)
+        if problems:
+            sys.exit("\n".join(problems))
+        print(f"{a.directory}: verified")
     elif a.cmd == "memcap":
         from .memcap_data import generate
 

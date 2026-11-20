@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "s43-asof-join": [
-      0
-    ]
-  },
-  "file": "join-asof-gating",
-  "format_version": 1
-}
