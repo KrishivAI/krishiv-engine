@@ -156,7 +156,8 @@ pub static CATALOG_VENDED_DEFAULT_TTL: ConfigEntry = ConfigEntry {
           the catalog gives no expiry for it (`s3.session-token-expires-at-ms`, \
           `gcs.oauth2.token-expires-at`, `adls.sas-token-expires-at-ms.<host>`). After it the \
           credential is fetched again from the catalog. A credential that stops working earlier is \
-          refreshed once and the request retried.",
+          refreshed once and the request retried. A value below twice `krishiv.io.credentials.refreshSkew` \
+          is allowed: the credential is then refreshed after half its lifetime.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",

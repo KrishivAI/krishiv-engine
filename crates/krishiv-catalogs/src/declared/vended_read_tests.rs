@@ -50,6 +50,12 @@ fn vended(prefix: &str, key_id: &str, ttl: Duration) -> String {
     )
 }
 
+/// A short-lived credential's lifetime, and how long to wait until it is past half of it: a credential is used for
+/// at most half its lifetime when that is shorter than the refresh skew (review c27440b53 F1), so a test that needs
+/// a credential "about to expire" reads once while it is fresh, waits [`AGE`], and reads again.
+const SHORT: Duration = Duration::from_secs(4);
+const AGE: Duration = Duration::from_millis(2500);
+
 /// The `loadTable` answer for `table` with `config` and `storage-credentials`.
 fn load_body(table: &WrittenTable, config: &str, credentials: &[String]) -> String {
     format!(
@@ -153,7 +159,7 @@ fn vended_credentials_only() {
 }
 
 /// Design §8 `vended_credential_refreshed_via_credentials_endpoint` and `catalog_refresh_and_signer_urls_never_followed`:
-/// the `loadTable` credential expires inside the refresh skew, so the read asks the catalog's own
+/// once the `loadTable` credential is past half its short life, the next read asks the catalog's own
 /// `loadCredentials` for a new one and signs every request with that; the refresh endpoint the table config names
 /// is never called.
 #[test]
@@ -170,11 +176,7 @@ fn vended_credential_refreshed_via_credentials_endpoint() {
         load_body(
             &table,
             &config,
-            &[vended(
-                "s3://bucket/wh",
-                "AKIAOLDKEY",
-                Duration::from_secs(60),
-            )],
+            &[vended("s3://bucket/wh", "AKIAOLDKEY", SHORT)],
         ),
         Some(vended(
             "s3://bucket/wh",
@@ -184,6 +186,10 @@ fn vended_credential_refreshed_via_credentials_endpoint() {
     );
     let s = session(&server, &s3);
     s3.deny(WRITER);
+    // Fresh: read with the `loadTable` credential, no `loadCredentials`.
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    assert_eq!(count(&server, "/v1/namespaces/db/tables/t/credentials"), 0);
+    std::thread::sleep(AGE);
     s3.deny("AKIAOLDKEY");
     s3.clear_seen();
     assert_eq!(ids(&s), vec![1, 2, 3]);
@@ -224,15 +230,11 @@ fn vended_table_token_refused_falls_back_to_caller_token() {
     let load = load_body(
         &table,
         r#"{"token": "table-token"}"#,
-        &[vended(
-            "s3://bucket/wh",
-            "AKIAOLDKEY",
-            Duration::from_secs(60),
-        )],
+        &[vended("s3://bucket/wh", "AKIAOLDKEY", SHORT)],
     );
     let config = r#"{"defaults": {}, "overrides": {}, "endpoints": ["GET /v1/{prefix}/namespaces/{namespace}/tables/{table}",
         "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"]}"#;
-    // The first credential answered is itself inside the refresh skew, so the read refreshes a second time.
+    // The first credential answered is itself short-lived, so a read past half its life refreshes a second time.
     let mut answered = 0_usize;
     let server = serve(move |r| match path(r) {
         "/v1/config" => Reply::Json(200, config.into()),
@@ -247,7 +249,7 @@ fn vended_table_token_refused_falls_back_to_caller_token() {
             }
             answered += 1;
             let (key, ttl) = if answered == 1 {
-                ("AKIAMIDKEY", Duration::from_secs(60))
+                ("AKIAMIDKEY", SHORT)
             } else {
                 ("AKIANEWKEY", Duration::from_secs(3600))
             };
@@ -266,7 +268,14 @@ fn vended_table_token_refused_falls_back_to_caller_token() {
     });
     let s = session(&server, &s3);
     s3.deny(WRITER);
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    // Past half the `loadTable` credential's life: the refresh sends the table token, refused, then the caller's.
+    std::thread::sleep(AGE);
     s3.deny("AKIAOLDKEY");
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    // Past half the refreshed credential's life: the next refresh goes straight to the caller's token.
+    std::thread::sleep(AGE);
+    s3.deny("AKIAMIDKEY");
     s3.clear_seen();
     assert_eq!(ids(&s), vec![1, 2, 3]);
     assert!(
@@ -342,8 +351,8 @@ fn count(server: &Server, p: &str) -> usize {
 
 /// Design §4.1: a catalog without `loadCredentials`, or one that answers it 404 (of any error type), refreshes by
 /// reloading the table.
-/// The first answer's credential is inside the refresh skew; the reload's is good, and every storage request is
-/// signed with it.
+/// The first answer's credential is short-lived: read once while fresh, then past half its life the reload's is
+/// used, and every storage request of that read is signed with it.
 #[test]
 fn vended_credential_refreshed_by_table_reload() {
     for mode in [
@@ -357,7 +366,7 @@ fn vended_credential_refreshed_by_table_reload() {
         let server = reloading_catalog(
             move |n| {
                 let (key, ttl) = if n == 0 {
-                    ("AKIAOLDKEY", Duration::from_secs(60))
+                    ("AKIAOLDKEY", SHORT)
                 } else {
                     ("AKIARELOADKEY", Duration::from_secs(3600))
                 };
@@ -371,6 +380,8 @@ fn vended_credential_refreshed_by_table_reload() {
         );
         let s = session(&server, &s3);
         s3.deny(WRITER);
+        assert_eq!(ids(&s), vec![1, 2, 3]);
+        std::thread::sleep(AGE);
         s3.deny("AKIAOLDKEY");
         s3.clear_seen();
         assert_eq!(ids(&s), vec![1, 2, 3]);
@@ -664,4 +675,32 @@ fn remote_signing_refused_cleanly() {
     assert_eq!(ids(&s), vec![1, 2, 3]);
     assert_eq!(s3.key_ids(), signed_with(&["AKIAVENDEDKEY"]));
     assert!(signer.seen().is_empty(), "{:?}", signer.seen());
+}
+
+/// Review c27440b53 F1: a catalog that only ever vends 60 s credentials (less than the 5-minute refresh skew) is asked
+/// for them about once per scope, not once per object-store request: the skew is at most half the credential's
+/// lifetime, in the store's cache and in `VendedSource`.
+#[test]
+fn short_lived_vended_credentials_are_not_fetched_per_request() {
+    let s3 = serve_s3();
+    let table = s3_table(&s3);
+    let short = vended("s3://bucket/wh", "AKIASHORTKEY", Duration::from_secs(60));
+    let server = catalog(
+        load_body(&table, "{}", std::slice::from_ref(&short)),
+        Some(short),
+    );
+    let s = session(&server, &s3);
+    s3.deny(WRITER);
+    s3.clear_seen();
+    for _ in 0..3 {
+        assert_eq!(ids(&s), vec![1, 2, 3]);
+    }
+    let requests = s3.seen().len();
+    let asked = count(&server, "/v1/namespaces/db/tables/t/credentials");
+    assert!(requests > 3, "the reads reached storage: {requests}");
+    // At most one per query per scope (one scope here); before the fix it was about one per S3 request.
+    assert!(
+        asked <= 3,
+        "{asked} credential calls for {requests} S3 requests"
+    );
 }

@@ -367,7 +367,11 @@ impl Refetch {
             Ok(handle) => handle
                 .spawn_blocking(move || this.fetch_blocking(token.as_ref()))
                 .await
-                .map_err(|_| self.refused(LocationRule::NoVendedCredential))?,
+                .map_err(|e| {
+                    // A panic or cancellation of the blocking fetch: a Krishiv fault, logged as one (no secrets).
+                    tracing::warn!(target: "krishiv::catalog", catalog = self.catalog.as_str(), table = self.relation.as_str(), panicked = e.is_panic(), "the vended credential fetch did not finish");
+                    self.refused(LocationRule::NoVendedCredential)
+                })?,
             Err(_) => this.fetch_blocking(token.as_ref()),
         }
     }
@@ -491,6 +495,13 @@ fn scheme_scope(url: &ParsedUrl) -> String {
     }
 }
 
+/// The refresh skew of a credential fetched at `issued` that expires at `expiry`: `skew`, at most half its lifetime,
+/// as the store's credential cache counts it, so a credential that lives less than twice the skew (a short session
+/// token, or `vendedDefaultTtl` below the skew) is reused for half its life instead of asked for on every request.
+fn effective_skew(skew: Duration, issued: SystemTime, expiry: SystemTime) -> Duration {
+    skew.min(expiry.duration_since(issued).unwrap_or(Duration::ZERO) / 2)
+}
+
 /// The `CredentialSource` of one vended scope of one query (module docs).
 #[derive(Debug)]
 pub(crate) struct VendedSource {
@@ -501,8 +512,9 @@ pub(crate) struct VendedSource {
 }
 
 impl VendedSource {
-    /// The credential now, fetching a new answer when the cached one gives none, one about to expire, or is the one
-    /// this source served before (the store asks again only when it refused it or it is about to expire).
+    /// The credential now, fetching a new answer when the cached one gives none, one about to expire (within the
+    /// refresh skew, at most half its lifetime: [`effective_skew`]), or is the one this source served before (the
+    /// store asks again only when it refused it or it is about to expire, by the same rule).
     pub(crate) async fn current(&self) -> Result<ScopedCredential, KrishivError> {
         let t = &self.table;
         let held = t.cache.get(&t.key);
@@ -515,7 +527,7 @@ impl VendedSource {
             && !served_before
             && let Some(c) = t.pick(a, &self.url)?
             && c.expires_at()
-                .is_none_or(|e| e > SystemTime::now() + t.skew)
+                .is_none_or(|e| e > SystemTime::now() + effective_skew(t.skew, a.fetched, e))
         {
             self.serve(a);
             return Ok(c);

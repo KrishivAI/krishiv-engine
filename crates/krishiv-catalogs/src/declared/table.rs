@@ -247,8 +247,10 @@ impl RestCatalog {
         Ok(Some(loaded))
     }
 
-    /// What is kept of `found` (module docs): the parsed metadata; every `config` value and
-    /// credential is dropped here.
+    /// What is kept of `found` (module docs): the parsed metadata, and with `storage = vended` its
+    /// vended part ([`VendedAnswer::of_table`]: the credential keys and the table token only), which
+    /// then lives in this 30 s table cache beside the `VendedCache`. Every other `config` value is
+    /// dropped here, and so is every credential when the storage is not vended.
     fn keep(
         &self,
         namespace: &[String],
