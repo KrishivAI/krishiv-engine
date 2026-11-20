@@ -29,6 +29,7 @@ pub(super) fn assign(
     by_name: bool,
     output: &[TableColumn],
     case_sensitive: bool,
+    legacy_store: bool,
 ) -> Result<Vec<Source>, KrishivError> {
     let eq = |a: &str, b: &str| {
         if case_sensitive {
@@ -119,7 +120,9 @@ pub(super) fn assign(
         }
     }
     for (column, from) in table.columns.iter().zip(&out) {
+        // `spark.sql.storeAssignmentPolicy=LEGACY` stores through any cast Spark can run: no ANSI check.
         if let Source::Position(i) = from
+            && !legacy_store
             && !can_store(&output[*i].data_type, &column.data_type)
         {
             return Err(IncompatibleDataForTableCannotSafelyCast {
