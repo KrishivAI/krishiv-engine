@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+publish = true
 
 [lints]
 workspace = true
@@ -26,23 +26,26 @@ foldhash = { workspace = true }
 futures = { workspace = true }
 hashbrown = { workspace = true }
 iceberg = { workspace = true }
-krishiv-arrow-bridge = { path = "../krishiv-arrow-bridge" }
-krishiv-common = { path = "../krishiv-common" }
-krishiv-exec = { path = "../krishiv-exec" }
-krishiv-io = { path = "../krishiv-io" }
-krishiv-memory = { path = "../krishiv-memory" }
+krishiv-arrow-bridge = { path = "../krishiv-arrow-bridge", version = "=0.2.1" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
+krishiv-io = { path = "../krishiv-io", version = "=0.2.1" }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
 # The optimizer's statistics (`TableStats`, `Literal` bounds) from manifests.
-krishiv-optimizer = { path = "../krishiv-optimizer" }
-krishiv-plan = { path = "../krishiv-plan" }
-krishiv-types = { path = "../krishiv-types" }
+krishiv-optimizer = { path = "../krishiv-optimizer", version = "=0.2.1" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 # Deletion vectors (the portable roaring64 layout); already built for iceberg.
 roaring = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 # Warnings of statistics dropped on write (PR-54b).
 tracing = { workspace = true }
 typetag = { workspace = true }
+# Feature `testing` only: the Parquet files and the local store of `testing::write_table`.
+parquet = { workspace = true, features = ["arrow"], optional = true }
+object_store = { workspace = true, optional = true }
 
 [dev-dependencies]
 arrow-buffer = { workspace = true }
@@ -63,3 +66,6 @@ harness = false
 [features]
 # Cloud object stores through `krishiv-exec/cloud` (S3, GCS, Azure); the Azurite Iceberg scan test needs it.
 cloud = ["krishiv-exec/cloud"]
+# Test tables for other crates' tests (`testing::write_table`: Parquet files and iceberg-rust's in-memory catalog
+# over the local file system). Never enabled by a product build.
+testing = ["dep:parquet", "dep:object_store"]

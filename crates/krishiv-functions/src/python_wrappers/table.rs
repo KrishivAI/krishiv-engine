@@ -152,6 +152,18 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "the analyzer's `translate` over `UTF8_LCASE` strings",
     ),
     (
+        "__json_table_rows",
+        "the lowering of `JSON_TABLE`: the row texts of a document",
+    ),
+    (
+        "__json_table_value",
+        "the lowering of `JSON_TABLE`: a column's value in a row text",
+    ),
+    (
+        "__json_table_exists",
+        "the lowering of `JSON_TABLE`: whether a column's path exists in a row text",
+    ),
+    (
         "__split_part_lcase",
         "the analyzer's `split_part` over `UTF8_LCASE` strings",
     ),
@@ -471,6 +483,7 @@ pub(super) fn rows() -> Vec<Row> {
         "sum",
         "tan",
         "tanh",
+        "to_base32",
         "unbase64",
         "unhex",
         "unix_date",
@@ -694,6 +707,36 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("is_variant_null", "v: ColumnOrName"),
         Row::new("schema_of_variant", "v: ColumnOrName"),
         Row::new("to_variant_object", "col: ColumnOrName"),
+        Row::new("collect_union", "col: ColumnOrName"),
+        Row::new("variant_delete", "v: ColumnOrName, *paths: str"),
+        Row::new(
+            "variant_insert",
+            "v: ColumnOrName, path: Column | str, value: ColumnOrName",
+        ),
+        Row::new(
+            "try_variant_insert",
+            "v: ColumnOrName, path: Column | str, value: ColumnOrName",
+        ),
+        Row::new(
+            "variant_array_append",
+            "v: ColumnOrName, path: Column | str, value: ColumnOrName",
+        ),
+        Row::new(
+            "try_variant_array_append",
+            "v: ColumnOrName, path: Column | str, value: ColumnOrName",
+        ),
+        Row::new(
+            "variant_set",
+            "v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool = True",
+        ),
+        Row::new(
+            "try_variant_set",
+            "v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool = True",
+        ),
+        Row::new(
+            "variant_strip_nulls",
+            "v: ColumnOrName, include_arrays: bool = True",
+        ),
         Row::new(
             "variant_get",
             "v: ColumnOrName, path: Column | str, targetType: str",
@@ -776,6 +819,7 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("array_repeat", "col: ColumnOrName, count: ColumnOrName | int"),
         Row::new("cardinality", "col: ColumnOrName"),
         Row::new("flatten", "col: ColumnOrName"),
+        Row::new("from_base32", "col: ColumnOrName"),
         Row::new("sequence", "start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName = None"),
         Row::new("slice", "x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int"),
         Row::new("sort_array", "col: ColumnOrName, asc: bool = True"),
@@ -825,6 +869,10 @@ pub(super) fn rows() -> Vec<Row> {
             "str: ColumnOrName, substr: str | Column, start: int | Column = None, occurrence: int | Column = None",
         ),
         Row::new("left", "str: ColumnOrName, len: ColumnOrName"),
+        Row::new(
+            "jaro_winkler_similarity",
+            "left: ColumnOrName, right: ColumnOrName",
+        ),
         Row::new(
             "levenshtein",
             "left: ColumnOrName, right: ColumnOrName, threshold: int | Column = None",

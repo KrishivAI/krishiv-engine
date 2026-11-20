@@ -129,7 +129,7 @@ pub fn json_object_keys(json: &StringArray) -> Result<ArrayRef, KrishivError> {
 
 /// One path step.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Step {
+pub(super) enum Step {
     /// `.name` or `['name']`.
     Field(String),
     /// `[index]`.
@@ -139,7 +139,7 @@ enum Step {
 }
 
 /// Parses a JSONPath; `None` for a bad path.
-fn parse_path(path: &str) -> Option<Vec<Step>> {
+pub(super) fn parse_path(path: &str) -> Option<Vec<Step>> {
     let bytes = path.as_bytes();
     if bytes.first() != Some(&b'$') {
         return None;
@@ -222,7 +222,7 @@ fn quoted(bytes: &[u8], i: usize, quote: u8) -> Option<&str> {
 
 /// One matched value, owned (only matches are materialized).
 #[derive(Debug, Clone, PartialEq)]
-enum Owned {
+pub(super) enum Owned {
     /// JSON `null`.
     Null,
     /// A boolean.
@@ -426,7 +426,7 @@ fn select_array(
 }
 
 /// The value at the cursor, materialized, nested `depth` deep.
-fn capture(lexer: &mut Lexer<'_>, depth: usize) -> Result<Owned, ParseError> {
+pub(super) fn capture(lexer: &mut Lexer<'_>, depth: usize) -> Result<Owned, ParseError> {
     if depth > super::parse::MAX_JSON_DEPTH {
         return Err(ParseError::TooDeep);
     }

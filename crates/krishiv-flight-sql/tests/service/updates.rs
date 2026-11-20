@@ -33,7 +33,7 @@ pub(super) async fn update(
     Ok((result.record_count, id))
 }
 
-/// DDL and DML answer `-1` (Spark reports no count for them); the statement runs once, so a
+/// DDL and DML answer `0` (Spark reports no count for them; `-1` would make the JDBC driver ask for a result set); the statement runs once, so a
 /// second create of the same view fails; a cookie session keeps what it made.
 #[tokio::test(flavor = "multi_thread")]
 async fn update_counts() {
@@ -46,7 +46,7 @@ async fn update_counts() {
     )
     .await
     .expect("create");
-    assert_eq!(count, -1);
+    assert_eq!(count, 0, "no count is 0 (Avatica reads -1 as a result set)");
     let cookie = cookie.expect("a temporary view marks the session changed: cookie");
     let e = update(
         &mut h,
@@ -72,7 +72,7 @@ async fn update_counts() {
     )
     .await
     .expect("SET");
-    assert_eq!((count, set), (-1, None), "a presented cookie sets none");
+    assert_eq!((count, set), (0, None), "a presented cookie sets none");
 }
 
 /// A query sent as an update is refused before it runs (design §4.3, N2), and its session is

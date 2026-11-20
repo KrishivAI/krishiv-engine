@@ -342,6 +342,29 @@ impl Catalog<'_> {
         &self,
         pattern: Option<&str>,
     ) -> Result<Vec<Database>, KrishivError> {
+        // A declared current catalog: its own namespaces (design P3-T067 PR-58b).
+        let current = self.current_catalog();
+        if self.is_declared(&current) {
+            self.authorize_as(&format!("SHOW NAMESPACES IN {}", quoted(&current)))
+                .await?;
+            let found = match self.session.declared_namespaces(&current, &[]).await {
+                Some(found) => found?,
+                None => return Err(Self::refuse_declared(&current)),
+            };
+            let mut out: Vec<Database> = found
+                .iter()
+                .map(|n| n.join("."))
+                .filter(|n| pattern.is_none_or(|p| crate::introspection::matches(p, n)))
+                .map(|name| Database {
+                    name,
+                    catalog: current.clone(),
+                    description: None,
+                    location_uri: String::new(),
+                })
+                .collect();
+            out.sort_by(|a, b| a.name.cmp(&b.name));
+            return Ok(out);
+        }
         self.authorize_as("SHOW NAMESPACES").await?;
         self.check_current()?;
         // Only what the principal may see, as `SHOW NAMESPACES` lists (P3-T062 §2.4).
@@ -513,6 +536,33 @@ impl Catalog<'_> {
         database: Option<&str>,
         pattern: Option<&str>,
     ) -> Result<Vec<Table>, KrishivError> {
+        // `cat.ns` of a declared catalog: the catalog's own listing (design P3-T067 PR-58b).
+        if let Some(d) = database
+            && let [catalog, ns @ ..] = parts(d).as_slice()
+            && !ns.is_empty()
+            && self.is_declared(catalog)
+        {
+            self.authorize_as(&format!("SHOW TABLES IN {}", quoted(d)))
+                .await?;
+            let found = match self.session.declared_tables(catalog, ns).await {
+                Some(found) => found?,
+                None => return Err(Self::refuse_declared(catalog)),
+            };
+            let mut out: Vec<Table> = found
+                .into_iter()
+                .filter(|n| pattern.is_none_or(|p| crate::introspection::matches(p, n)))
+                .map(|name| Table {
+                    name,
+                    catalog: Some(catalog.clone()),
+                    namespace: Some(ns.to_vec()),
+                    description: None,
+                    table_type: "EXTERNAL".to_owned(),
+                    is_temporary: false,
+                })
+                .collect();
+            out.sort_by(|a, b| a.name.cmp(&b.name));
+            return Ok(out);
+        }
         let statement = match database {
             Some(d) => format!("SHOW TABLES IN {}", quoted(d)),
             None => "SHOW TABLES".to_owned(),

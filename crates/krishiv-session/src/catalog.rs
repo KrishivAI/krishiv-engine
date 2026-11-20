@@ -44,6 +44,9 @@ use krishiv_plan::{
 
 use crate::cache::{RelationCache, is_cache_name};
 
+mod declared;
+#[cfg(test)]
+mod declared_tests;
 mod file_tables;
 mod key_facts;
 mod ndv_sampling;
@@ -602,15 +605,17 @@ impl QueryCatalog {
             match &scan.scan.source {
                 ReadSource::Table { name, options } => {
                     let last = name.last().map_or("", String::as_str);
+                    // A declared catalog's table is opened on the driver with the session's
+                    // stores; a worker cannot open it yet (design P3-T067 PR-58b).
+                    if self.is_declared_scan(name, scan.scan.version) {
+                        return Err(self.declared_refusal(name, " in a distributed stage"));
+                    }
                     let Some(table) = self.loaded(last) else {
                         // A relation cache snapshot lives on the driver (design P3-T083
                         // §3.8): a memory snapshot is dealt as a memory table without a
                         // lease is (no assignment: a stage of one task reads it whole);
                         // a disk snapshot is a driver-local file no worker can open, so
                         // such a plan is refused, not failed as an internal error.
-                        if let Some(e) = self.declared_read(name) {
-                            return Err(e);
-                        }
                         if crate::cache::is_cache_name(last) {
                             if self.cache.is_on_disk(last) {
                                 return Err(unsupported(
@@ -618,6 +623,9 @@ impl QueryCatalog {
                                 ));
                             }
                             continue;
+                        }
+                        if let Some(e) = self.declared_read(name) {
+                            return Err(e);
                         }
                         return Err(InternalError {
                             message: format!("the scanned table {last} was not loaded"),
@@ -1000,33 +1008,11 @@ pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
     )
 }
 
-fn unsupported(feature: &str) -> KrishivError {
+pub(super) fn unsupported(feature: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: feature.to_owned(),
     }
     .into()
-}
-
-impl QueryCatalog {
-    /// The refusal of a scan of `name` in a declared catalog: such a catalog resolves names only for
-    /// now (design P3-T067 PR-58a), so its table is never loaded and its read is refused, not failed
-    /// as an internal error. `None` when `name` is no declared catalog's.
-    fn declared_read(&self, name: &[String]) -> Option<KrishivError> {
-        let catalog = match name {
-            [c, _, _, ..] if self.system.catalogs.catalog(c).is_some() => c.clone(),
-            [_] | [_, _]
-                if !self.catalog.eq_ignore_ascii_case(CATALOG)
-                    && !crate::system::is_system(&self.catalog) =>
-            {
-                self.catalog.clone()
-            }
-            _ => return None,
-        };
-        Some(unsupported(&format!(
-            "reading the tables of the declared catalog `{}`",
-            catalog.replace('`', "``")
-        )))
-    }
 }
 
 impl Catalog for QueryCatalog {
@@ -1138,6 +1124,12 @@ impl TableProviderResolver for QueryCatalog {
             _ => &self.scanned.other,
         };
         kind.store(true, std::sync::atomic::Ordering::SeqCst);
+        // A declared catalog's table, opened before planning (`open_declared`).
+        if let ReadSource::Table { name, .. } = &scan.source
+            && let Some(provider) = self.declared_provider(name, scan.version)
+        {
+            return Ok(provider);
+        }
         match &scan.source {
             ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
                 let table = name.last().map_or("", String::as_str);
