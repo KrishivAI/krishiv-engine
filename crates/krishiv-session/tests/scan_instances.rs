@@ -198,3 +198,26 @@ fn a_union_and_a_cte_used_twice_return_the_same_rows_either_way() {
         assert_eq!(on, off, "{q}");
     }
 }
+
+#[test]
+fn a_self_join_of_csv_returns_the_same_rows_either_way() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.csv");
+    std::fs::write(&path, "1,1,10,100\n1,2,20,200\n2,3,30,300\n").unwrap();
+    let path = path.display().to_string();
+    let s = Session::new().unwrap();
+    let q = format!(
+        "SELECT CAST(x._c1 AS BIGINT) + CAST(y._c2 AS BIGINT) FROM csv.`{path}` x JOIN csv.`{path}` y \
+         ON x._c0 = y._c0 WHERE CAST(y._c3 AS BIGINT) > 100"
+    );
+    s.conf()
+        .set("krishiv.sql.optimizer.narrowScanInstances", "true")
+        .unwrap();
+    let (on, _) = run(&s, &q);
+    s.conf()
+        .set("krishiv.sql.optimizer.narrowScanInstances", "false")
+        .unwrap();
+    let (off, _) = run(&s, &q);
+    assert_eq!(on, vec![21, 22, 33]);
+    assert_eq!(on, off);
+}
