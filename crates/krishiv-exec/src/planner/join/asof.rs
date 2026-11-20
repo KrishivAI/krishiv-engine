@@ -19,7 +19,7 @@ use krishiv_plan::{
 use super::super::build::{Planned, Planner, unsupported};
 use super::super::explain::ExplainNode;
 use super::{equality, residual_of, sides, split_and, text};
-use crate::error::Result;
+use crate::error::{Result, internal};
 use crate::join::{AsOfMergeDirection, AsOfMergeSpec, JoinType};
 use crate::physical::{PhysNode, SortMergeJoinPlan, sort_merge_join};
 
@@ -36,7 +36,12 @@ impl Planner<'_> {
         let on = match condition {
             JoinCondition::On(e) => Some(e),
             JoinCondition::None => None,
-            _ => return Err(unsupported("ASOF JOIN ... USING in physical plans")),
+            _ => {
+                // The analyzer expands `USING` into `ON`.
+                return Err(internal(
+                    "an as-of join's USING reached the physical planner unexpanded".to_owned(),
+                ));
+            }
         };
         let direction = match as_of.direction {
             AsOfDirection::Backward => AsOfMergeDirection::Backward,
@@ -99,6 +104,10 @@ impl Planner<'_> {
         };
         let (probe, build) = self.co_partition(probe, &probe_keys, build, &build_keys)?;
         let filter = residual_of(&probe, &build, &residual);
+        let distance = as_of
+            .distance
+            .as_deref()
+            .and_then(|d| residual_of(&probe, &build, &[d]));
         let null_safe = keys.iter().map(|k| k.2).collect();
         let mut layout = probe.layout.clone();
         layout.extend(&build.layout);
@@ -135,6 +144,7 @@ impl Planner<'_> {
                 right_column,
                 direction,
                 allow_exact: as_of.allow_exact,
+                distance,
             }),
         };
         // Validates the join and gives its schema.

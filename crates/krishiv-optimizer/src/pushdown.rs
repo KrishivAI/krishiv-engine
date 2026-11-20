@@ -121,6 +121,52 @@ fn null_to_false(predicate: &Arc<Expr>) -> Arc<Expr> {
     fold(&call(op, vec![x, y], DataType::Boolean))
 }
 
+/// The rule at an as-of `Join`: its `ON` conjuncts that read only the right input filter it
+/// below (they only narrow the rows the nearest one is taken from), for inner and left outer;
+/// those that read only the left input move into it for an inner join (a left row they reject
+/// has no match). The match itself never moves.
+pub(crate) fn push_as_of_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    let PlanNode::AsOfJoin {
+        left,
+        right,
+        kind,
+        condition: JoinCondition::On(cond),
+        as_of,
+    } = &node.node
+    else {
+        return node;
+    };
+    let (lo, ro) = (ids(left), ids(right));
+    let to_left = *kind == JoinKind::Inner;
+    let (mut l, mut r, mut stay) = (Vec::new(), Vec::new(), Vec::new());
+    for c in conjuncts(cond) {
+        let refs = local(&c, &lo, &ro);
+        if !is_deterministic(&c) || has_subquery(&c) || refs.is_empty() {
+            stay.push(c);
+        } else if refs.is_subset(&ro) {
+            r.push(c);
+        } else if to_left && refs.is_subset(&lo) {
+            l.push(c);
+        } else {
+            stay.push(c);
+        }
+    }
+    if l.is_empty() && r.is_empty() {
+        return node;
+    }
+    let condition = and_all(stay).map_or(JoinCondition::None, JoinCondition::On);
+    Arc::new(LogicalPlan {
+        node: PlanNode::AsOfJoin {
+            left: into(left, l),
+            right: into(right, r),
+            kind: *kind,
+            condition,
+            as_of: Arc::clone(as_of),
+        },
+        origin: node.origin,
+    })
+}
+
 /// The rule at a `Join`: moves one-sided condition conjuncts into the side
 /// they read, where the join type allows.
 pub(crate) fn push_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
@@ -362,6 +408,37 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
             kind,
             condition,
         } => push_join(plan, left, right, *kind, condition, movable),
+        // A filter on the left input only: an as-of join's left row keeps or loses its match
+        // whatever the other left rows are, so it filters below as above (inner or left outer).
+        // Anything reading the right side stays: it would change which row is nearest.
+        PlanNode::AsOfJoin {
+            left,
+            right,
+            kind,
+            condition,
+            as_of,
+        } => {
+            let lo = ids(left);
+            let ro = ids(right);
+            let (l, stay): (Vec<_>, Vec<_>) = movable
+                .into_iter()
+                .partition(|p| local(p, &lo, &ro).is_subset(&lo));
+            if l.is_empty() {
+                (Arc::clone(plan), stay)
+            } else {
+                let out = Arc::new(LogicalPlan {
+                    node: PlanNode::AsOfJoin {
+                        left: into(left, l),
+                        right: Arc::clone(right),
+                        kind: *kind,
+                        condition: condition.clone(),
+                        as_of: Arc::clone(as_of),
+                    },
+                    origin: plan.origin,
+                });
+                (out, stay)
+            }
+        }
         // Into every input of a positional union, rewritten onto that input's
         // columns (Spark's `PushPredicateThroughNonJoin` for `Union`).
         PlanNode::Union {

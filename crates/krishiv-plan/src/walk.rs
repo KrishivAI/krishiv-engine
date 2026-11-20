@@ -432,6 +432,7 @@ impl Teardown {
                 if let Some(m) = Arc::into_inner(as_of) {
                     self.exprs.extend([m.left, m.right]);
                     self.exprs.extend(m.tolerance);
+                    self.exprs.extend(m.distance);
                 }
             }
             PlanNode::Sort { input, order, .. } => {

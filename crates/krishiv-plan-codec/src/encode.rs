@@ -678,15 +678,19 @@ impl Encoder {
             null_safe: join.null_safe.clone(),
             residual: self.residual(join.residual.as_ref())?,
             single_match: join.single_match,
-            as_of: join.as_of.map(|a| pb::AsOfMerge {
-                left_column: a.left_column as u64,
-                right_column: a.right_column as u64,
-                direction: match a.direction {
-                    AsOfMergeDirection::Backward => pb::AsOfMergeDirection::Backward,
-                    AsOfMergeDirection::Forward => pb::AsOfMergeDirection::Forward,
-                } as i32,
-                allow_exact: a.allow_exact,
-            }),
+            as_of: match &join.as_of {
+                None => None,
+                Some(a) => Some(pb::AsOfMerge {
+                    left_column: a.left_column as u64,
+                    right_column: a.right_column as u64,
+                    direction: match a.direction {
+                        AsOfMergeDirection::Backward => pb::AsOfMergeDirection::Backward,
+                        AsOfMergeDirection::Forward => pb::AsOfMergeDirection::Forward,
+                    } as i32,
+                    allow_exact: a.allow_exact,
+                    distance: self.residual(a.distance.as_ref())?,
+                }),
+            },
         })
     }
 

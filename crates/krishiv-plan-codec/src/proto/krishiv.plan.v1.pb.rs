@@ -1170,7 +1170,7 @@ pub struct SortMergeJoinNode {
 /// feature: as_of_join
 /// An as-of join's match: the as-of column of each input, the direction and whether an equal
 /// value matches.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AsOfMerge {
     /// feature: as_of_join
     #[prost(uint64, tag = "1")]
@@ -1184,6 +1184,9 @@ pub struct AsOfMerge {
     /// feature: as_of_join
     #[prost(bool, tag = "4")]
     pub allow_exact: bool,
+    /// feature: as_of_join
+    #[prost(message, optional, tag = "5")]
+    pub distance: ::core::option::Option<Residual>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {

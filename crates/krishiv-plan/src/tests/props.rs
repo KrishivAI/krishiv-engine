@@ -549,6 +549,7 @@ impl Gen<'_> {
                     ][usize::from(self.pick(3))],
                     allow_exact: self.flag(),
                     tolerance: self.flag().then(|| Arc::new(self.expr(1))),
+                    distance: self.flag().then(|| Arc::new(self.expr(1))),
                     as_written: self.flag(),
                 }),
             },

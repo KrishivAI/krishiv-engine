@@ -850,6 +850,10 @@ impl Encoder {
                     None => self.tag("no-tolerance"),
                     Some(t) => self.expr(t, bias),
                 }
+                match &as_of.distance {
+                    None => self.tag("no-distance"),
+                    Some(d) => self.expr(d, bias),
+                }
                 self.plan(left, bias);
                 self.plan(right, bias);
             }

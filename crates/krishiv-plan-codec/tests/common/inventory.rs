@@ -1429,8 +1429,9 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     as_of: Some(krishiv_exec::AsOfMergeSpec {
                         left_column: 0,
                         right_column: 0,
-                        direction: krishiv_exec::AsOfMergeDirection::Backward,
+                        direction: krishiv_exec::AsOfMergeDirection::Forward,
                         allow_exact: true,
+                        distance: Some(residual()),
                     }),
                 }
             }),

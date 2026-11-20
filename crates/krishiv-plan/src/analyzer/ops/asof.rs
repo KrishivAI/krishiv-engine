@@ -5,7 +5,7 @@
 
 use krishiv_common::error::{
     AsofJoinMatchConditionInvalidExpression, AsofJoinMatchConditionInvalidType,
-    AsofJoinMatchConditionTableReference,
+    AsofJoinMatchConditionTableReference, InternalError, KrishivUnsupportedFeature,
 };
 
 use super::*;
@@ -74,34 +74,62 @@ impl Resolver<'_> {
             return Err(type_error());
         }
         // Spark's `normalizeMatchOperands`: the operand that reads the left input goes first (a
-        // constant takes its written side); any other placement has no query context.
-        let (left, right, direction) = if m.as_written {
-            let side = |refs: &HashSet<AttrId>, written_left: bool| {
-                if refs.is_empty() {
-                    Some(written_left)
-                } else if refs.iter().all(|i| left_ids.contains(i)) {
-                    Some(true)
-                } else if refs.iter().all(|i| right_ids.contains(i)) {
-                    Some(false)
-                } else {
-                    None
-                }
-            };
-            match (side(&refs1, true), side(&refs2, false)) {
-                (Some(true), Some(false)) => (first, second, m.direction),
-                (Some(false), Some(true)) => (second, first, m.direction.flip()),
-                _ => {
-                    return Err(AnalysisError::new(
-                        AsofJoinMatchConditionTableReference {
-                            refs1: shown(&first),
-                            refs2: shown(&second),
-                        },
-                        Origin::UNKNOWN,
-                    ));
-                }
+        // constant takes its written side). Connect's operands are per side already, but Spark
+        // takes `joinAsOf(right, right.ts, left.ts)` too (its condition is an ordinary predicate),
+        // which is the swapped match in the flipped direction.
+        let side = |refs: &HashSet<AttrId>, written_left: bool| {
+            if refs.is_empty() {
+                Some(written_left)
+            } else if refs.iter().all(|i| left_ids.contains(i)) {
+                Some(true)
+            } else if refs.iter().all(|i| right_ids.contains(i)) {
+                Some(false)
+            } else {
+                None
             }
+        };
+        let (left, right, direction) = match (side(&refs1, true), side(&refs2, false)) {
+            (Some(true), Some(false)) => (first, second, m.direction),
+            (Some(false), Some(true)) => (second, first, m.direction.flip()),
+            _ if m.as_written => {
+                // Any other placement has no query context in Spark.
+                return Err(AnalysisError::new(
+                    AsofJoinMatchConditionTableReference {
+                        refs1: shown(&first),
+                        refs2: shown(&second),
+                    },
+                    Origin::UNKNOWN,
+                ));
+            }
+            _ => {
+                return Err(AnalysisError::new(
+                    KrishivUnsupportedFeature {
+                        feature: format!(
+                            "an as-of join whose values {} and {} read the same input",
+                            shown(&first),
+                            shown(&second)
+                        ),
+                    },
+                    origin,
+                ));
+            }
+        };
+        // Spark's forward distance `R - L` (`buildLeafOrderExpression`) over the operands as
+        // normalized, where the left one's type subtracts (`supportsSubtract`); evaluated by the
+        // executor where Spark evaluates it. A subtraction Krishiv cannot resolve for the two
+        // types leaves no check (the match itself is unchanged).
+        let distance = if direction == crate::AsOfDirection::Forward
+            && subtracts(left.ty.data_type.as_ref())
+        {
+            self.call(
+                "-",
+                vec![Arc::clone(&right.expr), Arc::clone(&left.expr)],
+                env,
+                origin,
+            )
+            .ok()
         } else {
-            (first, second, m.direction)
+            None
         };
         // The two values meet at the type a comparison of them casts both to.
         let compared = self
@@ -112,14 +140,25 @@ impl Resolver<'_> {
                 origin,
             )
             .map_err(|_| type_error())?;
-        let (left, right) = match &compared.node {
-            ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction { args, .. }))
-                if args.len() == 2 =>
-            {
-                (Arc::clone(&args[0]), Arc::clone(&args[1]))
-            }
-            _ => (left.expr, right.expr),
+        let ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction { args, .. })) =
+            &compared.node
+        else {
+            return Err(AnalysisError::new(
+                InternalError {
+                    message: "an as-of match's comparison did not resolve to a call".to_owned(),
+                },
+                origin,
+            ));
         };
+        let [left, right] = args.as_slice() else {
+            return Err(AnalysisError::new(
+                InternalError {
+                    message: "an as-of match's comparison does not take two values".to_owned(),
+                },
+                origin,
+            ));
+        };
+        let (left, right) = (Arc::clone(left), Arc::clone(right));
         let tolerance = match &m.tolerance {
             None => None,
             Some(t) => Some(self.bind(t, &Self::cx(&[], &[], env, "Join"))?.expr),
@@ -130,9 +169,32 @@ impl Resolver<'_> {
             direction,
             allow_exact: m.allow_exact,
             tolerance,
+            distance,
             as_written: false,
         })
     }
+}
+
+/// Whether Spark subtracts values of `t` for an as-of distance (`AsOfJoin.supportsSubtract`).
+fn subtracts(t: Option<&DataType>) -> bool {
+    matches!(
+        t,
+        Some(
+            DataType::Byte
+                | DataType::Short
+                | DataType::Integer
+                | DataType::Long
+                | DataType::Float
+                | DataType::Double
+                | DataType::Decimal(_)
+                | DataType::YearMonthInterval { .. }
+                | DataType::DayTimeInterval { .. }
+                | DataType::CalendarInterval
+                | DataType::Timestamp
+                | DataType::TimestampNtz
+                | DataType::Date
+        )
+    )
 }
 
 /// The ids of the input columns `e` reads (outside subqueries).

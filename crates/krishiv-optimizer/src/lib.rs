@@ -133,12 +133,13 @@ pub const MAX_ITERATIONS: usize = 100;
 type Rule = fn(Arc<LogicalPlan>) -> Arc<LogicalPlan>;
 
 /// The rewrite batch, in order, with the rules' names.
-const REWRITE: [(&str, Rule); 7] = [
+const REWRITE: [(&str, Rule); 8] = [
     ("RemoveAlias", project::remove_alias),
     ("CollapseRepartition", repartition::collapse),
     ("ConstantFolding", fold_node),
     ("PushDownFilter", pushdown::push_filter),
     ("PushDownJoinCondition", pushdown::push_join_condition),
+    ("PushDownAsOfCondition", pushdown::push_as_of_condition),
     ("CollapseProject", project::collapse),
     ("PushDownLimit", limit::push_limit),
 ];

@@ -12,7 +12,11 @@ impl Parser<'_> {
             self.far = self.far.max(far);
             return Err(Fail::Syntax);
         }
+        // A query inside an as-of join's right side is not that side: `MATCH_CONDITION` there
+        // is an ordinary alias again.
+        let asof_right = std::mem::replace(&mut self.asof_right, false);
         let r = self.query_at();
+        self.asof_right = asof_right;
         if matches!(r, Err(Fail::Syntax)) {
             self.failed_queries.insert(pos, self.far);
         }

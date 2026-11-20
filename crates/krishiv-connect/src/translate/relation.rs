@@ -424,6 +424,7 @@ impl Translator<'_> {
                 Some(t) => Some(self.expression(t)?),
                 None => None,
             },
+            distance: None,
             as_written: false,
         };
         Ok(PlanNode::AsOfJoin {

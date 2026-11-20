@@ -1064,6 +1064,8 @@ message AsOfMerge {
   AsOfMergeDirection direction = 3;
   // feature: as_of_join
   bool allow_exact = 4;
+  // feature: as_of_join
+  optional Residual distance = 5;
 }
 
 // feature: as_of_join

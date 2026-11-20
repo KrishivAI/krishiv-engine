@@ -20,5 +20,6 @@ pub(crate) fn as_of_merge(a: &pb::AsOfMerge) -> Result<AsOfMergeSpec> {
         right_column: column(a.right_column)?,
         direction,
         allow_exact: a.allow_exact,
+        distance: None,
     })
 }

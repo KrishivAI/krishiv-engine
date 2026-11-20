@@ -202,3 +202,13 @@ fn asof_join_gate() {
         "{text}"
     );
 }
+
+/// Inside a query on the right side, `match_condition (a)` is a table alias with a column list
+/// again: the as-of side's reading of the word ends at the subquery.
+#[test]
+fn asof_join_right_subquery_reads_match_condition_as_an_alias() {
+    let sql = "SELECT * FROM t ASOF JOIN (SELECT * FROM r match_condition (a)) q\n  \
+               MATCH_CONDITION (t.ts >= q.a) ON t.s = q.s";
+    let j = join(sql);
+    assert!(matches!(j.constraint, JoinConstraint::AsOf(_)), "{j:?}");
+}

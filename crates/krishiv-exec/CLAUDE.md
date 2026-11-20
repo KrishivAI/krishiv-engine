@@ -56,8 +56,13 @@ task; owner decision 2026-11-06); each task's build reports `broadcast_shared` o
 are the group, spilled past `krishiv.exec.join.smj.bufferBytes`; `join/fallback.rs` runs a grace partition that will not
 split through the same `Merge`. `join/merge/asof.rs` the as-of merge (Spark 4.3's `ASOF JOIN`, `SortMergeJoinPlan::as_of`, codec feature
 `as_of_join`): both sorts also order by the as-of column (NULLs first, skipped), groups are the keys alone, and each
-left row takes the nearest right row of its group (two pointers without a residual; with one, every allowed pair is
-evaluated, as Spark); `planner/join/asof.rs` plans `PlanNode::AsOfJoin` onto it (no key: one constant key; runtime-filter
+left row takes the nearest right row of its group: without a residual two pointers whose place (and backward's candidate)
+carries across the left batches of a key, so a group is read once (`AsOfCursor`, metric `as_of_right_rows`); with one,
+pairs are evaluated per left batch, forward emits a row at its first passing pair and backward at the first right row past
+its value, the open rows' best rows copied out of each read chunk, reserved (`as_of_compact`); forward evaluates Spark's
+distance `R - L` (`AsOfMergeSpec::distance`, `isnotnull` built at instantiation so no rule folds it) on each row's match
+and its next passing row, as Spark's scan does, so an ANSI overflow raises where Spark's does (`as_of_finish` reads that
+row at the key's end); `planner/join/asof.rs` plans `PlanNode::AsOfJoin` onto it (no key: one constant key; runtime-filter
 sites on the left only; nearest and tolerance are `KRISHIV_UNSUPPORTED_FEATURE`).
 `values/` (P2-T177) `ValueService` + `LocalValues`: runtime filters, subquery results and broadcast builds as
 versioned values (`ValueId`, `Version` are plan data), published as one partial per producer partition and visible

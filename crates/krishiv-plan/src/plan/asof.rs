@@ -58,6 +58,11 @@ pub struct AsOfMatch {
     pub allow_exact: bool,
     /// The largest `|L - R|` that matches: a foldable value at least zero (Connect only).
     pub tolerance: Option<Arc<Expr>>,
+    /// Resolved, forward only: `R - L` over the operands as normalized, Spark's distance
+    /// (`orderExpression`) where their type subtracts. Spark evaluates it on each left row's
+    /// matched right row and on the next right row that passes, so the executor does too: what
+    /// it raises (an ANSI overflow) is Spark's error. `None` before analysis.
+    pub distance: Option<Arc<Expr>>,
     /// Unresolved SQL: the operands are as written and the analyzer puts the one that
     /// reads the left input first (Spark's `normalizeMatchOperands`); `false` once
     /// resolved and for Connect, whose operands are already per side.
@@ -82,15 +87,17 @@ impl AsOfMatch {
             direction,
             allow_exact,
             tolerance: None,
+            distance: None,
             as_written: true,
         })
     }
 
-    /// Its expressions in order: the two values, then the tolerance.
+    /// Its expressions in order: the two values, the tolerance, then the distance.
     pub fn exprs(&self) -> impl Iterator<Item = &Arc<Expr>> {
         [&self.left, &self.right]
             .into_iter()
             .chain(self.tolerance.as_ref())
+            .chain(self.distance.as_ref())
     }
 
     /// Its expressions in order, mutably.
@@ -98,5 +105,6 @@ impl AsOfMatch {
         [&mut self.left, &mut self.right]
             .into_iter()
             .chain(self.tolerance.as_mut())
+            .chain(self.distance.as_mut())
     }
 }

@@ -938,11 +938,13 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     });
                     self.bool(as_of.allow_exact);
                     self.bool(as_of.as_written);
-                    match &as_of.tolerance {
-                        None => self.u8(0),
-                        Some(t) => {
-                            self.u8(1);
-                            self.expr(t);
+                    for e in [&as_of.tolerance, &as_of.distance] {
+                        match e {
+                            None => self.u8(0),
+                            Some(t) => {
+                                self.u8(1);
+                                self.expr(t);
+                            }
                         }
                     }
                 }

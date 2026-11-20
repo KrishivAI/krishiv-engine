@@ -953,11 +953,13 @@ impl Decoder {
             null_safe: j.null_safe.clone(),
             residual: self.residual(j.residual.as_ref())?,
             single_match: j.single_match,
-            as_of: j
-                .as_of
-                .as_ref()
-                .map(crate::decode_asof::as_of_merge)
-                .transpose()?,
+            as_of: match &j.as_of {
+                None => None,
+                Some(a) => Some(krishiv_exec::AsOfMergeSpec {
+                    distance: self.residual(a.distance.as_ref())?,
+                    ..crate::decode_asof::as_of_merge(a)?
+                }),
+            },
         })
     }
 

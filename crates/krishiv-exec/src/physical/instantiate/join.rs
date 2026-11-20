@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The hash join's builder, and the selection fused into its probe (design
 //! P2-E3 U2): the fused filter compiled over the probe input, and the row
-//! stage a scan below hands the probe ([`RuntimeFilters::hand_to_consumer`]).
+//! stage a scan below hands the probe ([`RuntimeFilters::hand_to_consumer`]);
+//! the sort-merge join's builder with its as-of distance check.
 
 use super::*;
 use std::collections::HashSet;
@@ -274,4 +275,60 @@ impl Instantiation<'_> {
         }
         join.with_row_stage(filters.clone())
     }
+}
+
+/// An as-of join's distance `R - L` as the check the merge evaluates: `isnotnull(R - L)`, built
+/// here so that no rule folds the subtraction away.
+fn as_of_distance(
+    probe: &SchemaRef,
+    build: &SchemaRef,
+    r: Option<&Residual>,
+    env: &EvalEnv,
+) -> Result<Option<Arc<dyn Predicate>>> {
+    let Some(r) = r else {
+        return Ok(None);
+    };
+    let both = crate::planner::concat_schemas(probe, build);
+    let exprs: Vec<&Expr> = r.conjuncts.iter().map(AsRef::as_ref).collect();
+    let v = Values {
+        env,
+        subqueries: &[],
+    };
+    let mut compiled = compile_all(&exprs, &r.layout, &both, &v)?;
+    let (Some(d), true) = (compiled.pop(), compiled.is_empty()) else {
+        return Err(internal("an as-of distance is one expression".to_owned()));
+    };
+    Ok(Some(
+        Arc::new(Compiled(eval::is_not_null(d))) as Arc<dyn Predicate>
+    ))
+}
+
+pub(crate) fn sort_merge_join(
+    probe: &SchemaRef,
+    build: &SchemaRef,
+    j: &SortMergeJoinPlan,
+    env: &EvalEnv,
+    spill: Option<SpillScope>,
+) -> Result<SortMergeJoin> {
+    let distance = as_of_distance(
+        probe,
+        build,
+        j.as_of.as_ref().and_then(|a| a.distance.as_ref()),
+        env,
+    )?;
+    SortMergeJoin::try_new_with_distance(
+        JoinSpec {
+            join_type: j.join_type,
+            probe_schema: Arc::clone(probe),
+            build_schema: Arc::clone(build),
+            probe_keys: j.probe_keys.clone(),
+            build_keys: j.build_keys.clone(),
+            null_safe: j.null_safe.clone(),
+            filter: residual(probe, build, j.residual.as_ref(), env)?,
+            single_match: j.single_match,
+            spill,
+        },
+        j.as_of.clone(),
+        distance,
+    )
 }

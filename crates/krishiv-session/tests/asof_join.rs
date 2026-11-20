@@ -149,7 +149,9 @@ fn a_spilled_group_gives_the_same_rows() {
     let sql = "SELECT count(*), sum(q.id) FROM range(0, 20000, 1, 4) t \
                ASOF JOIN (SELECT id, id * 2 AS v FROM range(0, 20000, 1, 4)) q \
                MATCH_CONDITION (t.id * 2 >= q.v + 1) ON t.id % 3 = q.id % 3";
-    let expected = rows(&s, sql);
+    // Each `t.id` from 3 takes the greatest `q.id < t.id` of its residue class: `t.id - 3`.
+    let expected = ["19997|199930006"];
+    assert_eq!(rows(&s, sql), expected);
     block_on(async {
         s.sql("SET krishiv.exec.join.smj.bufferBytes=1024")
             .await?
@@ -157,7 +159,32 @@ fn a_spilled_group_gives_the_same_rows() {
             .await
     })
     .unwrap();
-    assert_eq!(rows(&s, sql), expected);
+    let df = block_on(s.sql(sql)).unwrap();
+    let (batches, profile) = block_on(df.collect_with_profile()).unwrap();
+    let text = profile.to_text(krishiv_session::TextOptions::default());
+    let spilled = text
+        .lines()
+        .filter_map(|l| l.split("groups_spilled=").nth(1))
+        .filter_map(|v| {
+            v.split(|c: char| !c.is_ascii_digit())
+                .next()?
+                .parse::<u64>()
+                .ok()
+        })
+        .sum::<u64>();
+    assert!(spilled > 0, "a group spilled:\n{text}");
+    let got: Vec<String> = batches
+        .iter()
+        .flat_map(|b| {
+            (0..b.num_rows()).map(move |r| {
+                (0..b.num_columns())
+                    .map(|c| cell(b.column(c).as_ref(), r))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+        })
+        .collect();
+    assert_eq!(got, expected);
 }
 
 #[test]
@@ -165,4 +192,81 @@ fn the_flag_gates_the_syntax() {
     let s = Session::new().unwrap();
     let sql = "SELECT * FROM range(3) t ASOF JOIN range(3) q MATCH_CONDITION (t.id >= q.id)";
     assert_eq!(error(&s, sql), "UNSUPPORTED_FEATURE.ASOF_JOIN");
+}
+
+/// Spark 4.3.0 (real run): a forward match evaluates its distance `R - L` on the matched row and
+/// on the next passing row, so an ANSI overflow there raises; a later row's does not, and
+/// backward evaluates none.
+#[test]
+fn the_forward_distance_raises_where_spark_raises() {
+    let s = session();
+    let sql = |left: &str, rights: &str, op: &str| {
+        format!(
+            "SELECT * FROM VALUES ({left}) AS t(i) ASOF JOIN VALUES {rights} AS r(i) \
+             MATCH_CONDITION (t.i {op} r.i)"
+        )
+    };
+    assert_eq!(
+        error(&s, &sql("-2", "(2147483647)", "<=")),
+        "ARITHMETIC_OVERFLOW"
+    );
+    // The next passing row after the match (0) overflows.
+    assert_eq!(
+        error(&s, &sql("-2", "(0), (2147483647)", "<=")),
+        "ARITHMETIC_OVERFLOW"
+    );
+    // The next passing row is 1; 2147483647 is never evaluated.
+    assert_eq!(
+        rows(&s, &sql("-2", "(0), (1), (2147483647)", "<=")),
+        ["-2|0"]
+    );
+    assert_eq!(
+        rows(&s, &sql("2147483647", "(-2)", ">=")),
+        ["2147483647|-2"]
+    );
+}
+
+/// The optimizer moves an as-of join's one-sided conjuncts into its inputs (right-only `ON`
+/// conjuncts, left-only ones for an inner join, left-only filters above): the rows are those of
+/// the same filters written below by hand.
+#[test]
+fn one_sided_conditions_filter_the_inputs_with_the_same_rows() {
+    let s = session();
+    for kind in ["", "LEFT"] {
+        let pushed = format!(
+            "SELECT t.id, q.qid FROM t {kind} ASOF JOIN q MATCH_CONDITION (t.ts >= q.ts) \
+             ON t.k = q.k AND q.qid <> 102"
+        );
+        let by_hand = format!(
+            "SELECT t.id, q.qid FROM t {kind} ASOF JOIN (SELECT * FROM q WHERE qid <> 102) q \
+             MATCH_CONDITION (t.ts >= q.ts) ON t.k = q.k"
+        );
+        assert_eq!(rows(&s, &pushed), rows(&s, &by_hand), "{kind}");
+        let above = format!(
+            "SELECT t.id, q.qid FROM t {kind} ASOF JOIN q MATCH_CONDITION (t.ts >= q.ts) \
+             ON t.k = q.k WHERE t.id <> 2"
+        );
+        let by_hand = format!(
+            "SELECT t.id, q.qid FROM (SELECT * FROM t WHERE id <> 2) t {kind} ASOF JOIN q \
+             MATCH_CONDITION (t.ts >= q.ts) ON t.k = q.k"
+        );
+        assert_eq!(rows(&s, &above), rows(&s, &by_hand), "{kind}");
+    }
+    // A left-only `ON` conjunct: an inner join drops the rows it rejects, a left join keeps them
+    // unmatched.
+    let on_left = |kind: &str| {
+        format!(
+            "SELECT t.id, q.qid FROM t {kind} ASOF JOIN q MATCH_CONDITION (t.ts >= q.ts) \
+             ON t.k = q.k AND t.id <> 2"
+        )
+    };
+    assert_eq!(
+        rows(&s, &on_left("")),
+        rows(
+            &s,
+            "SELECT t.id, q.qid FROM (SELECT * FROM t WHERE id <> 2) t ASOF JOIN q \
+             MATCH_CONDITION (t.ts >= q.ts) ON t.k = q.k"
+        )
+    );
+    assert!(rows(&s, &on_left("LEFT")).contains(&"2|NULL".to_owned()));
 }
