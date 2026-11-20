@@ -103,6 +103,9 @@ SESSION_ID = "01932a40-1a00-7a01-8001-5e5510000001"
 # What a console over stored profiles answers: the history, a query's page and the health the page reads its mode from.
 # TPC-H Q9 as a stored profile: the document the Python viewer's tests read, at SF 0.01.
 Q9_ID = "01932a40-1a00-7a01-8001-000000000009"
+# A query whose plan arrives with the third answer; the count of answers so far.
+LATE_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000b"
+LATE_PLAN_ASKED = [0]
 # A query the fixture answers with no plan tree.
 NO_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000a"
 Q9_PROFILE = json.loads(
@@ -183,7 +186,11 @@ def stored_detail(query_id: str, profile: dict, sql: str) -> dict:
             "operator": hot["name"],
             "compute_ns": hot["compute_ns"],
         },
-        "plan": profile["plan"],
+        # The server sends a node's id, name and children, never its detail text.
+        "plan": [
+            {"id": n["id"], "name": n["name"], "children": n["children"]}
+            for n in profile["plan"]
+        ],
     }
 
 
@@ -230,6 +237,11 @@ def route(
     if path == f"/api/internal/queries/{NO_PLAN_ID}":
         # A query whose plan the source does not keep (a running one, a server with no history store).
         return d["detail"] | {"plan": None}
+    if path == f"/api/internal/queries/{LATE_PLAN_ID}":
+        # A query that has just ended: its profile is written a moment later, so the first answers carry no
+        # plan and a later one does.
+        LATE_PLAN_ASKED[0] += 1
+        return d["detail"] | ({} if LATE_PLAN_ASKED[0] > 2 else {"plan": None})
     if path.startswith("/api/internal/queries/"):
         return d["detail"]
     return None

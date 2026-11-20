@@ -92,6 +92,8 @@ export function nodeValue(operators: Operator[], metric: Metric): number | null 
   const all = operators.map((o) => ({ role: o.role, v: metric.value(o) })).filter((x): x is { role: string | undefined; v: number } => x.v != null);
   if (!all.length) return null;
   const sources = all.filter((x) => x.role === "source");
+  // A node with no source operator (a filter, a projection) has one operator that reports rows out; if it had
+  // several, their rows add up.
   const taken = (metric.over === "source" && sources.length ? sources : all).map((x) => x.v);
   return metric.over === "max" ? Math.max(...taken) : taken.reduce((a, v) => a + v, 0);
 }
@@ -103,7 +105,6 @@ export interface HeatRow {
   /** The node's id in the plan, or the operator's id when there is no tree. */
   id: number | null;
   name: string;
-  detail: string;
   value: number | null;
   /** `none`: not reported (no colour); `zero`: a measured zero (its own look); `value`: shaded. */
   state: "none" | "zero" | "value";
@@ -121,8 +122,8 @@ export function heatRows(plan: PlanNode[] | null | undefined, operators: Operato
   const tree = plan?.length ? planRows(plan, operators) : [];
   const loose = plan?.length ? unplaced(tree, operators) : operators;
   const rows = [
-    ...tree.map((r) => ({ key: `n${r.at}`, depth: r.depth, id: r.node.id ?? null, name: r.node.name, detail: r.node.detail ?? "", value: nodeValue(r.operators, metric) })),
-    ...loose.map((o) => ({ key: `o${o.operator_id}`, depth: 0, id: plan?.length ? null : o.operator_id, name: o.name, detail: "", value: nodeValue([o], metric) })),
+    ...tree.map((r) => ({ key: `n${r.at}`, depth: r.depth, id: r.node.id ?? null, name: r.node.name, value: nodeValue(r.operators, metric) })),
+    ...loose.map((o) => ({ key: `o${o.operator_id}`, depth: 0, id: plan?.length ? null : o.operator_id, name: o.name, value: nodeValue([o], metric) })),
   ];
   const largest = Math.max(0, ...rows.map((r) => r.value ?? 0));
   const sum = metric.over === "sum" ? rows.reduce((a, r) => a + (r.value ?? 0), 0) : 0;

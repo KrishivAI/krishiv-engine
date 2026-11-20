@@ -754,10 +754,12 @@ async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() 
     );
     // The plan of a stored query is the document's own (nodes join operators by `node_id`); an unknown query has none.
     assert_eq!(
-        source.plan(&stored[0].query_id).await.unwrap(),
+        source.plan(&queries[0]).await.unwrap(),
         Some(doc["plan"].clone())
     );
-    assert_eq!(source.plan("no-such-query").await.unwrap(), None);
+    let mut unknown = queries[0].clone();
+    unknown.insert("query_id".to_owned(), json!("no-such-query"));
+    assert_eq!(source.plan(&unknown).await.unwrap(), None);
     assert!(source.rows(SystemTable::Memory).await.unwrap().is_empty());
     assert!(source.rows(SystemTable::Caches).await.unwrap().is_empty());
     assert!(!source.cancel("anything").await.unwrap());
@@ -777,7 +779,7 @@ async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() 
         &format!("/api/internal/queries/{}", stored[0].query_id),
     )
     .await;
-    assert_eq!(detail["plan"], doc["plan"], "{detail}");
+    assert_eq!(detail["plan"], page_plan(&doc["plan"]), "{detail}");
     let nodes: Vec<&Value> = doc["plan"]
         .as_array()
         .unwrap()
@@ -957,6 +959,175 @@ async fn the_editor_result_is_exact_at_the_row_cap_boundary() {
     }
 }
 
+/// A stored plan as the query page gets it: each node's `id`, `name` and `children`, and nothing else.
+fn page_plan(plan: &Value) -> Value {
+    Value::Array(
+        plan.as_array()
+            .unwrap()
+            .iter()
+            .map(|n| json!({"id": n["id"], "name": n["name"], "children": n["children"]}))
+            .collect(),
+    )
+}
+
+/// The id of the listed query whose (masked) text starts with `text`.
+async fn listed_id(addr: std::net::SocketAddr, text: &str) -> String {
+    let list = get(addr, "/api/internal/history").await;
+    list["queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|q| {
+            q["query_text"]
+                .as_str()
+                .is_some_and(|t| t.starts_with(text))
+        })
+        .and_then(|q| q["query_id"].as_str())
+        .unwrap()
+        .to_owned()
+}
+
+/// The stored profile of `id`, waited for: the writer runs off the query's thread.
+async fn stored_soon(rt: &EngineRuntime, id: &str) -> krishiv_session::StoredProfile {
+    for _ in 0..200 {
+        if rt.stored_profile(id).unwrap().is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // `None` here: the profile was not stored within 10 s.
+    rt.stored_profile(id).unwrap().unwrap()
+}
+
+/// The plan's text never reaches the page. With `krishiv.history.literals = keep` the stored plan holds the
+/// statement's literals in its nodes' details; the query's page (and the signed link that reads the same
+/// response) gets the nodes' ids, names and children only, as it gets the statement's text masked.
+#[tokio::test]
+async fn the_plan_on_the_query_page_carries_no_literal_of_the_statement() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = EngineRuntime::builder()
+        .config("krishiv.history.path", dir.path().to_str().unwrap())
+        .config("krishiv.history.literals", "keep")
+        .build()
+        .unwrap();
+    let user = krishiv_session::Session::builder()
+        .runtime(Arc::clone(&rt))
+        .build()
+        .unwrap();
+    user.sql("SELECT id FROM range(0, 1000) WHERE id % 977 = 424242 OR id = 7")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let addr = serve(router_with_ui(
+        Arc::new(SessionSource::new(Arc::clone(&rt)).unwrap()),
+        TOKEN,
+    ))
+    .await;
+    let id = listed_id(addr, "SELECT id FROM range(").await;
+    let stored = stored_soon(&rt, &id).await;
+    // The store kept the literal, in the plan: the test would pass for the wrong reason otherwise.
+    let doc: Value = serde_json::from_str(&stored.profile).unwrap();
+    assert!(doc["plan"].to_string().contains("424242"), "{doc}");
+    let a = auth();
+    let (status, _, body) = raw(
+        addr,
+        "GET",
+        &format!("/api/internal/queries/{id}"),
+        &["Host: localhost", &a],
+        "",
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert!(!body.contains("424242"), "{body}");
+    let detail: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(detail["plan"], page_plan(&doc["plan"]), "{detail}");
+    assert!(
+        detail["plan"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n.as_object().unwrap().len() == 3),
+        "{detail}"
+    );
+}
+
+/// A client may reuse an operation id across runs of a server, and the server reads and writes one history
+/// directory. While this run's profile of the id is not written yet, the store's newest under that id is the
+/// earlier run's: its plan is not drawn over this run's operators.
+#[tokio::test]
+async fn an_earlier_runs_plan_is_not_shown_for_this_runs_query_of_the_same_id() {
+    use krishiv_server::internal::{SystemTable, UiSource};
+    let dir = tempfile::tempdir().unwrap();
+    let sql = "SELECT id % 3 AS k, count(*) AS n FROM range(0, 300) GROUP BY id % 3";
+    let run = async |rt: &Arc<EngineRuntime>, id: &str| {
+        let user = krishiv_session::Session::builder()
+            .runtime(Arc::clone(rt))
+            .build()
+            .unwrap();
+        user.sql_with(sql, krishiv_session::QueryOptions::new().operation_id(id))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+    };
+    let history = |dir: &std::path::Path| {
+        EngineRuntime::builder()
+            .config("krishiv.history.path", dir.to_str().unwrap())
+            .build()
+            .unwrap()
+    };
+    let id = "01932a40-1a00-7a01-8001-0000000000aa";
+    // The earlier run stores the id; dropping the runtime flushes its writer.
+    {
+        let earlier = history(dir.path());
+        run(&earlier, id).await;
+    }
+    let before = krishiv_session::read_profile_history(dir.path()).unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].query_id, id);
+
+    // This run: the server's wiring, one directory read at start and written by the runtime.
+    let rt = history(dir.path());
+    let source = SessionSource::new(Arc::clone(&rt))
+        .unwrap()
+        .with_stored_history(&before);
+    // Before this run uses the id, the earlier run's query is listed with its plan.
+    let listed = |rows: Vec<serde_json::Map<String, Value>>| {
+        rows.into_iter()
+            .find(|q| q["query_id"] == json!(id))
+            .expect("the query is listed")
+    };
+    let old_row = listed(source.rows(SystemTable::Queries).await.unwrap());
+    assert!(source.plan(&old_row).await.unwrap().is_some());
+    // This run finishes a query under the same id. A row of it submitted after anything the store holds
+    // gets no plan from the store, whatever the writer has or has not written.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    run(&rt, id).await;
+    let row = listed(source.rows(SystemTable::Queries).await.unwrap());
+    assert!(
+        row["submitted_at"].as_i64().unwrap() / 1000 >= before[0].finished_at_ms,
+        "{row:?}"
+    );
+    let mut later = row.clone();
+    later.insert("submitted_at".to_owned(), json!(i64::MAX / 2));
+    assert_eq!(source.plan(&later).await.unwrap(), None);
+    // Once this run's profile is written, the plan shown is this run's.
+    let mut own = None;
+    for _ in 0..200 {
+        own = rt.stored_profile(id).unwrap().filter(|p| p != &before[0]);
+        if own.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let own = own.expect("this run's profile was not stored within 10 s");
+    let doc: Value = serde_json::from_str(&own.profile).unwrap();
+    assert_eq!(source.plan(&row).await.unwrap(), Some(doc["plan"].clone()));
+}
+
 /// PR-32b: a running server's query page gets the plan tree. A query of this run is read from the runtime's
 /// history store once it is written; one of an earlier run from what the server read when it started; a runtime
 /// that keeps no history has no tree, and the page then lists the operators alone.
@@ -1006,7 +1177,7 @@ async fn a_server_returns_the_stored_plan_of_a_finished_query() {
     let doc: Value = serde_json::from_str(&stored.profile).unwrap();
     let detail = get(addr, &format!("/api/internal/queries/{id}")).await;
     assert!(doc["plan"].as_array().is_some_and(|p| p.len() > 1), "{doc}");
-    assert_eq!(detail["plan"], doc["plan"], "{detail}");
+    assert_eq!(detail["plan"], page_plan(&doc["plan"]), "{detail}");
     // The operators are the live rows of the same run: each names a node of that plan, or none.
     let nodes: Vec<&Value> = doc["plan"]
         .as_array()
@@ -1036,7 +1207,7 @@ async fn a_server_returns_the_stored_plan_of_a_finished_query() {
         .with_stored_history(&history);
     let addr = serve(router_with_ui(Arc::new(source), TOKEN)).await;
     let detail = get(addr, &format!("/api/internal/queries/{id}")).await;
-    assert_eq!(detail["plan"], doc["plan"], "{detail}");
+    assert_eq!(detail["plan"], page_plan(&doc["plan"]), "{detail}");
 
     // No history store: the query is listed with its operators and no tree.
     let user = krishiv_session::Session::builder()

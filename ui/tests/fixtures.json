@@ -302,7 +302,6 @@
       {
         "id": 0,
         "name": "HashAggregate",
-        "detail": "o_orderpriority",
         "children": [
           1
         ]
@@ -310,7 +309,6 @@
       {
         "id": 1,
         "name": "Exchange",
-        "detail": "hashpartitioning(o_orderpriority)",
         "children": [
           2
         ]
@@ -318,7 +316,6 @@
       {
         "id": 2,
         "name": "HashJoin",
-        "detail": "o_orderkey = l_orderkey",
         "children": [
           3,
           5,
@@ -328,7 +325,6 @@
       {
         "id": 3,
         "name": "Filter",
-        "detail": "l_commitdate < l_receiptdate",
         "children": [
           4
         ]
@@ -336,13 +332,11 @@
       {
         "id": 4,
         "name": "FileScan",
-        "detail": "lineitem",
         "children": []
       },
       {
         "id": null,
         "name": "Subquery",
-        "detail": "scalar-subquery#1",
         "children": [
           6
         ]
@@ -350,7 +344,6 @@
       {
         "id": null,
         "name": "SharedPlan",
-        "detail": "",
         "children": [
           7
         ]
@@ -358,7 +351,6 @@
       {
         "id": 5,
         "name": "FileScan",
-        "detail": "orders",
         "children": []
       }
     ]

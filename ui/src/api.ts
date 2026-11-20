@@ -91,11 +91,13 @@ export interface Operator {
   spilled_bytes?: number;
 }
 
-/** One node of a stored plan (the profile's `plan`); `children` index the array. A heading has no id. */
+/**
+ * One node of a stored plan (the profile's `plan`); `children` index the array. A heading has no id. The
+ * server sends no other member: a node's detail text can hold the statement's literals.
+ */
 export interface PlanNode {
   id: number | null;
   name: string;
-  detail?: string;
   children: number[];
 }
 

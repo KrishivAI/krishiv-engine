@@ -15,16 +15,35 @@
   // `embed`: the embedded view reads through its signed link (no session) and shows no navigation.
   let { id, embed = null }: { id: string; embed?: EmbedLink | null } = $props();
 
+  const ended = (d: QueryDetail) => !["running", "queued"].includes(d.query.state ?? "");
+  /// Answers waited for the plan of a query that has ended (one a second).
+  const PLAN_WAITS = 10;
+  /// Answers so far that showed the query ended with no plan.
+  let planless = $state(0);
+
   const q = createQuery<QueryDetail>(() => ({
     queryKey: ["query", id],
-    queryFn: () =>
-      api<QueryDetail>(
+    queryFn: async () => {
+      const d = await api<QueryDetail>(
         embed
           ? `/api/internal/embed/queries/${encodeURIComponent(id)}?exp=${encodeURIComponent(embed.exp)}&sig=${encodeURIComponent(embed.sig)}`
           : `/api/internal/queries/${encodeURIComponent(id)}`,
-      ),
-    refetchInterval: (query) => (consoleInfo.mode !== "profiles" && ["running", "queued"].includes(query.state.data?.query.state ?? "") ? 1000 : false),
+      );
+      if (ended(d) && !d.plan?.length) planless += 1;
+      return d;
+    },
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      if (!d || consoleInfo.mode === "profiles") return false;
+      if (!ended(d)) return 1000;
+      // The query has ended. Its profile is written a moment later, off the query's thread, so an answer
+      // with no plan is asked for again, for a bounded time.
+      return !d.plan?.length && planless < PLAN_WAITS ? 1000 : false;
+    },
   }));
+  const live = $derived(!!q.data && !ended(q.data));
+  // Whether the page is still asking for the plan of an ended query.
+  const waiting = $derived(!live && !q.data?.plan?.length && consoleInfo.mode !== "profiles" && planless < PLAN_WAITS);
 
   const maxCompute = $derived(Math.max(1, ...(q.data?.operators ?? []).map((o) => o.compute_ns ?? 0)));
   const hotId = $derived(q.data?.hot_operator?.operator_id);
@@ -102,7 +121,13 @@
     </div>
     {#if !hasPlan}
       <p class="mb-2 text-muted-foreground" data-testid="no-plan">
-        No plan tree is stored for this query, so its operators are listed in id order. The tree is read from the query history (<code>krishiv.history.path</code>) once the query has finished.
+        {#if live}
+          The plan tree is drawn once the query has ended; until then its operators are listed in id order.
+        {:else if waiting}
+          The query's profile is being stored; the plan tree is drawn when it is. Until then the operators are listed in id order.
+        {:else}
+          No plan tree is stored for this query, so its operators are listed in id order. The tree comes from the query history (<code>krishiv.history.path</code>).
+        {/if}
       </p>
     {/if}
     <ol class="mb-2 grid list-none gap-1 p-0" aria-label={`${hasPlan ? "Plan" : "Operators"} shaded by ${metric.label.toLowerCase()}`} data-testid="plan-tree">
@@ -114,7 +139,7 @@
           data-state={r.state}
           data-depth={r.depth}
         >
-          <span class="min-w-0 wrap-anywhere">{#if r.id != null}<span class="mono text-muted-foreground">{r.id}</span> {/if}<span data-part="name">{r.name}</span>{#if r.detail}{" "}<span class="text-muted-foreground">{r.detail}</span>{/if}</span>
+          <span class="min-w-0 wrap-anywhere">{#if r.id != null}<span class="mono text-muted-foreground">{r.id}</span> {/if}<span data-part="name">{r.name}</span></span>
           {#if r.value == null}
             <span class="text-muted-foreground" data-part="value">not reported</span>
           {:else}

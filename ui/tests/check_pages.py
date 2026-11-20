@@ -935,9 +935,44 @@ def heatmap_checks(origin: str) -> list[str]:
         ]
         if flat != want_flat:
             problems.append(f"heatmap without a plan: {flat}, not {want_flat}")
+        said = page.get_by_test_id("no-plan").inner_text()
+        if "being stored" not in said:
+            problems.append(
+                f"heatmap without a plan: while it still asks, the page says {said!r}"
+            )
         label = page.get_by_test_id("plan-tree").get_attribute("aria-label")
         if label != "Operators shaded by compute time":
             problems.append(f"heatmap without a plan: the list is labelled {label!r}")
+        # It stops asking after a bounded time, and then says the query has no stored tree.
+        try:
+            page.get_by_text("No plan tree is stored for this query").wait_for(
+                timeout=20000
+            )
+        except PlaywrightTimeout:
+            problems.append(
+                "heatmap without a plan: the page never says the query has no stored tree"
+            )
+        # A query watched to its end: the first answers after it ended have no plan (the profile is written
+        # a moment later), the page asks again, and the tree is drawn when the plan arrives.
+        fixture_server.LATE_PLAN_ASKED[0] = 0
+        page.goto(f"{origin}/?token=fixture#/queries/{fixture_server.LATE_PLAN_ID}")
+        page.get_by_test_id("no-plan").wait_for(timeout=10000)
+        try:
+            page.locator(f"{HEAT_ROWS}[data-depth='5']").wait_for(timeout=10000)
+        except PlaywrightTimeout:
+            problems.append(
+                "heatmap: a plan that arrives after the query ended is never drawn"
+            )
+        else:
+            late = [(depth, name) for depth, name, *_ in page.evaluate(HEAT)]
+            if late != NODES:
+                problems.append(
+                    f"heatmap: the late plan is drawn as {late}, not {NODES}"
+                )
+            if page.get_by_test_id("no-plan").count():
+                problems.append(
+                    "heatmap: the page still says there is no plan after drawing it"
+                )
         problems += [f"heatmap: page error: {e}" for e in errors]
         browser.close()
     return problems

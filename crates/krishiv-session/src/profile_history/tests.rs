@@ -123,6 +123,58 @@ fn a_query_id_stored_twice_reads_back_as_the_newest() {
     assert!(super::read_stored(&dir.path().join("missing"), "q1").is_err());
 }
 
+/// The row is found by its id and finish time alone: a segment whose `profile` column does not read still
+/// answers "not here" for another query, and a query in several row groups reads back as the one row.
+#[test]
+fn a_lookup_reads_the_profile_of_the_one_row_it_returns() {
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+    let dir = tempfile::tempdir().unwrap();
+    // 3,000 rows in row groups of 1,000; the wanted id is in the last group, between others.
+    let rows: Vec<StoredProfile> = (0..3000).map(|i| row(i, format!("doc-{i}"))).collect();
+    write_segment(dir.path(), "history-0000000000001-000001.parquet", &rows).unwrap();
+    let path = dir.path().join("history-0000000000001-000001.parquet");
+    let whole = super::read_segment(&path).unwrap();
+    let small = dir.path().join("history-0000000000002-000002.parquet");
+    let batch = {
+        let reader = super::open_segment(&path)
+            .unwrap()
+            .with_batch_size(3000)
+            .build()
+            .unwrap();
+        reader.into_iter().next().unwrap().unwrap()
+    };
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(1000))
+        .build();
+    let mut writer = ArrowWriter::try_new(
+        std::fs::File::create(&small).unwrap(),
+        batch.schema(),
+        Some(props),
+    )
+    .unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(
+        super::open_segment(&small)
+            .unwrap()
+            .metadata()
+            .num_row_groups(),
+        3
+    );
+    for i in [0_usize, 999, 1000, 2500, 2999] {
+        assert_eq!(
+            super::read_stored(dir.path(), &format!("q{i}"))
+                .unwrap()
+                .as_ref(),
+            Some(&whole[i]),
+            "row {i}"
+        );
+    }
+    assert_eq!(super::read_stored(dir.path(), "q3000").unwrap(), None);
+}
+
 #[test]
 fn a_finished_query_leaves_a_profile_that_reads_back() {
     let dir = tempfile::tempdir().unwrap();

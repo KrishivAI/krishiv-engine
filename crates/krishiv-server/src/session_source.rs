@@ -596,21 +596,30 @@ impl UiSource for SessionSource {
         })
     }
 
-    fn plan<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, Option<Value>> {
+    fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
         Box::pin(async move {
-            // A query of this run is in the runtime's own store once it has finished and the writer has
-            // reached it; a running one has no stored plan yet, and the page says so.
+            let Some(query_id) = query_id(query) else {
+                return Ok(None);
+            };
+            // The runtime's store, once the writer has reached the query. The store also holds earlier runs
+            // (a server reads and writes one directory) and a client may reuse an id, so a profile is this
+            // query's only if it ended after this query was submitted: until this run's profile is written
+            // the store's newest under the id is an earlier run's, whose plan is not this run's operators'.
             let runtime = Arc::clone(&self.runtime);
             let id = query_id.to_owned();
             let own = tokio::task::spawn_blocking(move || runtime.stored_profile(&id))
                 .await
                 .map_err(|e| UiError::new(e.to_string()))?
                 .map_err(ui_error)?;
-            if let Some(profile) = own {
+            let submitted_ms = query
+                .get("submitted_at")
+                .and_then(Value::as_i64)
+                .map_or(i64::MAX, |us| us.div_euclid(1000));
+            if let Some(profile) = own.filter(|p| p.finished_at_ms >= submitted_ms) {
                 return Ok(plan_of(&profile.profile));
             }
-            // One of an earlier run (read when the server started), unless this run has a query of that id:
-            // its page shows this run's operators, which an earlier run's plan would not match.
+            // One of an earlier run that the source was given when it was built, unless this run has a
+            // query of that id.
             match &self.stored {
                 Some(stored) if stored.plans.contains_key(query_id) => {
                     if self.live_ids().await?.contains(query_id) {
@@ -968,8 +977,8 @@ impl UiSource for ProfilesSource {
         Box::pin(async { Ok(false) })
     }
 
-    fn plan<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, Option<Value>> {
-        Box::pin(async move { Ok(self.plans.get(query_id).cloned()) })
+    fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
+        Box::pin(async move { Ok(query_id(query).and_then(|id| self.plans.get(id).cloned())) })
     }
 }
 
