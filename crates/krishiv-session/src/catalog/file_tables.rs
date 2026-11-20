@@ -133,6 +133,8 @@ impl QueryCatalog {
                 .unwrap_or_else(PoisonError::into_inner)
                 .push((key.clone(), Arc::new(opened)));
         }
+        // The declared catalogs' tables, on the I/O runtime (design P3-T067 PR-58b).
+        Box::pin(self.open_declared(plan)).await?;
         // Boxed: the sample's future would otherwise nest inside every
         // caller's state machine (the MCP server's overflows the layout depth).
         if sample {
