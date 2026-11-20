@@ -689,6 +689,76 @@ fn the_fault_store_delegates_and_flags_unscheduled_requests() {
 }
 
 #[test]
+fn a_bound_query_pool_charges_every_clone_until_it_ends() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    rt().block_on(async {
+        let root = TreePool::new(&MemoryConfig::default());
+        let session = root.child("session", None);
+        let s = setup(IoConfig::default());
+        let io = s.io.clone().with_memory(Arc::clone(&session));
+        // A clone taken during planning (a file table) shares the binding.
+        let planned = io.clone();
+        let f = put(&s, "b", 200_000).await;
+        let tail = planned.get_tail(&f, 0).await.unwrap();
+        assert!(
+            session.reserved() >= 64 << 10,
+            "planning reads charge the session"
+        );
+        let query = session.child("q", None);
+        let bound = io.bind_query_memory(Arc::clone(&query));
+        assert!(
+            Arc::ptr_eq(&planned.memory_pool().unwrap(), &query),
+            "the clone charges the query"
+        );
+        let held = planned.get_ranges_held(&f, &[0..1000]).await.unwrap();
+        assert!(
+            query.reserved() >= 1000,
+            "the query's reads charge the query"
+        );
+        drop(tail);
+        assert_eq!(
+            session.reserved(),
+            query.reserved(),
+            "the earlier read went back"
+        );
+        drop(held);
+        assert_eq!(query.reserved(), 0);
+        drop(bound);
+        // The query is over: a clone kept past it charges the session again and holds no
+        // consumer of the query's pool.
+        assert!(Arc::ptr_eq(&planned.memory_pool().unwrap(), &session));
+        assert!(
+            !query.snapshot().entries.iter().any(|e| e.is_consumer),
+            "no consumer left in the query pool"
+        );
+        let tail = planned.get_tail(&f, 0).await.unwrap();
+        assert!(session.reserved() >= 64 << 10);
+        assert_eq!(query.reserved(), 0);
+        drop(tail);
+        // `without_memory` and `with_memory` leave their clone's binding alone.
+        let other = root.child("other", None);
+        let apart = planned.clone().without_memory();
+        assert!(apart.memory_pool().is_none());
+        let moved = planned.clone().with_memory(Arc::clone(&other));
+        assert!(Arc::ptr_eq(&moved.memory_pool().unwrap(), &other));
+        assert!(Arc::ptr_eq(&planned.memory_pool().unwrap(), &session));
+        assert_eq!(root.reserved(), 0);
+    });
+}
+
+#[test]
+fn the_first_attached_pool_is_the_runtime_memory() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let s = setup(IoConfig::default());
+    assert!(s.io.runtime_memory().is_none());
+    let first: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let second: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    s.io.scheduler().attach_memory(&first);
+    s.io.scheduler().attach_memory(&second);
+    assert!(Arc::ptr_eq(s.io.runtime_memory().unwrap(), &first));
+}
+
+#[test]
 fn metadata_reads_and_the_cache_are_reserved() {
     use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
     rt().block_on(async {
