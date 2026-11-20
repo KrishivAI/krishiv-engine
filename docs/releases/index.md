@@ -1,4 +1,12 @@
+---
+description: "Release notes for each Krishiv Engine version."
+---
+
 # Releases
 
-Release notes for each Krishiv Engine version are listed here. The [changelog](https://krishiv.ai/changelog)
-on the site lists every release of every product, newest first.
+Read these when upgrading, to see what changed and what to check before you move to the new version.
+
+- [Krishiv 0.2.0](0.2.0.md): the embedded core.
+
+The [changelog](https://github.com/KrishivAI/krishiv-engine/blob/main/CHANGELOG.md) in the repository lists every
+change, newest first.

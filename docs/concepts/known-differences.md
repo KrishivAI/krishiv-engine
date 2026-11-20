@@ -1,3 +1,7 @@
+---
+description: "Where Krishiv behaviour deliberately differs from Spark."
+---
+
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Known differences from Spark
 
@@ -24,6 +28,15 @@ both off (the default) nothing differs. See [result cache](../reference/result-c
 what is cached, when entries go, and the one staleness the cache accepts (a change made outside the
 engine, until the entry expires or `REFRESH TABLE`).
 
+## Writers leave a `_krishiv_log` directory
+
+A write to a plain directory records each commit in `<path>/_krishiv_log/` (one `<version>.json` per commit), so that
+concurrent writers cannot both take a version and Krishiv readers see only committed files. Spark commits by
+writing files under their final names plus `_SUCCESS`. The underscore prefix hides the directory from Krishiv and
+Spark readers, but other tools that list the directory see it. `krishiv.sql.files.commitProtocol=NONE` selects
+Spark's plain commit for a new directory; a directory that already has a log keeps being written through it, so
+do not delete the log from a table you still append to.
+
 ## A malformed value of a Spark config key fails at `SET`
 
 A Spark key that Krishiv maps to a typed setting (for example
@@ -47,6 +60,84 @@ on every row as Spark's shuffle evaluates them. Two things differ:
 
 Pinned by `crates/krishiv-session/tests/distribute_by_goldens.rs` (`DIFFERENT`), against a Spark
 4.2.0 run (3.5, 4.0 and 4.1 not run).
+
+## `TABLESAMPLE` rows follow the input's partitions
+
+`TABLESAMPLE (x PERCENT)` and `(BUCKET x OUT OF y)` sample as Spark's `SampleExec` does: each row of
+input partition `i` takes one draw of `XORShiftRandom(seed + i)`, in input order, and is kept when it
+falls below the fraction. The rows therefore equal Spark's when both engines split the input the same
+way, and are otherwise a different Bernoulli sample at the same fraction:
+
+- A session with one compute thread reads `range(0, n)`, `VALUES` and a small file as one partition, as
+  Spark's `local[1]` does; `range(a, b, step, n)` is the same `n` slices in both engines at any thread
+  count; `UNION ALL` numbers its inputs' partitions one after another, as Spark.
+- An in-memory table (registered batches, a cached relation) is one partition per 128 Ki rows
+  (`morsel_rows`), even at one thread: a larger one draws from several streams where Spark's
+  `local[1]` draws from one.
+- A file scan under a sample reads Spark's file partitions (the same split planning:
+  `maxPartitionBytes`, `openCostInBytes`, the leaf parallelism) each whole, by one driver, in row order.
+  So `REPEATABLE` gives the same rows on every run at any thread count; they equal Spark's when the
+  files hold the same rows in the same order and the same sizes (files Krishiv writes differ in size
+  from Spark's, which can pack them differently).
+- With more threads, `range(0, n)` is cut into one slice per thread (Spark: `defaultParallelism`), so
+  the rows differ from a Spark cluster's of another parallelism; the same session repeats them.
+- After a join, an aggregate or an exchange the input partition is the driver's, and its rows' order
+  depends on scheduling: as in Spark, a sample there is not repeatable.
+- Without `REPEATABLE` the seed is a random value in `0..1000`, drawn when the plan is built. One
+  DataFrame keeps its seeds across actions (`df.collect()` twice gives the same rows, as a Spark
+  Dataset keeps its executed plan); each new statement draws again. Every reference of a `WITH`
+  definition holding one samples with its own seed, as Spark's inlined references do.
+- Inside a recursive CTE a sample draws from the stream of its iteration's input partition, without
+  Spark's per-round partition shift, so its rows there differ from Spark's.
+- `TABLESAMPLE SYSTEM (...)` (Spark 4.2's block sampling) is `KRISHIV_UNSUPPORTED_FEATURE`, and a
+  `REPEATABLE` seed past `BIGINT` is refused as unsupported where Spark raises an unclassified
+  `NumberFormatException`. A sampled plan travels through the plan codec (feature `sample`); a
+  worker without that feature refuses it.
+
+Pinned by `crates/krishiv-session/tests/tablesample_goldens.rs` against a Spark 4.2.0 run
+(`tests/fixtures/spark-4.2.0/tablesample.json`).
+
+## `histogram_numeric` bins depend on where partial histograms merge
+
+> Not part of 0.2.0: `histogram_numeric` does not exist in 0.2.0. This section describes later builds.
+
+`histogram_numeric(col, nb)` is Spark's `NumericHistogram` (add, merge, trim, the `java.util.Random(31183)`
+tie-break, the same serialized partial state). Its bins depend on the order rows are added and on where partial
+histograms merge, as Spark's do. The results equal Spark's when both engines split the input the same way, and
+can differ by a bin or its counts otherwise:
+
+- A local `VALUES` relation is one partition here; Spark's `local` run splits it into two. Merging two halves
+  reproduces Spark's bins, a single pass does not (the 50-row case of `group-by.sql`).
+- Krishiv merges at its own points: several drivers per partition, flushes of full partial tables, the adaptive
+  bypass of a partial aggregate and spills. A merge of two partial histograms does not combine equal `x` values,
+  so a bypassed two-phase aggregate over the rows `(1, 4), (1, 4)` gives two bins `{x: 4, y: 1}` where Spark gives
+  one bin `{x: 4, y: 2}`.
+- Not covered: `spark.sql.legacy.histogramNumericPropagateInputType=false`, TIME input, window use (refused).
+
+Pinned by `crates/krishiv-session/tests/aggregate_histogram_numeric.rs` and the golden runner (`group-by.sql`).
+
+## `SELECT *` next to `window(..)` or `session_window(..)`
+
+> Not part of 0.2.0: `window(..)` and `session_window(..)` time-window functions do not exist in 0.2.0. This section describes later builds.
+
+`SELECT *, window(ts, '5 minutes') FROM t` returns the window column once, as Spark does, also with a
+`QUALIFY` over a window. Krishiv adds the window column to the input before the star expands, where Spark
+expands the star first, so it leaves the added column out of a bare `*`. Three cases differ:
+
+- A table with a column named `window` (or `session_window`) next to a window call fails with
+  `AMBIGUOUS_REFERENCE`.
+- `SELECT * EXCEPT (window), window(..)` fails with `EXCEPT_OVERLAPPING_COLUMNS` where Spark answers
+  `UNRESOLVED_COLUMN`.
+- A `*` next to a window call in a `WHERE` or `ORDER BY`, and `struct(*)` next to one, are not pinned against a
+  Spark run; the star may include a trailing `window` column.
+
+## `session_window` over a string time column
+
+> Not part of 0.2.0: `session_window` does not exist in 0.2.0. This section describes later builds.
+
+`session_window(s, '5 minutes')` over a string column returns `start` and `end` as strings, with the
+right values. Spark casts the column to `TIMESTAMP` first, so its fields are timestamps. Pinned (ignored) by
+`crates/krishiv-session/tests/time_window_oracle.rs`.
 
 ## Filters move below only their deterministic prefix
 
@@ -74,6 +165,99 @@ and differs from it, and so from Krishiv, in these cases (checked on PySpark 4.2
   timestamp's fraction drops trailing zeros as `to_json` does (`00:00:01.5`); PySpark prints six digits (`.500000`).
 - Errors are `ValueError` whose message starts with the error class; PySpark raises `PySparkValueError` carrying the
   condition.
+
+## `mapInPandas` and `mapInArrow` results unlike the declared schema
+
+> Not part of 0.2.0: `mapInPandas`, `mapInArrow` and `applyInPandas` do not exist in the 0.2.0 Python package. This section describes later builds.
+
+With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set (Spark 4.1 and later), Krishiv checks each
+result batch as Spark does and raises `ARROW_TYPE_MISMATCH` with Spark's message. With it off (the default, and on
+Spark 3.5 and 4.0, which have no such setting), Spark does not check the result's types and reads the batch as if it
+had the declared ones. Krishiv refuses such a result instead, with `PYTHON_EXCEPTION` ("The Python worker returned an
+invalid result"), and refuses a null in a column declared non-nullable when a null is present. A `mapInArrow`
+result with more columns than declared is refused too (Spark reads the declared columns and ignores the rest when
+the setting is off; with it on, both raise `ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
+here, so the setting is honoured whatever the version: under a Spark 3.5 or 4.0 client, which has no such setting,
+setting it still turns the check on.
+
+## Python UDF workers per session (server mode)
+
+> Not part of 0.2.0: the server and its Python UDF workers, their per-session limits and iterator UDFs (eval type 204, rejected with `NOT_IMPLEMENTED`) are not in 0.2.0. This section describes later builds.
+
+In server mode each running Python relation UDF (`mapInPandas`, `applyInPandas`, a `pandas_udf` aggregate, ...)
+holds one of its session's `krishiv.python.worker.maxPerSession` workers for as long as the operator runs, and one
+worker is kept for scalar Python UDFs. An operator that needs more workers at once than that leaves (for example
+nine `pandas_udf` aggregates in one `agg` with the default of 8) fails with `KRISHIV_PYTHON_WORKER_LIMIT`; with the
+setting at 1, a scalar Python UDF call while a relation UDF of the same session runs (in any query) fails the same
+way. All sessions' relation UDFs together hold at most `krishiv.python.worker.maxTotal` minus one workers; one
+waits for another to finish when they would hold more, in arrival order. Spark runs such calls in one worker and has no such limit.
+
+A scalar iterator UDF (`pandas_udf` or `arrow_udf` with `Iterator` hints) and a Python UDF over a window hold a
+worker the same way, one per UDF of the operator.
+
+A Python UDF over a window keeps each window partition's input rows in memory until the partition's values come
+back from the worker; Spark queues them in a buffer that spills to disk. A partition larger than the query's memory
+fails with the memory pool's error in Krishiv where Spark finishes.
+
+A scalar iterator UDF runs one Python iterator per driver of the operator, not one per Spark partition, so a UDF
+that keeps state across its iterator (a running total, a call count) sees other batch boundaries than in Spark. The
+operator also reads all its input and keeps all its output before the next operator reads any, so a `LIMIT` above
+it does not stop it early.
+
+## Python artifacts in server mode
+
+> Not part of 0.2.0: the Spark Connect server is not in 0.2.0. This section describes later builds.
+
+The Spark Connect server does not hand a session's Python artifacts to its UDF workers yet: pyfiles and archives a
+Connect client adds (`addArtifacts(..., pyfile=True)`, `archive=True`) do not reach the workers, so a UDF that
+imports one fails with Python's import error where Spark finds the module. The worker pool takes them
+(`SessionUdfs::set_artifacts`); the server's forwarding to it is a separate change that follows. Once a session's
+artifacts are set, the pool treats them as below.
+
+Pyfiles go on the workers' `sys.path`, as in Spark: the files directory, then each zip or egg. Archives (zip, jar,
+tar, tar.gz, tgz) are unpacked into the same files directory under their `#alias`, or else their file name, as
+Spark's executor does; an archive's own directory is not on `sys.path` (as in Spark, its packages import as
+`alias.pkg`), and each entry of the files directory is reachable by a path relative to the worker's working
+directory (`./alias/...`), as in Spark. Two differences remain. The working directory is the worker's own writable
+directory, where the entries are links to a read-only directory of the server, so code cannot write into an
+unpacked archive. Spark takes any alias (a fragment like `../x` unpacks outside its directory) and lets a second
+archive of one alias replace the first; Krishiv refuses an empty, hidden (`.`, `..`), over-long (more than 255
+bytes) or `/`-containing alias with `INVALID_ARTIFACT_PATH`, and two artifacts of one name with
+`ARTIFACT_ALREADY_EXISTS`. A tar member that is a link leaving its archive's directory, a device file, or artifacts
+past the server's size limit fail the session's UDF calls with `KRISHIV_PYTHON_ARTIFACT_REFUSED`.
+
+## Python table functions (UDTFs)
+
+> Not part of 0.2.0: Python table functions (`@udtf`) do not exist in the 0.2.0 Python package. This section describes later builds.
+
+Python UDTFs (`@udtf`, `@udtf(useArrow=True)`, `@arrow_udtf`) run on the server's worker pool from SQL (`FROM f(..)`,
+`TABLE(t)` arguments with `PARTITION BY` / `ORDER BY` / `WITH SINGLE PARTITION`, `LATERAL f(..)`), with `analyze` at
+analysis time. They match PySpark 4.2.0's answers (`python/tests/pyspark_udf/udtf/goldens.json`) except:
+
+- A UDTF over an input without rows (a `TABLE` argument over an empty relation without `PARTITION BY`, or a
+  `LATERAL` call over an empty left side) whose class has a `terminate` method: Spark 4.2.0 fails with a JVM
+  `NullPointerException` (`EvalPythonUDTFExec` joins `terminate`'s rows with an input row that never came). Krishiv
+  starts no UDTF instance for such an input and returns no rows, as Spark does for `PARTITION BY` over an empty
+  relation.
+- A `@udtf` without Arrow (eval type 300) converts its rows as Spark's JVM does (`EvaluatePython.makeFromJava`: a
+  value of another type than the declared one is NULL, an integer is cut to the column's width, a string column
+  takes any value's text), but where Spark shows a JVM object's own `toString` in a string column (`[B@...` for
+  `bytes`, `java.util.GregorianCalendar[...]` for a `date`), Krishiv shows the value's Python `str`; and a `Row`
+  inside a result row, which Spark's JVM fails to unpickle (`PickleException`), is NULL in the column.
+- An `@arrow_udtf` (302) result with a NULL in a column declared `NOT NULL`: Spark 4.2.0's JVM fails reading the
+  batch (`IllegalStateException`, no error class); Krishiv refuses it as a result unlike the declared schema
+  (`PYTHON_EXCEPTION`).
+- A constant argument the analyzer does not fold (`array(1, 2)`) reaches `analyze` as no constant (`value` is
+  `None`, `isConstantExpression` false); Spark folds it.
+- `analyze`'s result is limited to 64 MiB (as the worker encodes it, the pickled `AnalyzeResult` as hex); a larger
+  one fails the call with `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON`. Spark sets no limit.
+- A constant `BINARY` argument reaches `analyze` as `bytes`, Spark's default
+  (`spark.sql.execution.pyspark.binaryAsBytes=true`); the setting is not read, so its `false` (`bytearray`) is not
+  available.
+- `LEFT JOIN LATERAL f(..) ON cond` (and `USING` or `NATURAL`) with a Python UDTF `f` is refused
+  (`KRISHIV_UNSUPPORTED_FEATURE`) until its rows are checked against a Spark run; an inner `JOIN LATERAL f(..) ON
+  cond` runs as Spark runs it, and `LEFT JOIN LATERAL f(..)` without a condition gives Spark's rows (those of the
+  inner join).
 
 ## `schema_of_variant` with `spark.sql.caseSensitive=true`
 
@@ -113,6 +297,9 @@ another expression, so:
   162 inferred `isnotnull` are of this kind);
 - Spark adds `isnotnull` for every column a null-rejecting join condition reads (`l_quantity < 0.2 * avg(..)`) and
   for a key equality common to every branch of an `OR`; Krishiv only for top-level `=` keys;
+- a join key's `isnotnull` is not pushed into a subtree that another part of the query reads too (TPC-H q15's
+  `revenue0`, read by the join and by the `max` subquery): the filter would make the two reads differ, and they
+  could no longer be computed once;
 - such a filter can raise in Spark (a cast or arithmetic under ANSI) on rows the query's own predicates never
   evaluate; Krishiv does not raise there.
 
@@ -120,7 +307,7 @@ Krishiv also infers at the semi and anti joins that `IN`/`EXISTS`/`NOT EXISTS` s
 q22: `isnotnull` on their keys); Spark rewrites those subqueries after its inference and adds none there. A null key
 never matches, so these filters drop only rows the join drops.
 
-The rows returned are the same. ADR 0023 (update 2026-11-06).
+The rows returned are the same.
 
 ## A multi-table `INSERT` that fails while it runs keeps the clauses written before
 
@@ -156,3 +343,178 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
 - A table function's body is pinned in its projections and filters only. Joins, grouping and aggregate arguments, and sort keys inside the body follow the caller's mode (`SELECT max(1 / x)` as a body raises or not by the caller's setting).
 - An aggregate or window call in a scalar function argument reads its operator's mode.
 - Only `spark.sql.ansi.enabled` is captured; Spark captures every SQL configuration.
+
+## The relation cache is per session
+
+Spark's `CacheManager` lives in the `SharedState` of a `SparkContext` (believed shared by every session of it, not
+yet confirmed against a Spark run): a frame cached in one session reads as cached, and is reused, in another.
+Krishiv keeps `cache()` / `persist()` registrations and their data per session, because each session can have its own memory pool (`krishiv.session.memoryLimit`) and a shared
+entry would charge one tenant for another's cache. `isCached` and `storageLevel` in one session do not see a
+`cache()` made in another, and closing a session drops its entries (memory and spill files). Invalidation does
+cross sessions: a write or `REFRESH TABLE` in one session drops what every session cached over the table, as in
+Spark.
+
+Storage levels: `_2`/`_3` replication and `OFF_HEAP` are accepted and reported as asked, but one copy is kept, in
+the engine's memory or one local spill file. Spilled and `DISK_ONLY` entries are scratch data in the spill
+directory (`krishiv.spill.*`), deleted with the entry or at the next start after a crash.
+
+## Checkpoint files and where a checkpoint lives
+
+> Not part of 0.2.0: `DataFrame.checkpoint()` and `localCheckpoint()` do not exist in the 0.2.0 Python package (calling them raises `AttributeError`). This section describes later builds.
+
+`DataFrame.checkpoint()` writes the rows under `spark.checkpoint.dir` as a Krishiv spill-format file
+and, unlike Spark, deletes the file when the result and every frame derived from it are gone (Spark
+keeps reliable checkpoint files by default, and nothing in Krishiv reads them back from another
+process). The rows are also held by the session, in its relation store (memory-accounted), so a
+reliable checkpoint holds a memory copy; `localCheckpoint(storageLevel=...)` accepts a level but holds
+the rows in the session's memory whatever it is. With `eager = false` the rows are taken when the
+result is first analyzed (its first action, or the first call that needs its schema), not at its
+first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
+do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
+
+## A declared schema on a Delta read
+
+`spark.read.schema(..).format("delta").load(path)` (and the same read through Spark Connect) is refused with
+`KRISHIV_UNSUPPORTED_FEATURE` when the table is opened, because what delta-spark 4.4.1 does with a declared schema is
+not pinned by the Delta oracle yet. A Delta table's schema always comes from its log. Until then, a call that only
+asks for the schema (`df.schema`, `printSchema`, Connect `AnalyzePlan`) returns the declared schema without opening
+the table, and the first action fails.
+
+## `krishiv server` (Spark Connect)
+
+> The Spark Connect server is not part of the 0.2 release; `krishiv server` in 0.2 serves the web UI and admin API
+> only. The behaviour below is what the Spark Connect server is built to do, and it does not apply to 0.2.
+
+- **The Connect listener binds `127.0.0.1` by default.** Spark binds every interface when
+  `spark.connect.grpc.binding.address` is unset. A non-loopback address needs authentication, so `krishiv server`
+  refuses to start on one until authentication is configured.
+- **A session belongs to the authenticated principal, not to `UserContext.user_id`.** Spark keys a session by the
+  `user_id` the client sends; Krishiv keys it by who authenticated, and records `user_id` without trusting it. Two
+  clients of one principal with different `$USER` values and the same session id share a session in Krishiv but not
+  in Spark. Clients pick random session ids, so this does not happen in practice. A session id another principal holds
+  answers `INVALID_HANDLE.SESSION_NOT_FOUND`.
+- **An idle session running a query is kept.** Spark releases a session by its last access alone; Krishiv also keeps
+  one whose query is still running or whose results are still being sent.
+- **A request over `spark.connect.grpc.maxInboundMessageSize` is refused with `OUT_OF_RANGE`**, read from the message
+  length before the body; Spark (grpc-java) answers `RESOURCE_EXHAUSTED`.
+- **`krishiv.connect.session.idleTimeout`** replaces `spark.connect.session.manager.defaultSessionTimeout`, whose
+  "never" is `-1`; Krishiv's is `0s`. `krishiv server` refuses Spark's key, and any other `spark.connect.*` key it
+  does not read, rather than ignore it.
+- **Too many operations in one session** fail with `KRISHIV_OPERATION_LIMIT` (`RESOURCE_EXHAUSTED`) past
+  `krishiv.connect.maxOperationsPerSession`; Spark has no such cap.
+- **An invalid operation tag** fails with `KRISHIV_INVALID_OPERATION_TAG` (SQLSTATE 22023) and Spark's message; Spark
+  sends an `INTERNAL` status without an error class.
+- **Results arrive in the engine's batches** (4,096 rows by default), cut further at Spark's
+  `spark.connect.grpc.arrow.maxBatchSize` and `spark.sql.execution.arrow.maxRecordsPerBatch` but never merged.
+- **Timestamps are labelled UTC when `spark.sql.session.timeZone` is unset**; Spark labels them with the JVM's zone.
+  The instants are the same.
+- **Geometry, geography and variant columns** get Spark's Arrow shape at the top level of a result only, not inside a
+  struct, array or map.
+- **The `metrics` response of ExecutePlan is empty** until the operator tree is wired through.
+- **A reattachable operation's query pauses** once `krishiv.connect.execute.aheadBytes` (64 MiB) of its responses are
+  unread, whether or not a client is attached; Spark keeps producing and buffers every unread response.
+- **A new operation can wait for admission.** Each operation reserves its worst case (`aheadBytes` plus, reattachable,
+  `krishiv.connect.execute.retryBufferSize`) of `krishiv.connect.maxResponseBytes` (1 GiB) before its first response,
+  until it is released, abandoned or ends; past the cap a new `ExecutePlan` waits (its stream sends nothing yet) until
+  one does. Running operations never wait on it. Spark has no such cap. A server refuses to start with a cap below one
+  operation's worst case (`KRISHIV_INVALID_CONFIG_VALUE`). There is no per-principal share yet, so one principal's
+  open operations can hold the whole cap.
+- **Column metadata travels in the `schema` response only**: Spark 4.3 also writes each field's user metadata into
+  the Arrow schema of every result batch (`SPARK::metadata::json`); Krishiv's batches carry none.
+- **ReleaseExecute without a release type** fails with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark throws
+  an `UnsupportedOperationException` without an error class.
+- **AnalyzePlan.** An `UNSPECIFIED` explain mode fails with `CONNECT_INVALID_PLAN.INVALID_ENUM`, and `json_to_ddl` of a
+  type that is not a struct with `INVALID_SCHEMA.NON_STRUCT_TYPE`; Spark sends `INTERNAL` without an error class for
+  both. `persist`, `unpersist` and `get_storage_level` fail with
+  `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` until DataFrame caching lands. `input_files` lists the paths
+  the file scans read, qualified (`file:/data/t`), not the files under them, and nothing for a catalog table (Spark
+  lists the files of a file-backed table). `same_semantics` and `semantic_hash` ignore column and alias names and
+  subquery aliases, as Spark's canonicalization does, but not Spark's other rewrites: plans that differ only in the
+  order of commutative operands (`a + b` and `b + a`), in a projection that only renames or repeats the input's
+  columns, or in join hints are not the same in Krishiv and are in Spark. `semantic_hash` values are Krishiv's own
+  (equal for plans `same_semantics` calls equal, within one server), not Spark's. `ddl_parse` refuses the clauses only
+  a table schema takes (`DEFAULT`, `GENERATED`), and its parse errors are those of the text as a data type, where Spark
+  reports the table-schema parse. `spark_version` is the session profile's release line (`4.2.0`).
+- **Config.** Secret-looking keys and values (Spark 4.3's `spark.redaction.regex` default) are hidden for 4.2 sessions
+  too; Spark 4.2 shows them. The pattern is the default only (Spark reads `spark.redaction.regex` from the startup
+  configuration). Krishiv also hides what its own secret classifier finds, where Spark 4.3 shows it: keys such as
+  `fs.azure.account.key.<account>`, `sasl.jaas.config` or `*.apiKey`, and values with credentials in a URL
+  (`postgres://user:password@host`). `set` of a key without a value fails with `INVALID_CONF_VALUE.REQUIREMENT`, and a request without an
+  operation with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark sends `INTERNAL` without an error class.
+  `is_modifiable` answers `true` for a key outside the engine's registry, where Spark answers `false` for a key it does
+  not know. `get_all` lists a registered key under its Spark name when it has one, else under its `krishiv.*` name.
+  Setting a key the registry marks admin-only answers `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501, gRPC
+  `PERMISSION_DENIED`) for a non-admin role (no role exists before authentication, so the local user is the admin).
+- **Interrupt by tag** fails with `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until operation tags can be interrupted.
+- **AddArtifacts.** Names are checked before anything is written and more strictly than Spark: one of the prefixes
+  `cache/`, `pyfiles/`, `archives/` or `files/`, `/`-separated, without empty, `.` or `..` segments, `\`, control or
+  invisible formatting characters, at most 32 segments of at most 255 bytes; a `cache/` name is one segment of ASCII
+  letters and digits. Anything else is `INVALID_ARTIFACT_PATH` (Spark accepts an unknown prefix as a plain file and
+  turns `\` into a separator). `jars/` and `classes/` (no JVM) and `forward_to_fs/` (no Hadoop file system) fail with
+  `KRISHIV_UNSUPPORTED_FEATURE`. Each session may hold `krishiv.connect.artifacts.maxBytes` (1 GiB) of artifacts and
+  one artifact `krishiv.connect.artifacts.maxArtifactBytes` (256 MiB); past either,
+  `KRISHIV_ARTIFACT_LIMIT` (`RESOURCE_EXHAUSTED`); Spark has no cap. Each segment of a name (the file and every
+  directory it may need) counts 4 KiB rather than each artifact, and all sessions together may hold
+  `krishiv.connect.artifacts.maxTotalBytes` (16 GiB). A broken chunk sequence (too many or too few chunks, a chunk
+  with no artifact begun, a new chunked artifact before the last chunk, a wrong `total_bytes`) fails with
+  `KRISHIV_INVALID_ARTIFACT_TRANSFER` where Spark sends `INTERNAL` without an error class. A `batch` sent while a
+  chunked artifact is still open fails the same way, which Spark accepts (the stock client never sends one). A
+  chunked artifact of one chunk is accepted (Spark fails it). An artifact that collides with one already stored fails with
+  `ARTIFACT_ALREADY_EXISTS` as in Spark, also when the name holds a directory or a link. Archives are stored, not
+  unpacked, until Python UDFs use them.
+- **FetchErrorDetails** sends no stack trace (Spark sends the JVM's): there is no JVM, and a Rust backtrace would
+  expose server internals. A client that asks for the server stack trace gets the root error's class line only. The
+  causes of an error are sent with the parameters of server-internal error classes redacted, as their own status would
+  be. Errors of a Connect `Sql` relation carry no SQL query context yet.
+- **CloneSession.** The clone gets copies of the configuration, temporary views, temporary functions, variables,
+  current catalog and namespace, and the session's artifacts (charged to the clone's
+  `krishiv.connect.artifacts.maxBytes` and to `maxTotalBytes`; a copy that does not fit fails with
+  `KRISHIV_ARTIFACT_LIMIT` and creates no session). Differences from Spark: Rust UDFs (`register_udf`) are shared
+  with the clone rather than copied; global temporary views are per session in Krishiv, so the clone gets a copy and
+  the two diverge (Spark shares them); cached relations are not copied (Spark's cache is shared by both sessions); a
+  clone counts against `krishiv.connect.maxSessions` and `maxSessionsPerPrincipal` (`KRISHIV_SESSION_LIMIT`), which
+  Spark does not check; a target id another principal holds answers `INVALID_HANDLE.SESSION_NOT_FOUND`; and a
+  target created by a racing request while the clone is made fails with
+  `INVALID_CLONE_SESSION_REQUEST.TARGET_SESSION_ID_ALREADY_EXISTS` where Spark returns the racing session.
+- **GetStatus** ignores request and operation extensions: Krishiv has no `spark.connect.extensions.getStatus.classes`
+  plugins. A session remembers the final state of at most 1,000 ended operations, each for 30 minutes after its last
+  lookup; Spark keeps every one for the 30 minutes. Operation ids are matched in their canonical UUID form, so an
+  upper-case spelling finds the operation; Spark keys them by the string as sent. Which state Spark reports in a few
+  cases has not been checked against Spark yet: Krishiv reports `CANCELLED` for an `ExecutePlan` whose client went
+  away during analysis, `FAILED` for one that failed there, and `TERMINATING` for an interrupted operation that has
+  not stopped yet.
+- **`ml_command.clean_cache` answers with no result.** PySpark sends it when its process exits; Krishiv has no ML
+  cache, so the operation succeeds with no response (only `result_complete` when reattachable). Spark sends an
+  `ml_command_result`, whose content for this command is not verified; PySpark ignores it. Its operation id is not
+  remembered after it ends, so the same id may be reused (Spark refuses a reused id with `OPERATION_ABANDONED`;
+  clients send fresh ids). Every other `ml_command` fails with SQLSTATE 56K00.
+
+## `Dataset.observe`: where the counts differ from Spark's
+
+> Not part of 0.2.0: `observe` and `Observation` do not exist in the 0.2.0 Python API. This section describes later builds.
+
+`DataFrame::observe` / PySpark `Observation` match Spark 4.2.0 on every case of
+`tests/fixtures/spark-4.2.0/observe-goldens.json` except the ones below
+(`crates/krishiv-session/tests/observe_goldens.rs` pins them in `KNOWN_GAPS`, each must still fail there, so a
+fix removes the line). A `LIMIT` (and so `take`, `first`, `show`) directly above the observed node,
+or above projections only, counts exactly the rows it takes, as Spark's `CollectMetricsExec` counts the rows
+its consumer pulled; the cap is one budget per node instance, so over several partitions the rows
+counted are the first the racing drivers hand over (Spark's are partition 0's: a `sum` metric can differ).
+The budget is per instantiation, not global: in a staged or distributed run every task that instantiates the
+observed node has its own, so the count can exceed `n`.
+
+- **Limit not last, or a filter in between:** `observe(..).limit(n).count()`, a limit under a join, or a filter between the observed node and the limit: Spark's per-partition `LocalLimit` can pull up to `n` rows per partition, and a filter changes how many rows the node saw per row taken; the engine applies one cap of `n` rows per instance of the node (see above). Not yet backed by a golden.
+- **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` reads every row in the engine (`n` = the input);
+  Spark's `TakeOrderedAndProject` pulls a partition-dependent subset (20 of 1000 in the golden).
+- **ANSI `sum` overflow:** Spark's metric aggregate returns the saturated `9223372036854775807` for a long
+  `sum` that overflows under ANSI; the engine raises `ARITHMETIC_OVERFLOW`. With ANSI off both wrap.
+- **Scalar subquery in a metric:** Spark runs it; the engine refuses it with `KRISHIV_UNSUPPORTED_FEATURE`.
+- **Empty relation above:** `observe(..).where(false)` (Spark prunes the node; `{}`) counts the rows read.
+  Only `LIMIT 0` prunes. Streaming frames are not refused as Spark refuses them.
+- **Connect:** struct, map and interval metric values are refused when the server builds the
+  `ObservedMetrics` literal (after the rows were sent); a name with no plan id reports `plan_id` 0.
+- **Cancelled actions:** a dropped result stream completes the observation with `{}` or the rows
+  folded before the drivers stopped (Spark: a partial value); a failed finalization of a metric is what `get`
+  raises.
+- **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
+- **Result cache:** a plan that observes is never served from the result cache (every action runs it).

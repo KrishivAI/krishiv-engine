@@ -1,11 +1,16 @@
+---
+description: "Krishiv runs Spark SQL: how to run it, what the language covers and where it differs from Spark."
+---
+
 # SQL
 
 Krishiv runs Spark SQL. Semantics, results and error classes follow Apache Spark; the differences that remain are
 listed in [known differences](../../concepts/known-differences.md) and in the [compatibility matrix](../../concepts/compatibility.md).
 
 Run SQL from Python with `spark.sql("...")`, or mix it with DataFrames: register a DataFrame with
-`createOrReplaceTempView` and query it by name (see the [quickstart](../../get-started/quickstart.md)).
+`createOrReplaceTempView` and query it by name (see the [quickstart](../../get-started/index.md)).
 
+- The [statements page](statements.md) lists the statements Krishiv runs, with examples, and what is not supported yet.
 - Every built-in function and operator has a page in the [SQL function reference](functions/index.md): Spark's
   description and examples, and whether Krishiv implements it.
 - `EXPLAIN` prints the physical plan; `EXPLAIN ANALYZE` runs the query and reports each operator's rows, time, peak
