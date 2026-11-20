@@ -608,3 +608,77 @@ fn the_epoch_never_goes_backwards_or_repeats_after_a_read_fault() {
         seen.push(e);
     }
 }
+
+fn stored(name: &str, owner: &str) -> super::StoredPythonFunction {
+    super::StoredPythonFunction::new(name, 100, true, "int", vec![1, 2, 3], "d1", "3.11", owner)
+}
+
+#[test]
+fn python_functions_are_per_tenant_and_survive_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cat.db");
+    {
+        let cat = SqliteCatalog::open("lite", &path, false).unwrap();
+        cat.put_python_function(Some("a"), &stored("Plus1", "alice"))
+            .unwrap();
+        cat.put_python_function(Some("b"), &stored("plus1", "bob"))
+            .unwrap();
+        cat.put_python_function(Some("a"), &stored("other", "alice"))
+            .unwrap();
+    }
+    let cat = SqliteCatalog::open("lite", &path, false).unwrap();
+    let f = cat.python_function(Some("a"), "PLUS1").unwrap().unwrap();
+    assert_eq!((f.name.as_str(), f.owner.as_str()), ("plus1", "alice"));
+    assert_eq!(f.payload, vec![1, 2, 3]);
+    assert_eq!(cat.python_functions(Some("a")).unwrap().len(), 2);
+    assert_eq!(cat.python_functions(Some("b")).unwrap().len(), 1);
+    assert!(cat.python_functions(None).unwrap().is_empty());
+    assert!(!format!("{f:?}").contains("[1, 2, 3]"));
+}
+
+#[test]
+fn drop_python_function_removes_only_that_tenants_row() {
+    let cat = SqliteCatalog::open_in_memory("lite", false).unwrap();
+    cat.put_python_function(Some("a"), &stored("f", "x"))
+        .unwrap();
+    cat.put_python_function(Some("b"), &stored("f", "y"))
+        .unwrap();
+    assert!(cat.drop_python_function(Some("a"), "F").unwrap());
+    assert!(!cat.drop_python_function(Some("a"), "f").unwrap());
+    assert!(cat.python_function(Some("a"), "f").unwrap().is_none());
+    assert!(cat.python_function(Some("b"), "f").unwrap().is_some());
+}
+
+#[test]
+fn replacing_a_python_function_moves_its_version() {
+    let cat = SqliteCatalog::open_in_memory("lite", false).unwrap();
+    cat.put_python_function(None, &stored("f", "x")).unwrap();
+    let v1 = cat.python_function(None, "f").unwrap().unwrap().version;
+    cat.put_python_function(None, &stored("f", "x")).unwrap();
+    assert!(cat.python_function(None, "f").unwrap().unwrap().version > v1);
+}
+
+#[test]
+fn an_oversized_python_payload_is_refused() {
+    let cat = SqliteCatalog::open_in_memory("lite", false).unwrap();
+    let mut f = stored("f", "x");
+    f.payload = vec![0; super::functions::MAX_STORED_PAYLOAD_BYTES + 1];
+    assert!(cat.put_python_function(None, &f).is_err());
+    assert!(cat.python_function(None, "f").unwrap().is_none());
+}
+
+#[test]
+fn a_version_1_file_is_upgraded_on_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v1.db");
+    {
+        let cat = SqliteCatalog::open("lite", &path, false).unwrap();
+        drop(cat);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute("DROP TABLE python_functions", []).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+    }
+    let cat = SqliteCatalog::open("lite", &path, false).unwrap();
+    cat.put_python_function(None, &stored("f", "x")).unwrap();
+    assert!(cat.python_function(None, "f").unwrap().is_some());
+}

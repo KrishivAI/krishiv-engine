@@ -12,8 +12,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
 /// The on-disk format of the database (`PRAGMA user_version`). A catalog reads its own version and refuses a newer one
-/// (ADR 0026: N reads N-1; there is no older one yet).
-pub(super) const FORMAT_VERSION: i64 = 1;
+/// (ADR 0026: N reads N-1). Version 2 added `python_functions`; a version 1 file is upgraded when opened.
+pub(super) const FORMAT_VERSION: i64 = 2;
 
 /// Why a step failed: the database, or a rule of the catalog (already a Spark error).
 #[derive(Debug)]
@@ -36,7 +36,7 @@ impl From<KrishivError> for Failure {
     }
 }
 
-/// The tables of format version 1. `version` of a table is the catalog epoch of the change that made it what it is,
+/// The tables of format version 2 (version 1 had no `python_functions`). `version` of a table is the catalog epoch of the change that made it what it is,
 /// so a table dropped and created again, or altered, is never at the version a reader saw before.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS epoch (
@@ -66,6 +66,19 @@ CREATE TABLE IF NOT EXISTS tables (
     columns TEXT NOT NULL,
     PRIMARY KEY (namespace, name)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS python_functions (
+    tenant TEXT NOT NULL,
+    name TEXT NOT NULL,
+    eval_type INTEGER NOT NULL,
+    deterministic INTEGER NOT NULL,
+    return_type TEXT NOT NULL,
+    payload BLOB NOT NULL,
+    digest TEXT NOT NULL,
+    python_ver TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    PRIMARY KEY (tenant, name)
+) WITHOUT ROWID;
 ";
 
 /// Creates the schema when the database is new and refuses one written by a newer format. Run in an immediate
@@ -81,7 +94,8 @@ pub(super) fn migrate(conn: &mut Connection, case_sensitive: bool) -> Result<(),
             "the catalog file has format version {version}; this build reads up to {FORMAT_VERSION}"
         )));
     }
-    if version == 0 {
+    if version < FORMAT_VERSION {
+        // Every statement is idempotent, so a version 1 file only gains the tables added since.
         tx.execute_batch(SCHEMA)?;
         tx.execute(
             "INSERT OR IGNORE INTO settings (id, case_sensitive) VALUES (0, ?1)",
