@@ -167,6 +167,31 @@ impl Instances<'_> {
                 let input = self.chain(self.graph.id(input), &below);
                 with_input(&p, &input)
             }
+            PlanNode::Join { .. } => {
+                // Each child is rebuilt for what the join reads of it given
+                // `need` above; a child that is no chain is rebuilt as usual.
+                let mut edge: HashMap<usize, Option<Attrs>> = HashMap::new();
+                for (c, d) in self.graph.demands(i, need) {
+                    match (edge.get_mut(&c), d) {
+                        (None, d) => {
+                            edge.insert(c, d);
+                        }
+                        (Some(Some(have)), Some(d)) => have.extend(d),
+                        (Some(have), _) => *have = None,
+                    }
+                }
+                let rebuilt = Arc::clone(&p).map_children(|c| {
+                    let id = self.graph.id(&c);
+                    Ok::<_, std::convert::Infallible>(match edge.get(&id) {
+                        Some(Some(d)) if is_scan_chain(&c) => self.chain(id, d),
+                        _ => self.node(id),
+                    })
+                });
+                match rebuilt {
+                    Ok(v) => v,
+                    Err(never) => match never {},
+                }
+            }
             _ => self.node(i),
         };
         self.chains.insert((i, key), Arc::clone(&out));
@@ -213,6 +238,12 @@ fn is_scan_chain(p: &LogicalPlan) -> bool {
             !sub && is_scan_chain(input)
         }
         PlanNode::Shift { input, .. } => is_scan_chain(input),
+        // A join with a chain below it: its copy reads what the edge needs.
+        PlanNode::Join { left, right, .. } => {
+            let mut sub = false;
+            subqueries(p, &mut |_, _| sub = true);
+            !sub && (is_scan_chain(left) || is_scan_chain(right))
+        }
         _ => false,
     }
 }
