@@ -1443,6 +1443,26 @@ impl Lowerer {
                 // Spark's builder of `lag` and `lead`: `input` NULL, `offset`
                 // 1 and `default` NULL when not given.
                 let lname = name.value.to_ascii_lowercase();
+                // Spark registers only the one-argument `collect_union`; the
+                // null-treatment flag below is appended after this check, so
+                // a second argument is always the user's.
+                let builtin_q = match &qualifier[..] {
+                    [] => true,
+                    [b] => b.eq_ignore_ascii_case("builtin"),
+                    [s, b] => s.eq_ignore_ascii_case("system") && b.eq_ignore_ascii_case("builtin"),
+                    _ => false,
+                };
+                if lname == "collect_union" && builtin_q && args.len() != 1 {
+                    return Err(err(
+                        WrongNumArgsWithoutSuggestion {
+                            function_name: format!("`{}`", name.value),
+                            expected_num: "1".to_owned(),
+                            actual_num: args.len().to_string(),
+                            docroot: "https://spark.apache.org/docs/latest".to_owned(),
+                        },
+                        sp,
+                    ));
+                }
                 if matches!(lname.as_str(), "lag" | "lead") && args.len() < 3 {
                     let fill = [
                         IrLiteral::Null(None),
@@ -1686,6 +1706,7 @@ fn takes_null_treatment(name: &str) -> bool {
         "lag",
         "lead",
         "nth_value",
+        "collect_union",
     ]
     .iter()
     .any(|n| name.eq_ignore_ascii_case(n))

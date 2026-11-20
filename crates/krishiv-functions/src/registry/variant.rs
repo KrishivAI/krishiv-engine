@@ -19,13 +19,14 @@
 //! `VARIANT`. The result is always nullable.
 
 use krishiv_common::error::{
-    DatatypeMismatchCastWithoutSuggestion, InvalidSchemaNonStringLiteral, KrishivError,
+    DatatypeMismatchCastWithoutSuggestion, DatatypeMismatchNonFoldableInput,
+    InvalidSchemaNonStringLiteral, KrishivError,
 };
 use krishiv_types::{DataType, parse_data_type};
 
 use super::defs::{Spec, scalar};
 use super::hof::call_sql;
-use crate::signature::{ArgType, CallTypes, Constant, InputType, Inputs};
+use crate::signature::{ArgType, CallTypes, Constant, InputBuilder, InputType, Inputs};
 
 /// Spark's `VariantGet.checkDataType`: whether a variant casts to `t`.
 #[must_use]
@@ -151,6 +152,101 @@ fn try_variant_get(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     ))
 }
 
+/// The value argument of the Spark 4.3 edit functions is "any expression castable to variant": a variant, an untyped
+/// NULL, or a type that casts to `VARIANT` (no struct, no map).
+fn check_value(name: &str, c: &CallTypes<'_>) -> Result<(), KrishivError> {
+    match c.data_type(2) {
+        Some(DataType::Null | DataType::Variant) | None => Ok(()),
+        Some(t) if variant_castable(t, false) => Ok(()),
+        Some(_) => Err(DatatypeMismatchCastWithoutSuggestion {
+            sql_expr: call_sql(name, c),
+            src_type: super::hof::quoted(c.data_type(2)),
+            target_type: "\"VARIANT\"".to_owned(),
+        }
+        .into()),
+    }
+}
+
+/// The optional flag of `variant_set` / `variant_strip_nulls` must be a foldable boolean.
+fn check_flag(name: &str, c: &CallTypes<'_>, at: usize, input: &str) -> Result<(), KrishivError> {
+    if c.args().len() <= at {
+        return Ok(());
+    }
+    match c.constant(at) {
+        Some(Constant::Boolean(_) | Constant::Null) => Ok(()),
+        Some(Constant::Error(e)) => Err(e.clone()),
+        _ => Err(DatatypeMismatchNonFoldableInput {
+            sql_expr: call_sql(name, c),
+            input_name: format!("`{input}`"),
+            input_type: "\"BOOLEAN\"".to_owned(),
+            input_expr: format!("\"{}\"", c.sql(at).unwrap_or_default()),
+        }
+        .into()),
+    }
+}
+
+fn variant_result(c: &CallTypes<'_>, try_: bool) -> ArgType {
+    ArgType::new(
+        DataType::Variant,
+        try_ || c.args().iter().any(|a| a.nullable),
+    )
+}
+
+fn variant_insert(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    check_value("variant_insert", c)?;
+    Ok(variant_result(c, false))
+}
+
+fn try_variant_insert(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    check_value("try_variant_insert", c)?;
+    Ok(variant_result(c, true))
+}
+
+fn variant_array_append(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    check_value("variant_array_append", c)?;
+    Ok(variant_result(c, false))
+}
+
+fn try_variant_array_append(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    check_value("try_variant_array_append", c)?;
+    Ok(variant_result(c, true))
+}
+
+fn variant_set(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    check_value("variant_set", c)?;
+    check_flag("variant_set", c, 3, "create_if_missing")?;
+    Ok(variant_result(c, false))
+}
+
+fn try_variant_set(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    check_value("try_variant_set", c)?;
+    check_flag("try_variant_set", c, 3, "create_if_missing")?;
+    Ok(variant_result(c, true))
+}
+
+fn variant_strip_nulls(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    check_flag("variant_strip_nulls", c, 1, "include_arrays")?;
+    Ok(variant_result(c, false))
+}
+
+/// `variant_delete`: NULL only for a NULL variant (a NULL path is skipped).
+fn variant_delete(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Variant, nullable(c)))
+}
+
+/// `variant_delete(v, path1, path2, ...)`: a variant, then strings.
+fn delete_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    (0..c.args().len())
+        .map(|i| {
+            InputType::Strict(if i == 0 {
+                DataType::Variant
+            } else {
+                DataType::String
+            })
+        })
+        .collect()
+}
+
 pub(super) fn specs() -> Vec<Spec> {
     // `ExpectsInputTypes` on `StringTypeWithCollation`: no implicit cast.
     let string = Inputs::Expects(vec![InputType::Strict(DataType::String)]);
@@ -171,6 +267,45 @@ pub(super) fn specs() -> Vec<Spec> {
         &["to_variant_object"],
         &Inputs::Any,
         to_variant_object,
+    ));
+    // Spark 4.3's edit functions.
+    let edit = Inputs::Expects(vec![
+        InputType::Strict(DataType::Variant),
+        InputType::Strict(DataType::String),
+        InputType::Any,
+    ]);
+    let set = Inputs::Expects(vec![
+        InputType::Strict(DataType::Variant),
+        InputType::Strict(DataType::String),
+        InputType::Any,
+        InputType::Strict(DataType::Boolean),
+    ]);
+    out.extend(scalar(&["variant_insert"], &edit, variant_insert));
+    out.extend(scalar(&["try_variant_insert"], &edit, try_variant_insert));
+    out.extend(scalar(
+        &["variant_array_append"],
+        &edit,
+        variant_array_append,
+    ));
+    out.extend(scalar(
+        &["try_variant_array_append"],
+        &edit,
+        try_variant_array_append,
+    ));
+    out.extend(scalar(&["variant_set"], &set, variant_set));
+    out.extend(scalar(&["try_variant_set"], &set, try_variant_set));
+    out.extend(scalar(
+        &["variant_strip_nulls"],
+        &Inputs::Expects(vec![
+            InputType::Strict(DataType::Variant),
+            InputType::Strict(DataType::Boolean),
+        ]),
+        variant_strip_nulls,
+    ));
+    out.extend(scalar(
+        &["variant_delete"],
+        &Inputs::Built(InputBuilder(delete_inputs)),
+        variant_delete,
     ));
     out
 }

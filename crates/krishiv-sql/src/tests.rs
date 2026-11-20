@@ -14,6 +14,7 @@ use super::*;
 mod commands;
 mod function;
 mod golden_syntax;
+mod json_table;
 mod probe;
 mod sample;
 mod tail;
