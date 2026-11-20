@@ -77,6 +77,8 @@ pub struct SessionAdmin {
     runtime: Arc<EngineRuntime>,
     denials: Option<Arc<DeniedCounts>>,
     ops: Option<Arc<DrainOps>>,
+    /// The `krishiv.auth.*` settings as the operator wrote them (references, never resolved).
+    pub(super) startup_auth: Arc<[(String, String)]>,
 }
 
 impl std::fmt::Debug for SessionAdmin {
@@ -102,7 +104,16 @@ impl SessionAdmin {
             runtime,
             denials: None,
             ops: None,
+            startup_auth: Arc::from([]),
         }
+    }
+
+    /// The same, listing the `krishiv.auth.*` startup settings (as written, so a secret reference
+    /// is shown, never its secret) in `GetConfig`: withheld unless the caller holds `Manage`.
+    #[must_use]
+    pub fn with_startup_auth(mut self, settings: Vec<(String, String)>) -> Self {
+        self.startup_auth = settings.into();
+        self
     }
 
     /// The same, serving the drain and readiness RPCs over `ops`.
@@ -118,6 +129,20 @@ impl SessionAdmin {
         self.denials = Some(denials);
         self
     }
+}
+
+/// Runs `work` on the blocking pool; a panicked or cancelled task is an internal error.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> AdminResult<T> + Send + 'static,
+) -> AdminResult<T> {
+    tokio::task::spawn_blocking(work).await.unwrap_or_else(|_| {
+        Err(AdminError::new(
+            ErrorKind::Internal,
+            "INTERNAL_ERROR",
+            "XX000",
+            "The request could not be completed.",
+        ))
+    })
 }
 
 /// The owner name of a caller with no identity: a control character, so no real principal has it.
@@ -311,7 +336,9 @@ impl AdminApi for SessionAdmin {
         _request: GetResourceGroupConfigRequest,
     ) -> BoxFuture<'_, AdminResult<GetResourceGroupConfigResponse>> {
         let call = call.clone();
-        async move { self.do_get_resource_group_config(&call) }.boxed()
+        let me = self.clone();
+        // File reads, writes and fsyncs: off the async workers (a stalled mount parks one thread).
+        async move { blocking(move || me.do_get_resource_group_config(&call)).await }.boxed()
     }
 
     fn validate_resource_group_config(
@@ -329,7 +356,10 @@ impl AdminApi for SessionAdmin {
         request: ReplaceResourceGroupConfigRequest,
     ) -> BoxFuture<'_, AdminResult<ReplaceResourceGroupConfigResponse>> {
         let call = call.clone();
-        async move { self.do_replace_resource_group_config(&call, &request) }.boxed()
+        let me = self.clone();
+        // File reads, writes and fsyncs: off the async workers (a stalled mount parks one thread).
+        async move { blocking(move || me.do_replace_resource_group_config(&call, &request)).await }
+            .boxed()
     }
 
     fn reload_resource_group_config(
@@ -338,7 +368,9 @@ impl AdminApi for SessionAdmin {
         _request: ReloadResourceGroupConfigRequest,
     ) -> BoxFuture<'_, AdminResult<ReloadResourceGroupConfigResponse>> {
         let call = call.clone();
-        async move { self.do_reload_resource_group_config(&call) }.boxed()
+        let me = self.clone();
+        // File reads, writes and fsyncs: off the async workers (a stalled mount parks one thread).
+        async move { blocking(move || me.do_reload_resource_group_config(&call)).await }.boxed()
     }
 
     fn get_config(
@@ -687,6 +719,7 @@ impl AdminApi for SessionAdmin {
         let who = Who::of(call);
         let call = call.clone();
         async move {
+            self.require(&call, who.manage, Privilege::Manage, "Drain", "cluster")?;
             let ops = match self.ops_for("Drain") {
                 Ok(ops) => ops,
                 Err(e) => {
@@ -695,7 +728,6 @@ impl AdminApi for SessionAdmin {
                     return Err(e);
                 }
             };
-            self.require(&call, who.manage, Privilege::Manage, "Drain", "cluster")?;
             let grace = match request.grace_period {
                 None => ops.default_grace,
                 Some(d) => u64::try_from(d.seconds)
@@ -728,6 +760,13 @@ impl AdminApi for SessionAdmin {
         let who = Who::of(call);
         let call = call.clone();
         async move {
+            self.require(
+                &call,
+                who.manage,
+                Privilege::Manage,
+                "ResumeServing",
+                "cluster",
+            )?;
             let ops = match self.ops_for("ResumeServing") {
                 Ok(ops) => ops,
                 Err(e) => {
@@ -736,13 +775,6 @@ impl AdminApi for SessionAdmin {
                     return Err(e);
                 }
             };
-            self.require(
-                &call,
-                who.manage,
-                Privilege::Manage,
-                "ResumeServing",
-                "cluster",
-            )?;
             if (ops.resume)().is_err() {
                 let e = AdminError::new(
                     ErrorKind::FailedPrecondition,

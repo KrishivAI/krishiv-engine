@@ -355,6 +355,9 @@ pub struct ConfigProblem {
     pub error_class: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub message: ::prost::alloc::string::String,
+    /// Where in the document, as `rootGroups\[1\].subGroups\[0\].name`; empty when it is the document.
+    #[prost(string, tag = "3")]
+    pub path: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ValidateResourceGroupConfigResponse {

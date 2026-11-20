@@ -66,6 +66,44 @@ fn invalid(path: &str, reason: impl Into<String>) -> KrishivError {
     .into()
 }
 
+/// Every problem of the group file, one per bad group, selector or reference (`validate`): the
+/// parse of [`parse`] continued past the first error at group and selector granularity. Empty
+/// when the document is valid.
+pub(super) fn problems(json: &str, total_memory: usize) -> Vec<KrishivError> {
+    let Ok(doc) = serde_json::from_str::<Value>(json) else {
+        return parse(json, total_memory).err().into_iter().collect();
+    };
+    let (Some(obj), Some(roots_json)) = (
+        doc.as_object(),
+        doc.get("rootGroups").and_then(Value::as_array),
+    ) else {
+        return parse(json, total_memory).err().into_iter().collect();
+    };
+    if only_keys(obj, &["rootGroups", "selectors", "defaultGroup"], &[], "$").is_err()
+        || roots_json.is_empty()
+    {
+        return parse(json, total_memory).err().into_iter().collect();
+    }
+    let mut out = Vec::new();
+    for (i, g) in roots_json.iter().enumerate() {
+        if let Err(e) = group(g, &format!("rootGroups[{i}]"), total_memory) {
+            out.push(e);
+        }
+    }
+    if let Some(list) = obj.get("selectors").and_then(Value::as_array) {
+        for (i, s) in list.iter().enumerate() {
+            if let Err(e) = selector(s, &format!("selectors[{i}]")) {
+                out.push(e);
+            }
+        }
+    }
+    if out.is_empty() {
+        // Whole-document checks (names, the default group, selector targets) need the parsed tree.
+        out.extend(parse(json, total_memory).err());
+    }
+    out
+}
+
 /// Parses the group file; `total_memory` is what a `"NN%"` memory limit is a share of.
 pub(super) fn parse(json: &str, total_memory: usize) -> Result<Config, KrishivError> {
     let doc: Value = serde_json::from_str(json).map_err(|e| invalid("$", e.to_string()))?;

@@ -161,6 +161,14 @@
           "oneof": null,
           "optional": false,
           "type": "string"
+        },
+        "path": {
+          "jsonName": "path",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
         }
       }
     },

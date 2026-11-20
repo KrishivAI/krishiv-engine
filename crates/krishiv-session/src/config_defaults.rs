@@ -18,6 +18,7 @@ use krishiv_common::error::{
 
 use crate::conf::{ConfStore, RuntimeConf, is_modifiable};
 use crate::runtime::EngineRuntime;
+use krishiv_common::secret::is_sensitive_key;
 
 impl EngineRuntime {
     /// The configuration a new session starts from, and the one its `RESET` returns to: the
@@ -185,8 +186,17 @@ impl EngineRuntime {
             self.config.explicit_registered().into_iter().collect();
         let keep = |key: &str| prefix.is_none_or(|p| key.starts_with(p));
         let mut rows: BTreeMap<String, ConfigListing> = BTreeMap::new();
-        let mut push = |key: &str, value: Option<String>, scope, settable_by, source| {
-            let withheld = is_sensitive(key) && !reveal_sensitive && value.is_some();
+        let mut push = |key: &str,
+                        value: Option<String>,
+                        scope: Option<&'static str>,
+                        settable_by: Option<&'static str>,
+                        source| {
+            // A key the registry does not know is not vetted: its value is shown only to `Manage`,
+            // and never when its name says credential (`spark.hadoop.fs.s3a.secret.key`).
+            let unvetted = scope.is_none();
+            let withheld = value.is_some()
+                && ((is_sensitive(key) && !reveal_sensitive)
+                    || (unvetted && (!reveal_sensitive || is_sensitive_key(key))));
             rows.insert(
                 key.to_owned(),
                 ConfigListing {

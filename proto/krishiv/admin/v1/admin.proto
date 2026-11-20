@@ -325,6 +325,8 @@ message ConfigProblem {
   // The error class of the refusal.
   string error_class = 1;
   string message = 2;
+  // Where in the document, as `rootGroups[1].subGroups[0].name`; empty when it is the document.
+  string path = 3;
 }
 
 message ValidateResourceGroupConfigResponse {

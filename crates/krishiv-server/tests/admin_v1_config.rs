@@ -80,6 +80,12 @@ struct Fixture {
 }
 
 fn fixture(with_groups: bool) -> Fixture {
+    fixture_with(with_groups, &[], &[])
+}
+
+/// A fixture whose server has the `krishiv.auth.*` startup settings `auth` and the engine
+/// settings `conf` (keys the registry may not know).
+fn fixture_with(with_groups: bool, auth: &[(&str, &str)], conf: &[(&str, &str)]) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("resource-groups.json");
     std::fs::write(&path, GROUPS).unwrap();
@@ -90,9 +96,18 @@ fn fixture(with_groups: bool) -> Fixture {
             path.to_str().unwrap(),
         );
     }
+    for (k, v) in conf {
+        builder = builder.config(*k, *v);
+    }
     let rt = builder.build().unwrap();
     let app = router(
-        Arc::new(SessionAdmin::new(rt)),
+        Arc::new(
+            SessionAdmin::new(rt).with_startup_auth(
+                auth.iter()
+                    .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                    .collect(),
+            ),
+        ),
         Arc::new(Roles),
         AdminConfig {
             loopback: true,
@@ -313,41 +328,167 @@ async fn without_a_group_file_the_reads_are_empty_and_the_changes_are_read_only(
 }
 
 #[tokio::test]
-async fn get_config_lists_keys_with_source_and_withholds_the_auth_values() {
-    let f = fixture(false);
+async fn get_config_lists_the_auth_settings_withheld_from_an_operator_and_shown_to_an_admin() {
+    let f = fixture_with(
+        false,
+        &[
+            ("krishiv.auth.tokens.ops.secret", "file:/run/secrets/ops"),
+            ("krishiv.auth.tokens.ops.role", "admin"),
+        ],
+        &[],
+    );
     let (status, _) = f.call("v:viewer", "GET", "/config", None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    let (status, body) = f
-        .call(
-            "o:operator",
-            "GET",
-            "/config?prefix=krishiv.auth.&pageSize=500",
-            None,
-        )
-        .await;
+    let url = "/config?prefix=krishiv.auth.&pageSize=500";
+    let (status, body) = f.call("o:operator", "GET", url, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let entries = body["entries"].as_array().unwrap();
-    // The authentication settings never reach the runtime's configuration: nothing is listed
-    // with a value, whoever asks.
-    assert!(
-        entries
-            .iter()
-            .all(|e| e["withheld"] == true && e["value"].is_null()),
-        "{body}"
+    assert_eq!(entries.len(), 2, "{body}");
+    for e in entries {
+        assert_eq!(e["withheld"], true, "{e}");
+        assert!(e["value"].is_null(), "{e}");
+        assert_eq!(e["scope"], "cluster");
+        assert_eq!(e["source"], "startup");
+    }
+    let (_, body) = f.call("a:admin", "GET", url, None).await;
+    let entries = body["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2, "{body}");
+    let secret = entries
+        .iter()
+        .find(|e| e["key"] == "krishiv.auth.tokens.ops.secret")
+        .unwrap();
+    assert_eq!(secret["value"], "file:/run/secrets/ops");
+    assert_eq!(secret["withheld"], false);
+}
+
+#[tokio::test]
+async fn get_config_withholds_the_path_allowlists_from_an_operator_over_the_rpc() {
+    let f = fixture_with(false, &[], &[("krishiv.io.local.allowedRoots", "/tmp")]);
+    let url = "/config?prefix=krishiv.io.local.allowedRoots";
+    let (_, body) = f.call("o:operator", "GET", url, None).await;
+    assert_eq!(body["entries"][0]["withheld"], true, "{body}");
+    assert!(body["entries"][0]["value"].is_null());
+    let (_, body) = f.call("a:admin", "GET", url, None).await;
+    assert_eq!(body["entries"][0]["value"], "/tmp", "{body}");
+}
+
+#[tokio::test]
+async fn get_config_never_shows_a_credential_named_startup_key() {
+    let f = fixture_with(
+        false,
+        &[],
+        &[
+            ("spark.hadoop.fs.s3a.secret.key", "s3cr3t"),
+            ("spark.some.plain", "visible"),
+        ],
     );
+    let url = "/config?prefix=spark.&pageSize=500";
+    for who in ["o:operator", "a:admin"] {
+        let (_, body) = f.call(who, "GET", url, None).await;
+        let text = body.to_string();
+        assert!(!text.contains("s3cr3t"), "{who}: {text}");
+        let row = body["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["key"] == "spark.hadoop.fs.s3a.secret.key")
+            .unwrap();
+        assert_eq!(row["withheld"], true);
+    }
+    let plain = |body: &Value| {
+        body["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["key"] == "spark.some.plain")
+            .cloned()
+            .unwrap()
+    };
+    let (_, body) = f.call("o:operator", "GET", url, None).await;
+    assert_eq!(
+        plain(&body)["withheld"],
+        true,
+        "an operator sees no unvetted value"
+    );
+    let (_, body) = f.call("a:admin", "GET", url, None).await;
+    assert_eq!(plain(&body)["value"], "visible");
+}
+
+#[tokio::test]
+async fn validate_reports_every_problem_with_its_path() {
+    let f = fixture(true);
+    let doc = r#"{"rootGroups": [
+        {"name": "a", "hardConcurrencyLimit": -1, "maxQueued": 1},
+        {"name": "b", "maxQueued": 1}],
+      "defaultGroup": "a"}"#;
+    let body = serde_json::json!({ "document": doc }).to_string();
     let (_, body) = f
         .call(
             "o:operator",
-            "GET",
-            "/config?prefix=krishiv.workload.resourceGroups.file",
-            None,
+            "POST",
+            "/resourceGroups/config:validate",
+            Some(&body),
         )
         .await;
-    assert_eq!(
-        body["entries"][0]["key"],
-        "krishiv.workload.resourceGroups.file"
-    );
-    assert_eq!(body["entries"][0]["source"], "default");
+    assert_eq!(body["valid"], false, "{body}");
+    let paths: Vec<&str> = body["problems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths.len(), 2, "{body}");
+    assert!(paths[0].starts_with("rootGroups[0]"), "{paths:?}");
+    assert!(paths[1].starts_with("rootGroups[1]"), "{paths:?}");
+}
+
+#[tokio::test]
+async fn a_replayed_request_id_answers_the_stored_response_and_applies_once() {
+    let f = fixture(true);
+    let (_, current) = f
+        .call("a:admin", "GET", "/resourceGroups/config", None)
+        .await;
+    let etag = current["etag"].as_str().unwrap();
+    let body = serde_json::json!({
+        "document": GROUPS_V2, "etag": etag, "requestId": "req-1"
+    })
+    .to_string();
+    let (first, a) = f
+        .call("a:admin", "PUT", "/resourceGroups/config", Some(&body))
+        .await;
+    assert_eq!(first, StatusCode::OK, "{a}");
+    // Applied again it would answer 412 (the etag moved); the replay answers the stored one.
+    let (second, b) = f
+        .call("a:admin", "PUT", "/resourceGroups/config", Some(&body))
+        .await;
+    assert_eq!(second, StatusCode::OK, "{b}");
+    assert_eq!(a["etag"], b["etag"]);
+
+    let set = serde_json::json!({
+        "set": {"krishiv.sql.ansi.enabled": "true"}, "requestId": "req-2"
+    })
+    .to_string();
+    let (s1, x) = f
+        .call("a:admin", "PATCH", "/config/defaults", Some(&set))
+        .await;
+    let (s2, y) = f
+        .call("a:admin", "PATCH", "/config/defaults", Some(&set))
+        .await;
+    assert_eq!((s1, s2), (StatusCode::OK, StatusCode::OK), "{x} {y}");
+    assert_eq!(x, y);
+}
+
+#[tokio::test]
+async fn a_file_edited_after_it_was_read_is_a_412_on_replace() {
+    let f = fixture(true);
+    let (_, current) = f
+        .call("a:admin", "GET", "/resourceGroups/config", None)
+        .await;
+    std::fs::write(&f.path, GROUPS_V2).unwrap();
+    let (status, body) = f
+        .replace("a:admin", GROUPS_V2, current["etag"].as_str().unwrap())
+        .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{body}");
 }
 
 #[tokio::test]

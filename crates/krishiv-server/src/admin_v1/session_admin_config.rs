@@ -4,6 +4,7 @@
 //! reading and changing the runtime's configuration defaults.
 
 use krishiv_common::error::KrishivError;
+use krishiv_common::secret::is_sensitive_key;
 use krishiv_session::{ConfigListing, ConfigSource, Privilege, ResourceGroupInfo};
 
 use super::page::Page;
@@ -66,21 +67,14 @@ fn group_message(g: &ResourceGroupInfo) -> ResourceGroup {
         scan_bytes_in_window: g.scan_bytes_in_window,
         scan_window_resets_at: g.scan_window_resets_at_ms.map(timestamp),
         config_etag: g.config_etag.clone(),
-        loaded_at: Some(timestamp(g.loaded_at_ms)),
+        loaded_at: (g.loaded_at_ms > 0).then(|| timestamp(g.loaded_at_ms)),
     }
 }
 
 fn entry_message(c: &ConfigListing) -> ConfigEntry {
-    // The `krishiv.auth.*` settings never reach the runtime's configuration, so a value listed
-    // for one would be the registry default, not what the server runs with: never show it.
-    let unknown_to_runtime = c.key.starts_with("krishiv.auth.");
     ConfigEntry {
         key: c.key.clone(),
-        value: if unknown_to_runtime {
-            None
-        } else {
-            c.value.clone()
-        },
+        value: c.value.clone(),
         scope: c.scope.unwrap_or_default().to_owned(),
         settable_by: c.settable_by.unwrap_or_default().to_owned(),
         source: match c.source {
@@ -89,7 +83,16 @@ fn entry_message(c: &ConfigListing) -> ConfigEntry {
             ConfigSource::Admin => "admin",
         }
         .to_owned(),
-        withheld: c.withheld || unknown_to_runtime,
+        withheld: c.withheld,
+    }
+}
+
+/// A value as the action record shows it: never one a name marks as a credential.
+fn shown(key: &str, value: Option<&str>) -> String {
+    match value {
+        None => "(unset)".to_owned(),
+        Some(_) if is_sensitive_key(key) => "(withheld)".to_owned(),
+        Some(v) => v.to_owned(),
     }
 }
 
@@ -127,7 +130,7 @@ impl SessionAdmin {
         Ok(GetResourceGroupConfigResponse {
             document: d.document,
             etag: d.etag,
-            loaded_at: Some(timestamp(d.loaded_at_ms)),
+            loaded_at: (d.loaded_at_ms > 0).then(|| timestamp(d.loaded_at_ms)),
             file_etag: d.file_etag.unwrap_or_default(),
         })
     }
@@ -145,16 +148,21 @@ impl SessionAdmin {
             "ValidateResourceGroupConfig",
             "system",
         )?;
-        let problems = match self
+        let problems: Vec<ConfigProblem> = self
             .runtime()
-            .validate_resource_group_document(&request.document)
-        {
-            Ok(()) => Vec::new(),
-            Err(e) => vec![ConfigProblem {
+            .resource_group_problems(&request.document)
+            .iter()
+            .map(|e| ConfigProblem {
                 error_class: e.error_class().name().to_owned(),
                 message: e.message().to_owned(),
-            }],
-        };
+                path: e
+                    .message_parameters()
+                    .iter()
+                    .find(|(k, _)| *k == "path")
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default(),
+            })
+            .collect();
         Ok(ValidateResourceGroupConfigResponse {
             valid: problems.is_empty(),
             problems,
@@ -174,23 +182,26 @@ impl SessionAdmin {
             "ReplaceResourceGroupConfig",
             "cluster",
         )?;
+        let old = self.runtime().resource_group_document().etag;
         if let Err(e) = self
             .runtime()
             .replace_resource_group_document(&request.document, &request.etag)
         {
             let e = admin_error(&e);
+            let target = format!("etag {} (current {old})", request.etag);
             self.log(
                 call,
                 "ReplaceResourceGroupConfig",
-                "",
+                &target,
                 false,
                 "failed",
                 &e.error_class,
             );
             return Err(e);
         }
-        self.log(call, "ReplaceResourceGroupConfig", "", false, "ok", "");
         let d = self.runtime().resource_group_document();
+        let target = format!("etag {old} -> {}", d.etag);
+        self.log(call, "ReplaceResourceGroupConfig", &target, false, "ok", "");
         Ok(ReplaceResourceGroupConfigResponse {
             etag: d.etag,
             loaded_at: Some(timestamp(d.loaded_at_ms)),
@@ -209,20 +220,23 @@ impl SessionAdmin {
             "ReloadResourceGroupConfig",
             "cluster",
         )?;
+        let old = self.runtime().resource_group_document().etag;
         if let Err(e) = self.runtime().reload_resource_group_document() {
             let e = admin_error(&e);
+            let target = format!("etag {old}");
             self.log(
                 call,
                 "ReloadResourceGroupConfig",
-                "",
+                &target,
                 false,
                 "failed",
                 &e.error_class,
             );
             return Err(e);
         }
-        self.log(call, "ReloadResourceGroupConfig", "", false, "ok", "");
         let d = self.runtime().resource_group_document();
+        let target = format!("etag {old} -> {}", d.etag);
+        self.log(call, "ReloadResourceGroupConfig", &target, false, "ok", "");
         Ok(ReloadResourceGroupConfigResponse {
             etag: d.etag,
             loaded_at: Some(timestamp(d.loaded_at_ms)),
@@ -239,7 +253,22 @@ impl SessionAdmin {
         let filter = format!("config{:?}", request.prefix);
         let page = Page::parse(request.page_size, &request.page_token, &filter)?;
         let prefix = (!request.prefix.is_empty()).then_some(request.prefix.as_str());
-        let rows = self.runtime().config_listing(prefix, who.manage);
+        let mut rows = self.runtime().config_listing(prefix, who.manage);
+        // The listener's own settings never reach the runtime: list them as written (references,
+        // never resolved secrets), their values for `Manage` only.
+        rows.extend(
+            self.startup_auth
+                .iter()
+                .filter(|(k, _)| prefix.is_none_or(|p| k.starts_with(p)))
+                .map(|(k, v)| ConfigListing {
+                    key: k.clone(),
+                    value: who.manage.then(|| v.clone()),
+                    scope: Some("cluster"),
+                    settable_by: Some("startup"),
+                    source: ConfigSource::Startup,
+                    withheld: !who.manage,
+                }),
+        );
         let (rows, next) = page.apply(rows, |c| (0, c.key.clone()), &filter);
         Ok(GetConfigResponse {
             entries: rows.iter().map(entry_message).collect(),
@@ -265,23 +294,51 @@ impl SessionAdmin {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        let target = self.describe_defaults_change(&set, &request.unset);
         if let Err(e) = self.runtime().set_config_defaults(&set, &request.unset) {
             let e = admin_error(&e);
             self.log(
                 call,
                 "SetConfigDefaults",
-                "",
+                &target,
                 false,
                 "failed",
                 &e.error_class,
             );
             return Err(e);
         }
-        // The keys, never the values: a value may be a path or a reference.
-        self.log(call, "SetConfigDefaults", "", false, "ok", "");
+        self.log(call, "SetConfigDefaults", &target, false, "ok", "");
         Ok(SetConfigDefaultsResponse {
             set_count: i32::try_from(set.len()).unwrap_or(i32::MAX),
             unset_count: i32::try_from(request.unset.len()).unwrap_or(i32::MAX),
         })
+    }
+
+    /// The keys of a defaults change with their old and new values (design §5.6), values of a
+    /// credential-named key withheld.
+    fn describe_defaults_change(&self, set: &[(String, String)], unset: &[String]) -> String {
+        let current = |key: &str| {
+            self.runtime()
+                .config_listing(Some(key), true)
+                .into_iter()
+                .find(|r| r.key == key)
+                .and_then(|r| r.value)
+        };
+        let mut parts: Vec<String> = set
+            .iter()
+            .map(|(k, v)| {
+                format!(
+                    "set {k}: {} -> {}",
+                    shown(k, current(k).as_deref()),
+                    shown(k, Some(v))
+                )
+            })
+            .collect();
+        parts.extend(
+            unset
+                .iter()
+                .map(|k| format!("unset {k}: {}", shown(k, current(k).as_deref()))),
+        );
+        parts.join("; ")
     }
 }

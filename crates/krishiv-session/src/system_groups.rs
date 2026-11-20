@@ -23,14 +23,31 @@ fn visible_rows(sources: &Sources) -> Vec<(crate::resource_groups::GroupRow, boo
         .queries
         .snapshot(false)
         .into_iter()
-        .filter(|q| q.state == "running")
+        .filter(|q| holds_a_slot_or_a_place(q.state))
         .filter_map(|q| q.resource_group)
         .collect();
+    visible_to_owner(rows, &own, |r| r.group_id.as_str())
+}
+
+/// Whether a query in `state` counts for the own-groups rule: running, or queued in its group.
+pub(crate) fn holds_a_slot_or_a_place(state: &str) -> bool {
+    matches!(state, "running" | "queued")
+}
+
+/// The one visibility rule of a caller without `Monitor` (design §5.4), shared by
+/// `system.resource_groups` and `ListResourceGroups`: the groups in `own` (the groups of the
+/// caller's running or queued queries) and their ancestors, each paired with whether it is one of
+/// `own` (its counters are shown) or only an ancestor (subtree counters are other tenants' work).
+pub(crate) fn visible_to_owner<R>(
+    rows: Vec<R>,
+    own: &[String],
+    id: impl Fn(&R) -> &str,
+) -> Vec<(R, bool)> {
     rows.into_iter()
         .filter_map(|r| {
-            let holds = own.contains(&r.group_id);
+            let holds = own.iter().any(|g| g == id(&r));
             let ancestor = own.iter().any(|g| {
-                g.strip_prefix(r.group_id.as_str())
+                g.strip_prefix(id(&r))
                     .is_some_and(|rest| rest.starts_with('.'))
             });
             (holds || ancestor).then_some((r, holds))

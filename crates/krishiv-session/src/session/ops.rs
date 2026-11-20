@@ -675,6 +675,9 @@ impl Session {
             Poll::Ready(done) => done,
             Poll::Pending => {
                 self.state.queries.set_state(log_id, "queued");
+                if let Some(group) = controller.queued_group(&request) {
+                    self.state.queries.set_group(log_id, &group);
+                }
                 let done = admit.await;
                 if done.is_ok() {
                     self.state.queries.set_state(log_id, "running");

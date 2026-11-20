@@ -129,6 +129,13 @@ impl ResourceGroups {
         config::parse(json, total_memory).map(drop)
     }
 
+    /// Every problem of `json` (empty when it is valid): one per bad group, selector or
+    /// reference, each with its path.
+    #[must_use]
+    pub fn problems(json: &str, total_memory: usize) -> Vec<KrishivError> {
+        config::problems(json, total_memory)
+    }
+
     /// Swaps the group tree for the one `json` describes.
     ///
     /// Swaps the tree for the one `json` describes. A group the new document keeps (by dotted
@@ -300,5 +307,9 @@ impl AdmissionController for ResourceGroups {
 
     fn uses_estimate(&self) -> bool {
         false
+    }
+
+    fn queued_group(&self, request: &QueryRequest) -> Option<String> {
+        Some(select::select(&self.current().config, request).to_owned())
     }
 }

@@ -101,11 +101,11 @@ fn read_only(path: &str, reason: &str) -> KrishivError {
 /// Whether a new file made by this process would have another owner than `original`: a replace
 /// writes a temporary file and renames it over the original, and a process cannot give a file to
 /// another user without privilege, so a file owned by someone else is not replaced (design §5.4
-/// asks for the original's owner). The process's user is the owner of `/proc/self`.
+/// asks for the original's owner). The process's user is its effective user id.
 #[cfg(unix)]
 fn owner_would_change(original: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
-    fs::metadata("/proc/self").is_ok_and(|me| me.uid() != original.uid())
+    rustix::process::geteuid().as_raw() != original.uid()
 }
 
 #[cfg(not(unix))]

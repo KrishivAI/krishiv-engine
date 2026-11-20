@@ -110,53 +110,48 @@ impl EngineRuntime {
         } else {
             self.query_infos()
                 .into_iter()
-                .filter(|q| q.state == "running" && q.is_owned_by(caller))
+                .filter(|q| crate::system_groups::holds_a_slot_or_a_place(&q.state))
+                .filter(|q| q.is_owned_by(caller))
                 .filter_map(|q| q.resource_group)
                 .collect()
         };
-        groups
-            .rows()
+        let rows = groups.rows();
+        let visible: Vec<(_, bool)> = if monitor {
+            rows.into_iter().map(|r| (r, true)).collect()
+        } else {
+            crate::system_groups::visible_to_owner(rows, &own, |r| r.group_id.as_str())
+        };
+        visible
             .into_iter()
-            .filter_map(|r| {
-                let holds = own.contains(&r.group_id);
-                let ancestor = own.iter().any(|g| {
-                    g.strip_prefix(r.group_id.as_str())
-                        .is_some_and(|rest| rest.starts_with('.'))
-                });
-                if !monitor && !holds && !ancestor {
-                    return None;
-                }
-                let counters = monitor || holds;
-                Some(ResourceGroupInfo {
-                    group_id: r.group_id,
-                    parent_id: r.parent_id,
-                    state: r.state.to_owned(),
-                    scheduling_policy: r.scheduling_policy.to_owned(),
-                    scheduling_weight: r.scheduling_weight,
-                    priority: r.priority,
-                    workload_class: r.workload_class.to_owned(),
-                    hard_concurrency_limit: r.hard_concurrency_limit,
-                    max_queued: r.max_queued,
-                    soft_memory_limit_bytes: r.soft_memory_limit_bytes,
-                    per_query_memory_limit_bytes: r.per_query_memory_limit_bytes,
-                    scan_quota_bytes: r.scan_quota_bytes,
-                    scan_quota_period_s: r.scan_quota_period_s,
-                    running: counters.then_some(r.running),
-                    queued: counters.then_some(r.queued),
-                    memory_reserved_bytes: counters.then_some(r.memory_reserved_bytes),
-                    scan_bytes_in_window: if counters {
-                        r.scan_bytes_in_window
-                    } else {
-                        None
-                    },
-                    scan_window_resets_at_ms: if counters {
-                        r.scan_window_resets_at_ms
-                    } else {
-                        None
-                    },
-                    config_etag: r.config_etag,
-                    loaded_at_ms: r.loaded_at_ms,
-                })
+            .map(|(r, counters)| ResourceGroupInfo {
+                group_id: r.group_id,
+                parent_id: r.parent_id,
+                state: r.state.to_owned(),
+                scheduling_policy: r.scheduling_policy.to_owned(),
+                scheduling_weight: r.scheduling_weight,
+                priority: r.priority,
+                workload_class: r.workload_class.to_owned(),
+                hard_concurrency_limit: r.hard_concurrency_limit,
+                max_queued: r.max_queued,
+                soft_memory_limit_bytes: r.soft_memory_limit_bytes,
+                per_query_memory_limit_bytes: r.per_query_memory_limit_bytes,
+                scan_quota_bytes: r.scan_quota_bytes,
+                scan_quota_period_s: r.scan_quota_period_s,
+                running: counters.then_some(r.running),
+                queued: counters.then_some(r.queued),
+                memory_reserved_bytes: counters.then_some(r.memory_reserved_bytes),
+                scan_bytes_in_window: if counters {
+                    r.scan_bytes_in_window
+                } else {
+                    None
+                },
+                scan_window_resets_at_ms: if counters {
+                    r.scan_window_resets_at_ms
+                } else {
+                    None
+                },
+                config_etag: r.config_etag,
+                loaded_at_ms: r.loaded_at_ms,
             })
             .collect()
     }
@@ -187,6 +182,12 @@ impl EngineRuntime {
     /// `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID` for an invalid document.
     pub fn validate_resource_group_document(&self, document: &str) -> Result<(), KrishivError> {
         ResourceGroups::validate(document, self.group_memory())
+    }
+
+    /// Every problem of `document`, one per bad group or selector (`ValidateResourceGroupConfig`).
+    #[must_use]
+    pub fn resource_group_problems(&self, document: &str) -> Vec<KrishivError> {
+        ResourceGroups::problems(document, self.group_memory())
     }
 
     /// Writes `document` over the group file and swaps the tree (`ReplaceResourceGroupConfig`).
