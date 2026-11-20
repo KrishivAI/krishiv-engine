@@ -394,6 +394,15 @@ impl Display for NodeLine<'_> {
                 write!(f, " ({})", List(params))
             }
             PlanNode::PipeOperator { .. } => f.write_str("PipeOperator"),
+            PlanNode::ColumnNames { op, .. } => match op {
+                crate::ColumnNamesOp::ToDf(names) => write!(f, "ToDF {}", Name(names)),
+                crate::ColumnNamesOp::Rename(pairs) => {
+                    let pairs: Vec<String> =
+                        pairs.iter().map(|(a, b)| format!("{a} -> {b}")).collect();
+                    write!(f, "RenameColumns {}", Name(&pairs))
+                }
+                crate::ColumnNamesOp::Drop(names) => write!(f, "DropColumns {}", Name(names)),
+            },
             PlanNode::Repartition { exprs, .. } => write!(f, "Repartition ({})", List(exprs)),
             PlanNode::CollectMetrics { name, metrics, .. } => {
                 write!(

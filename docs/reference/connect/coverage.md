@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 12 done, 14 partial, 32 missing, 4 out of scope.
+62 arms: 14 done, 15 partial, 29 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -29,10 +29,10 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 15 | range | done |  | Range | P2-T091a | 0 |
 | 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
 | 17 | repartition | missing |  | Repartition (round robin / coalesce) | P3-T012 | 3 |
-| 18 | to_df | missing |  | lowering: Project of Alias (positional) | P3-T012 | 4 |
-| 19 | with_columns_renamed | missing |  | lowering: Project | P3-T012 | 4 |
+| 18 | to_df | done |  | ColumnNames(ToDf): the analyzer renames by position (count mismatch is the derived-table alias error) | P3-T012 | 4 |
+| 19 | with_columns_renamed | done |  | ColumnNames(Rename): the pairs in turn, case rule of the session, unknown names ignored | P3-T012 | 4 |
 | 20 | show_string | missing |  | server-side: execute, then format as Spark's Dataset.showString (truncate, vertical); returns a one-row, one-column relation | P3-T012 | 4 |
-| 21 | drop | missing |  | lowering: Project without the dropped columns (names or column references) | P3-T012 | 4 |
+| 21 | drop | partial | columns that are qualified or tied to a DataFrame | ColumnNames(Drop): by name, plain one-part column expressions included; unknown names ignored | P3-T012 | 4 |
 | 22 | tail | missing |  | new Tail (the last n rows in plan order; not Sort + Limit) | P3-T012 | 3 |
 | 23 | with_columns | partial | Alias.metadata | WithColumns; metadata on the column field | P3-T012 | 4 |
 | 24 | hint | done |  | Hint; as Spark 4.2: parameters are literals or lists of them, a partitioning hint is dropped with a warning (3.5 reads parameters differently) | P3-T012 | 3 |

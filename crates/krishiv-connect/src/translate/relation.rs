@@ -14,8 +14,9 @@ use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
-    ALIAS_PART_SEP, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan,
-    Origin, PlanId, PlanNode, ReadSource, SampleBounds, SetOperation, SqlArgs, UnpivotColumnSet,
+    ALIAS_PART_SEP, ColumnNamesOp, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal,
+    LogicalPlan, Origin, PlanId, PlanNode, ReadSource, SampleBounds, SetOperation, SqlArgs,
+    UnpivotColumnSet,
 };
 
 use super::errors::{
@@ -122,6 +123,12 @@ impl Translator<'_> {
             },
             RelType::RepartitionByExpression(r) => self.repartition_by_expression(r)?,
             RelType::Unpivot(u) => self.unpivot(u)?,
+            RelType::ToDf(t) => PlanNode::ColumnNames {
+                input: self.input("ToDF", t.input.as_deref())?,
+                op: ColumnNamesOp::ToDf(t.column_names.clone()),
+            },
+            RelType::WithColumnsRenamed(w) => self.with_columns_renamed(w)?,
+            RelType::Drop(d) => self.drop_columns(d)?,
             RelType::Extension(any) => match resolve(any, Slot::Relation)? {
                 // One row, one string column: `SELECT '<message>' AS message`.
                 Extension::Echo(echo) => PlanNode::Project {
@@ -240,6 +247,50 @@ impl Translator<'_> {
         Ok(PlanNode::Repartition {
             input: self.input("RepartitionByExpression", r.input.as_deref())?,
             exprs: self.expressions(&r.partition_exprs)?,
+        })
+    }
+
+    /// `WithColumnsRenamed`: the `renames` list, or the older `rename_columns_map` when the list is
+    /// empty (Spark's own fallback). Names that match no column are ignored, as Spark does.
+    fn with_columns_renamed(&mut self, w: &pb::WithColumnsRenamed) -> Result<PlanNode> {
+        let pairs = if w.renames.is_empty() {
+            w.rename_columns_map
+                .iter()
+                .map(|(from, to)| (from.clone(), to.clone()))
+                .collect()
+        } else {
+            w.renames
+                .iter()
+                .map(|r| (r.col_name.clone(), r.new_col_name.clone()))
+                .collect()
+        };
+        Ok(PlanNode::ColumnNames {
+            input: self.input("WithColumnsRenamed", w.input.as_deref())?,
+            op: ColumnNamesOp::Rename(pairs),
+        })
+    }
+
+    /// `Drop` by name, or by column expressions that are plain one-part column names. A qualified
+    /// column or one tied to a DataFrame (`df["a"]`) drops by attribute in Spark and is refused.
+    fn drop_columns(&mut self, d: &pb::Drop) -> Result<PlanNode> {
+        let mut names = d.column_names.clone();
+        for e in self.expressions(&d.columns)? {
+            match &e.node {
+                ExprNode::Column(c) if c.name.len() == 1 && c.plan_id.is_none() => {
+                    names.push(c.name[0].clone());
+                }
+                _ => {
+                    return Err(unsupported_field(
+                        "Drop",
+                        "columns",
+                        "dropping a column expression that is not a plain column name",
+                    ));
+                }
+            }
+        }
+        Ok(PlanNode::ColumnNames {
+            input: self.input("Drop", d.input.as_deref())?,
+            op: ColumnNamesOp::Drop(names),
         })
     }
 

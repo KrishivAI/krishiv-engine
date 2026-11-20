@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use krishiv_common::error::ErrorClass;
 use krishiv_common::secret::OptionValue;
-use krishiv_plan::PlanNode;
+use krishiv_plan::{ColumnNamesOp, PlanNode};
 
 use super::super::testing::{
     attr, boxed, conf, expr, fails, func, lit, read_files, read_table, relation, show, translate,
@@ -894,9 +894,8 @@ fn a_relations_plan_id_becomes_its_origin() {
 fn unsupported_relations_are_named() {
     for (kind, name) in [
         (RelType::ShowString(Box::default()), "SHOW_STRING(20)"),
-        (RelType::ToDf(Box::default()), "TO_DF(18)"),
         (RelType::Transpose(Box::default()), "TRANSPOSE(42)"),
-        (RelType::Drop(Box::default()), "DROP(21)"),
+        (RelType::Tail(Box::default()), "TAIL(22)"),
         (RelType::WithRelations(Box::default()), "WITH_RELATIONS(41)"),
     ] {
         let r = relation(kind);
@@ -1360,4 +1359,73 @@ fn unpivot_plans_as_unpivot_include_nulls() {
         );
         assert_eq!(line(&translated, prefix), line(&parsed, prefix), "{prefix}");
     }
+}
+
+// ---- column-name arms: to_df, with_columns_renamed, drop ----------------------------------------
+
+fn column_names_op(rel: &Relation) -> ColumnNamesOp {
+    let PlanNode::ColumnNames { op, .. } = node(rel) else {
+        panic!("not a ColumnNames node")
+    };
+    op
+}
+
+#[test]
+fn to_df_keeps_the_names_in_order() {
+    let rel = relation(RelType::ToDf(Box::new(pb::ToDf {
+        input: input(),
+        column_names: vec!["x".into(), "y".into()],
+    })));
+    assert_eq!(
+        column_names_op(&rel),
+        ColumnNamesOp::ToDf(vec!["x".into(), "y".into()])
+    );
+}
+
+#[test]
+fn with_columns_renamed_reads_the_list_then_the_old_map() {
+    let listed = relation(RelType::WithColumnsRenamed(Box::new(
+        pb::WithColumnsRenamed {
+            input: input(),
+            rename_columns_map: [("ignored".to_owned(), "x".to_owned())].into(),
+            renames: vec![pb::with_columns_renamed::Rename {
+                col_name: "a".into(),
+                new_col_name: "b".into(),
+            }],
+        },
+    )));
+    assert_eq!(
+        column_names_op(&listed),
+        ColumnNamesOp::Rename(vec![("a".into(), "b".into())])
+    );
+    let mapped = relation(RelType::WithColumnsRenamed(Box::new(
+        pb::WithColumnsRenamed {
+            input: input(),
+            rename_columns_map: [("a".to_owned(), "b".to_owned())].into(),
+            renames: vec![],
+        },
+    )));
+    assert_eq!(
+        column_names_op(&mapped),
+        ColumnNamesOp::Rename(vec![("a".into(), "b".into())])
+    );
+}
+
+#[test]
+fn drop_takes_names_and_plain_columns_and_refuses_other_expressions() {
+    let rel = relation(RelType::Drop(Box::new(pb::Drop {
+        input: input(),
+        columns: vec![attr("a")],
+        column_names: vec!["b".into()],
+    })));
+    assert_eq!(
+        column_names_op(&rel),
+        ColumnNamesOp::Drop(vec!["b".into(), "a".into()])
+    );
+    let qualified = relation(RelType::Drop(Box::new(pb::Drop {
+        input: input(),
+        columns: vec![lit(LiteralType::Integer(1))],
+        column_names: vec![],
+    })));
+    assert_eq!(code(&qualified), ErrorClass::KrishivUnsupportedFeature);
 }

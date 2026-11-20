@@ -119,6 +119,7 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::CoGroupMap { .. } => 39,
         PlanNode::PythonTableFunction { .. } => 40,
         PlanNode::CollectMetrics { .. } => 41,
+        PlanNode::ColumnNames { .. } => 42,
     }
 }
 
@@ -963,6 +964,24 @@ impl<'k, 'a> Encoder<'k, 'a> {
             | PlanNode::PipeOperator { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Repartition { exprs, .. } => self.exprs(exprs),
+            PlanNode::ColumnNames { op, .. } => match op {
+                crate::ColumnNamesOp::ToDf(names) => {
+                    self.u8(0);
+                    self.strs(names);
+                }
+                crate::ColumnNamesOp::Rename(pairs) => {
+                    self.u8(1);
+                    self.len(pairs.len());
+                    for (from, to) in pairs {
+                        self.str(from);
+                        self.str(to);
+                    }
+                }
+                crate::ColumnNamesOp::Drop(names) => {
+                    self.u8(2);
+                    self.strs(names);
+                }
+            },
             PlanNode::CollectMetrics { name, metrics, .. } => {
                 self.str(name);
                 self.exprs(metrics);

@@ -94,6 +94,22 @@ impl PartialEq for SampleBounds {
 
 impl Eq for SampleBounds {}
 
+/// What a [`PlanNode::ColumnNames`] does with its input's columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ColumnNamesOp {
+    /// `toDF(names)`: every column renamed by position (Spark's
+    /// `UnresolvedSubqueryColumnAliases`); the count must match.
+    ToDf(Vec<String>),
+    /// `withColumnsRenamed`: each `(existing, new)` pair in turn renames every column whose
+    /// name matches `existing` under the session's case rule; names that match nothing are
+    /// ignored (Spark's `UnresolvedStarWithColumnsRenames`).
+    Rename(Vec<(String, String)>),
+    /// `drop(names)`: the columns whose name matches any of `names` are left out; names that
+    /// match nothing are ignored (Spark's `Dataset.drop(colNames*)`).
+    Drop(Vec<String>),
+}
+
 /// The relation node kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -236,6 +252,15 @@ pub enum PlanNode {
         name: String,
         /// Its parameters.
         params: Vec<Arc<Expr>>,
+    },
+    /// A DataFrame call that works on column names the input's schema decides
+    /// (`toDF`, `withColumnsRenamed`, `drop(names)`): the analyzer resolves
+    /// it to a projection over the input and does not keep the node.
+    ColumnNames {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// What to do with the names.
+        op: ColumnNamesOp,
     },
     /// The boundary Spark puts between pipe operators (`PipeOperator`):
     /// a `WHERE` or `ORDER BY` after `|>` reads only what the operator
@@ -1174,6 +1199,7 @@ impl LogicalPlan {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
+            | PlanNode::ColumnNames { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
@@ -1240,6 +1266,7 @@ impl LogicalPlan {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
+            | PlanNode::ColumnNames { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
@@ -1292,6 +1319,7 @@ impl LogicalPlan {
             | PlanNode::UnionLoop { .. }
             | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
+            | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
@@ -1398,6 +1426,7 @@ impl LogicalPlan {
             | PlanNode::UnionLoop { .. }
             | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
+            | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
@@ -1681,6 +1710,7 @@ impl LogicalPlan {
                 | PlanNode::Sql { .. }
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
+                | PlanNode::ColumnNames { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::SetOp { .. }
                 | PlanNode::Pivot { .. }

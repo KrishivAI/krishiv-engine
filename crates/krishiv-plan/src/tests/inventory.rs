@@ -46,6 +46,7 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Shift { .. } => "PlanNode::Shift",
         PlanNode::Hint { .. } => "PlanNode::Hint",
         PlanNode::PipeOperator { .. } => "PlanNode::PipeOperator",
+        PlanNode::ColumnNames { .. } => "PlanNode::ColumnNames",
         PlanNode::Repartition { .. } => "PlanNode::Repartition",
         PlanNode::CollectMetrics { .. } => "PlanNode::CollectMetrics",
         PlanNode::JoinHint { .. } => "PlanNode::JoinHint",

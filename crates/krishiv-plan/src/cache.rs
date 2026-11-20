@@ -893,6 +893,11 @@ impl Encoder {
                 self.tag("PipeOperator");
                 self.plan(input, bias);
             }
+            PlanNode::ColumnNames { input, op } => {
+                self.tag("ColumnNames");
+                self.text(&format!("{op:?}"));
+                self.plan(input, bias);
+            }
             PlanNode::Repartition { input, exprs } => {
                 self.tag("Repartition");
                 self.exprs(exprs, bias);

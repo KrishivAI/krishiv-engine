@@ -28,14 +28,6 @@ const UNSUPPORTED: &[(&str, ErrorClass)] = &[
         "show_string",
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
     ),
-    (
-        "to_df",
-        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
-    ),
-    (
-        "with_column_renamed",
-        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
-    ),
 ];
 
 #[cfg(test)]

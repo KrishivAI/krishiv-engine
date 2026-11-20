@@ -540,65 +540,7 @@ impl Resolver<'_> {
         let inner = if columns.is_empty() {
             c
         } else {
-            if columns.len() != c.out.len() {
-                if let Some(func) = generator_relation_name(input) {
-                    return Err(AnalysisError::new(
-                        NumTableValueAliasesMismatch {
-                            func_name: format!("`{func}`"),
-                            aliases_num: columns.len().to_string(),
-                            out_cols_num: c.out.len().to_string(),
-                        },
-                        p.origin,
-                    ));
-                }
-                return Err(AnalysisError::new(
-                    AssignmentArityMismatch {
-                        num_target: c.out.len().to_string(),
-                        num_expr: columns.len().to_string(),
-                    },
-                    p.origin,
-                ));
-            }
-            let mut exprs = Vec::new();
-            let mut out = Vec::new();
-            for (a, name) in c.out.iter().zip(columns) {
-                let output = BoundColumn {
-                    id: self.fresh(),
-                    name: name.clone(),
-                    ..a.col.clone()
-                };
-                self.carry_column_meta(a.col.id, output.id);
-                exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
-                    ResolvedExpr::Alias {
-                        expr: col_expr(&a.col, Origin::UNKNOWN),
-                        output: output.clone(),
-                    },
-                ))));
-                out.push(Attr {
-                    col: output,
-                    qual: no_qual(),
-                    source: a.source.clone(),
-                    // Spark's `Alias` keeps its child's metadata.
-                    duplicate: a.duplicate,
-                });
-            }
-            let node = PlanNode::Project {
-                input: Arc::clone(&c.plan),
-                exprs: exprs.clone(),
-            };
-            let mut renamed = self.make(Origin::UNKNOWN, node, out, &[&c]);
-            // A file table's `_metadata` stays reachable through the renaming.
-            let meta: Vec<Attr> = c
-                .hidden
-                .iter()
-                .filter(|a| is_generated_metadata(a))
-                .cloned()
-                .collect();
-            if !meta.is_empty() {
-                renamed.hidden = meta.into();
-                renamed.widen = Some(Arc::new(Widen::Project { input: c, exprs }));
-            }
-            renamed
+            self.rename_by_position(p, input, c, columns)?
         };
         let qual: Arc<[String]> = alias
             .split(crate::plan::ALIAS_PART_SEP)
@@ -633,5 +575,137 @@ impl Resolver<'_> {
             rel.widen = Some(Arc::new(Widen::Through { child: inner }));
         }
         Ok(rel)
+    }
+
+    /// `c` with its columns renamed by position and its qualifiers dropped (Spark's
+    /// `UnresolvedSubqueryColumnAliases`: a derived table's column list and `toDF`).
+    pub(in crate::analyzer) fn rename_by_position(
+        &mut self,
+        p: &LogicalPlan,
+        input: &Arc<LogicalPlan>,
+        c: Rel,
+        columns: &[String],
+    ) -> Result<Rel, AnalysisError> {
+        if columns.len() != c.out.len() {
+            if let Some(func) = generator_relation_name(input) {
+                return Err(AnalysisError::new(
+                    NumTableValueAliasesMismatch {
+                        func_name: format!("`{func}`"),
+                        aliases_num: columns.len().to_string(),
+                        out_cols_num: c.out.len().to_string(),
+                    },
+                    p.origin,
+                ));
+            }
+            return Err(AnalysisError::new(
+                AssignmentArityMismatch {
+                    num_target: c.out.len().to_string(),
+                    num_expr: columns.len().to_string(),
+                },
+                p.origin,
+            ));
+        }
+        let mut exprs = Vec::new();
+        let mut out = Vec::new();
+        for (a, name) in c.out.iter().zip(columns) {
+            let output = BoundColumn {
+                id: self.fresh(),
+                name: name.clone(),
+                ..a.col.clone()
+            };
+            self.carry_column_meta(a.col.id, output.id);
+            exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Alias {
+                    expr: col_expr(&a.col, Origin::UNKNOWN),
+                    output: output.clone(),
+                },
+            ))));
+            out.push(Attr {
+                col: output,
+                qual: no_qual(),
+                source: a.source.clone(),
+                // Spark's `Alias` keeps its child's metadata.
+                duplicate: a.duplicate,
+            });
+        }
+        let node = PlanNode::Project {
+            input: Arc::clone(&c.plan),
+            exprs: exprs.clone(),
+        };
+        let mut renamed = self.make(Origin::UNKNOWN, node, out, &[&c]);
+        // A file table's `_metadata` stays reachable through the renaming.
+        let meta: Vec<Attr> = c
+            .hidden
+            .iter()
+            .filter(|a| is_generated_metadata(a))
+            .cloned()
+            .collect();
+        if !meta.is_empty() {
+            renamed.hidden = meta.into();
+            renamed.widen = Some(Arc::new(Widen::Project { input: c, exprs }));
+        }
+        Ok(renamed)
+    }
+
+    /// A [`PlanNode::ColumnNames`]: the input's columns by name, as Spark's `toDF`,
+    /// `withColumnsRenamed` and `drop(names)` resolve them. The node is not kept.
+    pub(in crate::analyzer) fn column_names(
+        &mut self,
+        p: &LogicalPlan,
+        input: &Arc<LogicalPlan>,
+        op: &crate::ColumnNamesOp,
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        use crate::ColumnNamesOp;
+        let c = self.child(input, env)?;
+        let cs = self.ctx.conf.case_sensitive;
+        let same = |a: &str, b: &str| crate::analyzer::bind::same(a, b, cs);
+        match op {
+            ColumnNamesOp::ToDf(names) => self.rename_by_position(p, input, c, names),
+            ColumnNamesOp::Rename(pairs) => {
+                let mut names: Vec<String> = c.out.iter().map(|a| a.col.name.clone()).collect();
+                let mut changed = vec![false; names.len()];
+                for (from, to) in pairs {
+                    for (n, ch) in names.iter_mut().zip(changed.iter_mut()) {
+                        if same(n, from) {
+                            n.clone_from(to);
+                            *ch = true;
+                        }
+                    }
+                }
+                let exprs: Vec<Arc<Expr>> = c
+                    .out
+                    .iter()
+                    .zip(names.iter().zip(&changed))
+                    .map(|(a, (n, ch))| {
+                        if *ch {
+                            Arc::new(Expr::new(ExprNode::Alias {
+                                expr: self.pass_expr(&a.col),
+                                name: n.clone(),
+                            }))
+                        } else {
+                            self.pass_expr(&a.col)
+                        }
+                    })
+                    .collect();
+                self.project_items(p, &c, &exprs, env)
+            }
+            ColumnNamesOp::Drop(drops) => {
+                if !c
+                    .out
+                    .iter()
+                    .any(|a| drops.iter().any(|d| same(&a.col.name, d)))
+                {
+                    return Ok(c);
+                }
+                let exprs: Vec<Arc<Expr>> = c
+                    .out
+                    .iter()
+                    .filter(|a| !drops.iter().any(|d| same(&a.col.name, d)))
+                    .map(|a| self.pass_expr(&a.col))
+                    .collect();
+                self.project_items(p, &c, &exprs, env)
+            }
+        }
     }
 }
