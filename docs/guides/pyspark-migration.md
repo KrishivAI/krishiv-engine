@@ -159,7 +159,6 @@ Each row links to the full description in [known differences](../concepts/known-
 | [SQL function bodies and the ANSI mode they were created under](../concepts/known-differences.md#sql-function-bodies-and-the-ansi-mode-they-were-created-under) |
 | [The relation cache is per session](../concepts/known-differences.md#the-relation-cache-is-per-session) |
 | [Checkpoint files and where a checkpoint lives](../concepts/known-differences.md#checkpoint-files-and-where-a-checkpoint-lives) |
-| [`remote("local")` is not supported](../concepts/known-differences.md#remotelocal-is-not-supported) |
 | [A declared schema on a Delta read](../concepts/known-differences.md#a-declared-schema-on-a-delta-read) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
 | [`Dataset.observe`: where the counts differ from Spark's](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks) |
