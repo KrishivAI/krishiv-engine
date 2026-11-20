@@ -24,6 +24,10 @@ use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::batch::Batch;
 
 use super::Assignment;
+
+/// Each rewrite's target and whether its request kept a `read_filter` (the partitions read), in
+/// order: the end-to-end side of the re-read rule (review 681c2e038 nit 1).
+pub(super) static READ_FILTERS: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
 use crate::session::Session;
 
 /// The table's files: name and rows (`id BIGINT, s STRING`).
@@ -809,4 +813,56 @@ fn a_delta_target_is_compared_by_its_root_not_its_spelling() {
     ] {
         assert!(!rereads(&different), "{different}");
     }
+}
+
+/// On a real rewrite plan (the hidden provider in it), an `UPDATE` whose `SET` subquery reads
+/// another Delta table keeps its condition as the read filter, and one that reads the target again
+/// under another spelling reads the whole table (review 681c2e038 nit 1).
+#[cfg(feature = "delta")]
+#[test]
+fn a_delta_update_reads_the_whole_table_only_when_a_subquery_reads_the_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, other) = (dir.path().join("rt"), dir.path().join("ro"));
+    let s = Session::builder().build().unwrap();
+    let sql = |text: &str| {
+        block_on(async { s.sql(text).await?.collect().await }).unwrap();
+    };
+    s.conf()
+        .set(
+            "spark.sql.warehouse.dir",
+            &dir.path().join("wh").display().to_string(),
+        )
+        .unwrap();
+    for (name, path) in [("rt", &root), ("ro", &other)] {
+        sql(&format!(
+            "CREATE TABLE {name} USING delta PARTITIONED BY (p) LOCATION '{}' AS SELECT 1 AS v, 1 AS p UNION ALL SELECT 2, 2",
+            path.display()
+        ));
+    }
+    let (t, o) = (root.display().to_string(), other.display().to_string());
+    let filters = |update: &str| {
+        let before = READ_FILTERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len();
+        sql(update);
+        let seen = READ_FILTERS.lock().unwrap_or_else(PoisonError::into_inner);
+        seen[before..]
+            .iter()
+            .filter(|(name, _)| name.contains(&t))
+            .map(|(_, kept)| *kept)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        filters(&format!(
+            "UPDATE delta.`{t}` SET v = (SELECT max(v) FROM delta.`{o}`) WHERE p = 1"
+        )),
+        vec![true]
+    );
+    assert_eq!(
+        filters(&format!(
+            "UPDATE delta.`{t}` SET v = (SELECT max(v) FROM delta.`file:{t}/`) WHERE p = 1"
+        )),
+        vec![false]
+    );
 }

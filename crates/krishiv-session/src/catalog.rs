@@ -445,9 +445,6 @@ impl QueryCatalog {
         file_metadata(&format)
     }
 
-    /// The entry a scan of `name` (as the analyzer kept it) reads: a
-    /// temporary view or table by its single part, a permanent table by
-    /// `namespace.table`.
     /// The root of the Delta table `scan` reads, as [`crate::delta::DeltaReads::hadoop_root`] names it
     /// (`file:/..`): a read by path (`` delta.`p` ``, `format("delta")`) or a catalog table whose entry
     /// this query opened as a Delta read. `None`: not a Delta read (the hidden target of a row-level
@@ -466,6 +463,9 @@ impl QueryCatalog {
         crate::delta::is_delta(&source).then(|| self.delta.hadoop_root(&source))
     }
 
+    /// The entry a scan of `name` (as the analyzer kept it) reads: a
+    /// temporary view or table by its single part, a permanent table by
+    /// `namespace.table`.
     fn loaded_for(&self, name: &[String]) -> Option<Arc<TempTable>> {
         self.entry_of(name).map(|(_, t)| t)
     }

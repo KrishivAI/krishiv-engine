@@ -335,6 +335,11 @@ impl Session {
         let rereads_target =
             crate::catalog::reads_source(analysis.analyzed.plan.root(), &scan.source);
         let read_filter = read_filter(condition, rereads_target)?;
+        #[cfg(test)]
+        tests::READ_FILTERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((quoted.to_string(), read_filter.is_some()));
         let mut request = RowLevelWrite::new(
             op,
             quoted,
