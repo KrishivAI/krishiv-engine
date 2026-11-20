@@ -2,6 +2,7 @@
 //! View expansion: the walk that inlines permanent and temporary views into a plan.
 
 use super::*;
+use crate::sql_functions::CallRule;
 use krishiv_plan::analyzer::views::{ViewExpansion, ViewSecurity};
 
 /// [`expand_temp_views`]: the views on the current expansion path, by
@@ -15,22 +16,112 @@ pub(super) struct Expander<'a> {
     pub(super) view_namespace: Option<String>,
     /// Inside a stored view: the SQL path frozen with it.
     pub(super) view_path: Option<Vec<Vec<String>>>,
+    /// Inside a definer view's text: the functions bound when it was created (review r8 item 1).
+    pub(super) view_functions: Option<crate::store::BoundFunctions>,
     /// The catalog-store lookups so far, in plan order, without repeats.
     pub(super) reads: Vec<ReadCandidate>,
     /// The first failure inside a stored view's text, kept for [`Expansion::deferred`].
     pub(super) deferred: Option<KrishivError>,
+    /// Whether [`Self::deferred`] arose inside a definer view's text (review B2: the reader is told
+    /// only its class).
+    pub(super) deferred_in_definer: bool,
     /// The stored views inlined so far, for [`Expansion::stored_reads`].
     pub(super) stored_reads: Vec<crate::view_schema::StoredRead>,
     /// The views inlined so far, for [`Expansion::views`] (the lineage side table).
     pub(super) views: Vec<ViewExpansion>,
+    /// The definer views inlined so far, for [`Expansion::definers`].
+    pub(super) definers: Vec<DefinerRead>,
+    /// The definer views whose text the expansion is inside, innermost last (indexes of
+    /// [`Self::definers`]): a lookup there is the innermost one's, asked of its definer.
+    pub(super) in_definer: Vec<usize>,
+    /// How many stored views' texts the expansion is inside: their calls are qualified by
+    /// [`StoredViews::qualify`] under a view's rule (a stored function's body, expanded in its
+    /// namespace, is qualified under a body's rule, [`StoredViews::stored_body`]).
+    pub(super) in_stored_view: usize,
     /// The keeps of the temporary view entries inlined so far, for [`Expansion::keeps`].
     pub(super) keeps: Vec<Keep>,
+    /// The stored views inlined so far, each with the definer view whose text holds it (an index
+    /// of [`Self::definers`], `None` outside one), for [`Expansion::reached`].
+    reached: Vec<(Option<usize>, ReachedView)>,
+    /// The stored views whose text the expansion is inside (indexes of [`Self::reached`]).
+    open_views: Vec<usize>,
 }
 
-/// A view read the expansion inlined as `SubqueryAlias alias` at `origin`, for the view side table. Every
-/// view inlined here is read with its base tables checked against the caller (the analyzer binds them as the
-/// query's own reads): a temporary view, or a permanent view as `INVOKER` (T062 adds `DEFINER`). The expansion
-/// has no memo, so a read shared by two parents of the plan (`df.join(df)`) is inlined, and recorded, twice.
+/// A stored view an expansion inlined (review r10 M10): inside a definer view's trusted text it is
+/// checked against the version the definer view pinned, and its own reads are asked of its owner
+/// and author too.
+#[derive(Debug, Clone)]
+pub(crate) struct ReachedView {
+    /// The namespace and name the catalog stores.
+    pub(crate) view: (String, String),
+    /// [`ViewDef::revision`] of the entry inlined.
+    pub(crate) revision: u64,
+    /// [`ViewDef::author`] of the entry inlined.
+    pub(crate) author: String,
+    /// The catalog-store lookups of its text and of the invoker views inside it, not those inside
+    /// a definer view in it (which are that definer's).
+    pub(crate) reads: Vec<ReadCandidate>,
+    /// Its text as inlined (`None` when it failed).
+    pub(crate) query: Option<Arc<LogicalPlan>>,
+}
+
+impl<'a> Expander<'a> {
+    /// An expansion of a plan written inside `namespace` (none: the query's own) under `view_path`.
+    pub(super) fn new(
+        catalog: &'a SessionCatalog,
+        case_sensitive: bool,
+        stored: Option<&'a StoredViews<'a>>,
+        namespace: Option<String>,
+        view_path: Option<Vec<Vec<String>>>,
+    ) -> Self {
+        Self {
+            catalog,
+            case_sensitive,
+            path: Vec::new(),
+            stored,
+            view_namespace: namespace,
+            view_path,
+            view_functions: None,
+            reads: Vec::new(),
+            deferred: None,
+            deferred_in_definer: false,
+            stored_reads: Vec::new(),
+            views: Vec::new(),
+            definers: Vec::new(),
+            in_definer: Vec::new(),
+            in_stored_view: 0,
+            keeps: Vec::new(),
+            reached: Vec::new(),
+            open_views: Vec::new(),
+        }
+    }
+
+    /// What the expansion found, with its expanded `plan`.
+    pub(super) fn finish(mut self, plan: Arc<LogicalPlan>) -> Expansion {
+        for (definer, view) in &self.reached {
+            if let Some(d) = definer.and_then(|i| self.definers.get_mut(i)) {
+                d.views.push(view.clone());
+            }
+        }
+        Expansion {
+            plan,
+            reads: self.reads,
+            deferred: self.deferred,
+            deferred_in_definer: self.deferred_in_definer,
+            stored_reads: self.stored_reads,
+            views: self.views,
+            definers: self.definers,
+            keeps: self.keeps,
+            reached: self.reached.into_iter().map(|(_, v)| v).collect(),
+        }
+    }
+}
+
+/// A view read the expansion inlined as `SubqueryAlias alias` at `origin`, for the view side table: a
+/// temporary view or a permanent `INVOKER` view, read with its base tables checked against the caller (the
+/// analyzer binds them as the query's own reads), or a permanent `DEFINER` view, whose base tables are checked
+/// against its definer (P3-T062 §2.4). The expansion has no memo, so a read shared by two parents of the plan
+/// (`df.join(df)`) is inlined, and recorded, twice.
 fn view_read(
     name: Vec<String>,
     alias: &str,
@@ -173,7 +264,55 @@ impl Expander<'_> {
             return self.go_with_cte(plan.origin, input, ctes, scope);
         }
         let plan = self.children_and_exprs(plan, scope)?;
+        let plan = self.qualified_table_function(plan);
         self.expand_stored(plan, scope)
+    }
+
+    /// Where the calls of the plan being expanded resolve, when not through the reader's session:
+    /// inside a stored view's text, its namespace and frozen path (a view's rule); else, in a stored
+    /// function's body, the function's namespace and frozen path (a body's rule, review r7 R7-1).
+    /// The last field: the rule, a definer view's text calling only the functions it bound when
+    /// it was created (review r8 item 1).
+    fn call_scope(&self) -> Option<(&str, &[Vec<String>], CallRule<'_>)> {
+        let namespace = self.view_namespace.as_deref()?;
+        if self.in_stored_view > 0 {
+            let rule = match &self.view_functions {
+                Some(bound) => CallRule::Bound(bound),
+                None => CallRule::View,
+            };
+            return Some((namespace, self.view_path.as_deref()?, rule));
+        }
+        self.stored.filter(|s| s.stored_body).map(|_| {
+            (
+                namespace,
+                self.view_path.as_deref().unwrap_or_default(),
+                CallRule::Body,
+            )
+        })
+    }
+
+    /// `plan`, or inside a stored view's text or a stored function's body, when it calls a table
+    /// function by a bare name, the call qualified as its scalar calls are (review r6 R6-1, r7
+    /// R7-1, [`StoredViews::qualify_table`]).
+    fn qualified_table_function(&self, plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+        let PlanNode::TableFunction { name, args } = &plan.node else {
+            return plan;
+        };
+        let (Some(qualify), Some((namespace, path, rule))) =
+            (self.stored.and_then(|s| s.qualify_table), self.call_scope())
+        else {
+            return plan;
+        };
+        match qualify(name, namespace, path, rule) {
+            Some(name) => Arc::new(
+                LogicalPlan::new(PlanNode::TableFunction {
+                    name,
+                    args: args.clone(),
+                })
+                .with_origin(plan.origin),
+            ),
+            None => plan,
+        }
     }
 
     /// `plan`, or when it reads a stored view, that view's query as a subquery named for the view.
@@ -238,8 +377,27 @@ impl Expander<'_> {
                 .filter(|e| e.view.is_some())
                 .map(|e| (e.namespace.clone(), e.name.clone())),
         };
-        if !self.reads.contains(&candidate) {
-            self.reads.push(candidate);
+        // A lookup in a stored view's text is its owner's too (review r10 M10): recorded for each
+        // view whose text holds it, up to the innermost definer view's text.
+        let innermost = self.in_definer.last().copied();
+        for &open in &self.open_views {
+            if let Some((definer, view)) = self.reached.get_mut(open)
+                && *definer == innermost
+                && !view.reads.contains(&candidate)
+            {
+                view.reads.push(candidate.clone());
+            }
+        }
+        // Inside a definer view's text a lookup is the definer's to be allowed, not the reader's.
+        let reads = match self.in_definer.last() {
+            Some(&i) => match self.definers.get_mut(i) {
+                Some(d) => &mut d.reads,
+                None => &mut self.reads,
+            },
+            None => &mut self.reads,
+        };
+        if !reads.contains(&candidate) {
+            reads.push(candidate);
         }
         let Some((entry, view)) = entry.as_ref().and_then(|e| Some((e, e.view.as_ref()?))) else {
             return Ok(plan);
@@ -248,7 +406,13 @@ impl Expander<'_> {
             Ok(done) => Ok(done),
             Err(e) => {
                 // Keep the read as it is; the failure is raised once the reads are authorized.
-                self.deferred.get_or_insert(e);
+                if self.deferred.is_none() {
+                    // A failure of a definer view's own text (its `WITH`s under its policy, a name in it) is
+                    // the definer's too, though its text is no longer on the path once it fails.
+                    self.deferred_in_definer =
+                        !self.in_definer.is_empty() || view.definer.is_some();
+                    self.deferred = Some(e);
+                }
                 Ok(plan)
             }
         }
@@ -288,21 +452,87 @@ impl Expander<'_> {
             }
             .into());
         };
+        let source = (stored.next_source)();
         let lowered = krishiv_sql::lower_identified(
             &query,
-            (stored.next_source)(),
+            source,
             stored.parser.case_sensitive,
             &view.identifier_spans,
         )
         .map_err(|e| e.error)?;
+        // The view's own `WITH`s resolve under the policy captured with it, in its text alone, before
+        // expansion (review r4 Y1; Spark: `View.effectiveSQLConf(viewSQLConfigs, ..)`): no reader's policy
+        // or definition changes what its text reads, and a read the text's own policy leaves to a table is
+        // qualified to the view's namespace below like any other.
+        let text = krishiv_plan::analyzer::inline_view_ctes(
+            lowered.root(),
+            view.cte_precedence.unwrap_or_default(),
+            stored.cte_precedence,
+            self.case_sensitive,
+        )?;
+        let name = vec![
+            CATALOG.to_owned(),
+            namespace.to_owned(),
+            table_key.to_owned(),
+        ];
+        // Its version and its own lookups, for the definer view whose text holds it (review r10 M10).
+        self.reached.push((
+            self.in_definer.last().copied(),
+            ReachedView {
+                view: (entry.namespace.clone(), entry.name.clone()),
+                revision: view.revision,
+                author: view.author.clone(),
+                reads: Vec::new(),
+                query: None,
+            },
+        ));
+        let reached = self.reached.len() - 1;
+        self.open_views.push(reached);
+        // A definer view's text is read with its definer's rights: its lookups are recorded as its own.
+        let definer = view.definer.as_ref().map(|definer| {
+            self.definers.push(DefinerRead {
+                name: name.clone(),
+                definer: definer.clone(),
+                query: None,
+                reads: Vec::new(),
+                view: 0,
+                namespace: view.namespace.clone(),
+                path: view.path.clone(),
+                bound: view.functions.clone().unwrap_or_default(),
+                views: Vec::new(),
+            });
+            self.definers.len() - 1
+        });
+        self.in_definer.extend(definer);
         self.path.push(key);
         let previous = self.view_namespace.replace(view.namespace.clone());
         let previous_path = self.view_path.replace(view.path.clone());
-        let input = self.go(Arc::clone(lowered.root()), &mut Vec::new());
+        // A definer view calls what it bound when created; an invoker view resolves at each read.
+        let previous_functions = std::mem::replace(
+            &mut self.view_functions,
+            view.definer
+                .as_ref()
+                .map(|_| view.functions.clone().unwrap_or_default()),
+        );
+        self.in_stored_view += 1;
+        let input = self.go(text, &mut Vec::new());
+        self.in_stored_view -= 1;
+        self.open_views.pop();
         self.view_namespace = previous;
         self.view_path = previous_path;
+        self.view_functions = previous_functions;
         self.path.pop();
+        if definer.is_some() {
+            self.in_definer.pop();
+        }
         let mut input = input?;
+        if let Some((_, r)) = self.reached.get_mut(reached) {
+            r.query = Some(Arc::clone(&input));
+        }
+        if let Some(d) = definer.and_then(|i| self.definers.get_mut(i)) {
+            d.query = Some(Arc::clone(&input));
+            d.view = self.views.len();
+        }
         let mode = crate::view_schema::effective_mode(view.schema_mode, stored.binding_enabled);
         let projection = crate::view_schema::projection(mode);
         let mut columns: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
@@ -310,6 +540,7 @@ impl Expander<'_> {
             entry: Arc::clone(entry),
             query: Arc::clone(&input),
             mode,
+            in_definer: definer.is_some() || !self.in_definer.is_empty(),
             renamed: projection != crate::view_schema::ReadProjection::Output
                 && view.query_columns.len() == columns.len()
                 && crate::view_schema::repeats_names(&view.query_columns),
@@ -338,14 +569,14 @@ impl Expander<'_> {
             );
         }
         self.views.push(view_read(
-            vec![
-                CATALOG.to_owned(),
-                namespace.to_owned(),
-                table_key.to_owned(),
-            ],
+            name,
             &table,
             plan.origin,
-            ViewSecurity::Invoker,
+            if definer.is_some() {
+                ViewSecurity::Definer
+            } else {
+                ViewSecurity::Invoker
+            },
         ));
         // Otherwise (a view stored without its query's column names) the columns are only renamed by position.
         Ok(Arc::new(
@@ -407,14 +638,12 @@ impl Expander<'_> {
         scope: &mut Vec<String>,
     ) -> Result<Arc<Expr>, KrishivError> {
         let mut expr = expr.map_children(|child| self.expand_expr(child, scope))?;
-        // Inside a stored view the calls of its query resolve through the path it was created under.
+        // Inside a stored view (or a stored function's body) the calls of its query resolve through
+        // the path it was created under.
         if matches!(expr.node, ExprNode::Function(_))
-            && let (Some(qualify), Some(namespace), Some(path)) = (
-                self.stored.and_then(|s| s.qualify),
-                &self.view_namespace,
-                &self.view_path,
-            )
-            && let Some(next) = qualify(&expr, namespace, path)
+            && let (Some(qualify), Some((namespace, path, rule))) =
+                (self.stored.and_then(|s| s.qualify), self.call_scope())
+            && let Some(next) = qualify(&expr, namespace, path, rule)
         {
             expr = next;
         }

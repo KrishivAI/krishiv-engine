@@ -425,6 +425,12 @@
     ],
     "sqlState" : "42704"
   },
+  "KRISHIV_SAMPLE_FRACTION_OUT_OF_RANGE" : {
+    "message" : [
+      "requirement failed: Sampling fraction (<fraction>) must be on interval [0, 1] without replacement"
+    ],
+    "sqlState" : "22023"
+  },
   "KRISHIV_SESSION_LIMIT" : {
     "message" : [
       "Cannot open a new session: <limitName> allows at most <limit> live sessions. Release a session (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."

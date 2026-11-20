@@ -232,12 +232,12 @@ pub fn edge_arrow_type(arrow: &ArrowType) -> ArrowType {
     map_calendar(&client_arrow_type(&map_fixed_lists(arrow, false)), true)
 }
 
-/// The longest vector the engine carries as a `FixedSizeList` (design P3-T075): the bound keeps `N` times a batch's rows
+/// The longest vector the engine carries as a `FixedSizeList`: the bound keeps `N` times a batch's rows
 /// far from the `i32` offsets of the plain list it becomes at an expression input.
 pub const MAX_VECTOR_LENGTH: i32 = 65_536;
 
 /// Whether `arrow` is a vector carrier: a top-level `FixedSizeList` of `Float32` or `Float64` of length `1..=`
-/// [`MAX_VECTOR_LENGTH`] (design P3-T075 §3).
+/// [`MAX_VECTOR_LENGTH`].
 #[must_use]
 pub fn is_vector_carrier(arrow: &ArrowType) -> bool {
     matches!(arrow, ArrowType::FixedSizeList(f, n)
