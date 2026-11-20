@@ -131,7 +131,7 @@ _TEMPLATES = {
     "PYTHON_EXCEPTION": "<msg>: <traceback>",
     "KRISHIV_PYTHON_DATA_SOURCE_LIMIT": (
         "The Python data source <source> returned <bytes> bytes, over the <limit> byte limit of this embedded read "
-        "path, which holds a source's rows in memory when a query is planned. Read less of it per query (narrow "
+        "path, which holds a source's rows in memory when a scan runs. Read less of it per query (narrow "
         "the source's options or split it into smaller sources)."
     ),
     "UNSUPPORTED_DATA_SOURCE_SAVE_MODE": (

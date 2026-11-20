@@ -8,7 +8,7 @@ reads with ``spark.read.format(name)`` and writes with ``df.write.format(name)``
 How it runs here:
 
 * The schema is fixed when ``load`` is called (Spark's ``create_data_source`` step).
-* The reader's ``partitions()`` and ``read()`` run when the query is *planned*, once per physical plan, so
+* The reader's ``partitions()`` and ``read()`` run when the query's scan runs (planning and ``EXPLAIN`` read nothing), once per scan, so
   a source that lists files sees new ones on the next action (Spark plans the read per execution).
   Partitions run one after the other in this process (the process pool's parallel partitions are T014).
 * ``read`` may yield tuples, ``Row`` objects, lists or ``pyarrow.RecordBatch`` objects; they are cast to
@@ -19,7 +19,7 @@ How it runs here:
   reader that overrides ``pushFilters`` then fails with ``DATA_SOURCE_PUSHDOWN_DISABLED``. With the
   switch on, ``pushFilters`` is **not called** yet (the engine applies every filter itself); the pushdown
   acceptance of this API stays open.
-* Interim embedded path: the read is materialised in memory when a query is planned (capped by
+* Interim embedded path: the read is materialised in memory when a scan runs (capped by
   ``KRISHIV_PYTHON_DATA_SOURCE_LIMIT``), not streamed per partition as the design's read operator will.
 * The ``DataSource`` instance is created once by ``load`` and reused by every plan of the DataFrame (Spark
   re-creates it from the pickled class for each planning), so state a reader keeps on it lasts across actions.

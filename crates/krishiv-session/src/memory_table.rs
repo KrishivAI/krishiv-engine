@@ -60,9 +60,9 @@ impl Session {
 /// What a `SourceTable` calls each time a plan reads it: the table's rows as batches of its schema.
 pub type BatchSource = Arc<dyn Fn() -> Result<Vec<RecordBatch>, KrishivError> + Send + Sync>;
 
-/// A table whose rows come from a callback, asked afresh for every physical plan of a query (not
+/// A table whose rows come from a callback, asked afresh for every scan of a query (not
 /// once per registration): the Python Data Source API's reader lists its partitions and reads
-/// them when the plan is made, as Spark's `PythonScanBuilder` does (design P3-T040 §3.3).
+/// them when the scan runs (planning and `EXPLAIN` read nothing), as Spark's `PythonScanBuilder` does (design P3-T040 §3.3).
 #[derive(Clone)]
 struct SourceTable {
     label: String,
@@ -82,11 +82,12 @@ struct SourceTable {
 /// are gone.
 struct ScanHold {
     _pool: Arc<dyn MemoryPool>,
+    // Never locked: the Mutex only makes the guard `Sync`; dropping it releases the reservation.
     _reservation: std::sync::Mutex<Reservation>,
 }
 
-/// The most bytes of batches one plan of a [`SourceTable`] may hold: the interim embedded path
-/// materialises a source when a query is planned, so it is capped (⚗, design P3-T040 §3.3).
+/// The most bytes of batches one scan of a [`SourceTable`] may hold: the interim embedded path
+/// materialises a source when the scan runs, so it is capped (⚗, design P3-T040 §3.3).
 const MAX_SOURCE_BYTES: usize = 1 << 30;
 
 impl std::fmt::Debug for SourceTable {
@@ -206,7 +207,7 @@ impl ScanPushdown for LazySourceScan {
 
 impl Session {
     /// Registers the temporary table `name` of `schema` whose rows `source` returns each time a
-    /// query over it is planned. The schema is fixed here (the analysis); the rows are not (a
+    /// scan of it runs. The schema is fixed here (the analysis); the rows are not (a
     /// source that lists files sees new ones on the next action).
     ///
     /// `label` names the source in errors. Each plan's batches are counted in the session's memory

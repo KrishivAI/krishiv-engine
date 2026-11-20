@@ -220,7 +220,7 @@ impl PySession {
     /// A DataFrame over a Python data source (design P3-T040): `schema` is any Arrow
     /// object carrying the source's schema (read now, from an empty table), `read` a
     /// callable returning an Arrow object of that schema. The engine calls it once for
-    /// every physical plan of a query over the DataFrame, so a source that lists its
+    /// every scan of the table in a query, so a source that lists its
     /// partitions in `read` sees new ones on the next action. A failure of `read` is `PYTHON_EXCEPTION`; a planning failure the
     /// Python side classed as `PYTHON_DATA_SOURCE_ERROR` keeps its action and type.
     fn register_python_source(
