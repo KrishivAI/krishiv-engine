@@ -68,6 +68,8 @@ mod puffin_stats_tests;
 #[cfg(test)]
 mod rolling_tests;
 #[cfg(test)]
+mod roundtrip_tests;
+#[cfg(test)]
 mod scan_tests;
 #[cfg(test)]
 mod sink_tests;
@@ -79,5 +81,7 @@ mod table_tests;
 mod tests;
 #[cfg(test)]
 mod validate_tests;
+#[cfg(test)]
+mod write_conformance_tests;
 #[cfg(test)]
 mod write_tests;

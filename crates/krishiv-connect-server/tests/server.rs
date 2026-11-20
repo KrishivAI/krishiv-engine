@@ -602,8 +602,8 @@ async fn every_rpc_is_unavailable_once_the_server_drains() {
             ] {
                 assert_eq!(e.code(), Code::Unavailable);
             }
-            let e = service
-                .execute_plan(Request::new(decoded()))
+            // Boxed: `execute_plan`'s future is over clippy's `large_futures` threshold.
+            let e = Box::pin(service.execute_plan(Request::new(decoded())))
                 .await
                 .err()
                 .expect("err");
