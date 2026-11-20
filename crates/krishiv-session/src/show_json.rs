@@ -32,17 +32,31 @@ impl Session {
                 span,
                 ..
             } => {
-                // The JSON names the session catalog and a stored table type; the `system` tables are
-                // neither, so their metadata would be made up. Refused rather than answered wrong.
-                let in_system = match namespace {
-                    Some(n) => self
-                        .namespace_name(n, &self.query_env())
-                        .is_ok_and(|name| crate::system::is_system(&name)),
-                    None => crate::system::is_system(&self.state.catalog.current_catalog()),
+                // The JSON names the session catalog and a stored table type; the `system` tables and a
+                // declared catalog's tables are neither, so their metadata would be made up (the listing
+                // carries no catalog identity or table type). Refused rather than answered wrong.
+                let outside_session_catalog = match namespace {
+                    Some(n) => {
+                        let env = self.query_env();
+                        let parts = crate::access::ddl_parts(n, &env)?;
+                        match parts.as_slice() {
+                            [one] => crate::system::is_system(one),
+                            [catalog, _] => {
+                                crate::system::is_system(catalog)
+                                    || self.declared_catalogs().canonical(catalog).is_some()
+                            }
+                            _ => false,
+                        }
+                    }
+                    None => {
+                        let current = self.state.catalog.current_catalog();
+                        crate::system::is_system(&current)
+                            || self.declared_catalogs().canonical(&current).is_some()
+                    }
                 };
-                if in_system {
+                if outside_session_catalog {
                     return Err(KrishivUnsupportedFeature {
-                        feature: "SHOW TABLE EXTENDED ... AS JSON over the system catalog"
+                        feature: "SHOW TABLE EXTENDED ... AS JSON over the system catalog or a declared catalog"
                             .to_owned(),
                     }
                     .into());
