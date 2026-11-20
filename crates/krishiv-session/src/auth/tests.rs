@@ -1139,12 +1139,15 @@ fn basic_binds_the_user_name_to_the_token_principal() {
 
     let wrong_user = basic("prometheus", TOKEN_A);
     let wrong_password = basic("alice", TOKEN_B);
-    for c in [&wrong_user, &wrong_password] {
+    for (case, c) in [
+        ("wrong user", &wrong_user),
+        ("wrong password", &wrong_password),
+    ] {
         let r = auth.authenticate_at(
             &Credentials::new(peer(21), Surface::FlightSql).with_basic(c),
             now,
         );
-        assert_eq!(r, Err(AuthFailure::Invalid), "user {}", c.user());
+        assert_eq!(r, Err(AuthFailure::Invalid), "{case}");
     }
     // Off the Flight surface: refused even with the right pair, not counted as a guess.
     let r = auth.authenticate_at(
