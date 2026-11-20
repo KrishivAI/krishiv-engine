@@ -94,7 +94,7 @@ pub trait UdfHost: Send + Sync + fmt::Debug {
 /// One session's UDF runtime on the server's workers: what the engine calls, plus its payload store.
 pub trait SessionUdfRuntime: UdfRuntime {
     /// Registers `udf`'s payload as `(name, version)`, the identity a plan's call names. A Python UDTF's
-    /// payload comes the same way ([`udtf_payload`]): its eval type (300, 301, 302), class and Python
+    /// payload comes the same way (`udtf_payload`): its eval type (300, 301, 302), class and Python
     /// version; `name` is then the lower-case name the plan's `PythonUdfRef` carries.
     fn register(&self, name: &str, version: u32, udf: &PythonUdf);
     /// Stops the session's workers (idle ones now, busy ones when their call ends).

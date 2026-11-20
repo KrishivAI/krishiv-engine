@@ -227,9 +227,9 @@ impl ArtifactSet {
         }
     }
 
-    /// The set of `pyfiles` and `archives`. Nothing is read here: the paths and names are checked by the first
-    /// call that needs them ([`Self::refused`], [`Self::prepare`]), before any copy, which refuses any other
-    /// file than the one the check opened.
+    /// The set of `pyfiles` and `archives`. Nothing is read here: the paths and names are checked, and each
+    /// file's device and inode pinned, by the first call that needs them ([`Self::refused`], [`Self::prepare`]),
+    /// not when the set is given; every copy refuses any other file than the one that check opened.
     pub(crate) fn new(pyfiles: Vec<PathBuf>, archives: Vec<PythonArchive>) -> Self {
         if pyfiles.is_empty() && archives.is_empty() {
             return Self::empty();
@@ -359,16 +359,17 @@ impl ArtifactSet {
             fs::create_dir(d)
                 .map_err(|e| server_io("cannot make the UDF artifact directory", &e))?;
         }
+        let checked = self.checked();
         let mut used = 0u64;
         let mut sys_path = vec![py.clone()];
-        for file in &self.checked().pyfiles {
+        for file in &checked.pyfiles {
             let to = py.join(&file.name);
             used = used.saturating_add(copy_capped(file, &to, limit.saturating_sub(used))?);
             if !file.name.ends_with(".py") {
                 sys_path.push(to);
             }
         }
-        for (i, archive) in self.checked().archives.iter().enumerate() {
+        for (i, archive) in checked.archives.iter().enumerate() {
             let file = file_name(&archive.path).map_err(Failure::lasting)?;
             // The unpacker reads this copy only, never a path the client named; its name keeps the file's
             // (the format is read from it), made unique since two aliases may name one file.
@@ -388,11 +389,10 @@ impl ArtifactSet {
         }
         fs::remove_dir(&incoming)
             .map_err(|e| server_io("cannot remove the UDF archive copies' directory", &e))?;
-        let entries = self
-            .checked()
+        let entries = checked
             .pyfiles
             .iter()
-            .chain(&self.checked().archives)
+            .chain(&checked.archives)
             .map(|a| a.name.clone())
             .collect();
         Ok(Prepared {

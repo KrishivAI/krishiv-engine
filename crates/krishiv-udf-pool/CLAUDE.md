@@ -56,10 +56,10 @@ Paths are relative to this crate.
   (`take_slots`, never queued), a task with its slot submitted ahead of the queue (`submit_task`); with
   `maxPerSession` 1 a scalar call beside an open task is `KRISHIV_PYTHON_WORKER_LIMIT`
 - `src/artifacts.rs` (PR-26c-3) a session's pyfiles and archives (`SessionUdfs::set_artifacts`, `PythonArchive`
-  with its `#fragment` alias): paths checked when set (absolute, lexically canonical, a regular file opened by
+  with its `#fragment` alias): paths checked by the first call that needs them, not when set (absolute, lexically canonical, a regular file opened by
   `openat2` with `RESOLVE_NO_SYMLINKS`: no symbolic link anywhere, `INVALID_ARTIFACT_PATH`; an alias plain, not
   empty, hidden or with a `/`, `INVALID_ARTIFACT_PATH`; one name once across pyfiles and archives,
-  `ARTIFACT_ALREADY_EXISTS`; the device and inode recorded), prepared once per set by the first worker start into
+  `ARTIFACT_ALREADY_EXISTS`; the device and inode pinned then), prepared once per set by the first worker start into
   a directory of the pool (each file opened again the same way and refused unless it is the file checked; `py/`,
   the files directory, holds the pyfile copies and each archive unpacked into `py/<alias or file name>/`: the
   archive copied to `in/` and that copy unpacked by `unpack.py` with the worker interpreter, sandboxed when the
