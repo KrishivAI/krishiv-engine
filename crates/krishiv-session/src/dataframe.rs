@@ -283,9 +283,28 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: self.invalid.clone(),
             trace: None,
-            statement: None,
+            statement: self.statement_for_derived(),
             keep: self.keep.clone(),
         }
+    }
+
+    /// The statement a frame derived from this one runs as: this frame's own analysis's, else the
+    /// one it inherited, so a `limit` or `filter` of a `sql` frame shows that SQL in
+    /// `system.queries`. Its `system.queries` row marker is its own, not the statement's.
+    fn statement_for_derived(&self) -> Option<Arc<QueryEnv>> {
+        let own = self
+            .analysis
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|a| Arc::clone(&a.env));
+        let source = own.or_else(|| self.statement.clone())?;
+        source.text.as_ref()?;
+        let mut env = QueryEnv::clone(&source);
+        env.row = Arc::default();
+        // A derived frame's unseeded sample draws again, whatever its source drew.
+        env.sample_salt = self.session.query_env().sample_salt;
+        Some(Arc::new(env))
     }
 
     /// The column `name` of this DataFrame (PySpark's `df["a"]`): it
