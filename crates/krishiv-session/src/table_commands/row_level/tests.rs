@@ -533,6 +533,7 @@ fn cols() -> Vec<TableColumn> {
 fn delta_rewrite_errors_that_are_not_the_tasks_are_not_wrapped() {
     use krishiv_common::error::{
         DeltaUnsupportedSubquery, InternalError, KrishivUnsupportedFeature, OperationCanceled,
+        UnsupportedFeatureTableOperation,
     };
     let kept: Vec<KrishivError> = vec![
         DeltaUnsupportedSubquery {
@@ -542,6 +543,12 @@ fn delta_rewrite_errors_that_are_not_the_tasks_are_not_wrapped() {
         .into(),
         KrishivUnsupportedFeature {
             feature: "f".into(),
+        }
+        .into(),
+        // The change-data-feed refusal: `UNSUPPORTED_FEATURE.TABLE_OPERATION`.
+        UnsupportedFeatureTableOperation {
+            table_name: "t".into(),
+            operation: "UPDATE".into(),
         }
         .into(),
         InternalError {
@@ -594,9 +601,10 @@ fn an_overflow_under_a_narrowing_store_cast_is_delta_cast_overflow() {
         overflow(),
         "file:/t",
         &cols(),
+        // Assigned out of table order: the first such column in table order is named.
         &[
-            ("SMALL".into(), DataType::Integer),
             ("`d`".into(), DataType::Long),
+            ("SMALL".into(), DataType::Integer),
         ],
     );
     assert_eq!(out.error_class(), ErrorClass::TaskWriteFailed);
