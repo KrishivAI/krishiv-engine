@@ -1049,6 +1049,8 @@ pub struct InsertClause {
 pub struct Delete {
     /// The table to delete from.
     pub table: DdlName,
+    /// `WITH (...)` target options.
+    pub options: Vec<TableOption>,
     /// Its alias, if written.
     pub alias: Option<Ident>,
     /// `WHERE ...`.
@@ -1073,6 +1075,8 @@ pub struct UpdateAssignment {
 pub struct Update {
     /// The table to update.
     pub table: DdlName,
+    /// `WITH (...)` target options.
+    pub options: Vec<TableOption>,
     /// Its alias, if written.
     pub alias: Option<Ident>,
     /// The `SET` assignments.
@@ -1088,6 +1092,8 @@ pub struct Update {
 pub struct Merge {
     /// The target table.
     pub target: DdlName,
+    /// `WITH (...)` target options.
+    pub options: Vec<TableOption>,
     /// Its alias, if written.
     pub target_alias: Option<Ident>,
     /// The source.

@@ -276,6 +276,21 @@ pub(crate) fn legacy_error_temp_0035(message: String, span: Span) -> ParseError 
     at(LegacyErrorTemp0035 { message }, span)
 }
 
+/// `MULTIPLE_TIME_TRAVEL_SPEC`: an `@` suffix together with a time travel clause.
+pub(crate) fn multiple_time_travel_spec(span: Span) -> ParseError {
+    at(krishiv_common::error::MultipleTimeTravelSpec {}, span)
+}
+
+/// `UNSUPPORTED_FEATURE.TIME_TRAVEL_AT_SYNTAX`: the `@` suffix with its config off.
+pub(crate) fn time_travel_at_syntax(span: Span) -> ParseError {
+    at(
+        krishiv_common::error::UnsupportedFeatureTimeTravelAtSyntax {
+            config: "spark.sql.timeTravel.atSyntax.enabled".to_owned(),
+        },
+        span,
+    )
+}
+
 /// `INVALID_SQL_SYNTAX.CREATE_TEMP_FUNC_WITH_DATABASE`: a temporary
 /// function named with a database.
 pub(crate) fn create_temp_func_with_database(database: String, span: Span) -> ParseError {

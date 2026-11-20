@@ -17,6 +17,7 @@ Delete(
                 span: 12..13,
             },
         ),
+        options: [],
         alias: None,
         where_clause: Some(
             Expr {
@@ -62,6 +63,7 @@ Delete(
                 span: 12..13,
             },
         ),
+        options: [],
         alias: None,
         where_clause: None,
         span: 0..13,
@@ -97,6 +99,7 @@ Delete(
                 span: 12..35,
             },
         ),
+        options: [],
         alias: None,
         where_clause: Some(
             Expr {
@@ -142,6 +145,7 @@ Update(
                 span: 7..8,
             },
         ),
+        options: [],
         alias: None,
         assignments: [
             UpdateAssignment {
@@ -186,6 +190,7 @@ Update(
                 span: 7..8,
             },
         ),
+        options: [],
         alias: None,
         assignments: [
             UpdateAssignment {
@@ -298,6 +303,7 @@ Update(
                 span: 7..8,
             },
         ),
+        options: [],
         alias: Some(
             Ident {
                 value: "x",
@@ -353,6 +359,7 @@ Update(
                 span: 7..8,
             },
         ),
+        options: [],
         alias: Some(
             Ident {
                 value: "x",
@@ -423,6 +430,7 @@ Update(
                 span: 7..30,
             },
         ),
+        options: [],
         alias: None,
         assignments: [
             UpdateAssignment {
@@ -467,6 +475,7 @@ Merge(
                 span: 11..12,
             },
         ),
+        options: [],
         target_alias: Some(
             Ident {
                 value: "x",
@@ -587,6 +596,7 @@ Merge(
                 span: 11..12,
             },
         ),
+        options: [],
         target_alias: None,
         source: Table {
             name: Parts(
@@ -670,6 +680,7 @@ Merge(
                 span: 11..12,
             },
         ),
+        options: [],
         target_alias: None,
         source: Query {
             query: Query {
@@ -845,6 +856,7 @@ Merge(
                 span: 11..12,
             },
         ),
+        options: [],
         target_alias: None,
         source: Table {
             name: Parts(
@@ -1007,6 +1019,7 @@ Merge(
                 span: 11..12,
             },
         ),
+        options: [],
         target_alias: None,
         source: Table {
             name: Parts(
@@ -1130,6 +1143,7 @@ Merge(
                 span: 11..34,
             },
         ),
+        options: [],
         target_alias: Some(
             Ident {
                 value: "t",

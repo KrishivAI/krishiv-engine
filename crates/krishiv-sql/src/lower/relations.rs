@@ -598,7 +598,15 @@ impl Lowerer {
                 options,
             } => {
                 if let Some(t) = temporal {
-                    return Err(unsupported("time travel", t.span));
+                    // No table of the session catalog reads an older version yet; Spark names the
+                    // relation as resolved, here it is as written.
+                    let parts: Vec<String> = name.parts.iter().map(|p| p.value.clone()).collect();
+                    return Err(err(
+                        krishiv_common::error::UnsupportedFeatureTimeTravel {
+                            relation_id: krishiv_common::names::quote_parts(&parts),
+                        },
+                        t.span,
+                    ));
                 }
                 let mut opts = BTreeMap::new();
                 for o in options {

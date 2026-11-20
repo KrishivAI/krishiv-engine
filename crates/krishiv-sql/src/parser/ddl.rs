@@ -15,8 +15,8 @@ use super::{Close, Fail, PR, Parser};
 use crate::ast::{
     AddResource, AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable,
     AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, Cache, CacheKind,
-    ChangeColumnAction, CreatePermanentView, DdlName, Delete, Describe, DescribeKind, DescribeMode,
-    DirectoryFormat, DropPermanentView, FunctionScope, Ident, Insert, InsertClause,
+    ChangeColumnAction, ColumnName, CreatePermanentView, DdlName, Delete, Describe, DescribeKind,
+    DescribeMode, DirectoryFormat, DropPermanentView, FunctionScope, Ident, Insert, InsertClause,
     InsertDirectory, ListResource, LoadData, Merge, MergeAction, MergeClause, MergeInsert,
     MergeMatched, MergeSource, NamespaceKind, PartitionSpec, PartitionSpecPart,
     PartitionWithLocation, PermanentViewColumn, Query, Refresh, RefreshKind, Relation, RelationExt,
@@ -198,6 +198,36 @@ impl<'s> Parser<'s> {
                     action: AlterNamespaceAction::SetComment(comment),
                     span,
                 }));
+            }
+            if p.eat_kw("COLUMN") {
+                // `COMMENT ON COLUMN table.column IS ...` (Spark 4.3): the last part is the column.
+                let written = p.ddl_name()?;
+                let DdlName::Parts(mut parts) = written else {
+                    return p.fail();
+                };
+                if parts.parts.len() < 2 {
+                    return p.fail();
+                }
+                let Some(column) = parts.parts.pop() else {
+                    return p.fail();
+                };
+                if let Some(last) = parts.parts.last() {
+                    parts.span.end = last.span.end;
+                }
+                p.expect_kw("IS")?;
+                // `IS NULL` sets the empty comment (`AstBuilder.visitComment`).
+                let comment = p.comment_value()?.unwrap_or_default();
+                let span = p.span_from(start);
+                p.command_end()?;
+                return Ok(Statement::AlterTable(Box::new(AlterTable {
+                    table: DdlName::Parts(parts),
+                    action: AlterTableAction::AlterColumn {
+                        name: ColumnName::Ident(column),
+                        action: AlterColumnAction::Comment(comment),
+                        span,
+                    },
+                    span,
+                })));
             }
             p.expect_kw("TABLE")?;
             let table = p.ddl_name()?;

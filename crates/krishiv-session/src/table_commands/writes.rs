@@ -110,6 +110,24 @@ impl Session {
         self.empty_frame().await
     }
 
+    /// `DELETE|UPDATE|MERGE INTO t WITH (...)` (Spark 4.3): the target's options reach the table's
+    /// scan builder, and no table of the session catalog takes them, so the statement is refused
+    /// by the table (after the table resolved) as Spark does for such a table.
+    pub(crate) fn refuse_target_options(
+        &self,
+        table: &krishiv_sql::ast::DdlName,
+        options: &[krishiv_sql::ast::TableOption],
+        operation: &str,
+    ) -> Result<(), KrishivError> {
+        if options.is_empty() {
+            return Ok(());
+        }
+        let env = self.query_env();
+        let name = self.table_name(table, &env)?;
+        self.table_for_write(&name, operation, &env)?;
+        Err(table_operation(&name, "WITH options"))
+    }
+
     /// `c` checked through to the rows it would write (`dry`), or written.
     pub(super) async fn insert_clause(
         &self,
@@ -119,11 +137,14 @@ impl Session {
         dry: bool,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
-        if c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some() {
-            return Err(unsupported("INSERT ... REPLACE"));
-        }
+        let replace =
+            c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some();
         let name = self.table_name(&c.name, &env)?;
         let table = self.table_for_write(&name, "INSERT", &env)?;
+        if replace {
+            // A session-catalog table has no replace-by-condition write (Spark: the table lacks the capability).
+            return Err(table_operation(&name, "INSERT ... REPLACE"));
+        }
         let statics = match &c.partition {
             None => Vec::new(),
             Some(spec) => {

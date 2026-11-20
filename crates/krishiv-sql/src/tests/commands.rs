@@ -868,11 +868,6 @@ fn insert_errors() {
             "'REPLACE'",
             30..37,
         ),
-        (
-            "INSERT INTO t (a) REPLACE WHERE a = 1 SELECT 1",
-            "'REPLACE'",
-            18..25,
-        ),
         ("FROM s SELECT * FROM s", "'FROM'", 16..20),
         (
             "FROM s INSERT INTO t SELECT a FROM x INSERT INTO u SELECT b",
@@ -1717,4 +1712,38 @@ fn describe_checks_follow_sparks_order() {
             "{sql}"
         );
     }
+}
+
+/// Spark 4.3 takes a column list before `REPLACE` (Spark 4.2 stopped at the `REPLACE`, so the
+/// 4.2 probe above no longer lists it); the 4.3 coverage fixture has it raise `TABLE_OPERATION`.
+#[test]
+fn insert_replace_takes_a_column_list() {
+    for sql in [
+        "INSERT INTO t (a) REPLACE WHERE a = 1 SELECT 1",
+        "INSERT INTO t (a, b) REPLACE ON t.a = s.a SELECT 1, 2",
+    ] {
+        let ast::Statement::Insert(insert) = checked(sql) else {
+            panic!("{sql}: not an insert");
+        };
+        assert!(!insert.clauses[0].columns.is_empty(), "{sql}");
+    }
+}
+
+/// `WITH (...)` after the target of `DELETE`, `UPDATE` and `MERGE` (Spark 4.3) is kept in the tree.
+#[test]
+fn dml_targets_keep_their_options() {
+    let ast::Statement::Delete(d) = checked("DELETE FROM t WITH ('k' = 'v') WHERE a = 1") else {
+        panic!("not a delete");
+    };
+    assert_eq!(d.options.len(), 1);
+    let ast::Statement::Update(u) = checked("UPDATE t WITH ('k' = 'v') SET a = 1") else {
+        panic!("not an update");
+    };
+    assert_eq!(u.options.len(), 1);
+    let ast::Statement::Merge(m) =
+        checked("MERGE INTO t WITH ('k' = 'v') USING s ON t.a = s.a WHEN MATCHED THEN DELETE")
+    else {
+        panic!("not a merge");
+    };
+    assert_eq!(m.options.len(), 1);
 }
