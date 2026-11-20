@@ -542,6 +542,18 @@ fn a_checkpoint_follows_the_interval() {
     assert_eq!(ids(&env.read(&env.open().unwrap())).len(), 16);
 }
 
+/// The checkpoint's engine keeps none of the statement's memory: it runs after the statement
+/// has ended, so a reservation there would charge (and race) a query that is over.
+#[test]
+fn the_detached_checkpoint_engine_reserves_nothing_from_the_statement() {
+    let env = Env::new();
+    assert!(env.engine.io().memory_pool().is_some());
+    let token = Arc::new(krishiv_exec::CancellationToken::new());
+    let detached = env.engine.detached(token);
+    assert!(detached.io().memory_pool().is_none());
+    assert_eq!(detached.table_root(), env.engine.table_root());
+}
+
 /// No write into an oracle table, of any mode, raises `INTERNAL_ERROR` (design section 3.7:
 /// every user-reachable refusal is named).
 #[test]
