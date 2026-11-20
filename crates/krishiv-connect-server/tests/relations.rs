@@ -414,3 +414,43 @@ async fn zip_of_different_sources_is_not_mergeable() {
         .expect_err("refused");
     assert_eq!(error_class(&status), "ZIP_PLANS_NOT_MERGEABLE");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_of_chains_layers_a_column_built_on_another() {
+    // Spark's ResolveZip: one layer per dependency depth; `a6` reads `a1`, which the left side defines.
+    let server = start().await;
+    let left = project(
+        project(source(), vec![attr("id"), plus("a", 1, "a1")]),
+        vec![attr("id"), plus("a1", 5, "a6")],
+    );
+    let right = project(source(), vec![plus("a", 2, "a2")]);
+    assert_eq!(
+        run(&server, zip(left, right)).await.expect("runs"),
+        strings(&[&["1", "16", "12"], &["1", "16", "12"], &["2", "26", "22"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_of_one_producer_under_two_names_keeps_both_columns() {
+    // The producer `a + 1` is shared (kept once); each side's column keeps its own name.
+    let server = start().await;
+    let left = project(source(), vec![plus("a", 1, "x")]);
+    let right = project(source(), vec![plus("a", 1, "y")]);
+    assert_eq!(
+        run(&server, zip(left, right)).await.expect("runs"),
+        strings(&[&["11", "11"], &["11", "11"], &["21", "21"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_of_a_source_with_itself_doubles_its_columns() {
+    let server = start().await;
+    assert_eq!(
+        run(&server, zip(source(), source())).await.expect("runs"),
+        strings(&[
+            &["1", "10", "100", "1", "10", "100"],
+            &["1", "10", "100", "1", "10", "100"],
+            &["2", "20", "NULL", "2", "20", "NULL"],
+        ])
+    );
+}

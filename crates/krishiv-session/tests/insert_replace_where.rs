@@ -72,3 +72,15 @@ fn unnest_in_from_is_4_3_grammar() {
         "{err}"
     );
 }
+
+#[test]
+fn the_source_query_is_analyzed_before_the_table_is_refused() {
+    // Spark analyzes the query first: its own error wins over the refusal of the target.
+    for profile in [SparkProfile::V4_2, SparkProfile::V4_3] {
+        let err = class_of(
+            profile,
+            "insert into tbl replace where id = 1 select nope from tbl",
+        );
+        assert!(err.contains("UNRESOLVED_COLUMN"), "{profile:?}: {err}");
+    }
+}

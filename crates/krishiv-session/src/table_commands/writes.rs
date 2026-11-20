@@ -133,6 +133,7 @@ impl Session {
         let table = self.table_for_write(&name, "INSERT", &env)?;
         // `REPLACE WHERE` is an overwrite by filter: only a table that takes one (Delta) has it, as
         // a V1 file table does not (`unsupportedInsertReplaceWhere`).
+        let mut refusal: Option<KrishivError> = None;
         let replace_where = match &c.replace_where {
             None => None,
             Some(_)
@@ -149,7 +150,8 @@ impl Session {
                 let delta = false;
                 if !delta {
                     // 4.3 refuses the operation on the table; 4.2 reaches the V1 write and refuses there.
-                    return Err(
+                    // Both come after the source query is analyzed (below), as in Spark.
+                    refusal = Some(
                         if self.state.profile >= krishiv_plan::analyzer::SparkProfile::V4_3 {
                             table_operation(&name, "INSERT INTO ... REPLACE WHERE")
                         } else {
@@ -218,6 +220,11 @@ impl Session {
         )
         .map_err(|e| self.lowering_error(e, &env))?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        if let Some(refusal) = refusal {
+            // The source query's own errors come first.
+            source.analyzed_in(self.query_env()).await?;
+            return Err(refusal);
+        }
         let listed: Vec<String> = c
             .columns
             .iter()

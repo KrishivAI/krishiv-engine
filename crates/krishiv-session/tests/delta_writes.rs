@@ -856,3 +856,60 @@ fn max_records_per_file_reaches_a_catalog_append() {
     );
     assert_eq!(rows(), 15);
 }
+
+/// `INSERT INTO t REPLACE WHERE cond` on a Delta table is delta-spark's `replaceWhere`: the rows the
+/// condition selects are replaced, the others stay, and a row outside the condition is refused with the
+/// class the DataFrame `replaceWhere` option gives (oracle step `replace_where_mismatch`).
+#[test]
+fn insert_replace_where_is_a_filter_overwrite() {
+    let oracle = oracle();
+    let mismatch = oracle["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["step"] == "replace_where_mismatch")
+        .unwrap()["error"]["condition"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE rw USING delta PARTITIONED BY (p) LOCATION '{path}' AS \
+             SELECT CAST(id AS BIGINT) AS id, v, p FROM VALUES \
+             (1, 'a', 'x'), (2, 'b', 'y'), (3, 'c', 'y') AS t(id, v, p)"
+        ),
+    )
+    .unwrap();
+    run(
+        &s,
+        "INSERT INTO rw REPLACE WHERE p = 'y' VALUES (CAST(30 AS BIGINT), 'new', 'y')",
+    )
+    .unwrap();
+    assert_eq!(
+        query(&s, "SELECT id, v, p FROM rw ORDER BY id"),
+        serde_json::json!([[1, "a", "x"], [30, "new", "y"]]),
+    );
+    let before = versions(&dir);
+    let e = run(
+        &s,
+        "INSERT INTO rw REPLACE WHERE p = 'y' VALUES (CAST(31 AS BIGINT), 'bad', 'x')",
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), mismatch);
+    assert_eq!(versions(&dir), before);
+    // The column list of Spark 4.3 grammar names the same columns.
+    run(
+        &s,
+        "INSERT INTO rw (id, v, p) REPLACE WHERE p = 'x' VALUES (CAST(40 AS BIGINT), 'cl', 'x')",
+    )
+    .unwrap();
+    assert_eq!(
+        query(&s, "SELECT id, v, p FROM rw ORDER BY id"),
+        serde_json::json!([[30, "new", "y"], [40, "cl", "x"]]),
+    );
+}
