@@ -26,11 +26,15 @@ use crate::catalog_registry::{
 };
 
 /// `db.t (x INT)` holding 1, 2, 3; counts its opens and refreshes. Lists the namespaces `db`
-/// and `ops`, the tables `db.t`, `db.u` and `ops.v` (only `db.t` loads).
+/// and `ops`, the tables `db.t`, `db.u` and `ops.v` (only `db.t` loads). With `nested`, also
+/// `a` holding `a.b` (table `a.b.t`) and `locked`, whose table listing fails; `table_listings`
+/// counts the calls of `list_tables`.
 #[derive(Debug, Default)]
 struct Lake {
     opens: Arc<AtomicUsize>,
     refreshes: AtomicUsize,
+    nested: bool,
+    table_listings: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -118,9 +122,16 @@ impl CallerCatalog for Lake {
         parent: &'a [String],
     ) -> BoxFuture<'a, Result<Option<Vec<Vec<String>>>, KrishivError>> {
         Box::pin(async move {
+            let ns = |parts: &[&str]| parts.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
             Ok(match parent {
-                [] => Some(vec![vec!["db".to_owned()], vec!["ops".to_owned()]]),
+                [] if self.nested => {
+                    Some(vec![ns(&["a"]), ns(&["db"]), ns(&["locked"]), ns(&["ops"])])
+                }
+                [] => Some(vec![ns(&["db"]), ns(&["ops"])]),
                 [n] if n == "db" || n == "ops" => Some(Vec::new()),
+                [n] if self.nested && n == "a" => Some(vec![ns(&["a", "b"])]),
+                [n] if self.nested && n == "locked" => Some(Vec::new()),
+                [a, b] if self.nested && a == "a" && b == "b" => Some(Vec::new()),
                 _ => None,
             })
         })
@@ -131,8 +142,14 @@ impl CallerCatalog for Lake {
         _caller: &'a CatalogCaller,
         namespace: &'a [String],
     ) -> BoxFuture<'a, Result<Option<Vec<String>>, KrishivError>> {
+        self.table_listings.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
             Ok(match namespace {
+                [n] if self.nested && n == "locked" => {
+                    return Err(crate::session::internal("403 Forbidden".to_owned()));
+                }
+                [n] if self.nested && n == "a" => Some(Vec::new()),
+                [a, b] if self.nested && a == "a" && b == "b" => Some(vec!["t".to_owned()]),
                 [n] if n == "db" => Some(vec!["t".to_owned(), "u".to_owned()]),
                 [n] if n == "ops" => Some(vec!["v".to_owned()]),
                 _ => None,
@@ -447,4 +464,72 @@ fn show_namespaces_in_a_hidden_database_is_schema_not_found() {
         error_class(&ana, "SHOW NAMESPACES IN nope"),
         "SCHEMA_NOT_FOUND"
     );
+}
+
+/// A grant deep in nested namespaces shows every namespace above it, and the listing rule asks
+/// the grant state, not the catalog (review of #902 at 60b8e6e44, P2 1 and 2): `SELECT` on
+/// `lake.a.b.t` shows `a` in `lake` and `a.b` in `lake.a`; `SHOW TABLES IN lake.a` is empty, not
+/// `SCHEMA_NOT_FOUND`. `SHOW NAMESPACES` makes no table listing, so `locked`, whose table listing
+/// fails, fails no listing.
+#[test]
+fn nested_namespace_grants_show_their_parents_without_table_listings() {
+    let lake = Arc::new(Lake {
+        nested: true,
+        ..Lake::default()
+    });
+    let grants = crate::grants::Grants::new(Arc::new(crate::grants::MemoryGrantStore::new()));
+    let rt = lake_runtime(&lake);
+    let root = grants_session(&rt, &grants, "root", true);
+    for statement in [
+        "GRANT USAGE ON CATALOG lake TO user:ana",
+        "GRANT SELECT ON TABLE lake.a.b.t TO user:ana",
+    ] {
+        block_on(async { root.sql(statement).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{statement}: {e}"));
+    }
+    assert_eq!(
+        strings(&root, "SHOW NAMESPACES IN lake", 0),
+        ["a", "db", "locked", "ops"]
+    );
+    let ana = grants_session(&rt, &grants, "ana", false);
+    let before = lake.table_listings.load(Ordering::SeqCst);
+    assert_eq!(strings(&ana, "SHOW NAMESPACES IN lake", 0), ["a"]);
+    assert_eq!(strings(&ana, "SHOW NAMESPACES IN lake.a", 0), ["a.b"]);
+    block_on(ana.catalog().set_current_catalog("lake")).unwrap();
+    let dbs = block_on(ana.catalog().list_databases(None)).unwrap();
+    assert_eq!(
+        dbs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+        ["a"]
+    );
+    assert_eq!(lake.table_listings.load(Ordering::SeqCst), before);
+    assert!(strings(&ana, "SHOW TABLES IN lake.a", 1).is_empty());
+    assert_eq!(strings(&ana, "SHOW TABLES IN lake.a.b", 1), ["t"]);
+    assert_eq!(
+        error_class(&ana, "SHOW NAMESPACES IN lake.locked"),
+        "SCHEMA_NOT_FOUND"
+    );
+    assert_eq!(
+        error_class(&ana, "SHOW NAMESPACES IN lake.db"),
+        "SCHEMA_NOT_FOUND"
+    );
+}
+
+/// A grant on a namespace alone shows the namespace, and `SHOW TABLES` in it is empty (review of
+/// #902 at 60b8e6e44, nit).
+#[test]
+fn a_namespace_only_grant_lists_the_namespace_and_no_tables() {
+    let lake = Arc::new(Lake::default());
+    let grants = crate::grants::Grants::new(Arc::new(crate::grants::MemoryGrantStore::new()));
+    let rt = lake_runtime(&lake);
+    let root = grants_session(&rt, &grants, "root", true);
+    for statement in [
+        "GRANT USAGE ON CATALOG lake TO user:ana",
+        "GRANT USAGE ON NAMESPACE lake.ops TO user:ana",
+    ] {
+        block_on(async { root.sql(statement).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{statement}: {e}"));
+    }
+    let ana = grants_session(&rt, &grants, "ana", false);
+    assert_eq!(strings(&ana, "SHOW NAMESPACES IN lake", 0), ["ops"]);
+    assert!(strings(&ana, "SHOW TABLES IN lake.ops", 1).is_empty());
 }

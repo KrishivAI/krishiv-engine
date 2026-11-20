@@ -1103,11 +1103,7 @@ impl crate::Session {
         Some(
             async {
                 let (built, caller) = built?;
-                if !parent.is_empty()
-                    && !self
-                        .declared_namespace_listed(&built, &caller, &name, parent)
-                        .await?
-                {
+                if !parent.is_empty() && !self.declared_namespace_listed(&name, parent).await {
                     return Err(schema_not_found(catalog, parent));
                 }
                 let Some(found) = built
@@ -1119,10 +1115,7 @@ impl crate::Session {
                 };
                 let mut out = Vec::with_capacity(found.len());
                 for n in found {
-                    if self
-                        .declared_namespace_listed(&built, &caller, &name, &n)
-                        .await?
-                    {
+                    if self.declared_namespace_listed(&name, &n).await {
                         out.push(n);
                     }
                 }
@@ -1155,9 +1148,9 @@ impl crate::Session {
                 let listed = self.listed_declared_tables(&name, namespace, found).await;
                 if listed.is_empty()
                     && self.state.grants.is_some()
-                    && !self.may_list(&declared_namespace(&name, namespace)).await
+                    && !self.declared_namespace_listed(&name, namespace).await
                 {
-                    // Nothing listable in it and no grant on it: as for a missing one.
+                    // Nothing listable in it, nor under it: as for a missing one.
                     return Err(schema_not_found(catalog, namespace));
                 }
                 Ok(listed)
@@ -1191,34 +1184,19 @@ impl crate::Session {
     /// Whether this session's principal may see the namespace `namespace` of the declared catalog
     /// `catalog` (its canonical name) in a listing, by the session catalog's rule
     /// ([`Session::may_list_namespace`]): it may list the namespace, or, under the `grants`
-    /// provider, any table directly in it (a table grant shows where the table is). Other
-    /// policies decide a table by `Browse` as they decide its namespace, so only `grants` asks
-    /// the catalog for the tables.
-    ///
-    /// # Errors
-    /// The catalog's failure listing the namespace's tables.
-    async fn declared_namespace_listed(
-        &self,
-        built: &Arc<dyn CallerCatalog>,
-        caller: &CatalogCaller,
-        catalog: &str,
-        namespace: &[String],
-    ) -> Result<bool, KrishivError> {
-        if self.may_list(&declared_namespace(catalog, namespace)).await {
-            return Ok(true);
+    /// provider, it owns or holds a grant on something under it at any depth (a nested
+    /// namespace, a table, a column; `GrantsPolicy::listable_under`). Decided from the grant
+    /// state alone: no catalog call, so one namespace the catalog refuses cannot fail a listing.
+    async fn declared_namespace_listed(&self, catalog: &str, namespace: &[String]) -> bool {
+        let securable = declared_namespace(catalog, namespace);
+        if self.may_list(&securable).await {
+            return true;
         }
-        if self.state.grants.is_none() {
-            return Ok(false);
-        }
-        let tables = built
-            .list_tables(caller, namespace)
-            .await
-            .map_err(|e| names_catalog(e, catalog))?
-            .unwrap_or_default();
-        Ok(!self
-            .listed_declared_tables(catalog, namespace, tables)
-            .await
-            .is_empty())
+        self.state
+            .grants
+            .as_ref()
+            .and_then(|g| g.listable_under(&self.state.principal, &securable))
+            .unwrap_or(false)
     }
 
     /// Every catalog this session sees, sorted: `spark_catalog`, `system` and the visible
