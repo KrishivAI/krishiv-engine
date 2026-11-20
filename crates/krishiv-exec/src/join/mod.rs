@@ -161,6 +161,7 @@
 mod block;
 mod broadcast;
 mod build;
+mod columnar;
 mod fallback;
 mod grace;
 mod keys;
@@ -813,12 +814,15 @@ impl Shared {
             None => None,
         };
         let columnar_arena = match keys.layout() {
-            Some(l) if columnar => Some(flag(table::arena_schema(table::ArenaFormat::Rows {
-                keys: l,
-                payload: None,
-                arrow_payload: false,
-                columnar: Some(&build_fields),
-            })?)),
+            Some(l) if columnar => {
+                let stored: Vec<Field> = build_fields.iter().map(columnar::stored_field).collect();
+                Some(flag(table::arena_schema(table::ArenaFormat::Rows {
+                    keys: l,
+                    payload: None,
+                    arrow_payload: false,
+                    columnar: Some(&stored),
+                })?))
+            }
             _ => None,
         };
         let arrow_format = table::ArenaFormat::Arrow {
@@ -902,8 +906,8 @@ impl Shared {
     }
 
     /// The build columns of rows `build` gathered from arenas that keep
-    /// them as Arrow columns (`None` if they do not): a view column copies
-    /// 16-byte views and shares the strings' buffers.
+    /// them as Arrow columns (`None` if they do not), in their declared
+    /// types: a stored string column is copied into a view column.
     fn gather_columns<'a>(
         &self,
         build: &[(usize, u32)],
@@ -942,14 +946,12 @@ impl Shared {
             picks.push((blocks[block], row));
         }
         let mut out = Vec::with_capacity(self.build_fields.len());
-        for c in 0..self.build_fields.len() {
+        for (c, field) in self.build_fields.iter().enumerate() {
             let arrays: Vec<&dyn Array> = sources
                 .iter()
                 .map(|s| s.get(c).map(AsRef::as_ref).ok_or_else(bad))
                 .collect::<Result<_>>()?;
-            let gathered = arrow_select::interleave::interleave(&arrays, &picks)
-                .map_err(|e| internal(e.to_string()))?;
-            out.push(compact_gathered(gathered));
+            out.push(columnar::gather(field.data_type(), &arrays, &picks)?);
         }
         Ok(Some(out))
     }
@@ -971,39 +973,9 @@ fn record(schema: &SchemaRef, columns: Vec<ArrayRef>, rows: usize) -> Result<Rec
         .map_err(|e| internal(e.to_string()))
 }
 
-/// A view column gathered from build blocks, compacted when the blocks'
-/// buffers it references hold far more than its own long values (more than
-/// twice those plus 64 KiB): otherwise every output batch would be charged
-/// downstream, by `get_array_memory_size`, for the build's string bytes.
-fn compact_gathered(column: ArrayRef) -> ArrayRef {
-    use arrow_array::cast::AsArray;
-    fn wasteful<T: arrow_array::types::ByteViewType + ?Sized>(
-        a: &arrow_array::GenericByteViewArray<T>,
-    ) -> bool {
-        let held: usize = a.data_buffers().iter().map(arrow_buffer::Buffer::len).sum();
-        if held <= 64 << 10 {
-            return false;
-        }
-        let used: usize = a
-            .views()
-            .iter()
-            // A view's low 32 bits are its value's length.
-            .map(|&v| usize::try_from(v & u128::from(u32::MAX)).unwrap_or(0))
-            .filter(|&n| n > 12)
-            .sum();
-        held > 2 * used + (64 << 10)
-    }
-    let waste = match column.data_type() {
-        DataType::Utf8View => wasteful(column.as_string_view()),
-        DataType::BinaryView => wasteful(column.as_binary_view()),
-        _ => false,
-    };
-    if waste { compact_view(column) } else { column }
-}
-
 /// `column` compacted (`gc`) when it is a string or binary view column,
 /// else as it is: see [`compact_views`].
-pub(crate) fn compact_view(column: ArrayRef) -> ArrayRef {
+fn compact_view(column: ArrayRef) -> ArrayRef {
     use arrow_array::cast::AsArray;
     match column.data_type() {
         arrow_schema::DataType::Utf8View => Arc::new(column.as_string_view().gc()),

@@ -858,16 +858,8 @@ pub(crate) fn arena_chunk(
             return Err(internal("payload rows without a layout".to_owned()));
         }
         (Some(Payload::Columns(cols)), _) => {
-            let ids = rows
-                .iter()
-                .map(|&i| {
-                    u32::try_from(i).map_err(|_| internal("a build batch too large".to_owned()))
-                })
-                .collect::<Result<arrow_array::UInt32Array>>()?;
             for c in cols {
-                let taken = arrow_select::take::take(c.as_ref(), &ids, None)
-                    .map_err(|e| internal(e.to_string()))?;
-                columns.push(super::compact_view(taken));
+                columns.push(super::columnar::store(c, rows)?);
             }
         }
         (None, _) => {}
