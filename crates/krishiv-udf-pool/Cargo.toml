@@ -34,6 +34,8 @@ rustix = { workspace = true, features = ["fs", "net", "process", "std"] }
 [dev-dependencies]
 # The compressed-result regression test writes an LZ4 stream.
 arrow-ipc = { workspace = true, features = ["lz4"] }
+# The UDTF golden replay reads the committed, gzipped export of its cases.
+flate2.workspace = true
 futures = { workspace = true, features = ["executor"] }
 # The window and iterator golden replay runs SQL on a session over the pool.
 krishiv-session = { path = "../krishiv-session" }

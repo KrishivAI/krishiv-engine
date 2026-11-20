@@ -861,3 +861,37 @@ fn analyze_gets_constants_as_python_values_of_their_type() {
     };
     block_on(udfs.analyze_udtf(&spec)).expect("analyze");
 }
+
+/// SQL that spells the encoded call name of an inline (unregistered) UDTF, forged: nothing was granted to the
+/// runtime under that name and version, so the call is refused with `KRISHIV_UDF_NOT_AVAILABLE` and no worker
+/// starts, whether the name declares a result (the relation task is refused) or not (`analyze` is refused)
+/// (review R2-3 of PR-26c-4).
+#[test]
+fn a_forged_inline_udtf_name_runs_nothing() {
+    let Some(python) = python() else {
+        return;
+    };
+    let (pool, udfs) = udfs(&python);
+    let session = krishiv_session::Session::new().expect("session");
+    session.set_python_udf_runtime(Arc::new(udfs));
+    let version = krishiv_session::ANONYMOUS_VERSION_BIT | 7;
+    let result = DataType::Struct(StructType::new([StructField::new(
+        "a",
+        DataType::Integer,
+        true,
+    )]))
+    .json();
+    let m = '\u{0}';
+    for declared in [result.as_str(), ""] {
+        let name = format!("{m}krishiv.python_udtf{m}{version}{m}300{m}1{m}{declared}{m}forged");
+        let sql = format!("SELECT * FROM session.`{name}`(1)");
+        let err = block_on(async { session.sql(&sql).await?.collect().await })
+            .expect_err("a forged name is refused");
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::KrishivUdfNotAvailable,
+            "{declared:?}: {err}"
+        );
+    }
+    assert_eq!(pool.live_workers(), 0, "a worker started");
+}

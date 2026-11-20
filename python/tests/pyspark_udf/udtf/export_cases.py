@@ -10,10 +10,23 @@ replayed here); one whose definition fails in ``pyspark`` is ``client_error`` wi
 client, as Spark Connect raises it). Usage: ``python export_cases.py OUT.json``. The session's
 ``spark.sql.execution.pythonUDTF.arrow.enabled`` comes from ``KRISHIV_UDTF_ARROW_DEFAULT`` (the engine's answer to
 ``conf.get``), which decides a bare ``@udtf``'s eval type as ``pyspark.sql.udtf._create_py_udtf`` reads it.
+
+The replay reads the export committed as ``crates/krishiv-udf-pool/tests/goldens/udtf_cases.json.gz``, so CI needs
+no full PySpark, only the workers' interpreter. Regenerate it after a change to ``cases.py`` or this file (the
+replay compares their SHA-256 with the ones recorded) with a full PySpark 4.2.0 on the workers' CPython minor
+version (cloudpickled code objects are specific to it), from the repository root::
+
+    KRISHIV_UDTF_ARROW_DEFAULT=true $PYSPARK_PYTHON python/tests/pyspark_udf/udtf/export_cases.py \
+        crates/krishiv-udf-pool/tests/goldens/udtf_cases.json.gz
+
+A ``.gz`` output is the committed form: gzip (no timestamp) of ``{"python", "pyspark", "arrow_default",
+"sources", "cases"}``, ``sources`` mapping each of ``cases.py`` and ``export_cases.py`` to its SHA-256.
 """
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
 import os
 import sys
@@ -139,7 +152,21 @@ def main() -> None:
                 for n, f in spark.udtf.udtfs
             ]
         out[name] = record
-    Path(sys.argv[1]).write_text(json.dumps(out, indent=1, sort_keys=True) + "\n")
+    target = Path(sys.argv[1])
+    if target.suffix != ".gz":
+        target.write_text(json.dumps(out, indent=1, sort_keys=True) + "\n")
+        return
+    import pyspark
+
+    committed = {
+        "python": f"{sys.version_info[0]}.{sys.version_info[1]}",
+        "pyspark": pyspark.__version__,
+        "arrow_default": os.environ.get("KRISHIV_UDTF_ARROW_DEFAULT", "true"),
+        "sources": {f: hashlib.sha256((HERE / f).read_bytes()).hexdigest() for f in ("cases.py", "export_cases.py")},
+        "cases": out,
+    }
+    text = json.dumps(committed, sort_keys=True, separators=(",", ":")) + "\n"
+    target.write_bytes(gzip.compress(text.encode(), compresslevel=9, mtime=0))
 
 
 if __name__ == "__main__":

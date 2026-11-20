@@ -151,15 +151,32 @@ impl ConfStore {
     /// does not list it (as in Spark).
     pub(crate) fn query_snapshot(&self) -> (Arc<Config>, u64) {
         let (config, version) = self.versioned_snapshot();
-        if config.get(&SESSION_TIME_ZONE).is_some() {
+        let zone_unset = config.get(&SESSION_TIME_ZONE).is_none();
+        let profile_keys: Vec<(&ConfigEntry, ConfigValue)> = [&PYTHON_UDTF_ARROW_ENABLED]
+            .into_iter()
+            .filter(|entry| !config.is_set(entry))
+            .filter_map(|entry| Some((entry, profile_default(entry, self.profile)?)))
+            .collect();
+        if !zone_unset && profile_keys.is_empty() {
             return (config, version);
         }
         let mut effective = Config::clone(&config);
-        match effective.set(SESSION_TIME_ZONE.key, &self.local_zone) {
-            Ok(_) => (Arc::new(effective), version),
-            // Not reached: `local_zone` only returns zones the entry accepts.
-            Err(_) => (config, version),
+        // The profile's defaults are what every reader of the query's configuration sees, not only
+        // `value` (review R2-2 of PR-26c-4).
+        for (entry, value) in &profile_keys {
+            if effective.set(entry.key, &value.to_string()).is_err() {
+                return (config, version);
+            }
         }
+        if zone_unset
+            && effective
+                .set(SESSION_TIME_ZONE.key, &self.local_zone)
+                .is_err()
+        {
+            // Not reached: `local_zone` only returns zones the entry accepts.
+            return (config, version);
+        }
+        (Arc::new(effective), version)
     }
 
     pub(crate) fn snapshot(&self) -> Arc<Config> {
@@ -534,6 +551,31 @@ mod tests {
     use krishiv_common::config::Config;
 
     use super::{ConfStore, get, local_zone_from};
+    use krishiv_common::config::PYTHON_UDTF_ARROW_ENABLED;
+    use krishiv_plan::analyzer::SparkProfile;
+
+    /// What a query's configuration holds for a key whose Spark default differs by release is the profile's
+    /// default, as `conf.get` shows it; a set value wins and `SET` still lists only set keys (review R2-2).
+    #[test]
+    fn a_query_snapshot_holds_the_profile_default() {
+        let key = &PYTHON_UDTF_ARROW_ENABLED;
+        for (profile, want) in [(SparkProfile::V4_1, "false"), (SparkProfile::V4_2, "true")] {
+            let store = ConfStore::new(Config::default()).with_profile(profile);
+            let (config, _) = store.query_snapshot();
+            assert_eq!(
+                config.get(key).map(ToString::to_string).as_deref(),
+                Some(want)
+            );
+            assert_eq!(store.value(key.key).as_deref(), Some(want));
+            assert!(store.explicit_entries().iter().all(|(k, _)| k != key.key));
+            store.update(|c| c.set(key.key, "true").map(drop)).unwrap();
+            let (config, _) = store.query_snapshot();
+            assert_eq!(
+                config.get(key).map(ToString::to_string).as_deref(),
+                Some("true")
+            );
+        }
+    }
 
     #[test]
     fn a_snapshot_pairs_a_configuration_with_its_own_version() {
