@@ -287,3 +287,42 @@ fn strip_nulls_removes_object_nulls_and_by_default_array_nulls() {
         vec![Some("1".to_owned()), None]
     );
 }
+
+#[test]
+fn an_untyped_null_argument_makes_every_row_null() {
+    let null: ArrayRef = Arc::new(arrow_array::NullArray::new(1));
+    let v = variants(&[Some(r#"{"a":1}"#)]);
+    let p = text_col(&[Some("$.b")]);
+    let val = variants(&[Some("2")]);
+    // NULL as the variant, as the path and as the value; `variant_delete` and `variant_strip_nulls` of NULL.
+    for cols in [[&null, &p, &val], [&v, &null, &val], [&v, &p, &null]] {
+        for name in ["variant_insert", "try_variant_set", "variant_array_append"] {
+            let out = run(name, &cols, None).unwrap();
+            assert_eq!(show(&out), vec![None], "{name}");
+        }
+    }
+    assert_eq!(
+        show(&run("variant_delete", &[&null, &p], None).unwrap()),
+        vec![None]
+    );
+    assert_eq!(
+        show(&run("variant_delete", &[&v, &null], None).unwrap()),
+        vec![Some(r#"{"a":1}"#.to_owned())]
+    );
+    assert_eq!(
+        show(&run("variant_strip_nulls", &[&null], None).unwrap()),
+        vec![None]
+    );
+}
+
+#[test]
+fn a_value_of_another_type_is_cast_to_variant() {
+    let v = variants(&[Some(r#"{"a":1}"#)]);
+    let p = text_col(&[Some("$.b")]);
+    let int: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![7]));
+    let text: ArrayRef = text_col(&[Some("x")]);
+    let out = run("variant_insert", &[&v, &p, &int], None).unwrap();
+    assert_eq!(show(&out), vec![Some(r#"{"a":1,"b":7}"#.to_owned())]);
+    let out = run("variant_insert", &[&v, &p, &text], None).unwrap();
+    assert_eq!(show(&out), vec![Some(r#"{"a":1,"b":"x"}"#.to_owned())]);
+}
