@@ -1812,6 +1812,8 @@ pub(crate) use owned_directory::{OwnedDirectory, OwnedDirectoryError};
 #[cfg(test)]
 mod owned_directory_tests;
 
+#[cfg(feature = "unstable-ir")]
+mod insert_parameters;
 mod writes;
 
 mod create;

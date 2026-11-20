@@ -53,7 +53,8 @@ Paths are relative to this crate.
   `src/auth/layer.rs` `AuthLayer`, the tower layer in front of the router: every RPC (the unimplemented ones too)
   authenticates from its headers before the body is decoded, through the server's one `Authenticator`
   (`ServerAuth`, shared with the admin listener): the `authorization` header (two entries or a non-`Bearer` scheme
-  are malformed) and the peer address; failures `UNAUTHENTICATED` with Spark's messages, throttled or unavailable
+  are malformed; on `Surface::FlightSql` only, `Basic` is decoded by `ConnectAuth::authenticate` in `src/auth.rs`:
+  the password as the bearer, the user name bound to the principal, P3-T101 note §3.1) and the peer address; failures `UNAUTHENTICATED` with Spark's messages, throttled or unavailable
   `UNAVAILABLE`, no peer address refused, a caller with no role `PERMISSION_DENIED` (42501, audited) before any
   session; the result rides in the request extensions (`ConnectAuth::caller` fails closed without it); auth off =
   the local user. The layer takes the request's `Surface` from its path (`surface_of_path`: `/arrow.flight.protocol.FlightService/` is
@@ -100,6 +101,7 @@ Paths are relative to this crate.
   task unwinds (`INTERNAL_ERROR`, or `OPERATION_CANCELED` after an interrupt), so no stream waits on an orphan;
   `src/execute/hooks.rs` (cfg(test) only) injects an encoder panic or a held preparation per operation id, used by
   `src/execute/fault_tests.rs`;
+  `src/execute/catalog_call.rs` (PR-46) the `Catalog` relation: the `CatalogCall` the translator recorded runs on `Session::catalog()` while the plan is prepared (`build_local_relation`), its rows (Spark's `Database`, `Table`, `Column`, `Function`, `CatalogMetadata`, `TablePartition`, a `value` string or boolean, or the empty relation of a call that returns nothing; names and nullability as Spark's encoders) held as a local relation; `cache_table`, `uncache_table` and `clear_cache` need the operator floor (`Check::SideEffect`); `tests/catalog.rs`;
   `src/execute/arrow.rs` Spark's Arrow shapes, batch limits, IPC streams, codecs and chunks;
   `src/execute/schema.rs` the `schema` response (`DataTypeProtoConverter.toConnectProtoType`)
 - `src/udf.rs` (P3-T014, PR-26d part 1) Python UDFs: `UdfHost` (the server's one pool, `krishiv_udf_pool::Pool` on

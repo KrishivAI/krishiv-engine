@@ -300,6 +300,12 @@ impl IcebergTableProvider {
         Ok(out)
     }
 
+    /// The I/O and file lookup the scan's deletes are read with (a
+    /// merge-on-read write reads the deletes it absorbs through them).
+    pub(super) fn delete_io(&self) -> (krishiv_io::IoContext, super::lazy::Locate) {
+        (self.scan.env.io.clone(), Arc::clone(&self.scan.env.locate))
+    }
+
     /// The write target (a committer and the current version).
     pub(super) fn write_target(&self) -> Option<&Arc<WriteTarget>> {
         self.write.as_ref()

@@ -46,19 +46,21 @@ Paths are relative to this crate.
   future, whatever the row's state (review M4)
 - `src/statement.rs` `GetFlightInfo(CommandStatementQuery)` (slot, `Operation`, classify with `sql_query_with`, a
   command runs once and is stored), `DoGet(TicketStatementQuery)` (re-analysis with the pinned clock,
-  `SCHEMA_CHANGED`, the stored rows of a command), `CancelFlightInfo` (only the operations live on the handle, `Payload::live`); marks are drop guards released in reverse
+  `SCHEMA_CHANGED`, the stored rows of a command), `described` (the announced schemas carry `ARROW:FLIGHT:SQL:PRECISION`/`SCALE`
+  on decimal columns, note §17 A3; the batches none), `CancelFlightInfo` (only the operations live on the handle, `Payload::live`); marks are drop guards released in reverse
   (operation, fetch, response budget, call; §16 M3)
 - `src/update.rs` `DoPut(CommandStatementUpdate)` (design §4.3, §16 M2): classified with `sql_query_with` (a query
   is `KRISHIV_FLIGHT_SQL_QUERY_AS_UPDATE`, nothing runs), run once under an `Operation`; `record_count` from a
-  `num_affected_rows` column, else -1; a cookie-less update that marks nothing changed runs in a transient session
+  `num_affected_rows` column, else 0 (note §17 A2: Arrow's JDBC driver reads -1 as a result set and runs it again); a cookie-less update that marks nothing changed runs in a transient session
   (no `set-cookie`, released at the end of the call)
 - `src/prepared.rs` prepared statements (design §4.4): `CreatePreparedStatement` classifies with `sql_query_with`
   (a parameterized statement with each `?` bound to `NULL`; nothing runs), stores a `Kind::Prepared` handle (never
-  evicted) and marks the session changed; `dataset_schema` only without parameters, `parameter_schema` one nullable
-  `Null` per marker; `DoPut(CommandPreparedStatementQuery)` binds one row (`Session::bind_parameters`, literals as
+  evicted) and marks the session changed; `dataset_schema` of every query, `parameter_schema` one nullable field per
+  marker typed from its context (note §17 A1: `krishiv_session::parameter_types::marker_types` over the `NULL`-bound
+  analysis, `Session::insert_parameter_types` for an `INSERT ... VALUES` cell, else a string); `DoPut(CommandPreparedStatementQuery)` binds one row (`Session::bind_parameters`, literals as
   `EXECUTE IMMEDIATE ... USING`), `GetFlightInfo` of it runs as §4.1 in the handle's session,
-  `DoPut(CommandPreparedStatementUpdate)` runs once per row (all bound first; counts summed, `-1` if any run reports
-  none; over `maxBatchRows` `KRISHIV_FLIGHT_SQL_INVALID_PARAMETERS`, 07001); `ClosePreparedStatement` of a gone or
+  `DoPut(CommandPreparedStatementUpdate)` runs once per row (all bound first; counts summed, a run that reports
+  none counts 0; over `maxBatchRows` `KRISHIV_FLIGHT_SQL_INVALID_PARAMETERS`, 07001); `ClosePreparedStatement` of a gone or
   foreign handle is OK; every call but create is handle-carrying (`handle_call`)
 - `src/metadata.rs` catalog metadata (design §5): `GetCatalogs`, `GetDbSchemas`, `GetTables`, `GetTableTypes` and the
   key commands; `GetFlightInfo` answers the fixed schema and a ticket that is the command (no session), `DoGet` runs it
@@ -77,7 +79,8 @@ Paths are relative to this crate.
   is a `FlightRpc` (method + command type URL or action type) and `check_flight` (exhaustive, no wildcard) answers what
   the server does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
   session work, counted `unsupported`; `DoPut` and the prepared-statement actions are dispatched here (first message peeked; the create's answer carries the cookie), not by arrow-rs; the session-option actions too; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, `CreatePreparedStatement`, `ClosePreparedStatement`, `SetSessionOptions`, `GetSessionOptions`, `CloseSession`, the actions it lets through; counted `list_actions`, no session)
-- `src/service.rs` the arrow-rs `FlightSqlService` impl: caller first, and new work (handshake, statements, updates, prepared-statement create/execute/bind, `GetSqlInfo` info; `admit_new`) refused with `KRISHIV_SERVER_DRAINING` (`FAILED_PRECONDITION`) while the drain flag is set (fetches of held tickets and cancels still served, T066 §5.1); Handshake echoes the bearer;
+- `src/service.rs` the arrow-rs `FlightSqlService` impl: caller first, and new work (handshake, statements, updates, prepared-statement create/execute/bind, `GetSqlInfo` info; `admit_new`) refused with `KRISHIV_SERVER_DRAINING` (`FAILED_PRECONDITION`) while the drain flag is set (fetches of held tickets and cancels still served, T066 §5.1); Handshake echoes the bearer
+  (a `Basic` login's password as `Bearer`, note §3.1; `Basic` is decoded by Connect's `AuthLayer` on this surface only);
   `GetSqlInfo` without a session; `CancelFlightInfo` and the deprecated `CancelQuery` (a malformed ticket is
   `INVALID_HANDLE.FORMAT`)
 - `tests/service.rs` end to end over a Connect listener with token auth (round trip, cookie and cookie-less sessions,
