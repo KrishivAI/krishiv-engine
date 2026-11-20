@@ -1188,6 +1188,15 @@ fn window_function(f: &WindowFunctionPlan, nested: &Cell<bool>) -> Result<pb::Wi
             ignore_nulls: *ignore_nulls,
             data_type: arrow_bytes(data_type, nested),
         }),
+        WindowFunction::CounterDiff {
+            counter,
+            start_time,
+            data_type,
+        } => Function::CounterDiff(pb::CounterDiffFunction {
+            counter: *counter as u64,
+            start_time: start_time.map(|c| c as u64),
+            data_type: arrow_bytes(data_type, nested),
+        }),
     };
     let offset = |b: FrameBound| match b {
         FrameBound::Offset(k) => k,

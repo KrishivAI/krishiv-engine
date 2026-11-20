@@ -662,6 +662,39 @@ pub(crate) fn window_offset_values() -> WindowPlan {
     }
 }
 
+/// `counter_diff` with and without a start time, over its running frame.
+pub(crate) fn window_counter_diff() -> WindowPlan {
+    let running = WindowFrame {
+        units: FrameUnits::Rows,
+        lower: FrameBound::UnboundedPreceding,
+        upper: FrameBound::CurrentRow,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
+            window_function(
+                WindowFunction::CounterDiff {
+                    counter: 2,
+                    start_time: None,
+                    data_type: arrow_schema::DataType::Int64,
+                },
+                running,
+                "diff",
+            ),
+            window_function(
+                WindowFunction::CounterDiff {
+                    counter: 2,
+                    start_time: Some(3),
+                    data_type: arrow_schema::DataType::Decimal128(10, 2),
+                },
+                running,
+                "diff_started",
+            ),
+        ],
+    }
+}
+
 /// `RANGE` frames over a date or timestamp key with year-month interval bounds (calendar months).
 pub(crate) fn window_range_months() -> WindowPlan {
     let aggs = aggregate_exprs();
@@ -1113,6 +1146,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::Window {
                 input: boxed(scan()),
                 window: window_offset_values(),
+            },
+        ),
+        (
+            "window_counter_diff",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_counter_diff(),
             },
         ),
         (

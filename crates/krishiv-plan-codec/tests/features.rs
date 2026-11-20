@@ -65,6 +65,10 @@ fn the_header_lists_exactly_the_features_in_use() {
         ["window", "window_frame_offsets", "window_offset_functions"]
     );
     assert_eq!(
+        message("window_counter_diff").features,
+        ["window", "window_counter_diff"]
+    );
+    assert_eq!(
         message("window_range_values").features,
         ["window", "window_range_bounds"]
     );
@@ -541,6 +545,16 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         Some(Feature::WindowOffsetFunctions)
     );
+    assert_eq!(
+        feature_of(Construct::Window(
+            &krishiv_exec::window::WindowFunction::CounterDiff {
+                counter: 0,
+                start_time: None,
+                data_type: arrow_schema::DataType::Int64,
+            }
+        )),
+        Some(Feature::WindowCounterDiff)
+    );
     for bound in [
         FrameBound::RangeInt(3),
         FrameBound::RangeFloat(1.0_f64.to_bits()),
@@ -579,6 +593,7 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     assert_eq!(Feature::Window.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowFrameOffsets.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowOffsetFunctions.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::WindowCounterDiff.kind(), FeatureKind::Semantic);
     // A plain write plan is the `write_plan` feature; a layout (partition
     // columns) is the `partitioned_writes` feature.
     use krishiv_exec::physical::WritePlan;
