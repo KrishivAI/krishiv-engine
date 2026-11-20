@@ -298,9 +298,10 @@ impl SessionBuilder {
     }
 
     /// Who the session says its client is, shown as `system.sessions.client_type` and matched by
-    /// the `source` selector of a resource group (design P3-T003 §4; Python sets
+    /// the `source` selector of a resource group (design P3-T003 §3; Python sets
     /// `krishiv-python`). Client-asserted: a routing hint, never an identity. A front end that
-    /// reports its own client type later does not replace it.
+    /// reports its own client type later does not replace it. `new_session` does not inherit it
+    /// (a Connect manager's sessions take each client's own type).
     ///
     /// ```
     /// let s = krishiv_session::Session::builder().source("etl-job").build()?;
@@ -1797,7 +1798,11 @@ impl Session {
         let (log_id, permit) = match admitted {
             Some(admitted) => admitted.into_parts(),
             None => self
-                .admit_query(env, env.catalog.reads_only_system(physical))
+                .admit_query(
+                    env,
+                    env.catalog.reads_only_system(physical),
+                    krishiv_sql::StatementClass::Read,
+                )
                 .await?
                 .into_parts(),
         };
