@@ -61,10 +61,21 @@ fn tag(f: &Field, t: &DataType) -> Field {
     match (t, f.data_type()) {
         // A UDT is tagged with its JSON when its storage type is what the file holds; a footer whose storage
         // type does not fit the column leaves it alone.
-        (DataType::Udt(_), _) => {
+        (DataType::Udt(u), carrier) => {
             let mut meta = f.metadata().clone();
             meta.insert(SPARK_TYPE_METADATA_KEY.to_owned(), t.json());
-            let tagged = f.clone().with_metadata(meta);
+            let mut tagged = f.clone().with_metadata(meta);
+            // A file without Arrow metadata holds an interval as a plain integer: restore the interval carrier
+            // so the storage check sees the type the footer declares.
+            let integer = matches!(carrier, ArrowType::Int32 | ArrowType::Int64);
+            if integer
+                && matches!(
+                    u.sql_type(),
+                    DataType::YearMonthInterval { .. } | DataType::DayTimeInterval { .. }
+                )
+            {
+                tagged = tagged.with_data_type(u.sql_type().to_arrow());
+            }
             if DataType::from_arrow_field(&tagged).is_ok() {
                 tagged
             } else {
@@ -334,6 +345,26 @@ mod tests {
             "{json}"
         );
         let untagged = Schema::new(vec![Field::new("p", ArrowType::Utf8View, true)]);
+        let back = restore(&untagged, Some(&kv(&json))).expect("restored");
+        assert_eq!(DataType::from_arrow_field(back.field(0)).unwrap(), udt);
+    }
+
+    /// A UDT over an ANSI interval in a file with no Arrow metadata: the column is a plain integer, and the tag
+    /// restores both the UDT and the interval carrier.
+    #[test]
+    fn a_udt_over_an_interval_restores_from_the_footer_alone() {
+        let storage = DataType::YearMonthInterval {
+            start: krishiv_types::YearMonthField::Year,
+            end: krishiv_types::YearMonthField::Month,
+        };
+        let udt = DataType::Udt(Arc::new(UdtType::python(
+            storage,
+            "__main__.IUDT".to_owned(),
+            "gAWV".to_owned(),
+        )));
+        let schema = Schema::new(vec![udt.to_arrow_field("p", true)]);
+        let json = super::super::intervals::row_metadata(&schema).unwrap();
+        let untagged = Schema::new(vec![Field::new("p", ArrowType::Int32, true)]);
         let back = restore(&untagged, Some(&kv(&json))).expect("restored");
         assert_eq!(DataType::from_arrow_field(back.field(0)).unwrap(), udt);
     }

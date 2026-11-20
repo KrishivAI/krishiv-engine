@@ -482,6 +482,8 @@ impl DataType {
             Self::Struct(s) => Self::Struct(StructType::new(s.fields().iter().map(|f| {
                 StructField::new(f.name(), f.data_type().collation_key_type(), f.nullable())
             }))),
+            // A user-defined type is physically its storage type.
+            Self::Udt(u) => u.sql_type().collation_key_type(),
             other => other.clone(),
         }
     }
