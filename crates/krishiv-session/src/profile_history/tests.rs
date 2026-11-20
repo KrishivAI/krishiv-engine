@@ -845,3 +845,58 @@ fn stored_keeps_hints_only_for_a_finished_entry() {
         }
     }
 }
+
+/// Per-query wall time of `n` runs of one small query, sorted.
+fn latencies(session: &Session, n: usize) -> Vec<std::time::Duration> {
+    let mut times = Vec::with_capacity(n);
+    for _ in 0..n {
+        let start = std::time::Instant::now();
+        run(
+            session,
+            "SELECT id % 7 AS k, count(*) AS n FROM range(0, 2000) GROUP BY id % 7",
+        );
+        times.push(start.elapsed());
+    }
+    times.sort();
+    times
+}
+
+/// P3-T051 write cost: what persisting a profile adds to a query's critical path, as p50 and p99 of the same
+/// query with the history on and off, interleaved in blocks so drift hits both. A measurement, not an assertion:
+/// the plan's "under 1 ms at p99" is read from the printed figures
+/// (`cargo test -p krishiv-session --release write_cost -- --ignored --nocapture`).
+#[test]
+#[ignore = "a measurement: prints the p50 and p99 cost of persisting a profile"]
+fn write_cost_of_persisting_a_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt_on = runtime(dir.path(), "64m");
+    let on = Session::builder()
+        .runtime(Arc::clone(&rt_on))
+        .build()
+        .unwrap();
+    let off = Session::builder()
+        .runtime(EngineRuntime::builder().build().unwrap())
+        .build()
+        .unwrap();
+    latencies(&on, 50);
+    latencies(&off, 50);
+    let (mut with, mut without) = (Vec::new(), Vec::new());
+    for _ in 0..10 {
+        with.extend(latencies(&on, 100));
+        without.extend(latencies(&off, 100));
+    }
+    with.sort();
+    without.sort();
+    let at = |v: &[std::time::Duration], per_mille: usize| {
+        v[(v.len() * per_mille / 1000).min(v.len() - 1)]
+    };
+    for (name, q) in [("p50", 500), ("p99", 990)] {
+        let (a, b) = (at(&with, q), at(&without, q));
+        println!(
+            "write cost {name}: history on {a:?}, off {b:?}, added {:?}",
+            a.saturating_sub(b)
+        );
+    }
+    rt_on.profile_history.as_ref().unwrap().flush();
+    assert_eq!(rt_on.profile_history.as_ref().unwrap().failures(), 0);
+}
