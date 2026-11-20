@@ -43,7 +43,7 @@ use krishiv_sql::ast::{
     AlterView, AlterViewAction, Analyze, AnalyzeColumns, ChangeColumnAction, ColumnName,
     CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, CreateView, DdlName,
     DropBehavior, DropNamespace, DropPermanentView, DropTable, Ident, Insert, InsertClause, Query,
-    TableElement, TableOption, Truncate, Use, ViewColumn,
+    TableElement, Truncate, Use, ViewColumn,
 };
 use krishiv_types::DataType;
 
@@ -1947,40 +1947,6 @@ fn overflow_in_table_insert(
     .into()
 }
 
-/// `OPTIONS (...)` / `TBLPROPERTIES (...)` as text pairs, keys lower-cased
-/// for options as Spark does not (kept as written).
-fn options_of(options: &[TableOption], original: &str) -> BTreeMap<String, String> {
-    options
-        .iter()
-        .map(|o| {
-            let key = o
-                .key
-                .parts
-                .iter()
-                .map(|p| p.value.as_str())
-                .collect::<Vec<_>>()
-                .join(".");
-            let value = o
-                .value
-                .as_ref()
-                .map(|v| literal_text(original.get(v.span.start..v.span.end).unwrap_or_default()))
-                .unwrap_or_default();
-            (key, value)
-        })
-        .collect()
-}
-
-/// A literal's text without its quotes.
-fn literal_text(fragment: &str) -> String {
-    let f = fragment.trim();
-    for q in ['\'', '"'] {
-        if f.len() >= 2 && f.starts_with(q) && f.ends_with(q) {
-            return f[1..f.len() - 1].to_owned();
-        }
-    }
-    f.to_owned()
-}
-
 pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1988,7 +1954,11 @@ pub(crate) fn now_ms() -> i64 {
 }
 
 mod files;
+mod option_text;
 pub(crate) use files::CheckedDir;
+#[cfg(test)]
+use option_text::literal_text;
+use option_text::options_of;
 mod questions;
 use files::remove_dir;
 mod location;
