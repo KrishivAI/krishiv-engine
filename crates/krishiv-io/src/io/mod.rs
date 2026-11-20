@@ -934,6 +934,8 @@ impl IoContext {
 
     /// This context reserving nothing from a query's pool: for work that outlives the query
     /// (a Delta checkpoint after a commit), which must not hold the finished query's memory.
+    /// Its metadata reads ([`Self::get_tail`], [`Self::get_ranges_held`]) then reserve nothing,
+    /// as with a context that never had [`Self::with_memory`].
     #[must_use]
     pub fn without_memory(mut self) -> Self {
         self.memory = None;
