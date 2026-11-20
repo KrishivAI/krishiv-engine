@@ -901,7 +901,10 @@ impl Checker<'_> {
         self.ddl_name(&m.target)?;
         self.table_reference(m.target.span(), None, &m.target_options)?;
         match &m.source {
-            MergeSource::Table { name, .. } => self.ddl_name(name)?,
+            MergeSource::Table { name, options, .. } => {
+                self.ddl_name(name)?;
+                self.table_reference(name.span(), None, options)?;
+            }
             MergeSource::Query { query, .. } => self.query(query)?,
         }
         self.expr(&m.on)?;

@@ -68,3 +68,29 @@ fn with_options_parse_after_the_alias_and_match_spark() {
         assert_eq!(class(&s, sql), want, "{sql}");
     }
 }
+
+/// The options of a `MERGE` source are checked as the target's are (Spark reads both through
+/// `createUnresolvedRelation`): a duplicate key and a key without a value.
+#[test]
+fn merge_source_options_are_validated_like_the_targets() {
+    let s = Session::new().unwrap();
+    for q in [
+        "create table tbl (id int, name string) using parquet",
+        "create temporary view src as select 1 as id, 'z' as name",
+    ] {
+        block_on(async { s.sql(q).await?.collect().await }).unwrap();
+    }
+    let tail = "on tbl.id = s.id when matched then delete";
+    for options in ["('k'='v', 'k'='w')", "('k')"] {
+        let target = class(
+            &s,
+            &format!("merge into tbl with {options} using src s {tail}"),
+        );
+        let source = class(
+            &s,
+            &format!("merge into tbl using src with {options} s {tail}"),
+        );
+        assert_ne!(target, "UNSUPPORTED_FEATURE.TABLE_OPERATION", "{options}");
+        assert_eq!(source, target, "{options}");
+    }
+}

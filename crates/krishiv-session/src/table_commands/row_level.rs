@@ -129,9 +129,7 @@ impl Session {
         // statement that would run refuses them rather than ignore them.
         if let Some(operation) = with_options {
             return Err(krishiv_common::error::KrishivUnsupportedFeature {
-                feature: format!(
-                    "{operation} with WITH (options) on a table that runs row-level changes"
-                ),
+                feature: format!("WITH (options) on {operation} of a table with row-level changes"),
             }
             .into());
         }
