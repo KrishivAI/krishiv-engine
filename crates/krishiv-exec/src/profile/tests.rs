@@ -564,7 +564,7 @@ fn the_mean_reads_in_flight_is_reported() {
 fn a_later_minor_is_read() {
     let p = QueryProfile::new(&plan(matching()), metrics(), true);
     let mut v = p.to_json_value();
-    v["minor"] = 7.into();
+    v["minor"] = (PROFILE_MINOR + 1).into();
     v["tasks"] = serde_json::json!([{"fragment": 3}]);
     v["query"]["new_counter"] = 5.into();
     v["operators"][2]["extra"][0]["kind"] = "avg".into();
