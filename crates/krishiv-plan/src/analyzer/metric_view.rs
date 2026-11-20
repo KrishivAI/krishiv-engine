@@ -37,6 +37,12 @@ use crate::{
 /// The name of Spark's `Measure` aggregate.
 const MEASURE: &str = "measure";
 
+/// Spark's message for a plan its planner has no strategy for (`QueryExecution`).
+const PLANNING_FAILED: &str = "The Spark SQL phase planning failed with an internal error. You hit a bug in Spark or the Spark plugins you use. Please, report this bug to the corresponding communities or vendors, and provide the full stack trace.";
+
+/// Spark's message for a `Measure` left in an aggregate.
+const UNEVALUABLE: &str = "UnevaluableAggregateFunc.aggBufferAttributes should not be called.";
+
 impl Resolver<'_> {
     /// A [`PlanNode::MetricViewRead`]: its source resolved, its output the stored columns
     /// (unqualified: a metric view's name never qualifies its columns).
@@ -98,6 +104,11 @@ impl Resolver<'_> {
             return self.aggregate(p, input, grouping, aggregates, env);
         };
         let read = Arc::clone(read);
+        // Spark's rule never looks through a view (a `View` node ends the chain) and never fires
+        // for a metric view over a metric view: the `measure(..)` stays, and planning refuses it.
+        if self.crosses_view(input) || reads_metric_view_below(&read) {
+            return self.aggregate(p, input, grouping, aggregates, env);
+        }
         // Pass 1: as written, over the read.
         let first = self.aggregate(p, input, grouping, aggregates, env)?;
         let PlanNode::MetricViewRead {
@@ -248,6 +259,23 @@ impl Resolver<'_> {
         self.rel(&agg, env)
     }
 
+    /// Whether the unresolved chain from `input` down to its metric-view read passes the inlined
+    /// text of a permanent view.
+    fn crosses_view(&self, input: &Arc<LogicalPlan>) -> bool {
+        let mut at = input;
+        loop {
+            if self.ctx.stored_view_texts.contains(at) {
+                return true;
+            }
+            match &at.node {
+                PlanNode::Filter { input, .. }
+                | PlanNode::Project { input, .. }
+                | PlanNode::SubqueryAlias { input, .. } => at = input,
+                _ => return false,
+            }
+        }
+    }
+
     /// Whether two column names are the same under the session's case rule.
     fn same_name(&self, a: &str, b: &str) -> bool {
         if self.ctx.conf.case_sensitive {
@@ -343,6 +371,21 @@ fn chain_read(plan: &Arc<LogicalPlan>) -> Option<&Arc<LogicalPlan>> {
     }
 }
 
+/// Whether the source of the metric-view read `read` reads a metric view.
+fn reads_metric_view_below(read: &LogicalPlan) -> bool {
+    let mut found = false;
+    read.for_each_child(&mut |source| {
+        let _ = visit_distinct(Node::Plan(source), |n| {
+            if matches!(n, Node::Plan(p) if matches!(p.node, PlanNode::MetricViewRead { .. })) {
+                found = true;
+                return std::ops::ControlFlow::Break(());
+            }
+            std::ops::ControlFlow::Continue(())
+        });
+    });
+    found
+}
+
 /// Whether `plan` (resolved) reads a metric view through filters, projections and aliases.
 pub(super) fn reads_metric_view(plan: &Arc<LogicalPlan>) -> bool {
     chain_read(plan).is_some()
@@ -401,8 +444,8 @@ fn reads_measures(
 }
 
 /// Planning's refusal of what only an aggregate over a metric view may hold (design note §4,
-/// golden results 3): a read no aggregate rewrote is Spark's planning failure, a `measure(..)`
-/// left in a plan its unevaluable aggregate's.
+/// golden results 3): a `measure(..)` left in a plan is its unevaluable aggregate's failure,
+/// then a read no aggregate rewrote Spark's planning failure.
 ///
 /// # Errors
 /// `INTERNAL_ERROR` with Spark's message for the first found.
@@ -416,18 +459,27 @@ pub fn refuse_unplannable(plan: &LogicalPlan) -> Result<(), KrishivError> {
         }
         std::ops::ControlFlow::Continue(())
     });
-    if read {
+    if measure {
         return Err(InternalError {
-            message: "The Spark SQL phase planning failed with an internal error. You hit a bug in Spark or the Spark plugins you use. Please, report this bug to the corresponding communities or vendors, and provide the full stack trace.".to_owned(),
+            message: UNEVALUABLE.to_owned(),
         }
         .into());
     }
-    if measure {
+    if read {
         return Err(InternalError {
-            message: "UnevaluableAggregateFunc.aggBufferAttributes should not be called."
-                .to_owned(),
+            message: PLANNING_FAILED.to_owned(),
         }
         .into());
     }
     Ok(())
+}
+
+/// Whether `e` is one of [`refuse_unplannable`]'s errors (`EXPLAIN` prints it as Spark's planning
+/// failure, in every mode).
+#[must_use]
+pub fn is_unplannable(e: &KrishivError) -> bool {
+    e.error_class() == krishiv_common::error::ErrorClass::InternalError
+        && e.message_parameters()
+            .iter()
+            .any(|(k, v)| *k == "message" && (v == PLANNING_FAILED || v == UNEVALUABLE))
 }
