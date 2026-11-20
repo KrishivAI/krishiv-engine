@@ -65,7 +65,7 @@ const FIRES: [&str; 5] = [
 ];
 
 /// Each stays above the expansion, for the reason in its comment.
-const STAYS: [&str; 5] = [
+const STAYS: [&str; 6] = [
     // Summation order: a `bigint` buffer that can overflow.
     "SELECT k, sum(k) FROM f GROUP BY ROLLUP(k)",
     // Summation order: floating point.
@@ -75,6 +75,8 @@ const STAYS: [&str; 5] = [
     // Not one accumulator per group.
     "SELECT k, count(DISTINCT i) FROM f GROUP BY ROLLUP(k)",
     "SELECT k, sum(i) FILTER (WHERE k > 2) FROM f GROUP BY ROLLUP(k)",
+    // No key: a keyless partial aggregate yields a row over empty input.
+    "SELECT sum(i), count(*) FROM f GROUP BY GROUPING SETS ((), (), ())",
 ];
 
 #[test]
@@ -100,6 +102,19 @@ fn the_calls_it_cannot_move_stay_above_the_expansion() {
     let t = tables(dir.path(), &many(), &WEIGHTS, &rt);
     for q in STAYS {
         assert!(!fires(&t, q), "{q}");
+        let (on, off) = both(&t, q);
+        assert_eq!(on, off, "{q}");
+    }
+}
+
+/// An empty table: what the rule leaves answers as the plan without it, for the sets that fire
+/// and the ones that stay (Spark goldens `postgreSQL/groupingsets` #16 and #44: only empty sets).
+#[test]
+fn an_empty_input_returns_the_same_rows() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = tables(dir.path(), &[], &WEIGHTS, &rt);
+    for q in FIRES.iter().chain(&STAYS) {
         let (on, off) = both(&t, q);
         assert_eq!(on, off, "{q}");
     }

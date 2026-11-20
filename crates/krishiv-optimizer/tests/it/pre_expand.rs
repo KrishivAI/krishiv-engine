@@ -255,6 +255,17 @@ fn a_floating_point_key_stays() {
     );
 }
 
+/// Only empty grouping sets: no column of the input is read above the expansion, and a keyless
+/// partial aggregate would yield a row over empty input (Spark goldens `postgreSQL/groupingsets`
+/// #16 and #44).
+#[test]
+fn only_empty_grouping_sets_stay() {
+    assert_refuses(
+        "SELECT sum(w), count(*) FROM h GROUP BY GROUPING SETS ((), (), ())",
+        "no key",
+    );
+}
+
 /// A distinct aggregate exports no states.
 #[test]
 fn a_distinct_aggregate_stays() {

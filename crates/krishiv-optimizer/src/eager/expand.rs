@@ -100,6 +100,14 @@ impl<'a> Shape<'a> {
             .filter(|c| need.contains(&c.id))
             .cloned()
             .collect();
+        // Without a key the partial aggregate is a global one, which yields a
+        // state row over empty input; the expansion would turn it into a row
+        // per grouping set where the grouped aggregate above yields none.
+        if keys.is_empty() {
+            return Err(
+                "no key: a keyless partial aggregate yields a row over empty input".to_owned(),
+            );
+        }
         // Values that compare equal but read differently (`-0.0` and `0.0`,
         // strings equal under a collation) would merge before a grouping
         // expression could tell them apart.
