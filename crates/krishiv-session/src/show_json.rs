@@ -69,6 +69,25 @@ impl Session {
             }
             kind => kind.clone(),
         };
+        // A declared catalog's listing carries its namespace as one dotted label, so a multipart namespace
+        // (`lake.a.b`) cannot be written back as `["a","b"]`: refused rather than answered wrong.
+        if let ShowKind::Tables {
+            namespace: Some(n), ..
+        } = &listed
+        {
+            let parts = crate::access::ddl_parts(n, &self.query_env())?;
+            if let [catalog, ns @ ..] = parts.as_slice()
+                && ns.len() > 1
+                && self.declared_catalogs().canonical(catalog).is_some()
+            {
+                return Err(KrishivUnsupportedFeature {
+                    feature:
+                        "SHOW TABLES ... AS JSON over a multipart namespace of a declared catalog"
+                            .to_owned(),
+                }
+                .into());
+            }
+        }
         let plain = Show {
             kind: listed,
             as_json: false,

@@ -348,6 +348,16 @@ fn show_table_extended_as_json_is_refused_for_a_declared_catalog() {
     assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
 }
 
+/// `SHOW TABLES IN lake.a.b ... AS JSON` cannot give the namespace as `["a","b"]` (the listing carries one dotted
+/// label), so a multipart namespace of a declared catalog is refused (Codex review of #879).
+#[test]
+fn show_tables_as_json_refuses_a_multipart_declared_namespace() {
+    let rt = runtime(DeclMode::Embedded, &LAKE);
+    let s = Session::builder().runtime(rt).build().unwrap();
+    let e = run(&s, "SHOW TABLES IN lake.a.b AS JSON").unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
+}
+
 /// With a declared catalog current, the SQL namespace and table commands that would resolve in it
 /// refuse rather than read or change the embedded catalog in its name, as the Catalog API does;
 /// `spark_catalog.<db>` forms, `global_temp` and temporary views keep working.
