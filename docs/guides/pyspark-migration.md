@@ -150,6 +150,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [Checkpoint files and where a checkpoint lives](../concepts/known-differences.md#checkpoint-files-and-where-a-checkpoint-lives) |
 | [`remote("local")` is not supported](../concepts/known-differences.md#remotelocal-is-not-supported) |
 | [A declared schema on a Delta read](../concepts/known-differences.md#a-declared-schema-on-a-delta-read) |
+| [Tags and global views](../concepts/known-differences.md#tags-and-global-views) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
 | [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
 | [Delta Lake writes](../concepts/known-differences.md#delta-lake-writes) |

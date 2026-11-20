@@ -22,7 +22,7 @@ arrow-flight = { workspace = true, features = ["flight-sql"] }
 arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
 getrandom.workspace = true
-prost = { workspace = true, features = ["std"] }
+prost = { workspace = true, features = ["std", "derive"] }
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tonic = { workspace = true, features = ["router"] }
 tracing.workspace = true

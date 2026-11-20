@@ -380,6 +380,18 @@ not pinned by the Delta oracle yet. A Delta table's schema always comes from its
 asks for the schema (`df.schema`, `printSchema`, Connect `AnalyzePlan`) returns the declared schema without opening
 the table, and the first action fails.
 
+## Tags and global views
+
+`spark.addTag(tag)` tags the queries of the calling thread. A DataFrame keeps the tags it was made with: tag
+before `spark.sql`, `spark.table`, `spark.read` or `spark.range`, not before the action. A frame made before the
+tag, or made on another thread, is not cancelled by `spark.interruptTag(tag)`, and a frame made under a tag keeps
+it after `removeTag`. Frames derived from it (`filter`, `select`, ...) keep it. In Spark, the tags are those of the
+thread that runs the action. `removeTag` of a tag the thread does not have does nothing, as in Spark 4.3.
+
+Global temporary views (`createGlobalTempView`, `CREATE GLOBAL TEMPORARY VIEW`) belong to the session that
+made them: another session, `spark.newSession()` included, does not see `global_temp.<name>`. In Spark they are
+shared by every session of the application.
+
 ## `krishiv server` (Spark Connect)
 
 > The Spark Connect server is not part of the 0.2 release; `krishiv server` in 0.2 serves the web UI and admin API

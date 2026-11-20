@@ -354,6 +354,26 @@ impl Catalog<'_> {
         Ok(out)
     }
 
+    /// The namespaces of the embedded catalog `spark_catalog` whatever the current catalog is,
+    /// sorted by name: the Arrow Flight SQL `GetDbSchemas` listing (design P3-T101 §5), which
+    /// names its catalog rather than following `USE`.
+    ///
+    /// # Errors
+    /// The access error `SHOW NAMESPACES` gives with `spark_catalog` current: `Browse` on the
+    /// catalog, audited as a read.
+    pub async fn list_embedded_databases(&self) -> Result<Vec<Database>, KrishivError> {
+        self.session
+            .authorize_privilege(
+                &krishiv_plan::analyzer::Securable::Namespace(vec![
+                    crate::catalog::CATALOG.to_owned(),
+                ]),
+                Privilege::Browse,
+                krishiv_sql::StatementClass::Read,
+            )
+            .await?;
+        Ok(self.databases(None))
+    }
+
     fn databases(&self, pattern: Option<&str>) -> Vec<Database> {
         let mut out: Vec<Database> = self
             .session
