@@ -51,6 +51,37 @@ fn binary_array(rows: Vec<Vec<u8>>) -> Result<BinaryArray> {
     Ok(BinaryArray::from_iter_values(rows))
 }
 
+/// The bytes of the sketches in a binary column: the values' own lengths, for `Binary`, `LargeBinary` and
+/// `BinaryView` alike, not the views, the offsets or a slice's parent buffer.
+pub(crate) fn sketch_bytes(a: &dyn arrow_array::Array) -> usize {
+    use arrow_array::cast::AsArray;
+    use arrow_schema::DataType;
+    match a.data_type() {
+        DataType::Binary => {
+            let b = a.as_binary::<i32>();
+            let o = b.value_offsets();
+            o.last()
+                .zip(o.first())
+                .map_or(0, |(l, f)| usize::try_from(l - f).unwrap_or(0))
+        }
+        DataType::LargeBinary => {
+            let b = a.as_binary::<i64>();
+            let o = b.value_offsets();
+            o.last()
+                .zip(o.first())
+                .map_or(0, |(l, f)| usize::try_from(l - f).unwrap_or(0))
+        }
+        // The low 32 bits of a view are its length.
+        DataType::BinaryView => a
+            .as_binary_view()
+            .views()
+            .iter()
+            .map(|v| usize::try_from(*v & u128::from(u32::MAX)).unwrap_or(0))
+            .sum(),
+        _ => a.get_array_memory_size(),
+    }
+}
+
 /// The error when the lengths sum past what a `binary` column's 32-bit offsets hold (or overflow `usize`).
 fn check_total_len(mut lens: impl Iterator<Item = usize>) -> Result<()> {
     let total = lens.try_fold(0_usize, usize::checked_add);
@@ -219,7 +250,8 @@ impl ThetaSketchAcc {
 
     /// The size after adding `new` groups (an upper bound; a row table passes the partition's rows) and folding
     /// `rows` input rows. `states` says the rows are partial states, not raw values, and `state_bytes` is the byte
-    /// length of the state column of the whole batch.
+    /// length of the sketches in the argument column of the whole batch (partial states, or the raw sketches of a
+    /// union or an intersection).
     ///
     /// Raw values: one row can grow the table of the group it lands in 8 times (`GROWTH`), up to the full table, and
     /// the groups that exist have `ceiling - charged` bytes of room in all. A fresh group costs what a real fresh

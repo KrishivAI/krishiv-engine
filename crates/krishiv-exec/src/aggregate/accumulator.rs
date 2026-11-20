@@ -804,7 +804,7 @@ impl Accumulator {
             Kind::HllSketch(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len), states),
             Kind::ThetaSketch(h) => {
                 let state_bytes = if states || h.takes_sketches() {
-                    arg.map_or(0, arrow_array::Array::get_array_memory_size)
+                    arg.map_or(0, |c| super::theta_sketch::sketch_bytes(c.as_ref()))
                 } else {
                     0
                 };

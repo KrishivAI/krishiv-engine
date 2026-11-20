@@ -196,21 +196,19 @@ fn spark_written_estimation_mode_sketches_agree_with_krishivs() -> R {
             "{name}: the union"
         );
         let hex = rows(&s, &format!("SELECT hex({own})"))?.remove(0);
-        {
-            let back = fx_dir_json("reverse.json")?;
-            let back = &back["krishiv_read_by_spark"][name];
-            assert_eq!(back["estimate"].as_i64(), Some(want), "{name}: Spark reads");
-            assert_eq!(
-                back["union_with_spark"].as_i64(),
-                Some(want),
-                "{name}: Spark unions"
-            );
-            assert_eq!(
-                fx_dir_json("krishiv-compact.json")?[name].as_str(),
-                Some(hex.as_str()),
-                "{name}: Krishiv's bytes changed; rerun gen.py with the new krishiv-compact.json"
-            );
-        }
+        let back = fx_dir_json("reverse.json")?;
+        let back = &back["krishiv_read_by_spark"][name];
+        assert_eq!(back["estimate"].as_i64(), Some(want), "{name}: Spark reads");
+        assert_eq!(
+            back["union_with_spark"].as_i64(),
+            Some(want),
+            "{name}: Spark unions"
+        );
+        assert_eq!(
+            fx_dir_json("krishiv-compact.json")?[name].as_str(),
+            Some(hex.as_str()),
+            "{name}: Krishiv's bytes changed; rerun gen.py with the new krishiv-compact.json"
+        );
         dump.insert(name.to_owned(), serde_json::Value::String(hex));
     }
     if let Ok(path) = std::env::var("KRISHIV_THETA_INTEROP_DUMP") {
