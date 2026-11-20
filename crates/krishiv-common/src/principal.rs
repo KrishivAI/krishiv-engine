@@ -26,6 +26,13 @@ pub struct Principal {
     /// itself; the audit and `system.queries` / `system.sessions` show both. It never enters
     /// [`Self::id`]: what a query may read is the end user's, whoever asked for it.
     pub delegated_by: Option<String>,
+    /// The reader this principal acts for while it reads the query of a `SQL SECURITY DEFINER`
+    /// view as the view's definer (P3-T062 §2.4), or `scheduler` for a materialized view refresh
+    /// run as its owner. `None` for a principal that acts for itself. Such a principal holds
+    /// only what is granted to its own name: never the session's admin role, never the groups or
+    /// the objects of the statement that runs it. It enters [`Self::id`], so a plan analyzed
+    /// for it is never reused for the definer itself.
+    pub definer_for: Option<String>,
 }
 
 /// The kind of a principal.
@@ -48,6 +55,18 @@ impl Principal {
             tenant: None,
             kind,
             delegated_by: None,
+            definer_for: None,
+        }
+    }
+
+    /// The principal `name` reading a `SQL SECURITY DEFINER` view's query for `reader` (see
+    /// [`Self::definer_for`]): a user principal without groups or tenant, so it holds only what
+    /// is granted to `name` itself.
+    #[must_use]
+    pub fn definer(name: impl Into<String>, reader: impl Into<String>) -> Self {
+        Self {
+            definer_for: Some(reader.into()),
+            ..Self::new(name, PrincipalKind::User)
         }
     }
 
@@ -84,7 +103,7 @@ impl Principal {
     }
 
     /// The identity that enters the context fingerprint: kind, tenant,
-    /// name and the sorted groups (a policy may decide by group).
+    /// name, the sorted groups (a policy may decide by group) and the reader a definer acts for.
     #[must_use]
     pub fn id(&self) -> String {
         let kind = match self.kind {
@@ -100,13 +119,19 @@ impl Principal {
             .as_ref()
             .map_or_else(|| "-".to_owned(), |t| quoted(std::slice::from_ref(t)));
         format!(
-            "{kind}:{tenant}/{}{}",
+            "{kind}:{tenant}/{}{}{}",
             quoted(std::slice::from_ref(&self.name)),
             if groups.is_empty() {
                 String::new()
             } else {
                 format!("[{}]", quoted(&groups))
-            }
+            },
+            self.definer_for
+                .as_ref()
+                .map_or_else(String::new, |by| format!(
+                    "<{}",
+                    quoted(std::slice::from_ref(by))
+                ))
         )
     }
 }
@@ -132,6 +157,16 @@ mod tests {
         let mut b = Principal::new("y", PrincipalKind::User);
         b.tenant = Some("t/`x".to_owned());
         assert_ne!(a.id(), b.id());
+    }
+
+    #[test]
+    fn a_definer_principal_has_its_own_id() {
+        let owner = Principal::new("ana", PrincipalKind::User);
+        let derived = Principal::definer("ana", "bob");
+        assert_eq!(derived.definer_for.as_deref(), Some("bob"));
+        assert_eq!(derived.delegated_by, None);
+        assert_eq!(owner.id(), "user:-/`ana`");
+        assert_eq!(derived.id(), "user:-/`ana`<`bob`");
     }
 
     #[test]
