@@ -22,6 +22,9 @@ from typing import Any
 # file; the JVM `error-conditions.json` vendored in krishiv-common carries none of these,
 # not even the pre-existing ones like `NOT_EXPECTED_TYPE`).
 _TEMPLATES = {
+    "_LEGACY_ERROR_TEMP_1312": "'<operation>' does not support bucketBy right now.",
+    "_LEGACY_ERROR_TEMP_1313": "'<operation>' does not support bucketBy and sortBy right now.",
+    "SORT_BY_WITHOUT_BUCKETING": "sortBy must be used together with bucketBy.",
     "NOT_IMPLEMENTED": "<feature> is not implemented.",
     "CONTEXT_ONLY_VALID_ON_DRIVER": (
         "It appears that you are attempting to reference SparkContext from a broadcast variable, action, or "

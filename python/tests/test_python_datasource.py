@@ -256,7 +256,7 @@ def test_empty_iterator_and_missing_partitions_default(spark: SparkSession) -> N
 
 
 def test_partitions_are_planned_for_every_execution(spark: SparkSession) -> None:
-    calls = {"n": 0}
+    calls = {"n": 0, "partitions": 0, "reads": 0}
 
     class Growing(DataSource):
         def schema(self) -> str:
@@ -268,9 +268,11 @@ def test_partitions_are_planned_for_every_execution(spark: SparkSession) -> None
 
             class R(DataSourceReader):
                 def partitions(self) -> list[InputPartition]:
+                    calls["partitions"] += 1
                     return [InputPartition(k) for k in range(n)]
 
                 def read(self, partition: InputPartition) -> Any:
+                    calls["reads"] += 1
                     yield (partition.value,)
 
             return R()
@@ -279,7 +281,9 @@ def test_partitions_are_planned_for_every_execution(spark: SparkSession) -> None
     df = spark.read.format("Growing").load()
     first = df.count()
     second = df.count()
-    assert second > first  # a second action sees a source that grew
+    assert (first, second) == (1, 2)  # a second action sees a source that grew
+    # One reader(), one partitions() and one read() per partition, per action (not one more for planning).
+    assert (calls["n"], calls["partitions"], calls["reads"]) == (2, 2, 3)
 
 
 def test_reregistering_a_name_replaces_the_class(spark: SparkSession) -> None:
@@ -706,12 +710,15 @@ def test_a_bucketed_save_through_a_python_sink_is_refused(spark: SparkSession) -
     with pytest.raises(AnalysisException) as bucketed:
         df.write.format("sink").mode("append").bucketBy(2, "a").save()
     assert bucketed.value.getCondition() == "_LEGACY_ERROR_TEMP_1312"
+    assert "'save' does not support bucketBy right now." in bucketed.value.getMessage()
     with pytest.raises(AnalysisException) as both:
         df.write.format("sink").mode("append").bucketBy(2, "a").sortBy("a").save()
     assert both.value.getCondition() == "_LEGACY_ERROR_TEMP_1313"
+    assert "does not support bucketBy and sortBy right now." in both.value.getMessage()
     with pytest.raises(AnalysisException) as sort_only:
         df.write.format("sink").mode("append").sortBy("a").save()
     assert sort_only.value.getCondition() == "SORT_BY_WITHOUT_BUCKETING"
+    assert "sortBy must be used together with bucketBy." in sort_only.value.getMessage()
     assert Log.events == []
 
 
