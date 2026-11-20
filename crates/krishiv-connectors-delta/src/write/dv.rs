@@ -618,7 +618,13 @@ pub(crate) async fn write(
             }
             out.descriptors.insert(path, descriptor);
             #[cfg(test)]
-            super::test_hooks::at(write_id, super::test_hooks::Point::VectorWritten, query).await;
+            {
+                let site = super::test_hooks::Site {
+                    point: super::test_hooks::Point::VectorWritten,
+                    driver: 0,
+                };
+                super::test_hooks::at(write_id, site, query, None).await;
+            }
         }
         if let Some(f) = file.take() {
             let DvFile {

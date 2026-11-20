@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The config entries of the runtime join filters (`krishiv.runtimeFilter.*`): the switch,
-//! the IN-list, exact-set and Bloom limits and the adaptive pass-rate check. The at-scale Bloom
-//! tiers are in `runtime_filter_bloom.rs`.
+//! The config entries of runtime filters: on/off, IN-list and exact-set sizes,
+//! the Bloom filter caps and the adaptive pass-rate switch.
 
-use super::MIB;
 use crate::config::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
+
+const MIB: u64 = 1024 * 1024;
 
 /// `krishiv.runtimeFilter.enabled`.
 pub static RUNTIME_FILTER_ENABLED: ConfigEntry = ConfigEntry {

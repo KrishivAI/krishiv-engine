@@ -13,7 +13,7 @@ use krishiv_common::error::ErrorClass;
 use krishiv_exec::planner::WriteMode;
 
 use super::super::sink::{CheckpointSlot, ExactCheck, checkpoints_skipped};
-use super::super::test_hooks::{self, Point};
+use super::super::test_hooks::{self, Act, Point};
 use super::streaming::{data_files, new_table, wide_rows};
 use super::{Env, modes_schema};
 
@@ -38,13 +38,12 @@ fn cancelled_at(point: Point, write_id: &str) {
     let before = data_files(&env.dir);
     test_hooks::set(
         write_id,
-        Arc::new(move |at, query| {
-            if at == point {
-                query.cancel();
-                true
-            } else {
-                false
+        Arc::new(move |site, query| {
+            if site.point != point {
+                return Act::NONE;
             }
+            query.cancel();
+            Act::stall(std::time::Duration::from_secs(30))
         }),
     );
     let batches: Vec<RecordBatch> = (0..6).map(|b| wide_rows(100 + b * 100, 100)).collect();

@@ -720,4 +720,6 @@ mod cache_tests;
 #[cfg(test)]
 mod oracle_tests;
 #[cfg(test)]
+mod roundtrip_tests;
+#[cfg(test)]
 mod tests;
