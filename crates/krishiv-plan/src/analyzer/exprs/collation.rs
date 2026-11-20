@@ -112,6 +112,8 @@ const RUNTIME_INDETERMINATE: &[&str] = &["str_to_map", "split_part"];
 const DEPENDS: &[&str] = &[
     // Spark hashes the collation key (`HllSketchAgg.update`); Krishiv has no key hashing yet.
     "hll_sketch_agg",
+    // The same for `ThetaSketchAgg.update` (the collation's sort key).
+    "theta_sketch_agg",
     "contains",
     "startswith",
     "endswith",

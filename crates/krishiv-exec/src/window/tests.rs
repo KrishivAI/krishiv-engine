@@ -531,6 +531,9 @@ fn reference(
                         | AggregateFunction::BitmapAndAgg
                         | AggregateFunction::HllSketchAgg { .. }
                         | AggregateFunction::HllUnionAgg { .. }
+                        | AggregateFunction::ThetaSketchAgg { .. }
+                        | AggregateFunction::ThetaUnionAgg { .. }
+                        | AggregateFunction::ThetaIntersectionAgg
                         | AggregateFunction::Udf(_) => {
                             unreachable!("no window test aggregates with this function")
                         }

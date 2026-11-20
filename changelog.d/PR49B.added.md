@@ -1,0 +1,1 @@
+Theta sketches: `theta_sketch_agg`, `theta_union_agg`, `theta_intersection_agg` and the scalar `theta_sketch_estimate`, `theta_union`, `theta_intersection`, `theta_difference`, with Spark 4.3 results; a collated string input is refused.

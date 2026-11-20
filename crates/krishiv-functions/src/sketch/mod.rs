@@ -4,3 +4,4 @@
 //! encoding and the byte mapping, over the `datasketches` crate. The scalar and aggregate bindings sit on top.
 
 pub mod hll;
+pub mod theta;

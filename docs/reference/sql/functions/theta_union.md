@@ -11,7 +11,7 @@ Datasketches ThetaSketch objects using a ThetaSketch Union object. Users can set
 lgNomEntries to a value between 4 and 26 to find the union of sketches with different
 union buffer size values (defaults to 12).
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -23,9 +23,9 @@ theta_union(first, second, lgNomEntries)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.1.0 |
 | In Spark profiles | 4.1 and later |
 | Arguments | [2, 3] |
@@ -42,6 +42,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

@@ -26,12 +26,15 @@ pub(super) fn assert_message(cond: &Bound, origin: Origin, zone: Option<SessionZ
 /// `false`): Spark's constructors write them, and the column name shows them.
 pub(super) fn hll_default(name: &str, n: usize, origin: Origin) -> Option<Bound> {
     match (name, n) {
-        ("hll_sketch_agg", 1) => Some(default_argument(
-            Literal::Integer(12),
-            DataType::Integer,
-            false,
-            origin,
-        )),
+        // Theta: `lgNomEntries` 12 when omitted (`ThetaSketchUtils.DEFAULT_LG_NOM_LONGS`).
+        ("hll_sketch_agg" | "theta_sketch_agg" | "theta_union_agg", 1) | ("theta_union", 2) => {
+            Some(default_argument(
+                Literal::Integer(12),
+                DataType::Integer,
+                false,
+                origin,
+            ))
+        }
         ("hll_union_agg", 1) | ("hll_union", 2) => Some(default_argument(
             Literal::Boolean(false),
             DataType::Boolean,
