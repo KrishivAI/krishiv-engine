@@ -502,3 +502,49 @@ fn explain_shows_no_advice_when_the_definer_reads_are_withheld() {
     assert!(!plan.contains("Partition Advice"), "{plan}");
     assert!(!plan.contains("partition advice"), "{plan}");
 }
+
+/// The cost the advisor adds to a query's start when `krishiv.history.path` is set (P3-T025, "planning p99 changes
+/// by at most 0.1 ms"): `history_job`'s only work on the query path is `profile_scans` over the physical plan with
+/// each scan's table statistics, which is timed here alone, 1,000 times, on a four-table join with filters.
+/// Run: `cargo nextest run -p krishiv-session --lib --run-ignored only --no-capture advisor_query_start_cost`.
+#[test]
+#[ignore = "timing; prints p50 and p99 of the history job's plan walk"]
+fn advisor_query_start_cost() {
+    use std::time::Instant;
+    let dir = tempfile::tempdir().unwrap();
+    let (_rt, session) = setup(&dir.path().join("h"), &dir.path().join("w"));
+    for t in ["a", "b", "c", "d"] {
+        run(&session, &format!("CREATE TABLE {t} AS {EVENTS}"));
+    }
+    let sql = "SELECT a.id FROM a JOIN b ON a.id = b.id JOIN c ON b.id = c.id JOIN d ON c.d = d.d \
+               WHERE a.d = 5 AND b.c = 1 AND c.d > 3 AND d.id < 100";
+    let df = block_on(session.sql(sql)).unwrap();
+    let mut times = Vec::with_capacity(1000);
+    let scans = block_on(session.on_executor({
+        let session = session.clone();
+        async move {
+            let a = df.analysis().await?;
+            let (_, physical) = session.physical_inspected(&a.analyzed, &a.env).await?;
+            let mut last = Vec::new();
+            for _ in 0..1000 {
+                let t = Instant::now();
+                last = krishiv_exec::profile::profile_scans(&physical, &|scan| {
+                    use krishiv_exec::planner::TableProviderResolver as _;
+                    a.env.catalog.provider(scan).ok()?.statistics()
+                });
+                times.push(t.elapsed());
+            }
+            Ok((last, times))
+        }
+    }))
+    .unwrap();
+    let (scans, mut times) = scans;
+    assert_eq!(scans.len(), 4, "the four tables are the scans");
+    times.sort();
+    println!(
+        "advisor_query_start_cost: p50 {:?} p99 {:?} over {} runs",
+        times[times.len() / 2],
+        times[times.len() * 99 / 100],
+        times.len()
+    );
+}
