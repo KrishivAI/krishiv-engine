@@ -167,13 +167,24 @@ impl Session {
         }
         let table = self.table_for_write(&name, "INSERT", &env)?;
         if replace {
+            if c.replace_where.is_some() {
+                // Spark 4.3.0 runs REPLACE WHERE on DSv2 tables only; a Parquet or Hive table (every table
+                // here) fails with this class, with or without a column list
+                // (`tests/fixtures/spark-4.3.0/write-semantics/replace_where.json`). 4.2 reaches the V1
+                // write and refuses there.
+                return Err(
+                    if self.state.profile >= krishiv_plan::analyzer::SparkProfile::V4_3 {
+                        table_operation(&name, "INSERT INTO ... REPLACE WHERE")
+                    } else {
+                        krishiv_common::error::LegacyErrorTemp1012 {
+                            identifier: name.quoted(),
+                        }
+                        .into()
+                    },
+                );
+            }
             // A session-catalog table has no replace-by-condition write (Spark: the table lacks the capability).
-            let operation = if c.replace_where.is_some() {
-                "INSERT INTO ... REPLACE WHERE"
-            } else {
-                "INSERT INTO ... REPLACE ON/USING"
-            };
-            return Err(table_operation(&name, operation));
+            return Err(table_operation(&name, "INSERT INTO ... REPLACE ON/USING"));
         }
         let statics = match &c.partition {
             None => Vec::new(),
