@@ -121,6 +121,9 @@ fuzz_target!(|data: &[u8]| {
                 if let Ok(mut s) = opened {
                     while let Ok(Some(_)) = s.next_batch().await {}
                 }
+                // Checked before the unregister, which subtracts any outstanding grants from the
+                // pool's accounting and would hide a leaked reservation from the final assert.
+                assert_eq!(h.pool.reserved(), 0, "a scan held memory after it ended");
                 // A `Reservation` returns its bytes on drop but does not leave the pool:
                 // without this the pool's consumer table grows by one entry per scan,
                 // forever (weekly fuzz run 42456135258: 934 MB to 2,058 MB over 420K runs).
