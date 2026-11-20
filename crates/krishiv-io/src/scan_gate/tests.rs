@@ -223,12 +223,19 @@ fn the_budget_makes_a_stream_wait_for_another_streams_unit() {
         a.next_batch().await.unwrap().unwrap();
         assert_eq!((gate.active(), gate.bytes()), (1, shares[0]));
         let mut b = env.stream(&file, &req, &pool, &gate).await;
-        let waiting =
-            tokio::spawn(async move { b.next_batch().await.unwrap().unwrap().num_rows() });
+        assert_eq!(b.gate_wait_ns(), 0);
+        let waiting = tokio::spawn(async move {
+            let rows = b.next_batch().await.unwrap().unwrap().num_rows();
+            (rows, b.gate_wait_ns())
+        });
         settle().await;
         assert!(!waiting.is_finished(), "b waits for a's unit");
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         drop(a);
-        assert_eq!(waiting.await.unwrap(), 4_096);
+        let (rows, waited) = waiting.await.unwrap();
+        assert_eq!(rows, 4_096);
+        // The wait is reported (the scan's `decode_gate_wait_ns`).
+        assert!(waited >= 1_000_000_000, "b waited {waited} ns");
         assert_eq!(gate.overcommitted(), 0);
     });
 }
