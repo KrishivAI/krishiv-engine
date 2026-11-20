@@ -60,6 +60,10 @@ def actual_rows(df, cols: list[str]) -> list[tuple[str, ...]]:
     return sorted(tuple(norm(v) for v in r) for r in picked.collect())
 
 
+# The reader-feature gate (crates/krishiv-connectors-delta/src/features.rs).
+REFUSAL_CLASS = "DELTA_UNSUPPORTED_FEATURES_FOR_READ"
+
+
 def check_table(spark, name: str) -> dict:
     from pyspark.errors import PySparkException
 
@@ -80,7 +84,16 @@ def check_table(spark, name: str) -> dict:
                     "detail": "read succeeded but Krishiv refuses this table",
                 }
             except PySparkException as e:
-                out[k] = {"status": "pass", "detail": str(e).splitlines()[0][:200]}
+                cls = e.getCondition() if hasattr(e, "getCondition") else None
+                msg = str(e)
+                if cls == REFUSAL_CLASS or REFUSAL_CLASS in msg:
+                    out[k] = {"status": "pass", "detail": msg.splitlines()[0][:200]}
+                else:
+                    out[k] = {
+                        "status": "fail",
+                        "detail": f"refused with {cls or type(e).__name__}, expected {REFUSAL_CLASS}: "
+                        + (msg.splitlines()[0][:150] if msg else ""),
+                    }
         return out
     cols, want = expected_rows(expected)
     out = {}

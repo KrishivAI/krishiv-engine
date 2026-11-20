@@ -37,7 +37,15 @@ if [ -z "$server_bin" ] && [ -z "$remote" ]; then
 fi
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
-rm -f "$out"/go.json "$out"/scala.json
+if [ -n "$tpcds_data" ]; then tpcds_data="$(cd "$tpcds_data" && pwd)"; fi
+# Reports of earlier runs must not pass for this run's: clear those of the selected clients.
+for c in ${clients//,/ }; do
+  case "$c" in
+    go|scala) rm -f "$out/$c.json" ;;
+    delta) rm -f "$out"/delta-read.json "$out"/delta-read-summary.md ;;
+    tpcds) rm -f "$out"/tpcds.json "$out"/tpcds-summary.md ;;
+  esac
+done
 
 server_pid=""
 cleanup() {
