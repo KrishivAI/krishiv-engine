@@ -7,6 +7,8 @@
 
 use krishiv_common::error::KrishivError;
 
+mod ops;
+
 use crate::catalog::{GLOBAL_NAMESPACE, global_key};
 use crate::session::Session;
 use crate::store::{CatalogStore, CatalogTable};

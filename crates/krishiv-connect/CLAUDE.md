@@ -17,6 +17,7 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
 - `src/translate/udf.rs` Python UDFs (P3-T014): `python_udf` reads a `CommonInlineUserDefinedFunction` into a `PythonUdf`
   (scalar eval types 100/101/200/250; Scala/Java 56K00), `UdfHost` is the server's hook naming an inline call
   (`translate_relation_with`; without a host inline UDFs are refused), `translate_command` reads `register_function`
+- `src/translate/catalog.rs` (P3-T082, PR-46) `catalog_call`: a `Relation.catalog` message (36 operations) as a `CatalogCall` (Spark's overload by `db_name`; `createTable` / `createExternalTable` as `CreateTable`: the `path` becomes the last option, a struct schema becomes a DDL column list, a non-struct is `ASSERTION_FAILURE`); the translator records it as `LocalRequest::Catalog` and the host answers it (`krishiv-connect-server` `execute/catalog_call.rs`); `translate/catalog/tests.rs`
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
 - `src/artifact.rs` `parse_artifact_name`: `AddArtifacts` names (prefixes, segments, fragments), fuzzed by
   `connect_artifact_name` in `fuzz/`
