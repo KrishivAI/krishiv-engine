@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 20 done, 17 partial, 21 missing, 4 out of scope.
+62 arms: 19 done, 18 partial, 21 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -28,7 +28,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 14 | deduplicate | partial | a column subset and within_watermark | Distinct (all columns); a subset is Aggregate with first per non-key column and needs the input columns (analyzer node); within_watermark → P4 | P3-T012 | 3 |
 | 15 | range | done |  | Range | P2-T091a | 0 |
 | 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
-| 17 | repartition | partial | the partition count (spark_partition_id, getNumPartitions) | Hint(REPARTITION n \| COALESCE n): rows pass through unchanged; the count is not applied to the plan | P3-T012 | 3 |
+| 17 | repartition | partial | the partition count (spark_partition_id, getNumPartitions) | Hint(REPARTITION n \| COALESCE n): rows pass through unchanged; the count is not applied to the plan; each call adds the warning "Hint REPARTITION(n) has no effect in a single-node plan." to the plan's warnings (Spark logs nothing; whether a client sees them is not checked) | P3-T012 | 3 |
 | 18 | to_df | done |  | ColumnNames(ToDf): the analyzer renames by position (count mismatch is the derived-table alias error) | P3-T012 | 4 |
 | 19 | with_columns_renamed | partial | rename_columns_map when its result depends on entry order (wire order is lost on decode) | ColumnNames(Rename): the pairs in turn, case rule of the session, unknown names ignored | P3-T012 | 4 |
 | 20 | show_string | missing |  | server-side: execute, then format as Spark's Dataset.showString (truncate, vertical); returns a one-row, one-column relation | P3-T012 | 4 |
@@ -60,17 +60,17 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 46 | relation_changes | missing |  | CDC read (DataFrameReader.changes()): Delta change data feed through table_changes; the Iceberg changelog and is_streaming come later | P3-T021b | 8 |
 | 47 | nearest_by_join | missing |  | top-k per left row by a ranking expression: new NearestByJoin, planned on T077's top-k (num_results 1–100,000) | P3-T077 | 8 |
 | 48 | zip | missing |  | new Zip (columns of two inputs side by side, by row position) | P3-T012 | 3 |
-| 90 | fill_na | done |  | ColumnNames(FillNa): the analyzer projects coalesce / nanvl of the cast value in the columns the value's type reaches; NA_FILL_VALUES_EMPTY, NA_FILL_VALUES_LENGTH_MISMATCH | P3-T012 | 5 |
-| 91 | drop_na | done |  | ColumnNames(DropNa): the analyzer filters on the count of values that are neither NULL nor NaN (min_non_nulls, else every column of the subset) | P3-T012 | 5 |
-| 92 | replace | done |  | ColumnNames(Replace): the analyzer projects CASE WHEN col = old THEN new per column the first old value's kind reaches (a Spark 4.0 run); a NULL or mixed-type old value is refused | P3-T012 | 5 |
+| 90 | fill_na | done |  | ColumnNames(FillNa): the analyzer projects coalesce / nanvl of the cast value in the columns the value's type reaches; NA_FILL_VALUES_EMPTY, NA_FILL_VALUES_LENGTH_MISMATCH; several values are Spark's fillMap (every named column, the last value of a repeated name); a BYTE, SHORT, INT, FLOAT or DECIMAL value is accepted where Spark's one-value fill takes only Long, Double, String, Boolean | P3-T012 | 5 |
+| 91 | drop_na | done |  | ColumnNames(DropNa): the analyzer filters on the count of values that are neither NULL nor NaN (min_non_nulls, else every column of the subset); a nested field in the subset (`s.a`) is UNRESOLVED_COLUMN where Spark resolves it | P3-T012 | 5 |
+| 92 | replace | done |  | ColumnNames(Replace): the analyzer projects CASE WHEN col = old THEN new per column the first old value's kind reaches (a Spark 4.0 run); a NULL or mixed-type old value is refused; the last pair of a repeated old value wins; named columns are resolved even with no pairs | P3-T012 | 5 |
 | 100 | summary | missing |  | lowering as Spark's StatFunctions.summary: Aggregate then a stack to rows | P3-T012 | 5 |
 | 101 | crosstab | missing |  | lowering: Aggregate count + Pivot | P3-T012 | 5 |
 | 102 | describe | missing |  | as summary with the fixed statistic list | P3-T012 | 5 |
-| 103 | cov | done |  | Aggregate of coalesce(covar_samp over NULL-as-0.0 doubles, 0.0), as StatFunctions.calculateCov (a Spark 4.0 run); recorded difference: a non-numeric column is not refused | P3-T012 | 5 |
-| 104 | corr | partial | method other than pearson | Aggregate of coalesce(corr over NULL-as-0.0 doubles, NaN); recorded differences: a non-numeric column is not refused, zero variance is NaN (Spark 4.0 ANSI: DIVIDE_BY_ZERO) | P3-T012 | 5 |
+| 103 | cov | partial | a non-numeric column is answered when its values cast to double (Spark refuses by type; a value that is not a number is an error here, never 0.0) | Aggregate of coalesce(covar_samp over NULL-as-0.0 doubles, 0.0), as StatFunctions.calculateCov (a Spark 4.0 run) | P3-T012 | 5 |
+| 104 | corr | partial | method other than pearson; a non-numeric column is answered when its values cast to double (Spark refuses by type; a value that is not a number is an error here, never 0.0) | Aggregate of coalesce(corr over NULL-as-0.0 doubles, NaN); recorded difference: zero variance is NaN (Spark 4.0 ANSI: DIVIDE_BY_ZERO) | P3-T012 | 5 |
 | 105 | approx_quantile | missing |  | Aggregate approx_percentile with relative error | P3-T012 | 5 |
 | 106 | freq_items | missing |  | new aggregate (Spark's frequent-items sketch, support) | P3-T012 | 5 |
-| 107 | sample_by | done |  | Filter(rand(seed) < CASE WHEN col = stratum THEN fraction ... ELSE 0.0 END), the draw made for every row as Spark does; recorded difference: strata compare with SQL = (numeric coercion), not boxed equality | P3-T012 | 5 |
+| 107 | sample_by | done |  | Filter(rand(seed) < CASE WHEN col = stratum THEN fraction ... ELSE 0.0 END), the draw made for every row as Spark does; a repeated stratum keeps its last fraction; strata compare with SQL = (numeric coercion), whether Spark's boxed lookup differs for an Int stratum on a Long column is not verified against a Spark run | P3-T012 | 5 |
 | 200 | catalog | done |  | a call of the session's `spark.catalog` run by the host while the plan is prepared (`LocalRequest::Catalog`), its rows the local relation the plan reads; `execute/catalog_call.rs`, tests/catalog.rs | P3-T082 | 9 |
 | 300 | ml_relation | out of scope |  | machine learning is out of scope |  | 0 |
 | 998 | extension | partial | every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); Echo is a one-row Project over OneRowRelation | P3-T015 | 10 |

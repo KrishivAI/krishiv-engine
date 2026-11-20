@@ -1339,7 +1339,10 @@ fn repartition_and_coalesce_plan_as_their_hints() {
             shuffle,
         })))
     };
-    let (translated, parsed) = plans(&rel(None), "SELECT /*+ REPARTITION(4) */ * FROM t");
+    // `shuffle` is `optional bool`, default false: Spark reads it with `getShuffle`, so unset is `coalesce`.
+    let (translated, parsed) = plans(&rel(None), "SELECT /*+ COALESCE(4) */ * FROM t");
+    assert_eq!(translated, parsed);
+    let (translated, parsed) = plans(&rel(Some(true)), "SELECT /*+ REPARTITION(4) */ * FROM t");
     assert_eq!(translated, parsed);
     let (translated, parsed) = plans(&rel(Some(false)), "SELECT /*+ COALESCE(4) */ * FROM t");
     assert_eq!(translated, parsed);

@@ -171,7 +171,8 @@ impl Resolver<'_> {
             }
             let at = cols
                 .iter()
-                .position(|n| crate::analyzer::bind::same(name, n, cs))?;
+                // A name given twice takes the last value (Spark builds a `Map` from the pairs).
+                .rposition(|n| crate::analyzer::bind::same(name, n, cs))?;
             if literals.len() == 1 {
                 literals.first()
             } else {
@@ -257,6 +258,8 @@ impl Resolver<'_> {
                 _ => return Err(unsupported_replace(p.origin)),
             }
         }
+        // Spark resolves the named columns before it looks at the pairs.
+        self.check_fill_columns(p, &c, cols)?;
         let Some((kind, _, _)) = literals.first() else {
             return Ok(c);
         };
@@ -268,7 +271,6 @@ impl Resolver<'_> {
                 return Err(unsupported_replace(p.origin));
             }
         }
-        self.check_fill_columns(p, &c, cols)?;
         let mut changed = false;
         let mut exprs = Vec::with_capacity(c.out.len());
         for a in c.out.iter() {
@@ -284,7 +286,8 @@ impl Resolver<'_> {
             changed = true;
             let ty = a.col.data_type.clone();
             let mut args = Vec::with_capacity(pairs.len() + 1);
-            for pair in literals.chunks(2) {
+            // `CASE` takes the first match: backwards, the last pair of a repeated old value wins (Spark's `Map`).
+            for pair in literals.chunks(2).rev() {
                 let [(_, old, _), (_, new, _)] = pair else {
                     return Err(unsupported_replace(p.origin));
                 };

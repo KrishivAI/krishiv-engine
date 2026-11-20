@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
-    ALIAS_PART_SEP, Builtin, ColumnNamesOp, Expr, ExprNode, Grouping, JoinCondition, JoinKind,
-    Literal, LogicalPlan, Origin, PlanId, PlanNode, ReadSource, SampleBounds, SetOperation,
-    SqlArgs, UnpivotColumnSet,
+    ALIAS_PART_SEP, Builtin, CastMode, ColumnNamesOp, Expr, ExprNode, Grouping, JoinCondition,
+    JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode, ReadSource, SampleBounds,
+    SetOperation, SqlArgs, UnpivotColumnSet,
 };
 
 use super::errors::{
@@ -146,7 +146,8 @@ impl Translator<'_> {
             RelType::FillNa(n) => self.na_fill(n)?,
             RelType::Replace(n) => self.na_replace(n)?,
             RelType::DropNa(n) => {
-                let min = n.min_non_nulls.map(|m| u32::try_from(m).unwrap_or(0));
+                // A count of 0 or less keeps every row, as `AtLeastNNonNulls(0 or less)` does.
+                let min = n.min_non_nulls.map(|m| m.max(0).unsigned_abs());
                 PlanNode::ColumnNames {
                     input: self.input("NaDrop", n.input.as_deref())?,
                     op: ColumnNamesOp::DropNa {
@@ -158,11 +159,12 @@ impl Translator<'_> {
             RelType::Repartition(r) => PlanNode::Hint {
                 input: self.input("Repartition", r.input.as_deref())?,
                 // Spark's own hint forms: `repartition(n)` is `REPARTITION(n)`, and
-                // `coalesce(n)` (shuffle = false) is `COALESCE(n)`. Rows pass through.
-                name: if r.shuffle == Some(false) {
-                    "COALESCE"
-                } else {
+                // `coalesce(n)` (shuffle false, or unset: the field is `optional bool`, default false,
+                // read with `getShuffle`) is `COALESCE(n)`. Rows pass through.
+                name: if r.shuffle.unwrap_or(false) {
                     "REPARTITION"
+                } else {
+                    "COALESCE"
                 }
                 .to_owned(),
                 params: vec![Arc::new(Expr::literal(Literal::Integer(r.num_partitions)))],
@@ -237,9 +239,10 @@ impl Translator<'_> {
     /// `rand(seed) < fractions.getOrElse(stratum, 0.0)`, drawing the random number for every row.
     /// Lowered to `Filter(rand(seed) < CASE WHEN col = k1 THEN f1 ... ELSE 0.0 END)` so the draw
     /// is not skipped for unmatched strata. A NULL stratum matches nothing (fraction 0.0). A
-    /// fraction outside [0, 1] is refused (Spark's classless `require`). Recorded difference: the
-    /// stratum is compared with SQL `=` (numeric coercion), where Spark compares boxed values, so
-    /// an Int stratum never matches a Long column there.
+    /// fraction outside [0, 1] is refused (Spark's classless `require`). A stratum listed twice
+    /// keeps the last fraction (Spark's `Map`). The stratum is compared with SQL `=` (numeric
+    /// coercion); whether Spark's boxed lookup matches an Int stratum to a Long column the same
+    /// way is not verified against a real Spark run.
     fn sample_by(&mut self, s: &pb::StatSampleBy) -> Result<PlanNode> {
         let input = self.input("StatSampleBy", s.input.as_deref())?;
         let column = self.required_expression(s.col.as_ref())?;
@@ -250,7 +253,8 @@ impl Translator<'_> {
             return Err(assertion("Fractions must be in [0, 1]"));
         }
         let mut branches: Vec<Expr> = Vec::new();
-        for f in &s.fractions {
+        // `CASE` takes the first match, so walking the pairs backwards keeps the last of a repeated stratum.
+        for f in s.fractions.iter().rev() {
             let stratum = f.stratum.as_ref().ok_or_else(expression_not_set)?;
             let key = self.literal_expression(stratum)?;
             branches.push(Expr::function(
@@ -274,9 +278,11 @@ impl Translator<'_> {
     /// `StatCov` and `StatCorr`: Spark's `StatFunctions.calculateCov` / `pearsonCorrelation`, which
     /// read each NULL as 0.0 (a Spark 4.0 run: `(1,2),(NULL,3),(3,7),(4,NULL)` gives cov -1/3), and
     /// answer one never-NULL double row: `cov` 0.0 and `corr` NaN below two rows. Lowered to
-    /// `coalesce(covar_samp | corr (coalesce(cast(c as double), 0.0)), 0.0 | NaN)`. Recorded
-    /// differences: a non-numeric column is not refused (the translator sees no types), and a
-    /// zero-variance `corr` is NaN where Spark 4.0 under ANSI raises DIVIDE_BY_ZERO.
+    /// `coalesce(covar_samp | corr (coalesce(cast(c as double), 0.0)), 0.0 | NaN)`. The cast is
+    /// ANSI, so a value that is not a number is an error, never 0.0. Recorded differences: Spark
+    /// refuses every non-numeric column by type (`require(NumericType)`), the translator sees no
+    /// types, so a STRING column of numbers is answered here; and a zero-variance `corr` is NaN
+    /// where Spark 4.0 under ANSI raises DIVIDE_BY_ZERO.
     fn stat_pair(
         &mut self,
         message: &str,
@@ -291,7 +297,11 @@ impl Translator<'_> {
             Ok(Expr::function(
                 "coalesce",
                 vec![
-                    Expr::column(parse_attribute_name(c)?).cast(krishiv_types::DataType::Double),
+                    Expr::new(ExprNode::Cast {
+                        expr: Arc::new(Expr::column(parse_attribute_name(c)?)),
+                        to: krishiv_types::DataType::Double,
+                        mode: CastMode::Ansi,
+                    }),
                     Expr::literal(Literal::Double(0.0)),
                 ],
             ))
