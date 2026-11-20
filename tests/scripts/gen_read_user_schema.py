@@ -84,6 +84,9 @@ def layout(spark, root):
         ("pdtail", "2024-01-02 xyz"),
         ("pmonth", "2024-1"),
         ("ptsz", "2024-01-02T03%3A04%3A05Z"),
+        # Escaped otherwise than Spark escapes (a space as `%20`): Spark casts a date from the stored text.
+        ("pd20", "2024-01-02%20xyz"),
+        ("pts20", "2024-01-02%2003%3A04%3A05"),
     ):
         spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/tmp")
         os.rename(f"{root}/{tree}/p/tmp", f"{root}/{tree}/p/k={k}")
@@ -600,6 +603,13 @@ def cases(spark, root):
         with_micros("parquet", "pyear/p", "v STRING, k TIMESTAMP", timeZone="+05:30"),
         la,
     )
+    for tree, values in (("pd20", "k=2024-01-02%20xyz"), ("pts20", "k=2024-01-02%2003%3A04%3A05")):
+        for ty in ("DATE", "TIMESTAMP", "TIMESTAMP_NTZ"):
+            add(
+                f"typed parquet {values} as {ty}",
+                f"parquet {tree}/p schema v STRING, k {ty}",
+                read("parquet", f"{tree}/p", f"v STRING, k {ty}"),
+            )
     off = {"spark.sql.ansi.enabled": "false"}
     for tree, values, ty in (
         ("pabc", "k=abc", "DATE"),
@@ -609,6 +619,8 @@ def cases(spark, root):
         ("pdtail", "k=2024-01-02 xyz", "TIMESTAMP"),
         ("pyear", "k=2024", "TIMESTAMP"),
         ("pabc", "k=abc", "INT"),
+        ("pd20", "k=2024-01-02%20xyz", "DATE"),
+        ("pts20", "k=2024-01-02%2003%3A04%3A05", "TIMESTAMP_NTZ"),
     ):
         add(
             f"typed parquet {values} as {ty}, ansi=false",

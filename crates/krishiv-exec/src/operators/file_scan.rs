@@ -1395,11 +1395,13 @@ impl FileScanSource {
                 .map(|(field, v)| krishiv_io::scalar_column(field, v, 1))
                 .collect();
         }
-        let texts = krishiv_io::file_values(&file.path, self.partition_fields.len())?;
+        let texts = krishiv_io::file_partition_values(&file.path, self.partition_fields.len())?;
         self.partition_fields
             .iter()
             .zip(&texts)
-            .map(|(field, text)| krishiv_io::constant_column(field, text.as_deref(), 1))
+            .map(|(field, (text, stored))| {
+                krishiv_io::constant_column_stored(field, text.as_deref(), stored.as_deref(), 1)
+            })
             .collect()
     }
 

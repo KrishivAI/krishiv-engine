@@ -126,11 +126,14 @@ pub fn user_value_mode(field: &Field) -> Option<bool> {
 
 /// `value` (`None` for the default partition) read as `field`'s type, as
 /// Spark reads a partition value as a user type; `exact_scale_decimals` for a
-/// vectorized reader.
+/// vectorized reader. `stored` is the value's directory text as stored,
+/// before Hive's escaping is undone, which Spark casts a date from; `None`
+/// takes Spark's own escaping of `value` (`escape_partition_value`).
 #[must_use]
 pub fn user_partition_value(
     field: &Field,
     value: Option<&str>,
+    stored: Option<&str>,
     exact_scale_decimals: bool,
 ) -> UserPartitionValue {
     use UserPartitionValue as V;
@@ -179,14 +182,24 @@ pub fn user_partition_value(
                 V::Invalid
             }
         }
-        DataType::Date32 | DataType::Timestamp(..) => datetime(field, v),
+        DataType::Date32 | DataType::Timestamp(..) => {
+            let escaped;
+            let raw = match stored {
+                Some(raw) => raw,
+                None => {
+                    escaped = super::escape_partition_value(v);
+                    &escaped
+                }
+            };
+            datetime(field, v, raw)
+        }
         _ => V::Unsupported,
     }
 }
 
 /// A date or timestamp partition value, as Spark 4.2.0's
-/// `castPartValueToDesiredType` casts it.
-fn datetime(field: &Field, v: &str) -> UserPartitionValue {
+/// `castPartValueToDesiredType` casts it: `v` unescaped, `raw` as stored.
+fn datetime(field: &Field, v: &str, raw: &str) -> UserPartitionValue {
     use UserPartitionValue as V;
     let metadata = field.metadata();
     let ansi = metadata
@@ -203,11 +216,7 @@ fn datetime(field: &Field, v: &str) -> UserPartitionValue {
     // Not under ANSI, the cast gives NULL and nothing is raised.
     let unread = if ansi { V::Invalid } else { V::Null };
     match field.data_type() {
-        DataType::Date32 => match raw_date(v) {
-            Raw::Date(d) => V::Date(d),
-            Raw::None => unread,
-            Raw::Differs => V::Unsupported,
-        },
+        DataType::Date32 => raw_date(raw).map_or(unread, V::Date),
         DataType::Timestamp(TimeUnit::Microsecond, tz) => {
             match cast_one(v, field.data_type(), &zone) {
                 Some(us) => V::Timestamp(us),
@@ -215,37 +224,19 @@ fn datetime(field: &Field, v: &str) -> UserPartitionValue {
                 // `TIMESTAMP`: Spark's fallback casts the date to a zoned
                 // timestamp without a zone, which always raises.
                 None if tz.is_some() => V::Invalid,
-                None => match raw_date(v) {
-                    Raw::Date(d) => V::Timestamp(i64::from(d) * MICROS_PER_DAY),
-                    Raw::None => V::Invalid,
-                    Raw::Differs => V::Unsupported,
-                },
+                None => raw_date(raw)
+                    .map_or(V::Invalid, |d| V::Timestamp(i64::from(d) * MICROS_PER_DAY)),
             }
         }
         _ => V::Unsupported,
     }
 }
 
-/// `CAST(raw AS DATE)` of a value, where `raw` is the directory's escaped
-/// text.
-enum Raw {
-    Date(i32),
-    None,
-    /// The escaped and unescaped forms cast differently: the escaped text on
-    /// disk is not known here.
-    Differs,
-}
-
-fn raw_date(v: &str) -> Raw {
-    let utc = FixedOffset(0);
-    let plain = cast_one(v, &DataType::Date32, &utc);
-    let escaped = super::escape_partition_value(v);
-    if escaped != v && cast_one(&escaped, &DataType::Date32, &utc) != plain {
-        return Raw::Differs;
-    }
-    plain.map_or(Raw::None, |d| {
-        i32::try_from(d).map_or(Raw::Differs, Raw::Date)
-    })
+/// `CAST(raw AS DATE)`, where `raw` is the directory's text as stored (Spark
+/// casts it before unescaping: `2024-01-02%20xyz` is no date, though
+/// `2024-01-02 xyz` is).
+fn raw_date(raw: &str) -> Option<i32> {
+    cast_one(raw, &DataType::Date32, &FixedOffset(0)).and_then(|d| i32::try_from(d).ok())
 }
 
 /// The legacy cast of the string `v` to `to` (`Date32` or `Timestamp(µs)`)
@@ -382,7 +373,7 @@ mod tests {
     use super::*;
 
     fn read(t: DataType, v: &str, unscaled: bool) -> UserPartitionValue {
-        user_partition_value(&Field::new("k", t, true), Some(v), unscaled)
+        user_partition_value(&Field::new("k", t, true), Some(v), None, unscaled)
     }
 
     fn text(s: &str) -> UserPartitionValue {
@@ -415,7 +406,7 @@ mod tests {
         let list = DataType::List(std::sync::Arc::new(Field::new("e", DataType::Int32, true)));
         assert_eq!(read(list, "1", false), Unsupported);
         assert_eq!(
-            user_partition_value(&Field::new("k", DataType::Int32, true), None, false),
+            user_partition_value(&Field::new("k", DataType::Int32, true), None, None, false),
             UserPartitionValue::Null
         );
     }
@@ -446,7 +437,11 @@ mod tests {
     }
 
     fn at(field: &Field, v: &str) -> UserPartitionValue {
-        user_partition_value(field, Some(v), true)
+        user_partition_value(field, Some(v), None, true)
+    }
+
+    fn stored(field: &Field, v: &str, raw: &str) -> UserPartitionValue {
+        user_partition_value(field, Some(v), Some(raw), true)
     }
 
     const JAN_1_2024: i32 = 19_723;
@@ -469,9 +464,17 @@ mod tests {
         let legacy = typed(DataType::Date32, "UTC", false);
         assert_eq!(at(&legacy, "abc"), Null);
         assert_eq!(at(&legacy, "2024"), Date(JAN_1_2024));
-        // A control character Spark escapes on disk: `2024%09` does not
-        // read, `2024\t` would.
-        assert_eq!(at(&date, "2024\t"), Unsupported);
+        // A date is cast from the stored text: Spark stores `2024\t` as
+        // `2024%09`, which is no date.
+        assert_eq!(at(&date, "2024\t"), Invalid);
+        // Escaped otherwise than Spark escapes (a space as `%20`): no date
+        // either, though the unescaped `2024-01-02 xyz` is one (Spark 4.2.0).
+        assert_eq!(stored(&date, "2024-01-02 xyz", "2024-01-02%20xyz"), Invalid);
+        assert_eq!(stored(&legacy, "2024-01-02 xyz", "2024-01-02%20xyz"), Null);
+        assert_eq!(
+            stored(&date, "2024-01-02 xyz", "2024-01-02 xyz"),
+            Date(JAN_1_2024 + 1)
+        );
         // An unknown zone id.
         assert_eq!(
             at(&typed(DataType::Date32, "Nowhere/x", true), "2024"),
@@ -515,6 +518,13 @@ mod tests {
         assert_eq!(at(&n, "2024-01-02 xyz"), Timestamp(jan1 + DAY));
         assert_eq!(at(&n, "abc"), Invalid);
         assert_eq!(at(&typed(ntz, "UTC", false), "2024-01-02 xyz"), Null);
+        // A timestamp is cast unescaped; the NTZ fallback's date from the
+        // stored text (Spark 4.2.0: `k=2024-01-02%20xyz` is no NTZ value).
+        assert_eq!(
+            stored(&utc, "2024-01-02 03:04:05", "2024-01-02%2003%3A04%3A05"),
+            Timestamp(jan1 + DAY + 11_045_000_000)
+        );
+        assert_eq!(stored(&n, "2024-01-02 xyz", "2024-01-02%20xyz"), Invalid);
         // Other timestamp units are not partition types.
         let ms = typed(
             DataType::Timestamp(TimeUnit::Millisecond, None),

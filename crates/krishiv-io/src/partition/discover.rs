@@ -365,6 +365,23 @@ fn is_timestamp(b: &[u8]) -> bool {
 /// `INTERNAL_ERROR` when the path has fewer directories, or one that is
 /// not `name=value`: listing checked both.
 pub fn file_values(path: &Path, columns: usize) -> Result<Vec<Option<String>>> {
+    Ok(file_partition_values(path, columns)?
+        .into_iter()
+        .map(|(v, _)| v)
+        .collect())
+}
+
+/// The values of a file as [`file_values`] gives them, each with its text as
+/// stored (the directory name after `=`, before Hive's escaping is undone;
+/// `None` for the default partition). Spark casts a date from the stored
+/// text (`castPartValueToDesiredType`).
+///
+/// # Errors
+/// As [`file_values`].
+pub fn file_partition_values(
+    path: &Path,
+    columns: usize,
+) -> Result<Vec<(Option<String>, Option<String>)>> {
     let parts: Vec<_> = path.parts().collect();
     let dirs = parts
         .len()
@@ -374,12 +391,14 @@ pub fn file_values(path: &Path, columns: usize) -> Result<Vec<Option<String>>> {
         .ok_or_else(|| internal(format!("{path} has fewer than {columns} directories")))?;
     dirs.iter()
         .map(|d| {
-            parse_segment(d.as_ref()).map(|(_, v)| v).ok_or_else(|| {
-                internal(format!(
-                    "{path}: {} is not a partition directory",
-                    d.as_ref()
-                ))
-            })
+            let dir = d.as_ref();
+            let (_, value) = parse_segment(dir)
+                .ok_or_else(|| internal(format!("{path}: {dir} is not a partition directory")))?;
+            let stored = value
+                .is_some()
+                .then(|| dir.split_once('=').map(|(_, raw)| raw.to_owned()))
+                .flatten();
+            Ok((value, stored))
         })
         .collect()
 }
@@ -391,6 +410,22 @@ pub fn file_values(path: &Path, columns: usize) -> Result<Vec<Option<String>>> {
 /// `INTERNAL_ERROR` when the value does not read as the type: discovery
 /// inferred the type from the same values.
 pub fn constant_column(field: &Field, value: Option<&str>, rows: usize) -> Result<ArrayRef> {
+    let stored = value.map(super::escape_partition_value);
+    constant_column_stored(field, value, stored.as_deref(), rows)
+}
+
+/// [`constant_column`] of a value whose directory text as stored is
+/// `stored` (see [`file_partition_values`]), which a user-typed date is cast
+/// from.
+///
+/// # Errors
+/// As [`constant_column`].
+pub fn constant_column_stored(
+    field: &Field,
+    value: Option<&str>,
+    stored: Option<&str>,
+    rows: usize,
+) -> Result<ArrayRef> {
     // A column a user schema typed reads its values as Spark converts them
     // (`user_value`): a value that does not read is NULL here, as under
     // `validatePartitionColumns=false` (listing refused it otherwise).
@@ -399,7 +434,7 @@ pub fn constant_column(field: &Field, value: Option<&str>, rows: usize) -> Resul
         None => value,
         Some(unscaled) => {
             use super::user_value::UserPartitionValue as V;
-            match super::user_value::user_partition_value(field, value, unscaled) {
+            match super::user_value::user_partition_value(field, value, stored, unscaled) {
                 V::Null | V::Invalid => None,
                 V::Text(t) => {
                     converted = t;

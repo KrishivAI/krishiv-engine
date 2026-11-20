@@ -576,7 +576,17 @@ impl FileReads {
                 zone: &partition_zone,
                 ansi: self.ansi(),
             };
-            let (schema, partition_columns, data) = user_schema_columns(user, &discovered, rules)?;
+            // Each file's partition directory texts as stored, in `discovered`'s order.
+            let stored = files
+                .iter()
+                .zip(&discovered)
+                .map(|(f, (_, segs))| {
+                    krishiv_io::file_partition_values(&f.path, segs.len())
+                        .map(|v| v.into_iter().map(|(_, raw)| raw).collect())
+                })
+                .collect::<std::result::Result<Vec<Vec<Option<String>>>, _>>()?;
+            let (schema, partition_columns, data) =
+                user_schema_columns(user, &discovered, &stored, rules)?;
             check_user_schema(format.name(), &data)?;
             return Ok(FileListing {
                 format,

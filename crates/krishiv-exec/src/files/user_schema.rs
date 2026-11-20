@@ -85,6 +85,7 @@ pub(super) struct UserPartitions<'a> {
 pub(super) fn user_schema_columns<'a>(
     schema: &'a StructType,
     discovered: &[(String, Vec<Segment>)],
+    stored: &[Vec<Option<String>>],
     rules: UserPartitions<'_>,
 ) -> Result<(
     SchemaRef,
@@ -131,19 +132,27 @@ pub(super) fn user_schema_columns<'a>(
             rules.zone,
             rules.ansi,
         );
-        let mut checked: HashSet<&str> = HashSet::new();
-        for (_, segs) in discovered {
+        let mut checked: HashSet<(&str, Option<&str>)> = HashSet::new();
+        for (j, (_, segs)) in discovered.iter().enumerate() {
             let value = segs[i].1.as_deref();
-            if !value.is_none_or(|v| checked.insert(v)) {
+            // The directory text as stored (Spark names it in the error and
+            // casts a date from it); none known: Spark's own escaping.
+            let raw = stored
+                .get(j)
+                .and_then(|s| s.get(i))
+                .and_then(Option::as_deref);
+            if !value.is_none_or(|v| checked.insert((v, raw))) {
                 continue;
             }
+            let escaped = value.map(krishiv_io::escape_partition_value);
+            let shown = raw.or(escaped.as_deref()).unwrap_or_default();
             use krishiv_io::UserPartitionValue as V;
-            match krishiv_io::user_partition_value(&field, value, rules.exact_scale_decimals) {
+            match krishiv_io::user_partition_value(&field, value, raw, rules.exact_scale_decimals) {
                 V::Null | V::Text(_) | V::Date(_) | V::Timestamp(_) => {}
                 V::Invalid if !rules.validate => {}
                 V::Invalid => {
                     return Err(InvalidPartitionValue {
-                        value: format!("'{}'", value.unwrap_or_default()),
+                        value: format!("'{shown}'"),
                         data_type: format!("\"{}\"", data_type.sql()),
                         column_name: format!("`{}`", named.name().replace('`', "``")),
                     }
@@ -151,8 +160,7 @@ pub(super) fn user_schema_columns<'a>(
                 }
                 V::Unsupported => {
                     return Err(unsupported(format!(
-                        "the partition value '{}' as {} (column {})",
-                        value.unwrap_or_default(),
+                        "the partition value '{shown}' as {} (column {})",
                         data_type.sql(),
                         named.name()
                     )));
@@ -233,7 +241,7 @@ mod tests {
     fn a_user_schema_puts_partition_columns_last_typed_as_it_names_them() {
         let named = ddl(&[("K", DataType::Long, false), ("v", DataType::String, false)]);
         let (schema, parts, data) =
-            user_schema_columns(&named, &discovered(&["1", "2"]), rules(false, true)).unwrap();
+            user_schema_columns(&named, &discovered(&["1", "2"]), &[], rules(false, true)).unwrap();
         // Moved last, the schema's name and type, nullable.
         assert_eq!(
             shape(&schema),
@@ -248,7 +256,7 @@ mod tests {
         assert_eq!(krishiv_io::user_value_mode(&parts[0]), Some(false));
         // Case-sensitive, `K` is no partition column: `k` is appended, inferred.
         let (schema, _, _) =
-            user_schema_columns(&named, &discovered(&["1", "2"]), rules(true, true)).unwrap();
+            user_schema_columns(&named, &discovered(&["1", "2"]), &[], rules(true, true)).unwrap();
         assert_eq!(
             shape(&schema),
             [
@@ -260,7 +268,7 @@ mod tests {
         // A value that does not read is Spark's error, or NULL without validation.
         let k_int = ddl(&[("k", DataType::Integer, true)]);
         for bad in ["abc", "1.5"] {
-            let e = user_schema_columns(&k_int, &discovered(&["1", bad]), rules(false, true))
+            let e = user_schema_columns(&k_int, &discovered(&["1", bad]), &[], rules(false, true))
                 .unwrap_err();
             assert_eq!(e.error_class().name(), "INVALID_PARTITION_VALUE");
             assert_eq!(
@@ -275,13 +283,15 @@ mod tests {
                 ]
             );
             assert!(
-                user_schema_columns(&k_int, &discovered(&["1", bad]), rules(false, false)).is_ok()
+                user_schema_columns(&k_int, &discovered(&["1", bad]), &[], rules(false, false))
+                    .is_ok()
             );
         }
         // A reading Spark does not pin is refused, never cast another way.
         let e = user_schema_columns(
             &ddl(&[("k", DataType::Byte, true)]),
             &discovered(&["300"]),
+            &[],
             rules(false, true),
         )
         .unwrap_err();
@@ -291,9 +301,9 @@ mod tests {
     #[test]
     fn a_user_schema_repeating_a_name_is_refused() {
         let twice = ddl(&[("v", DataType::String, true), ("V", DataType::String, true)]);
-        let e = user_schema_columns(&twice, &[], rules(false, true)).unwrap_err();
+        let e = user_schema_columns(&twice, &[], &[], rules(false, true)).unwrap_err();
         assert_eq!(e.error_class().name(), "COLUMN_ALREADY_EXISTS");
-        assert!(user_schema_columns(&twice, &[], rules(true, true)).is_ok());
+        assert!(user_schema_columns(&twice, &[], &[], rules(true, true)).is_ok());
     }
 
     #[test]
@@ -327,7 +337,7 @@ mod tests {
             ("k", DataType::Integer, true),
         ]);
         let (_, _, data) =
-            user_schema_columns(&with_k, &discovered(&["1"]), rules(false, true)).unwrap();
+            user_schema_columns(&with_k, &discovered(&["1"]), &[], rules(false, true)).unwrap();
         assert!(check_user_schema("text", &data).is_ok());
     }
 }

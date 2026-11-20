@@ -94,7 +94,10 @@ pub use constants::{FileConstants, scalar_column};
 pub use name_mapping::{MappedField, NameMapping};
 pub use partition::{
     DEFAULT_PARTITION, check_partition_column,
-    discover::{Segment, constant_column, file_values, parse_segment, partition_columns},
+    discover::{
+        Segment, constant_column, constant_column_stored, file_partition_values, file_values,
+        parse_segment, partition_columns,
+    },
     escape_partition_value, partition_dir_name, partition_segment, partition_segments,
     partition_texts, partition_texts_in, renders_as_string, spark_partitioned_file_name,
     user_value::{
