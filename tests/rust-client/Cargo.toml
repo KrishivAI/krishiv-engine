@@ -1,0 +1,23 @@
+# Drives a running Krishiv Connect server with Apache's Rust Spark Connect client (P3-T089, PR-40).
+# A workspace of its own, like fuzz/: apache-spark-connect pulls an older Arrow major while the product workspace
+# is pinned to a later major, so adding it there would fail `cargo deny` (duplicate versions).
+# Run from the repository root against a server on KRISHIV_CONNECT_URL (default sc://127.0.0.1:15002):
+#   cargo test --locked --manifest-path tests/rust-client/Cargo.toml -- --ignored --skip blocked_ --test-threads=1
+[package]
+name = "connect-rust-client"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+apache-spark-connect = "4.3.0"
+
+# The crate is imported as `spark_connect`, which cargo-machete cannot map back to the package name.
+[package.metadata.cargo-machete]
+ignored = ["apache-spark-connect"]
+
+[workspace]

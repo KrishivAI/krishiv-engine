@@ -5,11 +5,15 @@
 use arrow_array::builder::GenericStringBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
-use arrow_array::{Array, Int64Array, StringArray};
+use arrow_array::{Array, BinaryArray, Int64Array, StringArray};
 use arrow_schema::DataType;
 use md5::Md5;
 use sha1::Sha1;
 use sha2::{Digest, Sha224, Sha256, Sha384, Sha512};
+
+use krishiv_common::error::{
+    InvalidParameterValueHmacAlgorithm, InvalidParameterValueHmacCryptoError,
+};
 
 use crate::error::KernelError;
 use crate::ops::Operand;
@@ -177,6 +181,111 @@ pub fn crc32(input: &dyn Array) -> Result<Int64Array, KernelError> {
     Ok((0..input.len())
         .map(|i| bytes_at(input, i).map(|b| i64::from(crc32_of(b))))
         .collect())
+}
+
+/// The bytes of `parts` hashed by `D`.
+fn hashed<D: Digest>(parts: &[&[u8]]) -> Vec<u8> {
+    let mut d = D::new();
+    for p in parts {
+        d.update(p);
+    }
+    d.finalize().to_vec()
+}
+
+/// HMAC (RFC 2104) of `message` under `key` with hash `D` of block size `block`.
+fn hmac_of<D: Digest>(block: usize, key: &[u8], message: &[u8]) -> Vec<u8> {
+    let mut k = if key.len() > block {
+        hashed::<D>(&[key])
+    } else {
+        key.to_vec()
+    };
+    k.resize(block, 0);
+    let ipad: Vec<u8> = k.iter().map(|b| b ^ 0x36).collect();
+    let opad: Vec<u8> = k.iter().map(|b| b ^ 0x5c).collect();
+    let inner = hashed::<D>(&[&ipad, message]);
+    hashed::<D>(&[&opad, &inner])
+}
+
+/// `hmac(key, message[, algorithm])` (Spark 4.3): the raw MAC bytes. `algorithm` is `SHA-224`, `SHA-256`,
+/// `SHA-384`, `SHA-512`, `SHA-1` (also without the hyphen) or `MD5`, in any case, and `SHA-256` when `None`.
+/// NULL when any argument is NULL.
+///
+/// # Errors
+/// `INVALID_PARAMETER_VALUE.HMAC_ALGORITHM` for another algorithm (the first failing row);
+/// `INVALID_PARAMETER_VALUE.HMAC_CRYPTO_ERROR` for an empty key, which Java's `SecretKeySpec` refuses;
+/// `INTERNAL_ERROR` if the columns differ in length.
+pub fn hmac(
+    key: &BinaryArray,
+    message: &BinaryArray,
+    algorithm: Option<&StringArray>,
+) -> Result<BinaryArray, KernelError> {
+    let rows = key.len();
+    if message.len() != rows || algorithm.is_some_and(|a| a.len() != rows) {
+        return Err(KernelError::internal("hmac operands differ in length"));
+    }
+    let mut out = arrow_array::builder::BinaryBuilder::with_capacity(rows, 0);
+    for i in 0..rows {
+        let name = match algorithm {
+            Some(a) if a.is_null(i) => {
+                out.append_null();
+                continue;
+            }
+            Some(a) => a.value(i),
+            None => "SHA-256",
+        };
+        if key.is_null(i) || message.is_null(i) {
+            out.append_null();
+            continue;
+        }
+        let (key, message) = (key.value(i), message.value(i));
+        // Spark maps the name first (`hmacName`), then the key is refused when empty.
+        let upper = name.to_uppercase();
+        if !matches!(
+            upper.as_str(),
+            "SHA-224"
+                | "SHA224"
+                | "SHA-256"
+                | "SHA256"
+                | "SHA-384"
+                | "SHA384"
+                | "SHA-512"
+                | "SHA512"
+                | "SHA-1"
+                | "SHA1"
+                | "MD5"
+        ) {
+            return Err(KernelError::with_row(
+                Some(i),
+                InvalidParameterValueHmacAlgorithm {
+                    function_name: "`hmac`".to_owned(),
+                    parameter: "`algorithm`".to_owned(),
+                    algorithm: format!("'{name}'"),
+                }
+                .into(),
+            ));
+        }
+        if key.is_empty() {
+            return Err(KernelError::with_row(
+                Some(i),
+                InvalidParameterValueHmacCryptoError {
+                    function_name: "`hmac`".to_owned(),
+                    parameter: "`key`".to_owned(),
+                    detail_message: "Empty key".to_owned(),
+                }
+                .into(),
+            ));
+        }
+        let mac = match upper.as_str() {
+            "SHA-224" | "SHA224" => hmac_of::<Sha224>(64, key, message),
+            "SHA-256" | "SHA256" => hmac_of::<Sha256>(64, key, message),
+            "SHA-384" | "SHA384" => hmac_of::<Sha384>(128, key, message),
+            "SHA-512" | "SHA512" => hmac_of::<Sha512>(128, key, message),
+            "SHA-1" | "SHA1" => hmac_of::<Sha1>(64, key, message),
+            _ => hmac_of::<Md5>(64, key, message),
+        };
+        out.append_value(mac);
+    }
+    Ok(out.finish())
 }
 
 #[cfg(test)]

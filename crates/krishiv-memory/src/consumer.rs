@@ -293,7 +293,9 @@ impl ConsumerHandle {
     /// enough waits for it (re-planning on every release, up to
     /// `abortReleaseTimeout`) before it fails a request or aborts a query.
     /// Hold only memory the member frees without more memory from a round
-    /// of its own driver.
+    /// of its own driver. The round counts the whole use, whatever part the
+    /// member then gives back: if less comes back, the round re-plans in its
+    /// abort phase, which asks for no more spills, and fails or aborts then.
     #[must_use]
     pub fn join_cohort(&self, name: &'static str) -> Option<crate::Seat> {
         let cohort = self.pool.cohort(name)?;
