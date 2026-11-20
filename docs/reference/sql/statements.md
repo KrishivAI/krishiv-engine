@@ -21,6 +21,7 @@ SELECT * FROM t ORDER BY id;
 (see [EXPLAIN ANALYZE](../explain-analyze.md)).
 
 ```sql
+-- over the table t created under "Namespaces and tables" below
 EXPLAIN SELECT * FROM t;
 EXPLAIN ANALYZE SELECT * FROM t;
 ```
@@ -39,8 +40,10 @@ SHOW TABLES;
 SHOW CREATE TABLE t;
 TRUNCATE TABLE t2;
 DROP TABLE t2;
-DROP NAMESPACE demo CASCADE;                 -- without CASCADE a non-empty namespace is refused (SCHEMA_NOT_EMPTY)
 ```
+
+To remove the namespace and everything in it, run `DROP NAMESPACE demo CASCADE` after the examples that use `t`
+(without CASCADE a non-empty namespace is refused, `SCHEMA_NOT_EMPTY`).
 
 ## Writing data
 

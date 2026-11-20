@@ -43,6 +43,8 @@ feature and `krishiv.ui.enabled` (default `true`); a `server`-only build has no 
 
 These settings belong to the single-node server. The Spark Connect listener and its settings are not part of 0.2.
 
+> Planned, not in 0.2.0: the 0.2.0 admin server enforces no roles and does not refuse the combinations below. It warns that it serves plain HTTP and keeps serving, so the admin token can be read on the network. Keep it on loopback, or put a TLS proxy or an authenticated tunnel in front.
+
 Without authentication settings the server binds loopback only, and the admin port (`/metrics`, the web UI) prints a
 random token at start. To serve another address, configure at least one method with `--conf` (these settings are
 read by the server itself and never become session configuration):

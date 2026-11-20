@@ -18,7 +18,7 @@ Krishiv needs Python 3.11 or newer, the floor of the Spark 4.3 Python client; th
 pip install "krishiv[pyarrow]"
 ```
 
-`collect()` and `toArrow()` return Arrow data, so the `pyarrow` extra is needed for them.
+`collect()` returns a list of `Row` and `toArrow()` returns a `pyarrow.Table`; both need the `pyarrow` extra.
 
 ```python
 import krishiv

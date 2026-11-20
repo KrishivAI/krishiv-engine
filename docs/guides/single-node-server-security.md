@@ -11,6 +11,8 @@ endpoint and the web console. It describes what the server checks today.
 
 ## Admin endpoints and token roles
 
+> Planned, not in 0.2.0: the 0.2.0 admin server takes one token and accepts any request that presents it, with no roles; no code reads `krishiv.auth.tokens.*`. A token with `role = viewer` would have admin access. The table and settings below describe the planned behaviour.
+
 The server's admin listener serves `/metrics`, the web console and its API. Those routes check a bearer token
 against static tokens you configure:
 

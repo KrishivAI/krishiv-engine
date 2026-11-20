@@ -37,4 +37,4 @@ Krishiv follows [semantic versioning](https://semver.org). While the major versi
 
 - `public-api` (nightly): the snapshot diff above.
 - `semver-checks` (nightly): `cargo-semver-checks` against the last released version. It is **non-blocking** in CI
-  today (`continue-on-error`), and becomes blocking when the job's baseline is set.
+  today (`continue-on-error`), and becomes blocking when the job's baseline is set and its `continue-on-error` is removed.

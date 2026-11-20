@@ -182,6 +182,7 @@ setting at 1, a scalar Python UDF call while a relation UDF of the same session 
 way. All sessions' relation UDFs together hold at most `krishiv.python.worker.maxTotal` minus one workers; one
 waits for another to finish when they would hold more, in arrival order. Spark runs such calls in one worker and has no such limit.
 
+(Not part of 0.2.0: iterator UDFs (`Iterator` hints, eval type 204) are rejected with `NOT_IMPLEMENTED` in 0.2.0.)
 A scalar iterator UDF (`pandas_udf` or `arrow_udf` with `Iterator` hints) and a Python UDF over a window hold a
 worker the same way, one per UDF of the operator.
 
@@ -346,6 +347,8 @@ directory (`krishiv.spill.*`), deleted with the entry or at the next start after
 
 ## Checkpoint files and where a checkpoint lives
 
+> Not part of 0.2.0: `DataFrame.checkpoint()` and `localCheckpoint()` do not exist in the 0.2.0 Python package (calling them raises `AttributeError`). This section describes later builds.
+
 `DataFrame.checkpoint()` writes the rows under `spark.checkpoint.dir` as a Krishiv spill-format file
 and, unlike Spark, deletes the file when the result and every frame derived from it are gone (Spark
 keeps reliable checkpoint files by default, and nothing in Krishiv reads them back from another
@@ -474,6 +477,8 @@ the table, and the first action fails.
   clients send fresh ids). Every other `ml_command` fails with SQLSTATE 56K00.
 
 ## `Dataset.observe`: where the counts differ from Spark's
+
+> Not part of 0.2.0: `observe` and `Observation` do not exist in the 0.2.0 Python API. This section describes later builds.
 
 `DataFrame::observe` / PySpark `Observation` match Spark 4.2.0 on every case of
 `tests/fixtures/spark-4.2.0/observe-goldens.json` except the ones below

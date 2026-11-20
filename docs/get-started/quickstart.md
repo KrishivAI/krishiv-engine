@@ -9,12 +9,12 @@ description: "Install the Python package and run your first SQL and DataFrame qu
 Krishiv 0.2 is on PyPI (you can also build the wheel from the repository with `maturin build`):
 
 ```bash
-pip install krishiv
+pip install "krishiv[pyarrow]"
 ```
 
 The command-line tool (the `krishiv` binary) installs from source with Rust 1.97 or newer: `cargo install krishiv-cli`. Prebuilt `krishiv` CLI binaries are not available yet.
 
-Krishiv needs Python 3.11 or newer (the floor of the Spark 4.3 Python client); the examples run on 3.11 to 3.14. `pyarrow` is installed with it (a required dependency since 0.2.0); `collect()` and `toArrow()` return Arrow data.
+Krishiv needs Python 3.11 or newer (the floor of the Spark 4.3 Python client); the examples run on 3.11 to 3.14. The `pyarrow` extra is needed for `collect()` and `toArrow()`; `toArrow()` returns a `pyarrow.Table`.
 
 SQL and DataFrames:
 
@@ -72,7 +72,7 @@ assert plan.startswith("== Physical Plan (analyzed) ==")
 
 ## From Rust
 
-`cargo add krishiv futures` (Rust 1.97 or newer). Results are Arrow record batches; actions are `async`, so any
+The `krishiv` crate is not on crates.io yet: build it from the repository (see the [0.2.0 release notes](../releases/0.2.0.md)), then add it as a path dependency alongside `futures` (Rust 1.97 or newer). Results are Arrow record batches; actions are `async`, so any
 runtime, or none with `futures::executor::block_on`, can await them.
 
 ```rust

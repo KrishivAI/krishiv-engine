@@ -24,4 +24,4 @@ python docs/datasets/generate.py ./data            # orders.parquet (200,000 row
 python docs/datasets/generate.py ./data --orders 5000000   # a larger set
 ```
 
-The data is deterministic: the same arguments always give the same rows. Notebooks are committed with their outputs stripped. CI runs each one headless against the built wheel on changes to the Python package or the engine; the link check and the generated migration guide are checked on every change.
+The data is deterministic: the same arguments always give the same rows. Notebooks are committed with their outputs stripped.

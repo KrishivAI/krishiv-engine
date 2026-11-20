@@ -4,7 +4,7 @@ description: "How Python UDFs run in a single-node Krishiv server: sandboxed wor
 
 # Python UDFs in the server: the sandbox
 
-> The single-node server is not part of 0.2.0. This page describes how it runs Python UDFs.
+> The single-node server is not part of 0.2.0. This page describes planned behaviour, not what 0.2.0 does: 0.2.0 has no Landlock or seccomp sandbox, reads neither `krishiv.udf.sandbox` nor `krishiv.python.worker.idleTimeout`, and its Python UDF process pool is not a sandbox (see SECURITY.md).
 
 There are two ways to run a Python UDF in Krishiv, and they are protected differently.
 

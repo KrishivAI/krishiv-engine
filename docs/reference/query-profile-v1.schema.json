@@ -23,7 +23,7 @@
     },
     "scans": {
       "type": "array",
-      "description": "The named tables the query scanned and the columns it compared with a value (added in minor 6; the partition advisor's input). Absent when the query scanned no named table; a table read twice is one entry.",
+      "description": "The named tables the query scanned and the columns it compared with a value (added in minor 6; the partition advisor's input; 0.2.0 writes minor 5 and does not write this member). Absent when the query scanned no named table; a table read twice is one entry.",
       "items": {
         "type": "object",
         "required": ["table", "equality"],
