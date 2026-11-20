@@ -686,6 +686,7 @@ impl<'a> Walker<'a> {
             | PlanNode::Sql { .. }
             | PlanNode::WithColumns { .. }
             | PlanNode::Hint { .. }
+            | PlanNode::ColumnEdit { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::SetOp { .. }
             | PlanNode::Pivot { .. }

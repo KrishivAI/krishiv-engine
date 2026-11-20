@@ -311,6 +311,7 @@ impl Walk {
                 | PlanNode::Sql { .. }
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
+                | PlanNode::ColumnEdit { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::Distinct { .. }
                 | PlanNode::SetOp { .. }

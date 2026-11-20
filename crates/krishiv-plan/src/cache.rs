@@ -28,8 +28,8 @@ use twox_hash::XxHash3_128;
 
 use crate::analyzer::{PolicyVersion, TableIdent};
 use crate::{
-    AttrId, BoundColumn, Expr, ExprNode, FieldOp, Grouping, JoinCondition, JoinKind, LogicalPlan,
-    Plan, PlanNode, ReadSource, ResolvedExpr, SqlArgs, TableVersion,
+    AttrId, BoundColumn, ColumnEdit, Expr, ExprNode, FieldOp, Grouping, JoinCondition, JoinKind,
+    LogicalPlan, Plan, PlanNode, ReadSource, ResolvedExpr, SqlArgs, TableVersion,
 };
 
 /// A cache key: the normalized hash, the pinned table versions, who runs
@@ -878,6 +878,25 @@ impl Encoder {
                 self.tag("Shift");
                 self.num(*offset);
                 self.plan(input, bias.wrapping_add(*offset));
+            }
+            PlanNode::ColumnEdit { input, edit } => {
+                self.tag("ColumnEdit");
+                match edit {
+                    ColumnEdit::Rename(pairs) => {
+                        self.tag("Rename");
+                        self.num(pairs.len() as u64);
+                        for (from, to) in pairs {
+                            self.text(from);
+                            self.text(to);
+                        }
+                    }
+                    ColumnEdit::Drop(names) => {
+                        self.tag("Drop");
+                        self.num(names.len() as u64);
+                        names.iter().for_each(|n| self.text(n));
+                    }
+                }
+                self.plan(input, bias);
             }
             PlanNode::Hint {
                 input,

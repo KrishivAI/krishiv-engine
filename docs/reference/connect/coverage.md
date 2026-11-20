@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 12 done, 14 partial, 32 missing, 4 out of scope.
+62 arms: 13 done, 16 partial, 29 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -29,10 +29,10 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 15 | range | done |  | Range | P2-T091a | 0 |
 | 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
 | 17 | repartition | missing |  | Repartition (round robin / coalesce) | P3-T012 | 3 |
-| 18 | to_df | missing |  | lowering: Project of Alias (positional) | P3-T012 | 4 |
-| 19 | with_columns_renamed | missing |  | lowering: Project | P3-T012 | 4 |
+| 18 | to_df | partial | no names (Spark: ASSIGNMENT_ARITY_MISMATCH) | SubqueryAlias with no alias and the new column names (a positional rename; a length mismatch is ASSIGNMENT_ARITY_MISMATCH) | P3-T012 | 4 |
+| 19 | with_columns_renamed | done |  | ColumnEdit::Rename: the renames in order, each over the names the previous left; a name no column has is skipped; renames (field 3) win over the deprecated map | P3-T012 | 4 |
 | 20 | show_string | missing |  | server-side: execute, then format as Spark's Dataset.showString (truncate, vertical); returns a one-row, one-column relation | P3-T012 | 4 |
-| 21 | drop | missing |  | lowering: Project without the dropped columns (names or column references) | P3-T012 | 4 |
+| 21 | drop | partial | a column reference with a qualifier or a plan id (df2.k) | ColumnEdit::Drop by name (names and plain column references; other expressions drop nothing, as Spark) | P3-T012 | 4 |
 | 22 | tail | missing |  | new Tail (the last n rows in plan order; not Sort + Limit) | P3-T012 | 3 |
 | 23 | with_columns | partial | Alias.metadata | WithColumns; metadata on the column field | P3-T012 | 4 |
 | 24 | hint | done |  | Hint; as Spark 4.2: parameters are literals or lists of them, a partitioning hint is dropped with a warning (3.5 reads parameters differently) | P3-T012 | 3 |

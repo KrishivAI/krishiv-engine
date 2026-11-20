@@ -600,6 +600,10 @@ impl Resolver<'_> {
             }
             renamed
         };
+        // No alias (`df.toDF(names)`): only the column names change, no qualifier is set.
+        if alias.is_empty() {
+            return Ok(inner);
+        }
         let qual: Arc<[String]> = alias
             .split(crate::plan::ALIAS_PART_SEP)
             .map(str::to_owned)

@@ -21,10 +21,10 @@ use krishiv_common::secret::SecretUrl;
 
 use crate::walk::{self, Node};
 use crate::{
-    Builtin, CastMode, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall, FunctionId, Grouping,
-    JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, Plan, PlanNode, ReadSource,
-    ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, SqlArgs, SubqueryKind, WindowSpec,
-    WindowSpecRef,
+    Builtin, CastMode, ColumnEdit, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall,
+    FunctionId, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, Plan,
+    PlanNode, ReadSource, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, SqlArgs,
+    SubqueryKind, WindowSpec, WindowSpecRef,
 };
 
 /// Printed instead of a node deeper than [`crate::MAX_DEPTH`].
@@ -393,6 +393,16 @@ impl Display for NodeLine<'_> {
                 }
                 write!(f, " ({})", List(params))
             }
+            PlanNode::ColumnEdit { edit, .. } => match edit {
+                ColumnEdit::Rename(pairs) => {
+                    f.write_str("Rename [")?;
+                    for (i, (from, to)) in pairs.iter().enumerate() {
+                        write!(f, "{}{from} -> {to}", sep(i))?;
+                    }
+                    f.write_str("]")
+                }
+                ColumnEdit::Drop(names) => write!(f, "Drop [{}]", names.join(", ")),
+            },
             PlanNode::PipeOperator { .. } => f.write_str("PipeOperator"),
             PlanNode::Repartition { exprs, .. } => write!(f, "Repartition ({})", List(exprs)),
             PlanNode::CollectMetrics { name, metrics, .. } => {

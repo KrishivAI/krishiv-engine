@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
-    ALIAS_PART_SEP, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan,
-    Origin, PivotValue, PlanId, PlanNode, ReadSource, SampleBounds, SetOperation, SqlArgs,
-    UnpivotColumnSet,
+    ALIAS_PART_SEP, ColumnEdit, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal,
+    LogicalPlan, Origin, PivotValue, PlanId, PlanNode, ReadSource, SampleBounds, SetOperation,
+    SqlArgs, UnpivotColumnSet,
 };
 
 use super::errors::{
@@ -123,6 +123,36 @@ impl Translator<'_> {
             },
             RelType::RepartitionByExpression(r) => self.repartition_by_expression(r)?,
             RelType::Unpivot(u) => self.unpivot(u)?,
+            RelType::ToDf(t) => {
+                // An empty list means "keep the names" to `SubqueryAlias`; Spark fails the arity.
+                if t.column_names.is_empty() {
+                    return Err(unsupported_field(
+                        "ToDF",
+                        "column_names",
+                        "toDF with no names",
+                    ));
+                }
+                PlanNode::SubqueryAlias {
+                    input: self.input("ToDF", t.input.as_deref())?,
+                    alias: String::new(),
+                    columns: t.column_names.clone(),
+                }
+            }
+            RelType::WithColumnsRenamed(r) => PlanNode::ColumnEdit {
+                input: self.input("WithColumnsRenamed", r.input.as_deref())?,
+                edit: ColumnEdit::Rename(if r.renames.is_empty() {
+                    r.rename_columns_map
+                        .iter()
+                        .map(|(from, to)| (from.clone(), to.clone()))
+                        .collect()
+                } else {
+                    r.renames
+                        .iter()
+                        .map(|x| (x.col_name.clone(), x.new_col_name.clone()))
+                        .collect()
+                }),
+            },
+            RelType::Drop(d) => self.drop_columns(d)?,
             RelType::Extension(any) => match resolve(any, Slot::Relation)? {
                 // One row, one string column: `SELECT '<message>' AS message`.
                 Extension::Echo(echo) => PlanNode::Project {
@@ -140,6 +170,33 @@ impl Translator<'_> {
             }
         };
         Ok(Arc::new(LogicalPlan::new(node).with_origin(origin_of(rel))))
+    }
+
+    /// `Drop`, as Spark's `Dataset.drop`: the named columns and the column arguments that are
+    /// plain column references go; any other argument (`df.a + 1`) drops nothing, and so does a
+    /// name no column has. A reference that names a relation (`df2.k`, `t.k`) is refused: the
+    /// translation matches by bare name and would drop the wrong column of a join.
+    fn drop_columns(&mut self, d: &pb::Drop) -> Result<PlanNode> {
+        let input = self.input("Drop", d.input.as_deref())?;
+        let mut names = d.column_names.clone();
+        for e in self.expressions(&d.columns)? {
+            if let ExprNode::Column(c) = &e.node {
+                match (c.name.as_slice(), c.plan_id) {
+                    ([name], None) => names.push(name.clone()),
+                    _ => {
+                        return Err(unsupported_field(
+                            "Drop",
+                            "columns",
+                            "drop of a qualified column or one of another DataFrame",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(PlanNode::ColumnEdit {
+            input,
+            edit: ColumnEdit::Drop(names),
+        })
     }
 
     /// `Sample`, as Spark's `transformSample`: Bernoulli sampling without replacement, the seed

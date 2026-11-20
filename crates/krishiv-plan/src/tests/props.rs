@@ -16,8 +16,8 @@ use proptest::prelude::*;
 use proptest::sample::Index;
 
 use crate::{
-    AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Cte, CteRef, DayTimeField, Expr, ExprNode,
-    FieldOp, FrameBound, FrameUnits, FunctionCall, FunctionId, FunctionKind, Grouping,
+    AttrId, BoundColumn, Builtin, CastMode, ColumnEdit, ColumnRef, Cte, CteRef, DayTimeField, Expr,
+    ExprNode, FieldOp, FrameBound, FrameUnits, FunctionCall, FunctionId, FunctionKind, Grouping,
     JoinCondition, JoinKind, JoinStrategy, Literal, LogicalPlan, NullOrdering, Origin, PivotValue,
     Plan, PlanId, PlanNode, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SetOperation,
     SortDirection, SortOrder, SourceId, Span, SqlArgs, Star, SubqueryKind, TableVersion,
@@ -437,7 +437,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 33 };
+        let kinds = if depth == 0 { 4 } else { 34 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -638,6 +638,14 @@ impl Gen<'_> {
                     alias: g.flag().then(|| g.name()),
                 }),
                 include_nulls: self.flag(),
+            },
+            33 => PlanNode::ColumnEdit {
+                input: self.input(d),
+                edit: if self.flag() {
+                    ColumnEdit::Rename(self.many(0, 2, |g| (g.name(), g.name())))
+                } else {
+                    ColumnEdit::Drop(self.many(0, 2, Self::name))
+                },
             },
             _ => PlanNode::WithCte {
                 input: self.input(d),
@@ -1544,6 +1552,25 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             name,
             params,
         } => m_string(name, w) || m_exprs(params, w) || m_plan(input, w),
+        PlanNode::ColumnEdit { input, edit } => {
+            match edit {
+                ColumnEdit::Rename(pairs) => {
+                    site!(w, pairs.push(("x".to_owned(), "y".to_owned())));
+                    if pairs
+                        .iter_mut()
+                        .any(|(from, to)| m_string(from, w) || m_string(to, w))
+                    {
+                        return true;
+                    }
+                }
+                ColumnEdit::Drop(names) => {
+                    if m_strings(names, w) {
+                        return true;
+                    }
+                }
+            }
+            m_plan(input, w)
+        }
         PlanNode::JoinHint { input, strategy } => {
             site!(
                 w,

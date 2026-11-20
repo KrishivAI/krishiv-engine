@@ -949,9 +949,8 @@ fn a_relations_plan_id_becomes_its_origin() {
 fn unsupported_relations_are_named() {
     for (kind, name) in [
         (RelType::ShowString(Box::default()), "SHOW_STRING(20)"),
-        (RelType::ToDf(Box::default()), "TO_DF(18)"),
+        (RelType::Tail(Box::default()), "TAIL(22)"),
         (RelType::Transpose(Box::default()), "TRANSPOSE(42)"),
-        (RelType::Drop(Box::default()), "DROP(21)"),
         (RelType::WithRelations(Box::default()), "WITH_RELATIONS(41)"),
     ] {
         let r = relation(kind);
@@ -1261,6 +1260,94 @@ fn hint_and_repartition_by_expression() {
         code(&repartition(vec![], None)),
         ErrorClass::KrishivUnsupportedFeature
     );
+}
+
+#[test]
+fn to_df_is_an_alias_less_positional_rename() {
+    let r = relation(RelType::ToDf(Box::new(pb::ToDf {
+        input: input(),
+        column_names: vec!["x".into(), "y".into()],
+    })));
+    let PlanNode::SubqueryAlias { alias, columns, .. } = node(&r) else {
+        panic!("not an alias")
+    };
+    assert!(alias.is_empty());
+    assert_eq!(columns, ["x", "y"]);
+    // Spark fails the arity of an empty list; `SubqueryAlias` would read it as "keep the names".
+    let empty = relation(RelType::ToDf(Box::new(pb::ToDf {
+        input: input(),
+        column_names: vec![],
+    })));
+    assert_eq!(code(&empty), ErrorClass::KrishivUnsupportedFeature);
+}
+
+#[test]
+fn with_columns_renamed_prefers_the_ordered_renames_over_the_deprecated_map() {
+    let renamed = |renames: Vec<(&str, &str)>, map: Vec<(&str, &str)>| {
+        relation(RelType::WithColumnsRenamed(Box::new(
+            pb::WithColumnsRenamed {
+                input: input(),
+                renames: renames
+                    .into_iter()
+                    .map(|(a, b)| pb::with_columns_renamed::Rename {
+                        col_name: a.into(),
+                        new_col_name: b.into(),
+                    })
+                    .collect(),
+                rename_columns_map: map
+                    .into_iter()
+                    .map(|(a, b)| (a.to_owned(), b.to_owned()))
+                    .collect(),
+            },
+        )))
+    };
+    let edit = |r: &Relation| match node(r) {
+        PlanNode::ColumnEdit { edit, .. } => edit,
+        other => panic!("not a column edit: {other:?}"),
+    };
+    assert_eq!(
+        edit(&renamed(vec![("b", "c"), ("a", "b")], vec![("z", "y")])),
+        ColumnEdit::Rename(vec![("b".into(), "c".into()), ("a".into(), "b".into())])
+    );
+    assert_eq!(
+        edit(&renamed(vec![], vec![("z", "y")])),
+        ColumnEdit::Rename(vec![("z".into(), "y".into())])
+    );
+}
+
+#[test]
+fn drop_takes_names_and_plain_column_references_and_ignores_other_expressions() {
+    let drop = |columns: Vec<Expression>, names: Vec<&str>| {
+        relation(RelType::Drop(Box::new(pb::Drop {
+            input: input(),
+            columns,
+            column_names: names.into_iter().map(str::to_owned).collect(),
+        })))
+    };
+    let PlanNode::ColumnEdit {
+        edit: ColumnEdit::Drop(names),
+        ..
+    } = node(&drop(vec![attr("b")], vec!["a"]))
+    else {
+        panic!("not a drop")
+    };
+    assert_eq!(names, ["a", "b"]);
+    // A column that is not a reference drops nothing (Spark ignores it).
+    let PlanNode::ColumnEdit {
+        edit: ColumnEdit::Drop(names),
+        ..
+    } = node(&drop(vec![lit(LiteralType::Integer(1))], vec![]))
+    else {
+        panic!("not a drop")
+    };
+    assert!(names.is_empty());
+    // A qualified reference could name a column of another relation: refused.
+    let qualified = relation(RelType::Drop(Box::new(pb::Drop {
+        input: input(),
+        columns: vec![attr("t.a")],
+        column_names: vec![],
+    })));
+    assert_eq!(code(&qualified), ErrorClass::KrishivUnsupportedFeature);
 }
 
 #[test]

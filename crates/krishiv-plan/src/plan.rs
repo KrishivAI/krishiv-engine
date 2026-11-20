@@ -237,6 +237,15 @@ pub enum PlanNode {
         /// Its parameters.
         params: Vec<Arc<Expr>>,
     },
+    /// A by-name column edit of Spark's `Dataset` API (`withColumnsRenamed`, `drop`), unresolved:
+    /// the analyzer resolves the names against the input's columns, as the session's
+    /// case-sensitivity setting says, and rewrites the node to a projection.
+    ColumnEdit {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The edit.
+        edit: ColumnEdit,
+    },
     /// The boundary Spark puts between pipe operators (`PipeOperator`):
     /// a `WHERE` or `ORDER BY` after `|>` reads only what the operator
     /// before it output, never a column that operator dropped. The
@@ -696,6 +705,17 @@ impl GeneratorKind {
         };
         Some((kind, outer))
     }
+}
+
+/// The edit of a [`PlanNode::ColumnEdit`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColumnEdit {
+    /// `withColumnsRenamed`: the renames `(existing, new)` in order, each applied to the names the
+    /// previous ones left. A name the input has no column of is skipped; every column the name
+    /// matches is renamed.
+    Rename(Vec<(String, String)>),
+    /// `drop(names)`: every column a name matches is removed; a name matching none is skipped.
+    Drop(Vec<String>),
 }
 
 /// One value of a [`PlanNode::Pivot`]: one expression per pivot column,
@@ -1179,6 +1199,7 @@ impl LogicalPlan {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
+            | PlanNode::ColumnEdit { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
@@ -1245,6 +1266,7 @@ impl LogicalPlan {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
+            | PlanNode::ColumnEdit { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
@@ -1303,6 +1325,7 @@ impl LogicalPlan {
             | PlanNode::SetOp { .. }
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
+            | PlanNode::ColumnEdit { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Hint { params, .. }
             | PlanNode::Repartition { exprs: params, .. }
@@ -1411,6 +1434,7 @@ impl LogicalPlan {
             | PlanNode::SetOp { .. }
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
+            | PlanNode::ColumnEdit { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Hint { params, .. }
             | PlanNode::Repartition { exprs: params, .. }
@@ -1690,6 +1714,7 @@ impl LogicalPlan {
                 | PlanNode::Sql { .. }
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
+                | PlanNode::ColumnEdit { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::SetOp { .. }
                 | PlanNode::Pivot { .. }

@@ -172,6 +172,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Sql { .. }
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
+                | PlanNode::ColumnEdit { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::SetOp { .. }
                 | PlanNode::Pivot { .. }
@@ -436,6 +437,7 @@ impl Teardown {
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Sample { input, .. }
             | PlanNode::PipeOperator { input }
+            | PlanNode::ColumnEdit { input, .. }
             | PlanNode::Distinct { input } => {
                 self.plans.push(input);
             }

@@ -13,8 +13,8 @@ use super::exprs::{Bound, Cx};
 use super::ops::col_expr;
 use super::{AnalysisContext, AnalysisError, SecurableUse};
 use crate::{
-    AttrId, BoundColumn, Cte, Expr, ExprNode, LogicalPlan, Origin, Plan, PlanId, PlanNode,
-    ReadSource,
+    AttrId, BoundColumn, ColumnEdit, Cte, Expr, ExprNode, LogicalPlan, Origin, Plan, PlanId,
+    PlanNode, ReadSource,
 };
 
 /// Relations resolved on the caller's stack before hopping to a fresh one.
@@ -1013,6 +1013,7 @@ impl Resolver<'_> {
                 name,
                 params,
             } => self.hint(p, input, name, params, env),
+            PlanNode::ColumnEdit { input, edit } => self.column_edit(p, input, edit, env),
             PlanNode::PipeOperator { input } => self.pipe_operator(input, env),
             PlanNode::Repartition { input, exprs } => self.repartition(p, input, exprs, env),
             PlanNode::CollectMetrics {
@@ -1241,6 +1242,7 @@ impl Resolver<'_> {
             | PlanNode::SubqueryAlias { .. }
             | PlanNode::WithCte { .. }
             | PlanNode::Hint { .. }
+            | PlanNode::ColumnEdit { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::Repartition { .. }
             | PlanNode::CollectMetrics { .. }
@@ -1265,6 +1267,56 @@ impl Resolver<'_> {
                 o,
             )),
         }
+    }
+
+    /// `withColumnsRenamed` and `drop` as Spark's `Dataset` resolves them: by name, under the
+    /// session's case-sensitivity, skipping a name no column has. A rename is applied to the names
+    /// the previous renames left (so `{a: b, b: c}` renames `a` to `c`), and renames every column
+    /// the name matches; a drop removes every match.
+    #[inline(never)]
+    fn column_edit(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        edit: &ColumnEdit,
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let c = self.child(input, env)?;
+        let cs = self.ctx.conf.case_sensitive;
+        let mut names: Vec<&str> = c.out.iter().map(|a| a.col.name.as_str()).collect();
+        let mut keep = vec![true; names.len()];
+        match edit {
+            ColumnEdit::Rename(pairs) => {
+                for (from, to) in pairs {
+                    for n in &mut names {
+                        if same(from, n, cs) {
+                            *n = to;
+                        }
+                    }
+                }
+            }
+            ColumnEdit::Drop(drops) => {
+                for (k, n) in keep.iter_mut().zip(&names) {
+                    *k = !drops.iter().any(|d| same(d, n, cs));
+                }
+            }
+        }
+        let mut exprs = Vec::new();
+        for ((a, name), keep) in c.out.iter().zip(names).zip(keep) {
+            if !keep {
+                continue;
+            }
+            let pass = self.pass_expr(&a.col);
+            exprs.push(if name == a.col.name {
+                pass
+            } else {
+                Arc::new(Expr::new(ExprNode::Alias {
+                    expr: pass,
+                    name: name.to_owned(),
+                }))
+            });
+        }
+        self.project_items(p, &c, &exprs, env)
     }
 
     /// A `WithColumns` as Spark resolves it: replaced columns keep their

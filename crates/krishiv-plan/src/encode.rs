@@ -62,7 +62,7 @@ use std::sync::Arc;
 use krishiv_common::secret::{OptionValue, SecretUrl, SecretValue, UrlPart};
 use twox_hash::XxHash3_128;
 
-use crate::{BoundColumn, CteRef, Scan};
+use crate::{BoundColumn, ColumnEdit, CteRef, Scan};
 use crate::{
     CastMode, ColumnRef, DayTimeField, Expr, ExprNode, FieldOp, FunctionCall, Grouping,
     JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, Plan, PlanId, PlanNode,
@@ -119,6 +119,7 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::CoGroupMap { .. } => 39,
         PlanNode::PythonTableFunction { .. } => 40,
         PlanNode::CollectMetrics { .. } => 41,
+        PlanNode::ColumnEdit { .. } => 42,
     }
 }
 
@@ -958,6 +959,20 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.str(name);
                 self.exprs(params);
             }
+            PlanNode::ColumnEdit { edit, .. } => match edit {
+                ColumnEdit::Rename(pairs) => {
+                    self.u8(0);
+                    self.len(pairs.len());
+                    for (from, to) in pairs {
+                        self.str(from);
+                        self.str(to);
+                    }
+                }
+                ColumnEdit::Drop(names) => {
+                    self.u8(1);
+                    self.strs(names);
+                }
+            },
             // Only the tag.
             PlanNode::OneRowRelation
             | PlanNode::PipeOperator { .. }
