@@ -110,3 +110,32 @@ fn a_plain_pair_keeps_sparks_text() {
     );
     assert!(!e.to_string().contains(REDACTED), "{e}");
 }
+
+#[test]
+fn an_unhonoured_legacy_setting_hides_the_value() {
+    // A `spark.sql.legacy.*` key Spark registers but Krishiv does not honour is refused for a
+    // non-default value; the refusal names the pair, so a credential in the value must go.
+    let key = "spark.sql.legacy.allowNegativeScaleOfDecimal";
+    let canary = "canary-legacy";
+    let s = Session::new().unwrap();
+    let e = s
+        .conf()
+        .set(key, &format!("postgres://u:{canary}@h/x"))
+        .unwrap_err();
+    hides(&e, ErrorClass::KrishivUnsupportedFeature, key, canary);
+    // SQL `SET` takes the same path.
+    let e = block_on(s.sql(&format!("SET {key} = postgres://u:{canary}@h/x")))
+        .map(drop)
+        .unwrap_err();
+    hides(&e, ErrorClass::KrishivUnsupportedFeature, key, canary);
+}
+
+#[test]
+fn a_value_inside_a_secret_like_key_leaves_the_key_readable() {
+    // `krishiv.foo.token` is unknown and secret-like; the value `o` occurs in the key itself.
+    let key = "krishiv.foo.token";
+    let s = Session::new().unwrap();
+    let e = s.conf().set(key, "o").unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnknownConfig, "{e}");
+    assert!(e.to_string().contains(key), "{e}");
+}

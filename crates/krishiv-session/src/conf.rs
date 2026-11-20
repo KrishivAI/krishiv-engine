@@ -419,11 +419,12 @@ impl RuntimeConf {
     /// ([`krishiv_common::redact::is_redacted_setting`]: a secret-like key, or a value that looks
     /// like a credential), the error shows `*********(redacted)` wherever it would repeat the value.
     /// Spark repeats it; this is a difference toward safety (threat model T-C8), and every other
-    /// pair keeps Spark's text.
+    /// pair keeps Spark's text. Settings given at startup (`SessionBuilder::config`, the CLI's
+    /// `--conf`) are the operator's own input and are not covered: their errors repeat the value.
     pub fn set(&self, key: &str, value: &str) -> Result<(), KrishivError> {
         self.set_unredacted(key, value).map_err(|e| {
             if is_redacted_setting(key, Some(value)) {
-                e.with_value_redacted(value)
+                e.with_value_redacted(value, key)
             } else {
                 e
             }
