@@ -3089,6 +3089,7 @@ dependencies = [
  "arrow-schema 60.1.0",
  "insta",
  "krishiv-common",
+ "krishiv-kernels",
  "krishiv-plan",
  "krishiv-sql",
  "krishiv-types",

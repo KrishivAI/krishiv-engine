@@ -320,10 +320,25 @@ fn syntax_errors_match_spark() {
     ] {
         assert_eq!(
             fail(sql).error.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::KrishivJvmFunctionUnsupported,
             "{sql}"
         );
     }
+    // The error names the function and the class, and suggests the built-in a stock Hive class stands for.
+    let e = fail(
+        "CREATE TEMPORARY FUNCTION my_nvl AS 'org.apache.hadoop.hive.ql.udf.generic.GenericUDFNvl'",
+    );
+    let text = e.error.to_string();
+    assert!(text.contains("my_nvl"), "{text}");
+    assert!(
+        !text.contains("GenericUDFNvl"),
+        "the class literal is not echoed: {text}"
+    );
+    assert_eq!(e.error.error_class().sql_state(), Some("0A000"));
+    assert_eq!(
+        text,
+        "[KRISHIV_JVM_FUNCTION_UNSUPPORTED] The function my_nvl is implemented by a JVM class, which Krishiv cannot load: it runs no JVM. Use the built-in function `nvl` instead. SQLSTATE: 0A000"
+    );
 }
 
 #[test]

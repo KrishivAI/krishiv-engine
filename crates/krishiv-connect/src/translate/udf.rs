@@ -30,6 +30,7 @@ use krishiv_types::DataType;
 use super::Result;
 use super::errors::{not_set, unsupported, unsupported_field, unsupported_variant};
 use super::types::data_type;
+use crate::extension::{Extension, Slot, resolve};
 use crate::proto::v4_3 as pb;
 use crate::proto::v4_3::command::CommandType;
 use crate::proto::v4_3::common_inline_user_defined_function::Function;
@@ -167,6 +168,11 @@ pub fn translate_command(command: &pb::Command) -> Result<Command> {
         Some(CommandType::WriteOperationV2(w)) => {
             super::write::write_v2_spec(w).map(Command::WriteV2)
         }
+        // No command extension is registered yet: `resolve` names the capability it lacks, or the
+        // slot a registered message does sit in.
+        Some(CommandType::Extension(any)) => match resolve(any, Slot::Command)? {
+            Extension::Echo(_) => Err(super::command_not_supported(command)),
+        },
         _ => Err(super::command_not_supported(command)),
     }
 }

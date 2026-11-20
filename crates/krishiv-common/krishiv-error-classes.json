@@ -266,6 +266,12 @@
     ],
     "sqlState" : "53200"
   },
+  "KRISHIV_JVM_FUNCTION_UNSUPPORTED" : {
+    "message" : [
+      "The function <function> is implemented by a JVM class, which Krishiv cannot load: it runs no JVM. <hint>"
+    ],
+    "sqlState" : "0A000"
+  },
   "KRISHIV_MALFORMED_JSON" : {
     "message" : [
       "The JSON string <json> is malformed. Provide valid JSON."
@@ -412,6 +418,12 @@
       "The role <role> does not exist. Create it with CREATE ROLE first."
     ],
     "sqlState" : "42704"
+  },
+  "KRISHIV_SAMPLE_FRACTION_OUT_OF_RANGE" : {
+    "message" : [
+      "requirement failed: Sampling fraction (<fraction>) must be on interval [0, 1] without replacement"
+    ],
+    "sqlState" : "22023"
   },
   "KRISHIV_SESSION_LIMIT" : {
     "message" : [
