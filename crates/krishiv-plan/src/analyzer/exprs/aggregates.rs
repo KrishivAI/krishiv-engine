@@ -44,8 +44,18 @@ impl Resolver<'_> {
         );
         let flag_ok =
             n == 1 || (n == 2 && matches!(f.args[1].node, ExprNode::Literal(Literal::Boolean(_))));
+        // Only where the registry lists it for the session's Spark profile.
+        let listed = || {
+            matches!(
+                self.ctx
+                    .functions
+                    .lookup(&["collect_union".to_owned()], self.ctx.profile),
+                FunctionLookup::Found(_)
+            )
+        };
         if !name.eq_ignore_ascii_case("collect_union")
             || !flag_ok
+            || !listed()
             || !f.within_group.is_empty()
             || !matches!(kids[0].ty.data_type, Some(DataType::Array(_)))
         {

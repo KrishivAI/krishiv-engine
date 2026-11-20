@@ -4232,7 +4232,7 @@ Calls the registry function `variant_array_append`.
 ### `variant_delete`
 
 ```python
-def variant_delete(v: ColumnOrName, *paths: ColumnOrName) -> Column
+def variant_delete(v: ColumnOrName, *paths: str) -> Column
 ```
 
 Calls the registry function `variant_delete`.
