@@ -149,3 +149,32 @@ fn local_relations_compare_by_mode() {
     assert_ne!(c, LocalRelations::default());
     assert!(format!("{c:?}").contains("Collect"));
 }
+
+#[test]
+fn a_cached_relation_is_read_as_the_inline_one_it_holds() {
+    use prost::Message as _;
+    let bytes = pb::LocalRelation {
+        data: Some(b"ipc".to_vec()),
+        schema: Some("a INT".to_owned()),
+    }
+    .encode_to_vec();
+    let (data, schema) = cached_request(&bytes).expect("decodes");
+    assert_eq!(data.as_deref(), Some(&b"ipc"[..]));
+    assert_eq!(schema.expect("schema").fields().len(), 1);
+}
+
+#[test]
+fn a_cached_relation_that_does_not_decode_is_refused() {
+    // A field key cut off mid-varint, then a valid tag of an unknown wire type (a group).
+    for bytes in [&b"\xff\xff"[..], &b"\x0b"[..]] {
+        assert_eq!(
+            fails(cached_request(bytes)).error_class(),
+            ErrorClass::ConnectInvalidPlanCannotParse
+        );
+    }
+    // Neither data nor schema: as an inline relation.
+    assert_eq!(
+        fails(cached_request(&[])).error_class(),
+        ErrorClass::ConnectInvalidPlanSchemaRequiredForLocalRelation
+    );
+}

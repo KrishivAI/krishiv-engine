@@ -130,7 +130,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     WithWatermark => ("with_watermark", 33, OutOfScope, "", "P4", "", 0),
     ApplyInPandasWithState => ("apply_in_pandas_with_state", 34, OutOfScope, "", "P4", "", 0),
     HtmlString => ("html_string", 35, Missing, "", "as show_string, HTML form", "P3-T012", 4),
-    CachedLocalRelation => ("cached_local_relation", 36, Partial, "hashes in the artifact store (AddArtifacts cache/<hash> is not stored yet: every hash is NOT_FOUND_CACHED_LOCAL_RELATION)", "Read(ReadSource::Local) through the same host request as local_relation; the artifact lookup is the host's", "P3-T083", 7),
+    CachedLocalRelation => ("cached_local_relation", 36, Done, "", "Read(ReadSource::Local) through the same host request as local_relation; the host reads the session's own cache/<hash> artifact (CANNOT_FIND_CACHED_LOCAL_RELATION without one) and builds it as an inline local_relation", "P3-T012", 7),
     CachedRemoteRelation => ("cached_remote_relation", 37, Done, "", "a read of the reserved table `__krishiv_cached_remote.<id>`; the server resolves the id in its session (DATAFRAME_NOT_FOUND when absent) and splices the frame's plan in (`Session::from_plan_over`); a lazy checkpoint's rows are taken by the first analysis that reads it, AnalyzePlan included (Spark runs no job on analysis: a recorded difference); tests/cache.rs", "P3-T083", 7),
     CommonInlineUserDefinedTableFunction => ("common_inline_user_defined_table_function", 38, Missing, "", "TableFunction with a Python UDTF (T014)", "P3-T014", 6),
     AsOfJoin => ("as_of_join", 39, Missing, "", "new AsOfJoin, shared with the ASOF JOIN SQL syntax", "P3-T012", 8),
