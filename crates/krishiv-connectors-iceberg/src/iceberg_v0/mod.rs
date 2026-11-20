@@ -12,6 +12,7 @@ pub(crate) mod lazy;
 pub(crate) mod lineage;
 pub(crate) mod manifest_cache;
 pub(crate) mod merge;
+pub(crate) mod overwrite;
 pub(crate) mod provider;
 pub(crate) mod puffin_stats;
 pub(crate) mod rolling;
@@ -57,11 +58,15 @@ mod merge_tests;
 #[cfg(test)]
 mod oracle_tests;
 #[cfg(test)]
+mod overwrite_tests;
+#[cfg(test)]
 mod provider_tests;
 #[cfg(test)]
 mod puffin_stats_tests;
 #[cfg(test)]
 mod rolling_tests;
+#[cfg(test)]
+mod roundtrip_tests;
 #[cfg(test)]
 mod scan_tests;
 #[cfg(test)]
@@ -74,5 +79,7 @@ mod table_tests;
 mod tests;
 #[cfg(test)]
 mod validate_tests;
+#[cfg(test)]
+mod write_conformance_tests;
 #[cfg(test)]
 mod write_tests;

@@ -101,7 +101,7 @@ pub struct Pruner<'a> {
 
 /// A leaf of the predicate, bound to its column.
 #[derive(Debug, Clone, Copy)]
-enum Op<'e> {
+pub(super) enum Op<'e> {
     Cmp(CmpOp, &'e ScalarValue),
     In(&'e [ScalarValue]),
     IsNull,
@@ -184,22 +184,7 @@ impl<'a> Pruner<'a> {
     #[must_use]
     pub fn metrics_may_match(&self, file: &ContentFile) -> bool {
         self.eval(&self.expr, &|field, op| {
-            let options = match self.metrics.map(|m| m.mode(field.id)) {
-                None => Some(self.options),
-                Some(MetricsMode::None | MetricsMode::Counts) => None,
-                Some(MetricsMode::Truncate(n)) => Some(PruneOptions {
-                    truncate_length: n,
-                    ..self.options
-                }),
-                Some(MetricsMode::Full) => Some(PruneOptions {
-                    truncate_length: usize::MAX,
-                    ..self.options
-                }),
-                Some(MetricsMode::Unknown) => Some(PruneOptions {
-                    truncate_length: 0,
-                    ..self.options
-                }),
-            };
+            let options = metric_options(self.metrics, field.id, self.options);
             metric_facts(file, field, options).may_match(op)
         })
     }
@@ -243,7 +228,7 @@ impl<'a> Pruner<'a> {
 /// An upper bound: exact, or "at most this value or any value starting with it"
 /// (a string or binary bound that may have been truncated without rounding up).
 #[derive(Debug, Clone)]
-enum Upper {
+pub(super) enum Upper {
     Exact(ScalarValue),
     Prefix(ScalarValue),
 }
@@ -251,7 +236,7 @@ enum Upper {
 /// What is known about the non-null values of one column (or partition value)
 /// of a file or manifest.
 #[derive(Debug, Clone, Default)]
-struct Facts {
+pub(super) struct Facts {
     /// A value at or below every non-null, non-NaN value.
     lower: Option<ScalarValue>,
     /// A bound above every non-null, non-NaN value.
@@ -265,7 +250,7 @@ struct Facts {
 }
 
 impl Facts {
-    fn may_match(&self, op: Op<'_>) -> bool {
+    pub(super) fn may_match(&self, op: Op<'_>) -> bool {
         match op {
             Op::IsNull => self.has_nulls != Some(false),
             Op::IsNotNull => !self.all_null,
@@ -333,8 +318,34 @@ impl Facts {
     }
 }
 
+/// The options a column's metrics are read with under the writers' modes
+/// `metrics` (`None`: `base` for every column); `None` when the writer wrote
+/// no bounds for it (review F3).
+pub(super) fn metric_options(
+    metrics: Option<&WriterMetrics>,
+    id: i32,
+    base: PruneOptions,
+) -> Option<PruneOptions> {
+    match metrics.map(|m| m.mode(id)) {
+        None => Some(base),
+        Some(MetricsMode::None | MetricsMode::Counts) => None,
+        Some(MetricsMode::Truncate(n)) => Some(PruneOptions {
+            truncate_length: n,
+            ..base
+        }),
+        Some(MetricsMode::Full) => Some(PruneOptions {
+            truncate_length: usize::MAX,
+            ..base
+        }),
+        Some(MetricsMode::Unknown) => Some(PruneOptions {
+            truncate_length: 0,
+            ..base
+        }),
+    }
+}
+
 /// Whether `v` starts with `u` (strings or binaries); `None` for other types.
-fn has_prefix(v: &ScalarValue, u: &ScalarValue) -> Option<bool> {
+pub(super) fn has_prefix(v: &ScalarValue, u: &ScalarValue) -> Option<bool> {
     match (v, u) {
         (ScalarValue::Utf8(v), ScalarValue::Utf8(u)) => Some(v.starts_with(u.as_str())),
         (ScalarValue::Binary(v), ScalarValue::Binary(u)) => Some(v.starts_with(u)),
@@ -344,7 +355,7 @@ fn has_prefix(v: &ScalarValue, u: &ScalarValue) -> Option<bool> {
 
 /// `v` as an upper bound: exact unless it is a string or binary that may be
 /// truncated (see the module docs).
-fn upper_bound(v: ScalarValue, ty: &IcebergType, options: PruneOptions) -> Upper {
+pub(super) fn upper_bound(v: ScalarValue, ty: &IcebergType, options: PruneOptions) -> Upper {
     let len = match (&v, ty) {
         (ScalarValue::Utf8(s), IcebergType::String) => Some(s.chars().count()),
         (ScalarValue::Binary(b), IcebergType::Binary | IcebergType::Fixed(_)) => Some(b.len()),
@@ -359,7 +370,11 @@ fn upper_bound(v: ScalarValue, ty: &IcebergType, options: PruneOptions) -> Upper
 }
 
 /// `options` `None`: the writer wrote no bounds, so none found is trusted.
-fn metric_facts(file: &ContentFile, field: &SchemaField, options: Option<PruneOptions>) -> Facts {
+pub(super) fn metric_facts(
+    file: &ContentFile,
+    field: &SchemaField,
+    options: Option<PruneOptions>,
+) -> Facts {
     let id = field.id;
     // uuid bounds: Spark compares the strings (unsigned order of the bytes),
     // but older Java writers ordered bounds by `UUID.compareTo` (signed longs;
@@ -389,7 +404,7 @@ fn metric_facts(file: &ContentFile, field: &SchemaField, options: Option<PruneOp
     }
 }
 
-fn partition_facts(value: &PartitionValue, pf: &PartitionFieldInfo) -> Facts {
+pub(super) fn partition_facts(value: &PartitionValue, pf: &PartitionFieldInfo) -> Facts {
     let Some(ty) = &pf.result_type else {
         return Facts::default();
     };
@@ -454,7 +469,7 @@ fn summary_facts(
 
 /// A leaf on `field` answered through each partition field of `spec` whose
 /// source is `field`: false when one of them rules it out.
-fn projected(
+pub(super) fn projected(
     spec: &PartitionSpecInfo,
     field: &SchemaField,
     op: Op<'_>,
@@ -548,7 +563,7 @@ fn project(pf: &PartitionFieldInfo, source: &IcebergType, op: Op<'_>, facts: &Fa
 /// truncates to above it). A long column may have been an int when a file was
 /// written (type promotion keeps its partition values), so its files may hold
 /// an int's wrapped values too. Empty for other transforms and types.
-fn wrapped_windows(t: Transform, source: &IcebergType) -> Vec<ScalarValue> {
+pub(super) fn wrapped_windows(t: Transform, source: &IcebergType) -> Vec<ScalarValue> {
     let Transform::Truncate(w) = t else {
         return Vec::new();
     };
@@ -584,12 +599,12 @@ fn int_era(t: Transform, source: &IcebergType, v: &ScalarValue) -> Option<Scalar
 
 /// A `truncate[W]` whose int arithmetic overflows for values away from the
 /// minimum (`W > 2^30`: `v % W + W` passes `i32::MAX`).
-fn wide_truncate(t: Transform) -> bool {
+pub(super) fn wide_truncate(t: Transform) -> bool {
     matches!(t, Transform::Truncate(w) if w > 1 << 30)
 }
 
 /// Whether the truncation `fv` of the integer `v` wrapped (landed above it).
-fn wraps(v: &ScalarValue, fv: &ScalarValue) -> bool {
+pub(super) fn wraps(v: &ScalarValue, fv: &ScalarValue) -> bool {
     match (v, fv) {
         (ScalarValue::Int32(v), ScalarValue::Int32(fv)) => fv > v,
         (ScalarValue::Int64(v), ScalarValue::Int64(fv)) => fv > v,

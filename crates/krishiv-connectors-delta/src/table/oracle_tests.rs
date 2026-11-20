@@ -75,6 +75,15 @@ impl Env {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("t");
         std::fs::create_dir_all(dir.join("_delta_log")).unwrap();
+        Self::rooted(tmp, dir, memory)
+    }
+
+    /// The table at `dir`, which outlives the environment (another engine reads it next).
+    pub(super) fn at(dir: PathBuf) -> Self {
+        Self::rooted(tempfile::tempdir().unwrap(), dir, &MemoryConfig::default())
+    }
+
+    fn rooted(tmp: tempfile::TempDir, dir: PathBuf, memory: &MemoryConfig) -> Self {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -303,7 +312,7 @@ fn typed(a: &dyn Array, row: usize, table: &Field) -> Value {
 }
 
 /// The rows of `batches` in the typed form, ordered by the first column (`id`).
-fn rows(batches: &[RecordBatch], table: &SchemaRef) -> Vec<Vec<Value>> {
+pub(super) fn rows(batches: &[RecordBatch], table: &SchemaRef) -> Vec<Vec<Value>> {
     let mut out: Vec<Vec<Value>> = batches
         .iter()
         .flat_map(|b| {

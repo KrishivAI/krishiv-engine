@@ -587,11 +587,11 @@ fn a_cancel_while_vectors_are_written_leaves_no_file() {
     test_hooks::set(
         id,
         Arc::new(|at, query| {
-            if at == test_hooks::Point::VectorWritten {
+            if at.point == test_hooks::Point::VectorWritten {
                 query.cancel();
-                true
+                test_hooks::Act::stall(std::time::Duration::from_secs(30))
             } else {
-                false
+                test_hooks::Act::NONE
             }
         }),
     );

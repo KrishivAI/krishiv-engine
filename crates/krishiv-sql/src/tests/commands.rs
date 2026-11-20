@@ -327,6 +327,42 @@ fn create_full_view_statements() {
     assert!(v.or_replace && v.temporary && v.global);
 }
 
+/// `SQL SECURITY INVOKER | DEFINER` on a permanent view (Krishiv's extension, P3-T062 §2.4):
+/// among the other clauses in any order; absent (as in every statement Spark parses: the
+/// snapshot above has `security: None` throughout) it is `None`. A temporary view has no such
+/// clause: there `SQL` is the syntax error it is in Spark.
+#[test]
+fn view_sql_security() {
+    let security = |sql: &str| {
+        let ast::Statement::CreatePermanentView(v) = checked(sql) else {
+            panic!("not a full view: {sql}")
+        };
+        v.security
+    };
+    assert_eq!(security("CREATE VIEW v AS SELECT 1"), None);
+    assert_eq!(
+        security("CREATE VIEW v SQL SECURITY DEFINER AS SELECT 1"),
+        Some(ast::SqlSecurity::Definer)
+    );
+    assert_eq!(
+        security("CREATE OR REPLACE VIEW v (a) COMMENT 'c' SQL SECURITY INVOKER AS SELECT 1"),
+        Some(ast::SqlSecurity::Invoker)
+    );
+    assert_eq!(
+        security("CREATE VIEW v sql security definer WITH SCHEMA BINDING AS SELECT 1"),
+        Some(ast::SqlSecurity::Definer)
+    );
+    for sql in [
+        "CREATE TEMPORARY VIEW v SQL SECURITY DEFINER AS SELECT 1",
+        "CREATE GLOBAL TEMPORARY VIEW v SQL SECURITY INVOKER AS SELECT 1",
+        "CREATE VIEW v SQL SECURITY OWNER AS SELECT 1",
+        "CREATE VIEW v SQL AS SELECT 1",
+    ] {
+        let e = err(sql);
+        assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError, "{sql}");
+    }
+}
+
 /// Full `CREATE VIEW` errors as Spark 4.2.0 raises them (positions and
 /// messages from a Spark 4.2.0 run).
 #[test]

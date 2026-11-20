@@ -25,7 +25,7 @@ use super::super::dml::{
     ROW_LEVEL_AFFECTED_OPTION, ROW_LEVEL_ALIAS_OPTION, ROW_LEVEL_CONDITION_OPTION,
     ROW_LEVEL_SCAN_MS_OPTION,
 };
-use super::super::test_hooks::{self, Point};
+use super::super::test_hooks::{self, Act, Point};
 use super::streaming::{data_files, new_table};
 use super::{Env, Leaf, Writing, commit_info, modes_schema, rows, typed_rows};
 use crate::table::DeltaTable;
@@ -421,13 +421,12 @@ fn a_rewrite_cancelled_during_its_batches_leaves_the_table_unchanged() {
     let id = "dml-cancel-during-sink";
     test_hooks::set(
         id,
-        Arc::new(|at, query| {
-            if at == Point::Sunk {
-                query.cancel();
-                true
-            } else {
-                false
+        Arc::new(|site, query| {
+            if site.point != Point::Sunk {
+                return Act::NONE;
             }
+            query.cancel();
+            Act::stall(std::time::Duration::from_secs(30))
         }),
     );
     let rl = table.row_level(RowLevelOperation::Update).unwrap();

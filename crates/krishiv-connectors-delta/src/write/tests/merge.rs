@@ -23,7 +23,7 @@ use super::super::dml::{
     ROW_LEVEL_ALIAS_OPTION, ROW_LEVEL_CONDITION_OPTION, ROW_LEVEL_SCAN_MS_OPTION,
 };
 use super::super::merge::{MERGE_CLAUSES_OPTION, MERGE_COUNTS_OPTION};
-use super::super::test_hooks::{self, Point};
+use super::super::test_hooks::{self, Act, Point};
 use super::dml::{ids_left, row_files, the_file_of, two_file_table};
 use super::streaming::data_files;
 use super::{Env, Leaf, Writing, commit_info, modes_schema, rows};
@@ -292,13 +292,12 @@ fn a_merge_cancelled_during_its_rewrite_leaves_the_table_unchanged() {
     let id = "merge-cancel-during-sink";
     test_hooks::set(
         id,
-        Arc::new(|at, query| {
-            if at == Point::Sunk {
-                query.cancel();
-                true
-            } else {
-                false
+        Arc::new(|site, query| {
+            if site.point != Point::Sunk {
+                return Act::NONE;
             }
+            query.cancel();
+            Act::stall(std::time::Duration::from_secs(30))
         }),
     );
     let out = merge(
