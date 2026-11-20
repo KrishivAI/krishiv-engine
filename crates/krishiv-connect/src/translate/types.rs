@@ -15,7 +15,9 @@ use crate::proto::v4_3::{DataType as Proto, data_type::Kind};
 /// no scale has scale 0, a time with no precision is `time(6)`, an SRID of
 /// -1 is `ANY`, `string` with the default collation is `STRING` and with another one a collated string,
 /// and a struct field's metadata is Spark's `Metadata` JSON. An unset
-/// element, key, value or field type is an unset kind.
+/// element, key, value or field type is an unset kind. The result may hold a collated string:
+/// callers that cannot carry one (literals, casts, typed NULLs) must call
+/// `DataType::refuse_collations` on it.
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a type Krishiv does not have yet

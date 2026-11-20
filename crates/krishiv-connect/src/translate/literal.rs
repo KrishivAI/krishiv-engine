@@ -92,7 +92,8 @@ fn literal_at(
             if let Some(Kind::String(s)) = declared_kind {
                 // A string literal declared with a collation is refused until Connect types are gated
                 // by profile and backed by a golden (Opus review of #531): `data_type` only knows
-                // the collation, and the analyzer would see the wrapped value as explicit.
+                // the collation, and a literal needs a carrier of default strength (a `Collate`
+                // node would make the value explicit).
                 data_type(&ProtoType {
                     kind: Some(Kind::String(s.clone())),
                 })?
