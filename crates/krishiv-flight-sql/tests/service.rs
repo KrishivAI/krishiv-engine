@@ -33,6 +33,11 @@ use tonic::service::Routes;
 use tonic::transport::Channel;
 use tonic::{Code, Request, Status};
 
+#[path = "service/prepared.rs"]
+mod prepared;
+#[path = "service/updates.rs"]
+mod updates;
+
 const OPS: &str = "flight-operator-token-0123456789abcdef";
 const OTHER: &str = "flight-other-token-0123456789abcdefgh";
 
@@ -924,9 +929,9 @@ async fn requests_reach_the_metrics_snapshot() {
 async fn unsupported_rpcs_unimplemented_before_decoding() {
     let mut h = start(FlightSqlConfig::default()).await;
     for kind in [
-        "ClosePreparedStatement",
         "BeginTransaction",
-        "CreatePreparedStatement",
+        "EndTransaction",
+        "CreatePreparedSubstraitPlan",
     ] {
         let e = h
             .client
@@ -950,15 +955,16 @@ async fn unsupported_rpcs_unimplemented_before_decoding() {
         .await
         .expect_err("GetCatalogs is 65b");
     assert_eq!(e.code(), Code::Unimplemented, "{e:?}");
+    let ingest = arrow_flight::sql::CommandStatementIngest::default();
     let e = h
         .client
         .do_put(authed(
-            futures::stream::empty::<arrow_flight::FlightData>(),
+            futures::stream::iter([updates::put_of(&ingest)]),
             OPS,
             None,
         ))
         .await
-        .expect_err("DoPut is 65b");
+        .expect_err("ingest is not served");
     assert_eq!(e.code(), Code::Unimplemented, "{e:?}");
     let e = h
         .client
@@ -1790,7 +1796,7 @@ async fn flight_release_leaves_connect_tombstones() {
     );
 }
 
-/// `ListActions` lists the two actions served, with no session (§4.6, §9).
+/// `ListActions` lists the actions served, with no session (§4.6, §9).
 #[tokio::test(flavor = "multi_thread")]
 async fn list_actions_names_the_served_actions() {
     let mut h = start(FlightSqlConfig::default()).await;
@@ -1806,6 +1812,14 @@ async fn list_actions_names_the_served_actions() {
         .try_collect()
         .await
         .expect("actions");
-    assert_eq!(actions, ["CancelFlightInfo", "CancelQuery"]);
+    assert_eq!(
+        actions,
+        [
+            "CancelFlightInfo",
+            "CancelQuery",
+            "CreatePreparedStatement",
+            "ClosePreparedStatement"
+        ]
+    );
     assert_eq!(h.flight.session_count(), 0);
 }
