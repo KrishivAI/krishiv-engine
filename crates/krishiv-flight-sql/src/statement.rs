@@ -19,7 +19,7 @@ use arrow_flight::{FlightData, FlightEndpoint, FlightInfo, Ticket};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::stream::{self, BoxStream, Stream, StreamExt};
 use krishiv_common::error::{
-    InternalError, InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError,
+    ErrorClass, InternalError, InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError,
     KrishivFlightSqlFetchIdle, KrishivFlightSqlResultNotStored, KrishivFlightSqlSchemaChanged,
     KrishivFlightSqlStatementTooLarge, OperationCanceled,
 };
@@ -301,6 +301,15 @@ pub(crate) fn spark_schema(
     Ok(empty_batch(schema, tz)?.schema())
 }
 
+/// Whether `e`, or a cause of it, is `INVALID_HANDLE.SESSION_CLOSED`: the manager was shut
+/// (`close_all`) while a command's result was being stored. `store_command` wraps every failure in
+/// `KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED`, and `error_class` is the outer class only.
+fn closed_by_shutdown(e: &KrishivError) -> bool {
+    std::iter::once(e)
+        .chain(e.causes())
+        .any(|c| c.error_class() == ErrorClass::InvalidHandleSessionClosed)
+}
+
 /// `maxStatementBytes` (design §4.1): a statement's text over it is `INVALID_ARGUMENT`
 /// (`KRISHIV_FLIGHT_SQL_STATEMENT_TOO_LARGE`) before parsing.
 pub(crate) fn check_statement_bytes(sql: &str, max: usize) -> Result<(), Status> {
@@ -423,6 +432,7 @@ impl FlightSqlServer {
             query_start_micros: query_start,
             kind: Kind::Pending,
             live: Arc::default(),
+            fetched: Arc::default(),
         };
         // 1. The slot (count and text bytes, with eviction); a refusal here runs nothing.
         let inserted = inner
@@ -492,7 +502,7 @@ impl FlightSqlServer {
                 // The command ran: any failure from here says so (§15 m3).
                 let stored = self.store_command(session, df).await;
                 drop(gate);
-                if stored.is_err() && self.draining() {
+                if stored.as_ref().err().is_some_and(closed_by_shutdown) {
                     return Err(Status::unavailable(
                         "server shutting down; the statement ran, its result was not stored",
                     ));
@@ -623,6 +633,9 @@ impl FlightSqlServer {
         let Some((_, payload)) = inner.handles.begin(&cap, &id, Instant::now()) else {
             return Err(flight_status(&not_found()));
         };
+        payload
+            .fetched
+            .store(true, std::sync::atomic::Ordering::Release);
         let fetch = FetchGuard {
             server: self.clone(),
             id,
@@ -653,7 +666,10 @@ impl FlightSqlServer {
                 let gate = entry.shared().await;
                 let options = QueryOptions::new()
                     .operation_id(op.id())
-                    .query_start(payload.query_start_micros);
+                    .query_start(payload.query_start_micros)
+                    // The ticket was issued before any drain (a drain refuses new statements): a
+                    // fetch is work the server accepted, which a drain lets finish (T066 §5.1).
+                    .admitted_before_drain();
                 let df = session
                     .sql_query_with(&payload.sql, options)
                     .await
@@ -870,6 +886,26 @@ mod tests {
             .map(|f| f.data_type().clone())
             .collect();
         assert_eq!(types, before, "types unchanged");
+    }
+
+    /// A result that was not stored because the session was closed by shutdown is told apart from
+    /// one that failed for its own reason, though `store_command` wraps both (review of d54cd33f4).
+    #[test]
+    fn a_not_stored_result_caused_by_a_closed_session_is_a_shutdown() {
+        let closed: KrishivError = krishiv_common::error::InvalidHandleSessionClosed {
+            handle: "s".to_owned(),
+        }
+        .into();
+        let wrap = |cause: KrishivError| {
+            KrishivError::from(KrishivFlightSqlResultNotStored {
+                size: stored_size(None),
+                reason: "r".to_owned(),
+            })
+            .with_cause(cause)
+        };
+        assert!(closed_by_shutdown(&closed));
+        assert!(closed_by_shutdown(&wrap(closed)));
+        assert!(!closed_by_shutdown(&wrap(not_found())));
     }
 
     /// An operation that would join a handle after `CancelFlightInfo` took its live set is refused,

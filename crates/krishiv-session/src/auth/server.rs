@@ -88,6 +88,21 @@ pub struct ImpersonationCount {
 }
 
 impl ServerAuth {
+    /// Readiness check 2 of the admin API (design P3-T066 §5.2): `None` when OIDC is not
+    /// configured, else `Err(reason)` while the JWK set was never fetched or is older than
+    /// three refresh periods.
+    #[must_use]
+    pub fn jwks_ready(&self) -> Option<Result<(), String>> {
+        #[cfg(feature = "oidc")]
+        {
+            self.oidc.as_ref().map(Oidc::jwks_ready)
+        }
+        #[cfg(not(feature = "oidc"))]
+        {
+            None
+        }
+    }
+
     /// Builds the authenticator: resolves and hashes every token, and starts the OIDC key
     /// fetch thread when OIDC is configured. Logs a warning when Spark's all-powerful
     /// `spark.connect.authenticate.token` is in use.

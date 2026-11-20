@@ -1169,9 +1169,18 @@ async fn analyze_with(
             .map(|(_, u)| u)
             .collect();
     }
-    unexecutable::check(&root, ctx.conf.time_type)?;
+    // What the analysis of the prefix this one started from already checked is not checked again.
+    let mut verified = prefix::Verified::start(
+        warm.as_deref()
+            .filter(|_| warm_started)
+            .and_then(|e| e.verified.as_ref()),
+        ctx.conf.time_type,
+    );
+    unexecutable::check_known(&root, ctx.conf.time_type, &mut verified.unexecutable)?;
     input_file::check(plan.root(), &bindings, ctx)?;
-    let resolved = Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+    let resolved = Plan::try_new_known(Arc::clone(&root), &mut verified.heights)
+        .map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+    verified.keep(root);
     if let Some((slot, starts)) = slot {
         if warm_started {
             starts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1180,6 +1189,7 @@ async fn analyze_with(
         if let Ok(mut g) = slot.lock() {
             *g = entry.map(|mut e| {
                 e.fingerprint = Some(context.clone());
+                e.verified = Some(verified);
                 Arc::new(e)
             });
         }

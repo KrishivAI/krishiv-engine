@@ -678,3 +678,47 @@ async fn parameter_types_come_from_the_statement() {
         ]
     );
 }
+
+/// Design P3-T066 §5.1: while the server drains, every Flight SQL call that starts new work is
+/// refused with `KRISHIV_SERVER_DRAINING` before any session work: `CreatePreparedStatement`, a
+/// prepared handle made before the drain run through `GetFlightInfo` or either `DoPut`, and
+/// `DoPut(CommandStatementUpdate)`. `ClosePreparedStatement` ends existing work and is served.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_draining_server_refuses_prepared_and_update_work_but_closes_handles() {
+    use std::sync::atomic::Ordering::Release;
+    let mut h = start(FlightSqlConfig::default()).await;
+    let (created, cookie) = create(&mut h, OPS, None, "SELECT 1 AS x")
+        .await
+        .expect("create before the drain");
+    let handle = created.prepared_statement_handle.to_vec();
+    h.runtime.set_draining(true);
+    h.draining.store(true, Release);
+    let draining = |e: &Status, what: &str| {
+        assert_eq!(e.code(), Code::FailedPrecondition, "{what}: {e:?}");
+        assert_eq!(class_of(e), Some("KRISHIV_SERVER_DRAINING"), "{what}");
+    };
+    let e = create(&mut h, OPS, cookie.as_deref(), "SELECT 2")
+        .await
+        .expect_err("create");
+    draining(&e, "CreatePreparedStatement");
+    let e = prepared_info(&mut h, OPS, &handle)
+        .await
+        .expect_err("get_flight_info");
+    draining(&e, "GetFlightInfo of a prepared handle");
+    let e = bind(&mut h, OPS, &handle, Vec::new())
+        .await
+        .expect_err("bind");
+    draining(&e, "DoPut(CommandPreparedStatementQuery)");
+    let e = run_update(&mut h, OPS, &handle, Vec::new())
+        .await
+        .expect_err("prepared update");
+    draining(&e, "DoPut(CommandPreparedStatementUpdate)");
+    let e = updates::update(&mut h, OPS, cookie.as_deref(), "CREATE VIEW v AS SELECT 1")
+        .await
+        .expect_err("update");
+    draining(&e, "DoPut(CommandStatementUpdate)");
+    close(&mut h, OPS, &handle)
+        .await
+        .expect("ClosePreparedStatement while draining");
+    assert_eq!(h.flight.held(), 0, "a refused call holds no ticket");
+}

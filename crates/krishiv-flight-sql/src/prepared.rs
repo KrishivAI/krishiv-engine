@@ -364,6 +364,8 @@ impl FlightSqlServer {
                 bound: None,
             })),
             live: Arc::default(),
+            // A prepared handle is not a ticket: it never holds a drain open.
+            fetched: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
         let cap = call.owner.cap_key();
         let inserted = inner
