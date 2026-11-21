@@ -9,7 +9,7 @@ use std::sync::Arc;
 use arrow_array::{Array, ArrayRef, BinaryArray, Int64Array};
 use arrow_schema::DataType;
 
-use super::args::{Inputs, Prim};
+use super::args::{Bin, Inputs, Prim};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 use crate::sketch::theta;
 
@@ -21,6 +21,14 @@ pub(super) const NAMES: &[&str] = &[
     "theta_difference",
 ];
 
+/// Row `i` of a binary operand: a literal is read at every row without being repeated into a column.
+fn row(b: &Bin, i: usize) -> Option<&[u8]> {
+    match b {
+        Bin::Array(a) => a.is_valid(i).then(|| a.value(i)),
+        Bin::Scalar(s) => s.as_deref(),
+    }
+}
+
 fn is_binary(t: &DataType) -> bool {
     super::args::is_binary(t)
 }
@@ -31,10 +39,10 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
     let binding = match (listed, types.as_slice()) {
         ("theta_sketch_estimate", [t]) if is_binary(t) => {
             Ok(Binding::new(DataType::Int64, |x: &Inputs<'_>| {
-                let b = x.binaries(0)?;
-                let mut out = Vec::with_capacity(b.len());
-                for row in b.iter() {
-                    out.push(match row {
+                let b = x.bin(0)?;
+                let mut out = Vec::with_capacity(x.rows());
+                for i in 0..x.rows() {
+                    out.push(match row(&b, i) {
                         Some(bytes) => Some(theta::estimate(&theta::from_bytes(
                             bytes,
                             "theta_sketch_estimate",
@@ -47,22 +55,24 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
         }
         ("theta_union", [a, b, DataType::Int32]) if is_binary(a) && is_binary(b) => {
             Ok(Binding::new(DataType::Binary, |x: &Inputs<'_>| {
-                let (a, b) = (x.binaries(0)?, x.binaries(1)?);
+                let (a, b) = (x.bin(0)?, x.bin(1)?);
                 let lg = x.int(2)?;
-                let mut out: Vec<Option<Vec<u8>>> = Vec::with_capacity(a.len());
-                for i in 0..a.len() {
+                let mut out: Vec<Option<Vec<u8>>> = Vec::with_capacity(x.rows());
+                for i in 0..x.rows() {
                     let lg_nom = match &lg {
                         Prim::Array(v) => v.is_valid(i).then(|| v.value(i)),
                         Prim::Scalar(v) => *v,
                     };
-                    let Some(lg_nom) = lg_nom.filter(|_| !a.is_null(i) && !b.is_null(i)) else {
+                    let (Some(lg_nom), Some(first), Some(second)) =
+                        (lg_nom, row(&a, i), row(&b, i))
+                    else {
                         out.push(None);
                         continue;
                     };
                     // Spark checks the size, then reads the first buffer, then the second.
                     theta::check_lg_nom(lg_nom, "theta_union")?;
-                    let first = theta::from_bytes(a.value(i), "theta_union")?;
-                    let second = theta::from_bytes(b.value(i), "theta_union")?;
+                    let first = theta::from_bytes(first, "theta_union")?;
+                    let second = theta::from_bytes(second, "theta_union")?;
                     let u = theta::union(&first, &second, lg_nom, "theta_union")?;
                     out.push(Some(theta::to_bytes(&u)));
                 }
@@ -74,20 +84,20 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
         {
             let intersect = f == "theta_intersection";
             Ok(Binding::new(DataType::Binary, move |x: &Inputs<'_>| {
-                let (a, b) = (x.binaries(0)?, x.binaries(1)?);
+                let (a, b) = (x.bin(0)?, x.bin(1)?);
                 let function = if intersect {
                     "theta_intersection"
                 } else {
                     "theta_difference"
                 };
-                let mut out: Vec<Option<Vec<u8>>> = Vec::with_capacity(a.len());
-                for i in 0..a.len() {
-                    if a.is_null(i) || b.is_null(i) {
+                let mut out: Vec<Option<Vec<u8>>> = Vec::with_capacity(x.rows());
+                for i in 0..x.rows() {
+                    let (Some(first), Some(second)) = (row(&a, i), row(&b, i)) else {
                         out.push(None);
                         continue;
-                    }
-                    let first = theta::from_bytes(a.value(i), function)?;
-                    let second = theta::from_bytes(b.value(i), function)?;
+                    };
+                    let first = theta::from_bytes(first, function)?;
+                    let second = theta::from_bytes(second, function)?;
                     let r = if intersect {
                         theta::intersection(&first, &second, function)?
                     } else {

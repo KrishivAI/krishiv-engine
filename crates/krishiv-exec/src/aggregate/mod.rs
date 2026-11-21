@@ -681,6 +681,13 @@ impl AggregateExpr {
             }
             // `approx_count_distinct` is `bigint`.
             (F::ApproxCountDistinct { .. }, t) if accumulator::hll_supported(t) => DataType::Int64,
+            // `theta_sketch_agg` over an array: `ARRAY<INT>` or `ARRAY<BIGINT>` only (Spark's `TypeCollection`), whatever
+            // the array's `containsNull`.
+            (F::ThetaSketchAgg { .. }, DataType::List(item))
+                if matches!(item.data_type(), DataType::Int32 | DataType::Int64) =>
+            {
+                DataType::BinaryView
+            }
             // The bitmap and HLL sketch aggregates are a `binary`, on the engine's view carrier (see `bitmap`);
             // the HLL values are `int`, `bigint`, `string` or `binary`.
             (F::BitmapConstructAgg, DataType::Int64)
@@ -702,8 +709,7 @@ impl AggregateExpr {
                 | DataType::LargeUtf8
                 | DataType::Utf8View
                 | DataType::Binary
-                | DataType::BinaryView
-                | DataType::List(_),
+                | DataType::BinaryView,
             )
             | (
                 F::HllSketchAgg { .. },

@@ -66,6 +66,7 @@
 
 mod arrow;
 mod decode;
+mod decode_aggregate_fns;
 mod decode_sketch;
 mod decode_udt;
 mod encode;

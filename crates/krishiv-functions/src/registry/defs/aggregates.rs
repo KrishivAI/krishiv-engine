@@ -488,7 +488,10 @@ fn theta_sketch_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
         {
             InputType::Strict(t.clone())
         }
+        // The diagnostic names Spark's whole collection, arrays included.
         _ => InputType::StrictOneOf(vec![
+            DataType::Array(ArrayType::new(DataType::Integer, true).into()),
+            DataType::Array(ArrayType::new(DataType::Long, true).into()),
             DataType::Binary,
             DataType::Double,
             DataType::Float,

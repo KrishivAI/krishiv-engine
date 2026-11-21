@@ -409,6 +409,29 @@ impl ThetaSketchAcc {
         Ok(())
     }
 
+    /// Applies a raw update to group `g`. A group whose table was widened holds a union (its sketch was merged
+    /// into one), so the update goes through a one-off sketch of the same size that the union then takes.
+    fn apply(&mut self, g: usize, update: impl FnOnce(&mut ThetaSketch)) -> Result<()> {
+        let function = self.function();
+        let lg_nom = self.lg_nom();
+        match self.slot_mut(g)? {
+            Slot::Updatable(s) => {
+                update(s);
+                Ok(())
+            }
+            Slot::Union(u) => {
+                let mut one = theta::new_sketch(i32::from(lg_nom), function)?;
+                update(&mut one);
+                one.trim();
+                u.update(&theta::finish(one.compact(true), lg_nom)?)
+                    .map_err(|_| internal("a Theta union refused its own sketch".to_owned()))
+            }
+            Slot::Intersection(_) => {
+                Err(internal("a raw update of a Theta intersection".to_owned()))
+            }
+        }
+    }
+
     fn update_values(
         &mut self,
         groups: &[u32],
@@ -419,12 +442,7 @@ impl ThetaSketchAcc {
             ($a:expr, $f:expr) => {{
                 for (i, &g) in groups.iter().enumerate() {
                     if valid(i) && !$a.is_null(i) {
-                        let Slot::Updatable(s) = self.slot_mut(g as usize)? else {
-                            return Err(internal(
-                                "a Theta union where a sketch was expected".to_owned(),
-                            ));
-                        };
-                        ($f)(s, $a.value(i));
+                        self.apply(g as usize, |s| ($f)(s, $a.value(i)))?;
                     }
                 }
             }};
@@ -460,16 +478,13 @@ impl ThetaSketchAcc {
                     continue;
                 }
                 let items = a.value(i);
-                let Slot::Updatable(s) = self.slot_mut(g as usize)? else {
-                    return Err(internal(
-                        "a Theta union where a sketch was expected".to_owned(),
-                    ));
-                };
                 if let Some(v) = items.as_any().downcast_ref::<Int32Array>() {
                     // A NULL element reads as 0, as `ArrayData.toIntArray` does.
-                    theta::update_ints(s, &v.iter().map(|x| x.unwrap_or(0)).collect::<Vec<_>>());
+                    let ints = v.iter().map(|x| x.unwrap_or(0)).collect::<Vec<_>>();
+                    self.apply(g as usize, |s| theta::update_ints(s, &ints))?;
                 } else if let Some(v) = items.as_any().downcast_ref::<Int64Array>() {
-                    theta::update_longs(s, &v.iter().map(|x| x.unwrap_or(0)).collect::<Vec<_>>());
+                    let longs = v.iter().map(|x| x.unwrap_or(0)).collect::<Vec<_>>();
+                    self.apply(g as usize, |s| theta::update_longs(s, &longs))?;
                 } else {
                     return Err(internal(format!(
                         "theta_sketch_agg over {:?}",

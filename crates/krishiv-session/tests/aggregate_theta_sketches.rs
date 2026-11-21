@@ -197,6 +197,11 @@ fn spark_written_estimation_mode_sketches_agree_with_krishivs() -> R {
             "{name}: the union"
         );
         let hex = rows(&s, &format!("SELECT hex({own})"))?.remove(0);
+        // Exported before any golden is checked, so a changed encoding can still be dumped for gen.py.
+        dump.insert(name.to_owned(), serde_json::Value::String(hex.clone()));
+        if let Ok(path) = std::env::var("KRISHIV_THETA_INTEROP_DUMP") {
+            std::fs::write(path, serde_json::to_string(&dump)?)?;
+        }
         let back = fx_dir_json("reverse.json")?;
         let back = &back["krishiv_read_by_spark"][name];
         assert_eq!(back["estimate"].as_i64(), Some(want), "{name}: Spark reads");
@@ -210,10 +215,6 @@ fn spark_written_estimation_mode_sketches_agree_with_krishivs() -> R {
             Some(hex.as_str()),
             "{name}: Krishiv's bytes changed; rerun gen.py with the new krishiv-compact.json"
         );
-        dump.insert(name.to_owned(), serde_json::Value::String(hex));
-    }
-    if let Ok(path) = std::env::var("KRISHIV_THETA_INTEROP_DUMP") {
-        std::fs::write(path, serde_json::to_string(&dump)?)?;
     }
     Ok(())
 }

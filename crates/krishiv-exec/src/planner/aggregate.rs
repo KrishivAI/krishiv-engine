@@ -485,7 +485,9 @@ pub(super) fn check_constants(f: &ResolvedFunction) -> Result<()> {
     }
     // Theta: `THETA_LG_NOM_ENTRIES_MUST_BE_CONSTANT` for a size that is not a literal, `SKETCH_INVALID_LG_NOM_ENTRIES`
     // for one outside `4..=26` (a NULL is 0), named after the aggregate.
-    if matches!(f.id.name(), "theta_sketch_agg" | "theta_union_agg")
+    // Built-ins only: a native aggregate UDF may carry the same name.
+    if matches!(f.id, FunctionId::Registry { .. })
+        && matches!(f.id.name(), "theta_sketch_agg" | "theta_union_agg")
         && let Some(k) = f.args.get(1)
     {
         let name = f.id.name();

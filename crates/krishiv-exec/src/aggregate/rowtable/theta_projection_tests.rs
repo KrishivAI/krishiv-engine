@@ -99,4 +99,6 @@ fn a_partition_with_no_row_is_not_charged_the_column() {
     // One group in one partition: the column is charged once (32 table bytes per byte, doubled by the transient; 16
     // partitions charged alike would be 16 times that).
     assert!(one < 70 * bytes + (8 << 20), "{one} for {bytes}");
+    // ... and the sketch bytes are charged at all (a projection that stopped charging them would pass the cap alone).
+    assert!(one >= 32 * bytes, "{one} for {bytes}");
 }

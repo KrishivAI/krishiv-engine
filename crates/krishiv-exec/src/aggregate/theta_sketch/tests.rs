@@ -68,6 +68,29 @@ fn partials_merge_through_their_bytes() {
 }
 
 #[test]
+fn a_raw_update_after_a_merge_goes_into_the_union_the_merge_made() {
+    // A table that widens while input arrives merges its sketches into each other (`RowTable::widen`), which leaves
+    // every group a union; the next raw rows of that group must still count (and array rows too).
+    let mut a = ThetaSketchAcc::new(ThetaSketchOp::Sketch(12)).unwrap();
+    a.resize(1);
+    a.update(&[0, 0], &longs(&[Some(1), Some(2)]), |_| true)
+        .unwrap();
+    let state = a.state(&[0]).unwrap().remove(0);
+    let state = state.as_any().downcast_ref::<BinaryArray>().unwrap();
+    let mut b = ThetaSketchAcc::new(ThetaSketchOp::Sketch(12)).unwrap();
+    b.resize(1);
+    b.merge(&[0], state).unwrap();
+    b.update(&[0, 0, 0], &longs(&[Some(2), Some(3), None]), |_| true)
+        .unwrap();
+    let list =
+        ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(7), Some(8)])]);
+    b.update(&[0], &(Arc::new(list) as ArrayRef), |_| true)
+        .unwrap();
+    // {1, 2} merged, then 2 (again), 3 and the array {7, 8} as one value: 4 distinct.
+    assert_eq!(estimate_of(&b.evaluate(&[0]).unwrap(), 0), 4);
+}
+
+#[test]
 fn an_intersection_with_no_input_is_the_empty_sketch_and_an_empty_state() {
     let mut acc = ThetaSketchAcc::new(ThetaSketchOp::Intersection).unwrap();
     acc.resize(1);
@@ -123,8 +146,14 @@ fn a_bad_buffer_is_the_theta_error_and_an_out_of_range_size_is_refused() {
     let col: ArrayRef = Arc::new(BinaryArray::from_iter_values([b"junk".to_vec()]));
     let e = u.update(&[0], &col, |_| true).unwrap_err().to_string();
     assert!(e.contains("THETA_INVALID_INPUT_SKETCH_BUFFER"), "{e}");
-    assert!(ThetaSketchAcc::new(ThetaSketchOp::Sketch(3)).is_err());
-    assert!(ThetaSketchAcc::new(ThetaSketchOp::Union(27)).is_err());
+    for op in [ThetaSketchOp::Sketch(3), ThetaSketchOp::Union(27)] {
+        let e = ThetaSketchAcc::new(op).err().map(|e| e.to_string());
+        assert!(
+            e.as_deref()
+                .is_some_and(|e| e.contains("SKETCH_INVALID_LG_NOM_ENTRIES")),
+            "{e:?}"
+        );
+    }
 }
 
 /// Feeds `n` values to group 0, one row per batch, and checks every batch against its projection.
