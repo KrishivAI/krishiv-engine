@@ -64,7 +64,7 @@
 //! in `validate.rs`'s fixed order; Puffin blob order and file counters follow
 //! data file paths, not Java's hash order; a position delete file's
 //! `split_offsets` are not written; the memory charge is an estimate: 8 bytes per position a
-//! task collects (and per absorbed one), held until the statement's commit drops the outputs,
+//! task collects (and per absorbed one), held (v3) until the statement's commit returns,
 //! and each delete file's bytes while it is built and uploaded.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -300,7 +300,10 @@ impl MergeOnReadWrite {
         let mut deletes = Vec::new();
         let mut rewritten: BTreeSet<DeleteKey> = BTreeSet::new();
         let mut task_files = Vec::new();
+        // The positions' charge lives until the commit returns, as the positions do.
+        let mut held = Vec::new();
         for task in tasks {
+            held.extend(task.held);
             data.extend(task.data);
             deletes.extend(task.deletes);
             task_files.extend(task.files);
@@ -369,7 +372,10 @@ impl MergeOnReadWrite {
             write_id: &self.write_id,
             query_id,
         };
-        commit_validated(t.committer.as_ref(), cx, base, &mut new, ids, &validation).await
+        let outcome =
+            commit_validated(t.committer.as_ref(), cx, base, &mut new, ids, &validation).await;
+        drop(held);
+        outcome
     }
 
     /// The deletes with the DVs of a data file written by more than one task
@@ -477,7 +483,7 @@ pub(crate) struct WrittenDelete {
 #[derive(Debug, Default)]
 pub(crate) struct TaskOutput {
     /// The charge of the positions the output holds (`deletes`' bitmaps on v3), kept until the
-    /// statement's commit or abort drops the output.
+    /// statement's commit returns (it moves into `commit_inner`) or the output is dropped.
     pub(crate) held: Option<Reservation>,
     /// The data files (`UPDATE`/`MERGE` rows).
     pub(crate) data: Vec<WrittenDataFile>,
@@ -654,8 +660,11 @@ impl MorTask {
             return Err(e);
         }
         guard.armed = false;
-        let held = self.charge.size();
-        out.held = Some(self.charge.split(held));
+        // Only a v3 output holds its positions (the DVs' bitmaps); v2's die with the task.
+        if self.write.dvs {
+            let held = self.charge.size();
+            out.held = Some(self.charge.split(held));
+        }
         Ok(out)
     }
 

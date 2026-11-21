@@ -45,6 +45,8 @@ pub(super) struct Catalog {
     pub(super) hang: AtomicBool,
     /// A request was sent.
     sent: AtomicBool,
+    /// Runs when a commit request reaches the catalog.
+    pub(super) observe: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl Catalog {
@@ -61,6 +63,7 @@ impl Catalog {
             state: Mutex::new((metadata, location, 0)),
             hang: AtomicBool::new(false),
             sent: AtomicBool::new(false),
+            observe: Mutex::new(None),
         })
     }
 
@@ -75,6 +78,7 @@ impl Catalog {
             )),
             hang: AtomicBool::new(false),
             sent: AtomicBool::new(false),
+            observe: Mutex::new(None),
         })
     }
 
@@ -113,6 +117,9 @@ impl CommitTable for Catalog {
         updates: Vec<TableUpdate>,
     ) -> CommitOutcome {
         self.sent.store(true, Ordering::SeqCst);
+        if let Some(f) = self.observe.lock().unwrap().as_ref() {
+            f();
+        }
         if self.hang.load(Ordering::SeqCst) {
             return std::future::pending().await;
         }

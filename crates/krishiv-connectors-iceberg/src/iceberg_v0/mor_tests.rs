@@ -1279,28 +1279,47 @@ fn a_concurrently_removed_absorbed_delete_fails_update_not_delete() {
     }
 }
 
-/// R36d m1: on v3 a finished task's output holds its positions until the commit, so the pool
-/// keeps their charge while the outputs live, and returns it when they are dropped.
+/// R36d m1: on v3 a finished task's output holds its positions until the commit returns, so the
+/// pool keeps their charge while the outputs live (`write_in`'s `settle` is what charges a fresh
+/// table's positions), while the commit reaches the catalog, and returns it afterwards. A v2 task
+/// holds no positions after `finish`, so nothing stays charged.
 #[test]
-fn a_v3_output_keeps_its_positions_charged_until_dropped() {
-    let env = env();
-    let t = create(&env, 3, false, &[("write.delete.mode", "merge-on-read")]);
-    let catalog = Catalog::new(&t);
-    append(&env, &catalog, range(0, 100));
-    let mor = Mor::open(&env, &catalog, RowLevelOperation::Delete);
-    let w = mor.writer();
-    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
-    let outputs = mor
-        .write_in(
-            &w,
-            vec![Task {
-                deletes: mor.ids("true"),
-                inserts: Vec::new(),
-            }],
-            &pool,
-        )
-        .unwrap();
-    assert!(pool.reserved() > 0, "the held positions are charged");
-    drop(outputs);
-    assert_eq!(pool.reserved(), 0);
+fn a_v3_output_keeps_its_positions_charged_through_the_commit() {
+    for (version, held) in [(3, true), (2, false)] {
+        let env = env();
+        let t = create(
+            &env,
+            version,
+            false,
+            &[("write.delete.mode", "merge-on-read")],
+        );
+        let catalog = Catalog::new(&t);
+        append(&env, &catalog, range(0, 100));
+        let mor = Mor::open(&env, &catalog, RowLevelOperation::Delete);
+        let w = mor.writer();
+        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        let outputs = mor
+            .write_in(
+                &w,
+                vec![Task {
+                    deletes: mor.ids("true"),
+                    inserts: Vec::new(),
+                }],
+                &pool,
+            )
+            .unwrap();
+        assert_eq!(pool.reserved() > 0, held, "v{version} before the commit");
+        let seen = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+        {
+            let (seen, pool) = (Arc::clone(&seen), Arc::clone(&pool));
+            *catalog.observe.lock().unwrap() = Some(Box::new(move || {
+                seen.store(pool.reserved(), std::sync::atomic::Ordering::SeqCst);
+            }));
+        }
+        env.rt.block_on(w.commit(outputs, Some("q"))).unwrap();
+        let at_commit = seen.load(std::sync::atomic::Ordering::SeqCst);
+        assert_ne!(at_commit, usize::MAX, "the commit reached the catalog");
+        assert_eq!(at_commit > 0, held, "v{version} at the catalog");
+        assert_eq!(pool.reserved(), 0, "v{version} after the commit");
+    }
 }
