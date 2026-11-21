@@ -3,8 +3,8 @@
   "result_target_percent": 90,
   "result_floor_per_mille": 900,
   "measured": {
-    "passed": 15027,
+    "passed": 15035,
     "total": 16686,
-    "on": "2026-11-20"
+    "on": "2026-11-21"
   }
 }
