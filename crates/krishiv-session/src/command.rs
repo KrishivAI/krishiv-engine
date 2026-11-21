@@ -287,7 +287,9 @@ impl Session {
         )?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let case_sensitive = env.analysis.conf.case_sensitive;
-        let analysis = df.analyzed_in(env).await?;
+        let analysis = df.analyzed_in(env.clone()).await?;
+        env.catalog
+            .check_reference_options(analysis.analyzed.plan.root())?;
         let output: Vec<String> =
             crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?
                 .output
