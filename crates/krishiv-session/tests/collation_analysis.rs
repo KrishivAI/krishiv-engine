@@ -1796,6 +1796,29 @@ fn nvl2_column_names_show_the_arguments_as_written() {
     }
 }
 
+/// The escape character is read off the pattern as written, then the literals fold (review of PR 949):
+/// `'e'` is not the escape `'E'`, so its `%` stays a wildcard (Spark: false for the first row).
+#[test]
+fn like_escape_is_exact_over_lcase() {
+    for (sql, want) in [
+        (
+            "select '%' collate utf8_lcase like 'e%' escape 'E'",
+            "false",
+        ),
+        (
+            "select 'ex' collate utf8_lcase like 'e%' escape 'E'",
+            "true",
+        ),
+        ("select '%' collate utf8_lcase like 'E%' escape 'E'", "true"),
+        (
+            "select 'x' collate utf8_lcase like 'E%' escape 'E'",
+            "false",
+        ),
+    ] {
+        assert!(one(sql).to_lowercase().contains(want), "{sql}");
+    }
+}
+
 /// `LIKE` and `ILIKE` over `UTF8_LCASE` (SQL-40) against the vendored Spark runs of
 /// `tests/fixtures/spark-<v>/like-lcase.json` (made by `tests/scripts/gen_like_lcase_goldens.py`):
 /// values, output column names and the `unicode_ci` refusal. Spark 4.0.0 differs in one row

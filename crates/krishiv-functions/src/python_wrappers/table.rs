@@ -148,6 +148,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "the analyzer's `like` and `ilike` over `UTF8_LCASE` strings",
     ),
     (
+        "__like_fold_pattern",
+        "the analyzer's `like ... escape` pattern over `UTF8_LCASE` strings",
+    ),
+    (
         "__replace_lcase",
         "the analyzer's `replace` over `UTF8_LCASE` strings",
     ),

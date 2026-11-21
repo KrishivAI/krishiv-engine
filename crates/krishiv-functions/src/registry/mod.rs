@@ -338,6 +338,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__trim_collated" => "__trim_collated",
         "__icu_case" => "__icu_case",
         "__like_fold" => "__like_fold",
+        "__like_fold_pattern" => "__like_fold_pattern",
         "__replace_lcase" => "__replace_lcase",
         "__translate_lcase" => "__translate_lcase",
         "__split_part_lcase" => "__split_part_lcase",

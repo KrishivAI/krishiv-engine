@@ -46,6 +46,7 @@ pub(super) const NAMES: &[&str] = &[
     "__trim_collated",
     "__icu_case",
     "__like_fold",
+    "__like_fold_pattern",
     "__replace_lcase",
     "__translate_lcase",
     "__split_part_lcase",
@@ -214,6 +215,14 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         ("__like_fold", "IS") => Binding::new(DataType::Utf8, |x| {
             let (ilike, s) = (x.int(0)?, x.str(1)?);
             Ok(utf8(string::like_fold(ilike.operand(), s.operand())?))
+        }),
+        ("__like_fold_pattern", "ISS") => Binding::new(DataType::Utf8, |x| {
+            let (ilike, s, esc) = (x.int(0)?, x.str(1)?, x.str(2)?);
+            Ok(utf8(string::like_fold_pattern(
+                ilike.operand(),
+                s.operand(),
+                esc.operand(),
+            )?))
         }),
         ("__replace_lcase", "SSS") => Binding::new(DataType::Utf8, |x| {
             let (s, a, b) = (x.str(0)?, x.str(1)?, x.str(2)?);

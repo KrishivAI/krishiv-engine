@@ -304,6 +304,11 @@ pub(super) fn specs() -> Vec<Spec> {
         string,
     ));
     out.extend(scalar(
+        &["__like_fold_pattern"],
+        &Inputs::Expects(vec![int_arg.clone(), text.clone(), text.clone()]),
+        string,
+    ));
+    out.extend(scalar(
         &["__icu_case"],
         &Inputs::Expects(vec![int_arg.clone(), int_arg.clone(), text.clone()]),
         string,
