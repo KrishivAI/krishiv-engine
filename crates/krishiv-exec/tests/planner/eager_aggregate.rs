@@ -232,6 +232,56 @@ fn the_grouping_dimension_moves_to_the_top_join() {
     }
 }
 
+/// A distinct runs below the join too (no calls: the partial aggregate only
+/// drops repeated groups), and a distinct over a semi or anti join
+/// (`INTERSECT`, `EXCEPT`) moves onto both inputs first (lever K5, TPC-DS
+/// q14's `cross_items`).
+const DISTINCTS: [(&str, bool); 7] = [
+    ("SELECT DISTINCT w.wk FROM f JOIN w ON f.k = w.wk", true),
+    (
+        "SELECT w.wk FROM f JOIN w ON f.k = w.wk GROUP BY w.wk",
+        true,
+    ),
+    (
+        "SELECT w.wk FROM f JOIN w ON f.k = w.wk INTERSECT SELECT f.k FROM f WHERE f.i > 100",
+        true,
+    ),
+    (
+        "SELECT w.wk FROM f JOIN w ON f.k = w.wk EXCEPT SELECT f.k FROM f WHERE f.k < 6",
+        true,
+    ),
+    // Chained: the left of the outer one is distinct already.
+    (
+        "SELECT f.k FROM f INTERSECT SELECT w.wk FROM w INTERSECT SELECT f.k FROM f WHERE f.i < 50",
+        false,
+    ),
+    // Two columns, NULLs on one: `<=>` matches them.
+    (
+        "SELECT f.k, f.s FROM f INTERSECT SELECT f.k, f.s FROM f WHERE f.k > 3",
+        false,
+    ),
+    // A floating-point column stays as written.
+    (
+        "SELECT f.k, CAST(f.i AS DOUBLE) FROM f INTERSECT SELECT f.k, CAST(f.i AS DOUBLE) FROM f",
+        false,
+    ),
+];
+
+#[test]
+fn distincts_move_below_joins_and_return_the_same_rows() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = tables(dir.path(), &many(), &WEIGHTS, &rt);
+    for (q, fires_here) in DISTINCTS {
+        if fires_here {
+            assert!(fires(&t, q), "{q}");
+        }
+        let (on, off) = both(&t, q);
+        assert_eq!(on, off, "{q}");
+        assert!(!on.is_empty(), "{q}");
+    }
+}
+
 /// A nullable dimension key gets `InferJoinFilters`' `isnotnull` filter on
 /// the dimension (TPC-DS q11's `customer`): the dimension is still read whole
 /// for the rule, which fires, and the NULL keys the join drops stay dropped.

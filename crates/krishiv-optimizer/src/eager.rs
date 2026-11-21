@@ -9,6 +9,11 @@
 //! `sum`, `avg`, `min` and `max` need no duplication factor, and the same
 //! accumulators run, so result types and rounding do not change.
 //!
+//! An aggregate without calls (a distinct) pushes its groups the same way:
+//! the partial aggregate removes repeated groups below the join, the
+//! aggregate above the rest. A distinct over a semi or anti join (`INTERSECT`,
+//! `EXCEPT`) first moves below it, onto both inputs ([`semi`]).
+//!
 //! # When it applies
 //!
 //! Calls ([`refusal_of_call`]). Every aggregate call must be one that exports
@@ -66,6 +71,8 @@ use krishiv_plan::{
 };
 use krishiv_types::DataType;
 
+mod semi;
+
 use crate::dag;
 use crate::estimate::Estimator;
 use crate::expr::{
@@ -115,46 +122,79 @@ pub(crate) fn rewrite(
     let defer = defer.then_some(stats);
     let mut deferred = false;
     let out = dag::rewrite_up(root, &mut |p| {
-        let Some(shape) = Shape::of(&p) else {
-            return Ok(p);
+        let mut pushed = |d: Arc<LogicalPlan>, est: &mut Estimator<'_>| {
+            attempt(d, defer, est, &mut next, &mut notes, &mut deferred)
         };
-        let tried = shape
-            .push(shape.join, defer, &mut est, &mut next)
-            .or_else(|why| {
-                deferred |= why.starts_with(DEFERRED);
-                // The dimension the keys need may sit below another one.
-                shape
-                    .rotated()
-                    .and_then(|join| match shape.push(&join, defer, &mut est, &mut next) {
-                        Ok(pushed) => Some(pushed),
-                        Err(other) => {
-                            deferred |= other.starts_with(DEFERRED);
-                            None
-                        }
-                    })
-                    .ok_or(why)
-            });
-        match tried {
-            Ok((pushed, note)) => {
-                // Out of attribute ids: leave the plan as it is, as CSE and the sum rewrite do.
-                if next > MAX_ID {
-                    notes.push("not applied: the plan has no attribute ids left".to_owned());
-                    return Ok(p);
+        if let Some(split) = semi::split(&p, &mut est, &mut pushed) {
+            return Ok(match split {
+                Ok(s) => {
+                    notes.push(s.note);
+                    s.plan
                 }
-                notes.push(note);
-                Ok(pushed)
-            }
-            Err(why) => {
-                notes.push(format!("not applied: {why}"));
-                Ok(p)
-            }
+                Err(why) => {
+                    notes.push(format!("distinct not split: {why}"));
+                    p
+                }
+            });
         }
+        Ok(attempt(
+            p,
+            defer,
+            &mut est,
+            &mut next,
+            &mut notes,
+            &mut deferred,
+        ))
     })?;
     Ok(Rewritten {
         plan: out,
         notes,
         deferred,
     })
+}
+
+/// `p` with its aggregate pushed below its join, or `p` (the reason in
+/// `notes`).
+fn attempt(
+    p: Arc<LogicalPlan>,
+    defer: Option<&dyn Statistics>,
+    est: &mut Estimator<'_>,
+    next: &mut u64,
+    notes: &mut Vec<String>,
+    deferred: &mut bool,
+) -> Arc<LogicalPlan> {
+    let Some(shape) = Shape::of(&p) else {
+        return p;
+    };
+    let tried = shape.push(shape.join, defer, est, next).or_else(|why| {
+        *deferred |= why.starts_with(DEFERRED);
+        // The dimension the keys need may sit below another one.
+        shape
+            .rotated()
+            .and_then(|join| match shape.push(&join, defer, est, next) {
+                Ok(pushed) => Some(pushed),
+                Err(other) => {
+                    *deferred |= other.starts_with(DEFERRED);
+                    None
+                }
+            })
+            .ok_or(why)
+    });
+    match tried {
+        Ok((pushed, note)) => {
+            // Out of attribute ids: leave the plan as it is, as CSE and the sum rewrite do.
+            if *next > MAX_ID {
+                notes.push("not applied: the plan has no attribute ids left".to_owned());
+                return p;
+            }
+            notes.push(note);
+            pushed
+        }
+        Err(why) => {
+            notes.push(format!("not applied: {why}"));
+            p
+        }
+    }
 }
 
 /// The start of the refusal of a join left to `PayloadAboveAggregate`.
@@ -220,10 +260,9 @@ impl<'a> Shape<'a> {
         est: &mut Estimator<'_>,
         next: &mut u64,
     ) -> Result<(Arc<LogicalPlan>, String), String> {
+        // No calls (a distinct): the partial aggregate below only removes
+        // repeated groups, which the aggregate above removes anyway.
         let calls = distinct_calls(self.outputs);
-        if calls.is_empty() {
-            return Err("no aggregate call".to_owned());
-        }
         let mut args = Attrs::default();
         for (_, f) in &calls {
             for a in &f.args {
