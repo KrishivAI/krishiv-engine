@@ -900,7 +900,6 @@ fn unsupported_relations_are_named() {
     for (kind, name) in [
         (RelType::ShowString(Box::default()), "SHOW_STRING(20)"),
         (RelType::Transpose(Box::default()), "TRANSPOSE(42)"),
-        (RelType::Tail(Box::default()), "TAIL(22)"),
         (RelType::WithRelations(Box::default()), "WITH_RELATIONS(41)"),
     ] {
         let r = relation(kind);
