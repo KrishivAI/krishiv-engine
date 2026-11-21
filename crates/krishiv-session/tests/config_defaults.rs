@@ -212,6 +212,18 @@ fn a_path_allowlist_value_is_withheld_without_manage() {
 }
 
 #[test]
+fn a_credential_in_a_registered_value_is_withheld_without_manage() {
+    let rt = EngineRuntime::builder()
+        .config("krishiv.io.egress.proxy", "http://user:password@proxy:8080")
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let hidden = listed(&rt, "krishiv.io.egress.proxy", false);
+    assert!(hidden.withheld && hidden.value.is_none());
+    let shown = listed(&rt, "krishiv.io.egress.proxy", true);
+    assert!(!shown.withheld && shown.value.is_some());
+}
+
+#[test]
 fn concurrent_sets_all_survive() {
     let rt = runtime();
     let real = [

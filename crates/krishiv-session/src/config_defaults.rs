@@ -18,6 +18,7 @@ use krishiv_common::error::{
 
 use crate::conf::{ConfStore, RuntimeConf, is_modifiable};
 use crate::runtime::EngineRuntime;
+use krishiv_common::redact::is_redacted_setting;
 use krishiv_common::secret::is_sensitive_key;
 
 impl EngineRuntime {
@@ -194,8 +195,13 @@ impl EngineRuntime {
             // A key the registry does not know is not vetted: its value is shown only to `Manage`,
             // and never when its name says credential (`spark.hadoop.fs.s3a.secret.key`).
             let unvetted = scope.is_none();
+            // A registered value may carry a credential too (`krishiv.io.egress.proxy=http://u:pw@h`).
             let withheld = value.is_some()
                 && ((is_sensitive(key) && !reveal_sensitive)
+                    || (!reveal_sensitive
+                        && value
+                            .as_deref()
+                            .is_some_and(|v| is_redacted_setting(key, Some(v))))
                     || (unvetted && (!reveal_sensitive || is_sensitive_key(key))));
             rows.insert(
                 key.to_owned(),
