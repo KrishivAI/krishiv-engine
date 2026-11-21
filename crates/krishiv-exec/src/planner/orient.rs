@@ -29,12 +29,20 @@
 //!   [`STATS_FACTOR`] times as much (both sides estimated from table
 //!   statistics), or [`DEFAULT_FACTOR`] times (either side from default
 //!   estimates). A tie keeps the right input.
+//! - For a left or full outer join with statistics on both sides, the left input is also built when the
+//!   right one has more than [`ROWS_FACTOR`] times the rows and is not
+//!   narrower in bytes: a table's index and finalize cost follow its rows,
+//!   so a wide small side must not hide a much longer one (TPC-DS q78).
 
 use crate::join::JoinType;
 
 /// How much larger the right input's table must be to build the left one,
 /// when both estimates rest on table statistics.
 pub(crate) const STATS_FACTOR: f64 = 2.0;
+
+/// How many times the left input's rows the right one needs, with no
+/// fewer bytes, to build the left one (both estimates from statistics).
+pub(crate) const ROWS_FACTOR: f64 = 2.0;
 
 /// The same factor when either estimate rests on defaults.
 pub(crate) const DEFAULT_FACTOR: f64 = 8.0;
@@ -109,7 +117,13 @@ pub(crate) fn orient(
     broadcast_max: Option<f64>,
 ) -> JoinType {
     match flipped(join_type, single_match) {
-        Some(other) if builds_left(left, right, broadcast_max) => other,
+        Some(other)
+            if builds_left(left, right, broadcast_max)
+                || (matches!(join_type, JoinType::LeftOuter | JoinType::FullOuter)
+                    && much_longer_right(left, right, broadcast_max)) =>
+        {
+            other
+        }
         _ => join_type,
     }
 }
@@ -132,6 +146,18 @@ pub(crate) fn builds_left(
         };
     // NaN compares false: no flip.
     right.bytes > factor * left.bytes
+}
+
+/// Whether, for an outer join, the right input has more than
+/// [`ROWS_FACTOR`] times the left one's rows and no fewer bytes (both
+/// from statistics): the left input builds although the bytes alone would
+/// keep the right one.
+fn much_longer_right(left: &InputStats, right: &InputStats, broadcast_max: Option<f64>) -> bool {
+    left.source == StatsSource::Statistics
+        && right.source == StatsSource::Statistics
+        && !broadcast_max.is_some_and(|max| right.bytes <= max)
+        && right.rows > ROWS_FACTOR * left.rows
+        && right.bytes >= left.bytes
 }
 
 #[cfg(test)]
@@ -161,6 +187,32 @@ mod tests {
 
     fn known(bytes: f64) -> InputStats {
         stats(bytes, StatsSource::Statistics)
+    }
+
+    #[test]
+    fn a_much_longer_right_input_with_no_fewer_bytes_builds_on_the_left() {
+        // q78: 5.47 M rows / 1024 MiB left, 14.26 M rows / 1230 MiB right.
+        let row = |rows: f64, mib: f64, source| InputStats {
+            rows,
+            bytes: mib * MIB,
+            source,
+        };
+        let left = row(5.47e6, 1024.0, StatsSource::Statistics);
+        let right = row(14.26e6, 1230.0, StatsSource::Statistics);
+        let flips = |t, l: &InputStats, r: &InputStats| orient(t, false, l, r) != t;
+        assert!(flips(JoinType::LeftOuter, &left, &right));
+        // Only outer joins use the rows rule (TPC-DS q14, q35: semi joins).
+        assert!(!flips(JoinType::LeftSemi, &left, &right));
+        assert!(!builds_left(&left, &right));
+        // A right input with fewer bytes keeps the right build.
+        let narrow = row(14.26e6, 900.0, StatsSource::Statistics);
+        assert!(!flips(JoinType::LeftOuter, &left, &narrow));
+        // Under 2x the rows keeps it.
+        let short = row(10.0e6, 1230.0, StatsSource::Statistics);
+        assert!(!flips(JoinType::LeftOuter, &left, &short));
+        // Default estimates never use the rows rule.
+        let dflt = row(5.47e6, 1024.0, StatsSource::Default);
+        assert!(!flips(JoinType::LeftOuter, &dflt, &right));
     }
 
     #[test]
