@@ -456,12 +456,15 @@ fn na_targets_are_chosen_by_attribute_not_by_name() {
         |p| p,
     )
     .expect("qualified replace");
+    // One `when` item, and it rewrote `r.year` (output position 4) into a new attribute; `l.year`
+    // (position 1) is still the scan's own column.
     assert_eq!(
-        format!("{plan:?}").matches("CaseWhen").count()
-            + format!("{plan:?}").matches("when").count().min(1),
-        format!("{plan:?}").matches("CaseWhen").count()
-            + format!("{plan:?}").matches("when").count().min(1)
+        format!("{plan:?}").matches("Builtin(When)").count(),
+        1,
+        "only r.year is replaced: {plan:?}"
     );
+    assert_eq!(plan.output[1].id, crate::AttrId(1), "l.year untouched");
+    assert_ne!(plan.output[4].id, crate::AttrId(4), "r.year rewritten");
     // Separate values for the two columns reach one column each.
     let both = ColumnNamesOp::FillNa {
         cols: strings(&["l.year", "r.year"]),
@@ -472,7 +475,13 @@ fn na_targets_are_chosen_by_attribute_not_by_name() {
     };
     let plan = run_on(false, doubled(), both, |p| p).expect("both");
     let text = format!("{plan:?}");
-    assert!(text.contains("Long(1)") || text.contains("1"), "{text}");
+    // `l.year` coalesces with 1 and `r.year` with 2, in that order (by name both would take 2).
+    assert_eq!(text.matches("Literal(Long(1))").count(), 1, "{text}");
+    assert_eq!(text.matches("Literal(Long(2))").count(), 1, "{text}");
+    assert!(
+        text.find("Literal(Long(1))") < text.find("Literal(Long(2))"),
+        "{text}"
+    );
 }
 
 #[test]
