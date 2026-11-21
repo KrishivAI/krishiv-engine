@@ -238,6 +238,61 @@ impl<'a> Dml<'a> {
         )
     }
 
+    /// A merge-on-read statement: the rows `select` gives over the whole snapshot (ending with
+    /// the row id) into the rewriter, which recognizes them by the row id columns.
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "a test helper: a setup failure panics, the rewrite's own error is returned"
+    )]
+    pub(super) fn merge_on_read(&self, select: &str) -> Result<(), KrishivError> {
+        let mut batches = self.query(self.table.scan().unwrap(), select);
+        let schema = batches.first().map_or_else(
+            || {
+                let mut f: Vec<_> = input_schema().fields().iter().cloned().collect();
+                f.push(Arc::new(arrow_schema::Field::new(
+                    ROW_FILE_COLUMN,
+                    A::BinaryView,
+                    false,
+                )));
+                f.push(Arc::new(arrow_schema::Field::new(
+                    ROW_POSITION_COLUMN,
+                    A::Int64,
+                    false,
+                )));
+                Arc::new(Schema::new(f))
+            },
+            RecordBatch::schema,
+        );
+        if batches.is_empty() {
+            batches.push(RecordBatch::new_empty(Arc::clone(&schema)));
+        }
+        let mut request =
+            RowLevelWrite::new(self.op, "`db`.`t`", Arc::clone(&schema), Vec::new(), None);
+        request.write_id = Some(format!("dml-{}", super::sink::unique_u64()));
+        let sink = self.table.rewriter(&request)?;
+        let input = Arc::new(PerDriver {
+            schema,
+            batches,
+            stall: false,
+        });
+        run(self.env, sink, input, None).0
+    }
+
+    /// `DELETE FROM t WHERE condition` in merge-on-read mode.
+    pub(super) fn mor_delete(&self, condition: &str) -> Result<(), KrishivError> {
+        self.merge_on_read(&format!(
+            "SELECT {ROW_FILE_COLUMN}, {ROW_POSITION_COLUMN} FROM t WHERE coalesce(({condition}), false)"
+        ))
+    }
+
+    /// `UPDATE t SET name = value WHERE condition` in merge-on-read mode.
+    pub(super) fn mor_update(&self, condition: &str, value: &str) -> Result<(), KrishivError> {
+        self.merge_on_read(&format!(
+            "SELECT id, x, {value} AS name, {ROW_FILE_COLUMN}, {ROW_POSITION_COLUMN} FROM t \
+             WHERE coalesce(({condition}), false)"
+        ))
+    }
+
     /// The rewrite's columns: `name` replaced where `set.0` holds by `set.1`;
     /// the lineage columns kept, an updated row's sequence number null.
     fn select_list(&self, set: Option<(&str, &str)>) -> String {

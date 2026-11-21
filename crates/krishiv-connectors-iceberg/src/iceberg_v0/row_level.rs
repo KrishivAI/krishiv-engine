@@ -130,7 +130,15 @@ pub(crate) fn isolation(
 
 impl RowLevelTable for IcebergRowLevel {
     fn capabilities(&self) -> RowLevelCapabilities {
-        RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality)
+        let mut c = RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality);
+        // A mode that cannot be read is the statement's error, raised when it runs.
+        c.merge_on_read = self.provider.write_target().is_some_and(|t| {
+            matches!(
+                super::row_delta::row_level_mode(t.base.properties(), self.op),
+                Ok(super::row_delta::RowLevelMode::MergeOnRead)
+            )
+        });
+        c
     }
 
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
@@ -144,6 +152,18 @@ impl RowLevelTable for IcebergRowLevel {
     }
 
     fn rewriter(&self, request: &RowLevelWrite) -> krishiv_exec::Result<Arc<dyn Sink>> {
+        // A merge-on-read statement's rows end with the row id (`mor_sink.rs`).
+        if super::mor_sink::is_merge_on_read_input(&request.input_schema) {
+            let write = super::row_delta::MergeOnReadWrite::new(
+                &self.provider,
+                self.op,
+                request.read_filter_pushdown(),
+                request.write_id.clone(),
+            )?;
+            return Ok(Arc::new(super::mor_sink::MergeOnReadSink::new(
+                write, self.op,
+            )));
+        }
         let target = Arc::clone(self.provider.write_target().ok_or_else(|| {
             KrishivError::from(krishiv_common::error::InternalError {
                 message: "a row-level Iceberg table without a write target".to_owned(),
