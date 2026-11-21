@@ -4,7 +4,8 @@
 //! rows with it on and off, over negative, sparse, duplicate and NULL keys
 //! and probe keys outside the build's span, with `Int64` and `Int32` keys
 //! (the TPC-DS surrogate keys), sliced key arrays with NULLs and a probe
-//! filter fused into the join; it runs only where it applies.
+//! filter fused into the join; it runs only where it applies, and a build
+//! past the payload cap (perf lever P3) decodes its columns per pair.
 
 use arrow_array::Int32Array;
 use krishiv_exec::{FnPredicate, HashJoin, HashJoinNode};
@@ -324,6 +325,51 @@ async fn a_fused_probe_selection_matches_the_oracle_with_the_direct_index() {
             assert_eq!(on, want, "{join_type:?} int32 {int32}");
             assert_eq!(off, want, "{join_type:?} int32 {int32}");
             assert!(direct > 0, "{join_type:?} int32 {int32}: the index ran");
+        }
+    }
+}
+
+/// A long payload string: 3,000 build rows of it hold more than the
+/// 256 KiB a direct build may hold for its payload to be decoded once.
+const LONG: &str = "a payload string long enough that three thousand rows of it are \
+                    well past the decoded payload cap of a direct build index";
+
+/// A direct build too large to decode its payload once (perf lever P3)
+/// keeps the direct index and decodes its build columns per pair; a small
+/// one takes them from the payload decoded once. Both match the oracle.
+#[tokio::test]
+async fn the_payload_cap_keeps_the_direct_index_either_way() {
+    let big: Vec<Row> = (0..3_000_i64)
+        .map(|k| r(Some(k), Some(LONG), k % 7))
+        .collect();
+    let small: Vec<Row> = (0..40_i64).map(|k| r(Some(k), Some(LONG), k)).collect();
+    let probe = keyed(
+        &(0..60)
+            .map(|i| Some((i * 53) % 3_100 - 20))
+            .chain([None])
+            .collect::<Vec<_>>(),
+    );
+    for join_type in [JoinType::Inner, JoinType::LeftOuter] {
+        let mut c = case(join_type, 1, false, false);
+        c.row_layout = true;
+        for build in [&big, &small] {
+            let (got, direct) = run_direct(
+                &c,
+                &probe,
+                build,
+                Run {
+                    on: true,
+                    ..Run::default()
+                },
+            )
+            .await;
+            assert_eq!(
+                got,
+                c.oracle(&probe, build),
+                "{join_type:?} {}",
+                build.len()
+            );
+            assert_eq!(direct, probe.len() as u64, "{join_type:?} {}", build.len());
         }
     }
 }

@@ -21,14 +21,27 @@
 //! each, small and bounded, so they are not reserved from the pool. The
 //! span limit is four slots a row with a floor of 64 slots (a build of
 //! fewer than 16 rows may span 64 values).
+//!
+//! Build payload (perf lever P3): a direct build whose level-0 tables hold
+//! at most [`MAX_PAYLOAD_BYTES`] also has its payload decoded once into
+//! Arrow columns ([`DirectPayload`]), every row of every table in table
+//! then row order, with the decoder the probe would use per pair. A probe
+//! then fills its build columns with an Arrow `take` by row instead of
+//! decoding one payload row per output row: the same values, since they
+//! come from the same decoder (a string view `take` copies the views and
+//! shares the buffers). The columns are of at most 4,096 rows and the
+//! bytes are capped, so they are not reserved either.
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Int32Type, Int64Type};
-use arrow_array::{Array, ArrayRef};
+use std::sync::Arc;
+
+use arrow_array::{Array, ArrayRef, UInt32Array};
 use arrow_schema::DataType;
 
 use super::keys::KeyCodec;
-use super::table::{JoinTable, NONE};
+use super::table::{JoinTable, NONE, RowArena};
+use crate::error::Result;
 use crate::rows::RowSource;
 
 /// The most build rows a direct index covers.
@@ -41,6 +54,10 @@ pub(crate) const SPAN_PER_ROW: usize = 4;
 /// the hashed path).
 pub(crate) const MAX_SLOTS: usize = 16 * 1024;
 
+/// The most bytes the level-0 tables of a direct build may hold for its
+/// payload to be decoded once ([`DirectPayload`]).
+pub(crate) const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
+
 /// An empty slot.
 const EMPTY: u64 = u64::MAX;
 
@@ -50,6 +67,8 @@ const EMPTY: u64 = u64::MAX;
 pub(crate) struct Direct {
     min: i64,
     slots: Vec<u64>,
+    /// The build columns decoded once, when the tables are small enough.
+    payload: Option<Arc<DirectPayload>>,
 }
 
 impl Direct {
@@ -110,7 +129,22 @@ impl Direct {
             let i = usize::try_from(v - min).ok()?;
             *slots.get_mut(i)? = (u64::from(*p) << 32) | u64::from(*r);
         }
-        Some(Self { min, slots })
+        Some(Self {
+            min,
+            slots,
+            payload: None,
+        })
+    }
+
+    /// This index with the build's payload decoded once (`payload`).
+    pub(crate) fn with_payload(mut self, payload: Option<DirectPayload>) -> Self {
+        self.payload = payload.map(Arc::new);
+        self
+    }
+
+    /// The build's decoded payload, when it was decoded.
+    pub(crate) fn payload(&self) -> Option<&Arc<DirectPayload>> {
+        self.payload.as_ref()
     }
 
     /// For each row of `col` (the probe's key column, in the build key's
@@ -147,6 +181,84 @@ impl Direct {
         }
         Some(())
     }
+}
+
+/// The build columns of every row of a direct build's level-0 tables,
+/// decoded once (module docs, perf lever P3): row `r` of partition `p` is
+/// row `base[p] + r` of each column.
+#[derive(Debug)]
+pub(crate) struct DirectPayload {
+    /// Each partition's first row in `columns`; `None` for a partition
+    /// without a table.
+    base: Vec<Option<u32>>,
+    /// Each partition's row count.
+    len: Vec<u32>,
+    columns: Vec<ArrayRef>,
+}
+
+impl DirectPayload {
+    /// The payload of `tables`, decoded by `decode` from the pairs
+    /// `(partition, row)` of every row in table then row order; `None`
+    /// when the tables hold more than [`MAX_PAYLOAD_BYTES`].
+    pub(crate) fn of(
+        tables: &[Option<JoinTable>],
+        decode: impl FnOnce(&[(usize, u32)]) -> Result<Vec<ArrayRef>>,
+    ) -> Result<Option<Self>> {
+        let held: usize = tables
+            .iter()
+            .flatten()
+            .map(|t| t.arena().held_bytes())
+            .sum();
+        if held > MAX_PAYLOAD_BYTES {
+            return Ok(None);
+        }
+        let mut base = Vec::with_capacity(tables.len());
+        let mut len = Vec::with_capacity(tables.len());
+        let mut pairs = Vec::new();
+        for (p, t) in tables.iter().enumerate() {
+            let Some(t) = t else {
+                base.push(None);
+                len.push(0);
+                continue;
+            };
+            let (Ok(start), Ok(n)) = (u32::try_from(pairs.len()), u32::try_from(t.arena().len()))
+            else {
+                return Ok(None);
+            };
+            base.push(Some(start));
+            len.push(n);
+            pairs.extend((0..n).map(|r| (p, r)));
+        }
+        let columns = decode(&pairs)?;
+        Ok(Some(Self { base, len, columns }))
+    }
+
+    /// The build columns of the pairs `build` (partition, row), taken from
+    /// the decoded columns; `None` when a pair is not one of its rows.
+    pub(crate) fn columns(&self, build: &[(usize, u32)]) -> Result<Option<Vec<ArrayRef>>> {
+        let mut ids = Vec::with_capacity(build.len());
+        for &(p, r) in build {
+            match (self.base.get(p).copied().flatten(), self.len.get(p)) {
+                (Some(start), Some(&n)) if r < n => ids.push(start + r),
+                _ => return Ok(None),
+            }
+        }
+        let ids = UInt32Array::from(ids);
+        let columns = self
+            .columns
+            .iter()
+            .map(|c| {
+                arrow_select::take::take(c.as_ref(), &ids, None)
+                    .map_err(|e| crate::error::internal(e.to_string()))
+            })
+            .collect::<Result<_>>()?;
+        Ok(Some(columns))
+    }
+}
+
+/// The arena of partition `p` of `tables`, for a payload decoder.
+pub(crate) fn arena_of(tables: &[Option<JoinTable>], p: usize) -> Option<&RowArena> {
+    tables.get(p).and_then(Option::as_ref).map(JoinTable::arena)
 }
 
 /// Calls `f(i, value)` for every non-NULL row `i`.
