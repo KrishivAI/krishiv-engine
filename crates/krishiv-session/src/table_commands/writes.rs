@@ -503,6 +503,19 @@ impl Session {
                 // Asked first, as `insertInto` does: what is reported about a table the caller
                 // may not write must not depend on its metadata.
                 self.authorize_table_write(&name, false, &env).await?;
+                // A permanent view, metric views included, is Spark's "Saving data into a view is
+                // not allowed" (a Spark 4.2.1 run, 2026-11-21); a temporary view of the same name
+                // is not this table.
+                if !self.temp_entry_of(&name, &env)
+                    && self
+                        .state
+                        .catalog
+                        .store
+                        .table(&name.namespace, &name.name)
+                        .is_some_and(|t| t.view.is_some())
+                {
+                    return Err(krishiv_common::error::LegacyErrorTemp1158 {}.into());
+                }
                 let table = self.table_for_write(&name, "INSERT", &env)?;
                 // Spark refuses an append whose format or partitioning differs
                 // from the table's.

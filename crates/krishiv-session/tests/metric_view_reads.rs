@@ -7,9 +7,9 @@
 
 use std::sync::Arc;
 
-use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
+use arrow_array::{Array, RecordBatch};
 use futures::executor::block_on;
 use krishiv_common::error::KrishivError;
 use krishiv_plan::analyzer::BoxFuture;
@@ -396,4 +396,55 @@ fn a_read_through_a_temporary_view_or_a_cte_is_sparks_internal_error() {
             "{q}: {err}"
         );
     }
+}
+
+/// `saveAsTable` onto a metric view (a Spark 4.2.1 run, 2026-11-21): `append` is "Saving data
+/// into a view is not allowed", `overwrite` replaces it with a managed table, `errorifexists` is
+/// `TABLE_OR_VIEW_ALREADY_EXISTS` and `ignore` leaves it (review b047d8901 nit 1). `append` onto
+/// a plain permanent view is the same refusal.
+#[test]
+fn save_as_table_onto_a_metric_view_follows_sparks_modes() {
+    let type_of = |s: &Session| -> String {
+        let text = |c: &dyn Array, i: usize| match c.as_string_opt::<i32>() {
+            Some(a) => a.value(i).to_owned(),
+            None => c.as_string_view().value(i).to_owned(),
+        };
+        let rows = run(s, "DESCRIBE EXTENDED mv").unwrap();
+        rows.iter()
+            .find_map(|b| {
+                (0..b.num_rows())
+                    .find(|&i| text(b.column(0), i) == "Type")
+                    .map(|i| text(b.column(1), i))
+            })
+            .unwrap_or_default()
+    };
+    for (mode, want) in [
+        ("append", Err("_LEGACY_ERROR_TEMP_1158")),
+        ("overwrite", Ok("MANAGED")),
+        ("errorifexists", Err("TABLE_OR_VIEW_ALREADY_EXISTS")),
+        ("ignore", Ok("METRIC_VIEW")),
+    ] {
+        let (s, _dir) = session();
+        let got = block_on(s.sql("SELECT 1L AS id"))
+            .and_then(|df| block_on(df.write().mode(mode).save_as_table("mv")));
+        match want {
+            Ok(ty) => {
+                got.unwrap_or_else(|e| panic!("{mode}: {e}"));
+                assert_eq!(type_of(&s), ty, "{mode}");
+            }
+            Err(c) => {
+                assert_eq!(class(&got.unwrap_err()), c, "{mode}");
+                assert_eq!(type_of(&s), "METRIC_VIEW", "{mode}");
+            }
+        }
+    }
+}
+
+#[test]
+fn save_as_table_append_onto_a_permanent_view_is_refused_as_spark_does() {
+    let (s, _dir) = session();
+    run(&s, "CREATE VIEW pv AS SELECT 1L AS id").unwrap();
+    let got = block_on(s.sql("SELECT 2L AS id"))
+        .and_then(|df| block_on(df.write().mode("append").save_as_table("pv")));
+    assert_eq!(class(&got.unwrap_err()), "_LEGACY_ERROR_TEMP_1158");
 }
