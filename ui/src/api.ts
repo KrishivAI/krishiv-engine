@@ -43,6 +43,10 @@ export interface Query {
   query_id: string;
   state: string;
   principal?: string;
+  /** What the client of the query's session said it is; a server console only. */
+  client_type?: string | null;
+  /** The session's tags and the request's (a request tag has an empty value). */
+  tags?: Record<string, string> | null;
   statement_class?: string | null;
   query_text?: string | null;
   query_text_truncated?: boolean;
@@ -103,6 +107,12 @@ export interface CacheRow {
 
 export interface Health {
   version: string;
+  /** Which console this is; absent from a server older than the modes. */
+  mode?: "server" | "embedded" | "profiles";
+  /** The one session an `embedded` console shows. */
+  session_id?: string | null;
+  /** The caller's role (`viewer`, `operator`, `admin`); absent or null when the server does not say. */
+  role?: string | null;
   uptime_seconds: number;
   workers: number;
   running_queries: number;
