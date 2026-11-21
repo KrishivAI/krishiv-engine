@@ -307,6 +307,48 @@ fn adbc_q1(tls: bool) {
     eprintln!("{stdout}");
 }
 
+/// TPC-H q1..q22 over SF 0.01 (`tpchgen-cli`), each through ADBC and through Spark Connect on the
+/// same server; the rows and Arrow types must agree.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs uv, the network and tpchgen-cli (cargo install tpchgen-cli): --run-ignored only"]
+fn adbc_flight_sql_tpch_all() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tpch = data_dir(dir.path()).join("tpch");
+    let gen_status = Command::new("tpchgen-cli")
+        .args(["parquet", "-s", "0.01", "--output-dir"])
+        .arg(&tpch)
+        .status()
+        .expect("tpchgen-cli runs (cargo install tpchgen-cli)");
+    assert!(gen_status.success());
+    let (conf, _) = auth_conf(dir.path(), false);
+    let conf: Vec<&str> = conf.iter().map(String::as_str).collect();
+    let (server, flight) = start(dir.path(), &conf);
+    assert!(flight);
+    let addr = server
+        .connect
+        .split(';')
+        .next()
+        .expect("address")
+        .trim_end_matches('/')
+        .to_owned();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let out = Command::new("uv")
+        .args(["run", "--quiet", "--script"])
+        .arg(root.join("tests/scripts/flight_sql_adbc.py"))
+        .args(["--addr", &addr, "--token", ADMIN_TOKEN])
+        .arg("--tpch-dir")
+        .arg(&tpch)
+        .arg("--queries")
+        .arg(root.join("bench/queries/tpch"))
+        .output()
+        .expect("uv runs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stdout}\n{stderr}");
+    eprintln!("{stdout}");
+}
+
 /// Plaintext loopback with token auth. Needs `uv` and the network for the drivers, so it is
 /// ignored by default: `cargo nextest run -p krishiv-cli --features flight-sql --test flight_sql
 /// --run-ignored only`.

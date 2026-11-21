@@ -95,6 +95,47 @@ def write_lineitem(directory: Path) -> Path:
     return path
 
 
+TPCH_TABLES = ("part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation", "region")
+
+
+def tpch_query(sql: str, directory: Path) -> str:
+    """`sql` with each TPC-H table a CTE over its Parquet file (spliced into the query's own WITH)."""
+    ctes = ", ".join(f"{t} AS (SELECT * FROM parquet.`{directory / (t + '.parquet')}`)" for t in TPCH_TABLES)
+    body = sql.strip().rstrip(";")
+    if body.upper().startswith("WITH"):
+        return f"WITH {ctes}, {body[4:].lstrip()}"
+    return f"WITH {ctes} {body}"
+
+
+def run_tpch(args: argparse.Namespace) -> int:
+    """q1..q22 over `--tpch-dir` through ADBC and Spark Connect; rows and types must agree."""
+    directory = Path(args.tpch_dir).resolve()
+    queries = Path(args.queries).resolve()
+    failed = []
+    with connect_adbc(args.addr, args.token, args.ca) as conn, conn.cursor() as cur:
+        spark = connect_spark(args.addr, args.token, args.ca)
+        try:
+            for n in range(1, 23):
+                sql = tpch_query((queries / f"q{n:02d}.sql").read_text(), directory)
+                cur.execute(sql)
+                flight = cur.fetch_arrow_table()
+                connect = spark.sql(sql).toArrow()
+                same_types = [f.type for f in flight.schema] == [f.type for f in connect.schema]
+                same_rows = flight.to_pylist() == connect.to_pylist()
+                if same_types and same_rows:
+                    print(f"q{n}: {flight.num_rows} rows equal")
+                else:
+                    failed.append(n)
+                    print(f"q{n}: DIFFERS (types equal: {same_types}, rows equal: {same_rows})")
+        finally:
+            spark.stop()
+    if failed:
+        print(f"ADBC and Spark Connect disagree on q{failed}")
+        return 1
+    print("ADBC TPC-H q1..q22: equal to Spark Connect")
+    return 0
+
+
 def connect_adbc(addr: str, token: str, ca: str | None):
     import adbc_driver_flightsql.dbapi as flight_sql  # ty: ignore[unresolved-import]  # the script's own uv env
 
@@ -123,7 +164,7 @@ def via_adbc(addr: str, token: str, ca: str | None, q1: str):
         return cur.fetch_arrow_table()
 
 
-def via_connect(addr: str, token: str, ca: str | None, q1: str):
+def connect_spark(addr: str, token: str, ca: str | None):
     from pyspark.sql import SparkSession  # ty: ignore[unresolved-import]  # the script's own uv env
 
     host, port = addr.rsplit(":", 1)
@@ -134,7 +175,11 @@ def via_connect(addr: str, token: str, ca: str | None, q1: str):
     # PySpark's `token` turns TLS on; over plaintext the bearer goes as a plain header
     # (Connect URL parameters are request metadata).
     remote = f"sc://{host}:{port}/;" + (f"token={token};use_ssl=true" if ca else f"authorization=Bearer {token}")
-    spark = SparkSession.builder.remote(remote).getOrCreate()
+    return SparkSession.builder.remote(remote).getOrCreate()
+
+
+def via_connect(addr: str, token: str, ca: str | None, q1: str):
+    spark = connect_spark(addr, token, ca)
     try:
         return spark.sql(q1).toArrow()
     finally:
@@ -145,9 +190,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--addr", required=True, help="host:port of krishiv server's Connect listener")
     parser.add_argument("--token", required=True, help="the bearer token of an admin principal")
-    parser.add_argument("--data", required=True, help="a directory for lineitem.parquet")
+    parser.add_argument("--data", help="a directory for lineitem.parquet (q1 mode)")
+    parser.add_argument("--tpch-dir", help="a directory of the eight TPC-H Parquet files: run q1..q22 instead of q1")
+    parser.add_argument("--queries", default="bench/queries/tpch", help="the q01.sql..q22.sql directory")
     parser.add_argument("--ca", help="the CA to trust; both clients use TLS")
     args = parser.parse_args()
+    if args.tpch_dir:
+        return run_tpch(args)
+    if not args.data:
+        parser.error("--data or --tpch-dir is required")
     q1 = Q1.format(path=write_lineitem(Path(args.data)))
     flight = via_adbc(args.addr, args.token, args.ca, q1)
     connect = via_connect(args.addr, args.token, args.ca, q1)
