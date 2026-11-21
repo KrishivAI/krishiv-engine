@@ -6,7 +6,9 @@ name: Fuzz (weekly long run)
 # workflow-lint`); a job is capped at six hours, so a target gets 4.5 h.
 on:
   schedule:
-    - cron: "0 1 * * 0"
+    # GitHub created this run 05:27-07:19 UTC (2026-10-25 to 11-15) for a Sunday 01:00 cron, a delay of 4.5-6.3 h.
+    # Saturday 19:00 lands the run around 00:00-01:30 UTC on Sunday, inside the guard's night window.
+    - cron: "0 19 * * 6"
   workflow_dispatch:
 
 permissions:
@@ -24,7 +26,9 @@ env:
 
 jobs:
   # A scheduled run that GitHub delayed into the working day exits at once, so it never holds the runners
-  # the PR checks need. A manual run is not guarded. Window: scheduled runs may start 18:00-06:00 UTC. The window bounds the start only: a run that starts at 05:59 may still run into the morning (up to its job limit).
+  # the PR checks need. A manual run is not guarded. Window: scheduled runs may start 18:00-06:00 UTC.
+  # The window bounds the start only: a run that starts at 05:59 may still run into the morning (up to
+  # its job limit).
   guard:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest

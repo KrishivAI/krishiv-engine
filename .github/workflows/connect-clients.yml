@@ -6,7 +6,9 @@ name: Spark Connect client smoke runs
 on:
   workflow_dispatch:
   schedule:
-    - cron: "41 23 * * 0"
+    # Delay of six hours or more is expected (as for fuzz-weekly): 19:41 lands near 02:00 UTC, inside the guard's
+    # night window; 23:41 would land after 06:00.
+    - cron: "41 19 * * 0"
 
 concurrency:
   group: connect-clients-${{ github.ref }}
@@ -21,7 +23,9 @@ env:
 
 jobs:
   # A scheduled run that GitHub delayed into the working day exits at once, so it never holds the runners
-  # the PR checks need. A manual run is not guarded. Window: scheduled runs may start 18:00-06:00 UTC. The window bounds the start only: a run that starts at 05:59 may still run into the morning (up to its job limit).
+  # the PR checks need. A manual run is not guarded. Window: scheduled runs may start 18:00-06:00 UTC.
+  # The window bounds the start only: a run that starts at 05:59 may still run into the morning (up to
+  # its job limit).
   guard:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
