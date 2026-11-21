@@ -221,6 +221,8 @@ impl Resolver<'_> {
                 });
             }
             if let Some(id) = not_measure {
+                // Spark's text is `key not found: ExprId(<id>,<jvm uuid>)`: matched by its prefix,
+                // so the second field is a placeholder, never a real UUID.
                 return Err(AnalysisError::new(
                     KrishivError::from(InternalError {
                         message: format!("key not found: ExprId({},{})", id.0, "metric-view"),
