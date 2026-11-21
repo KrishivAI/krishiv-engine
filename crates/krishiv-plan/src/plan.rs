@@ -109,6 +109,64 @@ impl PartialEq for SampleBounds {
 
 impl Eq for SampleBounds {}
 
+/// What a [`PlanNode::ColumnNames`] does with its input's columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ColumnNamesOp {
+    /// `toDF(names)`: every column renamed by position (Spark's
+    /// `UnresolvedSubqueryColumnAliases`); the count must match.
+    ToDf(Vec<String>),
+    /// `withColumnsRenamed`: each `(existing, new)` pair in turn renames every column whose
+    /// name matches `existing` under the session's case rule; names that match nothing are
+    /// ignored (Spark's `UnresolvedStarWithColumnsRenames`).
+    Rename(Vec<(String, String)>),
+    /// `drop`: the columns whose name matches any of `names` are left out, every match, and
+    /// names that match nothing are ignored (Spark's `Dataset.drop(colNames*)`). Each of
+    /// `columns` (a plain one-part column written as an expression, `drop(col("a"))`) is
+    /// resolved like any column reference over the input instead: several matches are
+    /// `AMBIGUOUS_REFERENCE`, none is ignored, and the one found is dropped by id (Spark's
+    /// `ResolveDataFrameDropColumns`).
+    Drop {
+        /// Names dropped by name.
+        names: Vec<String>,
+        /// Column references resolved over the input.
+        columns: Vec<String>,
+    },
+    /// `na.drop`: keeps the rows with at least `min_non_nulls` values that are neither NULL
+    /// nor, for a float or double column, NaN, among the columns `subset` names (all of the
+    /// input's columns when it is empty), as Spark's `AtLeastNNonNulls`. `None` is Spark's
+    /// `how = "any"`: every column of the subset must hold one. A name that matches no column
+    /// is `UNRESOLVED_COLUMN`.
+    DropNa {
+        /// The columns looked at.
+        subset: Vec<String>,
+        /// The least count of values that count.
+        min_non_nulls: Option<u32>,
+    },
+    /// `na.fill`: a NULL (and a NaN, in a float or double column) becomes the value, in the
+    /// columns whose type the value's matches (Spark's `DataFrameNaFunctions.fillValue`: a
+    /// number fills a numeric column, a string a string column, a boolean a boolean column; the
+    /// value is cast to the column's type). With no `cols` the single value goes to every
+    /// column; with one value it goes to the named `cols`; otherwise `values[i]` goes to
+    /// `cols[i]`.
+    FillNa {
+        /// The named columns.
+        cols: Vec<String>,
+        /// Literal expressions.
+        values: Vec<Arc<Expr>>,
+    },
+    /// `na.replace`: in the named `cols` (every column when empty) whose type the first old value's
+    /// kind reaches (a number: the numeric columns; a string; a boolean), each old value becomes its
+    /// new value, cast to the column's type; other values stay (Spark's
+    /// `DataFrameNaFunctions.replace`). `pairs` is `[old0, new0, old1, new1, ...]`, literals.
+    Replace {
+        /// The named columns.
+        cols: Vec<String>,
+        /// Alternating old and new literal values.
+        pairs: Vec<Arc<Expr>>,
+    },
+}
+
 /// The relation node kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -261,6 +319,15 @@ pub enum PlanNode {
         name: String,
         /// Its parameters.
         params: Vec<Arc<Expr>>,
+    },
+    /// A DataFrame call that works on column names the input's schema decides
+    /// (`toDF`, `withColumnsRenamed`, `drop(names)`): the analyzer resolves
+    /// it to a projection over the input and does not keep the node.
+    ColumnNames {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// What to do with the names.
+        op: ColumnNamesOp,
     },
     /// The boundary Spark puts between pipe operators (`PipeOperator`):
     /// a `WHERE` or `ORDER BY` after `|>` reads only what the operator
@@ -1209,6 +1276,7 @@ impl LogicalPlan {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
+            | PlanNode::ColumnNames { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
@@ -1276,6 +1344,7 @@ impl LogicalPlan {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
+            | PlanNode::ColumnNames { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
@@ -1342,6 +1411,14 @@ impl LogicalPlan {
             } => {
                 params.iter().for_each(f);
             }
+            PlanNode::ColumnNames { op, .. } => match op {
+                ColumnNamesOp::FillNa { values, .. } => values.iter().for_each(f),
+                ColumnNamesOp::Replace { pairs, .. } => pairs.iter().for_each(f),
+                ColumnNamesOp::ToDf(_)
+                | ColumnNamesOp::Rename(_)
+                | ColumnNamesOp::Drop { .. }
+                | ColumnNamesOp::DropNa { .. } => {}
+            },
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter().for_each(f),
@@ -1449,6 +1526,14 @@ impl LogicalPlan {
             } => {
                 params.iter_mut().for_each(f);
             }
+            PlanNode::ColumnNames { op, .. } => match op {
+                ColumnNamesOp::FillNa { values, .. } => values.iter_mut().for_each(f),
+                ColumnNamesOp::Replace { pairs, .. } => pairs.iter_mut().for_each(f),
+                ColumnNamesOp::ToDf(_)
+                | ColumnNamesOp::Rename(_)
+                | ColumnNamesOp::Drop { .. }
+                | ColumnNamesOp::DropNa { .. } => {}
+            },
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter_mut().for_each(f),
@@ -1720,6 +1805,7 @@ impl LogicalPlan {
                 | PlanNode::Sql { .. }
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
+                | PlanNode::ColumnNames { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::SetOp { .. }
                 | PlanNode::Pivot { .. }

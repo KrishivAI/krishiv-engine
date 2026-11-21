@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 14 done, 14 partial, 30 missing, 4 out of scope.
+62 arms: 20 done, 18 partial, 20 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -28,11 +28,11 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 14 | deduplicate | partial | a column subset and within_watermark | Distinct (all columns); a subset is Aggregate with first per non-key column and needs the input columns (analyzer node); within_watermark → P4 | P3-T012 | 3 |
 | 15 | range | done |  | Range | P2-T091a | 0 |
 | 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
-| 17 | repartition | missing |  | Repartition (round robin / coalesce) | P3-T012 | 3 |
-| 18 | to_df | missing |  | lowering: Project of Alias (positional) | P3-T012 | 4 |
-| 19 | with_columns_renamed | missing |  | lowering: Project | P3-T012 | 4 |
+| 17 | repartition | partial | the partition count (spark_partition_id, getNumPartitions) | Hint(REPARTITION n \| COALESCE n): rows pass through unchanged; the count is not applied to the plan; each call adds the warning "Hint REPARTITION(n) has no effect in a single-node plan." to the plan's warnings (Spark logs nothing; whether a client sees them is not checked) | P3-T012 | 3 |
+| 18 | to_df | done |  | ColumnNames(ToDf): the analyzer renames by position (count mismatch is the derived-table alias error) | P3-T012 | 4 |
+| 19 | with_columns_renamed | partial | rename_columns_map when its result depends on entry order (wire order is lost on decode) | ColumnNames(Rename): the pairs in turn, case rule of the session, unknown names ignored | P3-T012 | 4 |
 | 20 | show_string | missing |  | server-side: execute, then format as Spark's Dataset.showString (truncate, vertical); returns a one-row, one-column relation | P3-T012 | 4 |
-| 21 | drop | missing |  | lowering: Project without the dropped columns (names or column references) | P3-T012 | 4 |
+| 21 | drop | partial | columns that are qualified or tied to a DataFrame | ColumnNames(Drop): by name; a plain one-part column expression resolves over the input (ambiguous is an error); unknown names ignored | P3-T012 | 4 |
 | 22 | tail | done |  | Tail (the last n rows in plan order; not Sort + Limit); a negative n is INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE from the analyzer | P3-T012 | 3 |
 | 23 | with_columns | partial | Alias.metadata | WithColumns; metadata on the column field | P3-T012 | 4 |
 | 24 | hint | done |  | Hint; as Spark 4.2: parameters are literals or lists of them, a partitioning hint is dropped with a warning (3.5 reads parameters differently) | P3-T012 | 3 |
@@ -47,7 +47,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 33 | with_watermark | out of scope |  | P4 |  | 0 |
 | 34 | apply_in_pandas_with_state | out of scope |  | P4 |  | 0 |
 | 35 | html_string | missing |  | as show_string, HTML form | P3-T012 | 4 |
-| 36 | cached_local_relation | partial | hashes in the artifact store (AddArtifacts cache/<hash> is not stored yet: every hash is NOT_FOUND_CACHED_LOCAL_RELATION) | Read(ReadSource::Local) through the same host request as local_relation; the artifact lookup is the host's | P3-T083 | 7 |
+| 36 | cached_local_relation | done |  | Read(ReadSource::Local) through the same host request as local_relation; the host reads the session's own cache/<hash> artifact (CANNOT_FIND_CACHED_LOCAL_RELATION without one) and builds it as an inline local_relation | P3-T012 | 7 |
 | 37 | cached_remote_relation | done |  | a read of the reserved table `__krishiv_cached_remote.<id>`; the server resolves the id in its session (DATAFRAME_NOT_FOUND when absent) and splices the frame's plan in (`Session::from_plan_over`); a lazy checkpoint's rows are taken by the first analysis that reads it, AnalyzePlan included (Spark runs no job on analysis: a recorded difference); tests/cache.rs | P3-T083 | 7 |
 | 38 | common_inline_user_defined_table_function | missing |  | TableFunction with a Python UDTF (T014) | P3-T014 | 6 |
 | 39 | as_of_join | missing |  | new AsOfJoin, shared with the ASOF JOIN SQL syntax | P3-T012 | 8 |
@@ -60,17 +60,17 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 46 | relation_changes | missing |  | CDC read (DataFrameReader.changes()): Delta change data feed through table_changes; the Iceberg changelog and is_streaming come later | P3-T021b | 8 |
 | 47 | nearest_by_join | missing |  | top-k per left row by a ranking expression: new NearestByJoin, planned on T077's top-k (num_results 1–100,000) | P3-T077 | 8 |
 | 48 | zip | missing |  | new Zip (columns of two inputs side by side, by row position) | P3-T012 | 3 |
-| 90 | fill_na | missing |  | lowering: Project of coalesce / nanvl by type; NA_FILL_VALUES_EMPTY, NA_FILL_VALUES_LENGTH_MISMATCH | P3-T012 | 5 |
-| 91 | drop_na | missing |  | lowering: Filter on non-null counts (how, thresh, subset) | P3-T012 | 5 |
-| 92 | replace | missing |  | lowering: Project of CASE per column | P3-T012 | 5 |
+| 90 | fill_na | done |  | ColumnNames(FillNa): the analyzer projects coalesce / nanvl of the cast value in the columns the value's type reaches; NA_FILL_VALUES_EMPTY, NA_FILL_VALUES_LENGTH_MISMATCH; several values are Spark's fillMap (every named column, the last value of a repeated name); a BYTE, SHORT, INT, FLOAT or DECIMAL value is accepted where Spark's one-value fill takes only Long, Double, String, Boolean | P3-T012 | 5 |
+| 91 | drop_na | done |  | ColumnNames(DropNa): the analyzer filters on the count of values that are neither NULL nor NaN (min_non_nulls, else every column of the subset); a nested field in the subset (`s.a`) is UNRESOLVED_COLUMN where Spark resolves it | P3-T012 | 5 |
+| 92 | replace | done |  | ColumnNames(Replace): the analyzer projects CASE WHEN col = old THEN new per column the first old value's kind reaches (a Spark 4.0 run); a NULL or mixed-type old value is refused; the last pair of a repeated old value wins; named columns are resolved even with no pairs | P3-T012 | 5 |
 | 100 | summary | missing |  | lowering as Spark's StatFunctions.summary: Aggregate then a stack to rows | P3-T012 | 5 |
 | 101 | crosstab | missing |  | lowering: Aggregate count + Pivot | P3-T012 | 5 |
 | 102 | describe | missing |  | as summary with the fixed statistic list | P3-T012 | 5 |
-| 103 | cov | missing |  | Aggregate covar_samp, a one-row result | P3-T012 | 5 |
-| 104 | corr | missing |  | Aggregate corr (Pearson only, as Spark) | P3-T012 | 5 |
+| 103 | cov | partial | a non-numeric column is answered when its values cast to double (Spark refuses by type; a value that is not a number is an error here, never 0.0) | Aggregate of coalesce(covar_samp over NULL-as-0.0 doubles, 0.0), as StatFunctions.calculateCov (a Spark 4.0 run) | P3-T012 | 5 |
+| 104 | corr | partial | method other than pearson; a non-numeric column is answered when its values cast to double (Spark refuses by type; a value that is not a number is an error here, never 0.0) | Aggregate of coalesce(corr over NULL-as-0.0 doubles, NaN); recorded difference: zero variance is NaN (Spark 4.0 ANSI: DIVIDE_BY_ZERO) | P3-T012 | 5 |
 | 105 | approx_quantile | missing |  | Aggregate approx_percentile with relative error | P3-T012 | 5 |
 | 106 | freq_items | missing |  | new aggregate (Spark's frequent-items sketch, support) | P3-T012 | 5 |
-| 107 | sample_by | missing |  | lowering: Filter with a seeded rand() against the per-stratum fraction | P3-T012 | 5 |
+| 107 | sample_by | done |  | Filter(rand(seed) < CASE WHEN col = stratum THEN fraction ... ELSE 0.0 END), the draw made for every row as Spark does; a repeated stratum keeps its last fraction; strata compare with SQL = (numeric coercion), whether Spark's boxed lookup differs for an Int stratum on a Long column is not verified against a Spark run | P3-T012 | 5 |
 | 200 | catalog | done |  | a call of the session's `spark.catalog` run by the host while the plan is prepared (`LocalRequest::Catalog`), its rows the local relation the plan reads; `execute/catalog_call.rs`, tests/catalog.rs | P3-T082 | 9 |
 | 300 | ml_relation | out of scope |  | machine learning is out of scope |  | 0 |
 | 998 | extension | partial | every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); Echo is a one-row Project over OneRowRelation | P3-T015 | 10 |

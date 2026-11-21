@@ -80,6 +80,7 @@
 //! | `PlanNode::Shift` | R | - | - |
 //! | `PlanNode::Hint` | U | - | - |
 //! | `PlanNode::PipeOperator` | U | - | - |
+//! | `PlanNode::ColumnNames` | U | - | - |
 //! | `PlanNode::Repartition` | U, R | - | - |
 //! | `PlanNode::CollectMetrics` | U, R | - | `observe` |
 //! | `PlanNode::JoinHint` | R | - | - |
@@ -181,9 +182,9 @@ pub fn generate_qualifier(index: usize, aliased: bool) -> String {
 }
 
 pub use plan::{
-    ALIAS_PART_SEP, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind,
-    JoinStrategy, LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, SampleBounds, Scan,
-    SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP, TableArg, TableVersion, UnpivotColumnSet,
+    ALIAS_PART_SEP, ColumnNamesOp, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition,
+    JoinKind, JoinStrategy, LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, SampleBounds,
+    Scan, SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP, TableArg, TableVersion, UnpivotColumnSet,
     generator_arg, without_generated_marker,
 };
 pub use python::{

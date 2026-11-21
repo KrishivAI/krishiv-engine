@@ -98,7 +98,12 @@
       "rows_produced": 1,
       "cpu_ns": 9200000000,
       "spill_bytes": 0,
-      "bytes_read": 7516192768
+      "bytes_read": 7516192768,
+      "client_type": "_SPARK_CONNECT_PYTHON spark/4.2.0 os/linux python/3.12",
+      "tags": {
+        "team": "risk",
+        "nightly": ""
+      }
     },
     {
       "query_id": "01932a40-1a00-7a01-8001-aaaaaaaaaa02",
@@ -111,7 +116,11 @@
       "rows_produced": 1,
       "cpu_ns": 12100000000,
       "spill_bytes": 134217728,
-      "bytes_read": 7516192768
+      "bytes_read": 7516192768,
+      "client_type": "krishiv-cli/0.2.1",
+      "tags": {
+        "team": "ads"
+      }
     },
     {
       "query_id": "01932a40-1a00-7a01-8001-aaaaaaaaaa03",
@@ -121,7 +130,9 @@
       "error_class": "DIVIDE_BY_ZERO",
       "submitted_at": 1793987000000000,
       "wall_ns": 3200000,
-      "peak_memory_bytes": 1048576
+      "peak_memory_bytes": 1048576,
+      "client_type": null,
+      "tags": {}
     },
     {
       "query_id": "01932a40-1a00-7a01-8001-aaaaaaaaaa04",
@@ -131,7 +142,11 @@
       "cancel_reason": "admin",
       "submitted_at": 1793986000000000,
       "wall_ns": 41000000000,
-      "peak_memory_bytes": 5368709120
+      "peak_memory_bytes": 5368709120,
+      "client_type": "ADBC Flight SQL",
+      "tags": {
+        "team": "risk"
+      }
     }
   ],
   "detail": {

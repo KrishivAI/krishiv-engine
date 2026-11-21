@@ -179,3 +179,254 @@ async fn an_embedded_ui_shows_the_hosts_own_queries_and_stops_on_drop() {
     assert!(stopped.is_ok(), "drop hung on an open event stream");
     assert!(tokio::net::TcpStream::connect(addr).await.is_err());
 }
+
+/// ADR 0024, the modes table: a server's history survives a restart. The second runtime's own tables start empty;
+/// the source adds what the store held when it was built, and a query in both is listed once, as the runtime has
+/// it.
+#[tokio::test]
+async fn a_servers_history_lists_what_ran_before_its_restart() {
+    use krishiv_session::QueryOptions;
+    const OP: &str = "0193b1c2-7a00-7a01-8001-00000000aa01";
+    async fn run(rt: &Arc<EngineRuntime>, sql: &str, options: QueryOptions) {
+        let session = Session::builder().runtime(Arc::clone(rt)).build().unwrap();
+        let df = session.sql_with(sql, options).await.unwrap();
+        df.collect().await.unwrap();
+    }
+    fn of<'a>(rows: &'a [krishiv_server::internal::Row], marker: &str) -> Vec<&'a Value> {
+        rows.iter()
+            .filter(|r| r["query_text"].as_str().is_some_and(|t| t.contains(marker)))
+            .map(|r| &r["query_id"])
+            .collect()
+    }
+    fn operators_of(rows: &[krishiv_server::internal::Row], id: &Value) -> usize {
+        rows.iter().filter(|r| &r["query_id"] == id).count()
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let with_store = || {
+        EngineRuntime::builder()
+            .config("krishiv.history.path", dir.path().to_str().unwrap())
+            .build()
+            .unwrap()
+    };
+    {
+        let rt = with_store();
+        let before = "SELECT count(*) AS before_restart FROM range(0, 100)";
+        run(&rt, before, QueryOptions::new()).await;
+        let again = "SELECT count(*) AS first_run FROM range(0, 100)";
+        run(&rt, again, QueryOptions::new().operation_id(OP)).await;
+        // Dropping the runtime flushes the history writer.
+    }
+    let stored = krishiv_session::read_profile_history(dir.path()).unwrap();
+    assert_eq!(stored.len(), 2, "{stored:?}");
+
+    let rt = with_store();
+    run(&rt, "SELECT 3 AS after_restart", QueryOptions::new()).await;
+    let again = "SELECT count(*) AS second_run FROM range(0, 100)";
+    run(&rt, again, QueryOptions::new().operation_id(OP)).await;
+    let plain = SessionSource::new(Arc::clone(&rt)).unwrap();
+    let source = SessionSource::new(rt).unwrap().with_stored_history(&stored);
+
+    let queries = source.rows(SystemTable::Queries).await.unwrap();
+    let before = of(&queries, "before_restart");
+    assert_eq!(before.len(), 1, "{queries:?}");
+    assert_eq!(of(&queries, "after_restart").len(), 1, "{queries:?}");
+    // The id that ran in both lives is the runtime's row, not the store's.
+    assert_eq!(
+        of(&queries, "second_run"),
+        [&Value::from(OP)],
+        "{queries:?}"
+    );
+    assert!(of(&queries, "first_run").is_empty(), "{queries:?}");
+
+    let operators = source.rows(SystemTable::Operators).await.unwrap();
+    assert!(operators_of(&operators, before[0]) > 0, "{operators:?}");
+    let live = plain.rows(SystemTable::Operators).await.unwrap();
+    let op = Value::from(OP);
+    assert!(operators_of(&live, &op) > 0, "{live:?}");
+    assert_eq!(operators_of(&operators, &op), operators_of(&live, &op));
+
+    // Without the store the restarted server knows this run only.
+    let alone = plain.rows(SystemTable::Queries).await.unwrap();
+    assert!(of(&alone, "before_restart").is_empty(), "{alone:?}");
+}
+
+/// A client that reuses its operation id after a restart: while the new run has reported no operator yet, its
+/// id is in the queries table only. The stored operators of the earlier run must not stand in for it, or the
+/// query's page would show the new run with the old run's metrics.
+#[tokio::test]
+async fn a_running_query_does_not_show_the_stored_operators_of_an_earlier_run_of_its_id() {
+    use krishiv_session::QueryOptions;
+    const OP: &str = "0193b1c2-7a00-7a01-8001-00000000bb01";
+    let dir = tempfile::tempdir().unwrap();
+    let with_store = || {
+        EngineRuntime::builder()
+            .config("krishiv.history.path", dir.path().to_str().unwrap())
+            .build()
+            .unwrap()
+    };
+    {
+        let rt = with_store();
+        let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+        let first = "SELECT count(*) AS first_run FROM range(0, 100)";
+        let df = session
+            .sql_with(first, QueryOptions::new().operation_id(OP))
+            .await
+            .unwrap();
+        df.collect().await.unwrap();
+    }
+    let stored = krishiv_session::read_profile_history(dir.path()).unwrap();
+    assert_eq!(stored.len(), 1, "{stored:?}");
+    let doc: Value = serde_json::from_str(&stored[0].profile).unwrap();
+    assert!(!doc["operators"].as_array().unwrap().is_empty());
+
+    let rt = with_store();
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let runner = session.clone();
+    let task = tokio::spawn(async move {
+        // A cross join no machine finishes soon.
+        let sql = "SELECT count(*) FROM range(0, 1000000000) a CROSS JOIN range(0, 1000000000) b";
+        let df = runner
+            .sql_with(sql, QueryOptions::new().operation_id(OP))
+            .await?;
+        df.collect().await
+    });
+    let plain = SessionSource::new(Arc::clone(&rt)).unwrap();
+    let source = SessionSource::new(rt).unwrap().with_stored_history(&stored);
+    let op = Value::from(OP);
+    let start = std::time::Instant::now();
+    loop {
+        let queries = plain.rows(SystemTable::Queries).await.unwrap();
+        if queries
+            .iter()
+            .any(|q| q["query_id"] == op && q["state"] == "running")
+        {
+            break;
+        }
+        assert!(start.elapsed().as_secs() < 30, "the query never ran");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let of_op = |rows: Vec<krishiv_server::internal::Row>| {
+        rows.into_iter()
+            .filter(|r| r["query_id"] == op)
+            .collect::<Vec<_>>()
+    };
+    // One row for the id, the running one; and exactly the operators the runtime itself reports for it.
+    let queries = of_op(source.rows(SystemTable::Queries).await.unwrap());
+    assert_eq!(queries.len(), 1, "{queries:?}");
+    assert_eq!(queries[0]["state"], "running");
+    let live = of_op(plain.rows(SystemTable::Operators).await.unwrap());
+    let shown = of_op(source.rows(SystemTable::Operators).await.unwrap());
+    assert_eq!(shown.len(), live.len(), "{shown:?}");
+
+    assert_eq!(session.interrupt_all().len(), 1);
+    assert!(task.await.unwrap().is_err());
+}
+
+/// The console's own reads are stored like any query, about two a second while a page is open. A restarted
+/// server must still list what its users ran: the console's profiles take no place among the newest it shows, and
+/// none of them is listed.
+#[tokio::test]
+async fn the_consoles_own_reads_do_not_push_the_users_history_out_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let with_store = || {
+        EngineRuntime::builder()
+            .config("krishiv.history.path", dir.path().to_str().unwrap())
+            .build()
+            .unwrap()
+    };
+    {
+        let rt = with_store();
+        let user = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+        let df = user.sql("SELECT 5 AS the_users_query").await.unwrap();
+        df.collect().await.unwrap();
+        // An open page: each read is two stored queries, so these are more than the 1,000 a server lists.
+        let console = SessionSource::new(Arc::clone(&rt)).unwrap();
+        for _ in 0..520 {
+            console.rows(SystemTable::Queries).await.unwrap();
+        }
+        // Dropping the runtime flushes the history writer.
+    }
+    let stored = krishiv_session::read_profile_history(dir.path()).unwrap();
+    let of_console = stored
+        .iter()
+        .filter(|p| p.principal == UI_PRINCIPAL)
+        .count();
+    assert!(
+        of_console > 1_000,
+        "{} stored, too few of them the console's to reach the cut",
+        stored.len()
+    );
+
+    let principals = |rows: &[krishiv_server::internal::Row]| -> Vec<String> {
+        rows.iter()
+            .filter_map(|r| r["principal"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let source = SessionSource::new(with_store())
+        .unwrap()
+        .with_stored_history(&stored);
+    let queries = source.rows(SystemTable::Queries).await.unwrap();
+    // The store keeps the statement as `system.queries` shows it, its literals replaced.
+    let texts: Vec<_> = queries.iter().map(|r| &r["query_text"]).collect();
+    assert_eq!(
+        texts,
+        ["SELECT ? AS the_users_query"],
+        "{of_console} stored"
+    );
+    assert!(!principals(&queries).iter().any(|p| p == UI_PRINCIPAL));
+
+    // `krishiv ui --profiles` over a server's folder leaves them out too.
+    let saved = krishiv_server::session_source::ProfilesSource::from_profiles(&stored);
+    let saved = saved.rows(SystemTable::Queries).await.unwrap();
+    assert_eq!(saved.len(), 1, "{saved:?}");
+    assert!(!principals(&saved).iter().any(|p| p == UI_PRINCIPAL));
+}
+
+/// A query's row carries its tags (the session's and the request's) and the client type of its session, so the
+/// server console can filter on them.
+#[tokio::test]
+async fn a_query_row_carries_its_tags_and_its_sessions_client_type() {
+    let rt = runtime();
+    let user = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    user.set_client_info(
+        krishiv_session::Transport::Connect,
+        Some("_SPARK_CONNECT_PYTHON spark/4.2.0"),
+        None,
+        None,
+    );
+    user.set_tag("team", "risk").unwrap();
+    user.sql_with(
+        "SELECT 7 AS tagged",
+        krishiv_session::QueryOptions::new().tags(["nightly"]),
+    )
+    .await
+    .unwrap()
+    .collect()
+    .await
+    .unwrap();
+    let plain = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    plain
+        .sql("SELECT 8 AS plain")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let rows = SessionSource::new(rt)
+        .unwrap()
+        .rows(SystemTable::Queries)
+        .await
+        .unwrap();
+    let of = |text: &str| {
+        rows.iter()
+            .find(|r| r["query_text"].as_str().is_some_and(|t| t.contains(text)))
+            .unwrap_or_else(|| panic!("{text}: {rows:?}"))
+    };
+    let tagged = of("7 AS tagged");
+    assert_eq!(tagged["client_type"], "_SPARK_CONNECT_PYTHON spark/4.2.0");
+    assert_eq!(tagged["tags"]["team"], "risk");
+    assert_eq!(tagged["tags"]["nightly"], "");
+    let plain = of("8 AS plain");
+    assert_eq!(plain["client_type"], Value::Null);
+    assert_eq!(plain["tags"], serde_json::json!({}));
+}
