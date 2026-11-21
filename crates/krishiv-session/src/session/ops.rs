@@ -457,7 +457,7 @@ impl Session {
                 return Ok(Vec::new());
             }
             // A key the directory cannot record (no commit log) is refused before `begin`, which deletes
-            // what an overwrite replaces.
+            // a single file an overwrite replaces.
             super::writes::refuse_unlogged_key_early(
                 &env.config,
                 &options,
