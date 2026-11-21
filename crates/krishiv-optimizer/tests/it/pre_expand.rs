@@ -310,3 +310,32 @@ fn a_filtered_regular_call_beside_distinct_calls_stays() {
         "exports no states",
     );
 }
+
+/// A key the projection below the expansion computes nondeterministically is computed once per
+/// input row, below the partial aggregate, which groups by its value: as many evaluations as
+/// without the rule. (The reference interpreter has no `rand`, so only the plan is checked.)
+#[test]
+fn a_nondeterministic_key_is_computed_once_below_the_partial_aggregate() {
+    let sql = "SELECT c, r, count(*) FROM (SELECT c, CAST(rand(7) * 10 AS INT) AS r FROM h) \
+               GROUP BY ROLLUP(c, r)";
+    let ctx = support::ctx_over(catalog());
+    let plan = support::resolve(sql, &ctx);
+    let udfs = UdfLibrary::new();
+    let on = optimize_with_udfs(&plan, &Stats, &udfs, &config(true)).unwrap();
+    let text = on.root().to_string();
+    assert_eq!(text.matches("rand(7)").count(), 1, "{text}");
+    let partial = text.find("PartialAggregate [c#0, r#5]").expect(&text);
+    assert!(text[partial..].contains("rand(7)"), "{text}");
+    let again = optimize_with_udfs(&on, &Stats, &udfs, &config(true)).unwrap();
+    assert!(again.structurally_eq(&on), "{text}");
+}
+
+/// An uncorrelated scalar subquery the key reads becomes a column of the input, so the rule
+/// groups by it below the expansion with the same rows.
+#[test]
+fn a_scalar_subquery_key_below_the_expansion_is_a_column() {
+    assert_fires(
+        "SELECT c, x, count(*) FROM (SELECT c, (SELECT max(w) FROM h) AS x FROM h) \
+         GROUP BY ROLLUP(c, x)",
+    );
+}
