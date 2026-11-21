@@ -278,6 +278,11 @@ impl<'a> Dml<'a> {
         run(self.env, sink, input, None).0
     }
 
+    /// Whether the statement's scan is refused (an unknown `write.*.mode`).
+    pub(super) fn scan_is_refused(&self) -> bool {
+        self.table.scan().is_err()
+    }
+
     /// `DELETE FROM t WHERE condition` in merge-on-read mode.
     pub(super) fn mor_delete(&self, condition: &str) -> Result<(), KrishivError> {
         self.merge_on_read(&format!(

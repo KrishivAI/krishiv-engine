@@ -12,7 +12,7 @@
 //! batch over a bounded channel. A driver that ends without `combine` stops its task, which
 //! aborts its output. `finalize` collects every task's output and commits them as one `RowDelta`
 //! ([`MergeOnReadWrite::commit`]); a task whose output `finalize` does not keep deletes it. A
-//! statement that deleted and inserted nothing commits nothing.
+//! statement that deleted and inserted nothing still commits an `overwrite` snapshot (Java).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -72,6 +72,9 @@ type Outcome = Result<TaskOutput, KrishivError>;
 
 struct Writer {
     done: oneshot::Receiver<Outcome>,
+    /// Tells the task whether its output is kept; a task told otherwise (or whose finalize never
+    /// comes) deletes its files.
+    keep: oneshot::Sender<bool>,
 }
 
 struct SinkLocal {
@@ -133,12 +136,18 @@ async fn apply(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one task's channels and shared state, built once in local_state"
+)]
 async fn run_task(
     mut task: super::row_delta::MorTask,
     update: bool,
     mut batches: mpsc::Receiver<RecordBatch>,
     commit: oneshot::Receiver<()>,
     done: oneshot::Sender<Outcome>,
+    keep: oneshot::Receiver<bool>,
+    write: Arc<MergeOnReadWrite>,
     failed: Arc<Mutex<Option<KrishivError>>>,
     stop: Arc<AtomicBool>,
 ) {
@@ -161,9 +170,16 @@ async fn run_task(
     }
     match task.finish().await {
         Err(e) => drop(done.send(Err(e))),
-        // The output is `finalize`'s from here (a finalize dropped midway leaves orphans, never
-        // a table that references deleted files).
-        Ok(out) => drop(done.send(Ok(out))),
+        Ok(out) => {
+            // Armed until `finalize` keeps the output: a finalize that never comes (another
+            // driver failed, the query was cancelled) or says no deletes the files here.
+            let mut guard = write.written_by(std::slice::from_ref(&out));
+            if done.send(Ok(out)).is_ok() && keep.await.unwrap_or(false) {
+                guard.armed = false;
+            } else {
+                guard.delete().await;
+            }
+        }
     }
 }
 
@@ -188,6 +204,7 @@ impl Sink for MergeOnReadSink {
         let (batches_tx, batches_rx) = mpsc::channel(QUEUED_BATCHES);
         let (commit_tx, commit_rx) = oneshot::channel();
         let (done_tx, done_rx) = oneshot::channel();
+        let (keep_tx, keep_rx) = oneshot::channel();
         let failed = Arc::new(Mutex::new(None));
         let stop = Arc::new(AtomicBool::new(false));
         let fut = run_task(
@@ -196,6 +213,8 @@ impl Sink for MergeOnReadSink {
             batches_rx,
             commit_rx,
             done_tx,
+            keep_rx,
+            Arc::clone(&self.write),
             Arc::clone(&failed),
             Arc::clone(&stop),
         );
@@ -209,7 +228,10 @@ impl Sink for MergeOnReadSink {
         Ok(Box::new(SinkLocal {
             batches: batches_tx,
             commit: Some(commit_tx),
-            writer: Some(Writer { done: done_rx }),
+            writer: Some(Writer {
+                done: done_rx,
+                keep: keep_tx,
+            }),
             failed,
             stop,
         }))
@@ -273,7 +295,9 @@ impl Sink for MergeOnReadSink {
             let writers = std::mem::take(&mut *lock(&global.writers));
             let mut outputs: Vec<TaskOutput> = Vec::new();
             let mut first_error = None;
+            let mut keeps = Vec::new();
             for w in writers {
+                keeps.push(w.keep);
                 match w.done.await {
                     Ok(Ok(o)) => outputs.push(o),
                     Ok(Err(e)) => {
@@ -284,22 +308,14 @@ impl Sink for MergeOnReadSink {
                     }
                 }
             }
+            // Each task deletes its own files unless told to keep them (dropping `keeps` says no).
             if let Some(e) = first_error {
-                self.write.abort(outputs).await;
                 return Err(e);
             }
-            if let Err(e) = ctx.query().check_cancelled() {
-                self.write.abort(outputs).await;
-                return Err(e);
-            }
-            let empty = outputs.iter().all(|o| {
-                o.data.is_empty()
-                    && o.deletes.is_empty()
-                    && o.files.is_empty()
-                    && o.rewritten.is_empty()
-            });
-            if empty {
-                return Ok(());
+            ctx.query().check_cancelled()?;
+            // An empty statement still commits (an `overwrite` snapshot, as Java's RowDelta).
+            for k in keeps {
+                let _ = k.send(true);
             }
             let query_id = ctx.query().id().0.to_string();
             self.write.commit(outputs, Some(&query_id)).await?;

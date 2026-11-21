@@ -256,12 +256,13 @@ impl MergeOnReadWrite {
     /// cancelled; Java's `PositionDeltaBatchWrite.abort`). Cancellation-safe:
     /// dropped midway, the files not deleted yet are deleted in the
     /// background.
+    #[cfg(test)]
     pub(crate) async fn abort(&self, tasks: Vec<TaskOutput>) {
         self.written_by(&tasks).delete().await;
     }
 
     /// An armed guard over every data and delete file of `tasks`.
-    fn written_by(&self, tasks: &[TaskOutput]) -> Written {
+    pub(crate) fn written_by(&self, tasks: &[TaskOutput]) -> Written {
         let t = &self.target;
         let mut written = Written::new(t.file_io.clone(), &t.registered);
         for task in tasks {

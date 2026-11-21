@@ -128,10 +128,21 @@ pub(crate) fn isolation(
     }
 }
 
+impl IcebergRowLevel {
+    /// Spark fails a statement whose `write.{delete,update,merge}.mode` is not a known mode
+    /// (`Unknown row-level operation mode`), before it reads anything.
+    fn check_mode(&self) -> krishiv_exec::Result<()> {
+        if let Some(t) = self.provider.write_target() {
+            super::row_delta::row_level_mode(t.base.properties(), self.op)?;
+        }
+        Ok(())
+    }
+}
+
 impl RowLevelTable for IcebergRowLevel {
     fn capabilities(&self) -> RowLevelCapabilities {
         let mut c = RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality);
-        // A mode that cannot be read is the statement's error, raised when it runs.
+        // A mode that cannot be read is the statement's error, raised by `scan` (`check_mode`).
         c.merge_on_read = self.provider.write_target().is_some_and(|t| {
             matches!(
                 super::row_delta::row_level_mode(t.base.properties(), self.op),
@@ -142,6 +153,7 @@ impl RowLevelTable for IcebergRowLevel {
     }
 
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+        self.check_mode()?;
         let inner = self.provider.row_level_scan(self.lineage, None)?;
         Ok(Arc::new(RowIdScan::new(inner)?))
     }

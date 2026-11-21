@@ -51,7 +51,7 @@ fn a_merge_on_read_update_deletes_the_old_row_and_adds_the_new() {
 }
 
 #[test]
-fn a_merge_on_read_delete_that_hits_nothing_commits_nothing() {
+fn a_merge_on_read_delete_that_hits_nothing_commits_an_overwrite() {
     let env = env();
     let t = create(&env, 2, false, MOR);
     let catalog = Catalog::new(&t);
@@ -60,7 +60,10 @@ fn a_merge_on_read_delete_that_hits_nothing_commits_nothing() {
     Dml::open(&env, &catalog, RowLevelOperation::Delete)
         .mor_delete("id > 100")
         .unwrap();
-    assert_eq!(catalog.metadata().current_snapshot_id(), before);
+    let m = catalog.metadata();
+    assert_ne!(m.current_snapshot_id(), before);
+    let (op, _) = summary(&m);
+    assert_eq!(format!("{op:?}").to_lowercase(), "overwrite");
 }
 
 #[test]
@@ -76,4 +79,18 @@ fn a_v3_merge_on_read_delete_writes_a_dv() {
     assert_eq!(read_back(&env, &catalog).len(), 5);
     let (_, s) = summary(&m);
     assert_eq!(get(&s, "added-dvs"), Some("1"));
+}
+
+#[test]
+fn an_unknown_row_level_mode_fails_the_statement() {
+    for (op, key) in [
+        (RowLevelOperation::Delete, "write.delete.mode"),
+        (RowLevelOperation::Update, "write.update.mode"),
+    ] {
+        let env = env();
+        let t = create(&env, 2, false, &[(key, "mor")]);
+        let catalog = Catalog::new(&t);
+        append(&env, &catalog, range(0, 3));
+        assert!(Dml::open(&env, &catalog, op).scan_is_refused(), "{key}");
+    }
 }
