@@ -217,6 +217,13 @@ async fn a_requests_traceparent_names_the_trace_of_the_statement_it_starts() {
     )
     .await;
     assert_eq!(seen["rows"], json!([[trace]]), "{seen}");
-    let all = finish(&s, &admin, "SELECT count(*) FROM system.queries").await;
-    assert!(all["rows"][0][0].as_i64().unwrap() >= 3, "{all}");
+    // Each submitted statement has its own history row, in submission order (UUIDv7 ids): the
+    // supplied trace id, none for the malformed header, none for no header.
+    let rows = finish(
+        &s,
+        &admin,
+        "SELECT trace_id FROM system.queries ORDER BY query_id LIMIT 3",
+    )
+    .await;
+    assert_eq!(rows["rows"], json!([[trace], [null], [null]]), "{rows}");
 }
