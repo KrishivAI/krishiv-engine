@@ -189,6 +189,49 @@ fn a_lookup_reads_the_profile_of_the_one_row_it_returns() {
     );
 }
 
+/// Two engines on one directory write segments whose finish times overlap, and a segment is named by its first
+/// finish: the newest profile of an id both wrote can be in the segment that sorts first.
+#[test]
+fn a_lookup_returns_the_newest_profile_across_overlapping_segments() {
+    let dir = tempfile::tempdir().unwrap();
+    let reused = |at: i64, profile: &str| StoredProfile {
+        query_id: "reused".to_owned(),
+        ..row(at, profile.to_owned())
+    };
+    write_segment(
+        dir.path(),
+        "history-0000000000100-a-000001.parquet",
+        &[row(100, "x".to_owned()), reused(400, "newest")],
+    )
+    .unwrap();
+    write_segment(
+        dir.path(),
+        "history-0000000000200-b-000001.parquet",
+        &[row(200, "y".to_owned()), reused(300, "older")],
+    )
+    .unwrap();
+    let read = |id: &str| super::read_stored(dir.path(), id).unwrap();
+    assert_eq!(read("reused"), Some(reused(400, "newest")));
+    // A segment that ends before the match found is not a candidate, and one that only ties does not replace it.
+    let path = dir.path().join("history-0000000000100-a-000001.parquet");
+    assert_eq!(
+        super::last_finish(&super::open_segment(&path).unwrap()),
+        Some(400)
+    );
+    assert_eq!(
+        super::find_in_segment(&path, "reused", Some(400)).unwrap(),
+        None
+    );
+    assert_eq!(
+        super::find_in_segment(&path, "reused", Some(399)).unwrap(),
+        Some(reused(400, "newest"))
+    );
+    assert_eq!(
+        super::find_in_segment(&path, "q100", Some(399)).unwrap(),
+        None
+    );
+}
+
 #[test]
 fn a_finished_query_leaves_a_profile_that_reads_back() {
     let dir = tempfile::tempdir().unwrap();
