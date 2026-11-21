@@ -36,7 +36,10 @@ async fn sessions(source: &SessionSource) -> Vec<Row> {
 
 fn row_of<'a>(rows: &'a [Row], id: &str) -> &'a Row {
     let row = rows.iter().find(|r| r["session_id"] == id);
-    assert!(row.is_some(), "no session {id} in {rows:?}");
+    assert!(
+        row.is_some(),
+        "a session the test opened is not on the list"
+    );
     row.unwrap()
 }
 
