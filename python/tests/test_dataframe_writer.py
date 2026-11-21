@@ -4,7 +4,7 @@ the writer, and the engine errors for partitioning, unknown formats and modes.
 
 ``df.writeTo``: table round trips through ``using``, append, Spark's
 existence error classes, and the engine errors for replacing, overwriting and
-partitioned or clustered tables."""
+clustered tables."""
 
 from __future__ import annotations
 
@@ -299,15 +299,9 @@ def test_writeto_overwrite_partitions_reports_insert_as_unsupported(df: DataFram
     assert len(df.sparkSession.table("t").collect()) == 3
 
 
-def test_writeto_partitioned_by_reports_unsupported(df: DataFrame) -> None:
-    # Written so it fails visibly when partitioned tables land: then the write succeeds.
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        df.writeTo("t").partitionedBy("name").create()
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    assert "partitioned tables" in str(bad.value)
-    with pytest.raises(errors.AnalysisException) as bad:
-        df.sparkSession.table("t").collect()
-    assert bad.value.getCondition() == "TABLE_OR_VIEW_NOT_FOUND"
+def test_writeto_partitioned_by_creates_a_partitioned_table(df: DataFrame) -> None:
+    df.writeTo("t").partitionedBy("name").create()
+    assert len(df.sparkSession.table("t").collect()) == 3
 
     # An append ignores the layout the builder was given.
     df.writeTo("u").create()
@@ -319,7 +313,7 @@ def test_writeto_cluster_by_reports_unsupported(df: DataFrame) -> None:
     with pytest.raises(errors.UnsupportedOperationException) as bad:
         df.writeTo("t").clusterBy("id").create()
     assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    assert "partitioned tables" in str(bad.value)
+    assert "clustered tables" in str(bad.value)
     with pytest.raises(errors.AnalysisException) as bad:
         df.sparkSession.table("t").collect()
     assert bad.value.getCondition() == "TABLE_OR_VIEW_NOT_FOUND"
@@ -421,9 +415,8 @@ def test_bucketing_is_refused_as_spark_refuses_it(df: DataFrame, tmp_path: Any) 
     with pytest.raises(errors.PySparkException) as sort_only:
         df.write.sortBy("name").save(path)
     assert error_class(sort_only.value) == "SORT_BY_WITHOUT_BUCKETING"
-    with pytest.raises(errors.PySparkException) as table:
-        df.write.bucketBy(2, ["id"]).saveAsTable("b")
-    assert error_class(table.value) == "KRISHIV_UNSUPPORTED_FEATURE"
+    df.write.bucketBy(2, ["id"]).saveAsTable("b")
+    assert df.sparkSession.table("b").count() == 3
     with pytest.raises(errors.PySparkException) as partitioned:
         df.write.partitionBy("id").insertInto("b")
     assert error_class(partitioned.value) == "PARTITION_BY_NOT_ALLOWED_WITH_INSERT_INTO"
@@ -464,6 +457,5 @@ def test_save_as_table_takes_format_mode_partition_by_and_options(spark: SparkSe
         df.write.saveAsTable(5)  # ty: ignore[invalid-argument-type]
     df.write.saveAsTable("fm", format="parquet", mode="error", compression=None)
     assert spark.table("fm").count() == 3
-    with pytest.raises(errors.PySparkException) as parted:
-        df.write.saveAsTable("pm", partitionBy="id")
-    assert error_class(parted.value) == "KRISHIV_UNSUPPORTED_FEATURE"
+    df.write.saveAsTable("pm", partitionBy="id")
+    assert spark.table("pm").count() == 3
