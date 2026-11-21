@@ -96,10 +96,10 @@ pub fn finish(sketch: CompactThetaSketch, lg_nom: u8) -> Result<CompactThetaSket
         out.extend_from_slice(&h.to_le_bytes());
     }
     CompactThetaSketch::deserialize(&out).map_err(|e| {
-        builder_failure(
-            "theta sketch",
-            &format!("the lg 4 cut does not read back: {e}"),
-        )
+        InternalError {
+            message: format!("a Theta sketch cut to lgNomEntries 4 does not read back: {e}"),
+        }
+        .into()
     })
 }
 
@@ -343,6 +343,7 @@ mod tests {
             let mut kept: Vec<u64> = cut.iter().map(|e| e.hash()).collect();
             kept.sort_unstable();
             assert_eq!(kept, all[..16]);
+            assert_eq!(cut.theta64(), all[16], "theta is the 17th smallest hash");
         }
         // A union of two estimation-mode inputs with different thetas.
         let u = union(&at5(5000), &at5(300), 4, "theta_union").unwrap();
