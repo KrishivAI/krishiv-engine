@@ -609,35 +609,42 @@ pub(super) fn when(
 }
 
 impl When {
-    /// The `whole` evaluation: the `ELSE` (or NULL), then each branch from
-    /// the last to the first takes the rows its condition is true on, so the
-    /// first true condition wins. A NULL condition is not true.
+    /// The `whole` evaluation: the conditions in order up to the first that
+    /// takes every row (the branches after it are never chosen), then the
+    /// values from that branch (or the `ELSE`, or NULL) back to the first,
+    /// each taking the rows its condition is true on, so the first true
+    /// condition wins. A NULL condition is not true.
     fn eval_whole(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let rows = batch.num_rows();
-        let mut acc = match &self.otherwise {
-            Some(e) => cast_null(e.eval(batch, partition)?.into_array(rows)?, &self.out),
-            None => new_null_array(&self.out, rows),
-        };
-        for (cond, value) in self.branches.iter().rev() {
+        let mut taken = Vec::with_capacity(self.branches.len());
+        let mut all: Option<&Arc<dyn PhysExpr>> = None;
+        for (cond, value) in &self.branches {
             let c = cond.eval(batch, partition)?.into_array(rows)?;
             let c = c
                 .as_boolean_opt()
                 .ok_or_else(|| internal("CASE condition"))?;
-            let taken = match c.nulls() {
+            let t = match c.nulls() {
                 Some(n) => c.values() & n.inner(),
                 None => c.values().clone(),
             };
-            let set = taken.count_set_bits();
-            if set == 0 {
+            if rows > 0 && t.count_set_bits() == rows {
+                all = Some(value);
+                break;
+            }
+            taken.push((t, value));
+        }
+        let seed = match (all, &self.otherwise) {
+            (Some(e), _) | (None, Some(e)) => e.eval(batch, partition)?.into_array(rows)?,
+            (None, None) => new_null_array(&self.out, rows),
+        };
+        let mut acc = cast_null(seed, &self.out);
+        for (t, value) in taken.into_iter().rev() {
+            if t.count_set_bits() == 0 {
                 continue;
             }
             let v = cast_null(value.eval(batch, partition)?.into_array(rows)?, &self.out);
-            acc = if set == rows {
-                v
-            } else {
-                zip(&BooleanArray::new(taken, None), &v, &acc)
-                    .map_err(|e| internal(&e.to_string()))?
-            };
+            acc =
+                zip(&BooleanArray::new(t, None), &v, &acc).map_err(|e| internal(&e.to_string()))?;
         }
         Ok(Value::Array(acc))
     }

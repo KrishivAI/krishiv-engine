@@ -1657,3 +1657,52 @@ fn a_whole_batch_case_answers_as_the_lazy_one() {
         }
     }
 }
+
+/// The binder sets `whole` for a `CASE` whose arguments cannot raise
+/// (TPC-DS q59's `CASE WHEN d = 0 THEN d ELSE 5 END` shape) and keeps it lazy
+/// where one may raise: `d / 0.0` under ANSI.
+#[test]
+fn case_binds_whole_batch_only_when_no_branch_may_raise() {
+    use krishiv_plan::{BoundColumn, Builtin, Expr, ExprNode, ResolvedExpr};
+    let env = env(true);
+    let layout = [AttrId(1)];
+    let schema = Arc::new(Schema::new(vec![Field::new("d", ArrowType::Float64, true)]));
+    let d = || {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+            BoundColumn {
+                id: AttrId(1),
+                name: "d".to_owned(),
+                data_type: DataType::Double,
+                nullable: true,
+            },
+        ))))
+    };
+    let lit_double = |v: f64| Arc::new(Expr::new(ExprNode::Literal(Literal::Double(v))));
+    let call = |b: Builtin, args: Vec<Arc<Expr>>, data_type: DataType| {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Builtin(b),
+                args,
+                ..resolved("", data_type)
+            },
+        ))))
+    };
+    let case = |otherwise: Arc<Expr>| {
+        let cond = call(Builtin::Eq, vec![d(), lit_double(0.0)], DataType::Boolean);
+        call(Builtin::When, vec![cond, d(), otherwise], DataType::Double)
+    };
+    let bound = |e: &Arc<Expr>| {
+        format!(
+            "{:?}",
+            super::super::compile(e, input(&env, &layout, &schema)).unwrap()
+        )
+    };
+    let whole = bound(&case(lit_double(5.0)));
+    assert!(whole.contains("whole: true"), "{whole}");
+    let lazy = bound(&case(call(
+        Builtin::Divide,
+        vec![d(), lit_double(0.0)],
+        DataType::Double,
+    )));
+    assert!(lazy.contains("whole: false"), "{lazy}");
+}
