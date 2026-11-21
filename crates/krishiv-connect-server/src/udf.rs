@@ -353,7 +353,10 @@ impl SessionPython {
                 .lock()
                 .payloads
                 .iter()
-                .any(|(name, _, _)| name.to_lowercase() == udf.name.to_lowercase());
+                // Only a registered function holds the name: an inline UDF (top-bit version) is not in the registry.
+                .any(|(name, v, _)| {
+                    v & ANONYMOUS_VERSION_BIT == 0 && name.to_lowercase() == udf.name.to_lowercase()
+                });
             if held {
                 continue;
             }
