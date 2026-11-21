@@ -116,8 +116,14 @@ jobs:
       - name: llvm-tools
         if: steps.changes.outputs.rust == 'true'
         run: rustup component add llvm-tools-preview
+      # Registry and git sources only, no `target/`: this workflow never runs on main, so a
+      # saved target restores only into the same PR's next run, and saving the instrumented
+      # build filled the runner's disk at the post-job save on 2026-11-21 (#933, #927, #937,
+      # #940: the gate passed, then `zstd: error 70`, 96 MB free).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.changes.outputs.cargo == 'true'
+        with:
+          cache-targets: "false"
       - uses: $/.github/actions/setup-mold
         if: steps.changes.outputs.cargo == 'true'
       # Which packages to test: see the comment at the top of this file.
@@ -207,3 +213,11 @@ jobs:
           flags: rust,pr
           use_oidc: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           fail_ci_if_error: false
+      # Last step, before the post-job cache save: drop the pooled profiles and the
+      # instrumented build, so that save (and the runner's own log upload) has disk.
+      - name: Free coverage artifacts
+        if: always() && steps.scope.outputs.rust == 'true'
+        run: |
+          find target/llvm-cov-target -maxdepth 1 -name '*.profraw' -delete 2> /dev/null || true
+          rm -rf target/llvm-cov-target
+          df -h /
