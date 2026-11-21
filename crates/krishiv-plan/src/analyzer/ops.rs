@@ -370,16 +370,29 @@ impl Resolver<'_> {
         if super::metric_view::reads_metric_view(&c.plan)
             && super::metric_view::is_aggregate(&r.plan)
         {
-            let global = Grouping::GroupBy(Vec::new());
-            let agg = LogicalPlan::new(PlanNode::Aggregate {
-                input: Arc::clone(input),
-                grouping: global.clone(),
-                aggregates: exprs.to_vec(),
-            })
-            .with_origin(p.origin);
-            return self.aggregate_node(&agg, input, &global, exprs, env);
+            return self.metric_view_global_aggregate(p, input, exprs, env);
         }
         Ok(r)
+    }
+
+    /// The global aggregate of a metric-view projection; out of line so `project`'s frame, on the
+    /// resolver's recursion path, stays small.
+    #[inline(never)]
+    fn metric_view_global_aggregate(
+        &mut self,
+        p: &LogicalPlan,
+        input: &Arc<LogicalPlan>,
+        exprs: &[Arc<Expr>],
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let global = Grouping::GroupBy(Vec::new());
+        let agg = LogicalPlan::new(PlanNode::Aggregate {
+            input: Arc::clone(input),
+            grouping: global.clone(),
+            aggregates: exprs.to_vec(),
+        })
+        .with_origin(p.origin);
+        self.aggregate_node(&agg, input, &global, exprs, env)
     }
 
     pub(super) fn project_items(
@@ -1640,6 +1653,8 @@ pub(in crate::analyzer) use lift::*;
 mod sortlimit;
 
 mod join;
+
+mod na;
 
 mod distinct;
 

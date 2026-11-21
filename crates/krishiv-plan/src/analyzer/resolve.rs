@@ -1028,6 +1028,7 @@ impl Resolver<'_> {
                 params,
             } => self.hint(p, input, name, params, env),
             PlanNode::PipeOperator { input } => self.pipe_operator(input, env),
+            PlanNode::ColumnNames { input, op } => self.column_names_node(p, input, op, env),
             PlanNode::Repartition { input, exprs } => self.repartition(p, input, exprs, env),
             PlanNode::CollectMetrics {
                 input,
@@ -1263,6 +1264,7 @@ impl Resolver<'_> {
             | PlanNode::SubqueryAlias { .. }
             | PlanNode::WithCte { .. }
             | PlanNode::Hint { .. }
+            | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::Repartition { .. }
             | PlanNode::CollectMetrics { .. }

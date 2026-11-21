@@ -657,7 +657,7 @@ impl Resolver<'_> {
     /// matches are `AMBIGUOUS_REFERENCE`, or no match when `lenient`. A
     /// single match with leftover parts resolves them as struct fields in
     /// [`Self::resolve_attr`].
-    pub(super) fn find(
+    pub(in crate::analyzer) fn find(
         &self,
         scope: &[Attr],
         parts: &[String],

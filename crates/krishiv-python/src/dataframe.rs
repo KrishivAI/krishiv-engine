@@ -395,8 +395,8 @@ impl PyDataFrame {
     fn execute(&self, py: Python<'_>) -> PyResult<ArrowStream> {
         let df = self.inner.clone();
         let (schema, first, stream) = block_on(py, async move {
-            let analyzed = df.schema().await?;
-            let mut stream = df.execute_stream().await?;
+            let analyzed = df.schema_boxed().await?;
+            let mut stream = df.execute_stream_boxed().await?;
             // The operators' output types (not the analysis') are the data's
             // schema; an empty result has no batch and takes the analysis'.
             let first = stream.next().await.transpose()?;
@@ -625,7 +625,7 @@ impl PyDataFrame {
     /// `(name, Spark simple type string, nullable)` per column, by analysis.
     fn schema(&self, py: Python<'_>) -> PyResult<Vec<(String, String, bool)>> {
         let df = self.inner.clone();
-        let schema = block_on(py, async move { df.schema().await })?;
+        let schema = block_on(py, async move { df.schema_boxed().await })?;
         schema
             .fields()
             .iter()

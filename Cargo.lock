@@ -3495,6 +3495,7 @@ dependencies = [
  "krishiv-connect-server",
  "krishiv-exec",
  "krishiv-plan",
+ "krishiv-server",
  "krishiv-session",
  "krishiv-sql",
  "krishiv-types",

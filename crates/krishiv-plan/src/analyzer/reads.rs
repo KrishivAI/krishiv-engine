@@ -313,6 +313,7 @@ impl Walk {
                 | PlanNode::Sql { .. }
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
+                | PlanNode::ColumnNames { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::Distinct { .. }
                 | PlanNode::SetOp { .. }

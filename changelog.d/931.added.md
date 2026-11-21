@@ -1,0 +1,1 @@
+Spark Connect clients can use `DataFrame.na.fill`, `na.drop`, `na.replace`, `stat.cov`, `stat.corr`, `stat.sampleBy`, `toDF`, `withColumnsRenamed`, `drop` and the repartition and coalesce hints, and `createDataFrame` batches sent as cached local relations.

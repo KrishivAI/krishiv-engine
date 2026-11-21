@@ -138,6 +138,10 @@ fn text_rows(batch: &RecordBatch) -> Vec<Vec<String>> {
                         match c.data_type() {
                             DataType::Int32 => c.as_primitive::<Int32Type>().value(row).to_string(),
                             DataType::Int64 => c.as_primitive::<Int64Type>().value(row).to_string(),
+                            DataType::Float64 => c
+                                .as_primitive::<arrow_array::types::Float64Type>()
+                                .value(row)
+                                .to_string(),
                             DataType::Utf8 => c.as_string::<i32>().value(row).to_owned(),
                             other => format!("<{other}>"),
                         }
@@ -327,4 +331,376 @@ async fn an_unpivot_value_that_is_an_id_is_refused_not_misprojected() {
         .await
         .expect_err("refused");
     assert_eq!(error_class(&status), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+// ---- na.fill / na.drop / na.replace / stat.cov / stat.corr / stat.sampleBy, run end to end ----
+// Expected rows follow Spark's `DataFrameNaFunctions` / `StatFunctions` (v4.2.0 / v4.3.0 sources) and
+// the quoted Spark 4.0 run: `(1,2),(NULL,3),(3,7),(4,NULL)` gives cov -1/3.
+
+fn sql(query: &str) -> pb::Relation {
+    relation(RelType::Sql(pb::Sql {
+        query: query.to_owned(),
+        ..Default::default()
+    }))
+}
+
+fn lit(kind: pb::expression::literal::LiteralType) -> pb::expression::Literal {
+    pb::expression::Literal {
+        literal_type: Some(kind),
+        data_type: None,
+    }
+}
+
+fn long(v: i64) -> pb::expression::Literal {
+    lit(pb::expression::literal::LiteralType::Long(v))
+}
+
+fn double(v: f64) -> pb::expression::Literal {
+    lit(pb::expression::literal::LiteralType::Double(v))
+}
+
+fn text(v: &str) -> pb::expression::Literal {
+    lit(pb::expression::literal::LiteralType::String(v.to_owned()))
+}
+
+const MIXED: &str = "SELECT * FROM VALUES (CAST(NULL AS STRING), CAST(NULL AS INT), CAST(NULL AS DOUBLE)), \
+                     ('a', 5, CAST('NaN' AS DOUBLE)) AS t(name, age, score)";
+const PAIRS: &str = "SELECT * FROM VALUES (CAST(1 AS DOUBLE), CAST(2 AS DOUBLE)), (CAST(NULL AS DOUBLE), CAST(3 AS DOUBLE)), \
+                     (CAST(3 AS DOUBLE), CAST(7 AS DOUBLE)), (CAST(4 AS DOUBLE), CAST(NULL AS DOUBLE)) AS t(x, y)";
+
+fn fill(query: &str, cols: &[&str], values: Vec<pb::expression::Literal>) -> pb::Relation {
+    relation(RelType::FillNa(Box::new(pb::NaFill {
+        input: Some(Box::new(sql(query))),
+        cols: cols.iter().map(|c| (*c).to_owned()).collect(),
+        values,
+    })))
+}
+
+fn drop_na(cols: &[&str], min: Option<i32>) -> pb::Relation {
+    relation(RelType::DropNa(Box::new(pb::NaDrop {
+        input: Some(Box::new(sql(MIXED))),
+        cols: cols.iter().map(|c| (*c).to_owned()).collect(),
+        min_non_nulls: min,
+    })))
+}
+
+fn replace(
+    query: &str,
+    cols: &[&str],
+    pairs: Vec<(pb::expression::Literal, pb::expression::Literal)>,
+) -> pb::Relation {
+    relation(RelType::Replace(Box::new(pb::NaReplace {
+        input: Some(Box::new(sql(query))),
+        cols: cols.iter().map(|c| (*c).to_owned()).collect(),
+        replacements: pairs
+            .into_iter()
+            .map(|(old, new)| pb::na_replace::Replacement {
+                old_value: Some(old),
+                new_value: Some(new),
+            })
+            .collect(),
+    })))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_fill_one_value_fills_the_numeric_columns_and_nan() {
+    let server = start().await;
+    // fill(0L): INT and DOUBLE columns, NaN included; the string column is left alone.
+    let rows = run(&server, fill(MIXED, &[], vec![long(0)]))
+        .await
+        .expect("runs");
+    assert_eq!(rows, strings(&[&["NULL", "0", "0"], &["a", "5", "0"]]));
+    // fill("x"): only the string column.
+    let rows = run(&server, fill(MIXED, &[], vec![text("x")]))
+        .await
+        .expect("runs");
+    assert_eq!(rows, strings(&[&["a", "5", "NaN"], &["x", "NULL", "NULL"]]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_fill_per_column_values_cast_to_each_columns_type() {
+    let server = start().await;
+    // fillMap {"name": 0, "age": "5"}: "0" in the string column, 5 in the INT column, `score` untouched.
+    let rows = run(
+        &server,
+        fill(MIXED, &["name", "age"], vec![long(0), text("5")]),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows, strings(&[&["0", "5", "NULL"], &["a", "5", "NaN"]]));
+    // A column named twice takes the last value (Spark builds a Map).
+    let rows = run(
+        &server,
+        fill(MIXED, &["age", "age"], vec![long(1), long(2)]),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows, strings(&[&["NULL", "2", "NULL"], &["a", "5", "NaN"]]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_fill_resolves_the_named_columns() {
+    let server = start().await;
+    let status = run(&server, fill(MIXED, &["agee"], vec![long(0)]))
+        .await
+        .expect_err("unknown column");
+    assert_eq!(error_class(&status), "UNRESOLVED_COLUMN.WITH_SUGGESTION");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_drop_counts_values_that_are_neither_null_nor_nan() {
+    let server = start().await;
+    // any: the first row has NULLs, the second a NaN in `score`.
+    assert!(
+        run(&server, drop_na(&[], None))
+            .await
+            .expect("runs")
+            .is_empty()
+    );
+    // A subset leaves NaN out of it.
+    assert_eq!(
+        run(&server, drop_na(&["name", "age"], None))
+            .await
+            .expect("runs"),
+        strings(&[&["a", "5", "NaN"]])
+    );
+    // thresh 2 over all three columns: the NaN row has two non-null values.
+    assert_eq!(
+        run(&server, drop_na(&[], Some(2))).await.expect("runs"),
+        strings(&[&["a", "5", "NaN"]])
+    );
+    // thresh 0 keeps every row; a threshold above the subset size keeps none.
+    assert_eq!(
+        run(&server, drop_na(&[], Some(0)))
+            .await
+            .expect("runs")
+            .len(),
+        2
+    );
+    assert!(
+        run(&server, drop_na(&["name"], Some(2)))
+            .await
+            .expect("runs")
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_replace_compares_the_key_as_written() {
+    let server = start().await;
+    const NUMBERS: &str =
+        "SELECT * FROM VALUES (1, 'a'), (2, 'b'), (3, CAST(NULL AS STRING)) AS t(n, s)";
+    // 1.5 never equals the INT 1: nothing changes (it used to become 1 and match).
+    let rows = run(
+        &server,
+        replace(NUMBERS, &[], vec![(double(1.5), double(9.0))]),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows, strings(&[&["1", "a"], &["2", "b"], &["3", "NULL"]]));
+    // 1.0 = 1: the INT column gets 9.
+    let rows = run(
+        &server,
+        replace(NUMBERS, &["n"], vec![(double(1.0), double(9.0))]),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows, strings(&[&["2", "b"], &["3", "NULL"], &["9", "a"]]));
+    // A string key reaches the string column only; a repeated key keeps its last pair.
+    let rows = run(
+        &server,
+        replace(
+            NUMBERS,
+            &[],
+            vec![(text("a"), text("y")), (text("a"), text("z"))],
+        ),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows, strings(&[&["1", "z"], &["2", "b"], &["3", "NULL"]]));
+    // No pairs still resolves the named columns.
+    let status = run(&server, replace(NUMBERS, &["nope"], vec![]))
+        .await
+        .expect_err("unknown column");
+    assert_eq!(error_class(&status), "UNRESOLVED_COLUMN.WITH_SUGGESTION");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_replace_matches_a_nan_key() {
+    let server = start().await;
+    let rows = run(
+        &server,
+        replace(MIXED, &["score"], vec![(double(f64::NAN), double(0.0))]),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(
+        rows,
+        strings(&[&["NULL", "NULL", "NULL"], &["a", "5", "0"]])
+    );
+}
+
+fn stat(rel: RelType) -> pb::Relation {
+    relation(rel)
+}
+
+fn number(rows: &[Vec<String>]) -> f64 {
+    assert_eq!(rows.len(), 1, "one row: {rows:?}");
+    rows[0][0].parse().expect("a number")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cov_and_corr_read_null_as_zero() {
+    let server = start().await;
+    let cov = stat(RelType::Cov(Box::new(pb::StatCov {
+        input: Some(Box::new(sql(PAIRS))),
+        col1: "x".to_owned(),
+        col2: "y".to_owned(),
+    })));
+    // The quoted Spark 4.0 run: -1/3.
+    let got = number(&run(&server, cov).await.expect("runs"));
+    assert!((got - (-1.0 / 3.0)).abs() < 1e-12, "{got}");
+    let corr = stat(RelType::Corr(Box::new(pb::StatCorr {
+        input: Some(Box::new(sql(PAIRS))),
+        col1: "x".to_owned(),
+        col2: "y".to_owned(),
+        method: None,
+    })));
+    // sxy = -1, sxx = 10, syy = 26 over the zero-filled columns.
+    let got = number(&run(&server, corr).await.expect("runs"));
+    assert!((got - (-1.0 / 260.0_f64.sqrt())).abs() < 1e-12, "{got}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cov_and_corr_below_two_rows_are_zero_and_nan() {
+    let server = start().await;
+    for query in [
+        "SELECT * FROM VALUES (CAST(1 AS DOUBLE), CAST(2 AS DOUBLE)) AS t(x, y)",
+        "SELECT * FROM VALUES (CAST(1 AS DOUBLE), CAST(2 AS DOUBLE)) AS t(x, y) WHERE x > 5",
+    ] {
+        let cov = stat(RelType::Cov(Box::new(pb::StatCov {
+            input: Some(Box::new(sql(query))),
+            col1: "x".to_owned(),
+            col2: "y".to_owned(),
+        })));
+        assert_eq!(run(&server, cov).await.expect("runs"), strings(&[&["0"]]));
+        let corr = stat(RelType::Corr(Box::new(pb::StatCorr {
+            input: Some(Box::new(sql(query))),
+            col1: "x".to_owned(),
+            col2: "y".to_owned(),
+            method: None,
+        })));
+        assert_eq!(
+            run(&server, corr).await.expect("runs"),
+            strings(&[&["NaN"]])
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cov_of_a_column_that_is_not_a_number_is_an_error_not_zero() {
+    let server = start().await;
+    let cov = stat(RelType::Cov(Box::new(pb::StatCov {
+        input: Some(Box::new(sql(
+            "SELECT * FROM VALUES ('abc', 1.0D), ('def', 2.0D) AS t(x, y)",
+        ))),
+        col1: "x".to_owned(),
+        col2: "y".to_owned(),
+    })));
+    let status = run(&server, cov).await.expect_err("not a number");
+    assert_eq!(error_class(&status), "CAST_INVALID_INPUT");
+}
+
+fn sample_by(fractions: Vec<(pb::expression::Literal, f64)>) -> pb::Relation {
+    relation(RelType::SampleBy(Box::new(pb::StatSampleBy {
+        input: Some(Box::new(sql(
+            "SELECT * FROM VALUES (1, 'a'), (1, 'b'), (2, 'c'), (CAST(NULL AS INT), 'd') AS t(k, v)",
+        ))),
+        col: Some(attr("k")),
+        fractions: fractions
+            .into_iter()
+            .map(|(stratum, fraction)| pb::stat_sample_by::Fraction {
+                stratum: Some(stratum),
+                fraction,
+            })
+            .collect(),
+        seed: Some(7),
+    })))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sample_by_with_fractions_zero_and_one_is_deterministic() {
+    let server = start().await;
+    // Stratum 1 whole, stratum 2 none; the NULL stratum and unlisted strata get 0.0.
+    let rows = run(&server, sample_by(vec![(long(1), 1.0), (long(2), 0.0)]))
+        .await
+        .expect("runs");
+    assert_eq!(rows, strings(&[&["1", "a"], &["1", "b"]]));
+    // A stratum listed twice keeps its last fraction.
+    let rows = run(&server, sample_by(vec![(long(1), 0.0), (long(1), 1.0)]))
+        .await
+        .expect("runs");
+    assert_eq!(rows, strings(&[&["1", "a"], &["1", "b"]]));
+}
+
+fn null_of_long() -> pb::expression::Literal {
+    lit(pb::expression::literal::LiteralType::Null(pb::DataType {
+        kind: Some(pb::data_type::Kind::Long(pb::data_type::Long::default())),
+    }))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_replace_compares_and_converts_numbers_as_doubles() {
+    let server = start().await;
+    const BIG: &str =
+        "SELECT * FROM VALUES (CAST(9007199254740993 AS BIGINT)), (CAST(5 AS BIGINT)) AS t(n)";
+    // (a) Spark compares double(col) = 9.007199254740992E15, true for 2^53 + 1: the row becomes 0.
+    let rows = run(
+        &server,
+        replace(BIG, &[], vec![(long(9_007_199_254_740_992), long(0))]),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows, strings(&[&["0"], &["5"]]));
+    // (c) The new value goes through a double: 2^53 + 1 is stored as 2^53.
+    let rows = run(
+        &server,
+        replace(BIG, &[], vec![(long(5), long(9_007_199_254_740_993))]),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(
+        rows,
+        strings(&[&["9007199254740992"], &["9007199254740993"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_replace_with_a_null_new_value_writes_null() {
+    let server = start().await;
+    const NUMBERS: &str = "SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(n, s)";
+    let rows = run(
+        &server,
+        replace(NUMBERS, &["n"], vec![(long(1), null_of_long())]),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows, strings(&[&["2", "b"], &["NULL", "a"]]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_drop_how_all_keeps_a_row_with_any_value() {
+    let server = start().await;
+    const ROWS: &str = "SELECT * FROM VALUES (CAST(NULL AS STRING), CAST(NULL AS INT)), \
+                        (CAST(NULL AS STRING), 3), ('a', 5) AS t(name, age)";
+    // `how="all"` is min_non_nulls = 1.
+    let drop = relation(RelType::DropNa(Box::new(pb::NaDrop {
+        input: Some(Box::new(sql(ROWS))),
+        cols: vec![],
+        min_non_nulls: Some(1),
+    })));
+    assert_eq!(
+        run(&server, drop).await.expect("runs"),
+        strings(&[&["NULL", "3"], &["a", "5"]])
+    );
 }

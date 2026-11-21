@@ -446,7 +446,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 34 };
+        let kinds = if depth == 0 { 4 } else { 35 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -561,7 +561,7 @@ impl Gen<'_> {
                 name: self.name(),
                 metrics: self.exprs(),
             },
-            33 => PlanNode::MetricViewRead {
+            34 => PlanNode::MetricViewRead {
                 input: self.input(d),
                 name: self.many(1, 3, Gen::name),
                 dimensions: self.many(0, 2, Gen::metric_column),
@@ -654,6 +654,17 @@ impl Gen<'_> {
                     alias: g.flag().then(|| g.name()),
                 }),
                 include_nulls: self.flag(),
+            },
+            33 => PlanNode::ColumnNames {
+                input: self.input(d),
+                op: match self.pick(3) {
+                    0 => crate::ColumnNamesOp::ToDf(self.many(0, 2, Gen::name)),
+                    1 => crate::ColumnNamesOp::Rename(self.many(0, 2, |g| (g.name(), g.name()))),
+                    _ => crate::ColumnNamesOp::Drop {
+                        names: self.many(0, 2, Gen::name),
+                        columns: self.many(0, 2, Gen::name),
+                    },
+                },
             },
             _ => PlanNode::WithCte {
                 input: self.input(d),
@@ -1591,7 +1602,9 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             site!(w, inputs.push(Arc::new(LogicalPlan::table(["x"]))));
             inputs.iter_mut().any(|i| m_plan(i, w))
         }
-        PlanNode::PipeOperator { input } | PlanNode::Distinct { input } => m_plan(input, w),
+        PlanNode::PipeOperator { input }
+        | PlanNode::ColumnNames { input, .. }
+        | PlanNode::Distinct { input } => m_plan(input, w),
         PlanNode::WithCte { input, ctes } => {
             site!(
                 w,
