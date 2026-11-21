@@ -182,10 +182,38 @@ fn persist_python_function_resolves_in_a_command_only() {
 
 #[test]
 fn persist_python_function_refuses_a_group_and_an_overrun() {
-    let group = any("PersistPythonFunction", vec![0x0B, 0x0C]);
-    assert!(resolve(&group, Slot::Command).is_err());
-    let overrun = any("PersistPythonFunction", vec![0x0A, 0x7F]);
-    assert!(resolve(&overrun, Slot::Command).is_err());
-    let utf8 = any("PersistPythonFunction", vec![0x0A, 0x01, 0xFF]);
-    assert!(resolve(&utf8, Slot::Command).is_err());
+    use krishiv_common::error::ErrorClass;
+    // As Echo's bytes (above): the wire check, then prost's own refusal; never "unsupported extension".
+    let group = resolve(
+        &any("PersistPythonFunction", vec![0x0B, 0x0C]),
+        Slot::Command,
+    )
+    .unwrap_err();
+    assert_eq!(
+        group.error_class(),
+        ErrorClass::ConnectInvalidPlanCannotParse
+    );
+    let overrun = resolve(
+        &any("PersistPythonFunction", vec![0x0A, 0x7F]),
+        Slot::Command,
+    )
+    .unwrap_err();
+    assert_eq!(
+        overrun.error_class(),
+        ErrorClass::ConnectInvalidPlanCannotParse
+    );
+    assert!(
+        overrun.to_string().contains("runs past the end"),
+        "{overrun}"
+    );
+    let utf8 = resolve(
+        &any("PersistPythonFunction", vec![0x0A, 0x01, 0xFF]),
+        Slot::Command,
+    )
+    .unwrap_err();
+    assert_eq!(
+        utf8.error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+    assert!(utf8.to_string().contains("does not decode"), "{utf8}");
 }

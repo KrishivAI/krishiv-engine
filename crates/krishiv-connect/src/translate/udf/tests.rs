@@ -225,11 +225,17 @@ fn from_stored_builds_what_register_function_would_and_refuses_a_bad_row() {
         PythonUdf::from_stored("f".into(), true, 101, "bigint", vec![1], "3.12".into()).unwrap();
     assert_eq!(udf.plan_eval_type, PythonEvalType::ArrowBatched);
     assert_eq!(udf.return_type, krishiv_types::DataType::Long);
-    assert!(
-        PythonUdf::from_stored("f".into(), true, 999, "bigint", vec![], String::new()).is_err()
+    let eval =
+        PythonUdf::from_stored("f".into(), true, 999, "bigint", vec![], String::new()).unwrap_err();
+    assert_eq!(
+        eval.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
     );
-    assert!(
-        PythonUdf::from_stored("f".into(), true, 101, "not a type (", vec![], String::new())
-            .is_err()
+    // A return type that does not parse is the DDL parser's error, not the eval type's.
+    let ty = PythonUdf::from_stored("f".into(), true, 101, "not a type (", vec![], String::new())
+        .unwrap_err();
+    assert_ne!(
+        ty.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
     );
 }

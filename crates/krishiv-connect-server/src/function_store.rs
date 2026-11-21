@@ -172,7 +172,33 @@ mod tests {
         catalog
             .put_python_function(
                 None,
-                &StoredPythonFunction::new("bad", 999, true, "bigint", vec![1], "d", "3.12", "x"),
+                &StoredPythonFunction::new(
+                    "bad",
+                    999,
+                    true,
+                    "bigint",
+                    vec![1],
+                    hex(&Sha256::digest([1])),
+                    "3.12",
+                    "x",
+                ),
+                false,
+            )
+            .expect("put");
+        // A row whose payload no longer matches its digest is skipped before conversion.
+        catalog
+            .put_python_function(
+                None,
+                &StoredPythonFunction::new(
+                    "damaged",
+                    101,
+                    true,
+                    "bigint",
+                    vec![1],
+                    "d",
+                    "3.12",
+                    "x",
+                ),
                 false,
             )
             .expect("put");

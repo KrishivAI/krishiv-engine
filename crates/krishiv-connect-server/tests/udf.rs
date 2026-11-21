@@ -540,7 +540,20 @@ async fn client_code_needs_usage_on_udf_and_starts_no_worker_without_it() {
         )
         .await
         .expect("a scalar UDF is typed without running it");
-        assert!(schema.result.is_some());
+        let Some(pb::analyze_plan_response::Result::Schema(schema)) = schema.result else {
+            panic!("a schema result");
+        };
+        let Some(pb::data_type::Kind::Struct(fields)) = schema.schema.and_then(|t| t.kind) else {
+            panic!("a struct schema");
+        };
+        assert_eq!(fields.fields.len(), 1);
+        assert!(matches!(
+            fields.fields[0]
+                .data_type
+                .as_ref()
+                .and_then(|t| t.kind.as_ref()),
+            Some(pb::data_type::Kind::Long(_))
+        ));
         release(&run.channel, token).await;
     }
     assert_eq!(
@@ -1249,9 +1262,10 @@ async fn a_persisted_udf_survives_a_restart_and_is_typed_by_the_first_analysis()
             .await
             .expect("persisted");
         // A name the session never registered is refused.
-        execute(&run.channel, persist("nope", false), ADMIN)
+        let e = execute(&run.channel, persist("nope", false), ADMIN)
             .await
             .expect_err("not registered");
+        assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE", "{e:?}");
     }
     let query = || sql("SELECT plus_one(id) FROM range(3)");
     let run = start_store(
@@ -1310,7 +1324,8 @@ async fn a_persisted_udf_survives_a_restart_and_is_typed_by_the_first_analysis()
         Some(file_store(&file)),
     )
     .await;
-    analyze_schema(&again.channel, query(), ADMIN)
+    let e = analyze_schema(&again.channel, query(), ADMIN)
         .await
         .expect_err("dropped");
+    assert_eq!(error_class(&e), "UNRESOLVED_ROUTINE", "{e:?}");
 }

@@ -102,7 +102,7 @@ impl SessionManager {
         };
         // The clone's own Python UDF runtime, never the source's (its workers serve one owner).
         let python = source.python().copy_for(
-            &caller.principal.name,
+            &super::principal_id(caller),
             caller.principal.tenant.as_deref(),
             caller.method != Method::None,
             &session,

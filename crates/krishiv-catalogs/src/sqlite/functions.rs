@@ -12,6 +12,11 @@ use super::store::{Failure, bump_epoch};
 /// The longest payload one stored function may have (bytes): a bound on what a client can make the file hold.
 pub(super) const MAX_STORED_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 
+/// The most functions one tenant may keep, and the most payload bytes they may hold together: what a
+/// session's first load reads into memory is bounded by these.
+pub(super) const MAX_FUNCTIONS_PER_TENANT: i64 = 256;
+pub(super) const MAX_TENANT_PAYLOAD_BYTES: i64 = 64 * 1024 * 1024;
+
 /// A Python UDF as the catalog keeps it.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -113,7 +118,8 @@ impl SqliteCatalog {
     /// transaction, so two writers cannot both pass it ([`FunctionChange::OwnedByOther`] otherwise).
     ///
     /// # Errors
-    /// `KRISHIV_CATALOG_FAILURE`, also for a payload over `MAX_STORED_PAYLOAD_BYTES`.
+    /// `KRISHIV_CATALOG_FAILURE`, also for a payload over `MAX_STORED_PAYLOAD_BYTES` and for a write that would take the
+    /// tenant over `MAX_FUNCTIONS_PER_TENANT` functions or `MAX_TENANT_PAYLOAD_BYTES` payload bytes.
     pub fn put_python_function(
         &self,
         tenant: Option<&str>,
@@ -130,11 +136,26 @@ impl SqliteCatalog {
             ));
         }
         let name = self.fold(&function.name);
-        self.change(&function.name, |tx| {
+        let over_budget = std::cell::Cell::new(false);
+        let changed = self.change(&function.name, |tx| {
             if !override_owner
                 && stored_owner(tx, tenant, &name)?.is_some_and(|o| o != function.owner)
             {
                 return Ok((FunctionChange::OwnedByOther, false));
+            }
+            // The tenant's other functions plus this one stay within the budget (a replaced row not counted twice).
+            let (count, bytes): (i64, i64) = tx.query_row(
+                "SELECT COUNT(*), COALESCE(SUM(LENGTH(payload)), 0) FROM python_functions \
+                 WHERE tenant = ?1 AND name <> ?2",
+                params![key(tenant), name],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let mine = i64::try_from(function.payload.len()).unwrap_or(i64::MAX);
+            if count >= MAX_FUNCTIONS_PER_TENANT
+                || bytes.saturating_add(mine) > MAX_TENANT_PAYLOAD_BYTES
+            {
+                over_budget.set(true);
+                return Ok((FunctionChange::Absent, false));
             }
             let version = bump_epoch(tx)?;
             tx.execute(
@@ -155,7 +176,17 @@ impl SqliteCatalog {
                 ],
             )?;
             Ok((FunctionChange::Done, true))
-        })
+        });
+        if over_budget.get() {
+            return Err(self.fault(
+                &function.name,
+                Failure::Sql(format!(
+                    "a tenant keeps at most {MAX_FUNCTIONS_PER_TENANT} functions and \
+                     {MAX_TENANT_PAYLOAD_BYTES} payload bytes"
+                )),
+            ));
+        }
+        changed
     }
 
     /// Removes `tenant`'s function `name` for `caller`. A row of another owner is removed only with

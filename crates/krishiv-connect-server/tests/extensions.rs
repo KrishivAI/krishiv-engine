@@ -155,8 +155,9 @@ async fn a_krishiv_client_reads_the_capabilities() {
     // The same set is a `surface` row of `system.capabilities`.
     let rows = krishiv_session::capabilities();
     assert!(
-        rows.iter()
-            .any(|r| r[0] == "surface" && r[1] == "krishiv.v1" && r[3].contains("echo")),
+        rows.iter().any(|r| r[0] == "surface"
+            && r[1] == "krishiv.v1"
+            && r[3] == "echo,persistpythonfunction"),
         "{rows:?}"
     );
 }

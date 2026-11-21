@@ -373,6 +373,8 @@ pub async fn execute_plan(
                     command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
                 };
                 crate::auth::enforce(&check_command(&wrapped), session).await?;
+                // A statement may call a function the tenant persisted.
+                load_persisted_udfs(entry).await;
                 let Some(pb::command::CommandType::SqlCommand(command)) = wrapped.command_type
                 else {
                     return Err(InternalError {

@@ -570,15 +570,9 @@ impl SessionManager {
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
         let session = (self.factory)(caller, transport)?;
-        // The persisted-function owner and the untenanted key tell a user from a service of the same name.
-        let kind = match caller.principal.kind {
-            PrincipalKind::User => "user",
-            PrincipalKind::Service => "service",
-            _ => "other",
-        };
         let python = SessionPython::new(
             self.udfs.as_ref(),
-            &format!("{kind}:{}", caller.principal.name),
+            &principal_id(caller),
             caller.principal.tenant.as_deref(),
             caller.method != Method::None,
             &session,
@@ -1192,3 +1186,14 @@ fn write_foreign_record(caller: &Authenticated, handle: &'static str, surface: S
 
 #[cfg(test)]
 mod tests;
+
+/// The principal as the Python UDF runtime and the function catalog tell it apart: a user and a service of
+/// one name are two principals (the persisted-function owner and the untenanted key).
+pub(crate) fn principal_id(caller: &Authenticated) -> String {
+    let kind = match caller.principal.kind {
+        PrincipalKind::User => "user",
+        PrincipalKind::Service => "service",
+        _ => "other",
+    };
+    format!("{kind}:{}", caller.principal.name)
+}

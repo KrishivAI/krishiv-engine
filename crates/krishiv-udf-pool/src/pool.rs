@@ -515,8 +515,7 @@ impl Pool {
                         state.take_oldest_idle(|k| k.owner.same_group(owner) && *k != key)
                     {
                         drop(state);
-                        drop(victim);
-                        state = self.inner.lock();
+                        state = self.inner.evicted(victim);
                         continue;
                     }
                     state = self
@@ -548,8 +547,7 @@ impl Pool {
                 // At the total cap: stop the longest-idle worker of anyone to make room.
                 if let Some(victim) = state.take_oldest_idle(|_| true) {
                     drop(state);
-                    drop(victim);
-                    state = self.inner.lock();
+                    state = self.inner.evicted(victim);
                     continue;
                 }
             } else if let Some(victim) = state.take_oldest_idle(|k| &k.owner == owner && *k != key)
@@ -558,8 +556,7 @@ impl Pool {
                 // session replaced): stop one of those rather than wait for the idle timeout (review
                 // 2026-11-13 m2).
                 drop(state);
-                drop(victim);
-                state = self.inner.lock();
+                state = self.inner.evicted(victim);
                 continue;
             }
             state = self
@@ -949,6 +946,17 @@ impl Inner {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// Stops `victim` (an idle worker taken with `take_oldest_idle`, the state lock released), then releases
+    /// its charge and wakes the waiters; returns the re-taken lock.
+    fn evicted(&self, victim: (Worker, Owner)) -> MutexGuard<'_, State> {
+        let (worker, owner) = victim;
+        drop(worker);
+        let mut state = self.lock();
+        state.forget(&owner);
+        self.freed.notify_all();
+        state
+    }
 }
 
 impl State {
@@ -972,8 +980,10 @@ impl State {
         }
     }
 
-    /// Removes the worker idle the longest among the keys `which` accepts.
-    fn take_oldest_idle(&mut self, which: impl Fn(&Key) -> bool) -> Option<Worker> {
+    /// Removes the worker idle the longest among the keys `which` accepts. Its count stays charged (owner,
+    /// group, live) until the caller has stopped it and calls [`Inner::evicted`], so a replacement never
+    /// runs beside a victim that is still exiting.
+    fn take_oldest_idle(&mut self, which: impl Fn(&Key) -> bool) -> Option<(Worker, Owner)> {
         let key = self
             .idle
             .iter()
@@ -986,8 +996,7 @@ impl State {
         if list.is_empty() {
             self.idle.remove(&key);
         }
-        self.forget(&key.owner);
-        Some(idle.worker)
+        Some((idle.worker, key.owner))
     }
 }
 

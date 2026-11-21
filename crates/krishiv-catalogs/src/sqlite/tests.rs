@@ -679,6 +679,42 @@ fn an_oversized_python_payload_is_refused() {
 }
 
 #[test]
+fn a_tenant_stays_within_its_function_count_and_payload_budget() {
+    let cat = SqliteCatalog::open_in_memory("lite", false).unwrap();
+    let max = usize::try_from(super::functions::MAX_FUNCTIONS_PER_TENANT).unwrap();
+    for i in 0..max {
+        cat.put_python_function(Some("a"), &stored(&format!("f{i}"), "x"), false)
+            .unwrap();
+    }
+    // One more is refused; replacing a stored one is not a new function; another tenant has its own budget.
+    assert!(
+        cat.put_python_function(Some("a"), &stored("extra", "x"), false)
+            .is_err()
+    );
+    assert!(cat.python_function(Some("a"), "extra").unwrap().is_none());
+    cat.put_python_function(Some("a"), &stored("f0", "x"), false)
+        .unwrap();
+    cat.put_python_function(Some("b"), &stored("extra", "x"), false)
+        .unwrap();
+    // The byte budget: big payloads of a fresh tenant fill it, the next is refused, a replacement that fits is not.
+    let big = |name: &str| {
+        let mut f = stored(name, "x");
+        f.payload = vec![0; super::functions::MAX_STORED_PAYLOAD_BYTES];
+        f
+    };
+    for i in 0..8 {
+        cat.put_python_function(Some("c"), &big(&format!("g{i}")), false)
+            .unwrap();
+    }
+    assert!(
+        cat.put_python_function(Some("c"), &big("g8"), false)
+            .is_err()
+    );
+    cat.put_python_function(Some("c"), &big("g0"), false)
+        .unwrap();
+}
+
+#[test]
 fn a_version_1_file_is_upgraded_on_open() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("v1.db");

@@ -724,10 +724,14 @@ async fn a_row_that_appears_after_the_owner_read_is_still_refused() {
 struct SlowStore {
     inner: MemStore,
     gate: std::sync::Barrier,
+    /// Set once `list` is entered (the first request is mid-load).
+    entered: std::sync::atomic::AtomicBool,
 }
 
 impl super::FunctionStore for SlowStore {
     fn list(&self, tenant: Option<&str>) -> Result<Vec<PythonUdf>, KrishivError> {
+        self.entered
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self.gate.wait();
         self.inner.list(tenant)
     }
@@ -764,6 +768,7 @@ async fn a_second_first_request_waits_for_the_load() {
     let slow = Arc::new(SlowStore {
         inner: MemStore::default(),
         gate: std::sync::Barrier::new(2),
+        entered: std::sync::atomic::AtomicBool::new(false),
     });
     slow.inner
         .put(Some("p:alice"), "x", &udf("f", b"x"), false)
@@ -777,7 +782,9 @@ async fn a_second_first_request_waits_for_the_load() {
         tokio::spawn(async move { python.load_persisted(&s).await })
     };
     // Wait until the first load is inside `list`, then start the second: it must not return early.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    while !slow.entered.load(std::sync::atomic::Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
     let second = {
         let (python, s) = (Arc::clone(&python), Arc::clone(&s));
         tokio::spawn(async move {
@@ -785,7 +792,10 @@ async fn a_second_first_request_waits_for_the_load() {
             python.lock().payloads.len()
         })
     };
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Give the second task every chance to run before the first load ends.
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
     assert!(
         !second.is_finished(),
         "the second request waits for the load"
