@@ -53,6 +53,8 @@ jobs:
             args: -max_len=8192
           - target: jwt_parse
             args: -max_len=20000
+          - target: iceberg_rest_response
+            args: -max_len=262144
           - target: delta_commit_json
             args: -max_len=262144
     env:
@@ -102,6 +104,9 @@ jobs:
                        tests/fixtures/delta-4.4.1/*/_delta_log/_last_checkpoint; do
                 cp "$f" "fuzz/corpus/$TARGET/$(sha1sum "$f" | cut -c1-16)"
               done ;;
+            iceberg_rest_response)
+              mkdir -p "fuzz/corpus/$TARGET"
+              cp fuzz/seeds/iceberg_rest_response/* "fuzz/corpus/$TARGET/" ;;
             connect_decode)
               KRISHIV_FUZZ_SEED_DIR="$PWD/fuzz/corpus/$TARGET" \
                 cargo test -p krishiv-connect --test goldens --locked ;;
