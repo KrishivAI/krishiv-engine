@@ -128,6 +128,7 @@ async fn apply(
         };
         task.delete(file, positions.value(row))?;
     }
+    task.settle().await?;
     if update && batch.num_rows() > 0 {
         let rows = batch
             .project(&(0..n - 2).collect::<Vec<_>>())

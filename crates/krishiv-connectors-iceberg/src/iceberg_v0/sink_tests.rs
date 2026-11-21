@@ -346,7 +346,18 @@ pub(super) fn run(
     input: Arc<dyn Source>,
     cancel_when: Option<Box<dyn Fn() -> bool + Send>>,
 ) -> (Result<(), KrishivError>, Arc<dyn MemoryPool>, QueryRunner) {
-    let root = TreePool::new(&MemoryConfig::default());
+    run_in(env, sink, input, cancel_when, &MemoryConfig::default())
+}
+
+/// [`run`] under the memory configuration `config`.
+pub(super) fn run_in(
+    env: &Env,
+    sink: Arc<dyn Sink>,
+    input: Arc<dyn Source>,
+    cancel_when: Option<Box<dyn Fn() -> bool + Send>>,
+    config: &MemoryConfig,
+) -> (Result<(), KrishivError>, Arc<dyn MemoryPool>, QueryRunner) {
+    let root = TreePool::new(config);
     let pool = root.child("q", None);
     let query = QueryContext::new(
         QueryId(7),

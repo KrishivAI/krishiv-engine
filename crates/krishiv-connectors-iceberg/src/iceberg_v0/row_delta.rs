@@ -75,7 +75,7 @@ use iceberg::spec::{DataFile, FormatVersion, TableMetadata};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::planner::RowLevelOperation;
 use krishiv_io::PushdownExpr;
-use krishiv_memory::ConsumerHandle;
+use krishiv_memory::{ConsumerHandle, Reservation};
 use roaring::RoaringTreemap;
 
 use super::append::{WriteIds, write_new_manifests};
@@ -102,6 +102,9 @@ pub(crate) const MERGE_MODE: &str = "write.merge.mode";
 
 /// The branch a row delta commits to.
 const BRANCH: &str = "main";
+
+/// Bytes charged per deleted position (uncompressed).
+const POSITION_BYTES: usize = 8;
 
 /// How a row-level statement changes a table (Java's `RowLevelOperationMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,6 +228,8 @@ impl MergeOnReadWrite {
             write: Arc::clone(self),
             partition_id,
             attempt_id: unique_u64(),
+            charge: mem.reservation(),
+            pending: 0,
             mem,
             by_ref: HashMap::new(),
             by_path: HashMap::new(),
@@ -493,6 +498,10 @@ pub(crate) struct MorTask {
     partition_id: u32,
     attempt_id: u64,
     mem: Arc<ConsumerHandle>,
+    /// What the positions and the delete files held in memory are charged to.
+    charge: Reservation,
+    /// Bytes of positions added since the last [`settle`](Self::settle).
+    pending: usize,
     /// Each file reference seen, by its index in `files`.
     by_ref: HashMap<Vec<u8>, usize>,
     /// The same slots by the data file's path (two encodings of one file share a slot).
@@ -547,9 +556,22 @@ impl MorTask {
                 i
             }
         };
-        if let Some(t) = self.files.get_mut(i) {
-            t.positions.insert(p);
+        if let Some(t) = self.files.get_mut(i)
+            && t.positions.insert(p)
+        {
+            self.pending = self.pending.saturating_add(POSITION_BYTES);
         }
+        Ok(())
+    }
+
+    /// Charges the positions added by [`delete`](Self::delete) since the last call to the task's
+    /// consumer (an uncompressed 8 bytes each, an upper bound of the bitmaps').
+    ///
+    /// # Errors
+    /// The memory error class when the pool cannot grant it.
+    pub(crate) async fn settle(&mut self) -> Result<(), KrishivError> {
+        let n = std::mem::take(&mut self.pending);
+        self.charge.grow(n).await?;
         Ok(())
     }
 
@@ -668,7 +690,16 @@ impl MorTask {
             let path = &touched.entry.file.path;
             let old =
                 super::deletes::positions_of(&io, &*locate, &self.mem, path, &previous).await?;
+            let before = touched.positions.len();
             touched.positions |= old;
+            let added = touched.positions.len().saturating_sub(before);
+            self.charge
+                .grow(
+                    usize::try_from(added)
+                        .unwrap_or(usize::MAX)
+                        .saturating_mul(POSITION_BYTES),
+                )
+                .await?;
             out.rewritten
                 .extend(previous.into_iter().filter(|d| file_scoped(d)));
         }
@@ -691,6 +722,7 @@ impl MorTask {
                 .map(|t| (t.entry.file.path.as_str(), &t.positions))
                 .collect();
             let (bytes, blobs) = dv_puffin(&list, &w.created_by)?;
+            self.charge.grow(bytes.len()).await?;
             out.files.push(location.clone());
             guard.data.push(location.clone());
             let size = put(
@@ -734,6 +766,11 @@ impl MorTask {
                 "parquet",
             );
             let location = locations.location(spec, schema, &partition, &name)?;
+            // The file is built whole in memory: its positions, sorted, are the bound.
+            let built = usize::try_from(d.positions.len())
+                .unwrap_or(usize::MAX)
+                .saturating_mul(POSITION_BYTES);
+            self.charge.grow(built).await?;
             out.files.push(location.clone());
             guard.data.push(location.clone());
             let file = write_position_deletes(

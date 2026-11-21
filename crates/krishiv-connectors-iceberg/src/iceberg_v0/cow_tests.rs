@@ -23,7 +23,7 @@ use iceberg::spec::{
 use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::planner::{RowLevelOperation, RowLevelTable, RowLevelWrite, TableProvider};
-use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown};
+use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown, Sink};
 use krishiv_types::batch::Batch;
 use krishiv_types::{DataType, StructField, StructType};
 
@@ -240,11 +240,26 @@ impl<'a> Dml<'a> {
 
     /// A merge-on-read statement: the rows `select` gives over the whole snapshot (ending with
     /// the row id) into the rewriter, which recognizes them by the row id columns.
-    #[expect(
-        clippy::unwrap_in_result,
-        reason = "a test helper: a setup failure panics, the rewrite's own error is returned"
-    )]
     pub(super) fn merge_on_read(&self, select: &str) -> Result<(), KrishivError> {
+        let (sink, schema, batches) = self.mor_parts(select);
+        let input = Arc::new(PerDriver {
+            schema,
+            batches,
+            stall: false,
+        });
+        run(self.env, sink?, input, None).0
+    }
+
+    /// The rewriter of a merge-on-read statement (or its refusal), with the schema and the rows
+    /// `select` gives; the tests of the sink run them their own way.
+    pub(super) fn mor_parts(
+        &self,
+        select: &str,
+    ) -> (
+        Result<Arc<dyn Sink>, KrishivError>,
+        SchemaRef,
+        Vec<RecordBatch>,
+    ) {
         let mut batches = self.query(self.table.scan().unwrap(), select);
         let schema = batches.first().map_or_else(
             || {
@@ -269,13 +284,8 @@ impl<'a> Dml<'a> {
         let mut request =
             RowLevelWrite::new(self.op, "`db`.`t`", Arc::clone(&schema), Vec::new(), None);
         request.write_id = Some(format!("dml-{}", super::sink::unique_u64()));
-        let sink = self.table.rewriter(&request)?;
-        let input = Arc::new(PerDriver {
-            schema,
-            batches,
-            stall: false,
-        });
-        run(self.env, sink, input, None).0
+        let sink = self.table.rewriter(&request);
+        (sink, schema, batches)
     }
 
     /// Whether the statement's scan is refused (an unknown `write.*.mode`).
