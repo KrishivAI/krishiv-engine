@@ -136,7 +136,7 @@ pub(crate) fn _udf_pool_shutdown(py: Python<'_>) -> usize {
 #[derive(Debug)]
 pub(crate) struct PyAnonymousUdf {
     def: krishiv_session::PythonUdfDef,
-    pub(crate) version: u32,
+    version: u32,
 }
 
 impl PyAnonymousUdf {
@@ -192,7 +192,7 @@ impl PyAnonymousUdf {
 
     /// The version plans name this UDF by (top bit set).
     #[getter]
-    fn version(&self) -> u32 {
+    pub(crate) fn version(&self) -> u32 {
         self.version
     }
 

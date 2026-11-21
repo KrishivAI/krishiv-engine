@@ -74,8 +74,16 @@ impl Drop for Held {
     }
 }
 
-/// The pool's slots as the operator sees them (a local type, for the trait).
+/// The pool's slots as the operator sees them (a local type, for the trait). A pool makes one and hands out
+/// clones of its `Arc`: the operator groups a driver's lanes by that pointer, so every call site of the pool
+/// must return the same one.
 pub(crate) struct SlotHandle(pub(crate) Arc<Slots>);
+
+impl SlotHandle {
+    pub(crate) fn new(limit: usize) -> Arc<Self> {
+        Arc::new(Self(Slots::new(limit)))
+    }
+}
 
 impl RelationSlots for SlotHandle {
     fn limit(&self) -> usize {

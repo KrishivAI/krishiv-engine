@@ -180,7 +180,7 @@ impl PyDataFrame {
         barrier: bool,
     ) -> PyResult<Self> {
         self.inner
-            .map_in_python(udf.def(), udf.version, barrier)
+            .map_in_python(udf.def(), udf.version(), barrier)
             .map(|df| self.derive(df))
             .map_err(|e| crate::errors::to_py(py, &e))
     }
@@ -200,7 +200,7 @@ impl PyDataFrame {
                 columns(left_keys),
                 columns(right_keys),
                 udf.def(),
-                udf.version,
+                udf.version(),
             )
             .map(|df| self.derive_with(df, other))
             .map_err(|e| crate::errors::to_py(py, &e))
@@ -695,7 +695,7 @@ impl PyGroupedData {
         udf: &crate::udf::PyAnonymousUdf,
     ) -> PyResult<PyDataFrame> {
         self.inner
-            .apply_in_python(udf.def(), udf.version)
+            .apply_in_python(udf.def(), udf.version())
             .map(|df| PyDataFrame {
                 inner: df,
                 owned: self.owned.clone(),

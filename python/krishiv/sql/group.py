@@ -50,7 +50,7 @@ class GroupedData:
         self._grouped = native
         self._source = df
         # The grouping columns, which a cogroup needs again (the native handle keeps them to itself).
-        self._keys = keys or []
+        self._keys = [] if keys is None else keys
 
     def applyInPandas(self, func: Any, schema: Any) -> DataFrame:
         """Maps each group of the current :class:`DataFrame` using a pandas UDF and returns the result as a

@@ -94,7 +94,10 @@ impl PreparedRelationUdf for PreparedRelation {
     fn capacity(&self) -> Option<Arc<dyn RelationSlots>> {
         // One slot per pool thread, taken by a driver for all its lanes together (module doc).
         let pool = self.pool.get().ok()?;
-        Some(Arc::new(super::slots::SlotHandle(Arc::clone(pool.slots()))))
+        // The pool's one handle: the operator groups a driver's lanes by its pointer.
+        let handle = Arc::clone(pool.slots());
+        let slots: Arc<dyn RelationSlots> = handle;
+        Some(slots)
     }
 
     fn open(&self, slot: Option<RelationSlot>) -> krishiv_exec::Result<Box<dyn UdfTask>> {

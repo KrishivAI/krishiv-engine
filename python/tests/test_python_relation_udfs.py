@@ -237,10 +237,6 @@ print("rows", len(res.collect()))
     assert out == "rows 1000"
 
 
-@pytest.mark.skip(
-    reason="OPEN (review finding 1): two grouped-agg UDFs in one agg are two chained relation nodes; the upstream "
-    "node's tasks hold every slot while blocked on a downstream node that needs one, so this hangs"
-)
 @pytest.mark.parametrize("threads", [1, 2])
 def test_two_grouped_aggregate_udfs_in_one_agg_finish_or_name_the_limit(threads: int) -> None:
     out = _run_isolated(
@@ -294,6 +290,84 @@ except Exception as e:
     assert "kaboom" in str(e)
     ok = spark.range(5).mapInPandas(lambda it: it, "id long").collect()
     print("rows", len(ok))
+""",
+    )
+    assert out == "rows 5"
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_chained_map_in_pandas_nodes_finish(threads: int) -> None:
+    out = _run_isolated(
+        threads,
+        """
+df = spark.range(2000).repartition(3)
+res = df.mapInPandas(lambda it: it, "id long").mapInPandas(lambda it: it, "id long")
+print("rows", len(res.collect()))
+""",
+    )
+    assert out == "rows 2000"
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_apply_in_pandas_then_map_in_pandas_finish(threads: int) -> None:
+    out = _run_isolated(
+        threads,
+        """
+df = spark.range(1000).repartition(3)
+res = (
+    df.groupBy("id").applyInPandas(lambda pdf: pdf, "id long").mapInPandas(lambda it: it, "id long")
+)
+print("rows", len(res.collect()))
+""",
+    )
+    assert out == "rows 1000"
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_two_python_threads_collecting_on_one_slot_both_finish(threads: int) -> None:
+    out = _run_isolated(
+        threads,
+        """
+import threading
+df = spark.range(1000).repartition(3)
+res = df.groupBy("id").applyInPandas(lambda pdf: pdf, "id long")
+counts = []
+def run():
+    counts.append(len(res.collect()))
+ts = [threading.Thread(target=run) for _ in range(3)]
+[t.start() for t in ts]
+[t.join() for t in ts]
+print("rows", sorted(counts))
+""",
+    )
+    assert out == "rows [1000, 1000, 1000]"
+
+
+def test_cancel_during_a_long_group_frees_the_pool() -> None:
+    out = _run_isolated(
+        1,
+        """
+import threading, time
+def slow(pdf):
+    time.sleep(0.2)
+    return pdf
+
+df = spark.range(300).repartition(1)
+res = df.groupBy("id").applyInPandas(slow, "id long")
+box = []
+def run():
+    try:
+        box.append(res.collect())
+    except Exception as e:
+        box.append(e)
+t = threading.Thread(target=run)
+t.start()
+time.sleep(0.5)
+spark.interruptAll()
+t.join(30)
+assert not t.is_alive(), "the cancelled query did not return"
+ok = spark.range(5).mapInPandas(lambda it: it, "id long").collect()
+print("rows", len(ok))
 """,
     )
     assert out == "rows 5"

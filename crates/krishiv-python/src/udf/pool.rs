@@ -91,12 +91,12 @@ pub(crate) struct Pool {
     /// finalizing by the time it gets there (review M1).
     abandoned: Arc<AtomicBool>,
     /// One relation task slot per thread (see `slots`).
-    slots: Arc<super::slots::Slots>,
+    slots: Arc<super::slots::SlotHandle>,
 }
 
 impl Pool {
     /// The relation task slots of this pool's threads.
-    pub(crate) fn slots(&self) -> &Arc<super::slots::Slots> {
+    pub(crate) fn slots(&self) -> &Arc<super::slots::SlotHandle> {
         &self.slots
     }
 
@@ -131,7 +131,7 @@ impl Pool {
             threads: Mutex::new(threads),
             pid: std::process::id(),
             abandoned,
-            slots: super::slots::Slots::new(size),
+            slots: super::slots::SlotHandle::new(size),
         })
     }
 

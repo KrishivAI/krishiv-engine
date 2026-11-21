@@ -164,6 +164,10 @@ pub trait PreparedRelationUdf: Send + Sync {
     /// lane together ([`RelationSlots::poll_take`]), or parks until slots
     /// free: a task that waits for a slot while its peers wait for frames
     /// would hang the driver.
+    ///
+    /// Identity contract: call sites that share slots return clones of the
+    /// same `Arc`; the operator groups a driver's lanes by its pointer, so a
+    /// fresh `Arc` per call splits one driver into groups of one.
     fn capacity(&self) -> Option<Arc<dyn RelationSlots>> {
         None
     }
