@@ -17,7 +17,9 @@
 //! with the outputs only the other lists added. The filtered side may add
 //! only bare group keys, never a call, so the shared aggregate evaluates no
 //! call on rows the query did not already evaluate it on, and raises nothing
-//! the query would not raise.
+//! the query would not raise. When both sides hold the same tests at
+//! different places, the second reads the first's plan: that can only skip an
+//! error its own placement would raise on a NULL-key row, never add one.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -250,3 +252,6 @@ fn null_test_of(e: &Arc<Expr>, keys: &HashSet<AttrId>) -> bool {
     matches!(builtin(e), Some((Builtin::IsNotNull | Builtin::IsNull, [a], _))
         if bare_column(a).is_some_and(|c| keys.contains(&c.id)))
 }
+
+#[cfg(test)]
+mod tests;

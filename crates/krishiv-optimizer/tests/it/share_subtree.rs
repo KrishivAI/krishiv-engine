@@ -358,3 +358,46 @@ fn null_tests_and_pruned_keys_share_one_aggregate_with_the_same_rows() {
     assert!(!want.is_empty());
     assert_eq!(eval::rows(&db, plan.root()), want, "{}", plan.root());
 }
+
+/// L4 over data with NULL group keys (`data::small`, ~20% NULL `a`): the join on `x1.a` gives the
+/// main instance an inferred `isnotnull(a)` the average's instance does not hold, and the average
+/// reads no `a` (pruned). The shared aggregate must be the unfiltered one, so the average still
+/// sees the NULL-`a` groups; the seeds include one where those groups change the answer.
+#[test]
+fn null_key_groups_stay_in_the_unfiltered_instance() {
+    use crate::support::{data, eval};
+    let sql = |extra: &str| {
+        format!(
+            "WITH x AS (SELECT a, b, sum(c) AS s FROM t GROUP BY a, b) \
+             SELECT u.d, x1.s FROM x x1 JOIN u ON x1.a = u.a \
+             WHERE x1.s >= (SELECT avg(x2.s) FROM x x2 WHERE x2.b = x1.b{extra})"
+        )
+    };
+    let plan = run(&sql(""), false);
+    let text = plan.root().to_string();
+    assert_eq!(scans(plan.root(), "spark_catalog.default.t"), 1, "{text}");
+    assert_eq!(text.matches("CteRef").count(), 2, "{text}");
+    Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
+    let again = optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &Config::new()).unwrap();
+    assert!(
+        again.structurally_eq(&plan),
+        "a fixed point:\n{}",
+        again.root()
+    );
+    let written = support::resolve(&sql(""), &support::ctx());
+    // The answer had the average skipped the NULL-`a` groups (the wrong definition).
+    let without = support::resolve(&sql(" AND x2.a IS NOT NULL"), &support::ctx());
+    let mut telling = 0;
+    for seed in 1..=16 {
+        let db = data::small(seed);
+        let want = eval::rows(&db, written.root());
+        assert_eq!(eval::rows(&db, plan.root()), want, "seed {seed}:\n{text}");
+        if eval::rows(&db, without.root()) != want {
+            telling += 1;
+        }
+    }
+    assert!(
+        telling > 0,
+        "no seed where the NULL-`a` groups change the answer"
+    );
+}

@@ -54,7 +54,7 @@ use krishiv_plan::{
     normalized_subtree_hash,
 };
 
-use crate::expr::{and_all, has_outer_reference};
+use crate::expr::{and_all, column, has_outer_reference};
 use crate::inline_cte::deterministic;
 use crate::restrict::subquery_plans;
 
@@ -141,7 +141,7 @@ pub(crate) fn share(
                 let read = match mine {
                     Some(cols) if cols != output => Arc::new(LogicalPlan::new(PlanNode::Project {
                         input: read,
-                        exprs: cols.iter().map(crate::expr::column).collect(),
+                        exprs: cols.iter().map(column).collect(),
                     })),
                     _ => read,
                 };
