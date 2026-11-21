@@ -1061,8 +1061,10 @@ fn json_table_path_ok(path: &str, row: bool) -> bool {
 }
 
 /// The path of a column written without one, as Spark builds it: `$['name']` (a name holding `'` makes it invalid).
+/// Spark's path parser reads the name between the quotes as is, so a backslash is a key character; the kernel's
+/// parser unescapes, so it is doubled here to select the same key.
 fn json_table_default_path(name: &str) -> String {
-    format!("$['{name}']")
+    format!("$['{}']", name.replace('\\', "\\\\"))
 }
 
 /// A value as Spark's `toSQLValue` prints a string: quoted, `\` and `'` escaped.
@@ -1105,4 +1107,15 @@ fn json_table_text(t: &crate::ast::JsonTable) -> String {
         columns.join(", "),
         if t.error_on_error { "ERROR" } else { "NULL" }
     )
+}
+
+#[cfg(test)]
+mod default_path_tests {
+    use super::json_table_default_path;
+
+    #[test]
+    fn a_backslash_in_a_column_name_stays_a_key_character() {
+        assert_eq!(json_table_default_path("a"), "$['a']");
+        assert_eq!(json_table_default_path("a\\b"), "$['a\\\\b']");
+    }
 }
