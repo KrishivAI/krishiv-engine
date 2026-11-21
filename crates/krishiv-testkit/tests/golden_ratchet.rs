@@ -23,7 +23,11 @@ type R = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
 fn session_engine_matches_the_frozen_baseline() -> R {
-    matches_the_frozen_baseline(SessionEngine::new().map_err(|e| e.message)?)
+    matches_the_frozen_baseline(
+        SessionEngine::new()
+            .map_err(|e| e.message)?
+            .with_tag(DEFAULT_TAG),
+    )
 }
 
 /// The same baseline with `krishiv.exec.debug.planRoundTrip` on: the wire format carries every
@@ -34,6 +38,7 @@ fn serialize_through_matches_the_frozen_baseline() -> R {
     matches_the_frozen_baseline(
         SessionEngine::new()
             .map_err(|e| e.message)?
+            .with_tag(DEFAULT_TAG)
             .with_plan_round_trip(),
     )
 }

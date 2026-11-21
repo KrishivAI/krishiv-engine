@@ -127,7 +127,7 @@ fn matches_the_baseline(tag: &str) -> R {
     assert!(manifest.frozen, "the exclusion manifest is frozen");
     let set = GoldenSet::scan(&dir)?;
     let manifest = manifest.restricted_to(&set);
-    let mut engine = SessionEngine::new().map_err(|e| e.message)?;
+    let mut engine = SessionEngine::new().map_err(|e| e.message)?.with_tag(tag);
     let result = run(&mut engine, &set, &manifest)?;
     assert!(result.failed_files.is_empty(), "{:?}", result.failed_files);
     let timeouts: Vec<String> = result

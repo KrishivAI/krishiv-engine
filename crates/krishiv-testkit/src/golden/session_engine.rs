@@ -73,6 +73,8 @@ pub struct SessionEngine {
     warehouse_text: String,
     /// Sessions run every plan through `krishiv.plan.v1` first (`krishiv.exec.debug.planRoundTrip`).
     plan_round_trip: bool,
+    /// The Spark profile every session runs under (`None`: the engine's default).
+    profile: Option<krishiv_plan::analyzer::SparkProfile>,
 }
 
 impl Drop for SessionEngine {
@@ -134,7 +136,21 @@ impl SessionEngine {
             warehouse: None,
             warehouse_text: String::new(),
             plan_round_trip: false,
+            profile: None,
         })
+    }
+
+    /// The same engine with its sessions on the profile of the golden tag's release line
+    /// (`"v4.2.0"` gives 4.2), so a tag is measured against its own Spark's behaviour and not the
+    /// engine's default. A tag with no profile keeps the default.
+    #[must_use]
+    pub fn with_tag(mut self, tag: &str) -> Self {
+        let mut parts = tag.trim_start_matches('v').split('.');
+        if let (Some(major), Some(minor)) = (parts.next(), parts.next()) {
+            self.profile =
+                krishiv_plan::analyzer::SparkProfile::from_line(&format!("{major}.{minor}"));
+        }
+        self
     }
 
     /// The same engine with a per-statement time limit of `timeout`.
@@ -330,6 +346,9 @@ impl Engine for SessionEngine {
             // statement's verdict does not change from run to run.
             .config("krishiv.exec.seed", "1")
             .config("spark.sql.warehouse.dir", self.warehouse_text.clone());
+        if let Some(profile) = self.profile {
+            builder = builder.profile(profile);
+        }
         if self.plan_round_trip {
             builder = builder.config("krishiv.exec.debug.planRoundTrip", "true");
         }

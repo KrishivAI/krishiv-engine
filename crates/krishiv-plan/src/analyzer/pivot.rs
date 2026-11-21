@@ -272,8 +272,8 @@ impl Resolver<'_> {
     /// distinct value keyed to its last index, `indexSize` slots, output
     /// `i` reading slot `i`): a NaN value is its own key and never matches
     /// (Scala's numeric `==`); `0.0` and `-0.0` are one key; duplicate
-    /// values leave fewer slots than outputs (before 4.3; 4.3 gives every output its own slot), so an output past the slots
-    /// raises `INVALID_ARRAY_INDEX` when a row is produced with ANSI on and
+    /// values leave fewer slots than outputs (4.3 gives every output its own slot), so an
+    /// output past the slots raises `INVALID_ARRAY_INDEX` when a row is produced with ANSI on and
     /// is NULL with ANSI off, and a slot no value's last index names is
     /// NULL. Before 4.2 a binary pivot column is keyed by array identity, so
     /// no row matches and every cell is NULL. Refused, never answered
