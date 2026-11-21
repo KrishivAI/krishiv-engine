@@ -1618,12 +1618,7 @@ impl Resolver<'_> {
                 to,
                 mode,
             } => {
-                // The cast a `TIME '..'` literal binds to (an explicit `Ansi` string cast to `TIME(6)`, never
-                // what the parser writes) passes the gate again, so a plan analyzed once analyzes to itself.
-                let from_literal = *mode == CastMode::Ansi
-                    && *to == DataType::Time { precision: 6 }
-                    && matches!(&inner.node, ExprNode::Literal(Literal::String(v))
-                        if krishiv_kernels::cast::parse_time(v).is_some());
+                let from_literal = is_time_literal_cast(inner, to, *mode);
                 let mode = match mode {
                     CastMode::Default if self.ctx.conf.ansi => CastMode::Ansi,
                     CastMode::Default => CastMode::Legacy,
