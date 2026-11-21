@@ -225,6 +225,30 @@ async fn a_queued_query_shows_its_wait_in_queued_ns() {
             .collect()
             .await
     });
+    // Wait until the second query shows as queued, then hold it for 200 ms,
+    // so a slow plan cannot shorten the wait the test measures.
+    let queued_seen = std::time::Instant::now();
+    loop {
+        let rows = a
+            .sql("select count(*) from system.queries where state = 'queued'")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+            .collect()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let n = rows[0]
+            .column(0)
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(0);
+        if n > 0 {
+            break;
+        }
+        assert!(
+            queued_seen.elapsed() < std::time::Duration::from_secs(30),
+            "the second query never showed as queued"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     drop(held);
     waiter
