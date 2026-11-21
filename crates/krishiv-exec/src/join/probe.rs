@@ -10,7 +10,7 @@ use std::time::Instant;
 use arrow_array::{Array, ArrayRef, BooleanArray, Int64Array, UInt32Array, new_null_array};
 use futures::future::BoxFuture;
 use krishiv_common::error::{ArithmeticOverflow, KrishivError, ScalarSubqueryTooManyRows};
-use krishiv_memory::SpillSignal;
+use krishiv_memory::{Reservation, SpillSignal};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::build::{BuildGlobal, Built, Level0, nanos};
@@ -567,6 +567,10 @@ struct ProbeLocal {
     /// J1, `Level0::direct`): off when `krishiv.exec.join.directIndex` is
     /// off or detailed metrics count probe lengths.
     direct: bool,
+    /// An empty reservation of this driver's consumer, for a direct index
+    /// past the unreserved caps and its payload (lever J2, `direct.rs`);
+    /// `None` for a prebuilt build, which outlives the probe's query.
+    index_memory: Option<Reservation>,
     cursor: Option<Cursor>,
     /// Rows of spilled partitions.
     parts: Vec<Part>,
@@ -701,13 +705,15 @@ impl ProbeOp {
         let level0 = held_level0(&mut l.level0, built)?;
         let tables = Tables::Level0(&level0.tables, built.spilled);
         let direct = if l.direct {
+            let memory = &mut l.index_memory;
             level0
                 .direct
                 .get_or_init(|| {
-                    Direct::of(&level0.tables, built.spilled, &s.keys).map(|d| {
+                    let mut empty = || memory.as_mut().map(|m| m.split(0));
+                    Direct::of(&level0.tables, built.spilled, &s.keys, empty()).map(|d| {
                         // A payload that fails to decode here fails the same
                         // way per pair, on the path that does not use it.
-                        let payload = DirectPayload::of(&level0.tables, |pairs| {
+                        let payload = DirectPayload::of(&level0.tables, empty(), |pairs| {
                             s.build_columns(g.hashing.rows(), pairs, |p| {
                                 arena_of(&level0.tables, p)
                             })
@@ -843,6 +849,7 @@ impl Operator for ProbeOp {
             detailed: ctx.query().config().detailed_metrics,
             direct: ctx.query().config().join_direct_index
                 && !ctx.query().config().detailed_metrics,
+            index_memory: releases.then(|| memory.reservation()),
             cursor: None,
             parts: (0..fanout)
                 .map(|_| Part::with_memory(memory.reservation()))

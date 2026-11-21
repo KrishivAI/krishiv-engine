@@ -37,11 +37,12 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 `join/` hash join (P2-T052a): `mod.rs` API + Spark semantics · `keys.rs` row-format keys, seeded foldhash,
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
-`direct.rs` (perf lever J1, `krishiv.exec.join.directIndex`) the direct index of a tiny build: at most 4,096 rows, one
-non-null-safe `Int32`/`Int64` row-layout key spanning at most four slots a row; the first probe driver builds it from the
+`direct.rs` (perf lever J1, `krishiv.exec.join.directIndex`) the direct index of a small build: at most 4,096 rows unreserved, or (lever J2, a build the probe owns, not a prebuilt
+broadcast) up to 2^19 rows and 2^20 slots with the slots and build-time vectors reserved on the probe driver's consumer (refused:
+hashed path), one non-null-safe `Int32`/`Int64` row-layout key spanning at most four slots a row; the first probe driver builds it from the
 level-0 tables (none spilled) into `build.rs` `Level0::direct`, shared by every driver and dropped with the tables; with lever
 P3 a build whose tables hold at most 256 KiB also has its payload decoded once (`DirectPayload`, unreserved, one copy per
-build; probes `take` build columns from it, sparse view columns `gc`'d; `direct_payload_rows`), and `Cursor::new` then finds each row's partition and newest row by `key - min`
+build; up to 16 MiB under a reservation of the decoded size, J2; probes `take` build columns from it, sparse view columns `gc`'d; `direct_payload_rows`), and `Cursor::new` then finds each row's partition and newest row by `key - min`
 (no encode, no hash; null-aware anti, grace partitions and detailed metrics keep the hashed probe; `direct_probe_rows`) ·
 `probe.rs` probe operator + match cursor (its first read of the build, `BuildGlobal::built`, ends the build's idle
 window: until then a finished build's tables are an `OutputSpill` written partition by partition, largest first, and

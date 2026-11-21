@@ -373,13 +373,13 @@ async fn a_fused_probe_selection_matches_the_oracle_with_the_direct_index() {
 /// A long payload string: 3,000 build rows of it hold more than the
 /// 256 KiB a direct build may hold for its payload to be decoded once.
 const LONG: &str = "a payload string long enough that three thousand rows of it are \
-                    well past the decoded payload cap of a direct build index";
+                    well past the unreserved payload cap of a direct build index";
 
-/// A direct build too large to decode its payload once (perf lever P3)
-/// keeps the direct index and decodes its build columns per pair; a small
-/// one takes them from the payload decoded once (`direct_payload_rows`
-/// counts its rows). Both match the oracle, with `Utf8` and `Utf8View`
-/// payloads, a residual filter and the build-preserving join types.
+/// A direct build past the unreserved payload cap (perf lever P3) decodes
+/// its payload once under a reservation (lever J2), as a small one does
+/// without (`direct_payload_rows` counts their rows). Both match the
+/// oracle, with `Utf8` and `Utf8View` payloads, a residual filter and the
+/// build-preserving join types.
 #[tokio::test]
 async fn the_payload_cap_keeps_the_direct_index_either_way() {
     let big: Vec<Row> = (0..3_000_i64)
@@ -418,13 +418,54 @@ async fn the_payload_cap_keeps_the_direct_index_either_way() {
                 .await;
                 assert_eq!(got, c.oracle(&probe, build), "{what}");
                 assert_eq!(direct, probe.len() as u64, "{what}");
-                let want = if build.len() == small.len() {
-                    small.len() as u64
-                } else {
-                    0
-                };
-                assert_eq!(payload, want, "{what}: rows decoded once");
+                assert_eq!(payload, build.len() as u64, "{what}: rows decoded once");
             }
+        }
+    }
+}
+
+/// Dense builds past the unreserved row cap (lever J2: 5,000 and 100,000
+/// rows, the size of TPC-DS `item` at SF100) take the direct index and
+/// their payload decoded once under the probe driver's reservation, and
+/// match the oracle; a build-preserving join emits every build row.
+#[tokio::test]
+async fn dense_builds_past_the_small_caps_take_the_direct_index() {
+    // The long payload of 100,000 rows is past the reserved cap (16 MiB).
+    for (rows, payload_text) in [(5_000_i64, LONG), (100_000, "brand #1")] {
+        let build: Vec<Row> = (0..rows)
+            .map(|k| r(Some(k), Some(payload_text), k % 11))
+            .collect();
+        let probe = keyed(
+            &(0..80)
+                .map(|i| Some((i * 7_919) % (rows + 40) - 20))
+                .chain([None])
+                .collect::<Vec<_>>(),
+        );
+        for (join_type, filter) in [
+            (JoinType::Inner, false),
+            (JoinType::LeftOuter, true),
+            (JoinType::RightOuter, false),
+        ] {
+            let mut c = case(join_type, 1, false, filter);
+            c.row_layout = true;
+            let what = format!("{join_type:?} filter {filter} rows {rows}");
+            let (got, direct, payload) = run_counted(
+                &c,
+                &probe,
+                &build,
+                Run {
+                    on: true,
+                    ..Run::default()
+                },
+            )
+            .await;
+            assert_eq!(got, c.oracle(&probe, &build), "{what}");
+            assert_eq!(direct, probe.len() as u64, "{what}");
+            assert_eq!(
+                payload,
+                u64::try_from(rows).unwrap(),
+                "{what}: rows decoded once"
+            );
         }
     }
 }
