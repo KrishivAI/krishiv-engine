@@ -253,9 +253,9 @@ impl DataFrameWriter {
     }
 
     /// Buckets the output by `cols` into `buckets` buckets (PySpark's
-    /// `bucketBy`). Only `saveAsTable` takes a bucketed layout in Spark, and
-    /// the engine has no bucketed tables yet: `save` and `insertInto` fail as
-    /// in Spark and `save_as_table` with `KRISHIV_UNSUPPORTED_FEATURE`.
+    /// `bucketBy`). Only `saveAsTable` takes a bucketed layout, as in Spark:
+    /// `save` and `insertInto` fail as in Spark. An append must name the
+    /// table's own bucketing, or none for a table without one.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -372,8 +372,9 @@ impl DataFrameWriter {
     ///
     /// # Errors
     /// `INVALID_SAVE_MODE`; `SORT_BY_WITHOUT_BUCKETING`;
-    /// `KRISHIV_UNSUPPORTED_FEATURE` for `bucket_by`, `partition_by`, an
-    /// append that does not match the table;
+    /// `_LEGACY_ERROR_TEMP_1158` to `_LEGACY_ERROR_TEMP_1164` for an append
+    /// that does not match the table (view, format, schema, partitioning,
+    /// bucketing);
     /// `UNSUPPORTED_OVERWRITE.TABLE`;
     /// `TABLE_OR_VIEW_ALREADY_EXISTS`; analysis and write errors.
     pub async fn save_as_table(self, table: &str) -> Result<(), KrishivError> {

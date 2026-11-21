@@ -656,8 +656,27 @@ fn an_append_names_the_tables_bucketing_or_none() {
             .save_as_table("b"),
     )
     .unwrap();
-    block_on(s.table("people").write().mode("append").save_as_table("b")).unwrap();
-    assert_eq!(count(&s, "b"), 9);
+    assert_eq!(count(&s, "b"), 6);
+    // Spark compares the two specs as options: no `bucketBy` into a bucketed table is refused,
+    // and so is `bucketBy` into a plain one.
+    assert_eq!(
+        class(block_on(
+            s.table("people").write().mode("append").save_as_table("b")
+        )),
+        "_LEGACY_ERROR_TEMP_1164"
+    );
+    block_on(s.table("people").write().save_as_table("plain")).unwrap();
+    assert_eq!(
+        class(block_on(
+            s.table("people")
+                .write()
+                .bucket_by(4, ["id"])
+                .mode("append")
+                .save_as_table("plain")
+        )),
+        "_LEGACY_ERROR_TEMP_1164"
+    );
+    assert_eq!(count(&s, "b"), 6);
 }
 
 #[test]

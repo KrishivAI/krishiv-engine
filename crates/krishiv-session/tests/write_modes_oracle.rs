@@ -149,7 +149,7 @@ fn run(case: &Value) -> Result<(), String> {
             Err(e) => {
                 let got = e.error_class().name().to_owned();
                 if got == observed["class"].as_str().unwrap() {
-                    Ok(())
+                    compare_params(observed, &e)
                 } else {
                     Err(format!("expected {}, got {got}: {e}", observed["class"]))
                 }
@@ -167,6 +167,41 @@ fn run(case: &Value) -> Result<(), String> {
         }
         other => Err(format!("unreplayable kind {other}")),
     }
+}
+
+/// The observed parameters against the error's, with the run's scratch schema (`ws_...`) read as `default`.
+fn compare_params(observed: &Value, e: &krishiv_common::error::KrishivError) -> Result<(), String> {
+    let Some(params) = observed["params"].as_object() else {
+        return Ok(());
+    };
+    let norm = |v: &str| {
+        let mut out = String::new();
+        let mut rest = v;
+        while let Some(i) = rest.find("ws_") {
+            out.push_str(&rest[..i]);
+            let tail = &rest[i..];
+            let end = tail
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(tail.len());
+            out.push_str("default");
+            rest = &tail[end..];
+        }
+        out.push_str(rest);
+        out
+    };
+    for (k, want) in params {
+        let got = e
+            .message_parameters()
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone());
+        let want = norm(want.as_str().unwrap());
+        // Spark prints a table as `spark_catalog.db.t`; Krishiv's catalog name is read the same way.
+        if got.as_deref().map(norm).as_deref() != Some(want.as_str()) {
+            return Err(format!("parameter {k}: expected {want}, got {got:?}: {e}"));
+        }
+    }
+    Ok(())
 }
 
 #[test]

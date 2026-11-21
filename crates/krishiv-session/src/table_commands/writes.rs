@@ -461,8 +461,9 @@ impl Session {
     /// table is created from the DataFrame's schema (an existing one in
     /// `errorifexists` mode fails with `TABLE_OR_VIEW_ALREADY_EXISTS`),
     /// `ignore` leaves an existing table alone, `append` adds the rows by
-    /// column name (names that do not match the table's, a format other than
-    /// its, or a `partition_by` fail with `KRISHIV_UNSUPPORTED_FEATURE`), and
+    /// column name (a view, another format, a different column count or names,
+    /// partitioning or bucketing fail with Spark's `_LEGACY_ERROR_TEMP_1158`
+    /// to `_LEGACY_ERROR_TEMP_1164`, checked in Spark's order), and
     /// `overwrite` drops the table and creates it again, after the checks that
     /// can refuse the new table and the `UNSUPPORTED_OVERWRITE.TABLE` check
     /// (a query that reads the table it replaces); a temporary view of the
@@ -504,17 +505,16 @@ impl Session {
                     return Err(krishiv_common::error::LegacyErrorTemp1158 {}.into());
                 }
                 let table = self.table_for_write(&name, "INSERT", &env)?;
-                // Spark refuses an append whose format, partitioning or bucketing differs from the
-                // table's (`PreprocessTableCreation`).
-                if let Some(p) = spec
-                    .provider
-                    .as_deref()
-                    .filter(|p| !p.eq_ignore_ascii_case(&table.provider))
-                {
+                // Spark refuses an append whose format, schema, partitioning or bucketing differs from
+                // the table's (`PreprocessTableCreation`), in this order: 1159, 1161, 1162, 1163, 1164.
+                // The writer's source is compared always: a writer that names none uses
+                // `spark.sql.sources.default`.
+                let asked_provider = self.written_provider(spec.provider.clone());
+                if !asked_provider.eq_ignore_ascii_case(&table.provider) {
                     return Err(krishiv_common::error::LegacyErrorTemp1159 {
                         table_name: spark_name(&name),
-                        existing_provider: table.provider.clone(),
-                        specified_provider: p.to_owned(),
+                        existing_provider: datasource_class(&table.provider),
+                        specified_provider: datasource_class(&asked_provider),
                     }
                     .into());
                 }
@@ -531,64 +531,6 @@ impl Session {
                 let same_names = |want: &[&str], have: &[String]| {
                     want.len() == have.len() && want.iter().zip(have).all(|(w, h)| same(w, h))
                 };
-                let asked_parts: Vec<&str> =
-                    spec.partitioned_by.iter().map(String::as_str).collect();
-                // A Delta append that names no partitioning takes the table's own.
-                #[cfg(feature = "delta")]
-                let infer_parts = asked_parts.is_empty() && is_delta_table(&table);
-                #[cfg(not(feature = "delta"))]
-                let infer_parts = false;
-                if !infer_parts && !same_names(&asked_parts, &table.layout.partition_columns) {
-                    return Err(krishiv_common::error::LegacyErrorTemp1163 {
-                        table_name: spark_name(&name),
-                        specified_part_cols: list(asked_parts),
-                        existing_part_cols: table.layout.partition_columns.join(", "),
-                    }
-                    .into());
-                }
-                // A bucketing the writer names must be the table's (count, columns, sort columns);
-                // one it leaves out is the table's own.
-                if let Some(asked) = &spec.bucket {
-                    let cols: Vec<&str> = asked
-                        .clustered_by
-                        .iter()
-                        .map(|c| c.value.as_str())
-                        .collect();
-                    let sorts: Vec<&str> = asked
-                        .sorted_by
-                        .iter()
-                        .map(|c| c.name.value.as_str())
-                        .collect();
-                    let matches = table.layout.bucket.as_ref().is_some_and(|b| {
-                        asked.buckets == b.num_buckets
-                            && same_names(&cols, &b.columns)
-                            && same_names(&sorts, &b.sort_columns)
-                    });
-                    if !matches {
-                        let text = |n: u64, c: &[&str], s: &[&str]| {
-                            format!(
-                                "{n} buckets, bucket columns: [{}], sort columns: [{}]",
-                                c.join(", "),
-                                s.join(", ")
-                            )
-                        };
-                        return Err(krishiv_common::error::LegacyErrorTemp1164 {
-                            table_name: spark_name(&name),
-                            specified_bucket_string: text(asked.buckets, &cols, &sorts),
-                            existing_bucket_string: table.layout.bucket.as_ref().map_or_else(
-                                String::new,
-                                |b| {
-                                    let c: Vec<&str> =
-                                        b.columns.iter().map(String::as_str).collect();
-                                    let s: Vec<&str> =
-                                        b.sort_columns.iter().map(String::as_str).collect();
-                                    text(b.num_buckets, &c, &s)
-                                },
-                            ),
-                        }
-                        .into());
-                    }
-                }
                 let schema_text = |fields: Vec<(String, String)>| {
                     format!(
                         "struct<{}>",
@@ -650,6 +592,66 @@ impl Session {
                             .map(|f| f.name().as_str())
                             .collect::<Vec<_>>()
                             .join(", "),
+                    }
+                    .into());
+                }
+                let asked_parts: Vec<&str> =
+                    spec.partitioned_by.iter().map(String::as_str).collect();
+                // A Delta append that names no partitioning takes the table's own.
+                #[cfg(feature = "delta")]
+                let infer_parts = asked_parts.is_empty() && is_delta_table(&table);
+                #[cfg(not(feature = "delta"))]
+                let infer_parts = false;
+                if !infer_parts && !same_names(&asked_parts, &table.layout.partition_columns) {
+                    return Err(krishiv_common::error::LegacyErrorTemp1163 {
+                        table_name: spark_name(&name),
+                        specified_part_cols: list(asked_parts),
+                        existing_part_cols: table.layout.partition_columns.join(", "),
+                    }
+                    .into());
+                }
+                // Bucketing is compared as options: an append with no `bucketBy` into a bucketed
+                // table is refused, as is a bucketed one into a plain table (`BucketSpec.toString`).
+                let asked_bucket: Option<(u64, Vec<&str>, Vec<&str>)> =
+                    spec.bucket.as_ref().map(|a| {
+                        (
+                            a.buckets,
+                            a.clustered_by.iter().map(|c| c.value.as_str()).collect(),
+                            a.sorted_by.iter().map(|c| c.name.value.as_str()).collect(),
+                        )
+                    });
+                let same_bucket = match (&asked_bucket, &table.layout.bucket) {
+                    (None, None) => true,
+                    (Some((n, cols, sorts)), Some(b)) => {
+                        *n == b.num_buckets
+                            && same_names(cols, &b.columns)
+                            && same_names(sorts, &b.sort_columns)
+                    }
+                    _ => false,
+                };
+                if !same_bucket {
+                    let text = |n: u64, c: &[&str], s: &[&str]| {
+                        let sort = if s.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", sort columns: [{}]", s.join(", "))
+                        };
+                        format!("{n} buckets, bucket columns: [{}]{sort}", c.join(", "))
+                    };
+                    return Err(krishiv_common::error::LegacyErrorTemp1164 {
+                        table_name: spark_name(&name),
+                        specified_bucket_string: asked_bucket
+                            .as_ref()
+                            .map_or_else(|| "not bucketed".to_owned(), |(n, c, s)| text(*n, c, s)),
+                        existing_bucket_string: table.layout.bucket.as_ref().map_or_else(
+                            || "not bucketed".to_owned(),
+                            |b| {
+                                let c: Vec<&str> = b.columns.iter().map(String::as_str).collect();
+                                let s: Vec<&str> =
+                                    b.sort_columns.iter().map(String::as_str).collect();
+                                text(b.num_buckets, &c, &s)
+                            },
+                        ),
                     }
                     .into());
                 }
@@ -969,6 +971,20 @@ enum Access {
     Read,
     /// Writes or changes it.
     Write,
+}
+
+/// The class name Spark's `_LEGACY_ERROR_TEMP_1159` prints for a provider (observed on Spark 4.3.0:
+/// `ParquetDataSourceV2`, `JsonDataSourceV2`); a provider without a known class prints as written.
+fn datasource_class(provider: &str) -> String {
+    match provider.to_ascii_lowercase().as_str() {
+        "parquet" => "ParquetDataSourceV2".to_owned(),
+        "json" => "JsonDataSourceV2".to_owned(),
+        "csv" => "CSVDataSourceV2".to_owned(),
+        "orc" => "OrcDataSourceV2".to_owned(),
+        "text" => "TextDataSourceV2".to_owned(),
+        "avro" => "AvroDataSourceV2".to_owned(),
+        _ => provider.to_owned(),
+    }
 }
 
 /// The table's name as Spark prints it in `_LEGACY_ERROR_TEMP` parameters (`unquotedString`).
