@@ -22,7 +22,8 @@
 //! More than one distinct window call in one node is `_LEGACY_ERROR_TEMP_1039`; a window call in a
 //! `HAVING` or `ORDER BY` over an aggregate cannot find its input there
 //! (`MISSING_ATTRIBUTES.RESOLVED_ATTRIBUTE_MISSING_FROM_INPUT`). A window call whose time column is itself
-//! a window, `window_time(..)` and the DataFrame form stay unsupported.
+//! a window (a nested call, or a column a derived table took from an inner `window(..)`), `window_time(..)` over
+//! anything else and the DataFrame form stay unsupported.
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -526,7 +527,57 @@ fn time_window_input(
         let time = Expr::function(WINDOW_TIME_SCALAR, vec![Expr::column(["__tw_inner"])]);
         return single_window(&inner_input, f, WINDOW, time, origin);
     }
+    // `window(w, ..)` where `w` is a column a derived table took from an inner `window(..)`: Spark reads the
+    // window's `window_time`, as for the nested call above.
+    if let ExprNode::Column(c) = &f.args[0].node
+        && let [name] = c.name.as_slice()
+        && is_window_column(base, name)
+    {
+        // The column is read under the name the `window_time` check accepts for a window column.
+        let renamed = project(
+            Arc::clone(base),
+            vec![
+                star(origin),
+                alias(Expr::column([name.as_str()]), "__tw_inner", origin),
+            ],
+            origin,
+        );
+        let time = Expr::function(WINDOW_TIME_SCALAR, vec![Expr::column(["__tw_inner"])]);
+        return single_window(&renamed, f, WINDOW, time, origin);
+    }
     single_window(base, f, WINDOW, (*f.args[0]).clone(), origin)
+}
+
+/// Whether the output column `name` of `p` is the window column an inner `window(..)` added: an alias of
+/// `window` (or `window` itself) over the time-window generator, seen through derived-table aliases.
+fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
+    match &p.node {
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            is_window_column(input, name)
+        }
+        PlanNode::Project { input, exprs }
+        | PlanNode::Aggregate {
+            input,
+            aggregates: exprs,
+            ..
+        } => {
+            let over_generator = matches!(
+                &input.node,
+                PlanNode::Generate { names, arg, .. }
+                    if names.as_slice() == [WINDOW.to_owned()]
+                        && call_of(arg, "__time_windows").is_some()
+            );
+            over_generator
+                && exprs.iter().any(|e| match &e.node {
+                    ExprNode::Alias { expr, name: n } => {
+                        n == name && matches!(&expr.node, ExprNode::Column(c) if c.name == [WINDOW])
+                    }
+                    ExprNode::Column(c) => c.name == [name] && name == WINDOW,
+                    _ => false,
+                })
+        }
+        _ => false,
+    }
 }
 
 /// One window column `name` over `base`: the windows of `time` under the durations of `f`.
