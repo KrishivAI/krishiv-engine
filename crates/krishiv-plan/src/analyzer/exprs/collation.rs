@@ -547,6 +547,9 @@ enum RwArg {
     Kid(usize),
     /// The call's argument with its trailing spaces dropped (`_RTRIM` ignores them in a delimiter).
     RtrimKid(usize),
+    /// The call's argument through `__like_fold(mode, _)`: the text Spark's `UTF8_LCASE` `LIKE` (mode 0) or
+    /// `ILIKE` (mode 1) compares.
+    LikeFoldKid(usize, i32),
     /// An integer constant.
     Int(i32),
 }
@@ -590,6 +593,15 @@ fn collated_rewrite(name: &str, n: usize, c: Collation) -> Option<Option<Rewrite
             (
                 "__trim_collated",
                 vec![RwArg::Int(mode), RwArg::Kid(src), RwArg::Kid(chars)],
+            )
+        }
+        // Spark compiles the pattern with `CASE_INSENSITIVE | UNICODE_CASE` under `UTF8_LCASE`: each character is
+        // matched by Java's case folding (`__like_fold`). `_RTRIM` and the escape form are not modelled.
+        ("like" | "ilike", 2) if lcase && !rtrim => {
+            let mode = i32::from(name == "ilike");
+            (
+                "like",
+                vec![RwArg::LikeFoldKid(0, mode), RwArg::LikeFoldKid(1, mode)],
             )
         }
         ("replace" | "translate", 3) if !lcase => return Some(None),
@@ -1740,6 +1752,22 @@ impl Resolver<'_> {
                         b = self.expr(&Arc::new(call), cx)?;
                         b.shown = Some(shown);
                     }
+                    b
+                }
+                RwArg::LikeFoldKid(i, mode) => {
+                    let k = &kids[i];
+                    let b = if is_string(k.ty.data_type.as_ref()) {
+                        self.plain_string(k, e.origin, cx)?
+                    } else {
+                        k.clone()
+                    };
+                    let flag =
+                        Expr::new(ExprNode::Literal(Literal::Integer(mode))).with_origin(e.origin);
+                    let call = Expr::function("__like_fold", vec![flag, (*b.expr).clone()])
+                        .with_origin(e.origin);
+                    let shown = b.shown();
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.shown = Some(shown);
                     b
                 }
                 RwArg::Int(v) => {

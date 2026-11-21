@@ -32,6 +32,54 @@ pub fn trim_mode(side: TrimSide, lcase: bool, rtrim: bool) -> i32 {
     side | (i32::from(lcase) << 2) | (i32::from(rtrim) << 3)
 }
 
+/// One character in Java's per-character case folding, as `Pattern.CASE_INSENSITIVE | UNICODE_CASE`
+/// compares: the simple lower case of the simple upper case (a mapping to more than one character
+/// leaves the character as it is; `İ` lower-cases to `i`, as `Character.toLowerCase` does).
+fn java_fold(c: char) -> char {
+    let mut up = c.to_uppercase();
+    let upper = match (up.next(), up.next()) {
+        (Some(u), None) => u,
+        _ => c,
+    };
+    if upper == '\u{130}' {
+        return 'i';
+    }
+    let mut low = upper.to_lowercase();
+    match (low.next(), low.next()) {
+        (Some(l), None) => l,
+        _ => upper,
+    }
+}
+
+/// The text `LIKE` and `ILIKE` compare over a `UTF8_LCASE` string (SQL-40). Spark matches each
+/// character by Java's case folding, so both operands go through [`java_fold`]. With `ilike` the
+/// operand is first lower-cased in full (`İ` becomes `i` and U+0307, which is why `ILIKE` and `LIKE`
+/// differ for `İ`). Oracle: a Spark 4.3.0 run, 2026-11-21.
+///
+/// # Errors
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the offset type.
+pub fn like_fold<O: OffsetSizeTrait>(
+    ilike: Operand<'_, Int32Type>,
+    input: StrOperand<'_, O>,
+) -> Result<GenericStringArray<O>, KernelError> {
+    let slots: [&dyn Slot; 2] = [&ilike, &input];
+    str_rows(&slots, |i, out| {
+        let s = input.at(i);
+        reserve_str(out, s.len().saturating_mul(2))?;
+        let full = int_at(ilike, i) != 0;
+        for c in s.chars() {
+            if full {
+                for l in c.to_lowercase() {
+                    out.push(java_fold(l));
+                }
+            } else {
+                out.push(java_fold(c));
+            }
+        }
+        Ok(())
+    })
+}
+
 /// The lower-cased code points of `window` (or the characters themselves when not `lcase`).
 fn key(window: &[char], lcase: bool, buf: &mut Vec<char>) {
     buf.clear();

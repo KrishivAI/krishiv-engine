@@ -337,6 +337,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__find_in_set_lcase" => "__find_in_set_lcase",
         "__trim_collated" => "__trim_collated",
         "__icu_case" => "__icu_case",
+        "__like_fold" => "__like_fold",
         "__replace_lcase" => "__replace_lcase",
         "__translate_lcase" => "__translate_lcase",
         "__split_part_lcase" => "__split_part_lcase",
@@ -369,6 +370,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
             | "__find_in_set_lcase"
             | "__json_table_value"
             | "__json_table_exists"
+            | "__like_fold"
     ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {

@@ -69,7 +69,7 @@ pub use collation_key::{
     collation_key, collation_key_type, keyed_map, keyed_map_type, push_collation_key,
 };
 pub use lcase::{
-    icu_case, replace_lcase, split_part_lcase, substring_index_lcase, translate_lcase,
+    icu_case, like_fold, replace_lcase, split_part_lcase, substring_index_lcase, translate_lcase,
     trim_collated, trim_mode,
 };
 pub use like::{LikePattern, like};

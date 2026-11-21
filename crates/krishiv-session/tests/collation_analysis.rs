@@ -257,8 +257,9 @@ fn search_and_indeterminate_rules_follow_spark() {
 fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
     let l = "('Ab' COLLATE utf8_lcase)";
     for sql in [
-        format!("SELECT {l} LIKE 'a%'"),
         format!("SELECT {l} RLIKE '^a'"),
+        format!("SELECT {l} LIKE 'a%' ESCAPE '#'"),
+        "SELECT 'Ab' COLLATE unicode_ci LIKE 'a%'".to_owned(),
         format!("SELECT regexp_replace({l}, 'a', 'x')"),
         "SELECT replace('aAb' COLLATE unicode_ci, 'a', 'x')".to_owned(),
         "SELECT translate('aAb' COLLATE unicode_ci, 'a', 'x')".to_owned(),
@@ -530,7 +531,7 @@ fn class_of(s: &Session, sql: &str) -> ErrorClass {
 #[test]
 fn unusual_operands_and_array_functions_do_not_compare_bytes() {
     for sql in [
-        "SELECT (SELECT 'Ab' COLLATE utf8_lcase) LIKE 'a%'",
+        "SELECT (SELECT 'Ab' COLLATE utf8_lcase) RLIKE 'a'",
         "SELECT replace(CAST(array('aAb') AS ARRAY<STRING COLLATE unicode_ci>)[0], 'a', 'x')",
         "SELECT array_contains(array('a', 'b'), 'A' COLLATE utf8_lcase)",
         "SELECT array_position(array('a'), 'A' COLLATE unicode_ci)",
@@ -1793,5 +1794,42 @@ fn nvl2_column_names_show_the_arguments_as_written() {
             .map(|f| f.name().to_owned())
             .collect();
         assert_eq!(names, [want], "{sql}");
+    }
+}
+
+/// `LIKE` and `ILIKE` over `UTF8_LCASE` (SQL-40); every value is from a Spark 4.3.0 local run (2026-11-21).
+#[test]
+fn like_over_lcase_matches_like_spark() {
+    for (sql, want) in [
+        ("'APPLE' COLLATE utf8_lcase LIKE 'app%'", "true"),
+        ("'xyz' COLLATE utf8_lcase LIKE 'APP%'", "false"),
+        ("'APPLE' COLLATE utf8_lcase ILIKE 'app%'", "true"),
+        ("CAST(NULL AS STRING) COLLATE utf8_lcase LIKE 'a%'", "NULL"),
+        (
+            "'\u{391}\u{3a3}' COLLATE utf8_lcase LIKE '\u{3b1}\u{3c2}'",
+            "true",
+        ),
+        ("'\u{3c3}' COLLATE utf8_lcase LIKE '\u{3a3}'", "true"),
+        ("'\u{3c2}' COLLATE utf8_lcase LIKE '\u{3a3}'", "true"),
+        ("'\u{3c2}' COLLATE utf8_lcase LIKE '\u{3c3}'", "true"),
+        ("'\u{17f}' COLLATE utf8_lcase LIKE 's'", "true"),
+        ("'s' COLLATE utf8_lcase LIKE '\u{17f}'", "true"),
+        ("'\u{131}' COLLATE utf8_lcase LIKE 'i'", "true"),
+        ("'\u{130}' COLLATE utf8_lcase LIKE 'i'", "true"),
+        ("'i' COLLATE utf8_lcase LIKE '\u{130}'", "true"),
+        ("'\u{b5}' COLLATE utf8_lcase LIKE '\u{3bc}'", "true"),
+        ("'x\u{130}y' COLLATE utf8_lcase LIKE 'xiy'", "true"),
+        ("'x\u{130}y' COLLATE utf8_lcase LIKE 'x_y'", "true"),
+        ("'x\u{130}y' COLLATE utf8_lcase LIKE 'x__y'", "false"),
+        ("'\u{130}' COLLATE utf8_lcase ILIKE 'i'", "false"),
+        ("'\u{3c2}' COLLATE utf8_lcase ILIKE '\u{3a3}'", "true"),
+        ("'\u{17f}' COLLATE utf8_lcase ILIKE 's'", "true"),
+        ("'\u{b5}' COLLATE utf8_lcase ILIKE '\u{3bc}'", "true"),
+    ] {
+        assert_eq!(
+            one(&format!("SELECT CAST(({sql}) AS STRING)")),
+            want,
+            "{sql}"
+        );
     }
 }

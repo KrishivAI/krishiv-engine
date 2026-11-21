@@ -629,3 +629,11 @@ both forms, so a sketch written by one engine can be estimated or unioned by the
 `length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
 `hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
 (`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.
+
+## Pattern matching over collated strings (`LIKE`, `RLIKE`)
+
+`LIKE` and `ILIKE` over a `UTF8_LCASE` string match as Spark does, character by character in Java's case folding
+(final sigma, `ſ`, `ı`, `İ` and `µ` match their case partners). Still refused with a `KRISHIV_UNSUPPORTED_FEATURE`
+error that names the call: `LIKE` with an `ESCAPE` clause or over `UTF8_LCASE_RTRIM`, `LIKE` over an ICU collation
+(Spark itself raises `DATATYPE_MISMATCH` there), `RLIKE` and the `regexp_*` family, and the `LIKE ANY`/`ALL` forms.
+Krishiv never matches such strings by bytes.
