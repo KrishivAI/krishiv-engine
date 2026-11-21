@@ -119,7 +119,12 @@ pub(crate) fn metric_view_gate_error(
     redacted: &RedactedSql,
 ) -> Option<KrishivError> {
     let span = metric_view_gate(v, profile)?;
-    let token = query.get(span.start..span.end).unwrap_or_default();
+    // Errors never echo a string literal's text (`krishiv-sql/CLAUDE.md`).
+    let token = if span.range() == v.body_span.range() {
+        "$$"
+    } else {
+        query.get(span.start..span.end).unwrap_or_default()
+    };
     let error = krishiv_common::error::ParseSyntaxError {
         error: format!("'{token}'"),
         hint: String::new(),
@@ -128,16 +133,25 @@ pub(crate) fn metric_view_gate_error(
 }
 
 /// Where a Spark release before 4.2 stops parsing `CREATE VIEW .. WITH METRICS`, if `profile` is
-/// one: 3.5 has no `WITH` there, 4.0 and 4.1 take `WITH` for a schema-binding clause and fail at
-/// the next token.
+/// one: at a view's `LANGUAGE` (no release before 4.2 has it), or at `WITH METRICS`, whichever
+/// comes first; 3.5 has no `WITH` there, 4.0 and 4.1 take `WITH` for a schema-binding clause and
+/// fail at the next token (Spark 3.5.7 and 4.1.0 runs, 2026-11-21). The statement always holds
+/// one of the two (else it is no metric view), so the span never covers the YAML literal.
 fn metric_view_gate(
     v: &krishiv_sql::ast::CreateMetricView,
     profile: SparkProfile,
 ) -> Option<krishiv_sql::ast::Span> {
-    let [with, metrics] = v.with_metrics.unwrap_or([v.body_span, v.body_span]);
+    let at = v.with_metrics.map(|[with, metrics]| match profile {
+        SparkProfile::V3_5 => with,
+        _ => metrics,
+    });
+    let first = [at, v.language_keyword]
+        .into_iter()
+        .flatten()
+        .min_by_key(|s| s.start);
     match profile {
-        SparkProfile::V3_5 => Some(with),
-        SparkProfile::V4_0 | SparkProfile::V4_1 => Some(metrics),
+        // Unreachable fallback, refused all the same: the literal's span, whose text is never shown.
+        SparkProfile::V3_5 | SparkProfile::V4_0 | SparkProfile::V4_1 => first.or(Some(v.body_span)),
         _ => None,
     }
 }

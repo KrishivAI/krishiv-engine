@@ -574,7 +574,9 @@ fn read_v01(events: &mut Events, options: &ParserOptions) -> Result<MetricViewSp
         return Err(Fail::Invalid(String::from("Source cannot be empty")));
     } else if parse_multipart_identifier(&source, options).is_ok() {
         MetricViewSource::Asset(source)
-    } else if parse_query(&source, options).is_ok() {
+    } else if !source.trim_end().ends_with(';') && parse_query(&source, options).is_ok() {
+        // A statement terminator is no part of a query source (Spark 4.2.1 run, 2026-11-21:
+        // `Invalid source: SELECT * FROM t;`); wrapped as a derived table it would not parse.
         MetricViewSource::Sql(source)
     } else {
         return Err(Fail::Invalid(format!("Invalid source: {source}")));

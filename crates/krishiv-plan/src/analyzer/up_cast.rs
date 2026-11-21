@@ -35,15 +35,21 @@ pub fn can_up_cast(from: &DataType, to: &DataType) -> bool {
         (f, T::Decimal(d)) if integral(f).is_some() => {
             integral(f).is_some_and(|(p, s)| d.precision() - d.scale() >= p - s && d.scale() >= s)
         }
-        // `from.isTighterThan(to)`.
+        // `from.isTighterThan(to)` for an integral `to`: a whole decimal with fewer digits than the
+        // integral's decimal form (`DECIMAL(10,0)` to `INT` can overflow; Spark 4.2.1 `canUpCast`).
         (T::Decimal(d), t) if integral(t).is_some() => {
-            integral(t).is_some_and(|(p, s)| d.precision() - d.scale() <= p - s && d.scale() <= s)
+            integral(t).is_some_and(|(p, _)| d.scale() == 0 && d.precision() < p)
         }
         (f, t) if rank(f).zip(rank(t)).is_some_and(|(f, t)| f < t) => true,
         (T::Date | T::TimestampNtz | T::Long, T::Timestamp)
         | (T::Date | T::Timestamp, T::TimestampNtz)
         | (T::Timestamp, T::Long)
-        | (T::Null, _) => true,
+        | (T::Null, _)
+        // Within one ANSI interval family, whatever the fields.
+        | (T::YearMonthInterval { .. }, T::YearMonthInterval { .. })
+        | (T::DayTimeInterval { .. }, T::DayTimeInterval { .. }) => true,
+        // A variant converts only to itself (the equality above).
+        (T::Variant, _) | (_, T::Variant) => false,
         // An atomic type to a plain string.
         (f, T::String) => !f.is_nested(),
         (T::Array(a), T::Array(b)) => {
@@ -93,6 +99,35 @@ mod tests {
         assert!(can_up_cast(&T::Date, &T::Timestamp));
         assert!(!can_up_cast(&T::Timestamp, &T::Date));
         assert!(can_up_cast(&T::Null, &T::Integer));
+    }
+
+    /// The cases of a Spark 4.2.1 `Cast.canUpCast` run (2026-11-21, review cL96, cL99, cL9_).
+    #[test]
+    fn decimals_variants_and_intervals_up_cast_as_spark_42() {
+        use DataType as T;
+        use krishiv_types::{DayTimeField as D, YearMonthField as Y};
+        for (from, to, ok) in [
+            (dec(3, 0), T::Byte, false),
+            (dec(2, 0), T::Byte, true),
+            (dec(5, 0), T::Short, false),
+            (dec(4, 0), T::Short, true),
+            (dec(10, 0), T::Integer, false),
+            (dec(9, 0), T::Integer, true),
+            (dec(20, 0), T::Long, false),
+            (dec(19, 0), T::Long, true),
+            (dec(9, 1), T::Integer, false),
+        ] {
+            assert_eq!(can_up_cast(&from, &to), ok, "{from:?} -> {to:?}");
+        }
+        assert!(!can_up_cast(&T::Variant, &T::String));
+        assert!(can_up_cast(&T::Variant, &T::Variant));
+        let ym = |a, b| T::year_month_interval(a, b).unwrap();
+        let dt = |a, b| T::day_time_interval(a, b).unwrap();
+        assert!(can_up_cast(&ym(Y::Year, Y::Month), &ym(Y::Month, Y::Month)));
+        assert!(can_up_cast(&ym(Y::Month, Y::Month), &ym(Y::Year, Y::Year)));
+        assert!(can_up_cast(&dt(D::Day, D::Second), &dt(D::Hour, D::Hour)));
+        assert!(can_up_cast(&dt(D::Day, D::Day), &dt(D::Second, D::Second)));
+        assert!(!can_up_cast(&ym(Y::Month, Y::Month), &dt(D::Day, D::Day)));
     }
 
     #[test]

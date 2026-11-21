@@ -37,6 +37,7 @@ impl Parser<'_> {
         let mut comment = None;
         let mut tblproperties: Option<Vec<TableOption>> = None;
         let mut language = None;
+        let mut language_keyword = None;
         let mut with_metrics = None;
         // A metric-only clause was read: only this rule is left.
         let mut predicted = false;
@@ -50,6 +51,10 @@ impl Parser<'_> {
                 tblproperties.get_or_insert(props);
                 1
             } else if self.kw_at(0, "LANGUAGE") {
+                let keyword = self.tok(0).map(|t| t.span);
+                if language_keyword.is_none() {
+                    language_keyword = keyword;
+                }
                 self.bump();
                 predicted = true;
                 let name = self.routine_language_name()?;
@@ -91,6 +96,7 @@ impl Parser<'_> {
             tblproperties: tblproperties.unwrap_or_default(),
             language,
             with_metrics,
+            language_keyword,
             duplicate_clause: seen.iter().find(|(_, n)| *n > 1).map(|(c, _)| *c),
             body,
             body_span,

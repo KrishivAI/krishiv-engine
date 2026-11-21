@@ -57,7 +57,14 @@ fn run(s: &Session, sql: &str) -> Result<Vec<RecordBatch>, KrishivError> {
 }
 
 fn longs(batches: &[RecordBatch], column: usize) -> Vec<i64> {
-    let mut out: Vec<i64> = batches
+    let mut out = longs_unsorted(batches, column);
+    out.sort_unstable();
+    out
+}
+
+/// A column's values in row order.
+fn longs_unsorted(batches: &[RecordBatch], column: usize) -> Vec<i64> {
+    batches
         .iter()
         .flat_map(|b| {
             b.column(column)
@@ -65,9 +72,7 @@ fn longs(batches: &[RecordBatch], column: usize) -> Vec<i64> {
                 .values()
                 .to_vec()
         })
-        .collect();
-    out.sort_unstable();
-    out
+        .collect()
 }
 
 fn class(e: &KrishivError) -> String {
@@ -166,8 +171,11 @@ fn one_view_read_twice_gives_each_read_its_own_columns() {
          JOIN (SELECT region, measure(total) AS t FROM mv GROUP BY region) b ON a.region = b.region",
     )
     .unwrap();
-    assert_eq!(longs(&rows, 0), [3, 5]);
-    assert_eq!(longs(&rows, 1), [3, 5]);
+    // Pairs, not columns sorted apart: each row joins a region's total to its own.
+    let (left, right) = (longs_unsorted(&rows, 0), longs_unsorted(&rows, 1));
+    let mut pairs: Vec<(i64, i64)> = left.into_iter().zip(right).collect();
+    pairs.sort_unstable();
+    assert_eq!(pairs, [(3, 3), (5, 5)]);
     let rows = run(
         &s,
         "SELECT measure(total) FROM mv UNION ALL SELECT measure(total) FROM mv",
@@ -688,4 +696,92 @@ fn an_expression_with_its_own_alias_is_named_by_its_column() {
     };
     assert_eq!(name(0), "r");
     assert_eq!(name(1), "total");
+}
+
+/// A metric view read inside an ordinary view resolves its source's bare names in the enclosing
+/// view's namespace, as the view's own names do; read directly, in the reader's (a Spark 4.2.1
+/// run, 2026-11-21: `a.v` read from `b` gives `a.t`'s rows, `a.mv` read from `b` gives `b.t`'s).
+#[test]
+fn a_metric_source_inside_a_view_resolves_in_that_views_namespace() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::builder().build().unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", &dir.path().display().to_string())
+        .unwrap();
+    for sql in [
+        "CREATE NAMESPACE a",
+        "CREATE NAMESPACE b",
+        "CREATE TABLE a.t (region STRING, n INT) USING parquet",
+        "INSERT INTO a.t VALUES ('a', 1)",
+        "CREATE TABLE b.t (region STRING, n INT) USING parquet",
+        "INSERT INTO b.t VALUES ('b', 100)",
+        "USE a",
+        "CREATE VIEW a.mv WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsource: t\ndimensions:\n  - name: region\n    expr: region\nmeasures:\n  - name: total\n    expr: sum(n)\n$$",
+        "CREATE VIEW a.v AS SELECT region, measure(total) AS m FROM a.mv GROUP BY region",
+        "USE b",
+    ] {
+        run(&s, sql).unwrap();
+    }
+    let direct = run(&s, "SELECT measure(total) FROM a.mv").unwrap();
+    assert_eq!(longs(&direct, 0), [100]);
+    let through_view = run(&s, "SELECT m FROM a.v").unwrap();
+    assert_eq!(longs(&through_view, 0), [1]);
+}
+
+/// A query source ending in `;` is no source (a Spark 4.2.1 run, 2026-11-21).
+#[test]
+fn a_query_source_ending_in_a_semicolon_is_invalid() {
+    let (s, _dir) = session();
+    let e = run(
+        &s,
+        "CREATE VIEW mv2 WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsource: SELECT * FROM src;\ndimensions:\n  - name: region\n    expr: region\nmeasures:\n  - name: total\n    expr: sum(n)\n$$",
+    )
+    .unwrap_err();
+    assert_eq!(class(&e), "INVALID_METRIC_VIEW_YAML", "{e}");
+    assert!(
+        e.to_string().contains("Invalid source: SELECT * FROM src;"),
+        "{e}"
+    );
+}
+
+/// `HAVING` on a grouping key the output does not show, then `ORDER BY measure(..)`: Spark 4.2.1
+/// cannot resolve the measure column in the sort (run 2026-11-21).
+#[test]
+fn order_by_a_measure_over_having_on_a_hidden_key_is_unresolved() {
+    let (s, _dir) = session();
+    let e = run(
+        &s,
+        "SELECT measure(total) FROM mv GROUP BY region HAVING region = 'a' ORDER BY measure(total)",
+    )
+    .unwrap_err();
+    assert_eq!(class(&e), "UNRESOLVED_COLUMN.WITH_SUGGESTION", "{e}");
+}
+
+/// Before 4.2 a metric view is a syntax error at the first keyword 4.1 does not know, and the
+/// message never quotes the YAML body (Spark 4.1.0 run, 2026-11-21).
+#[test]
+fn the_pre_4_2_syntax_error_names_the_keyword_not_the_body() {
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_1)
+        .build()
+        .unwrap();
+    for (sql, token) in [
+        (
+            "CREATE VIEW v LANGUAGE YAML AS $$\nversion: 0.1\nsecret: hunter2\n$$",
+            "'LANGUAGE'",
+        ),
+        (
+            "CREATE VIEW v WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsecret: hunter2\n$$",
+            "'METRICS'",
+        ),
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert_eq!(class(&e), "PARSE_SYNTAX_ERROR", "{e}");
+        let text = e.to_string();
+        assert!(
+            text.contains(&format!("Syntax error at or near {token}")),
+            "{text}"
+        );
+        assert!(!text.contains("hunter2"), "{text}");
+    }
 }

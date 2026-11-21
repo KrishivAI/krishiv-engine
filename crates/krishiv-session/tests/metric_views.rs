@@ -134,14 +134,34 @@ fn error_matches(e: &KrishivError, want: &Value, by_class: bool) -> Result<(), S
     if class != condition {
         return Err(format!("class {class} vs {condition}: {e}"));
     }
+    if let Some(state) = want["sqlstate"].as_str()
+        && e.sql_state() != Some(state)
+    {
+        return Err(format!("SQLSTATE {:?} vs {state}: {e}", e.sql_state()));
+    }
     if by_class {
         return Ok(());
     }
-    for (k, v) in e.message_parameters() {
-        let theirs = want["parameters"][*k].as_str();
-        if theirs != Some(v.as_str()) {
-            return Err(format!("parameter {k}: {v:?} vs {theirs:?}"));
-        }
+    // The complete maps: a parameter Spark gives that the engine leaves out fails too.
+    let ours: std::collections::BTreeMap<&str, &str> = e
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.as_str()))
+        .collect();
+    let theirs: std::collections::BTreeMap<&str, &str> = want["parameters"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                // Spark 4.2's cast errors still pass `ansiConfig`, which their message no longer
+                // names (`CAST_INVALID_INPUT` in `spark-error-conditions-4.2.1.json`): not shown,
+                // so not compared.
+                .filter(|(k, _)| !(condition == "CAST_INVALID_INPUT" && k.as_str() == "ansiConfig"))
+                .filter_map(|(k, v)| Some((k.as_str(), v.as_str()?)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if ours != theirs {
+        return Err(format!("parameters {ours:?} vs {theirs:?}"));
     }
     Ok(())
 }
@@ -158,14 +178,24 @@ fn run_step(s: &Session, step: &Value) -> Result<(), String> {
     let text = step["sql"].as_str().unwrap();
     let result = block_on(async {
         let df = s.sql(text).await?;
-        df.collect().await
+        let schema = df.schema().await?;
+        Ok::<_, KrishivError>((schema, df.collect().await?))
     });
     let by_class = step["match"] == "class_sqlstate_prefix";
     match (result, outcome.get("error")) {
         (Err(e), Some(want)) => error_matches(&e, want, by_class),
         (Err(e), None) => Err(format!("failed: {e}")),
         (Ok(_), Some(want)) => Err(format!("succeeded, Spark failed: {}", want["message"])),
-        (Ok(batches), None) => {
+        (Ok((schema, batches)), None) => {
+            // The columns first, in order: an extra or renamed column fails even when the rows
+            // compare equal cell by cell.
+            if let Some(columns) = outcome["schema"].as_array() {
+                let theirs: Vec<&str> = columns.iter().filter_map(|c| c["name"].as_str()).collect();
+                let ours: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+                if ours != theirs {
+                    return Err(format!("columns {ours:?} vs {theirs:?}"));
+                }
+            }
             let mut want = outcome["rows"].as_array().cloned().unwrap_or_default();
             let mut got = rows(&batches);
             if outcome["row_order"] == "sorted" {

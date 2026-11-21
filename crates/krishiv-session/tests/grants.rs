@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use arrow_array::cast::AsArray;
 use futures::executor::block_on;
 use krishiv_common::error::KrishivError;
 use krishiv_plan::analyzer::PolicyVersion;
@@ -690,13 +691,27 @@ fn the_creator_of_a_metric_view_owns_it() {
         text.contains("OWNERSHIP") && text.contains("user:ana"),
         "{text}"
     );
-    assert_eq!(
-        ok(
-            &ana,
-            "SELECT region, measure(total) FROM mv GROUP BY region"
-        ),
-        1
-    );
+    let rows = block_on(async {
+        ana.sql("SELECT region, measure(total) FROM mv GROUP BY region")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    // The one source row: region `eu`, `sum(amount)` 1.
+    let got: Vec<(String, i64)> = rows
+        .iter()
+        .flat_map(|b| {
+            let region = arrow_cast::cast(b.column(0), &arrow_schema::DataType::Utf8).unwrap();
+            let total = arrow_cast::cast(b.column(1), &arrow_schema::DataType::Int64).unwrap();
+            let region = region.as_string::<i32>();
+            let total = total.as_primitive::<arrow_array::types::Int64Type>();
+            (0..b.num_rows())
+                .map(|i| (region.value(i).to_owned(), total.value(i)))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(got, [("eu".to_owned(), 1)]);
     ok(&bob, &create("IF NOT EXISTS "));
     denied(
         &bob,

@@ -656,6 +656,8 @@ pub struct CreateMetricView {
     pub language: Option<Ident>,
     /// The `WITH` and `METRICS` tokens of the first `WITH METRICS`.
     pub with_metrics: Option<[Span; 2]>,
+    /// The first `LANGUAGE` keyword (a release before 4.2 fails there when it comes first).
+    pub language_keyword: Option<Span>,
     /// The first clause written twice, by Spark's check order (`COMMENT`,
     /// `TBLPROPERTIES`, `LANGUAGE`, `WITH METRICS`), if any.
     pub duplicate_clause: Option<&'static str>,
