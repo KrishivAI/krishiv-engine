@@ -461,6 +461,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_STATISTICAL_AGGREGATE,
     ),
     (
+        "spark.sql.timeTravel.atSyntax.enabled",
+        &TIME_TRAVEL_AT_SYNTAX_ENABLED,
+    ),
+    (
         "krishiv.advisor.missingStats.minQError",
         &ADVISOR_MISSING_STATS_MIN_Q_ERROR,
     ),
@@ -563,6 +567,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.optimizer.shareCteInstances",
         &SHARE_CTE_INSTANCES,
+    ),
+    (
+        "krishiv.sql.timeTravel.atSyntax.enabled",
+        &TIME_TRAVEL_AT_SYNTAX_ENABLED,
     ),
     (
         "spark.sql.avro.datetimeRebaseModeInRead",

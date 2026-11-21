@@ -116,6 +116,12 @@ pub(crate) struct RowChanges<'a> {
     pub(crate) values: &'a [&'a krishiv_sql::ast::Expr],
     /// The `WHERE` condition.
     pub(crate) condition: Option<&'a krishiv_sql::ast::Expr>,
+    /// The target's `WITH (...)` options.
+    pub(crate) options: &'a [krishiv_sql::ast::TableOption],
+    /// More expressions whose subqueries Spark analyzes first (a `MERGE`'s `ON` and clause conditions).
+    pub(crate) more: &'a [&'a krishiv_sql::ast::Expr],
+    /// Queries Spark analyzes first (a `MERGE` source that is a subquery).
+    pub(crate) sources: &'a [&'a krishiv_sql::ast::Query],
 }
 
 /// The scalar subqueries anywhere in the expression.
@@ -127,6 +133,21 @@ fn scalar_subqueries<'a>(
         out.push(q);
     }
     e.for_each_child(&mut |c| scalar_subqueries(c, out));
+}
+
+/// Every subquery (scalar, `IN` and `EXISTS`) anywhere in the expression.
+pub(crate) fn all_subqueries<'a>(
+    e: &'a krishiv_sql::ast::Expr,
+    out: &mut Vec<&'a krishiv_sql::ast::Query>,
+) {
+    match &e.kind {
+        krishiv_sql::ast::ExprKind::Subquery(q) | krishiv_sql::ast::ExprKind::Exists(q) => {
+            out.push(q);
+        }
+        krishiv_sql::ast::ExprKind::InSubquery { query, .. } => out.push(query),
+        _ => {}
+    }
+    e.for_each_child(&mut |c| all_subqueries(c, out));
 }
 
 fn unsupported(feature: &str) -> KrishivError {
@@ -191,7 +212,7 @@ impl TableName {
         Ok(Self {
             namespace,
             name,
-            written: format!("`{}`", parts.join("`.`")),
+            written: krishiv_common::names::quote_parts(parts),
             bare,
         })
     }
@@ -587,6 +608,11 @@ impl Session {
             ids,
         )
         .map_err(|e| e.error)?;
+        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        let case_sensitive = env.analysis.conf.case_sensitive;
+        let analysis = df.analyzed_in(env.clone()).await?;
+        env.catalog
+            .check_reference_options(analysis.analyzed.plan.root())?;
         if let Some(temp) = crate::catalog::reads_temporary(
             &self.state.catalog,
             plan.root(),
@@ -598,9 +624,6 @@ impl Session {
                 "VIEW",
             ));
         }
-        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        let case_sensitive = env.analysis.conf.case_sensitive;
-        let analysis = df.analyzed_in(env.clone()).await?;
         self.refuse_session_objects(&name.quoted(), plan.root(), &env)
             .await?;
         let query_columns: Vec<String> = analysis
@@ -1103,6 +1126,10 @@ impl Session {
                     ids,
                 )
                 .map_err(|e| e.error)?;
+                let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+                let analysis = df.analyzed_in(env.clone()).await?;
+                env.catalog
+                    .check_reference_options(analysis.analyzed.plan.root())?;
                 if let Some(temp) = crate::catalog::reads_temporary(
                     &self.state.catalog,
                     plan.root(),
@@ -1114,8 +1141,6 @@ impl Session {
                         "VIEW",
                     ));
                 }
-                let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-                let analysis = df.analyzed_in(env.clone()).await?;
                 self.refuse_session_objects(&name.quoted(), plan.root(), &env)
                     .await?;
                 crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
@@ -1242,7 +1267,7 @@ impl Session {
                         let (ty, declared) = t.to_column_type()?;
                         ColumnChange::Type(ty, declared)
                     }
-                    ChangeColumnAction::Comment(c) => ColumnChange::Comment(c.clone()),
+                    ChangeColumnAction::Comment(c) => ColumnChange::Comment(Some(c.clone())),
                     ChangeColumnAction::First | ChangeColumnAction::After(_) => {
                         ColumnChange::Position
                     }
@@ -1259,7 +1284,7 @@ impl Session {
                 ..
             } => {
                 let change = match action {
-                    AlterColumnAction::Comment(c) => ColumnChange::Comment(c.clone()),
+                    AlterColumnAction::Comment(c) => ColumnChange::Comment(Some(c.clone())),
                     AlterColumnAction::SetNotNull | AlterColumnAction::DropNotNull => {
                         ColumnChange::Nullability
                     }
@@ -1267,6 +1292,33 @@ impl Session {
                     _ => return Err(unsupported("ALTER COLUMN ... SET DEFAULT")),
                 };
                 self.change_column(&mut changed, column, change, &env)?;
+            }
+            AlterTableAction::CommentOnColumns { columns, .. } => {
+                // `AlterTableChangeColumnCommentsCommand`: every column is resolved first, then a column
+                // named twice is refused.
+                let mut resolved = Vec::with_capacity(columns.len());
+                for (column, _) in columns {
+                    resolved.push(resolve_column(&changed, column, &env)?);
+                }
+                for (i, at) in resolved.iter().enumerate() {
+                    if resolved[..i].contains(at) {
+                        return Err(krishiv_common::error::NotSupportedChangeSameColumn {
+                            table: name.quoted(),
+                            field_name: krishiv_common::names::quote_parts(&[changed.columns[*at]
+                                .name
+                                .clone()]),
+                        }
+                        .into());
+                    }
+                }
+                for (column, comment) in columns {
+                    self.change_column(
+                        &mut changed,
+                        column,
+                        ColumnChange::Comment(comment.clone()),
+                        &env,
+                    )?;
+                }
             }
             AlterTableAction::RenameColumn { from, .. } => {
                 resolve_column(&changed, from, &env)?;
@@ -1391,7 +1443,7 @@ impl Session {
             {
                 return Err(current.change_type_error(name.quoted(), &t, declared.as_deref()));
             }
-            ColumnChange::Comment(c) => current.comment = Some(c),
+            ColumnChange::Comment(c) => current.comment = c,
             ColumnChange::DropDefault => current.default = None,
             _ => {}
         }
@@ -1417,13 +1469,31 @@ impl Session {
                 // Spark's error for a view here is not recorded in the goldens yet.
                 return Err(unsupported("COMMENT ON TABLE of a view"));
             }
+            if let AlterTableAction::CommentOnColumns { list_form, .. } = &a.action {
+                return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
+                    operation: if *list_form {
+                        "COMMENT ON TABLE ... COLUMN"
+                    } else {
+                        "COMMENT ON COLUMN"
+                    }
+                    .to_owned(),
+                    view_name: name.quoted(),
+                }
+                .into());
+            }
             return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
                 operation: "`ALTER TABLE`".to_owned(),
                 view_name: name.quoted(),
             }
             .into());
         }
-        let operation = if matches!(a.action, AlterTableAction::SetComment(_)) {
+        let operation = if let AlterTableAction::CommentOnColumns { list_form, .. } = &a.action {
+            if *list_form {
+                "COMMENT ON TABLE ... COLUMN"
+            } else {
+                "COMMENT ON COLUMN"
+            }
+        } else if matches!(a.action, AlterTableAction::SetComment(_)) {
             "COMMENT ON TABLE"
         } else {
             "ALTER TABLE"
@@ -1527,7 +1597,8 @@ impl Session {
 enum ColumnChange {
     /// The type and the `CHAR(n)` / `VARCHAR(n)` string the new type was written with.
     Type(DataType, Option<String>),
-    Comment(String),
+    /// The new comment; `None` removes it.
+    Comment(Option<String>),
     Position,
     Nullability,
     DropDefault,

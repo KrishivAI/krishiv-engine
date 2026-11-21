@@ -367,8 +367,6 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
             | "__startswith_lcase"
             | "__endswith_lcase"
             | "__find_in_set_lcase"
-            | "__json_table_value"
-            | "__json_table_exists"
     ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {
