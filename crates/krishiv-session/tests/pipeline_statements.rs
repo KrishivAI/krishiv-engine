@@ -96,14 +96,30 @@ fn load_data_on_a_datasource_table() {
 }
 
 #[test]
-fn insert_overwrite_directory_is_refused_until_the_write_path_lands() {
+fn insert_overwrite_directory_writes_the_rows_and_replaces_the_directory() {
+    let s = session();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("o1");
+    std::fs::create_dir_all(&out).expect("mkdir");
+    std::fs::write(out.join("stale.txt"), "x").expect("write");
+    let sql = format!(
+        "INSERT OVERWRITE DIRECTORY '{}' USING parquet SELECT 1 AS a UNION ALL SELECT 2",
+        out.display()
+    );
+    block_on(async { s.sql(&sql).await?.collect().await }).expect("insert");
+    assert!(!out.join("stale.txt").exists());
+    let back = block_on(s.read().parquet([out.to_str().expect("utf8")]).count()).expect("count");
+    assert_eq!(back, 2);
+}
+
+#[test]
+fn insert_overwrite_directory_hive_form_is_refused_by_name() {
     let s = session();
     let e = error(
         &s,
-        "INSERT OVERWRITE DIRECTORY '/tmp/o1' USING parquet SELECT a FROM nat",
+        "INSERT OVERWRITE DIRECTORY '/tmp/o1' STORED AS parquet SELECT a FROM nat",
     );
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.to_string().contains("INSERT OVERWRITE DIRECTORY"), "{e}");
 }
 
 #[test]
