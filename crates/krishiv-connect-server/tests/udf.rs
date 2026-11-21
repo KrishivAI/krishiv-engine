@@ -111,6 +111,15 @@ async fn start(python: Option<&Path>) -> Running {
 
 /// [`start`], with the sessions' UDFs on `host` instead of the pool when given.
 async fn start_with(python: Option<&Path>, host: Option<Arc<dyn UdfHost>>) -> Running {
+    start_store(python, host, None).await
+}
+
+/// [`start_with`], keeping persisted UDFs in `store` when given.
+async fn start_store(
+    python: Option<&Path>,
+    host: Option<Arc<dyn UdfHost>>,
+    store: Option<Arc<dyn krishiv_connect_server::FunctionStore>>,
+) -> Running {
     let dir = tempfile::tempdir().expect("tempdir");
     let v = secret(dir.path(), "v", VIEWER);
     let o = secret(dir.path(), "o", OPERATOR);
@@ -147,10 +156,12 @@ async fn start_with(python: Option<&Path>, host: Option<Arc<dyn UdfHost>>) -> Ru
         Arc::clone(&denials),
     )
     .expect("factory");
-    let manager = Arc::new(
-        SessionManager::new(factory, SessionLimits::default())
-            .with_udf_host(host.unwrap_or_else(|| Arc::new(pool.clone()))),
-    );
+    let mut manager = SessionManager::new(factory, SessionLimits::default())
+        .with_udf_host(host.unwrap_or_else(|| Arc::new(pool.clone())));
+    if let Some(store) = store {
+        manager = manager.with_function_store(store);
+    }
+    let manager = Arc::new(manager);
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let server = ConnectServer::new(manager, ConnectServerConfig::default())
@@ -1172,4 +1183,97 @@ async fn each_call_sends_the_session_conf_current_when_it_runs() {
     set_conf(&run.channel, "spark.sql.session.timeZone", "Asia/Tokyo").await;
     let r = execute(&run.channel, query(), ADMIN).await.expect("runs");
     assert_eq!(longs(&r), [Some(1)]);
+}
+
+/// The `krishiv.v1.PersistPythonFunction` command.
+#[cfg(feature = "function-catalog")]
+fn persist(name: &str, drop: bool) -> pb::Plan {
+    pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(CommandType::Extension(Box::new(prost_types::Any {
+                type_url: "type.googleapis.com/krishiv.v1.PersistPythonFunction".to_owned(),
+                value: krishiv_connect::extension::PersistPythonFunction {
+                    name: name.to_owned(),
+                    drop,
+                }
+                .encode_to_vec(),
+            }))),
+        }))),
+    }
+}
+
+#[cfg(feature = "function-catalog")]
+fn file_store(path: &Path) -> Arc<dyn krishiv_connect_server::FunctionStore> {
+    let catalog = krishiv_catalogs::sqlite::SqliteCatalog::open("python_functions", path, false)
+        .expect("catalog");
+    Arc::new(krishiv_connect_server::SqliteFunctionStore::new(Arc::new(
+        catalog,
+    )))
+}
+
+/// A UDF persisted over the Connect service survives a server restart: a new server on the reopened catalog
+/// file types it in a fresh session whose first request is `AnalyzePlan`; one on another file does not.
+#[cfg(feature = "function-catalog")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_persisted_udf_survives_a_restart_and_is_typed_by_the_first_analysis() {
+    let dir = tempfile::tempdir().expect("dir");
+    let file = dir.path().join("functions.db");
+    {
+        let run = start_store(
+            None,
+            Some(Arc::new(Spy::default())),
+            Some(file_store(&file)),
+        )
+        .await;
+        execute(
+            &run.channel,
+            register(udf(None, "plus_one", PLUS_ONE, long(), Vec::new())),
+            ADMIN,
+        )
+        .await
+        .expect("registered");
+        execute(&run.channel, persist("PLUS_ONE", false), ADMIN)
+            .await
+            .expect("persisted");
+        // A name the session never registered is refused.
+        execute(&run.channel, persist("nope", false), ADMIN)
+            .await
+            .expect_err("not registered");
+    }
+    let query = || sql("SELECT plus_one(id) FROM range(3)");
+    let run = start_store(
+        None,
+        Some(Arc::new(Spy::default())),
+        Some(file_store(&file)),
+    )
+    .await;
+    let schema = analyze_schema(&run.channel, query(), ADMIN)
+        .await
+        .expect("typed in a new session of a restarted server");
+    assert!(schema.result.is_some());
+    // A server on an empty catalog does not know the function.
+    let empty = dir.path().join("empty.db");
+    let other = start_store(
+        None,
+        Some(Arc::new(Spy::default())),
+        Some(file_store(&empty)),
+    )
+    .await;
+    analyze_schema(&other.channel, query(), ADMIN)
+        .await
+        .expect_err("unknown there");
+    // `drop` removes it for later sessions.
+    execute(&run.channel, persist("plus_one", true), ADMIN)
+        .await
+        .expect("dropped");
+    drop(run);
+    let again = start_store(
+        None,
+        Some(Arc::new(Spy::default())),
+        Some(file_store(&file)),
+    )
+    .await;
+    analyze_schema(&again.channel, query(), ADMIN)
+        .await
+        .expect_err("dropped");
 }

@@ -1096,6 +1096,8 @@ fn internal(message: String) -> KrishivError {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn a_tenant_memory_limit_not_below_the_general_one_is_flagged() {
         let mut config = PoolConfig {
@@ -1111,8 +1113,6 @@ mod tests {
         config.tenant_memory_limit = None;
         assert!(!config.tenant_memory_limit_ignored());
     }
-
-    use super::*;
 
     fn sleeper() -> (Child, OwnedFd) {
         let child = Command::new("sleep")

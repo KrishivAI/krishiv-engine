@@ -412,6 +412,15 @@ impl super::FunctionStore for MemStore {
         rows.push((tenant.map(str::to_owned), owner.to_owned(), udf.clone()));
         Ok(())
     }
+    fn owner(&self, tenant: Option<&str>, name: &str) -> Result<Option<String>, KrishivError> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(t, _, u)| t.as_deref() == tenant && u.name == name)
+            .map(|(_, o, _)| o.clone()))
+    }
     fn remove(&self, tenant: Option<&str>, name: &str) -> Result<bool, KrishivError> {
         let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
         let before = rows.len();
@@ -441,7 +450,7 @@ async fn a_persisted_udf_reaches_a_later_session_of_the_tenant_only() {
     let (s1, s2, s3) = (session(), session(), session());
     let first = with_store(&host, &store, Some("acme"), &s1);
     first.register(&s1, udf("plus1", b"x")).unwrap();
-    first.persist("PLUS1", false).await.unwrap();
+    first.persist(&s1, "PLUS1", false).await.unwrap();
 
     let same_tenant = with_store(&host, &store, Some("acme"), &s2);
     assert!(same_tenant.load_pending());
@@ -466,19 +475,19 @@ async fn persist_needs_a_registered_udf_and_a_store_and_drop_removes() {
     let s = session();
     let python = with_store(&host, &store, None, &s);
     let e = python
-        .persist("nope", false)
+        .persist(&s, "nope", false)
         .await
         .expect_err("not registered");
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
     python.register(&s, udf("f", b"x")).unwrap();
-    python.persist("f", false).await.unwrap();
+    python.persist(&s, "f", false).await.unwrap();
     assert_eq!(store.rows.lock().unwrap().len(), 1);
-    python.persist("f", true).await.unwrap();
+    python.persist(&s, "f", true).await.unwrap();
     assert!(store.rows.lock().unwrap().is_empty());
 
     let bare = SessionPython::new(Some(&host), "alice", None, true, &s);
     assert!(!bare.load_pending());
-    let e = bare.persist("f", false).await.expect_err("no store");
+    let e = bare.persist(&s, "f", false).await.expect_err("no store");
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
 
@@ -490,8 +499,12 @@ async fn persist_needs_a_registered_udf_and_a_store_and_drop_removes() {
 async fn load_keeps_the_sessions_own_name_retries_after_a_failure_and_skip_stops_it() {
     let host: Arc<dyn UdfHost> = Arc::new(Host::default());
     let store = Arc::new(MemStore::default());
-    store.put(None, "bob", &udf("f", b"stored")).unwrap();
-    store.put(None, "bob", &udf("g", b"stored")).unwrap();
+    store
+        .put(Some("p:alice"), "bob", &udf("f", b"stored"))
+        .unwrap();
+    store
+        .put(Some("p:alice"), "bob", &udf("g", b"stored"))
+        .unwrap();
     let s = session();
     let python = with_store(&host, &store, None, &s);
     python.register(&s, udf("F", b"mine")).unwrap();
@@ -511,4 +524,153 @@ async fn load_keeps_the_sessions_own_name_retries_after_a_failure_and_skip_stops
     let skipped = with_store(&host, &store, None, &session());
     skipped.skip_load();
     assert!(!skipped.load_pending());
+}
+
+fn role_session(role: krishiv_session::auth::Role) -> Session {
+    use krishiv_session::auth::RolePolicy;
+    session().new_session_as(
+        krishiv_common::principal::Principal::new(
+            "p",
+            krishiv_common::principal::PrincipalKind::User,
+        ),
+        Arc::new(RolePolicy::new(
+            Some(role),
+            krishiv_session::auth::Role::Admin,
+            krishiv_session::PolicyVersion(1),
+        )),
+    )
+}
+
+fn named(
+    host: &Arc<dyn UdfHost>,
+    store: &Arc<MemStore>,
+    who: &str,
+    tenant: Option<&str>,
+    s: &Session,
+) -> SessionPython {
+    let store: Arc<dyn super::FunctionStore> = Arc::clone(store) as _;
+    SessionPython::new(Some(host), who, tenant, true, s).with_store(Some(&store))
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn another_principal_cannot_replace_or_drop_a_stored_function_without_manage() {
+    use krishiv_session::auth::Role;
+    let host: Arc<dyn UdfHost> = Arc::new(Host::default());
+    let store = Arc::new(MemStore::default());
+    let (sa, sb) = (session(), role_session(Role::Operator));
+    let alice = named(&host, &store, "alice", Some("acme"), &sa);
+    alice.register(&sa, udf("mask", b"alice")).unwrap();
+    alice.persist(&sa, "mask", false).await.unwrap();
+    // Bob, same tenant, may send code but is not the owner and holds no Manage.
+    let bob = named(&host, &store, "bob", Some("acme"), &sb);
+    bob.register(&sb, udf("mask", b"bob")).unwrap();
+    let e = bob
+        .persist(&sb, "mask", false)
+        .await
+        .expect_err("not the owner");
+    assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    let e = bob
+        .persist(&sb, "mask", true)
+        .await
+        .expect_err("not the owner");
+    assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    {
+        let rows = store.rows.lock().unwrap();
+        assert_eq!(
+            (rows.len(), rows[0].1.as_str(), rows[0].2.command.as_slice()),
+            (1, "alice", b"alice".as_slice())
+        );
+    }
+    // An admin may.
+    let sc = role_session(Role::Admin);
+    let carol = named(&host, &store, "carol", Some("acme"), &sc);
+    carol.register(&sc, udf("mask", b"carol")).unwrap();
+    carol.persist(&sc, "mask", false).await.unwrap();
+    assert_eq!(store.rows.lock().unwrap()[0].1, "carol");
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn untenanted_authenticated_principals_do_not_share_functions() {
+    let host: Arc<dyn UdfHost> = Arc::new(Host::default());
+    let store = Arc::new(MemStore::default());
+    let (sa, sb) = (session(), session());
+    let alice = named(&host, &store, "alice", None, &sa);
+    alice.register(&sa, udf("f", b"x")).unwrap();
+    alice.persist(&sa, "f", false).await.unwrap();
+    let bob = named(&host, &store, "bob", None, &sb);
+    bob.load_persisted(&sb).await;
+    assert!(bob.lock().payloads.is_empty());
+}
+
+/// A store whose `list` waits until released, to hold the first request mid-load.
+#[derive(Debug)]
+struct SlowStore {
+    inner: MemStore,
+    gate: std::sync::Barrier,
+}
+
+impl super::FunctionStore for SlowStore {
+    fn list(&self, tenant: Option<&str>) -> Result<Vec<PythonUdf>, KrishivError> {
+        self.gate.wait();
+        self.inner.list(tenant)
+    }
+    fn put(&self, t: Option<&str>, o: &str, u: &PythonUdf) -> Result<(), KrishivError> {
+        self.inner.put(t, o, u)
+    }
+    fn owner(&self, t: Option<&str>, n: &str) -> Result<Option<String>, KrishivError> {
+        self.inner.owner(t, n)
+    }
+    fn remove(&self, t: Option<&str>, n: &str) -> Result<bool, KrishivError> {
+        self.inner.remove(t, n)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn a_second_first_request_waits_for_the_load() {
+    let host: Arc<dyn UdfHost> = Arc::new(Host::default());
+    let slow = Arc::new(SlowStore {
+        inner: MemStore::default(),
+        gate: std::sync::Barrier::new(2),
+    });
+    slow.inner
+        .put(Some("p:alice"), "x", &udf("f", b"x"))
+        .unwrap();
+    let s = Arc::new(session());
+    let store: Arc<dyn super::FunctionStore> = Arc::clone(&slow) as _;
+    let python =
+        Arc::new(SessionPython::new(Some(&host), "alice", None, true, &s).with_store(Some(&store)));
+    let first = {
+        let (python, s) = (Arc::clone(&python), Arc::clone(&s));
+        tokio::spawn(async move { python.load_persisted(&s).await })
+    };
+    // Wait until the first load is inside `list`, then start the second: it must not return early.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let second = {
+        let (python, s) = (Arc::clone(&python), Arc::clone(&s));
+        tokio::spawn(async move {
+            python.load_persisted(&s).await;
+            python.lock().payloads.len()
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        !second.is_finished(),
+        "the second request waits for the load"
+    );
+    slow.gate.wait();
+    first.await.unwrap();
+    assert_eq!(second.await.unwrap(), 1);
+    assert!(!python.load_pending());
 }

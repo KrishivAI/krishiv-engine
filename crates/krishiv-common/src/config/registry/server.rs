@@ -542,8 +542,8 @@ pub static CONNECT_PYTHON_FUNCTIONS_CATALOG: ConfigEntry = ConfigEntry {
     default: None,
     doc: "Path of the SQLite catalog file that keeps the Python UDFs a client persists with the \
           `krishiv.v1.PersistPythonFunction` command, per tenant: later sessions of the same tenant \
-          find them, also after a restart. Made when it is not there. Needs a build with the \
-          `function-catalog` feature of the Connect server; when unset, nothing is persisted and the \
+          find them, also after a restart. Made when it is not there. Needs a `krishiv` binary built with the \
+          `python-function-catalog` feature; when unset, nothing is persisted and the \
           command is refused.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,

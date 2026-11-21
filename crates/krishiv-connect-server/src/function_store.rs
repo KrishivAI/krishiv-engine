@@ -37,6 +37,11 @@ impl FunctionStore for SqliteFunctionStore {
     fn list(&self, tenant: Option<&str>) -> Result<Vec<PythonUdf>, KrishivError> {
         let mut udfs = Vec::new();
         for f in self.catalog.python_functions(tenant)? {
+            // A payload that no longer matches its digest (a damaged or edited file) is not run.
+            if hex(&Sha256::digest(&f.payload)) != f.digest {
+                tracing::warn!(target: "krishiv::udf", function = %f.name, "a persisted Python UDF fails its digest");
+                continue;
+            }
             // A row that no longer converts (a newer build wrote it) is skipped, not fatal.
             match PythonUdf::from_stored(
                 f.name.clone(),
@@ -73,6 +78,10 @@ impl FunctionStore for SqliteFunctionStore {
                 owner,
             ),
         )
+    }
+
+    fn owner(&self, tenant: Option<&str>, name: &str) -> Result<Option<String>, KrishivError> {
+        Ok(self.catalog.python_function(tenant, name)?.map(|f| f.owner))
     }
 
     fn remove(&self, tenant: Option<&str>, name: &str) -> Result<bool, KrishivError> {
