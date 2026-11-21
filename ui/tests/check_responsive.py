@@ -226,6 +226,19 @@ def _layout(
     return problems
 
 
+# The long cell of the fixture's result (`fixture_server.RUNS`).
+LONG_VALUE = "lorem ipsum " * 50
+
+
+def becomes(page: Page, condition: str, timeout: int = 5000) -> bool:
+    """Waits until the JavaScript expression `condition` is true in `page`; whether it was within `timeout` ms."""
+    try:
+        page.wait_for_function(f"() => {condition}", timeout=timeout)
+    except PlaywrightTimeout:
+        return False
+    return True
+
+
 def layout_checks(browser: Browser, shots: Path | None) -> list[str]:
     """Every page of every console at every size, dark and light."""
     problems: list[str] = []
@@ -290,19 +303,21 @@ def menu_checks(browser: Browser, origin: str) -> list[str]:
                 problems.append(f"menu {label}: Tab leaves the open menu")
                 break
         page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
-        if dialog.count() != 0:
+        if not becomes(page, "!document.querySelector('[role=dialog]')"):
             problems.append(f"menu {label}: Esc does not close the menu")
-        elif not page.evaluate(
-            "document.activeElement.getAttribute('aria-label') === 'Open the menu'"
+        elif not becomes(
+            page,
+            "document.activeElement.getAttribute('aria-label') === 'Open the menu'",
         ):
             problems.append(
                 f"menu {label}: the focus does not return to the menu button"
             )
         button.click()
         dialog.get_by_role("link", name="History").click()
-        page.wait_for_timeout(300)
-        if dialog.count() != 0 or "#/history" not in page.url:
+        if not becomes(
+            page,
+            "!document.querySelector('[role=dialog]') && location.hash.includes('#/history')",
+        ):
             problems.append(
                 f"menu {label}: choosing a page does not close the menu and go there"
             )
@@ -365,12 +380,18 @@ def editor_checks(browser: Browser, origin: str) -> list[str]:
         if long.count() == 0:
             problems.append(f"{view}: a long value has no control to show it whole")
         else:
-            cut_short = len(long.inner_text())
             long.tap()
-            page.wait_for_timeout(150)
             whole = result.get_by_role("button", name="Show less").first
-            if whole.count() == 0 or len(whole.inner_text()) <= cut_short:
-                problems.append(f"{view}: a tap does not show a long value whole")
+            # The fixture's long cell, every word of it, then the control's own (unseen) name.
+            if not becomes(
+                page,
+                "(() => { const b = document.querySelector('[data-table-box] button[aria-expanded=true]');"
+                f" return !!b && b.textContent.replace(/\\s+/g, ' ').trim() === {LONG_VALUE + 'Show less'!r}; }})()",
+            ):
+                shown = whole.inner_text() if whole.count() else "(no control)"
+                problems.append(
+                    f"{view}: a tap does not show a long value whole ({len(shown)} characters shown)"
+                )
         problems += [
             f"{view}: touch target under 44 px: {s}"
             for s in page.evaluate(SMALL_TARGETS)

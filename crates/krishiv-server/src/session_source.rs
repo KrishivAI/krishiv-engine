@@ -511,24 +511,13 @@ pub fn batches_to_rows(batches: &[RecordBatch]) -> Vec<Row> {
 
 /// The catalog objects one level below `path` as `session` sees them ([`UiSource::catalog`]).
 pub(crate) async fn catalog_rows(session: &Session, path: &[String]) -> Result<Vec<Row>, UiError> {
-    // The built-in catalog's objects are named without it (`default.t`): the grammar of `SHOW` takes a
-    // schema, and a name with a catalog in front is only needed for another catalog.
-    let scoped = |c: &str, rest: String| {
-        if c == "spark_catalog" {
-            rest
-        } else {
-            format!("{}.{rest}", quote(c))
-        }
-    };
+    // Every statement names its catalog, the built-in one included: a bare `SHOW SCHEMAS` or `default.t`
+    // is read in the session's current catalog, which `USE <catalog>` changes.
     let sql = match path {
         [] => "SHOW CATALOGS".to_owned(),
-        [c] if c == "spark_catalog" => "SHOW SCHEMAS".to_owned(),
         [c] => format!("SHOW SCHEMAS IN {}", quote(c)),
-        [c, s] => format!("SHOW TABLES IN {}", scoped(c, quote(s))),
-        [c, s, t] => format!(
-            "DESCRIBE TABLE {}",
-            scoped(c, format!("{}.{}", quote(s), quote(t)))
-        ),
+        [c, s] => format!("SHOW TABLES IN {}.{}", quote(c), quote(s)),
+        [c, s, t] => format!("DESCRIBE TABLE {}.{}.{}", quote(c), quote(s), quote(t)),
         _ => return Ok(Vec::new()),
     };
     let df = session.sql_boxed(&sql).await.map_err(ui_error)?;
@@ -586,7 +575,11 @@ impl UiSource for SessionSource {
                     .filter_map(|r| query_id(r).map(str::to_owned))
                     .collect()
             } else {
-                self.live_ids().await?
+                // The ids of the rows just read are added: a query that left the runtime's history between
+                // the two reads is still this run's, and must keep an earlier run's operators out.
+                let mut live = self.live_ids().await?;
+                live.extend(rows.iter().filter_map(|r| query_id(r).map(str::to_owned)));
+                live
             };
             Ok(self.with_stored(table, rows, &live))
         })

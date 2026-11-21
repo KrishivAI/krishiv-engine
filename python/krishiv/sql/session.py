@@ -130,6 +130,8 @@ class SparkSession:
         self._config = list(config or [])
         # The session's web console once `krishiv.ui()` has started one; `stop` stops it.
         self._console: Console | None = None
+        # Held to read and to change `_console`, here and by `krishiv.ui()`.
+        self._console_lock = threading.Lock()
 
     @property
     def _native(self) -> _NativeSession:
@@ -493,7 +495,8 @@ class SparkSession:
         with _lock:
             if _active is self:
                 _active = None
-        console, self._console = self._console, None
+        with self._console_lock:
+            console, self._console = self._console, None
         if console is not None:
             console.stop()
 

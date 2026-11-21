@@ -284,6 +284,12 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 )
             self.server.asked.append(url.path)  # type: ignore[attr-defined]
+            if url.path == "/api/internal/health" and self.server.health_failures > 0:  # type: ignore[attr-defined]
+                self.server.health_failures -= 1  # type: ignore[attr-defined]
+                return self.send_json(
+                    503,
+                    {"error": "unavailable", "message": "the console is starting"},
+                )
             if url.path == "/api/internal/events" and self.mode != "profiles":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -410,16 +416,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(
-    port: int = 0, mode: str = "server", role: str = "admin"
+    port: int = 0, mode: str = "server", role: str = "admin", health_failures: int = 0
 ) -> ThreadingHTTPServer:
     """The fixture server as a console of `mode` for a caller of `role` (the settings are the administrator's);
-    `asked` collects the `/api/internal/*` paths pages requested."""
+    `asked` collects the `/api/internal/*` paths pages requested. The first `health_failures` requests for the
+    health answer 503, as a console that is let in before its server can answer."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     server.mode = mode  # type: ignore[attr-defined]
     server.role = role  # type: ignore[attr-defined]
     server.asked = []  # type: ignore[attr-defined]
+    server.health_failures = health_failures  # type: ignore[attr-defined]
     return server
 
 

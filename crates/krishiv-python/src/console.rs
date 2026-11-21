@@ -13,6 +13,7 @@ use krishiv_common::secret::SecretString;
 use krishiv_session::Session;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::session::PySession;
 
@@ -40,10 +41,54 @@ impl Serving for krishiv_server::session_source::EmbeddedUi {
     }
 }
 
+/// Why a start failed. The class and SQLSTATE are the engine's, when the engine raised the failure (the
+/// console's own session could not be built); a set-up failure (the port is taken, the session is closed, a
+/// build without the console) has none.
+struct StartError {
+    message: String,
+    error_class: Option<String>,
+    sql_state: Option<String>,
+}
+
+impl StartError {
+    /// The Python exception: the engine's error as `krishiv.errors` shapes it, a `RuntimeError` otherwise.
+    fn into_py(self, py: Python<'_>) -> PyErr {
+        let Some(class) = self.error_class else {
+            return PyRuntimeError::new_err(self.message);
+        };
+        let built = py
+            .import("krishiv.errors")
+            .and_then(|m| m.getattr("_from_native"))
+            .and_then(|f| {
+                f.call1((
+                    class,
+                    self.sql_state,
+                    self.message.as_str(),
+                    PyDict::new(py),
+                ))
+            });
+        match built {
+            Ok(exception) => PyErr::from_value(exception),
+            Err(cause) => {
+                // Keep why the conversion failed (a bug in `krishiv.errors`) as the cause.
+                let err = PyRuntimeError::new_err(self.message);
+                err.set_cause(py, Some(cause));
+                err
+            }
+        }
+    }
+}
+
 #[cfg(feature = "ui")]
-fn start(session: &Session, port: u16) -> Result<Started, String> {
-    let ui = krishiv_server::session_source::EmbeddedUi::for_session(session, port)
-        .map_err(|e| e.message)?;
+fn start(session: &Session, port: u16) -> Result<Started, StartError> {
+    let ui =
+        krishiv_server::session_source::EmbeddedUi::for_session(session, port).map_err(|e| {
+            StartError {
+                message: e.message,
+                error_class: e.error_class,
+                sql_state: e.sql_state,
+            }
+        })?;
     Ok(Started {
         port: ui.addr().port(),
         token: ui.token().to_owned(),
@@ -53,8 +98,12 @@ fn start(session: &Session, port: u16) -> Result<Started, String> {
 }
 
 #[cfg(not(feature = "ui"))]
-fn start(_session: &Session, _port: u16) -> Result<Started, String> {
-    Err("this build has no web console (it was built without the `ui` feature)".to_owned())
+fn start(_session: &Session, _port: u16) -> Result<Started, StartError> {
+    Err(StartError {
+        message: "this build has no web console (it was built without the `ui` feature)".to_owned(),
+        error_class: None,
+        sql_state: None,
+    })
 }
 
 /// The running console of one session.
@@ -84,9 +133,7 @@ impl PyConsole {
     #[pyo3(signature = (session, port=0))]
     fn new(py: Python<'_>, session: &PySession, port: u16) -> PyResult<Self> {
         let of = session.session().clone();
-        let started = py
-            .detach(|| start(&of, port))
-            .map_err(PyRuntimeError::new_err)?;
+        let started = py.detach(|| start(&of, port)).map_err(|e| e.into_py(py))?;
         Ok(Self {
             server: Mutex::new(Some(started.server)),
             port: started.port,

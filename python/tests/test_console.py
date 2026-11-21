@@ -6,6 +6,7 @@ from __future__ import annotations
 import gc
 import json
 import socket
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -15,6 +16,7 @@ import pytest
 
 import krishiv
 from krishiv import SparkSession, _native
+from krishiv.errors import UnsupportedOperationException, unsupported_feature
 
 pytestmark = pytest.mark.skipif(not _native.__ui__, reason="a build without the `ui` feature")
 
@@ -100,7 +102,8 @@ def test_a_named_port_and_a_restart_on_another(spark: SparkSession) -> None:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    first = krishiv.ui(spark)
+        # While the port is still held: the first console's own free port can then never be this one.
+        first = krishiv.ui(spark)
     second = krishiv.ui(spark, port=port)
     assert second.port == port
     assert second.running
@@ -114,6 +117,34 @@ def test_a_named_port_and_a_restart_on_another(spark: SparkSession) -> None:
             krishiv.ui(spark, port=taken)
     assert second.running
     assert krishiv.ui(spark) is second
+
+
+def test_an_engine_error_at_start_keeps_its_class(spark: SparkSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*_: object) -> None:
+        raise unsupported_feature("a console here")
+
+    monkeypatch.setattr(_native, "Console", refuse)
+    with pytest.raises(UnsupportedOperationException) as raised:
+        krishiv.ui(spark)
+    assert raised.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+    assert raised.value.getSqlState() == "0A000"
+    assert spark._console is None
+
+
+def test_stop_waits_for_a_start_in_progress() -> None:
+    session = SparkSession.builder.create()
+    console = krishiv.ui(session)
+    stopping = threading.Thread(target=session.stop)
+    # A start holds the session's console lock from reading the running console to storing the new one.
+    with session._console_lock:
+        stopping.start()
+        stopping.join(0.2)
+        assert stopping.is_alive()
+        assert console.running
+    stopping.join(30)
+    assert not stopping.is_alive()
+    assert not console.running
+    assert session._console is None
 
 
 def test_session_stop_stops_the_console() -> None:
