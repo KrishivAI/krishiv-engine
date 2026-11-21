@@ -1,0 +1,2022 @@
+{
+ "format_version": 1,
+ "spark_tag": "v4.3.0",
+ "status": "unverified-by-run",
+ "generator": "tests/scripts/gen_write_semantics_goldens.py",
+ "note": "Expected values are derived from the v4.3.0 source and suite assertions. The generator (tests/scripts/gen_write_semantics_goldens.py) never rewrites this file: it writes the run's 'observed' blocks to tests/fixtures/spark-4.3.0/write-semantics/. Where a run differs from the source-derived text, 'expect' is edited by hand to the run's result and the old text kept (see README.md).",
+ "cases": [
+  {
+   "id": "SAT-01-flat-missing-error",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "error",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "createDataSourceTables.scala:CreateDataSourceTableAsSelectCommand.run (table missing -> write with SaveMode.Overwrite then createTable)",
+    "ddl.scala:1070-1071 (case _ -> CreateTable(.., mode, Some(query)))"
+   ],
+   "note": "missing table: every mode creates it and writes the new rows (Ignore and ErrorIfExists included)"
+  },
+  {
+   "id": "SAT-02-flat-missing-errorifexists",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "errorifexists",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "createDataSourceTables.scala:CreateDataSourceTableAsSelectCommand.run (table missing -> write with SaveMode.Overwrite then createTable)",
+    "ddl.scala:1070-1071 (case _ -> CreateTable(.., mode, Some(query)))"
+   ],
+   "note": "missing table: every mode creates it and writes the new rows (Ignore and ErrorIfExists included)"
+  },
+  {
+   "id": "SAT-03-flat-missing-append",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "createDataSourceTables.scala:CreateDataSourceTableAsSelectCommand.run (table missing -> write with SaveMode.Overwrite then createTable)",
+    "ddl.scala:1070-1071 (case _ -> CreateTable(.., mode, Some(query)))"
+   ],
+   "note": "missing table: every mode creates it and writes the new rows (Ignore and ErrorIfExists included)"
+  },
+  {
+   "id": "SAT-04-flat-missing-overwrite",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "overwrite",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "createDataSourceTables.scala:CreateDataSourceTableAsSelectCommand.run (table missing -> write with SaveMode.Overwrite then createTable)",
+    "ddl.scala:1070-1071 (case _ -> CreateTable(.., mode, Some(query)))"
+   ],
+   "note": "missing table: every mode creates it and writes the new rows (Ignore and ErrorIfExists included)"
+  },
+  {
+   "id": "SAT-05-flat-missing-ignore",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "ignore",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "createDataSourceTables.scala:CreateDataSourceTableAsSelectCommand.run (table missing -> write with SaveMode.Overwrite then createTable)",
+    "ddl.scala:1070-1071 (case _ -> CreateTable(.., mode, Some(query)))"
+   ],
+   "note": "missing table: every mode creates it and writes the new rows (Ignore and ErrorIfExists included)"
+  },
+  {
+   "id": "SAT-06-flat-exists-error",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "error",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "sqlstate": "42P07",
+    "params": {
+     "relationName": "`spark_catalog`.`default`.`t`"
+    },
+    "thrown_at": "execution"
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "ddl.scala:1035-1036 (tableAlreadyExistsError(qualifiedIdent) -> TableAlreadyExistsException(nameParts))",
+    "sql/catalyst/.../errors/QueryCompilationErrors.scala:3901-3903",
+    "sql/api/.../analysis/alreadyExistException.scala:91-96"
+   ],
+   "note": "'error' and 'errorifexists' both map to SaveMode.ErrorIfExists (api/.../DataFrameWriter.scala:58-66)"
+  },
+  {
+   "id": "SAT-07-flat-exists-errorifexists",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "errorifexists",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "sqlstate": "42P07",
+    "params": {
+     "relationName": "`spark_catalog`.`default`.`t`"
+    },
+    "thrown_at": "execution"
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "ddl.scala:1035-1036 (tableAlreadyExistsError(qualifiedIdent) -> TableAlreadyExistsException(nameParts))",
+    "sql/catalyst/.../errors/QueryCompilationErrors.scala:3901-3903",
+    "sql/api/.../analysis/alreadyExistException.scala:91-96"
+   ],
+   "note": "'error' and 'errorifexists' both map to SaveMode.ErrorIfExists (api/.../DataFrameWriter.scala:58-66)"
+  },
+  {
+   "id": "SAT-08-flat-exists-append",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ],
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "datasources/rules.scala:158-245 (PreprocessTableCreation: Append into existing table, by name)"
+   ],
+   "note": "rows appended"
+  },
+  {
+   "id": "SAT-09-flat-exists-overwrite",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "overwrite",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "ddl.scala:1038-1062 (Overwrite: drop and recreate; the whole table, every partition, is replaced)",
+    "createDataSourceTables.scala (beforeWrite drops the table after the write passes its checks)"
+   ],
+   "note": "the table is dropped and recreated; for a partitioned table old partitions vanish regardless of spark.sql.sources.partitionOverwriteMode"
+  },
+  {
+   "id": "SAT-10-flat-exists-ignore",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "ignore",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "ddl.scala:1033-1034 (case (true, Ignore) => do nothing)"
+   ],
+   "note": "existing table untouched, no error"
+  },
+  {
+   "id": "SAT-11-part-missing-error",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "error",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "createDataSourceTables.scala:CreateDataSourceTableAsSelectCommand.run (table missing -> write with SaveMode.Overwrite then createTable)",
+    "ddl.scala:1070-1071 (case _ -> CreateTable(.., mode, Some(query)))"
+   ],
+   "note": "missing table: every mode creates it and writes the new rows (Ignore and ErrorIfExists included)"
+  },
+  {
+   "id": "SAT-12-part-missing-errorifexists",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "errorifexists",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "createDataSourceTables.scala:CreateDataSourceTableAsSelectCommand.run (table missing -> write with SaveMode.Overwrite then createTable)",
+    "ddl.scala:1070-1071 (case _ -> CreateTable(.., mode, Some(query)))"
+   ],
+   "note": "missing table: every mode creates it and writes the new rows (Ignore and ErrorIfExists included)"
+  },
+  {
+   "id": "SAT-13-part-missing-append",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "createDataSourceTables.scala:CreateDataSourceTableAsSelectCommand.run (table missing -> write with SaveMode.Overwrite then createTable)",
+    "ddl.scala:1070-1071 (case _ -> CreateTable(.., mode, Some(query)))"
+   ],
+   "note": "missing table: every mode creates it and writes the new rows (Ignore and ErrorIfExists included)"
+  },
+  {
+   "id": "SAT-14-part-missing-overwrite",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "overwrite",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "createDataSourceTables.scala:CreateDataSourceTableAsSelectCommand.run (table missing -> write with SaveMode.Overwrite then createTable)",
+    "ddl.scala:1070-1071 (case _ -> CreateTable(.., mode, Some(query)))"
+   ],
+   "note": "missing table: every mode creates it and writes the new rows (Ignore and ErrorIfExists included)"
+  },
+  {
+   "id": "SAT-15-part-missing-ignore",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "ignore",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "createDataSourceTables.scala:CreateDataSourceTableAsSelectCommand.run (table missing -> write with SaveMode.Overwrite then createTable)",
+    "ddl.scala:1070-1071 (case _ -> CreateTable(.., mode, Some(query)))"
+   ],
+   "note": "missing table: every mode creates it and writes the new rows (Ignore and ErrorIfExists included)"
+  },
+  {
+   "id": "SAT-16-part-exists-error",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "error",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "error",
+    "class": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "sqlstate": "42P07",
+    "params": {
+     "relationName": "`spark_catalog`.`default`.`t`"
+    },
+    "thrown_at": "execution"
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "ddl.scala:1035-1036 (tableAlreadyExistsError(qualifiedIdent) -> TableAlreadyExistsException(nameParts))",
+    "sql/catalyst/.../errors/QueryCompilationErrors.scala:3901-3903",
+    "sql/api/.../analysis/alreadyExistException.scala:91-96"
+   ],
+   "note": "'error' and 'errorifexists' both map to SaveMode.ErrorIfExists (api/.../DataFrameWriter.scala:58-66)"
+  },
+  {
+   "id": "SAT-17-part-exists-errorifexists",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "errorifexists",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "error",
+    "class": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "sqlstate": "42P07",
+    "params": {
+     "relationName": "`spark_catalog`.`default`.`t`"
+    },
+    "thrown_at": "execution"
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "ddl.scala:1035-1036 (tableAlreadyExistsError(qualifiedIdent) -> TableAlreadyExistsException(nameParts))",
+    "sql/catalyst/.../errors/QueryCompilationErrors.scala:3901-3903",
+    "sql/api/.../analysis/alreadyExistException.scala:91-96"
+   ],
+   "note": "'error' and 'errorifexists' both map to SaveMode.ErrorIfExists (api/.../DataFrameWriter.scala:58-66)"
+  },
+  {
+   "id": "SAT-18-part-exists-append",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ],
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "datasources/rules.scala:158-245 (PreprocessTableCreation: Append into existing table, by name)"
+   ],
+   "note": "rows appended"
+  },
+  {
+   "id": "SAT-19-part-exists-overwrite",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "overwrite",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "ddl.scala:1038-1062 (Overwrite: drop and recreate; the whole table, every partition, is replaced)",
+    "createDataSourceTables.scala (beforeWrite drops the table after the write passes its checks)"
+   ],
+   "note": "the table is dropped and recreated; for a partitioned table old partitions vanish regardless of spark.sql.sources.partitionOverwriteMode"
+  },
+  {
+   "id": "SAT-20-part-exists-ignore",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "ignore",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "ddl.scala:1033-1034 (case (true, Ignore) => do nothing)"
+   ],
+   "note": "existing table untouched, no error"
+  },
+  {
+   "id": "SAT-21-default-mode-existing",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "default",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "sqlstate": "42P07",
+    "params": {
+     "relationName": "`spark_catalog`.`default`.`t`"
+    },
+    "thrown_at": "execution"
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "ddl.scala:1035-1036 (tableAlreadyExistsError(qualifiedIdent) -> TableAlreadyExistsException(nameParts))",
+    "sql/catalyst/.../errors/QueryCompilationErrors.scala:3901-3903",
+    "sql/api/.../analysis/alreadyExistException.scala:91-96"
+   ],
+   "note": "'default' = ErrorIfExists"
+  },
+  {
+   "id": "SAT-22-mixedcase-mode-existing",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "ErrorIfExists",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "sqlstate": "42P07",
+    "params": {
+     "relationName": "`spark_catalog`.`default`.`t`"
+    },
+    "thrown_at": "execution"
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "ddl.scala:1035-1036 (tableAlreadyExistsError(qualifiedIdent) -> TableAlreadyExistsException(nameParts))",
+    "sql/catalyst/.../errors/QueryCompilationErrors.scala:3901-3903",
+    "sql/api/.../analysis/alreadyExistException.scala:91-96"
+   ],
+   "note": "mode string is lower-cased (Locale.ROOT)"
+  },
+  {
+   "id": "SAT-23-invalid-mode",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "foo",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "INVALID_SAVE_MODE",
+    "sqlstate": "42000",
+    "params": {
+     "mode": "\"foo\""
+    }
+   },
+   "source": [
+    "sql/api/.../errors/CompilationErrors.scala:95-98",
+    "api/.../DataFrameWriter.scala:58-66"
+   ],
+   "note": "raised by DataFrameWriter.mode before any table access; through Spark Connect the pyspark client may reject the string first (client-side), so capture only through a JVM/classic client; param quoting from DataTypeErrorsBase.quoteByDefault (double quotes)",
+   "conn_note": true
+  },
+  {
+   "id": "SAT-24-exists-part-vs-flat-append",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_1163",
+    "sqlstate": null,
+    "params": {
+     "tableName": "spark_catalog.default.t",
+     "specifiedPartCols": "",
+     "existingPartCols": "p"
+    },
+    "legacy": true
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:205-210",
+    "QueryCompilationErrors.scala:2206-2216"
+   ],
+   "note": "existing partitioned by p, writer has no partitionBy: Append must match partitioning; tableName is unquotedString; _LEGACY classes have no SQLSTATE in the registry (message text compared)"
+  },
+  {
+   "id": "SAT-25-exists-flat-vs-part-append",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_1163",
+    "sqlstate": null,
+    "params": {
+     "tableName": "spark_catalog.default.t",
+     "specifiedPartCols": "p",
+     "existingPartCols": ""
+    },
+    "legacy": true
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:205-210"
+   ]
+  },
+  {
+   "id": "SAT-26-exists-part-vs-flat-overwrite",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "overwrite",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ],
+    "partition_cols_after": []
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "ddl.scala:1038-1062"
+   ],
+   "note": "Overwrite replaces the definition, so partitioning follows the writer"
+  },
+  {
+   "id": "SAT-27-exists-flat-vs-part-overwrite",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "overwrite",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ],
+    "partition_cols_after": [
+     "p"
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "ddl.scala:1038-1062"
+   ]
+  },
+  {
+   "id": "SAT-28-exists-part-vs-flat-ignore",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "ignore",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "sql/core/.../execution/command/ddl.scala:1025-1075 (SaveAsV1TableCommand)",
+    "ddl.scala:1033-1034"
+   ],
+   "note": "Ignore performs no validation"
+  },
+  {
+   "id": "SAT-29-exists-part-vs-flat-errorifexists",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "errorifexists",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "sqlstate": "42P07",
+    "params": {
+     "relationName": "`spark_catalog`.`default`.`t`"
+    },
+    "thrown_at": "execution"
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "ddl.scala:1035-1036 (tableAlreadyExistsError(qualifiedIdent) -> TableAlreadyExistsException(nameParts))",
+    "sql/catalyst/.../errors/QueryCompilationErrors.scala:3901-3903",
+    "sql/api/.../analysis/alreadyExistException.scala:91-96"
+   ],
+   "note": "already-exists wins over the partitioning mismatch"
+  },
+  {
+   "id": "SAT-30-append-column-order-by-name",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 'z' AS p, 9 AS id",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ],
+     [
+      9,
+      "z"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:214-224,239-244 (adjustedColumns resolved by name; byName=true)"
+   ],
+   "note": "unlike insertInto, saveAsTable(append) matches columns by name (DataFrameWriter scaladoc :404-418)"
+  },
+  {
+   "id": "SAT-31-append-extra-column",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 5 AS id, 'q' AS p, 1 AS extra",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_1161",
+    "sqlstate": null,
+    "params": {
+     "tableName": "spark_catalog.default.t",
+     "existingTableSchema": "struct<id:int,p:string>",
+     "querySchema": "struct<id:int,p:string,extra:int>"
+    },
+    "legacy": true
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:197-200",
+    "QueryCompilationErrors.scala:2186-2196"
+   ]
+  },
+  {
+   "id": "SAT-32-append-missing-column",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 5 AS id",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_1161",
+    "sqlstate": null,
+    "params": {
+     "tableName": "spark_catalog.default.t",
+     "existingTableSchema": "struct<id:int,p:string>",
+     "querySchema": "struct<id:int>"
+    },
+    "legacy": true
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:197-200"
+   ]
+  },
+  {
+   "id": "SAT-33-append-renamed-column",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 5 AS id2, 'q' AS p",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_1162",
+    "sqlstate": null,
+    "params": {
+     "col": "id",
+     "inputColumns": "id2, p"
+    },
+    "legacy": true
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:205-208",
+    "QueryCompilationErrors.scala:2198-2204"
+   ]
+  },
+  {
+   "id": "SAT-34-append-string-into-int",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 'abc' AS id, 'q' AS p",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
+    "sqlstate": "KD000",
+    "params": {
+     "srcType": "\"STRING\"",
+     "colName": "`id`",
+     "targetType": "\"INT\"",
+     "tableName": "`spark_catalog`.`default`.`t`"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:240-244 (TableOutputResolver.resolveOutputColumns byName)",
+    "Cast.scala:497-522 (canANSIStoreAssign: string -> int is false)",
+    "QueryCompilationErrors.scala:2883-2894"
+   ],
+   "note": "storeAssignmentPolicy default ANSI; spark.sql.ansi.enabled does not change store assignment",
+   "old_expect": {
+    "kind": "error",
+    "class": "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
+    "sqlstate": "42K09",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "colName": "`id`",
+     "srcType": "\"STRING\"",
+     "targetType": "\"INT\""
+    },
+    "sqlstate_unverified": true
+   }
+  },
+  {
+   "id": "SAT-35-append-long-into-int-ok",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT CAST(7 AS BIGINT) AS id, 'q' AS p",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ],
+     [
+      7,
+      "q"
+     ]
+    ]
+   },
+   "source": [
+    "Cast.scala:500 ((_: NumericType, _: NumericType) => true)"
+   ],
+   "note": "numeric narrowing is allowed by ANSI store assignment"
+  },
+  {
+   "id": "SAT-36-append-long-overflow-into-int",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT CAST(5000000000 AS BIGINT) AS id, 'q' AS p",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "CAST_OVERFLOW_IN_TABLE_INSERT",
+    "sqlstate": "22003",
+    "params": {
+     "targetType": "\"INT\"",
+     "sourceType": "\"BIGINT\"",
+     "columnName": "`id`"
+    },
+    "thrown_at": "execution"
+   },
+   "source": [
+    "Cast.scala:500 + ANSI store-assignment runtime check; class text in error-conditions.json"
+   ],
+   "note": "runtime error, parameters sourceType/targetType/columnName not derived (unverified-by-run)",
+   "old_expect": {
+    "kind": "error",
+    "class": "CAST_OVERFLOW_IN_TABLE_INSERT",
+    "sqlstate": "22003",
+    "thrown_at": "execution",
+    "params_unverified": true
+   }
+  },
+  {
+   "id": "SAT-37-append-string-into-int-legacy-policy",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 'abc' AS id, 'q' AS p",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ],
+     [
+      null,
+      "q"
+     ]
+    ]
+   },
+   "source": [
+    "spark.sql.storeAssignmentPolicy=LEGACY"
+   ],
+   "conf": {
+    "spark.sql.storeAssignmentPolicy": "LEGACY"
+   },
+   "note": "derived from policy semantics, unverified-by-run"
+  },
+  {
+   "id": "SAT-38-append-provider-mismatch",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "append",
+    "format": "json",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_1159",
+    "sqlstate": null,
+    "params": {
+     "specifiedProvider": "JsonDataSourceV2",
+     "existingProvider": "ParquetDataSourceV2",
+     "tableName": "spark_catalog.default.t"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:180-185",
+    "QueryCompilationErrors.scala:2164-2172"
+   ],
+   "old_expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_1159",
+    "sqlstate": null,
+    "params": {
+     "tableName": "spark_catalog.default.t",
+     "existingProvider": "ParquetFileFormat",
+     "specifiedProvider": "JsonFileFormat"
+    },
+    "legacy": true
+   }
+  },
+  {
+   "id": "SAT-39-ignore-provider-mismatch",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "ignore",
+    "format": "json",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ]
+   },
+   "source": [
+    "ddl.scala:1033-1034"
+   ]
+  },
+  {
+   "id": "SAT-40-overwrite-provider-change",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "overwrite",
+    "format": "json",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ],
+    "provider_after": "json"
+   },
+   "source": [
+    "ddl.scala:1038-1062"
+   ],
+   "note": "table redefined as json"
+  },
+  {
+   "id": "SAT-41-overwrite-schema-change",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 1 AS id, 'a' AS p, 2.5D AS d",
+    "mode": "overwrite",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "a",
+      2.5
+     ]
+    ],
+    "schema_after": "id int, p string, d double"
+   },
+   "source": [
+    "ddl.scala:1038-1062",
+    "createDataSourceTables.scala (schema of the new relation)"
+   ],
+   "note": "Overwrite does not need the same schema (DataFrameWriter scaladoc :400-403)"
+  },
+  {
+   "id": "SAT-42-overwrite-self-read",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT id + 10 AS id, p FROM t",
+    "mode": "overwrite",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_OVERWRITE.TABLE",
+    "sqlstate": "42902",
+    "params": {
+     "table": "`spark_catalog`.`default`.`t`"
+    }
+   },
+   "source": [
+    "ddl.scala:1039-1054",
+    "QueryCompilationErrors.scala:3323-3327"
+   ],
+   "note": "query reads the table being overwritten"
+  },
+  {
+   "id": "SAT-43-append-self-read",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT id, p FROM t",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ],
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ]
+   },
+   "source": [
+    "datasources/rules.scala:158-245 (no self-read guard on Append)"
+   ],
+   "note": "derived: only the Overwrite branch has the self-read check"
+  },
+  {
+   "id": "SAT-44-ignore-self-read",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT id, p FROM t",
+    "mode": "ignore",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ]
+   },
+   "source": [
+    "ddl.scala:1033-1034"
+   ]
+  },
+  {
+   "id": "SAT-45-partition-col-case-insensitive",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 5 AS id, 'q' AS P",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": [
+     "P"
+    ]
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ],
+     [
+      5,
+      "q"
+     ]
+    ]
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:205-210 (normalizePartCols with conf.resolver, case-insensitive by default)",
+    "ExternalCatalogUtils.scala:239-245,312-322"
+   ],
+   "note": "derived: caseSensitive=false default"
+  },
+  {
+   "id": "SAT-46-partition-col-missing",
+   "existing": null,
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "errorifexists",
+    "format": "parquet",
+    "partitionBy": [
+     "zz"
+    ]
+   },
+   "expect": {
+    "kind": "error",
+    "class": "COLUMN_NOT_DEFINED_IN_TABLE",
+    "sqlstate": "42703",
+    "params": {
+     "colName": "`zz`",
+     "tableCols": "`id`, `p`",
+     "colType": "partition",
+     "tableName": "`spark_catalog`.`default`.`t`"
+    }
+   },
+   "source": [
+    "ExternalCatalogUtils.scala:312-322 (normalizeColumnName -> columnNotDefinedInTableError)",
+    "QueryCompilationErrors.scala:2143-2155"
+   ],
+   "note": "class from source, SQLSTATE and parameters unverified-by-run",
+   "old_expect": {
+    "kind": "error",
+    "class": "COLUMN_NOT_DEFINED_IN_TABLE",
+    "sqlstate": null,
+    "params_unverified": true
+   }
+  },
+  {
+   "id": "SAT-47-all-columns-partitioned",
+   "existing": null,
+   "write": {
+    "query": "SELECT 1 AS p",
+    "mode": "errorifexists",
+    "format": "parquet",
+    "partitionBy": [
+     "p"
+    ]
+   },
+   "expect": {
+    "kind": "error",
+    "class": "ALL_PARTITION_COLUMNS_NOT_ALLOWED",
+    "sqlstate": "KD005",
+    "params": {}
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:395-400"
+   ],
+   "note": "a single-column frame partitioned by that column"
+  },
+  {
+   "id": "SAT-48-existing-view-append",
+   "existing": {
+    "view": "CREATE VIEW t AS SELECT 1 AS id, 'x' AS p"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_1158",
+    "sqlstate": null,
+    "params": {},
+    "legacy": true
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:155-157",
+    "QueryCompilationErrors.scala:2158-2162"
+   ],
+   "note": "message: Saving data into a view is not allowed."
+  },
+  {
+   "id": "SAT-49-existing-view-errorifexists",
+   "existing": {
+    "view": "CREATE VIEW t AS SELECT 1 AS id, 'x' AS p"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "errorifexists",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "error",
+    "class": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "sqlstate": "42P07",
+    "params": {
+     "relationName": "`spark_catalog`.`default`.`t`"
+    },
+    "thrown_at": "execution"
+   },
+   "source": [
+    "sql/core/.../classic/DataFrameWriter.scala:450-475 (v1 path: AsTableIdentifier -> saveAsV1TableCommand)",
+    "ddl.scala:1035-1036 (tableAlreadyExistsError(qualifiedIdent) -> TableAlreadyExistsException(nameParts))",
+    "sql/catalyst/.../errors/QueryCompilationErrors.scala:3901-3903",
+    "sql/api/.../analysis/alreadyExistException.scala:91-96"
+   ],
+   "note": "catalog.tableExists is true for views; derived"
+  },
+  {
+   "id": "SAT-50-existing-view-ignore",
+   "existing": {
+    "view": "CREATE VIEW t AS SELECT 1 AS id, 'x' AS p"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "ignore",
+    "format": "parquet",
+    "partitionBy": []
+   },
+   "expect": {
+    "kind": "ok",
+    "note": "no-op, view unchanged"
+   },
+   "source": [
+    "ddl.scala:1033-1034"
+   ],
+   "note": "derived"
+  },
+  {
+   "id": "SAT-51-time-travel-option-v1-ignored",
+   "existing": {
+    "format": "parquet",
+    "partitionBy": [],
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ]
+    ],
+    "schema": "id int, p string"
+   },
+   "write": {
+    "query": "SELECT 3 AS id, 'x' AS p UNION ALL SELECT 4, 'z'",
+    "mode": "append",
+    "format": "parquet",
+    "partitionBy": [],
+    "options": {
+     "versionAsOf": "1"
+    }
+   },
+   "expect": {
+    "kind": "rows",
+    "rows": [
+     [
+      1,
+      "x"
+     ],
+     [
+      2,
+      "y"
+     ],
+     [
+      3,
+      "x"
+     ],
+     [
+      4,
+      "z"
+     ]
+    ],
+    "note": "versionAsOf is stored as a data source option; no UNSUPPORTED_FEATURE.TIME_TRAVEL on the V1 path"
+   },
+   "source": [
+    "DataFrameWriter.scala:464-472 (V1 branch taken before rejectTimeTravelOptionsForWrite)",
+    "DataSourceV2DataFrameSessionCatalogSuite.scala:102-125"
+   ],
+   "note": "derived for a plain parquet table; the suite checks a V2-provider/V1-table variant"
+  }
+ ]
+}

@@ -255,6 +255,7 @@ impl Resolver<'_> {
             "Sort" => Some("Sort"),
             "Limit" => Some("GlobalLimit"),
             "Offset" => Some("Offset"),
+            "Tail" => Some("Tail"),
             "Generate" => Some("Generate"),
             _ => None,
         } {

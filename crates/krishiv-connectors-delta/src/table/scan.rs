@@ -27,13 +27,15 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions, UInt32Array};
-use arrow_schema::{FieldRef, Schema, SchemaRef};
+use arrow_array::builder::make_view;
+use arrow_array::{ArrayRef, BinaryViewArray, RecordBatch, RecordBatchOptions, UInt32Array};
+use arrow_buffer::{Buffer, ScalarBuffer};
+use arrow_schema::{DataType as ArrowType, Field, FieldRef, Schema, SchemaRef};
 use delta_kernel::expressions::{Predicate, PredicateRef};
 use krishiv_common::error::{FailedReadFileNoHint, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::{
-    FilterPushdown, GlobalState, LocalState, PushedFilter, RuntimeFilters, ScanPushdown,
-    ScanPushdowns, Source, SourceRows, TaskContext,
+    FilterPushdown, GlobalState, LocalState, PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN,
+    RuntimeFilters, ScanPushdown, ScanPushdowns, Source, SourceRows, TaskContext,
 };
 use krishiv_io::{
     ByteRange, ColumnPath, FileRef, FormatOptions, MetadataCols, MetadataNeeds, RowLevel,
@@ -58,11 +60,26 @@ const DV_PEAK_BYTES_PER_ROW: usize = 2 * std::mem::size_of::<u64>() + RANGE_BYTE
 #[derive(Debug, Clone)]
 pub struct DeltaScan {
     inner: Arc<Inner>,
+    /// The scan of a row-level statement: it reads the row id
+    /// ([`ScanPushdowns::row_id`]) and says it [`supports_take`](ScanPushdown::supports_take),
+    /// so [`krishiv_exec::planner::RowIdScan`] can wrap it (it never takes rows by position).
+    row_ids: bool,
 }
 
 impl DeltaScan {
     pub(super) fn new(inner: Arc<Inner>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            row_ids: false,
+        }
+    }
+
+    /// The scan of a row-level statement over `inner` (see the `row_ids` field).
+    pub(crate) fn with_row_ids(inner: Arc<Inner>) -> Self {
+        Self {
+            inner,
+            row_ids: true,
+        }
     }
 
     /// The kernel predicate of `filters` (see the module docs), if any translates.
@@ -91,7 +108,7 @@ impl DeltaScan {
     pub fn source(&self, p: &ScanPushdowns) -> Result<DeltaScanSource, KrishivError> {
         // TODO(08b-2): Delta row-tracking columns, once `MetadataCols` can name them, are refused
         // with `crate::features::row_tracking_refused` (UNSUPPORTED_FEATURE.TABLE_OPERATION).
-        if p.selection.is_some() || p.row_id {
+        if p.selection.is_some() || (p.row_id && !self.row_ids) {
             return Err(unsupported("row selections and row ids over a Delta scan"));
         }
         if p.metadata != MetadataCols::default() {
@@ -133,6 +150,9 @@ impl DeltaScan {
             .collect();
         let mut request = ScanRequest::new(Arc::clone(&data_table), data_projection);
         request.mapping = inner.mapping.clone();
+        // The row index within the file, counted over the file's rows (a deletion vector's
+        // selection keeps the deleted rows' positions out, not their numbers).
+        request.metadata_cols.row_index = p.row_id;
         let decoded = Arc::clone(SchemaMapper::new(&request, data_table, "")?.output_schema());
         // One output column per distinct top-level column of the projection, in order of
         // first appearance (nested paths of one column merge into it), as the file scan does.
@@ -162,6 +182,22 @@ impl DeltaScan {
                 layout.push(Slot::Data(data));
                 data += 1;
             }
+        }
+        if p.row_id {
+            // The file scan's row id types (`FileScan::with_row_id`), appended last: the file
+            // as the log names it, then the decoder's row index (the decoded batch's last column).
+            fields.push(Arc::new(Field::new(
+                ROW_FILE_COLUMN,
+                ArrowType::BinaryView,
+                false,
+            )));
+            layout.push(Slot::RowFile);
+            fields.push(Arc::new(Field::new(
+                ROW_POSITION_COLUMN,
+                ArrowType::Int64,
+                false,
+            )));
+            layout.push(Slot::Data(data));
         }
         Ok(DeltaScanSource {
             inner: Arc::clone(inner),
@@ -202,6 +238,10 @@ impl ScanPushdown for DeltaScan {
         Ok(Arc::new(self.source(&pushdowns)?))
     }
 
+    fn supports_take(&self) -> bool {
+        self.row_ids
+    }
+
     fn output_schema(&self, pushdowns: &ScanPushdowns) -> krishiv_exec::Result<SchemaRef> {
         Ok(Arc::clone(&self.source(pushdowns)?.output))
     }
@@ -214,6 +254,8 @@ enum Slot {
     Data(usize),
     /// The partition column (index into the table's partition columns).
     Partition(usize),
+    /// The row id's file: the path the log names, as bytes.
+    RowFile,
 }
 
 /// The source of a Delta scan (see the module docs).
@@ -347,7 +389,7 @@ impl DeltaScanSource {
             .iter()
             .filter_map(|s| match s {
                 Slot::Partition(k) => Some(*k),
-                Slot::Data(_) => None,
+                Slot::Data(_) | Slot::RowFile => None,
             })
             .map(|k| {
                 let pc = &self.inner.partitions[k];
@@ -376,6 +418,7 @@ impl DeltaScanSource {
         local.current = Some(Current {
             stream,
             partitions,
+            row_file: Buffer::from(unit.path.as_bytes().to_vec()),
             _dv_memory: dv_memory,
         });
         Ok(())
@@ -386,6 +429,7 @@ impl DeltaScanSource {
         &self,
         batch: &RecordBatch,
         partitions: &[(usize, ArrayRef)],
+        row_file: &Buffer,
     ) -> Result<RecordBatch, KrishivError> {
         let rows = batch.num_rows();
         let zeros = UInt32Array::from(vec![0_u32; rows]);
@@ -401,6 +445,18 @@ impl DeltaScanSource {
                         .ok_or_else(|| internal(format!("partition column {k} without a value")))?;
                     arrow_select::take::take(value, &zeros, None)
                         .map_err(|e| internal(format!("a partition column of {rows} rows: {e}")))?
+                }
+                Slot::RowFile => {
+                    // Every row views the one buffer.
+                    let view = make_view(row_file.as_slice(), 0, 0);
+                    Arc::new(
+                        BinaryViewArray::try_new(
+                            ScalarBuffer::from(vec![view; rows]),
+                            vec![row_file.clone()],
+                            None,
+                        )
+                        .map_err(|e| internal(format!("a row file column: {e}")))?,
+                    )
                 }
             });
         }
@@ -421,7 +477,7 @@ impl DeltaScanSource {
             if let Some(cur) = local.current.as_mut() {
                 match cur.stream.next_batch().await? {
                     Some(b) => {
-                        let b = self.assemble(&b, &cur.partitions)?;
+                        let b = self.assemble(&b, &cur.partitions, &cur.row_file)?;
                         // After every other filter, as Spark evaluates a runtime filter last.
                         let b = local.rows.apply(b)?;
                         return Ok(Some(Batch::new(b)));
@@ -458,6 +514,8 @@ struct Global {
 struct Current {
     stream: ScanStream,
     partitions: Vec<(usize, ArrayRef)>,
+    /// The file's path, the row id's file.
+    row_file: Buffer,
     /// The deletion vector's bytes, held while the file is read.
     _dv_memory: Reservation,
 }
