@@ -269,10 +269,95 @@ fn fill_na_pairs_values_with_columns() {
             literal(Literal::Long(1)),
         ],
     );
+    let plan = run(false, op).expect("fill");
     assert_eq!(
-        names(run(false, op)),
+        plan.output
+            .iter()
+            .map(|c| c.name.clone())
+            .collect::<Vec<_>>(),
         strings(&["course", "year", "earnings"])
     );
+    // `course` takes "none", `year` takes 1, `earnings` is not touched.
+    let text = format!("{plan:?}");
+    assert_eq!(text.matches("coalesce").count(), 2, "{text}");
+    assert_eq!(text.matches("String(\"none\")").count(), 1, "{text}");
+    assert_eq!(text.matches("Literal(Long(1))").count(), 1, "{text}");
+    assert!(
+        text.find("String(\"none\")") < text.find("Literal(Long(1))"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_to_df_result_is_found_by_its_own_plan_id() {
+    use crate::{ColumnRef, ExprNode, PlanId};
+    // `renamed = df.toDF("a", "b", "c")`, then `renamed["b"]`: the column carries the toDF plan's id.
+    let renamed = LogicalPlan::new(PlanNode::ColumnNames {
+        input: Arc::new(LogicalPlan::table(["sales"])),
+        op: ColumnNamesOp::ToDf(strings(&["a", "b", "c"])),
+    })
+    .with_origin(Origin::plan(PlanId(7)));
+    let column = Expr::new(ExprNode::Column(ColumnRef {
+        plan_id: Some(PlanId(7)),
+        ..ColumnRef::new(vec!["b".to_owned()])
+    }));
+    let plan = LogicalPlan::new(PlanNode::Project {
+        input: Arc::new(renamed),
+        exprs: vec![Arc::new(column)],
+    });
+    let analyzed = run_on(
+        false,
+        LogicalPlan::table(["sales"]),
+        ColumnNamesOp::ToDf(strings(&["a", "b", "c"])),
+        |_| plan,
+    )
+    .expect("renamed[\"b\"] resolves against the toDF relation");
+    assert_eq!(names(Ok(analyzed)), strings(&["b"]));
+}
+
+#[test]
+fn the_expressions_of_fill_and_replace_are_visited_and_rewritten() {
+    use crate::Literal;
+    for op in [
+        fill(&["year"], vec![literal(Literal::Long(1))]),
+        replace(
+            &["year"],
+            vec![literal(Literal::Long(1)), literal(Literal::Long(2))],
+        ),
+    ] {
+        let node = LogicalPlan::new(PlanNode::ColumnNames {
+            input: Arc::new(LogicalPlan::table(["sales"])),
+            op,
+        });
+        let mut seen = 0;
+        node.for_each_expr(&mut |_| seen += 1);
+        let expected = if matches!(
+            &node.node,
+            PlanNode::ColumnNames {
+                op: ColumnNamesOp::FillNa { .. },
+                ..
+            }
+        ) {
+            1
+        } else {
+            2
+        };
+        assert_eq!(seen, expected);
+        // `map_expressions` reaches the same expressions and rewrites them.
+        let mut rewritten = 0;
+        let mapped = Arc::new(node)
+            .map_expressions(|_| -> Result<_, ()> {
+                rewritten += 1;
+                Ok(literal(Literal::Long(9)))
+            })
+            .expect("mapped");
+        assert_eq!(rewritten, expected);
+        assert!(
+            format!("{:?}", mapped.node).contains("Long(9)"),
+            "{:?}",
+            mapped.node
+        );
+    }
 }
 
 #[test]

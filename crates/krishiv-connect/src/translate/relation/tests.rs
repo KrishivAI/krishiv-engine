@@ -1365,9 +1365,16 @@ fn na_replace_flattens_the_pairs_for_the_analyzer() {
     let PlanNode::ColumnNames { op, .. } = node(&rel) else {
         panic!("not a ColumnNames node")
     };
+    let ColumnNamesOp::Replace { cols, pairs } = op else {
+        panic!("not a Replace op")
+    };
+    assert!(cols == ["a"] && pairs.len() == 2);
+    let pairs: Vec<String> = pairs.iter().map(|e| format!("{e:?}")).collect();
     assert!(
-        matches!(op, ColumnNamesOp::Replace { cols, pairs } if cols == ["a"] && pairs.len() == 2)
+        pairs[0].contains("Long(1)") && !pairs[0].contains("Long(10)"),
+        "{pairs:?}"
     );
+    assert!(pairs[1].contains("Long(10)"), "{pairs:?}");
 }
 
 #[test]
@@ -1505,8 +1512,25 @@ fn sample_by_plans_a_filter_drawing_rand_for_every_row() {
         panic!("not a Filter node")
     };
     let text = format!("{predicate:?}");
-    assert!(text.contains("rand"), "{text}");
-    assert!(text.contains("When") || text.contains("when"), "{text}");
+    // rand(7) < CASE WHEN k = 1 THEN 0.5 ELSE 0.0 END, in this order.
+    let in_order = [
+        "name: \"<\"",
+        "name: \"rand\"",
+        "Literal(Long(7))",
+        "name: \"when\"",
+        "name: \"==\"",
+        "name: [\"k\"]",
+        "Literal(Integer(1))",
+        "Literal(Double(0.5))",
+        "Literal(Double(0.0))",
+    ];
+    let mut at = 0;
+    for part in in_order {
+        let found = text[at..]
+            .find(part)
+            .unwrap_or_else(|| panic!("{part} after {at}: {text}"));
+        at += found + part.len();
+    }
     assert_eq!(
         code(&sample_by(1.5)),
         ErrorClass::ConnectInvalidPlanAssertionFailure

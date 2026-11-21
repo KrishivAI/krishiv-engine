@@ -1376,7 +1376,6 @@ impl LogicalPlan {
             | PlanNode::UnionLoop { .. }
             | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
-            | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
@@ -1391,6 +1390,14 @@ impl LogicalPlan {
             } => {
                 params.iter().for_each(f);
             }
+            PlanNode::ColumnNames { op, .. } => match op {
+                ColumnNamesOp::FillNa { values, .. } => values.iter().for_each(f),
+                ColumnNamesOp::Replace { pairs, .. } => pairs.iter().for_each(f),
+                ColumnNamesOp::ToDf(_)
+                | ColumnNamesOp::Rename(_)
+                | ColumnNamesOp::Drop { .. }
+                | ColumnNamesOp::DropNa { .. } => {}
+            },
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter().for_each(f),
@@ -1483,7 +1490,6 @@ impl LogicalPlan {
             | PlanNode::UnionLoop { .. }
             | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
-            | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
@@ -1498,6 +1504,14 @@ impl LogicalPlan {
             } => {
                 params.iter_mut().for_each(f);
             }
+            PlanNode::ColumnNames { op, .. } => match op {
+                ColumnNamesOp::FillNa { values, .. } => values.iter_mut().for_each(f),
+                ColumnNamesOp::Replace { pairs, .. } => pairs.iter_mut().for_each(f),
+                ColumnNamesOp::ToDf(_)
+                | ColumnNamesOp::Rename(_)
+                | ColumnNamesOp::Drop { .. }
+                | ColumnNamesOp::DropNa { .. } => {}
+            },
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter_mut().for_each(f),
