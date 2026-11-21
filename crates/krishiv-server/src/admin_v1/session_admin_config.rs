@@ -92,7 +92,19 @@ fn shown(key: &str, value: Option<&str>) -> String {
     match value {
         None => "(unset)".to_owned(),
         Some(_) if is_sensitive_key(key) => "(withheld)".to_owned(),
-        Some(v) => v.to_owned(),
+        Some(v) => {
+            // A request may carry a value of any length: the record keeps the start of it.
+            const MAX: usize = 256;
+            if v.len() <= MAX {
+                v.to_owned()
+            } else {
+                let cut = (0..=MAX)
+                    .rev()
+                    .find(|i| v.is_char_boundary(*i))
+                    .unwrap_or(0);
+                format!("{}... ({} bytes)", &v[..cut], v.len())
+            }
+        }
     }
 }
 
@@ -260,13 +272,19 @@ impl SessionAdmin {
             self.startup_auth
                 .iter()
                 .filter(|(k, _)| prefix.is_none_or(|p| k.starts_with(p)))
-                .map(|(k, v)| ConfigListing {
-                    key: k.clone(),
-                    value: who.manage.then(|| v.clone()),
-                    scope: Some("cluster"),
-                    settable_by: Some("startup"),
-                    source: ConfigSource::Startup,
-                    withheld: !who.manage,
+                .map(|(k, v)| {
+                    // A reference (`env:`/`file:`) is shown as written; an inline value of a
+                    // credential-named key (the Spark token may be one) is shown to no one.
+                    let is_reference = v.starts_with("env:") || v.starts_with("file:");
+                    let show = who.manage && (is_reference || !is_sensitive_key(k));
+                    ConfigListing {
+                        key: k.clone(),
+                        value: show.then(|| v.clone()),
+                        scope: Some("cluster"),
+                        settable_by: Some("startup"),
+                        source: ConfigSource::Startup,
+                        withheld: !show,
+                    }
                 }),
         );
         let (rows, next) = page.apply(rows, |c| (0, c.key.clone()), &filter);
@@ -317,6 +335,10 @@ impl SessionAdmin {
     /// The keys of a defaults change with their old and new values (design §5.6), values of a
     /// credential-named key withheld.
     fn describe_defaults_change(&self, set: &[(String, String)], unset: &[String]) -> String {
+        // The record names the canonical key: a Spark alias resolves to its registry entry.
+        let canonical = |key: &str| {
+            krishiv_common::config::lookup(key).map_or_else(|| key.to_owned(), |e| e.key.to_owned())
+        };
         let current = |key: &str| {
             self.runtime()
                 .config_listing(Some(key), true)
@@ -327,18 +349,18 @@ impl SessionAdmin {
         let mut parts: Vec<String> = set
             .iter()
             .map(|(k, v)| {
+                let k = canonical(k);
                 format!(
                     "set {k}: {} -> {}",
-                    shown(k, current(k).as_deref()),
-                    shown(k, Some(v))
+                    shown(&k, current(&k).as_deref()),
+                    shown(&k, Some(v))
                 )
             })
             .collect();
-        parts.extend(
-            unset
-                .iter()
-                .map(|k| format!("unset {k}: {}", shown(k, current(k).as_deref()))),
-        );
+        parts.extend(unset.iter().map(|k| {
+            let k = canonical(k);
+            format!("unset {k}: {}", shown(&k, current(&k).as_deref()))
+        }));
         parts.join("; ")
     }
 }

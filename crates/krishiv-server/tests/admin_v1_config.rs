@@ -362,6 +362,49 @@ async fn get_config_lists_the_auth_settings_withheld_from_an_operator_and_shown_
 }
 
 #[tokio::test]
+async fn get_config_never_shows_an_inline_spark_token_but_shows_a_reference() {
+    let f = fixture_with(
+        false,
+        &[
+            ("spark.connect.authenticate.token", "s3cr3t-inline"),
+            ("krishiv.auth.tokens.ops.secret", "env:OPS_TOKEN"),
+        ],
+        &[],
+    );
+    for prefix in ["spark.", "krishiv.auth."] {
+        for who in ["o:operator", "a:admin"] {
+            let (_, body) = f
+                .call(
+                    who,
+                    "GET",
+                    &format!("/config?prefix={prefix}&pageSize=500"),
+                    None,
+                )
+                .await;
+            assert!(!body.to_string().contains("s3cr3t-inline"), "{who}: {body}");
+        }
+    }
+    let (_, body) = f
+        .call(
+            "a:admin",
+            "GET",
+            "/config?prefix=spark.connect&pageSize=500",
+            None,
+        )
+        .await;
+    assert_eq!(body["entries"][0]["withheld"], true, "{body}");
+    let (_, body) = f
+        .call(
+            "a:admin",
+            "GET",
+            "/config?prefix=krishiv.auth.&pageSize=500",
+            None,
+        )
+        .await;
+    assert_eq!(body["entries"][0]["value"], "env:OPS_TOKEN", "{body}");
+}
+
+#[tokio::test]
 async fn get_config_withholds_the_path_allowlists_from_an_operator_over_the_rpc() {
     let f = fixture_with(false, &[], &[("krishiv.io.local.allowedRoots", "/tmp")]);
     let url = "/config?prefix=krishiv.io.local.allowedRoots";
@@ -440,6 +483,41 @@ async fn validate_reports_every_problem_with_its_path() {
     assert_eq!(paths.len(), 2, "{body}");
     assert!(paths[0].starts_with("rootGroups[0]"), "{paths:?}");
     assert!(paths[1].starts_with("rootGroups[1]"), "{paths:?}");
+}
+
+#[tokio::test]
+async fn validate_reports_every_problem_of_one_root_with_its_paths() {
+    let f = fixture(true);
+    let doc = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 4, "maxQueued": 1,
+        "subGroups": [
+          {"name": "a", "hardConcurrencyLimit": 0, "maxQueued": 1},
+          {"name": "b", "hardConcurrencyLimit": 1, "maxQueued": -1}]}],
+      "defaultGroup": "root.zzz"}"#;
+    let body = serde_json::json!({ "document": doc }).to_string();
+    let (_, body) = f
+        .call(
+            "o:operator",
+            "POST",
+            "/resourceGroups/config:validate",
+            Some(&body),
+        )
+        .await;
+    let paths: Vec<&str> = body["problems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths.len(), 3, "{body}");
+    assert!(
+        paths[0].starts_with("rootGroups[0].subGroups[0]"),
+        "{paths:?}"
+    );
+    assert!(
+        paths[1].starts_with("rootGroups[0].subGroups[1]"),
+        "{paths:?}"
+    );
+    assert_eq!(paths[2], "defaultGroup", "{paths:?}");
 }
 
 #[tokio::test]
@@ -543,4 +621,297 @@ async fn set_config_defaults_is_all_or_none_and_shows_as_admin_source() {
         .call("a:admin", "GET", &format!("/config?prefix={key}"), None)
         .await;
     assert_ne!(body["entries"][0]["source"], "admin");
+}
+
+/// Collects the `krishiv::admin_action` records of the process as `field=value` strings.
+#[derive(Clone, Default)]
+struct Records(Arc<std::sync::Mutex<Vec<String>>>);
+
+struct Fields(String);
+
+impl tracing::field::Visit for Fields {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        use std::fmt::Write as _;
+        let _ = write!(self.0, "{}={value:?} ", field.name());
+    }
+}
+
+impl tracing::Subscriber for Records {
+    fn enabled(&self, m: &tracing::Metadata<'_>) -> bool {
+        m.target() == "krishiv::admin_action"
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, e: &tracing::Event<'_>) {
+        let mut f = Fields(String::new());
+        e.record(&mut f);
+        self.0.lock().unwrap().push(f.0);
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+fn records() -> &'static Records {
+    static RECORDS: std::sync::OnceLock<Records> = std::sync::OnceLock::new();
+    RECORDS.get_or_init(|| {
+        let r = Records::default();
+        let _ = tracing::subscriber::set_global_default(r.clone());
+        r
+    })
+}
+
+/// Design 5.6 and 8: the group and defaults changes write one record each (allowed, denied,
+/// failed) with the old and new etag or value; a credential-named key's value is in no field and
+/// a Spark alias is recorded under its canonical key.
+#[tokio::test]
+async fn config_changes_write_action_records_with_old_and_new_values() {
+    let records = records();
+    let f = fixture(true);
+    let (_, current) = f
+        .call("rec:admin", "GET", "/resourceGroups/config", None)
+        .await;
+    let old = current["etag"].as_str().unwrap().to_owned();
+    // allowed replace, a stale replace (failed), an operator's replace (denied)
+    let (status, ok) = f.replace("rec:admin", GROUPS_V2, &old).await;
+    assert_eq!(status, StatusCode::OK, "{ok}");
+    let new = ok["etag"].as_str().unwrap().to_owned();
+    f.replace("rec:admin", GROUPS, &old).await;
+    f.replace("rec:operator", GROUPS, &new).await;
+    // reload after an edit on disk
+    std::fs::write(&f.path, GROUPS).unwrap();
+    let (status, reloaded) = f
+        .call(
+            "rec:admin",
+            "POST",
+            "/resourceGroups/config:reload",
+            Some("{}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reloaded}");
+    // defaults: through a Spark alias, then a credential-named unregistered key (fails)
+    let alias = serde_json::json!({
+        "set": {"spark.sql.avro.compression.codec": "deflate"}
+    })
+    .to_string();
+    let (status, body) = f
+        .call("rec:admin", "PATCH", "/config/defaults", Some(&alias))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let secret = serde_json::json!({ "set": {"my.secret.key": "topsecret-value"} }).to_string();
+    let (status, _) = f
+        .call("rec:admin", "PATCH", "/config/defaults", Some(&secret))
+        .await;
+    assert_ne!(status, StatusCode::OK);
+    f.call("rec:operator", "PATCH", "/config/defaults", Some(&alias))
+        .await;
+
+    let log: Vec<String> = records
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("principal=\"rec\""))
+        .cloned()
+        .collect();
+    let find = |rpc: &str, result: &str| -> &String {
+        log.iter()
+            .find(|l| {
+                l.contains(&format!("rpc=\"{rpc}\"")) && l.contains(&format!("result=\"{result}\""))
+            })
+            .unwrap_or_else(|| panic!("no {rpc} {result} in {log:#?}"))
+    };
+    let replaced = find("ReplaceResourceGroupConfig", "ok");
+    assert!(replaced.contains(&format!("{old} -> {new}")), "{replaced}");
+    let stale = find("ReplaceResourceGroupConfig", "failed");
+    assert!(stale.contains(&old) && stale.contains(&new), "{stale}");
+    find("ReplaceResourceGroupConfig", "denied");
+    let reload = find("ReloadResourceGroupConfig", "ok");
+    assert!(reload.contains(&format!("{new} -> ")), "{reload}");
+    let aliased = find("SetConfigDefaults", "ok");
+    assert!(
+        aliased.contains("set krishiv.sql.avro.compression.codec: ")
+            && aliased.contains("-> deflate")
+            && !aliased.contains("spark.sql.avro"),
+        "{aliased}"
+    );
+    let failed = find("SetConfigDefaults", "failed");
+    assert!(failed.contains("(withheld)"), "{failed}");
+    find("SetConfigDefaults", "denied");
+    assert!(
+        log.iter()
+            .all(|l| !l.contains("topsecret-value") && !l.contains("rec:admin")),
+        "{log:#?}"
+    );
+}
+
+#[tokio::test]
+async fn a_symbolic_link_group_file_refuses_a_replace_as_a_precondition() {
+    let f = fixture(true);
+    let (_, current) = f
+        .call("a:admin", "GET", "/resourceGroups/config", None)
+        .await;
+    let real = f.path.with_file_name("real.json");
+    std::fs::rename(&f.path, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &f.path).unwrap();
+    let (status, body) = f
+        .replace("a:admin", GROUPS_V2, current["etag"].as_str().unwrap())
+        .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{body}");
+    assert!(
+        body.to_string()
+            .contains("KRISHIV_RESOURCE_GROUP_CONFIG_READ_ONLY"),
+        "{body}"
+    );
+}
+
+/// All seven new RPCs over gRPC on a real socket answer as over REST (design §8, transports agree).
+#[tokio::test]
+async fn the_group_and_config_rpcs_answer_over_grpc() {
+    use krishiv_server::admin_v1::{
+        GetConfigRequest, GetConfigResponse, GetResourceGroupConfigRequest,
+        GetResourceGroupConfigResponse, ListResourceGroupsRequest, ListResourceGroupsResponse,
+        ReloadResourceGroupConfigRequest, ReloadResourceGroupConfigResponse,
+        ReplaceResourceGroupConfigRequest, ReplaceResourceGroupConfigResponse,
+        SetConfigDefaultsRequest, SetConfigDefaultsResponse, ValidateResourceGroupConfigRequest,
+        ValidateResourceGroupConfigResponse,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("resource-groups.json");
+    std::fs::write(&path, GROUPS).unwrap();
+    let rt = EngineRuntime::builder()
+        .config(
+            "krishiv.workload.resourceGroups.file",
+            path.to_str().unwrap(),
+        )
+        .build()
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = router(
+        Arc::new(SessionAdmin::new(rt)),
+        Arc::new(Roles),
+        AdminConfig::for_listener(addr.ip(), Vec::new()),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+    let channel = tonic::transport::Channel::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut grpc = tonic::client::Grpc::new(channel);
+    grpc.ready().await.unwrap();
+
+    async fn call<Q, R>(
+        grpc: &mut tonic::client::Grpc<tonic::transport::Channel>,
+        who: &str,
+        rpc: &str,
+        request: Q,
+    ) -> Result<R, tonic::Status>
+    where
+        Q: prost::Message + 'static,
+        R: prost::Message + Default + 'static,
+    {
+        grpc.ready().await.unwrap();
+        let mut req = tonic::Request::new(request);
+        req.metadata_mut()
+            .insert("authorization", format!("Bearer {who}").parse().unwrap());
+        let path = format!("/krishiv.admin.v1.AdminService/{rpc}")
+            .parse()
+            .unwrap();
+        grpc.unary(req, path, tonic_prost::ProstCodec::default())
+            .await
+            .map(tonic::Response::into_inner)
+    }
+
+    let listed: ListResourceGroupsResponse = call(
+        &mut grpc,
+        "a:admin",
+        "ListResourceGroups",
+        ListResourceGroupsRequest::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(listed.groups.len(), 1);
+    let got: GetResourceGroupConfigResponse = call(
+        &mut grpc,
+        "o:operator",
+        "GetResourceGroupConfig",
+        GetResourceGroupConfigRequest {},
+    )
+    .await
+    .unwrap();
+    let valid: ValidateResourceGroupConfigResponse = call(
+        &mut grpc,
+        "o:operator",
+        "ValidateResourceGroupConfig",
+        ValidateResourceGroupConfigRequest {
+            document: "{}".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!valid.valid && !valid.problems.is_empty());
+    let denied: Result<ReplaceResourceGroupConfigResponse, _> = call(
+        &mut grpc,
+        "o:operator",
+        "ReplaceResourceGroupConfig",
+        ReplaceResourceGroupConfigRequest {
+            document: GROUPS_V2.to_owned(),
+            etag: got.etag.clone(),
+            request_id: String::new(),
+        },
+    )
+    .await;
+    assert_eq!(denied.unwrap_err().code(), tonic::Code::PermissionDenied);
+    let replaced: ReplaceResourceGroupConfigResponse = call(
+        &mut grpc,
+        "a:admin",
+        "ReplaceResourceGroupConfig",
+        ReplaceResourceGroupConfigRequest {
+            document: GROUPS_V2.to_owned(),
+            etag: got.etag.clone(),
+            request_id: String::new(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_ne!(replaced.etag, got.etag);
+    let reloaded: ReloadResourceGroupConfigResponse = call(
+        &mut grpc,
+        "a:admin",
+        "ReloadResourceGroupConfig",
+        ReloadResourceGroupConfigRequest::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reloaded.etag, replaced.etag);
+    let config: GetConfigResponse = call(
+        &mut grpc,
+        "o:operator",
+        "GetConfig",
+        GetConfigRequest {
+            prefix: "krishiv.sql.ansi".to_owned(),
+            ..GetConfigRequest::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!config.entries.is_empty());
+    let set: SetConfigDefaultsResponse = call(
+        &mut grpc,
+        "a:admin",
+        "SetConfigDefaults",
+        SetConfigDefaultsRequest {
+            set: [("krishiv.sql.ansi.enabled".to_owned(), "true".to_owned())].into(),
+            ..SetConfigDefaultsRequest::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(set.set_count, 1);
+    server.abort();
 }

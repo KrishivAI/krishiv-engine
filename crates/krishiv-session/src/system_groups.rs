@@ -8,9 +8,9 @@ use arrow_array::{ArrayRef, Int32Array, TimestampMicrosecondArray};
 use crate::system::{Kind, Sources, long, text};
 
 /// The rows a caller sees. With `Monitor` on `system`: every group. Without it (design §5.4):
-/// the groups holding one of the caller's running queries, and their ancestors, whose subtree
-/// counters are totals over other tenants' work and show as null; the caller's own group keeps
-/// them. (A queued query takes its group when it starts, so it shows from then on.)
+/// the groups holding one of the caller's running or queued queries, and their ancestors,
+/// whose subtree counters are totals over other tenants' work and show as null; the caller's own
+/// group keeps them.
 fn visible_rows(sources: &Sources) -> Vec<(crate::resource_groups::GroupRow, bool)> {
     let Some(groups) = &sources.groups else {
         return Vec::new();
@@ -112,10 +112,16 @@ pub(crate) fn columns(sources: &Sources) -> Vec<ArrayRef> {
             )
             .with_timezone("UTC"),
         ),
-        text(rows.iter().map(|r| Some(r.config_etag.as_str()))),
+        text(
+            rows.iter()
+                .map(|r| (!r.config_etag.is_empty()).then_some(r.config_etag.as_str())),
+        ),
         Arc::new(
-            TimestampMicrosecondArray::from_iter(rows.iter().map(|r| micros(Some(r.loaded_at_ms))))
-                .with_timezone("UTC"),
+            TimestampMicrosecondArray::from_iter(
+                rows.iter()
+                    .map(|r| micros((r.loaded_at_ms > 0).then_some(r.loaded_at_ms))),
+            )
+            .with_timezone("UTC"),
         ),
     ]
 }
@@ -141,7 +147,7 @@ pub(crate) fn layout() -> Vec<(&'static str, Kind, bool)> {
         ("memory_reserved_bytes", Long, true),
         ("scan_bytes_in_window", Long, true),
         ("scan_window_resets_at", Time, true),
-        ("config_etag", Text, false),
-        ("loaded_at", Time, false),
+        ("config_etag", Text, true),
+        ("loaded_at", Time, true),
     ]
 }

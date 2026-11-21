@@ -114,7 +114,15 @@ async fn a_caller_sees_the_group_of_its_running_and_of_its_queued_query() {
         let bob = bob.clone();
         tokio::spawn(async move { bob.sql("select 2").await.unwrap().collect().await })
     };
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Wait until bob's query holds its place in the queue (a fixed sleep flakes on a loaded machine).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !rt.query_infos().iter().any(|q| q.state == "queued") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "bob's query never queued"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 
     let alice_p = Principal::new("alice", PrincipalKind::User);
     let own = rt.resource_group_infos(&alice_p, false);

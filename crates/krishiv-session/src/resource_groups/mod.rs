@@ -223,7 +223,8 @@ impl ResourceGroups {
             )
         };
         let mut rows = self.shared.rows();
-        for row in &mut rows {
+        // A removed group came from an earlier document: it carries neither this etag nor this time.
+        for row in rows.iter_mut().filter(|r| r.state != "removed") {
             row.config_etag.clone_from(&etag);
             row.loaded_at_ms = loaded_at_ms;
         }
