@@ -11,7 +11,10 @@ name: Mutation testing (nightly)
 # acceptance numbers are in `tests/mutation-floors.json`.
 on:
   schedule:
-    - cron: "30 3 * * *"
+    # GitHub starts this cron about eight hours late (runs created 11:29-12:10 UTC on 2026-11-16 to 11-21 for
+    # a 03:30 cron), so it is set at 19:47: on time it starts inside the night window of the guard job, and a
+    # delay of up to ten hours still lands before 06:00.
+    - cron: "47 19 * * *"
   workflow_dispatch:
     inputs:
       shard:
@@ -23,8 +26,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: mutants
-  cancel-in-progress: true
+  # Keyed by event: a delayed scheduled run that the guard skips never cancels a manual run, and nothing
+  # cancels a run in progress (a new one waits, GitHub keeps one pending).
+  group: mutants-${{ github.event_name }}
+  cancel-in-progress: false
 
 env:
   # No debug info at all: every mutant is a full rebuild and link of the crate's test binaries, and
@@ -37,7 +42,7 @@ env:
 
 jobs:
   # A scheduled run that GitHub delayed into the working day exits at once, so it never holds the runners
-  # the PR checks need. A manual run is not guarded. Window: scheduled runs may start 18:00-06:00 UTC.
+  # the PR checks need. A manual run is not guarded. Window: scheduled runs may start 18:00-06:00 UTC. The window bounds the start only: a run that starts at 05:59 may still run into the morning (up to its job limit).
   guard:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
@@ -58,7 +63,8 @@ jobs:
     if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
     needs: guard
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # The slices took up to 4 h 44 on 2026-11-16/17 (kernels parts 3 h 10 to 4 h 44), so the limit stays above that.
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
