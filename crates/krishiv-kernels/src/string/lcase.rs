@@ -32,6 +32,109 @@ pub fn trim_mode(side: TrimSide, lcase: bool, rtrim: bool) -> i32 {
     side | (i32::from(lcase) << 2) | (i32::from(rtrim) << 3)
 }
 
+/// One character in Java's per-character case folding, as `Pattern.CASE_INSENSITIVE | UNICODE_CASE`
+/// compares: the simple lower case of the simple upper case (a mapping to more than one character
+/// leaves the character as it is; `İ` lower-cases to `i`, as `Character.toLowerCase` does).
+fn java_fold(c: char) -> char {
+    let mut up = c.to_uppercase();
+    let upper = match (up.next(), up.next()) {
+        (Some(u), None) => u,
+        _ => c,
+    };
+    if upper == '\u{130}' {
+        return 'i';
+    }
+    let mut low = upper.to_lowercase();
+    match (low.next(), low.next()) {
+        (Some(l), None) => l,
+        _ => upper,
+    }
+}
+
+/// The text `LIKE` and `ILIKE` compare over a `UTF8_LCASE` string (SQL-40). Spark matches each
+/// character by Java's case folding, so both operands go through `java_fold`. With `ilike` the
+/// operand is first lower-cased in full (`İ` becomes `i` and U+0307, which is why `ILIKE` and `LIKE`
+/// differ for `İ`). One key per character cannot express Java's one-directional matches: the pattern
+/// `ß` matches only `ß` while the pattern `ẞ` matches both, so value `ẞ` against pattern `ß` is true here
+/// and false in Spark (likewise the titlecase letters `U+1F88`..`U+1FAF`, `U+1FBC`, `U+1FCC`, `U+1FFC`
+/// against their lower-case partners). Oracle: a Spark 4.3.0 run, 2026-11-21 (`tests/fixtures/spark-4.3.0/like-lcase.json`).
+///
+/// # Errors
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the offset type.
+pub fn like_fold<O: OffsetSizeTrait>(
+    ilike: Operand<'_, Int32Type>,
+    input: StrOperand<'_, O>,
+) -> Result<GenericStringArray<O>, KernelError> {
+    let slots: [&dyn Slot; 2] = [&ilike, &input];
+    str_rows(&slots, |i, out| {
+        let s = input.at(i);
+        reserve_str(out, s.len().saturating_mul(2))?;
+        let full = int_at(ilike, i) != 0;
+        for c in s.chars() {
+            if full {
+                for l in c.to_lowercase() {
+                    out.push(java_fold(l));
+                }
+            } else {
+                out.push(java_fold(c));
+            }
+        }
+        Ok(())
+    })
+}
+
+/// [`like_fold`] for a `LIKE ... ESCAPE` pattern: Spark reads the escape character off the pattern as
+/// written (`ILIKE`: off the lower-cased pattern) and only then compiles the literal characters
+/// case-insensitively, so the escape matches itself exactly, never its other cases (SQL-40, review
+/// of PR 949). A character that folds to the escape is written escaped, so it stays a literal.
+///
+/// An `escape` that is not one character leaves the pattern folded as [`like_fold`] does (the
+/// `like` call then refuses the escape).
+///
+/// # Errors
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the offset type.
+pub fn like_fold_pattern<O: OffsetSizeTrait>(
+    ilike: Operand<'_, Int32Type>,
+    pattern: StrOperand<'_, O>,
+    escape: StrOperand<'_, O>,
+) -> Result<GenericStringArray<O>, KernelError> {
+    let slots: [&dyn Slot; 3] = [&ilike, &pattern, &escape];
+    str_rows(&slots, |i, out| {
+        let s = pattern.at(i);
+        reserve_str(out, s.len().saturating_mul(3))?;
+        let full = int_at(ilike, i) != 0;
+        let mut esc_chars = escape.at(i).chars();
+        let esc = match (esc_chars.next(), esc_chars.next()) {
+            (Some(e), None) => Some(e),
+            _ => None,
+        };
+        let mut pieces: Vec<char> = Vec::with_capacity(s.len());
+        for c in s.chars() {
+            if full {
+                pieces.extend(c.to_lowercase());
+            } else {
+                pieces.push(c);
+            }
+        }
+        let mut it = pieces.into_iter();
+        while let Some(p) = it.next() {
+            if Some(p) == esc {
+                out.push(p);
+                if let Some(next) = it.next() {
+                    out.push(java_fold(next));
+                }
+                continue;
+            }
+            let f = java_fold(p);
+            if Some(f) == esc {
+                out.push(f);
+            }
+            out.push(f);
+        }
+        Ok(())
+    })
+}
+
 /// The lower-cased code points of `window` (or the characters themselves when not `lcase`).
 fn key(window: &[char], lcase: bool, buf: &mut Vec<char>) {
     buf.clear();
@@ -401,4 +504,58 @@ pub fn icu_case<O: OffsetSizeTrait>(
         out.push_str(&mapped);
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod like_fold_tests {
+    use super::java_fold;
+
+    #[test]
+    fn java_fold_is_lower_of_upper_per_character() {
+        assert_eq!(java_fold('A'), 'a');
+        assert_eq!(java_fold('a'), 'a');
+        // Long s and Kelvin sign fold to their ASCII letters through the upper case.
+        assert_eq!(java_fold('\u{17f}'), 's');
+        assert_eq!(java_fold('\u{212a}'), 'k');
+        // `İ` folds to `i`; `ß` upper-cases to two characters, so it stays.
+        assert_eq!(java_fold('\u{130}'), 'i');
+        assert_eq!(java_fold('\u{df}'), '\u{df}');
+        // Final and non-final sigma meet at the same character.
+        assert_eq!(java_fold('\u{3c2}'), java_fold('\u{3a3}'));
+        assert_eq!(java_fold('1'), '1');
+    }
+
+    #[test]
+    fn pattern_fold_reads_the_escape_before_folding() {
+        use arrow_array::StringArray;
+        let fold = |ilike: i32, pat: &str, esc: &str| {
+            let out = super::like_fold_pattern::<i32>(
+                crate::ops::Operand::Scalar(Some(ilike)),
+                super::StrOperand::Array(&StringArray::from(vec![pat])),
+                super::StrOperand::Scalar(Some(esc)),
+            )
+            .unwrap();
+            let a: &StringArray = &out;
+            a.value(0).to_owned()
+        };
+        // `e` is not the escape `E`: it folds as a literal and `%` stays a wildcard.
+        assert_eq!(fold(0, "E%", "E"), "E%");
+        assert_eq!(fold(0, "e%", "E"), "e%");
+        assert_eq!(fold(0, "AE%", "E"), "aE%");
+        // A character folding to the escape is written escaped, so it stays literal.
+        assert_eq!(fold(0, "E%", "e"), "ee%");
+        // `ILIKE` lower-cases first, so an upper-case escape never occurs in the pattern.
+        assert_eq!(fold(1, "E%", "E"), "e%");
+    }
+
+    #[test]
+    fn java_fold_is_idempotent_over_the_bmp() {
+        for c in ('\0'..='\u{ffff}').filter_map(|c| {
+            (c as u32 >= 0xd800 && c as u32 <= 0xdfff)
+                .then_some(c)
+                .map_or(Some(c), |_| None)
+        }) {
+            assert_eq!(java_fold(java_fold(c)), java_fold(c), "{c:?}");
+        }
+    }
 }
