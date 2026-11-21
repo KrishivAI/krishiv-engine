@@ -198,6 +198,7 @@ def stored_detail(query_id: str, profile: dict, sql: str) -> dict:
             {"id": n["id"], "name": n["name"], "children": n["children"]}
             for n in profile["plan"]
         ],
+        "warnings": [],
     }
 
 
