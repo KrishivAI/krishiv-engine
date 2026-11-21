@@ -16,6 +16,7 @@ use krishiv_io::{DisabledReason, FilterId, FilterSnapshot, KeyFilterBuilder};
 use krishiv_memory::{ConsumerHandle, Reservation, SpillFile, SpillScope, SpillSignal};
 use krishiv_types::batch::{Batch, Weights};
 
+use super::direct::Direct;
 use super::grace::{
     Grace, Part, SPILL_MIN, SPILL_SCRATCH, choose, reserve_chunks, spill_parts, write_sliced,
 };
@@ -154,6 +155,10 @@ pub(crate) struct Level0 {
     /// Per level-0 partition: its table, or `None` if it spilled or is
     /// empty.
     pub(crate) tables: Vec<Option<JoinTable>>,
+    /// The direct index of the tables (perf lever J1) with its decoded
+    /// payload (P3): made by the first probe driver that asks, shared by
+    /// the others, dropped with the tables (`direct.rs`).
+    pub(crate) direct: OnceLock<Option<Direct>>,
     /// Held only to go back with the tables.
     _memory: Vec<Reservation>,
 }
@@ -1099,6 +1104,7 @@ impl BuildGlobal {
         let _ = g.built.set(Built {
             level0: Mutex::new(Some(Arc::new(Level0 {
                 tables: Vec::new(),
+                direct: OnceLock::new(),
                 _memory: Vec::new(),
             }))),
             spilled: 0,
@@ -1613,6 +1619,7 @@ impl Sink for BuildSink {
             let built = Built {
                 level0: Mutex::new(Some(Arc::new(Level0 {
                     tables: all,
+                    direct: OnceLock::new(),
                     _memory: memory,
                 }))),
                 spilled,

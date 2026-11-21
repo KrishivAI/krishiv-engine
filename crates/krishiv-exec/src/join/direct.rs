@@ -11,13 +11,14 @@
 //! ([`JoinTable::next_of`]), so duplicates, marks and the emission of build
 //! rows are those of the hashed path.
 //!
-//! Built per probe driver from the level-0 tables it holds, only when none
-//! of them spilled; a NULL probe key or one outside the span finds nothing,
+//! Built once per build, by the first probe driver that reads the level-0
+//! tables (`build.rs` `Level0::direct`, shared by every probe driver and
+//! dropped with the tables), only when none of them spilled; a NULL probe key or one outside the span finds nothing,
 //! as in the hashed path. Null-safe (`<=>`) keys and null-aware anti joins
 //! keep the hashed path. `krishiv.exec.join.directIndex` switches it off.
 //!
 //! Memory: the slot array is at most [`MAX_SLOTS`] `u64`s (128 KiB) per
-//! probe driver and the build-time vectors at most [`MAX_ROWS`] entries
+//! build and the build-time vectors at most [`MAX_ROWS`] entries
 //! each, small and bounded, so they are not reserved from the pool. The
 //! span limit is four slots a row with a floor of 64 slots (a build of
 //! fewer than 16 rows may span 64 values).
@@ -29,13 +30,17 @@
 //! then fills its build columns with an Arrow `take` by row instead of
 //! decoding one payload row per output row: the same values, since they
 //! come from the same decoder (a string view `take` copies the views and
-//! shares the buffers). The columns are of at most 4,096 rows and the
-//! bytes are capped, so they are not reserved either.
+//! shares the buffers). A taken view column whose buffers hold more than
+//! 16 times the bytes its views use is compacted (`gc`), as the probe
+//! side's selections are (`compact_sparse_views`), so a small output batch
+//! is not charged downstream for the whole payload. The columns are of at
+//! most 4,096 rows and the bytes are capped (one copy per build, at most
+//! 256 KiB plus builder slack), so they are not reserved either.
+
+use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Int32Type, Int64Type};
-use std::sync::Arc;
-
 use arrow_array::{Array, ArrayRef, UInt32Array};
 use arrow_schema::DataType;
 
@@ -209,20 +214,33 @@ impl DirectPayload {
             .flatten()
             .map(|t| t.arena().held_bytes())
             .sum();
+        let lens: Vec<Option<usize>> = tables
+            .iter()
+            .map(|t| t.as_ref().map(|t| t.arena().len()))
+            .collect();
+        Self::of_lens(held, &lens, decode)
+    }
+
+    /// [`of`](Self::of) over the tables' held bytes and each partition's
+    /// row count (`None`: no table).
+    fn of_lens(
+        held: usize,
+        lens: &[Option<usize>],
+        decode: impl FnOnce(&[(usize, u32)]) -> Result<Vec<ArrayRef>>,
+    ) -> Result<Option<Self>> {
         if held > MAX_PAYLOAD_BYTES {
             return Ok(None);
         }
-        let mut base = Vec::with_capacity(tables.len());
-        let mut len = Vec::with_capacity(tables.len());
+        let mut base = Vec::with_capacity(lens.len());
+        let mut len = Vec::with_capacity(lens.len());
         let mut pairs = Vec::new();
-        for (p, t) in tables.iter().enumerate() {
-            let Some(t) = t else {
+        for (p, n) in lens.iter().enumerate() {
+            let Some(n) = *n else {
                 base.push(None);
                 len.push(0);
                 continue;
             };
-            let (Ok(start), Ok(n)) = (u32::try_from(pairs.len()), u32::try_from(t.arena().len()))
-            else {
+            let (Ok(start), Ok(n)) = (u32::try_from(pairs.len()), u32::try_from(n)) else {
                 return Ok(None);
             };
             base.push(Some(start));
@@ -249,11 +267,43 @@ impl DirectPayload {
             .iter()
             .map(|c| {
                 arrow_select::take::take(c.as_ref(), &ids, None)
+                    .map(compact_sparse)
                     .map_err(|e| crate::error::internal(e.to_string()))
             })
             .collect::<Result<_>>()?;
         Ok(Some(columns))
     }
+
+    /// The number of decoded rows (every row of every table).
+    pub(crate) fn rows(&self) -> usize {
+        self.columns.first().map_or(0, Array::len)
+    }
+}
+
+/// `col` compacted (`gc`) when it is a view column whose data buffers hold
+/// more than 16 times the bytes its views use (module docs).
+fn compact_sparse(col: ArrayRef) -> ArrayRef {
+    fn sparse(held: usize, used: usize) -> bool {
+        held > used.saturating_mul(16)
+    }
+    match col.data_type() {
+        DataType::Utf8View => {
+            let a = col.as_string_view();
+            let held = a.data_buffers().iter().map(arrow_buffer::Buffer::len).sum();
+            if sparse(held, a.total_buffer_bytes_used()) {
+                return Arc::new(a.gc());
+            }
+        }
+        DataType::BinaryView => {
+            let a = col.as_binary_view();
+            let held = a.data_buffers().iter().map(arrow_buffer::Buffer::len).sum();
+            if sparse(held, a.total_buffer_bytes_used()) {
+                return Arc::new(a.gc());
+            }
+        }
+        _ => {}
+    }
+    col
 }
 
 /// The arena of partition `p` of `tables`, for a payload decoder.
@@ -288,5 +338,155 @@ fn int_values(col: &ArrayRef) -> Option<Vec<Option<i64>>> {
         ),
         DataType::Int64 => Some(col.as_primitive_opt::<Int64Type>()?.iter().collect()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::cast::AsArray;
+    use arrow_array::{ArrayRef, Int64Array, StringViewArray};
+
+    use super::{DirectPayload, MAX_PAYLOAD_BYTES, compact_sparse};
+    use crate::error::Result;
+
+    /// Column 0: the pair's partition * 100 + row; column 1: a view of
+    /// 40-byte strings (not inlined).
+    fn decode(pairs: &[(usize, u32)]) -> Result<Vec<ArrayRef>> {
+        let ids: Vec<i64> = pairs
+            .iter()
+            .map(|&(p, r)| i64::try_from(p * 100).unwrap_or(0) + i64::from(r))
+            .collect();
+        let text: StringViewArray = ids.iter().map(|v| Some(format!("{v:0>40}"))).collect();
+        Ok(vec![
+            Arc::new(Int64Array::from(ids)) as ArrayRef,
+            Arc::new(text) as ArrayRef,
+        ])
+    }
+
+    fn ids(cols: &[ArrayRef]) -> Vec<i64> {
+        cols[0]
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .values()
+            .to_vec()
+    }
+
+    #[test]
+    fn pairs_map_to_their_rows_across_missing_partitions() -> Result<()> {
+        let lens = [Some(3), None, Some(2), Some(0), Some(4)];
+        let Some(payload) = DirectPayload::of_lens(0, &lens, decode)? else {
+            panic!("a payload under the cap is decoded");
+        };
+        assert_eq!(payload.rows(), 9);
+        let build = [(4, 3), (0, 0), (2, 1), (4, 0), (0, 2)];
+        let Some(cols) = payload.columns(&build)? else {
+            panic!("every pair is a row of the payload");
+        };
+        assert_eq!(ids(&cols), vec![403, 0, 201, 400, 2]);
+        assert_eq!(cols[1].as_string_view().value(2), format!("{:0>40}", 201));
+        Ok(())
+    }
+
+    #[test]
+    fn a_pair_outside_the_payload_falls_back() -> Result<()> {
+        let lens = [Some(3), None, Some(2)];
+        let Some(payload) = DirectPayload::of_lens(0, &lens, decode)? else {
+            panic!("a payload under the cap is decoded");
+        };
+        // A row past its partition, a partition without a table, one past
+        // the last partition.
+        for pair in [(0, 3), (1, 0), (3, 0)] {
+            assert!(payload.columns(&[(0, 0), pair])?.is_none(), "{pair:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_payload_over_the_cap_is_not_decoded() -> Result<()> {
+        let mut called = false;
+        let over = DirectPayload::of_lens(MAX_PAYLOAD_BYTES + 1, &[Some(1)], |pairs| {
+            called = true;
+            decode(pairs)
+        })?;
+        assert!(over.is_none());
+        assert!(!called, "an over-cap payload is never decoded");
+        assert!(DirectPayload::of_lens(MAX_PAYLOAD_BYTES, &[Some(1)], decode)?.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn a_payload_without_columns_takes_none() -> Result<()> {
+        let Some(payload) = DirectPayload::of_lens(0, &[Some(2)], |_| Ok(Vec::new()))? else {
+            panic!("a payload under the cap is decoded");
+        };
+        assert_eq!(payload.columns(&[(0, 1)])?.map(|c| c.len()), Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn a_decode_error_is_returned() {
+        let err = DirectPayload::of_lens(0, &[Some(1)], |_| {
+            Err(crate::error::internal("bad payload".to_owned()))
+        });
+        assert!(err.is_err());
+    }
+
+    fn held(col: &ArrayRef) -> usize {
+        col.as_string_view()
+            .data_buffers()
+            .iter()
+            .map(arrow_buffer::Buffer::len)
+            .sum()
+    }
+
+    #[test]
+    fn a_small_take_of_views_does_not_pin_the_payload() -> Result<()> {
+        let lens = [Some(4_000)];
+        let Some(payload) = DirectPayload::of_lens(0, &lens, decode)? else {
+            panic!("a payload under the cap is decoded");
+        };
+        let whole = held(&payload.columns[1]);
+        let Some(one) = payload.columns(&[(0, 7)])? else {
+            panic!("the pair is a row of the payload");
+        };
+        assert!(
+            held(&one[1]) <= 64,
+            "one row holds {} of {whole}",
+            held(&one[1])
+        );
+        assert_eq!(one[1].as_string_view().value(0), format!("{:0>40}", 7));
+        // A dense take keeps sharing the buffers.
+        let all: Vec<(usize, u32)> = (0..4_000).map(|r| (0, r)).collect();
+        let Some(dense) = payload.columns(&all)? else {
+            panic!("the pairs are rows of the payload");
+        };
+        assert_eq!(held(&dense[1]), whole);
+        Ok(())
+    }
+
+    #[test]
+    fn other_columns_are_not_compacted() {
+        let col: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        assert!(Arc::ptr_eq(&compact_sparse(Arc::clone(&col)), &col));
+        let bin: ArrayRef = Arc::new(arrow_array::BinaryViewArray::from_iter_values(
+            (0..1_000).map(|i| format!("{i:0>40}").into_bytes()),
+        ));
+        let one =
+            arrow_select::take::take(bin.as_ref(), &arrow_array::UInt32Array::from(vec![3]), None)
+                .map(compact_sparse);
+        let Ok(one) = one else { panic!("take") };
+        assert_eq!(
+            one.as_binary_view().value(0),
+            format!("{:0>40}", 3).as_bytes()
+        );
+        assert!(
+            one.as_binary_view()
+                .data_buffers()
+                .iter()
+                .map(arrow_buffer::Buffer::len)
+                .sum::<usize>()
+                <= 64
+        );
     }
 }

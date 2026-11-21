@@ -563,11 +563,10 @@ struct ProbeLocal {
     flushing: bool,
     /// Count probe lengths (`ExecConfig::detailed_metrics`).
     detailed: bool,
-    /// The direct index of the level-0 tables (perf lever J1): `None` until
-    /// this driver first holds them, then whether the build qualifies;
-    /// `Some(None)` from the start when `krishiv.exec.join.directIndex` is
+    /// Probe through the build's direct index when it has one (perf lever
+    /// J1, `Level0::direct`): off when `krishiv.exec.join.directIndex` is
     /// off or detailed metrics count probe lengths.
-    direct: Option<Option<Direct>>,
+    direct: bool,
     cursor: Option<Cursor>,
     /// Rows of spilled partitions.
     parts: Vec<Part>,
@@ -701,19 +700,29 @@ impl ProbeOp {
         }
         let level0 = held_level0(&mut l.level0, built)?;
         let tables = Tables::Level0(&level0.tables, built.spilled);
-        let direct = l
-            .direct
-            .get_or_insert_with(|| {
-                Direct::of(&level0.tables, built.spilled, &s.keys).map(|d| {
-                    // A payload that fails to decode here fails the same
-                    // way per pair, on the path that does not use it.
-                    let payload = DirectPayload::of(&level0.tables, |pairs| {
-                        s.build_columns(g.hashing.rows(), pairs, |p| arena_of(&level0.tables, p))
-                    });
-                    d.with_payload(payload.ok().flatten())
+        let direct = if l.direct {
+            level0
+                .direct
+                .get_or_init(|| {
+                    Direct::of(&level0.tables, built.spilled, &s.keys).map(|d| {
+                        // A payload that fails to decode here fails the same
+                        // way per pair, on the path that does not use it.
+                        let payload = DirectPayload::of(&level0.tables, |pairs| {
+                            s.build_columns(g.hashing.rows(), pairs, |p| {
+                                arena_of(&level0.tables, p)
+                            })
+                        });
+                        let payload = payload.ok().flatten();
+                        if let Some(p) = &payload {
+                            s.counters.add(Counter::DirectPayloadRows, p.rows() as u64);
+                        }
+                        d.with_payload(payload)
+                    })
                 })
-            })
-            .as_ref();
+                .as_ref()
+        } else {
+            None
+        };
         if l.cursor.is_none() {
             if input.num_rows() == 0 {
                 return Ok(OperatorOutput::NeedMoreInput(None));
@@ -832,9 +841,8 @@ impl Operator for ProbeOp {
             releases,
             flushing: false,
             detailed: ctx.query().config().detailed_metrics,
-            direct: (!ctx.query().config().join_direct_index
-                || ctx.query().config().detailed_metrics)
-                .then_some(None),
+            direct: ctx.query().config().join_direct_index
+                && !ctx.query().config().detailed_metrics,
             cursor: None,
             parts: (0..fanout)
                 .map(|_| Part::with_memory(memory.reservation()))
