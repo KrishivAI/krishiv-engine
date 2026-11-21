@@ -263,6 +263,7 @@ impl Resolver<'_> {
             };
             items.push(item);
         }
+        self.check_dimension_up_casts(input, dimensions, env, p.origin)?;
         let Some(rewritten_input) = self.replace_read(input, &source_names, dimensions) else {
             return Ok(first);
         };
@@ -275,7 +276,6 @@ impl Resolver<'_> {
             .with_origin(p.origin),
         );
         let mut rel = self.rel(&agg, env)?;
-        check_dimension_up_casts(&rel.plan, dimensions, p.origin)?;
         if holds_no_aggregate(grouping, aggregates)
             && let Some(info) = &rel.agg
         {
@@ -454,6 +454,73 @@ impl Resolver<'_> {
             .map(|m| Arc::clone(&m.expr))
     }
 
+    /// Spark's `UpCast` of each dimension to its stored type (`ResolveMetricView`'s projection of the
+    /// source): a source column whose type changed since the create so that the dimension no longer
+    /// up-casts fails the read, the first such dimension in YAML order, whatever the reader's ANSI
+    /// mode. Spark's `ResolveUpCast` raises it before any `Cast` exists, so each dimension is
+    /// resolved here alone over the source of the read `input` reaches, uncast, and its type
+    /// checked with `can_up_cast` (an `ARRAY<INT>` or a `DATE` source of an `INT` dimension is
+    /// `CANNOT_UP_CAST_DATATYPE`, not the cast's type error; Spark 4.2.1 run, review c856eb6ee
+    /// finding 1). A dimension that does not resolve alone is left to the read's own resolution,
+    /// whose type errors Spark raises later. The `expression` parameter is Krishiv's pretty form,
+    /// where Spark qualifies the columns (`spark_catalog.default.t.k`;
+    /// docs/concepts/known-differences.md).
+    fn check_dimension_up_casts(
+        &mut self,
+        input: &Arc<LogicalPlan>,
+        dimensions: &[MetricColumn],
+        env: &Arc<Env>,
+        origin: crate::Origin,
+    ) -> Result<(), AnalysisError> {
+        let Some(source) = unresolved_source(input) else {
+            return Ok(());
+        };
+        for d in dimensions {
+            let alone = Arc::new(
+                LogicalPlan::new(PlanNode::Project {
+                    input: Arc::clone(source),
+                    exprs: vec![Arc::new(
+                        (*d.expr)
+                            .clone()
+                            .alias(d.name.clone())
+                            .with_origin(d.expr.origin),
+                    )],
+                })
+                .with_origin(d.expr.origin),
+            );
+            let Ok(rel) = self.rel(&alone, env) else {
+                continue;
+            };
+            let PlanNode::Project { exprs, .. } = &rel.plan.node else {
+                continue;
+            };
+            let Some(x) = exprs.first().map(|e| match &e.node {
+                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
+                _ => e,
+            }) else {
+                continue;
+            };
+            let Some(from) = x.resolved_type() else {
+                continue;
+            };
+            if !super::can_up_cast(&from, &d.data_type) {
+                return Err(AnalysisError::new(
+                    CannotUpCastDatatype {
+                        expression: super::pretty_sql(x),
+                        source_type: format!("\"{}\"", from.sql()),
+                        target_type: format!("\"{}\"", d.data_type.sql()),
+                        details: "The type path of the target object is:\n\nYou can either add an \
+                                  explicit cast to the input data or choose a higher precision type \
+                                  of the field in the target object"
+                            .to_owned(),
+                    },
+                    origin,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// `plan` (unresolved) with the metric-view read it reaches through filters, projections and
     /// aliases replaced by Spark's projection of the source.
     fn replace_read(
@@ -504,53 +571,6 @@ impl Resolver<'_> {
             _ => return None,
         };
         Some(Arc::new(LogicalPlan::new(node).with_origin(plan.origin)))
-    }
-}
-
-/// Spark's `UpCast` of each dimension to its stored type (`ResolveMetricView`'s projection of the
-/// source): a source column whose type changed since the create so that the dimension no longer
-/// up-casts fails the read, the first such dimension in YAML order. `plan` is the rewritten
-/// aggregate, resolved; each dimension is the alias `replace_read` built, found by its origin, name
-/// and target type. The `expression` parameter is Krishiv's pretty form, where Spark qualifies the
-/// columns (`spark_catalog.default.t.k`; docs/concepts/known-differences.md).
-fn check_dimension_up_casts(
-    plan: &Arc<LogicalPlan>,
-    dimensions: &[MetricColumn],
-    origin: crate::Origin,
-) -> Result<(), AnalysisError> {
-    let mut first: Option<(usize, String, DataType, DataType)> = None;
-    let _ = visit_distinct(Node::Plan(plan), |n| {
-        if let Node::Expr(e) = n
-            && let ExprNode::Resolved(ResolvedExpr::Alias {
-                expr: inner,
-                output,
-            }) = &e.node
-            && let ExprNode::Cast { expr: x, to, .. } = &inner.node
-            && let Some(i) = dimensions.iter().position(|d| {
-                d.expr.origin == e.origin && d.name == output.name && d.data_type == *to
-            })
-            && first.as_ref().is_none_or(|(j, ..)| i < *j)
-            && let Some(from) = x.resolved_type()
-            && !super::can_up_cast(&from, to)
-        {
-            first = Some((i, super::pretty_sql(x), from, to.clone()));
-        }
-        std::ops::ControlFlow::Continue(())
-    });
-    match first {
-        None => Ok(()),
-        Some((_, expression, from, to)) => Err(AnalysisError::new(
-            CannotUpCastDatatype {
-                expression,
-                source_type: format!("\"{}\"", from.sql()),
-                target_type: format!("\"{}\"", to.sql()),
-                details: "The type path of the target object is:\n\nYou can either add an explicit \
-                          cast to the input data or choose a higher precision type of the field in the \
-                          target object"
-                    .to_owned(),
-            },
-            origin,
-        )),
     }
 }
 
@@ -797,4 +817,16 @@ fn measure_name(x: &Expr) -> Option<&str> {
         return None;
     };
     c.name.last().map(String::as_str)
+}
+
+/// The source (unresolved) of the metric-view read `plan` reaches through filters, projections and
+/// aliases, as [`Resolver::replace_read`] walks them.
+fn unresolved_source(plan: &Arc<LogicalPlan>) -> Option<&Arc<LogicalPlan>> {
+    match &plan.node {
+        PlanNode::MetricViewRead { input, .. } => Some(input),
+        PlanNode::Filter { input, .. }
+        | PlanNode::Project { input, .. }
+        | PlanNode::SubqueryAlias { input, .. } => unresolved_source(input),
+        _ => None,
+    }
 }

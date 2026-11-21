@@ -340,7 +340,15 @@ measures:
 $$",
     )
     .unwrap();
-    for (ty, value) in [("BIGINT", "5000000000"), ("STRING", "'x'")] {
+    // Spark 4.2.1 gives `CANNOT_UP_CAST_DATATYPE` for every one, in both ANSI modes, also where
+    // Krishiv's cast refuses the types outright (review c856eb6ee finding 1).
+    for (ty, value) in [
+        ("BIGINT", "5000000000"),
+        ("STRING", "'x'"),
+        ("ARRAY<INT>", "array(1)"),
+        ("DATE", "DATE'2020-01-01'"),
+        ("BOOLEAN", "true"),
+    ] {
         run(&s, "DROP TABLE w").unwrap();
         run(&s, &format!("CREATE TABLE w (k {ty}, n INT) USING parquet")).unwrap();
         run(&s, &format!("INSERT INTO w VALUES ({value}, 1)")).unwrap();

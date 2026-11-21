@@ -73,7 +73,9 @@ impl Session {
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
         // Metric views arrive in Spark 4.2: older releases fail to parse the statement, at `WITH`
-        // (3.5) or at `METRICS` (4.0, 4.1), the gate goldens of P3 4.2-MV.
+        // (3.5) or at `METRICS` (4.0, 4.1), the gate goldens of P3 4.2-MV. `session.rs`'s dispatch
+        // arm checks the same again, for EXECUTE IMMEDIATE and scripts; this check is only here so
+        // that the refusal comes right after the parse, before any access check. Keep both.
         if let Statement::CreateMetricView(v) = &statement
             && let Some(e) = metric_view_gate_error(v, self.state.profile, query, &redacted)
         {

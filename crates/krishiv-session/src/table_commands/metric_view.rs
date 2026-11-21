@@ -303,8 +303,12 @@ impl Session {
             {
                 Ok(analysis) => break (plan, analysis),
                 Err(e) => match aggregate_ordinal(&e, spec.dimensions.len(), &ungrouped) {
-                    // At most one more analysis per dimension.
-                    Some(n) => ungrouped.push(n),
+                    // At most one more analysis per dimension: `aggregate_ordinal` never names
+                    // an ordinal twice.
+                    Some(n) => {
+                        ungrouped.push(n);
+                        debug_assert!(ungrouped.len() <= spec.dimensions.len());
+                    }
                     None => return Err(aggregate.located(e, statement)),
                 },
             }
