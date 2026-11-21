@@ -58,7 +58,9 @@ pub struct ExecConfig {
     pub agg_direct_keys: bool,
     /// Collect the costlier metrics of a detailed profile (`EXPLAIN
     /// ANALYZE`): per-lookup hash-table probe lengths. The always-on
-    /// counters do not depend on it.
+    /// counters do not depend on it. A hash join's direct index
+    /// (`krishiv.exec.join.directIndex`) is off under it, so a detailed
+    /// profile times the hashed probe, not the direct one.
     pub detailed_metrics: bool,
     /// Hash joins use the row layout and its size-adaptive index
     /// (`krishiv.exec.join.rowLayout`; P2-T158).

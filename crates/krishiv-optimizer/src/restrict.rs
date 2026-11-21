@@ -57,10 +57,43 @@
 //!   a foreign key, restrict nothing), and computing it scans no more
 //!   rows than the aggregate's input does.
 //!
+//! ## The preserved side of an outer join (perf lever K6)
+//!
+//! With `krishiv.optimizer.preservedSideSemiJoin` on, the walk down from
+//! the join may also stop at a `LEFT` or `RIGHT OUTER` join (never `FULL`)
+//! whose preserved input holds every key, through filters, projections and
+//! inner joins only:
+//!
+//! ```text
+//! Join(A, OuterJoin(P, N), k = o)
+//!   =>  Join(A, OuterJoin(P ⋉ Shift(π_o(D)), N), k = o)
+//! ```
+//!
+//! Sound because each row of `P` reaches the outer join's output with its
+//! own key values (matched or null-extended), and the null-supplying side
+//! `N` emits no row of its own: a row of `P` whose keys meet no value of
+//! `A` only feeds output rows the join above drops, matched or not. The
+//! semi join sits on `P`, never on `N`. Its gates, on top of the ones
+//! above for the path and the equalities: every node on the path is
+//! deterministic, the domain is `repeatable` (computed twice), the keys
+//! are columns or integral widenings of `P`'s columns, statistics say the
+//! semi join keeps at most a quarter of `P` and `N` estimates at least
+//! twice the reduced `P` (so the hash join can build `P`), and `P` does
+//! not already hold a semi join on the keys (`reduced`). `P` itself need
+//! not be deterministic: the semi join only drops rows of it after they
+//! were computed once, so a nondeterministic `P` keeps its values.
+//!
+//! ## Errors
+//!
 //! Like a runtime filter, the restriction may skip rows whose evaluation
 //! would have raised an ANSI error (a `sum` that overflows in a group no
-//! row asks for); it never changes a value. This is a documented
-//! divergence from Spark, which computes every group.
+//! row asks for); it never changes a value. On the preserved side the
+//! skipped work is wider: the outer join's condition and every filter and
+//! projection between it and the join above are no longer evaluated on the
+//! removed rows, so an error Spark raises there (a failing cast in a
+//! projection above the outer join, on a row the inner join later drops)
+//! is not raised. This is a documented divergence from Spark, which
+//! computes every group and every row.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -398,6 +431,9 @@ impl Restrict<'_> {
         keys: &[Arc<Expr>],
         other: &Arc<LogicalPlan>,
     ) -> Option<Arc<LogicalPlan>> {
+        // `other`'s domain is computed twice, so it must agree with itself;
+        // `kept` need not be deterministic: the semi join sits above it and
+        // only drops rows computed once (module docs).
         if !repeatable(other) {
             return None;
         }

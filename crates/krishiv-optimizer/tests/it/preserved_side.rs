@@ -16,6 +16,12 @@ use crate::tpcds;
 /// plan keeps the output and the rows of the unoptimised plan and is a fixed
 /// point.
 fn check(sql: &str, on: bool) -> String {
+    check_as(sql, on, true)
+}
+
+/// [`check`], comparing rows only with `rows` (the reference interpreter
+/// runs no nondeterministic function).
+fn check_as(sql: &str, on: bool, rows: bool) -> String {
     let plan = support::resolve(sql, &support::ctx());
     let mut options = Options::default();
     options.group_key_code = false;
@@ -33,12 +39,14 @@ fn check(sql: &str, on: bool) -> String {
         "not a fixed point:\n{text}\nagain:\n{}",
         again.root()
     );
-    let db = data::tpch(7, 150);
-    assert_eq!(
-        eval::rows(&db, optimized.root()),
-        eval::rows(&db, plan.root()),
-        "{text}"
-    );
+    if rows {
+        let db = data::tpch(7, 150);
+        assert_eq!(
+            eval::rows(&db, optimized.root()),
+            eval::rows(&db, plan.root()),
+            "{text}"
+        );
+    }
     text
 }
 
@@ -72,6 +80,37 @@ fn a_filtered_dimension_above_reduces_the_preserved_side() {
     assert!(below.contains("Shift"), "{on}");
     let off = check(sql, false);
     assert!(!below_outer(&off).contains("Join LeftSemi"), "{off}");
+}
+
+/// The q78 shape: only the null-extended rows of `orders LEFT JOIN lineitem`
+/// (`l_orderkey IS NULL` above the outer join) under the inner join with a
+/// filtered dimension. The preserved side is still reduced, and over 40
+/// seeds of the generated data (30 customers each, so only some seeds hold
+/// a rich `BUILDING` customer) the rows are the unoptimised plan's, and
+/// some seeds have rows.
+#[test]
+fn null_extended_rows_under_a_filter_keep_their_rows() {
+    let sql = "SELECT o_orderkey, o_totalprice FROM orders \
+               LEFT JOIN lineitem ON o_orderkey = l_orderkey AND l_quantity > 49, customer \
+               WHERE l_orderkey IS NULL AND o_custkey = c_custkey \
+               AND c_mktsegment = 'BUILDING' AND c_acctbal > 9000";
+    let on = check(sql, true);
+    assert!(below_outer(&on).contains("Join LeftSemi"), "{on}");
+    let plan = support::resolve(sql, &support::ctx());
+    let mut options = Options::default();
+    options.group_key_code = false;
+    let optimized = optimize_with_options(&plan, &fixture(), &options).unwrap();
+    let mut with_rows = 0;
+    for seed in 1..=40 {
+        let db = data::tpch(seed, 150);
+        let want = eval::rows(&db, plan.root());
+        assert_eq!(eval::rows(&db, optimized.root()), want, "seed {seed}");
+        with_rows += usize::from(!want.is_empty());
+    }
+    assert!(
+        with_rows > 0,
+        "some seed holds null-extended rows of rich customers"
+    );
 }
 
 /// The same shape written as a `RIGHT OUTER JOIN`: the preserved side is the
@@ -113,6 +152,28 @@ fn no_semi_join_where_it_restricts_nothing_or_does_not_apply() {
          WHERE o_custkey = c_custkey AND c_acctbal > -500 GROUP BY o_orderkey",
     ] {
         let text = check(sql, true);
+        assert!(
+            !below_outer(&text).contains("Join LeftSemi"),
+            "{sql}\n{text}"
+        );
+    } // Nondeterminism (plans only: the interpreter runs no `rand`). A
+    // nondeterministic filter between the outer join and the join above
+    // stays on the path (it never moves), and a nondeterministic dimension
+    // is computed twice by the rewrite. A nondeterministic outer-join
+    // condition is refused at analysis, as in Spark.
+    for sql in [
+        "SELECT o_orderkey, count(l_linenumber) FROM (SELECT * FROM orders \
+         LEFT JOIN lineitem ON o_orderkey = l_orderkey AND l_quantity > 10 \
+         WHERE rand(1) < 2.0) t, customer \
+         WHERE o_custkey = c_custkey AND c_mktsegment = 'BUILDING' AND c_acctbal > 9000 \
+         GROUP BY o_orderkey",
+        "SELECT o_orderkey, count(l_linenumber) FROM orders \
+         LEFT JOIN lineitem ON o_orderkey = l_orderkey AND l_quantity > 10, \
+         (SELECT * FROM customer WHERE c_mktsegment = 'BUILDING' AND c_acctbal > 9000 \
+         AND rand(1) < 2.0) c \
+         WHERE o_custkey = c_custkey GROUP BY o_orderkey",
+    ] {
+        let text = check_as(sql, true, false);
         assert!(
             !below_outer(&text).contains("Join LeftSemi"),
             "{sql}\n{text}"

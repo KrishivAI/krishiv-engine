@@ -561,6 +561,23 @@ impl RowArena {
         }
     }
 
+    /// The row's key bytes when they are a row-layout row without views;
+    /// `None` for arrow-row bytes or a row whose layout has views. A reader
+    /// that decodes with a [`RowLayout`] asks this,
+    /// never [`Self::key_bytes`], so it cannot decode the other format.
+    pub(crate) fn layout_key_bytes(&self, row: u32) -> Option<&[u8]> {
+        let (part, row) = self.at(row)?;
+        let row = row as usize;
+        match &part.keys {
+            Cols::Rows(RowCols {
+                fixed,
+                stride,
+                heap: None,
+            }) => fixed.get(row * stride..(row + 1) * stride),
+            Cols::Arrow(_) | Cols::Rows(RowCols { heap: Some(_), .. }) => None,
+        }
+    }
+
     /// The row's arrow-row payload bytes (empty if the arena has none or
     /// holds payload rows).
     pub(crate) fn payload(&self, row: u32) -> &[u8] {

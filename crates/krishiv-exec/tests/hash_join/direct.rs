@@ -2,27 +2,96 @@
 //! The direct-index probe of tiny builds (perf lever J1,
 //! `krishiv.exec.join.directIndex`): every join type returns the oracle's
 //! rows with it on and off, over negative, sparse, duplicate and NULL keys
-//! and probe keys outside the build's span; it runs only where it applies.
+//! and probe keys outside the build's span, with `Int64` and `Int32` keys
+//! (the TPC-DS surrogate keys), sliced key arrays with NULLs and a probe
+//! filter fused into the join; it runs only where it applies.
+
+use arrow_array::Int32Array;
+use krishiv_exec::{FnPredicate, HashJoin, HashJoinNode};
 
 use super::*;
 
-/// Runs `case` (one `k1` key, row layout) with the direct index on or off;
-/// also returns the probe's `direct_probe_rows`.
-async fn run_direct(case: &Case, probe: &[Row], build: &[Row], on: bool) -> (Vec<String>, u64) {
+/// How [`run_direct`] runs a case.
+#[derive(Clone, Copy, Debug, Default)]
+struct Run {
+    /// The direct index on.
+    on: bool,
+    /// `k1` as `Int32` on both sides.
+    int32: bool,
+    /// [`keep`] fused into the probe (a selection of the probe batch).
+    fused: bool,
+}
+
+/// `k1` as `Int32`, the other columns as [`schema`].
+fn schema32() -> SchemaRef {
+    let mut fields: Vec<Field> = schema()
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect();
+    fields[0] = Field::new("k1", DataType::Int32, true);
+    Arc::new(Schema::new(fields))
+}
+
+/// [`data`] with `k1` as `Int32` (every key must fit).
+fn data32(rows: &[Row]) -> RecordBatch {
+    let wide = data(rows);
+    let mut cols = wide.columns().to_vec();
+    cols[0] = Arc::new(Int32Array::from(
+        rows.iter()
+            .map(|r| r.k1.map(|k| i32::try_from(k).unwrap()))
+            .collect::<Vec<_>>(),
+    ));
+    RecordBatch::try_new(schema32(), cols).unwrap()
+}
+
+/// The fused probe filter: `v % 3 != 0`.
+fn keep(b: &RecordBatch) -> Result<BooleanArray> {
+    let v = b.column(2).as_primitive::<Int64Type>();
+    Ok(v.iter().map(|v| v.map(|v| v % 3 != 0)).collect())
+}
+
+/// The oracle of `case` for `run`: over the probe rows [`keep`] keeps when
+/// the filter is fused.
+fn want(case: &Case, probe: &[Row], build: &[Row], run: Run) -> Vec<String> {
+    if !run.fused {
+        return case.oracle(probe, build);
+    }
+    let kept: Vec<Row> = probe.iter().filter(|r| r.v % 3 != 0).cloned().collect();
+    case.oracle(&kept, build)
+}
+
+/// Runs `case` (one `k1` key) as `run` says; also returns the probe's
+/// `direct_probe_rows` (absent, so 0, when the index did not run).
+async fn run_direct(case: &Case, probe: &[Row], build: &[Row], run_as: Run) -> (Vec<String>, u64) {
     let root = root(64 * MIB);
     let (_manager, scope) = spill();
     let config = ExecConfig {
         batch_size: 5,
         join_row_layout: case.row_layout,
-        join_direct_index: on,
+        join_direct_index: run_as.on,
         ..ExecConfig::default()
     };
     let q = query(&root, 1, config);
-    let plan = join(
-        case.spec(Some(scope.clone())),
-        scan(&schema(), batches(&data(build), 3)),
-        scan(&schema(), batches(&data(probe), 4)),
-    );
+    let (schema, data): (SchemaRef, fn(&[Row]) -> RecordBatch) = if run_as.int32 {
+        (schema32(), data32)
+    } else {
+        (schema(), data)
+    };
+    let mut spec = case.spec(Some(scope.clone()));
+    spec.probe_schema = Arc::clone(&schema);
+    spec.build_schema = Arc::clone(&schema);
+    let mut hash_join = HashJoin::try_new(spec).unwrap();
+    if run_as.fused {
+        hash_join = hash_join
+            .with_probe_filter(Arc::new(FnPredicate(keep)))
+            .unwrap();
+    }
+    let plan = Arc::new(HashJoinNode {
+        join: hash_join,
+        build: scan(&schema, batches(&data(build), 3)),
+        probe: scan(&schema, batches(&data(probe), 4)),
+    });
     let out = run(&runner_for(2, 64 * MIB), plan, &q).await.unwrap();
     assert_released(&root);
     (
@@ -83,8 +152,17 @@ async fn every_join_type_matches_the_oracle_with_the_direct_index() {
             let mut c = case(join_type, 1, false, filter);
             c.row_layout = true;
             let want = c.oracle(&probe, &build);
-            let (on, direct) = run_direct(&c, &probe, &build, true).await;
-            let (off, none) = run_direct(&c, &probe, &build, false).await;
+            let (on, direct) = run_direct(
+                &c,
+                &probe,
+                &build,
+                Run {
+                    on: true,
+                    ..Run::default()
+                },
+            )
+            .await;
+            let (off, none) = run_direct(&c, &probe, &build, Run::default()).await;
             assert_eq!(on, want, "{join_type:?} filter {filter}");
             assert_eq!(off, want, "{join_type:?} filter {filter}");
             assert_eq!(none, 0, "{join_type:?}: switched off");
@@ -119,9 +197,134 @@ async fn builds_the_direct_index_does_not_cover_keep_the_hashed_probe() {
         (&safe, &build),
         (&arrow, &build),
     ] {
-        let (got, direct) = run_direct(c, &probe, build, true).await;
+        let (got, direct) = run_direct(
+            c,
+            &probe,
+            build,
+            Run {
+                on: true,
+                ..Run::default()
+            },
+        )
+        .await;
         assert_eq!(got, c.oracle(&probe, build), "{c:?}");
         assert_eq!(direct, 0, "{c:?}");
+    }
+}
+
+/// `Int32` keys (the TPC-DS surrogate keys) through the same oracle:
+/// negative and duplicate build keys, NULLs on both sides, probe keys at
+/// `i32::MIN` and `i32::MAX`; the key arrays are slices (batches cut at
+/// offsets) with null buffers.
+#[tokio::test]
+async fn int32_keys_match_the_oracle_with_the_direct_index() {
+    let build = keyed(&[
+        Some(-7),
+        Some(0),
+        Some(3),
+        None,
+        Some(3),
+        Some(9),
+        Some(-7),
+        Some(5),
+        None,
+        Some(3),
+    ]);
+    let probe = keyed(&[
+        Some(3),
+        Some(i64::from(i32::MIN)),
+        Some(-7),
+        None,
+        Some(i64::from(i32::MAX)),
+        Some(4),
+        Some(-8),
+        Some(10),
+        Some(9),
+        None,
+        Some(0),
+        Some(5),
+        Some(-7),
+        Some(3),
+    ]);
+    for join_type in TYPES {
+        for filter in [false, true] {
+            let filter = filter && join_type != JoinType::NullAwareAnti;
+            let mut c = case(join_type, 1, false, filter);
+            c.row_layout = true;
+            let run_as = Run {
+                on: true,
+                int32: true,
+                fused: false,
+            };
+            let (on, direct) = run_direct(&c, &probe, &build, run_as).await;
+            let (off, _) = run_direct(
+                &c,
+                &probe,
+                &build,
+                Run {
+                    on: false,
+                    ..run_as
+                },
+            )
+            .await;
+            let want = want(&c, &probe, &build, run_as);
+            assert_eq!(on, want, "{join_type:?} filter {filter}");
+            assert_eq!(off, want, "{join_type:?} filter {filter}");
+            if join_type == JoinType::NullAwareAnti {
+                assert_eq!(direct, 0, "{join_type:?}");
+            } else {
+                assert_eq!(direct, probe.len() as u64, "{join_type:?}");
+            }
+        }
+    }
+}
+
+/// A probe filter fused into the join hands the probe a selection of each
+/// batch: the direct index reads the selected rows' keys, `Int64` and
+/// `Int32`, and joins what the join of the filtered probe joins.
+#[tokio::test]
+async fn a_fused_probe_selection_matches_the_oracle_with_the_direct_index() {
+    let (probe, build) = sides();
+    for int32 in [false, true] {
+        // `i64::MIN`/`MAX` probe keys do not fit an `Int32` column.
+        let probe: Vec<Row> = if int32 {
+            probe
+                .iter()
+                .filter(|r| r.k1.is_none_or(|k| i32::try_from(k).is_ok()))
+                .cloned()
+                .collect()
+        } else {
+            probe.clone()
+        };
+        for join_type in [
+            JoinType::Inner,
+            JoinType::LeftOuter,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+        ] {
+            let mut c = case(join_type, 1, false, false);
+            c.row_layout = true;
+            let run_as = Run {
+                on: true,
+                int32,
+                fused: true,
+            };
+            let (on, direct) = run_direct(&c, &probe, &build, run_as).await;
+            let (off, _) = run_direct(
+                &c,
+                &probe,
+                &build,
+                Run {
+                    on: false,
+                    ..run_as
+                },
+            )
+            .await;
+            let want = want(&c, &probe, &build, run_as);
+            assert_eq!(on, want, "{join_type:?} int32 {int32}");
+            assert_eq!(off, want, "{join_type:?} int32 {int32}");
+            assert!(direct > 0, "{join_type:?} int32 {int32}: the index ran");
+        }
     }
 }
 
@@ -140,7 +343,7 @@ proptest! {
         let mut c = case(join_type, 1, false, filter && join_type != JoinType::NullAwareAnti);
         c.row_layout = true;
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let (got, _) = rt.block_on(run_direct(&c, &probe, &build, true));
+        let (got, _) = rt.block_on(run_direct(&c, &probe, &build, Run { on: true, ..Run::default() }));
         prop_assert_eq!(got, c.oracle(&probe, &build));
     }
 }

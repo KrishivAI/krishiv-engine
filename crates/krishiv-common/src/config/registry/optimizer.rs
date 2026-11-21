@@ -47,7 +47,9 @@ pub static PRESERVED_SIDE_SEMI_JOIN: ConfigEntry = ConfigEntry {
           q80: sales joined to a filtered item or date range above `sales LEFT JOIN returns`), \
           so the hash join can build the reduced side instead of the whole outer side. Only \
           when statistics say the semi join keeps at most a quarter of the side. Results are \
-          the same either way; `false` turns it off.",
+          the same either way, except that an ANSI error Spark raises on a row the join above \
+          drops (in the outer join's condition or a projection above it) is not raised; \
+          `false` turns it off.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.1",

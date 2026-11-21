@@ -26,9 +26,11 @@ pub static EXEC_JOIN_DIRECT_INDEX: ConfigEntry = ConfigEntry {
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
     doc: "Internal: a hash join build of at most 4,096 rows with one integer key whose values \
-          span at most four slots a row is probed through an array indexed by the key, without \
-          encoding or hashing the probe keys (dimension joins such as TPC-DS q62's). Results \
-          are the same either way; `false` keeps the hashed probe.",
+          span at most four slots a row (at least 64 slots for a smaller build) is probed \
+          through an array indexed by the key, without encoding or hashing the probe keys \
+          (dimension joins such as TPC-DS q62's). A detailed profile (`PROFILE_DETAILED`) keeps \
+          the hashed probe, so it times that one. Results are the same either way; `false` \
+          keeps the hashed probe.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.1",

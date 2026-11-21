@@ -15,6 +15,12 @@
 //! of them spilled; a NULL probe key or one outside the span finds nothing,
 //! as in the hashed path. Null-safe (`<=>`) keys and null-aware anti joins
 //! keep the hashed path. `krishiv.exec.join.directIndex` switches it off.
+//!
+//! Memory: the slot array is at most [`MAX_SLOTS`] `u64`s (128 KiB) per
+//! probe driver and the build-time vectors at most [`MAX_ROWS`] entries
+//! each, small and bounded, so they are not reserved from the pool. The
+//! span limit is four slots a row with a floor of 64 slots (a build of
+//! fewer than 16 rows may span 64 values).
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Int32Type, Int64Type};
@@ -69,7 +75,10 @@ impl Direct {
                 if !arena.indexed(r) {
                     continue;
                 }
-                keys.push(arena.key_bytes(r)?);
+                // Only row-layout key rows: arrow-row bytes (row layout
+                // off, or a build column with no row arena) keep the
+                // hashed path rather than being decoded as a layout row.
+                keys.push(arena.layout_key_bytes(r)?);
                 at.push((p, r));
             }
         }

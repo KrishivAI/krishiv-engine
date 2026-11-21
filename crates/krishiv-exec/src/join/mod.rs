@@ -154,9 +154,11 @@
 //! `probe_rows`, `probe_spilled_rows`, `spill_file_bytes`,
 //! `grace_partitions` (spilled partitions joined), `repartitions`,
 //! `recursion_depth` (deepest level joined), `merge_fallbacks` (partitions
-//! joined by sort-merge) and `probe_table_ns` (time in
+//! joined by sort-merge), `probe_table_ns` (time in
 //! the tables: two clock reads per batch, for
-//! [`QueryMetrics::hash_probe_share`](crate::QueryMetrics::hash_probe_share)).
+//! [`QueryMetrics::hash_probe_share`](crate::QueryMetrics::hash_probe_share))
+//! and, only when above zero, `direct_probe_rows` (rows probed through a
+//! tiny build's direct index, `direct.rs`).
 
 mod block;
 mod broadcast;
@@ -438,7 +440,7 @@ const BUILD_COUNTERS: [(Counter, &str); 16] = [
     (Counter::MaxPartitionNs, "finalize_max_partition_ns"),
 ];
 /// The probe operator's counters, by name.
-const PROBE_COUNTERS: [(Counter, &str); 11] = [
+const PROBE_COUNTERS: [(Counter, &str); 10] = [
     (Counter::ProbeRows, "probe_rows"),
     (Counter::ProbeSpilledRows, "probe_spilled_rows"),
     (Counter::ProbeSpillBytes, "spill_file_bytes"),
@@ -449,7 +451,6 @@ const PROBE_COUNTERS: [(Counter, &str); 11] = [
     (Counter::GraceHashBuckets, "grace_hash_buckets"),
     (Counter::ReversedPartitions, "reversed_partitions"),
     (Counter::ProbeTableNs, "probe_table_ns"),
-    (Counter::DirectProbeRows, "direct_probe_rows"),
 ];
 /// The probe operator's per-lookup counters (detailed metrics only).
 const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
@@ -534,6 +535,10 @@ impl Counters {
                 (Counter::IdleSpills, "idle_spills"),
                 (Counter::IdleSpilledBytes, "idle_spilled_bytes"),
             ]));
+        }
+        // Only a probe that read a direct index (`direct.rs`) reports it.
+        if self.get(Counter::DirectProbeRows) > 0 {
+            out.extend(self.report(&[(Counter::DirectProbeRows, "direct_probe_rows")]));
         }
         // Only a join that fell back to sort-merge reports it.
         if self.get(Counter::MergeFallbacks) > 0 {
