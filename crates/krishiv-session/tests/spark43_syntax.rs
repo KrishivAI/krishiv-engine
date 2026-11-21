@@ -116,6 +116,16 @@ fn a_timestamp_suffix_is_checked_as_spark_checks_it() {
 }
 
 #[test]
+fn the_suffix_is_off_with_the_krishiv_key() {
+    let s = session_with_table();
+    run(&s, "set krishiv.sql.timeTravel.atSyntax.enabled=false").expect("set");
+    assert_eq!(
+        run(&s, "select * from tbl@v1"),
+        Err("UNSUPPORTED_FEATURE.TIME_TRAVEL_AT_SYNTAX".to_owned())
+    );
+}
+
+#[test]
 fn the_suffix_is_off_with_its_config() {
     let s = session_with_table();
     run(&s, "set spark.sql.timeTravel.atSyntax.enabled=false").expect("set");
