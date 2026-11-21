@@ -44,6 +44,8 @@ pub(super) struct Expander<'a> {
     /// The stored views inlined so far, each with the definer view whose text holds it (an index
     /// of [`Self::definers`], `None` outside one), for [`Expansion::reached`].
     reached: Vec<(Option<usize>, ReachedView)>,
+    /// The inlined query of each temporary view read, for [`Expansion::temp_texts`].
+    temp_texts: Vec<Arc<LogicalPlan>>,
     /// The stored views whose text the expansion is inside (indexes of [`Self::reached`]).
     open_views: Vec<usize>,
 }
@@ -93,6 +95,7 @@ impl<'a> Expander<'a> {
             in_stored_view: 0,
             keeps: Vec::new(),
             reached: Vec::new(),
+            temp_texts: Vec::new(),
             open_views: Vec::new(),
         }
     }
@@ -114,6 +117,7 @@ impl<'a> Expander<'a> {
             definers: self.definers,
             keeps: self.keeps,
             reached: self.reached.into_iter().map(|(_, v)| v).collect(),
+            temp_texts: self.temp_texts,
         }
     }
 }
@@ -237,6 +241,8 @@ impl Expander<'_> {
                 // reach into it.
                 let input = self.go(Arc::clone(definition), &mut Vec::new());
                 self.path.pop();
+                let input = input?;
+                self.temp_texts.push(Arc::clone(&input));
                 let columns = columns.iter().map(|c| c.name.clone()).collect();
                 // A global view's qualifier is `global_temp.v`, two parts (see `ALIAS_PART_SEP`).
                 let alias = if name.len() == 2 {
@@ -252,7 +258,7 @@ impl Expander<'_> {
                 ));
                 return Ok(Arc::new(
                     LogicalPlan::new(PlanNode::SubqueryAlias {
-                        input: input?,
+                        input,
                         alias,
                         columns,
                     })

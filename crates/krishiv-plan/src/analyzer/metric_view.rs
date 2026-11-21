@@ -289,11 +289,11 @@ impl Resolver<'_> {
     }
 
     /// Whether the unresolved chain from `input` down to its metric-view read passes the inlined
-    /// text of a permanent view.
+    /// text of a permanent or a temporary view (Spark's `View` node).
     fn crosses_view(&self, input: &Arc<LogicalPlan>) -> bool {
         let mut at = input;
         loop {
-            if self.ctx.stored_view_texts.contains(at) {
+            if self.ctx.stored_view_texts.contains(at) || self.ctx.temp_view_texts.contains(at) {
                 return true;
             }
             match &at.node {

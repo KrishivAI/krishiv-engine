@@ -698,6 +698,11 @@ pub struct AnalysisContext {
     /// temporary function or variable answers (`SessionCatalog.scala` lines 2427-2441,
     /// `Analyzer.scala` lines 252-254). Empty for an analysis that inlined none.
     pub stored_view_texts: views::DefinerTexts,
+    /// The inlined queries of the temporary views of the plan (SQL, DataFrame and global ones),
+    /// by node identity as [`Self::definer_texts`]: Spark's `View` node, which ends the chain the
+    /// metric-view rule follows from an aggregate to its read, as a permanent view's text does.
+    /// Empty for an analysis that inlined none.
+    pub temp_view_texts: views::DefinerTexts,
 }
 
 /// The context inputs of a resolution: with the input key and the pins,

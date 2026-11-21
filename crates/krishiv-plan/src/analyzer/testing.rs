@@ -57,6 +57,7 @@ pub fn context(catalog: MemoryCatalog, conf: ResolutionConf) -> AnalysisContext 
         mode: AnalysisMode::Execute,
         definer_texts: super::views::DefinerTexts::default(),
         stored_view_texts: super::views::DefinerTexts::default(),
+        temp_view_texts: super::views::DefinerTexts::default(),
     }
 }
 

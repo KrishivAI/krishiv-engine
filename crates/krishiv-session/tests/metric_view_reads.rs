@@ -371,3 +371,29 @@ $$",
     let rows = run(&s, "SELECT k, measure(c) FROM mvw GROUP BY k").unwrap();
     assert_eq!(longs(&rows, 1), vec![1]);
 }
+
+/// Spark's rule never looks through a temporary view (a `View` node) or a CTE reference: the
+/// `measure(..)` stays, and the run is Spark's internal error (a Spark 4.2.1 run, 2026-11-21:
+/// SQL, DataFrame and global temporary views, and `WITH`; review b047d8901 finding 4).
+#[test]
+fn a_read_through_a_temporary_view_or_a_cte_is_sparks_internal_error() {
+    let (s, _dir) = session();
+    run(&s, "CREATE TEMP VIEW tv AS SELECT * FROM mv").unwrap();
+    run(&s, "CREATE GLOBAL TEMP VIEW gv AS SELECT * FROM mv").unwrap();
+    block_on(s.table("mv").create_or_replace_temp_view("tv2")).unwrap();
+    for q in [
+        "SELECT region, measure(total) FROM tv GROUP BY region",
+        "SELECT measure(total) FROM tv",
+        "SELECT region, measure(total) FROM tv2 GROUP BY region",
+        "SELECT region, measure(total) FROM global_temp.gv GROUP BY region",
+        "WITH w AS (SELECT * FROM mv) SELECT region, measure(total) FROM w GROUP BY region",
+    ] {
+        let err = run(&s, q).unwrap_err();
+        assert_eq!(class(&err), "INTERNAL_ERROR", "{q}");
+        assert!(
+            err.to_string()
+                .contains("UnevaluableAggregateFunc.aggBufferAttributes should not be called"),
+            "{q}: {err}"
+        );
+    }
+}
