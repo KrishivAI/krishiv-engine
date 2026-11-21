@@ -650,6 +650,11 @@ fn a_removed_group_takes_nothing_new_and_goes_with_its_last_query() {
             ("root.b".to_owned(), "removed"),
         ]
     );
+    let removed = rg.rows().into_iter().find(|r| r.state == "removed");
+    assert!(
+        removed.is_some_and(|r| r.config_etag.is_empty() && r.loaded_at_ms == 0),
+        "a removed row carries no etag or load time"
+    );
     // The selector for bob is gone: his next query goes to the default group.
     assert_eq!(routed(&rg, &request("bob")), "root.a");
     // The running query still counts in the parent, and ends cleanly.

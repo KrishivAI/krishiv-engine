@@ -92,8 +92,8 @@ fn related(a: &str, b: &str) -> bool {
         || a.strip_prefix(b).is_some_and(|r| r.starts_with('.'))
 }
 
-/// The config and, when it is `None`, why: errors come in document order (groups, then selectors,
-/// then the whole-document checks). The whole-document checks run on what parsed and skip a
+/// The config and, when it is `None`, why: errors come in document order (groups, duplicate root names and
+/// `defaultGroup`, then selectors). The whole-document checks run on what parsed and skip a
 /// reference that a bad group could be the target of.
 fn build(json: &str, total_memory: usize) -> (Option<Config>, Vec<KrishivError>) {
     let mut errors = Vec::new();

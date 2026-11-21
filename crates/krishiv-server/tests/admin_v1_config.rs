@@ -691,7 +691,16 @@ async fn config_changes_write_action_records_with_old_and_new_values() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{reloaded}");
-    // defaults: through a Spark alias, then a credential-named unregistered key (fails)
+    // defaults: the canonical key first, then the same key through a Spark alias (the record must
+    // show the canonical old value), then a credential-named unregistered key (fails)
+    let canonical = serde_json::json!({
+        "set": {"krishiv.sql.avro.compression.codec": "snappy"}
+    })
+    .to_string();
+    let (status, body) = f
+        .call("rec:admin", "PATCH", "/config/defaults", Some(&canonical))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     let alias = serde_json::json!({
         "set": {"spark.sql.avro.compression.codec": "deflate"}
     })
@@ -730,10 +739,20 @@ async fn config_changes_write_action_records_with_old_and_new_values() {
     find("ReplaceResourceGroupConfig", "denied");
     let reload = find("ReloadResourceGroupConfig", "ok");
     assert!(reload.contains(&format!("{new} -> ")), "{reload}");
-    let aliased = find("SetConfigDefaults", "ok");
+    let sets: Vec<&String> = log
+        .iter()
+        .filter(|l| l.contains("rpc=\"SetConfigDefaults\"") && l.contains("result=\"ok\""))
+        .collect();
+    assert_eq!(sets.len(), 2, "{log:#?}");
     assert!(
-        aliased.contains("set krishiv.sql.avro.compression.codec: ")
-            && aliased.contains("-> deflate")
+        sets[0].contains("set krishiv.sql.avro.compression.codec: ")
+            && sets[0].contains("-> snappy"),
+        "{}",
+        sets[0]
+    );
+    let aliased = sets[1];
+    assert!(
+        aliased.contains("set krishiv.sql.avro.compression.codec: snappy -> deflate")
             && !aliased.contains("spark.sql.avro"),
         "{aliased}"
     );
