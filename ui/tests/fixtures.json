@@ -162,60 +162,126 @@
       "rows_produced": 5,
       "spill_bytes": 134217728,
       "bytes_read": 7516192768,
-      "hints": [{"code": "SPILL", "node_id": 2, "operator_id": 2, "message": "HashJoin spilled 128 MiB; give the query more memory."}]
+      "hints": [
+        {
+          "code": "SPILL",
+          "node_id": 2,
+          "operator_id": 2,
+          "message": "HashJoin spilled 128 MiB; give the query more memory."
+        }
+      ]
     },
     "operators": [
       {
         "operator_id": 0,
+        "node_id": null,
         "name": "Result",
+        "role": "sink",
         "drivers": 1,
         "rows_in": 5,
-        "rows_out": 5,
+        "rows_out": 0,
         "compute_ns": 20000,
         "blocked_io_ns": 0,
         "blocked_memory_ns": 0,
         "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 0,
         "spilled_bytes": 0
       },
       {
         "operator_id": 1,
+        "node_id": 0,
         "name": "HashAggregate",
+        "role": "sink",
         "drivers": 4,
         "rows_in": 15000000,
-        "rows_out": 5,
-        "compute_ns": 600000000,
+        "rows_out": 0,
+        "compute_ns": 400000000,
         "blocked_io_ns": 0,
         "blocked_memory_ns": 20000000,
         "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 50000000,
         "spilled_bytes": 0
       },
       {
         "operator_id": 2,
-        "name": "HashJoin",
+        "node_id": 0,
+        "name": "HashAggregate",
+        "role": "source",
         "drivers": 4,
-        "rows_in": 75000000,
-        "rows_out": 15000000,
-        "compute_ns": 1700000000,
+        "rows_in": 0,
+        "rows_out": 5,
+        "compute_ns": 200000000,
         "blocked_io_ns": 0,
-        "blocked_memory_ns": 300000000,
+        "blocked_memory_ns": 0,
         "blocked_sink_ns": 0,
-        "spilled_bytes": 134217728
+        "peak_reserved_bytes": 30000000,
+        "spilled_bytes": 0
       },
       {
         "operator_id": 3,
-        "name": "Scan lineitem",
+        "node_id": 2,
+        "name": "HashJoinBuild",
+        "role": "sink",
+        "drivers": 4,
+        "rows_in": 15000000,
+        "rows_out": 0,
+        "compute_ns": 500000000,
+        "blocked_io_ns": 0,
+        "blocked_memory_ns": 300000000,
+        "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 100000000,
+        "spilled_bytes": 134217728
+      },
+      {
+        "operator_id": 4,
+        "node_id": 2,
+        "name": "HashJoinProbe",
+        "role": "operator",
+        "drivers": 4,
+        "rows_in": 60000000,
+        "rows_out": 15000000,
+        "compute_ns": 1200000000,
+        "blocked_io_ns": 0,
+        "blocked_memory_ns": 0,
+        "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 0,
+        "spilled_bytes": 0
+      },
+      {
+        "operator_id": 5,
+        "node_id": 3,
+        "name": "Filter",
+        "role": "operator",
+        "drivers": 4,
+        "rows_in": 75000000,
+        "rows_out": 60000000,
+        "compute_ns": 90000000,
+        "blocked_io_ns": 0,
+        "blocked_memory_ns": 0,
+        "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 0,
+        "spilled_bytes": 0
+      },
+      {
+        "operator_id": 6,
+        "node_id": 4,
+        "name": "FileScan",
+        "role": "source",
         "drivers": 4,
         "rows_in": 0,
-        "rows_out": 60000000,
+        "rows_out": 75000000,
         "compute_ns": 410000000,
         "blocked_io_ns": 900000000,
         "blocked_memory_ns": 0,
         "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 150000000,
         "spilled_bytes": 0
       },
       {
-        "operator_id": 4,
-        "name": "Scan orders",
+        "operator_id": 7,
+        "node_id": 5,
+        "name": "FileScan",
+        "role": "source",
         "drivers": 1,
         "rows_in": 0,
         "rows_out": 15000000,
@@ -223,14 +289,71 @@
         "blocked_io_ns": 120000000,
         "blocked_memory_ns": 0,
         "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 0,
         "spilled_bytes": 0
       }
     ],
     "hot_operator": {
-      "operator_id": 2,
-      "operator": "HashJoin",
-      "compute_ns": 1700000000
-    }
+      "operator_id": 4,
+      "operator": "HashJoinProbe",
+      "compute_ns": 1200000000
+    },
+    "plan": [
+      {
+        "id": 0,
+        "name": "HashAggregate",
+        "children": [
+          1
+        ]
+      },
+      {
+        "id": 1,
+        "name": "Exchange",
+        "children": [
+          2
+        ]
+      },
+      {
+        "id": 2,
+        "name": "HashJoin",
+        "children": [
+          3,
+          5,
+          9
+        ]
+      },
+      {
+        "id": 3,
+        "name": "Filter",
+        "children": [
+          4
+        ]
+      },
+      {
+        "id": 4,
+        "name": "FileScan",
+        "children": []
+      },
+      {
+        "id": null,
+        "name": "Subquery",
+        "children": [
+          6
+        ]
+      },
+      {
+        "id": null,
+        "name": "SharedPlan",
+        "children": [
+          7
+        ]
+      },
+      {
+        "id": 5,
+        "name": "FileScan",
+        "children": []
+      }
+    ]
   },
   "resources": {
     "memory": [
