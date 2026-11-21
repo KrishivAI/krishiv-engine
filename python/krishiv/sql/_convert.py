@@ -95,7 +95,7 @@ def rows_of(table: Any) -> list[Row]:
 
 
 def _column_values(column: Any) -> list[Any]:
-    values = column.to_pylist()
+    values: list[Any] = column.to_pylist()
     if _is_plain(column.type):
         return values
     return [_value(v, column.type) for v in values]

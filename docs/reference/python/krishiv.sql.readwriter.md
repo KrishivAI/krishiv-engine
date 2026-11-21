@@ -80,6 +80,15 @@ b STRING"`). The files are read as its columns, never inferred; as in
 Spark, partition columns found under the path come last (one the schema
 names takes its type) and every column reads as nullable.
 
+### `text`
+
+```python
+def text(self, paths: str | list[str], wholetext: bool=False, lineSep: str | None=None, **options: object) -> DataFrame
+```
+
+Reads text files into a `value` string column, a row per line (`wholetext=True`: a row
+per file), as `pyspark.sql.DataFrameReader.text`.
+
 ## `DataFrameWriter`
 
 ```python

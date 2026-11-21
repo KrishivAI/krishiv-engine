@@ -19,5 +19,8 @@ class Row(tuple[Any, ...])
 ### `asDict`
 
 ```python
-def asDict(self) -> dict[str, Any]
+def asDict(self, recursive: bool=False) -> dict[str, Any]
 ```
+
+The row as a `dict`; `recursive=True` also converts nested rows, as PySpark does
+(inside lists and dict values too).
