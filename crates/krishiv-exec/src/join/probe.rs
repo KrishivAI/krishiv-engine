@@ -14,7 +14,7 @@ use krishiv_memory::SpillSignal;
 use krishiv_types::batch::{Batch, Weights};
 
 use super::build::{BuildGlobal, Built, Level0, nanos};
-use super::direct::Direct;
+use super::direct::{Direct, DirectPayload, arena_of};
 use super::grace::{self, Flush, Part, WRITE_SLICE, choose, reserve_chunks, spill_parts};
 use super::keys::{Hashing, MAX_RADIX_BITS};
 use super::table::{JoinTable, NONE, RowArena};
@@ -103,6 +103,9 @@ pub(crate) struct Cursor {
     matches: usize,
     /// Build rows are in the row layout (payload rows).
     rows: bool,
+    /// The build's payload decoded once (a direct probe of a small build,
+    /// perf lever P3): build columns are taken from it, not decoded.
+    payload: Option<Arc<DirectPayload>>,
 }
 
 impl Cursor {
@@ -159,6 +162,7 @@ impl Cursor {
                     pos: 0,
                     chain: NONE,
                     rows: hashing.rows(),
+                    payload: d.payload().cloned(),
                 };
                 return Ok((cursor, Vec::new()));
             }
@@ -229,6 +233,7 @@ impl Cursor {
             pos: 0,
             chain: NONE,
             rows: hashing.rows(),
+            payload: None,
         };
         Ok((cursor, deferred))
     }
@@ -308,7 +313,14 @@ impl Cursor {
         partition: u32,
     ) -> Result<Option<Batch>> {
         let arena = |p: usize| tables.get(p).map(JoinTable::arena);
-        let build_cols = shared.build_columns(self.rows, build, arena)?;
+        let decoded = match &self.payload {
+            Some(payload) => payload.columns(build)?,
+            None => None,
+        };
+        let build_cols = match decoded {
+            Some(cols) => cols,
+            None => shared.build_columns(self.rows, build, arena)?,
+        };
         let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), probe)?)?;
         let taken = self.compact_selected(taken)?;
         let m = probe.len();
@@ -691,7 +703,16 @@ impl ProbeOp {
         let tables = Tables::Level0(&level0.tables, built.spilled);
         let direct = l
             .direct
-            .get_or_insert_with(|| Direct::of(&level0.tables, built.spilled, &s.keys))
+            .get_or_insert_with(|| {
+                Direct::of(&level0.tables, built.spilled, &s.keys).map(|d| {
+                    // A payload that fails to decode here fails the same
+                    // way per pair, on the path that does not use it.
+                    let payload = DirectPayload::of(&level0.tables, |pairs| {
+                        s.build_columns(g.hashing.rows(), pairs, |p| arena_of(&level0.tables, p))
+                    });
+                    d.with_payload(payload.ok().flatten())
+                })
+            })
             .as_ref();
         if l.cursor.is_none() {
             if input.num_rows() == 0 {
