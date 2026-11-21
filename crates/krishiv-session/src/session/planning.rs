@@ -12,7 +12,7 @@ impl Session {
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
         let (optimized, physical, _) = self
-            .physical_with(analyzed, env, false, false, false)
+            .physical_with(analyzed, env, false, false, false, true)
             .await?;
         Ok((optimized, physical))
     }
@@ -27,7 +27,7 @@ impl Session {
         // A plan that is shown shows the queries of its definer views (P3-T062 §2.4).
         self.authorize_shown_definer_reads(analyzed).await?;
         let (optimized, physical, _) = self
-            .physical_with(analyzed, env, false, false, true)
+            .physical_with(analyzed, env, false, false, true, true)
             .await?;
         Ok((optimized, physical))
     }
@@ -42,7 +42,8 @@ impl Session {
         trace: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
         self.authorize_shown_definer_reads(analyzed).await?;
-        self.physical_with(analyzed, env, trace, false, true).await
+        self.physical_with(analyzed, env, trace, false, true, true)
+            .await
     }
 
     /// As [`Self::physical_inspected`] with every table's statistics and planning hints withheld
@@ -54,7 +55,22 @@ impl Session {
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
         self.authorize_shown_definer_reads(analyzed).await?;
-        let (optimized, physical, _) = self.physical_with(analyzed, env, false, true, true).await?;
+        let (optimized, physical, _) = self
+            .physical_with(analyzed, env, false, true, true, false)
+            .await?;
+        Ok((optimized, physical))
+    }
+
+    /// As [`Self::physical`] for a plan made only to find the first scan (the row-level probe): no
+    /// scan that decides once runs user code.
+    pub(crate) async fn physical_probe(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        let (optimized, physical, _) = self
+            .physical_with(analyzed, env, false, false, false, false)
+            .await?;
         Ok((optimized, physical))
     }
 
@@ -65,6 +81,7 @@ impl Session {
         trace: bool,
         withheld: bool,
         inspected: bool,
+        decisions: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
         let start = self.query_start.unwrap_or_else(query_start_micros);
         // A recursive CTE runs as an operator of the physical plan; the
@@ -139,7 +156,8 @@ impl Session {
             .with_sample_salt(env.sample_salt)
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs))
-            .with_inspection(inspected);
+            .with_inspection(inspected)
+            .with_decisions(decisions);
         let physical = self.state.planner.plan(&optimized, &cx)?;
         // The admission request's estimate, only for a controller that reads it.
         if !withheld && self.state.admission.uses_estimate() {
