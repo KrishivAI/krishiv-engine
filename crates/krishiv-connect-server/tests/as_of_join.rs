@@ -372,8 +372,22 @@ async fn as_of_join_distances_overflow_where_sparks_do() {
     }
 }
 
-/// Sets `spark.sql.ansi.enabled=false` on the test session.
+/// Sets `spark.sql.ansi.enabled=false` on the test session, and the session zone as in the Spark
+/// runs, whatever the host's (a zone with daylight saving refuses a Connect as-of join on
+/// `TIMESTAMP` values).
 async fn ansi_off(s: &Running) {
+    set_conf(
+        s,
+        &[
+            ("spark.sql.ansi.enabled", "false"),
+            ("spark.sql.session.timeZone", "UTC"),
+        ],
+    )
+    .await;
+}
+
+/// Sets `pairs` on the test session through the `Config` RPC.
+async fn set_conf(s: &Running, pairs: &[(&str, &str)]) {
     use pb::config_request::operation::OpType as ConfOp;
     let request = pb::ConfigRequest {
         session_id: SESSION.to_owned(),
@@ -383,10 +397,13 @@ async fn ansi_off(s: &Running) {
         }),
         operation: Some(pb::config_request::Operation {
             op_type: Some(ConfOp::Set(pb::config_request::Set {
-                pairs: vec![pb::KeyValue {
-                    key: "spark.sql.ansi.enabled".to_owned(),
-                    value: Some("false".to_owned()),
-                }],
+                pairs: pairs
+                    .iter()
+                    .map(|(key, value)| pb::KeyValue {
+                        key: (*key).to_owned(),
+                        value: Some((*value).to_owned()),
+                    })
+                    .collect(),
                 silent: None,
             })),
         }),
@@ -468,6 +485,37 @@ async fn a_connect_as_of_join_on_floating_point_values_is_refused() {
             );
         }
     }
+}
+
+/// Spark's `min_by` ranks `TIMESTAMP` distances taken as local date-times in the session zone, so
+/// across a DST fallback a later right row can be nearer than its value says (Spark 4.3.0,
+/// `America/New_York`, 2026-11-01: 06:15Z is 45 minutes after 04:30Z there, 05:45Z 75): the
+/// Connect form is refused in that zone, both directions, and runs in UTC.
+#[tokio::test]
+async fn a_connect_timestamp_as_of_join_across_daylight_saving_is_refused() {
+    let s = start().await;
+    let ts = |utc: &str| format!("CAST('2026-11-01 {utc}Z' AS TIMESTAMP)");
+    let (left, right) = (
+        format!("({})", ts("04:30:00")),
+        format!("({}), ({})", ts("05:45:00"), ts("06:15:00")),
+    );
+    set_conf(&s, &[("spark.sql.session.timeZone", "America/New_York")]).await;
+    for direction in ["backward", "forward"] {
+        let Err(e) = execute(&s.channel, keyless_as_of(&left, &right, direction)).await else {
+            panic!("a {direction} as-of join across the DST fallback ran");
+        };
+        assert_eq!(
+            error_class(&e),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{direction}"
+        );
+    }
+    set_conf(&s, &[("spark.sql.session.timeZone", "UTC")]).await;
+    assert!(
+        execute(&s.channel, keyless_as_of(&left, &right, "forward"))
+            .await
+            .is_ok()
+    );
 }
 
 /// A value type, its left and right rows, and Spark's rows backward and forward.

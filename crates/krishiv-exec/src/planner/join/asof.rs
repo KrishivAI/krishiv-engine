@@ -136,6 +136,23 @@ impl Planner<'_> {
                 "a forward as-of join on floating-point values"
             }));
         }
+        // A `TIMESTAMP` distance subtracts local date-times in the session zone (Spark's
+        // `subtractTimestamps`), so across a DST fallback a later right row can be nearer: Spark's
+        // forward scan and `min_by` take it, the merge takes the first by value. Refuse those
+        // forms where the session zone's local time can run backwards.
+        if (as_of.distance_on_every_pair || direction == AsOfMergeDirection::Forward)
+            && matches!(
+                probe.schema.field(left_column).data_type(),
+                arrow_schema::DataType::Timestamp(_, Some(_))
+            )
+            && !self.env.zone_rules()?.local_time_is_monotonic()
+        {
+            return Err(unsupported(if as_of.distance_on_every_pair {
+                "a Connect as-of join on TIMESTAMP values in a session time zone with daylight saving"
+            } else {
+                "a forward as-of join on TIMESTAMP values in a session time zone with daylight saving"
+            }));
+        }
         // Only a distance that can raise is evaluated: its value is never used.
         let distance = as_of
             .distance

@@ -471,3 +471,39 @@ fn an_as_of_operand_may_read_the_metadata_column() {
     );
     assert_eq!(got, ["1|3"]);
 }
+
+/// Spark subtracts `TIMESTAMP`s as local date-times in the session zone, so across New York's
+/// 2026-11-01 fallback the later right row (01:15 EST, 06:15Z) is 45 minutes from the left
+/// (00:30 EDT) and the earlier one (01:45 EDT, 05:45Z) 75: Spark's forward scan takes the later.
+/// The merge takes the first by value, so a forward join there is refused; backward evaluates no
+/// distance, and a fixed-offset zone or `TIMESTAMP_NTZ` values keep the order.
+#[test]
+fn a_forward_timestamp_as_of_join_across_daylight_saving_is_refused() {
+    let s = session();
+    let set = |sql: &str| {
+        block_on(async { s.sql(sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    };
+    let sql = |ty: &str, op: &str| {
+        format!(
+            "SELECT r.id FROM VALUES (CAST('2026-11-01 04:30:00Z' AS {ty})) AS t(v) ASOF JOIN \
+             VALUES (1, CAST('2026-11-01 05:45:00Z' AS {ty})), \
+             (2, CAST('2026-11-01 06:15:00Z' AS {ty})) AS r(id, v) MATCH_CONDITION (t.v {op} r.v)"
+        )
+    };
+    set("SET spark.sql.session.timeZone=America/New_York");
+    assert_eq!(
+        error(&s, &sql("TIMESTAMP", "<=")),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(
+        rows(&s, &sql("TIMESTAMP", ">=").replace("04:30", "07:00")),
+        ["2"]
+    );
+    assert_eq!(
+        rows(&s, &sql("TIMESTAMP_NTZ", "<=").replace("Z'", "'")),
+        ["1"]
+    );
+    set("SET spark.sql.session.timeZone=UTC");
+    assert_eq!(rows(&s, &sql("TIMESTAMP", "<=")), ["1"]);
+}
