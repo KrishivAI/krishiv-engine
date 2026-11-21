@@ -1175,6 +1175,35 @@ async fn the_page_of_a_query_without_operators_does_not_wait_for_a_plan() {
     assert_eq!(detail["plan_pending"], json!(false), "{detail}");
 }
 
+/// A command runs as a plan of its own (it has operator rows), so its profile is stored like a query's and
+/// its page's wait ends when the writer reaches it, well inside the wait's window.
+#[tokio::test]
+async fn the_page_of_a_command_gets_its_stored_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = EngineRuntime::builder()
+        .config("krishiv.history.path", dir.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    let user = krishiv_session::Session::builder()
+        .runtime(Arc::clone(&rt))
+        .build()
+        .unwrap();
+    let command = "CREATE TEMPORARY VIEW a_command_with_a_plan AS SELECT 1 AS x";
+    user.sql(command).await.unwrap().collect().await.unwrap();
+    let addr = serve(router_with_ui(
+        Arc::new(SessionSource::new(Arc::clone(&rt)).unwrap()),
+        TOKEN,
+    ))
+    .await;
+    let id = listed_id(addr, "CREATE TEMPORARY VIEW a_command_with_a_plan").await;
+    let stored = stored_soon(&rt, &id).await;
+    let doc: Value = serde_json::from_str(&stored.profile).unwrap();
+    let detail = get(addr, &format!("/api/internal/queries/{id}")).await;
+    assert_ne!(detail["operators"], json!([]), "{detail}");
+    assert_eq!(detail["plan"], page_plan(&doc["plan"]), "{detail}");
+    assert_eq!(detail["plan_pending"], json!(false), "{detail}");
+}
+
 /// PR-32b: a running server's query page gets the plan tree. A query of this run is read from the runtime's
 /// history store once it is written; one of an earlier run from what the server read when it started; a runtime
 /// that keeps no history has no tree, and the page then lists the operators alone.
