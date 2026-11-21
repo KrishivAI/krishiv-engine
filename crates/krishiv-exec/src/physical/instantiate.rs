@@ -1467,7 +1467,8 @@ impl Instantiation<'_> {
             fields,
             input.schema.metadata().clone(),
         ));
-        let sink = Arc::new(FileWriteSink::try_new(
+        let bucket_column = write.bucket.as_ref().map(|b| b.column);
+        let sink = Arc::new(FileWriteSink::try_new_bucketed(
             Arc::clone(&format),
             io,
             written,
@@ -1497,6 +1498,7 @@ impl Instantiation<'_> {
                     })
                     .collect::<Result<_>>()?,
             },
+            bucket_column,
         )?);
         Ok(Built {
             schema: Source::schema(sink.as_ref()),
