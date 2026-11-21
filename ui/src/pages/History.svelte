@@ -14,18 +14,30 @@
   let principal = $state("");
   let client = $state("");
   let tag = $state("");
+  // The Sessions page opens History on one session's queries: it leaves the id here, and it is read once.
+  function sessionAsked(): string {
+    try {
+      const id = sessionStorage.getItem("krishiv_history_session") ?? "";
+      sessionStorage.removeItem("krishiv_history_session");
+      return id;
+    } catch {
+      return "";
+    }
+  }
+  let session = $state(sessionAsked());
   let picked = $state<string[]>([]);
   let compared = $state<Compare | null>(null);
   let compareError = $state("");
 
   const q = createQuery<{ queries: Query[] }>(() => ({
-    queryKey: ["history", stateFilter, principal, client, tag],
+    queryKey: ["history", stateFilter, principal, client, tag, session],
     queryFn: () => {
       const p = new URLSearchParams({ limit: "200" });
       if (stateFilter) p.set("state", stateFilter);
       if (principal) p.set("principal", principal);
       if (client.trim()) p.set("client", client.trim());
       if (tag.trim()) p.set("tag", tag.trim());
+      if (session.trim()) p.set("session", session.trim());
       return api(`/api/internal/history?${p}`);
     },
     // Stored profiles do not change while the console is open.
@@ -97,6 +109,9 @@
     </label>
     <label class="flex w-full items-center gap-2 sm:w-auto">Tag
       <input class={cn(fieldClass, "flex-1")} bind:value={tag} placeholder="key or key=value" size="16" />
+    </label>
+    <label class="flex w-full items-center gap-2 sm:w-auto">Session
+      <input class={cn(fieldClass, "mono flex-1")} bind:value={session} placeholder="any" size="14" />
     </label>
   {/if}
   <Button class="w-full sm:w-auto" disabled={picked.length !== 2} onclick={compare}>Compare the two selected</Button>

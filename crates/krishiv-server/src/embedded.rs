@@ -121,6 +121,14 @@ impl UiSource for EmbeddedSource {
                     Ok(rows)
                 }
                 SystemTable::Caches => self.inner.rows(table).await,
+                // The one session the console shows; the groups are a server's.
+                SystemTable::Sessions => {
+                    let id = self.session.id();
+                    let mut rows = self.inner.rows(table).await?;
+                    rows.retain(|r| r.get("session_id").and_then(Value::as_str) == Some(id));
+                    Ok(rows)
+                }
+                SystemTable::ResourceGroups => Ok(Vec::new()),
             }
         })
     }

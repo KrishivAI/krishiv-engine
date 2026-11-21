@@ -223,9 +223,11 @@ impl SessionSource {
         let key = self.owner_key(caller).unwrap_or_default();
         let mut sessions = lock(&self.sessions);
         // A session's policy is fixed for its life: a caller whose role differs from the one its session was built
-        // with (a group claim that moved) gets a new session, as the Connect session manager gives.
+        // with (a group claim that moved) gets a new session, as the Connect session manager gives. So does a
+        // caller whose session was ended (the Sessions page, an idle sweep): the editor keeps working.
         if let Some((role, s)) = sessions.get(&key)
             && *role == who.role
+            && !s.is_closed()
         {
             return Ok((key, s.clone()));
         }
@@ -427,6 +429,8 @@ fn table_name(table: SystemTable) -> &'static str {
         SystemTable::Operators => "operators",
         SystemTable::Memory => "memory",
         SystemTable::Caches => "caches",
+        SystemTable::Sessions => "sessions",
+        SystemTable::ResourceGroups => "resource_groups",
     }
 }
 
@@ -604,6 +608,10 @@ impl UiSource for SessionSource {
                 rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
                 self.add_client_types(&mut rows).await?;
             }
+            // The console's own session is not a client's.
+            if table == SystemTable::Sessions {
+                rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
+            }
             if self.stored.is_none()
                 || !matches!(table, SystemTable::Queries | SystemTable::Operators)
             {
@@ -680,6 +688,17 @@ impl UiSource for SessionSource {
                 return Ok(false);
             };
             Ok(self.runtime.cancel(&id, CancelReason::Admin))
+        })
+    }
+
+    fn close_session<'a>(&'a self, session_id: &'a str) -> UiFuture<'a, Option<usize>> {
+        Box::pin(async move {
+            // The console reads through its own session, and the editor of an unidentified caller runs in one
+            // shared session: ending either would break the console for everyone, so neither can be ended here.
+            if session_id == self.session.id() || session_id == self.anonymous.id() {
+                return Ok(None);
+            }
+            Ok(self.runtime.kill_session(session_id, CancelReason::Admin))
         })
     }
 
@@ -1009,7 +1028,10 @@ impl UiSource for ProfilesSource {
             Ok(match table {
                 SystemTable::Queries => self.queries.clone(),
                 SystemTable::Operators => self.operators.clone(),
-                SystemTable::Memory | SystemTable::Caches => Vec::new(),
+                SystemTable::Memory
+                | SystemTable::Caches
+                | SystemTable::Sessions
+                | SystemTable::ResourceGroups => Vec::new(),
             })
         })
     }

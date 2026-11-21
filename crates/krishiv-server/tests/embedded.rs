@@ -342,6 +342,28 @@ async fn the_environment_is_the_sessions_settings() {
 }
 
 #[tokio::test]
+async fn the_console_lists_its_one_session_and_ends_none() {
+    let (mine, other) = two_sessions();
+    let source = EmbeddedSource::new(&mine).unwrap();
+    let sessions = source.rows(SystemTable::Sessions).await.unwrap();
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert_eq!(sessions[0]["session_id"], mine.id());
+    // The groups are a server's; this process has no operator, so no session is ended from here.
+    assert!(
+        source
+            .rows(SystemTable::ResourceGroups)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for id in [other.id(), mine.id()] {
+        assert_eq!(source.close_session(id).await.unwrap(), None);
+    }
+    run(&other, "SELECT 1").await;
+    run(&mine, "SELECT 1").await;
+}
+
+#[tokio::test]
 async fn a_closed_session_serves_nothing() {
     let (mine, _) = two_sessions();
     let source = EmbeddedSource::new(&mine).unwrap();
@@ -351,6 +373,7 @@ async fn a_closed_session_serves_nothing() {
         SystemTable::Operators,
         SystemTable::Memory,
         SystemTable::Caches,
+        SystemTable::Sessions,
     ] {
         let e = source.rows(table).await.unwrap_err();
         assert!(e.to_string().contains("closed"), "{e}");
