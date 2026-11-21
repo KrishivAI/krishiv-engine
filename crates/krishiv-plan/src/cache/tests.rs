@@ -877,8 +877,8 @@ fn cache_keys_separate_principals_policies_and_pins() {
     assert_eq!(CacheKey::of(&analyzed("a", 7)), base, "same inputs");
 }
 
-/// Every `ColumnNamesOp` is part of the plan's normalized hash (a change of any field changes
-/// it) and prints as one line naming its fields.
+/// Every `ColumnNamesOp` hashes apart from the others
+/// (each field alone: `column_names_each_field_changes_the_hash_alone`) and prints as one line naming its fields.
 #[test]
 fn column_names_operations_hash_apart_and_display_their_fields() {
     use crate::ColumnNamesOp as Op;
@@ -955,4 +955,78 @@ fn column_names_operations_hash_apart_and_display_their_fields() {
     distinct.sort_unstable();
     distinct.dedup();
     assert_eq!(distinct.len(), hashes.len(), "{hashes:?}");
+}
+
+/// Each field of a `ColumnNamesOp` changes the normalized hash on its own: every case differs from
+/// its base in one field only, so an encoder that drops a field fails here.
+#[test]
+fn column_names_each_field_changes_the_hash_alone() {
+    use crate::ColumnNamesOp as Op;
+    let names = |n: &[&str]| n.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    let lit = |v: i32| Arc::new(Expr::literal(Literal::Integer(v)));
+    let hash = |op: Op| {
+        normalized_subtree_hash(&LogicalPlan::new(PlanNode::ColumnNames {
+            input: Arc::new(scan(&[1, 2], &["a", "b"])),
+            op,
+        }))
+    };
+    let drop_na = |subset: &[&str], min: Option<u32>| Op::DropNa {
+        subset: names(subset),
+        min_non_nulls: min,
+    };
+    let fill = |cols: &[&str], v: i32| Op::FillNa {
+        cols: names(cols),
+        values: vec![lit(v)],
+    };
+    let replace = |cols: &[&str], from: i32, to: i32| Op::Replace {
+        cols: names(cols),
+        pairs: vec![lit(from), lit(to)],
+    };
+    let rename = |from: &str, to: &str| Op::Rename(vec![(from.to_owned(), to.to_owned())]);
+    let drop_cols = |n: &[&str], c: &[&str]| Op::Drop {
+        names: names(n),
+        columns: names(c),
+    };
+    let pairs = [
+        (
+            "dropna min",
+            drop_na(&["a"], Some(2)),
+            drop_na(&["a"], Some(3)),
+        ),
+        (
+            "dropna none vs zero",
+            drop_na(&["a"], None),
+            drop_na(&["a"], Some(0)),
+        ),
+        (
+            "dropna subset",
+            drop_na(&["a"], Some(2)),
+            drop_na(&["b"], Some(2)),
+        ),
+        ("fillna value", fill(&["a"], 7), fill(&["a"], 8)),
+        ("fillna cols", fill(&["a"], 7), fill(&["b"], 7)),
+        ("replace cols", replace(&["a"], 1, 2), replace(&["b"], 1, 2)),
+        ("replace to", replace(&["a"], 1, 2), replace(&["a"], 1, 3)),
+        ("replace from", replace(&["a"], 1, 2), replace(&["a"], 4, 2)),
+        ("rename to", rename("a", "b"), rename("a", "c")),
+        ("rename from", rename("a", "b"), rename("c", "b")),
+        (
+            "drop names",
+            drop_cols(&["a"], &["b"]),
+            drop_cols(&["c"], &["b"]),
+        ),
+        (
+            "drop columns",
+            drop_cols(&["a"], &["b"]),
+            drop_cols(&["a"], &["c"]),
+        ),
+        (
+            "todf",
+            Op::ToDf(names(&["x", "y"])),
+            Op::ToDf(names(&["x", "z"])),
+        ),
+    ];
+    for (what, base, other) in pairs {
+        assert_ne!(hash(base), hash(other), "{what}");
+    }
 }
