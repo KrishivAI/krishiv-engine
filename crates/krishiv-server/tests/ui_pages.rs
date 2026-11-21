@@ -1137,10 +1137,10 @@ async fn an_earlier_runs_plan_is_not_shown_for_this_runs_query_of_the_same_id() 
     assert_eq!(source.plan(&row).await.unwrap(), Some(doc["plan"].clone()));
 }
 
-/// A command has no operators, so its page has no plan to wait for, even on a runtime that stores profiles
-/// and a moment after the command ended.
+/// A query that ended with no operator rows (it failed before it ran) has nothing to draw a plan over, so its
+/// page does not wait for one, even on a runtime that stores profiles and a moment after the query ended.
 #[tokio::test]
-async fn the_page_of_a_command_does_not_wait_for_a_plan() {
+async fn the_page_of_a_query_without_operators_does_not_wait_for_a_plan() {
     use krishiv_server::internal::{SystemTable, UiSource};
     let dir = tempfile::tempdir().unwrap();
     let rt = EngineRuntime::builder()
@@ -1151,8 +1151,8 @@ async fn the_page_of_a_command_does_not_wait_for_a_plan() {
         .runtime(Arc::clone(&rt))
         .build()
         .unwrap();
-    let command = "CREATE TEMPORARY VIEW no_plan_to_wait_for AS SELECT 1 AS x";
-    user.sql(command).await.unwrap().collect().await.unwrap();
+    let refused = "SELECT no_plan_to_wait_for FROM range(0, 3)";
+    assert!(user.sql(refused).await.is_err());
     let source = SessionSource::new(Arc::clone(&rt)).unwrap();
     let row = source
         .rows(SystemTable::Queries)
@@ -1164,8 +1164,8 @@ async fn the_page_of_a_command_does_not_wait_for_a_plan() {
                 .as_str()
                 .is_some_and(|t| t.contains("no_plan_to_wait_for"))
         })
-        .expect("the command is listed");
-    // The source itself would wait: the command has just ended and the runtime writes a store.
+        .expect("the refused query is listed");
+    // The source itself would wait: the query has just ended and the runtime writes a store.
     assert!(source.plan_pending(&row));
     let id = row["query_id"].as_str().unwrap().to_owned();
     let addr = serve(router_with_ui(Arc::new(source), TOKEN)).await;
