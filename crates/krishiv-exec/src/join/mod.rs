@@ -158,7 +158,8 @@
 //! the tables: two clock reads per batch, for
 //! [`QueryMetrics::hash_probe_share`](crate::QueryMetrics::hash_probe_share))
 //! and, only when above zero, `direct_probe_rows` (rows probed through a
-//! tiny build's direct index, `direct.rs`).
+//! tiny build's direct index, `direct.rs`) and `direct_payload_rows` (its
+//! build rows decoded once, `DirectPayload`).
 
 mod block;
 mod broadcast;
@@ -418,6 +419,9 @@ pub(crate) enum Counter {
     FixedBloomKeys,
     /// Probe rows looked up through a direct index (`direct`, perf lever J1).
     DirectProbeRows,
+    /// Build rows whose payload was decoded once for a direct index
+    /// (`direct.rs` `DirectPayload`, perf lever P3).
+    DirectPayloadRows,
     /// Grace partition loads given up because the pool lacked free memory
     /// (`grace::Loaded::TooLarge`, before or after arbitration): the rows
     /// read so far go back and the partition is read again.
@@ -467,7 +471,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 38]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 39]);
 
 impl Default for Counters {
     fn default() -> Self {
@@ -545,6 +549,9 @@ impl Counters {
         // Only a probe that read a direct index (`direct.rs`) reports it.
         if self.get(Counter::DirectProbeRows) > 0 {
             out.extend(self.report(&[(Counter::DirectProbeRows, "direct_probe_rows")]));
+        }
+        if self.get(Counter::DirectPayloadRows) > 0 {
+            out.extend(self.report(&[(Counter::DirectPayloadRows, "direct_payload_rows")]));
         }
         // Only a grace join that had a partition load refused reports it.
         if self.get(Counter::GraceLoadsRefused) > 0 {
