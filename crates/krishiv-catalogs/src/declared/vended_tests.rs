@@ -572,3 +572,31 @@ fn an_answer_the_cache_refused_still_serves_its_query_with_its_table_token() {
         vec![Some("Bearer table-token".to_owned())]
     );
 }
+
+/// #930 thread (Codex, P2): a `loadTable` answer whose storage credential expired while it sat in the 30 s table
+/// cache is not kept (`State::put` drops it), but the table opens with it and its first refresh carries its table
+/// token, not the caller's.
+#[test]
+fn an_expired_loaded_answer_refreshes_with_its_table_token() {
+    let (server, cache, table, mut loaded) = token_fixture(10);
+    let past = ms(SystemTime::now() - Duration::from_secs(1));
+    for c in &mut loaded.credentials {
+        c.config.insert(
+            "s3.session-token-expires-at-ms".to_owned(),
+            SecretString::new(past.to_string()),
+        );
+    }
+    let own = Arc::new(loaded);
+    table.offer(Arc::clone(&own));
+    let key = key_of(1, IdentityKey::server("lake".to_owned()), "t");
+    assert!(cache.get(&key).is_none(), "an expired answer is not kept");
+    let answer = futures::executor::block_on(table.answer(Some(&own))).unwrap();
+    assert!(Arc::ptr_eq(&answer, &own), "no refresh to find the scopes");
+    assert!(credential_bearers(&server).is_empty());
+    let source = table.source("s3://bucket/wh/db/t", Some(own)).unwrap();
+    futures::executor::block_on(source.current()).unwrap();
+    assert_eq!(
+        credential_bearers(&server),
+        vec![Some("Bearer table-token".to_owned())]
+    );
+}
