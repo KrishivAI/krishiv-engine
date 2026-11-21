@@ -94,6 +94,10 @@ New crate → add it to `xtask/layers.toml` and root `Cargo.toml`, and write its
   Ground truth comes from apache/spark source at tags + a real Spark run (spark-semantics agent), never memory.
   Divergence is explicit and opt-in per expression; no global allowIncompatible switch. Observable hashing is
   Murmur3 seed 42.
+- **Flaky tests:** a test that fails and passes on a retry (nextest `FLAKY`) is a bug, not noise. The nightly run on main
+  fails on one that is not in `tests/quarantine.toml` (`cargo xtask quarantine --flaky LOG` prints the stanza to add:
+  owner, issue, deadline within 3 days). Quarantine is a stop-gap; fix the test or the code, then remove the entry. Never
+  loosen an assertion or raise a limit to hide a flake.
 - **Cargo features are additive only**; behaviour flags are runtime config `krishiv.*` / `krishiv.experimental.*`
   (ADR 0027).
 - **`unsafe` only** in krishiv-memory, krishiv-kernels and FFI crates (krishiv-python, SDK bridges, the temporary
