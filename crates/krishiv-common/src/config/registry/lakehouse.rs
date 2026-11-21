@@ -147,6 +147,37 @@ pub static CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE: ConfigEntry = C
     spark_alias: None,
 };
 
+/// How long a vended storage credential without an expiry is used (P3-T067 §4.1).
+pub static CATALOG_VENDED_DEFAULT_TTL: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.vendedDefaultTtl",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(15 * 60))),
+    doc: "How long a storage credential vended by a catalog with `storage = vended` is used when \
+          the catalog gives no expiry for it (`s3.session-token-expires-at-ms`, \
+          `gcs.oauth2.token-expires-at`, `adls.sas-token-expires-at-ms.<host>`). After it the \
+          credential is fetched again from the catalog. A credential that stops working earlier is \
+          refreshed once and the request retried. A value below twice `krishiv.io.credentials.refreshSkew` \
+          is allowed: the credential is then refreshed after half its lifetime.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Most vended credentials kept across all declared catalogs (P3-T067 §4.3).
+pub static CATALOG_VENDED_MAX_ENTRIES: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.vended.maxEntries",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10_000)),
+    doc: "Most vended storage credentials the server keeps across all declared catalogs, one per \
+          caller identity and table. The least recently used is dropped first and fetched again \
+          from the catalog on its next use; an entry is also dropped when its credential expires.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// How long one catalog call may take before it fails.
 pub static CATALOG_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.catalog.requestTimeout",

@@ -15,6 +15,19 @@ mod http_test_server;
 #[cfg(feature = "iceberg-rest")]
 pub mod iceberg_rest;
 pub mod location;
+#[cfg(any(test, feature = "testing"))]
+#[cfg(feature = "session")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test server: a poisoned lock or a failed bind ends the test"
+)]
+mod s3_test_server;
+
+/// Test helpers for other crates' tests (feature `testing`; never in a product build).
+#[cfg(feature = "testing")]
+pub mod testing {
+    pub use crate::s3_test_server::{S3Seen, S3Server, serve_s3, write_s3_table};
+}
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 #[cfg(feature = "unity")]

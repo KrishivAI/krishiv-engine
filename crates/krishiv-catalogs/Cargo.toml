@@ -34,6 +34,7 @@ session = [
     "dep:krishiv-plan",
     "dep:krishiv-exec",
     "dep:krishiv-connectors-iceberg",
+    "dep:async-trait",
     "tokio/rt",
 ]
 # The Unity Catalog read-only client (async reqwest over rustls on a thread of its own, every request on krishiv-store's
@@ -52,6 +53,10 @@ unity = [
     "krishiv-store/cloud",
 ]
 
+# Test helpers for other crates' tests (`testing::serve_s3`, a loopback S3 stand-in, and `write_s3_table`).
+# Never in a product build.
+testing = ["session", "krishiv-connectors-iceberg/testing"]
+
 # The embedded SQLite catalog (`rusqlite` with the bundled C amalgamation: a C build). Off by default.
 sqlite = ["dep:rusqlite", "dep:serde_json", "dep:krishiv-plan", "dep:krishiv-types"]
 
@@ -67,6 +72,8 @@ krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version =
 # The `CatalogFactory` trait and the declarations it builds from (feature `session`).
 krishiv-session = { path = "../krishiv-session", version = "=0.2.1", optional = true }
 tracing.workspace = true
+# The vended-credential source of a declared table (`krishiv-store`'s `CredentialSource`, feature `session`).
+async-trait = { workspace = true, optional = true }
 thrift = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt"], optional = true }
 reqwest = { workspace = true, features = ["rustls"], optional = true }

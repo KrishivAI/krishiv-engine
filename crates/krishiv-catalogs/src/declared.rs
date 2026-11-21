@@ -228,6 +228,7 @@ pub(crate) fn rest_caller(caller: &CatalogCaller) -> RestCaller {
 }
 
 mod table;
+mod vended;
 
 pub(crate) use table::RestCatalog;
 
@@ -235,3 +236,5 @@ pub(crate) use table::RestCatalog;
 mod read_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vended_read_tests;

@@ -7,10 +7,11 @@
 //!   the snapshot read becomes the version (the current snapshot, or the one a time travel names).
 //!   Read restrictions and server-side planning are refused by the client before anything is
 //!   returned.
-//! - **Table `config`.** No key of it reaches a store or a request in this build: the reads use the
-//!   server's store configuration. A catalog-supplied `token` (and the RFC 8693 token-type keys
-//!   beside it) is dropped, since no later request for the table exists yet; the refresh-endpoint
-//!   and `signer.*` keys are dropped and never followed. A response asking for remote signing
+//! - **Table `config`.** No key of it reaches a store: the reads use the server's store
+//!   configuration, or (`storage = vended`) only the vended credential keys. A catalog-supplied
+//!   `token` is kept only with a vended answer, as the bearer of that table's `loadCredentials` and
+//!   reload (`vended.rs`); otherwise it is dropped (and the RFC 8693 token-type keys beside it
+//!   always are); the refresh-endpoint and `signer.*` keys are dropped and never followed. A response asking for remote signing
 //!   (`s3.remote-signing-enabled`, or `signer.*` keys without credentials) is refused when the
 //!   table is read (`KRISHIV_UNSUPPORTED_FEATURE`, §4.5).
 //! - **Metadata cache (§3.5).** A `loadTable` answer is kept [`METADATA_TTL`] per table and
@@ -43,9 +44,11 @@ use krishiv_session::catalog_registry::{
     CallerCatalog, CatalogCaller, DeclaredTable, IdentityKey, LoadedDeclared, ScanInputs,
 };
 
+use super::vended::{Refetch, VendedAnswer, VendedCache, VendedPaths, VendedTable, cache_scope};
 use super::{quoted, rest_caller};
+use crate::iceberg_rest::vended::VendedPrefix;
 use crate::iceberg_rest::{LoadedTable, RestClient, RestError, RestLimits};
-use crate::location::{LocationPolicy, LocationRule, RemoteLocationPolicy};
+use crate::location::{LocationPolicy, LocationRule, RemoteLocationPolicy, refused};
 
 /// Iceberg's metadata table names (`MetadataTableType` at apache-iceberg-1.12.0), lower case.
 const METADATA_TABLES: [&str; 16] = [
@@ -87,6 +90,8 @@ struct Loaded {
     metadata_location: String,
     /// The answer asks for remote signing (§4.5).
     signing: bool,
+    /// The answer's vended credentials (`storage = vended` only; module docs of `vended.rs`).
+    vended: Option<Arc<VendedAnswer>>,
 }
 
 /// A `loadTable` cache key: the identity, the namespace and the table as asked.
@@ -102,6 +107,16 @@ pub(crate) struct RestCatalog {
     ttl: Duration,
     epoch: AtomicU64,
     cache: Mutex<HashMap<Key, (Instant, Arc<Loaded>)>>,
+    /// The vended answers (one cache per process, §4.3), keyed with `instance`.
+    vended: Arc<VendedCache>,
+    /// This catalog's own part of every vended key: unique in the process.
+    instance: u64,
+}
+
+impl Drop for RestCatalog {
+    fn drop(&mut self) {
+        self.vended.drop_instance(self.instance);
+    }
 }
 
 impl RestCatalog {
@@ -114,6 +129,11 @@ impl RestCatalog {
             ttl,
             epoch: AtomicU64::new(0),
             cache: Mutex::new(HashMap::new()),
+            vended: VendedCache::global(),
+            instance: {
+                static NEXT: AtomicU64 = AtomicU64::new(0);
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            },
         }
     }
 
@@ -206,14 +226,22 @@ impl RestCatalog {
         }
         let who = rest_caller(caller);
         let (ns, table) = (namespace.to_vec(), name.to_owned());
+        // Read before the request: a `REFRESH TABLE` after it keeps this answer out of the vended cache.
+        let drops = self.vended.drops();
         let Some(found) = self
             .blocking(move |c| c.load_table_as(&who, &ns, &table))
             .await?
         else {
             return Ok(None);
         };
-        let loaded = Arc::new(self.keep(namespace, name, found)?);
+        let loaded = Arc::new(self.keep(namespace, name, found, drops)?);
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        // A `REFRESH TABLE` since the request (any table's, as in the vended cache): this answer serves its own
+        // query only, so no later query reuses metadata the refresh discarded (review 2ed68fa67 nit 1). Checked under
+        // the cache lock; `refresh` moves the count before its `retain`, so no stale insert survives.
+        if self.vended.drops() != drops {
+            return Ok(Some(loaded));
+        }
         if cache.len() >= MAX_ENTRIES && !cache.contains_key(&key) {
             let oldest = cache
                 .iter()
@@ -227,25 +255,31 @@ impl RestCatalog {
         Ok(Some(loaded))
     }
 
-    /// What is kept of `found` (module docs): the parsed metadata; every `config` value and
-    /// credential is dropped here.
+    /// What is kept of `found` (module docs): the parsed metadata, and with `storage = vended` its
+    /// vended part ([`VendedAnswer::of_table`]: the credential keys and the table token only), which
+    /// then lives in this 30 s table cache beside the `VendedCache`. Every other `config` value is
+    /// dropped here, and so is every credential when the storage is not vended.
     fn keep(
         &self,
         namespace: &[String],
         name: &str,
         found: LoadedTable,
+        drops: u64,
     ) -> Result<Loaded, KrishivError> {
         let what = self.relation(namespace, name);
         let Some(metadata_location) = found.metadata_location.clone() else {
             return Err(self.fault(&what, "a table without a metadata location (staged)"));
         };
         let signing = asks_for_signing(&found);
+        let vended = (self.storage == CatalogStorage::Vended)
+            .then(|| Arc::new(VendedAnswer::of_table(&found, drops)));
         let metadata = IcebergMetadata::from_json(found.metadata)
             .map_err(|_| self.fault(&what, "table metadata that does not parse"))?;
         Ok(Loaded {
             metadata,
             metadata_location,
             signing,
+            vended,
         })
     }
 
@@ -344,11 +378,34 @@ impl CallerCatalog for RestCatalog {
                 file_metadata: FileMetadata::None,
                 column_comments,
             };
+            let relation = self.relation(&id.namespace, &id.name);
+            let vended = (self.storage == CatalogStorage::Vended).then(|| VendedRead {
+                cache: Arc::clone(&self.vended),
+                key: {
+                    let (identity, namespace, name) = self.key(caller, &id.namespace, &id.name);
+                    (self.instance, identity, namespace, name)
+                },
+                identity: caller.identity.clone(),
+                delegated: self.delegated,
+                refetch: Refetch {
+                    client: Arc::clone(&self.client),
+                    caller: rest_caller(caller),
+                    namespace: id.namespace.clone(),
+                    table: id.name.clone(),
+                    catalog: self.name.clone(),
+                    relation: relation.clone(),
+                    location: loaded
+                        .vended
+                        .as_ref()
+                        .map(|a| a.location().to_owned())
+                        .unwrap_or_default(),
+                },
+            });
             let table = RestTable {
-                relation: self.relation(&id.namespace, &id.name),
+                relation,
+                vended,
                 namespace: id.namespace.clone(),
                 name: id.name.clone(),
-                storage: self.storage,
                 loaded,
                 spec: snapshot
                     .snapshot_id
@@ -367,7 +424,10 @@ impl CallerCatalog for RestCatalog {
         Box::pin(async move {
             // REST identifiers go to the catalog as written, by the analyzer and by `REFRESH
             // TABLE` alike (the catalog decides what a spelling names), so the entries of this
-            // exact spelling are the ones a refresh drops.
+            // exact spelling are the ones a refresh drops. The count moves first: a load that read the old one and
+            // inserts before this `retain` is removed by it, and one inserting after sees the new count (`loaded`).
+            self.vended
+                .drop_table(self.instance, &id.namespace, &id.name);
             self.cache
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -412,9 +472,10 @@ impl CallerCatalog for RestCatalog {
 /// One loaded table of a declared REST catalog at one snapshot: what its scans open.
 struct RestTable {
     relation: String,
+    /// What a `storage = vended` read needs (`None` for `allowed-prefixes`).
+    vended: Option<VendedRead>,
     namespace: Vec<String>,
     name: String,
-    storage: CatalogStorage,
     loaded: Arc<Loaded>,
     spec: VersionSpec,
     /// The storage registrations of the providers opened, kept while the query holds the table.
@@ -430,28 +491,98 @@ impl std::fmt::Debug for RestTable {
     }
 }
 
+/// What a vended read of one table needs (module docs of `vended.rs`).
+#[derive(Debug)]
+struct VendedRead {
+    cache: Arc<VendedCache>,
+    key: super::vended::Key,
+    identity: IdentityKey,
+    delegated: bool,
+    refetch: Refetch,
+}
+
+impl RestTable {
+    /// The path locator of a vended read (module docs of `vended.rs`).
+    async fn vended_paths(
+        &self,
+        v: &VendedRead,
+        inputs: &ScanInputs,
+    ) -> Result<Arc<dyn krishiv_exec::files::PathLocator>, KrishivError> {
+        use krishiv_common::config::{
+            CATALOG_VENDED_DEFAULT_TTL, CATALOG_VENDED_MAX_ENTRIES, ConfigValue,
+            IO_CREDENTIALS_REFRESH_SKEW,
+        };
+        let config = &inputs.config;
+        let duration = |e| config.get(e).and_then(ConfigValue::as_duration);
+        let table = VendedTable {
+            cache: Arc::clone(&v.cache),
+            key: v.key.clone(),
+            max_entries: config
+                .get(&CATALOG_VENDED_MAX_ENTRIES)
+                .and_then(ConfigValue::as_int)
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(10_000),
+            default_ttl: duration(&CATALOG_VENDED_DEFAULT_TTL).unwrap_or(Duration::from_secs(900)),
+            skew: duration(&IO_CREDENTIALS_REFRESH_SKEW)
+                .unwrap_or(krishiv_store::DEFAULT_REFRESH_SKEW),
+            refetch: v.refetch.clone(),
+        };
+        // The answer `loadTable` gave, kept unless the cache holds a newer one for this identity or a `REFRESH TABLE`
+        // came since its request; either way this query reads with it when the cache holds nothing.
+        let own = self.loaded.vended.clone();
+        if let Some(a) = &own {
+            table.offer(Arc::clone(a));
+        }
+        let answer = table.answer(own.as_ref()).await?;
+        let refuse = |rule| refused(&table.refetch.catalog, &self.relation, rule);
+        if answer.is_empty() {
+            return Err(refuse(LocationRule::NoVendedCredential));
+        }
+        let scopes = table.scopes(&answer, &self.loaded.metadata_location)?;
+        let mut sources = Vec::new();
+        let mut prefixes = Vec::new();
+        for location in &scopes {
+            let scope = krishiv_store::CredentialScope::new(location)
+                .map_err(|_| refuse(LocationRule::NoVendedCredential))?;
+            let source: Arc<dyn krishiv_store::CredentialSource> =
+                Arc::new(table.source(location, own.clone())?);
+            sources.push((scope, source));
+            prefixes.push(
+                VendedPrefix::parse(location)
+                    .map_err(|_| refuse(LocationRule::NoVendedCredential))?,
+            );
+        }
+        let inner = inputs
+            .stores
+            .paths(cache_scope(&v.identity, v.delegated), sources);
+        Ok(Arc::new(VendedPaths {
+            inner,
+            prefixes,
+            catalog: table.refetch.catalog.clone(),
+            relation: self.relation.clone(),
+        }))
+    }
+}
+
 impl DeclaredTable for RestTable {
     fn open(
         self: Arc<Self>,
         inputs: ScanInputs,
     ) -> BoxFuture<'static, Result<Arc<dyn TableProvider>, KrishivError>> {
         Box::pin(async move {
-            // Refused before any storage request, never read with ambient credentials.
-            if self.storage == CatalogStorage::Vended {
-                return Err(unsupported(format!(
-                    "vended credentials for the Iceberg REST table {} (storage = vended is not in \
-                     this build)",
-                    self.relation
-                )));
-            }
             if self.loaded.signing {
                 return Err(unsupported(format!(
                     "Iceberg REST remote signing for the table {}",
                     self.relation
                 )));
             }
-            let registration =
-                StorageRegistration::new(inputs.io.clone(), std::sync::Arc::clone(&inputs.paths));
+            // `storage = vended`: only the vended credentials, only under their prefixes, refused before any
+            // storage request otherwise; never the server's own or ambient credentials.
+            let paths = match &self.vended {
+                Some(v) => self.vended_paths(v, &inputs).await?,
+                None => Arc::clone(&inputs.paths),
+            };
+            let registration = StorageRegistration::new(inputs.io.clone(), paths);
             let this = Arc::clone(&self);
             let config = Arc::clone(&inputs.config);
             let slots = inputs.worker_slots;

@@ -21,6 +21,13 @@ error reported can differ in class as well as in the blamed expression (for
 example `DIVIDE_BY_ZERO` against `ARITHMETIC_OVERFLOW`); a query that raises
 in one engine still raises in the other.
 
+## Spark 3.5 error-message parameters follow 4.x
+
+The parameters inside an error message follow Spark 4.x, also for a Spark
+3.5 client. For example, `SCHEMA_NOT_FOUND` names the schema with its catalog
+(`` `spark_catalog`.`dummy` ``) where Spark 3.5 names it without
+(`` `dummy` ``).
+
 ## Result cache, reproducible results (Krishiv extensions, off by default)
 
 `krishiv.resultCache.enabled` and `krishiv.deterministicOrder` add behaviour Spark does not have; with
@@ -504,6 +511,21 @@ shared by every session of the application.
   `ml_command_result`, whose content for this command is not verified; PySpark ignores it. Its operation id is not
   remembered after it ends, so the same id may be reused (Spark refuses a reused id with `OPERATION_ABANDONED`;
   clients send fresh ids). Every other `ml_command` fails with SQLSTATE 56K00.
+
+## Declared catalogs (`krishiv.catalog.<name>.*`, `spark.sql.catalog.<name>`)
+
+- **`SHOW CATALOGS` and `spark.catalog.listCatalogs()` list every declared catalog the principal sees, used or
+  not.** Spark lists `spark_catalog` and only the catalogs the session has already loaded. Spark loads a catalog when
+  a multi-part name first names it, even in a lookup that then fails, or with `SHOW NAMESPACES IN <catalog>`.
+  Setting `spark.sql.defaultCatalog` to it does not load it by itself. So a fresh Spark session answers
+  `spark_catalog` only, and Krishiv answers `spark_catalog` plus its declared catalogs. A catalog declared for other
+  tenants is never listed. `SHOW CATALOGS` also lists `system`; `spark.catalog.listCatalogs()` does not.
+- **In `krishiv server`, a session cannot declare or change a catalog.** `SET`, `RESET` and `spark.conf.set` of
+  `spark.sql.catalog.<name>`, `spark.sql.catalog.<name>.*` or `krishiv.catalog.<name>.*` fail with
+  `CANNOT_MODIFY_STATIC_CONFIG` for every role. So does a session builder that sets one. Declare catalogs in the
+  server's configuration instead. Spark lets a session set `spark.sql.catalog.<name>` at runtime and loads the
+  catalog when it is first used. In server mode that would mean fetching from an endpoint the client chose. Embedded
+  sessions are unchanged. Registered settings such as `krishiv.catalog.default` are not declaration keys.
 
 ## `Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)
 

@@ -174,6 +174,66 @@ pub struct ScanInputs {
     pub config: Arc<Config>,
     /// The drivers splits are planned for.
     pub worker_slots: u64,
+    /// What a table read with credentials of its own builds its stores from (vended, design P3-T067 §4.1).
+    pub stores: ScopedStores,
+}
+
+/// What a table read with credentials of its own (vended, design P3-T067 §4.1) builds its stores from: the query's
+/// configuration and the runtime's I/O scheduler. It holds no credential.
+#[derive(Clone)]
+pub struct ScopedStores {
+    config: Arc<Config>,
+    sched: Arc<krishiv_io::IoScheduler>,
+    cwd: String,
+}
+
+impl fmt::Debug for ScopedStores {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScopedStores").finish_non_exhaustive()
+    }
+}
+
+impl ScopedStores {
+    /// The stores of one query: `config` its snapshot, `sched` the runtime's scheduler, `cwd` where relative local
+    /// paths resolve.
+    #[must_use]
+    pub fn new(
+        config: Arc<Config>,
+        sched: Arc<krishiv_io::IoScheduler>,
+        cwd: impl Into<String>,
+    ) -> Self {
+        Self {
+            config,
+            sched,
+            cwd: cwd.into(),
+        }
+    }
+
+    /// A path locator whose stores under each scope of `sources` sign with that scope's source, registered under
+    /// `cache_scope`, and connect through the runtime's (egress policy) HTTP clients. A location outside every scope
+    /// would use the query's static store configuration, so the caller refuses those before it locates them. The
+    /// scoped stores are unregistered when the locator is dropped.
+    #[must_use]
+    pub fn paths(
+        &self,
+        cache_scope: krishiv_io::CacheScope,
+        sources: Vec<(
+            krishiv_io::CredentialScope,
+            Arc<dyn krishiv_io::CredentialSource>,
+        )>,
+    ) -> Arc<dyn PathLocator> {
+        let mut registry = krishiv_io::query_registry(Arc::clone(&self.config), &self.sched)
+            .with_cache_scope(cache_scope);
+        for (scope, source) in sources {
+            registry = registry.with_source(scope, source);
+        }
+        Arc::new(krishiv_exec::files::ObjectPaths::new(
+            krishiv_io::StoreId::new(crate::session::LOCAL_STORE),
+            self.cwd.clone(),
+            Arc::clone(&self.sched),
+            Arc::new(registry),
+        ))
+    }
 }
 
 impl fmt::Debug for ScanInputs {
@@ -193,12 +253,14 @@ impl ScanInputs {
         paths: Arc<dyn PathLocator>,
         config: Arc<Config>,
         worker_slots: u64,
+        stores: ScopedStores,
     ) -> Self {
         Self {
             io,
             paths,
             config,
             worker_slots,
+            stores,
         }
     }
 }
@@ -1138,6 +1200,14 @@ impl crate::Session {
         Some(
             async {
                 let (built, caller) = built?;
+                // A namespace the grants hide answers as a missing one before the catalog is
+                // asked (no existence oracle, no outbound call for it, ADR 0046 §8). A table the
+                // grants list implies its namespace is listed, so nothing listable is lost.
+                if self.state.grants.is_some()
+                    && !self.declared_namespace_listed(&name, namespace).await
+                {
+                    return Err(schema_not_found(catalog, namespace));
+                }
                 let Some(found) = built
                     .list_tables(&caller, namespace)
                     .await
@@ -1145,15 +1215,7 @@ impl crate::Session {
                 else {
                     return Err(schema_not_found(catalog, namespace));
                 };
-                let listed = self.listed_declared_tables(&name, namespace, found).await;
-                if listed.is_empty()
-                    && self.state.grants.is_some()
-                    && !self.declared_namespace_listed(&name, namespace).await
-                {
-                    // Nothing listable in it, nor under it: as for a missing one.
-                    return Err(schema_not_found(catalog, namespace));
-                }
-                Ok(listed)
+                Ok(self.listed_declared_tables(&name, namespace, found).await)
             }
             .await,
         )
@@ -1185,18 +1247,19 @@ impl crate::Session {
     /// `catalog` (its canonical name) in a listing, by the session catalog's rule
     /// ([`Session::may_list_namespace`]): it may list the namespace, or, under the `grants`
     /// provider, it owns or holds a grant on something under it at any depth (a nested
-    /// namespace, a table, a column; `GrantsPolicy::listable_under`). Decided from the grant
+    /// namespace, a table, a column; `GrantsPolicy::namespace_listable`). Decided from the grant
     /// state alone: no catalog call, so one namespace the catalog refuses cannot fail a listing.
     async fn declared_namespace_listed(&self, catalog: &str, namespace: &[String]) -> bool {
         let securable = declared_namespace(catalog, namespace);
-        if self.may_list(&securable).await {
-            return true;
-        }
-        self.state
+        if let Some(listed) = self
+            .state
             .grants
             .as_ref()
-            .and_then(|g| g.listable_under(&self.state.principal, &securable))
-            .unwrap_or(false)
+            .and_then(|g| g.namespace_listable(&self.state.principal, &securable))
+        {
+            return listed;
+        }
+        self.may_list(&securable).await
     }
 
     /// Every catalog this session sees, sorted: `spark_catalog`, `system` and the visible
