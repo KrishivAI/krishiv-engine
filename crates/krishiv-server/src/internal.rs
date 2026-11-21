@@ -877,7 +877,8 @@ async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Respo
             "query": pick_query(query),
             "operators": ops.iter().map(|r| Value::Object(pick(r, OPERATOR_COLUMNS))).collect::<Vec<_>>(),
             "hot_operator": hot_operator(&ops),
-            "plan_pending": ended && plan.is_none() && s.source.plan_pending(query),
+            // A query with no operator rows (a command) has nothing to draw a plan over: no wait for one.
+            "plan_pending": ended && plan.is_none() && !ops.is_empty() && s.source.plan_pending(query),
             "plan": plan,
         }),
     )

@@ -1137,6 +1137,44 @@ async fn an_earlier_runs_plan_is_not_shown_for_this_runs_query_of_the_same_id() 
     assert_eq!(source.plan(&row).await.unwrap(), Some(doc["plan"].clone()));
 }
 
+/// A command has no operators, so its page has no plan to wait for, even on a runtime that stores profiles
+/// and a moment after the command ended.
+#[tokio::test]
+async fn the_page_of_a_command_does_not_wait_for_a_plan() {
+    use krishiv_server::internal::{SystemTable, UiSource};
+    let dir = tempfile::tempdir().unwrap();
+    let rt = EngineRuntime::builder()
+        .config("krishiv.history.path", dir.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    let user = krishiv_session::Session::builder()
+        .runtime(Arc::clone(&rt))
+        .build()
+        .unwrap();
+    let command = "CREATE TEMPORARY VIEW no_plan_to_wait_for AS SELECT 1 AS x";
+    user.sql(command).await.unwrap().collect().await.unwrap();
+    let source = SessionSource::new(Arc::clone(&rt)).unwrap();
+    let row = source
+        .rows(SystemTable::Queries)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|q| {
+            q["query_text"]
+                .as_str()
+                .is_some_and(|t| t.contains("no_plan_to_wait_for"))
+        })
+        .expect("the command is listed");
+    // The source itself would wait: the command has just ended and the runtime writes a store.
+    assert!(source.plan_pending(&row));
+    let id = row["query_id"].as_str().unwrap().to_owned();
+    let addr = serve(router_with_ui(Arc::new(source), TOKEN)).await;
+    let detail = get(addr, &format!("/api/internal/queries/{id}")).await;
+    assert_eq!(detail["operators"], json!([]), "{detail}");
+    assert!(detail["plan"].is_null(), "{detail}");
+    assert_eq!(detail["plan_pending"], json!(false), "{detail}");
+}
+
 /// PR-32b: a running server's query page gets the plan tree. A query of this run is read from the runtime's
 /// history store once it is written; one of an earlier run from what the server read when it started; a runtime
 /// that keeps no history has no tree, and the page then lists the operators alone.
