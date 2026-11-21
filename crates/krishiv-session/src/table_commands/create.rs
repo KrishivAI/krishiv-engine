@@ -874,7 +874,15 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(table, &env)?;
-        self.table_for_write(&name, operation, &env)?;
+        if let Err(refusal) = self.table_for_write(&name, operation, &env) {
+            // Spark analyzes the subqueries before it finds the target cannot change: a time travel
+            // clause in one is the error then.
+            self.refuse_time_travel_in_subqueries(changes, original)
+                .await?;
+            return Err(refusal);
+        }
+        self.refuse_time_travel_in_subqueries(changes, original)
+            .await?;
         // Spark analyzes the condition and the new values against the table before it finds that the
         // table cannot change: an unknown column is the error then.
         // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own
@@ -978,6 +986,42 @@ impl Session {
             operation: operation.to_owned(),
         }
         .into())
+    }
+
+    /// Analyzes each subquery of a `DELETE`, `UPDATE` or `MERGE` on its own and refuses a time travel clause
+    /// in it. Any other failure (a correlated column does not resolve alone) is left to the statement's own
+    /// analysis.
+    async fn refuse_time_travel_in_subqueries(
+        &self,
+        changes: &RowChanges<'_>,
+        original: &str,
+    ) -> Result<(), KrishivError> {
+        let mut queries: Vec<&krishiv_sql::ast::Query> = changes.sources.to_vec();
+        for e in changes
+            .condition
+            .into_iter()
+            .chain(changes.values.iter().copied())
+            .chain(changes.more.iter().copied())
+        {
+            super::all_subqueries(e, &mut queries);
+        }
+        let plain = self.with_locals(Vec::new());
+        for q in queries {
+            let Some(text) = original.get(q.span.start..q.span.end) else {
+                continue;
+            };
+            match plain.analyze_variable_query(text).await {
+                Ok(analysis) => analysis
+                    .env
+                    .catalog
+                    .check_reference_options(analysis.analyzed.plan.root())?,
+                Err(e) if e.error_class().name() == "UNSUPPORTED_FEATURE.TIME_TRAVEL" => {
+                    return Err(e);
+                }
+                Err(_) => {}
+            }
+        }
+        Ok(())
     }
 
     /// Drops the cached relations that read the permanent table `name`: its data or existence changed.

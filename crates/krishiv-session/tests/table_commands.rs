@@ -823,7 +823,7 @@ fn insert_column_lists_by_name_and_conflicts() {
     );
     assert_eq!(
         class(&s, "INSERT INTO t REPLACE WHERE a = 1 VALUES (1, 'x')"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "UNSUPPORTED_FEATURE.TABLE_OPERATION"
     );
     // The multi-table insert writes one row per clause (`tests/multi_insert.rs`).
     let before = col0(&s, "SELECT CAST(count(*) AS STRING) FROM t");

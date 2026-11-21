@@ -320,6 +320,44 @@ fn the_clause_is_refused_for_every_kind_of_relation() {
             "`spark_catalog`.`default`.`tbl`",
         ),
         (
+            "create or replace temporary view tv3 as select * from tbl@v1",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
+        (
+            "create temporary view tv2 as select * from tbl@v1",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
+        (
+            "create global temporary view g2 as select * from tbl@v1",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
+        (
+            "alter view pv as select * from tbl@v1",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
+        (
+            "merge into tbl t using (select * from tbl@v1) s on t.id = s.id when matched then delete",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
+        (
+            "merge into tbl t using (select * from pv@v1) s on t.id = s.a when matched then delete",
+            "`spark_catalog`.`default`.`pv`",
+        ),
+        (
+            "merge into tbl t using tbl s on t.id = s.id when matched and t.id in (select id from tbl@v1) then delete",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
+        (
+            "select * from pv version as of 1 with ('a' = 'b')",
+            "`spark_catalog`.`default`.`pv`",
+        ),
+        ("create view v4 as select * from tv@v1", "`tv`"),
+        ("alter view pv as select * from tv@v1", "`tv`"),
+        (
+            "delete from tv where a in (select id from tbl@v1)",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
+        (
             &format!("select * from parquet.`{}` version as of 1", dir.display()),
             &format!("`parquet`.`{}`", dir.display()),
         ),
@@ -345,4 +383,98 @@ fn the_clause_is_refused_for_every_kind_of_relation() {
         run(&s, "select * from v2"),
         Err("TABLE_OR_VIEW_NOT_FOUND".to_owned())
     );
+}
+
+/// A variant edit whose argument folds to NULL is NULL before its literal path is parsed, as in Spark
+/// (`NullIntolerant` after constant folding); a call that does not fold still raises.
+#[test]
+fn a_variant_edit_over_an_argument_that_folds_to_null_is_null() {
+    let s = Session::new().expect("session");
+    for sql in [
+        "select variant_insert(parse_json(cast(null as string)), 'bad', 1)",
+        "select variant_set(parse_json(cast(null as string)), 'bad', 1)",
+        "select variant_array_append(parse_json(cast(null as string)), 'bad', 1)",
+        "select variant_insert(parse_json('{}'), 'bad', parse_json(cast(null as string)))",
+        "select try_variant_insert(to_variant_object(cast(null as struct<a:int>)), 'bad', 1)",
+    ] {
+        assert_eq!(run(&s, sql), Ok(()), "{sql}");
+    }
+    assert_eq!(
+        run(&s, "select variant_insert(parse_json('{}'), 'bad', 1)"),
+        Err("INVALID_VARIANT_PATH".to_owned())
+    );
+}
+
+/// `JSON_TABLE` checks every path first, then each column's cast in the session's mode; a refusal names the
+/// whole call (`JsonTable.checkInputDataTypes`).
+#[test]
+fn a_json_table_column_type_no_cast_reaches_names_the_call() {
+    let s = Session::new().expect("session");
+    let struct_col =
+        "select * from json_table('{\"a\":1}', '$' columns (v struct<x: int> path '$.a'))";
+    assert_eq!(
+        run(&s, struct_col),
+        Err("DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION".to_owned())
+    );
+    let text = message(&s, struct_col);
+    assert!(
+        text.contains("JSON_TABLE(")
+            && text.contains("COLUMNS (v STRUCT<x: INT> PATH '$.a') NULL ON ERROR)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("cannot cast \"STRING\" to \"STRUCT<x: INT>\""),
+        "{text}"
+    );
+    // An `EXISTS` column (BOOLEAN) cast to TIMESTAMP is refused under ANSI, with the call's text, not the cast.
+    let exists =
+        "select * from json_table('{\"a\":1}', '$' columns (v timestamp exists path '$.a'))";
+    assert_eq!(
+        run(&s, exists),
+        Err("DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION".to_owned()),
+        "{}",
+        message(&s, exists)
+    );
+    let text = message(&s, exists);
+    assert!(
+        text.contains("JSON_TABLE(") && !text.contains("__json_table"),
+        "{text}"
+    );
+    // Every path is checked before any column's cast.
+    assert_eq!(
+        run(
+            &s,
+            "select * from json_table('{\"a\":1}', '$' columns (v struct<x: int> path '$.a', w int path 'bad'))"
+        ),
+        Err("DATATYPE_MISMATCH.INVALID_JSON_TABLE_PATH".to_owned())
+    );
+    // With ANSI off the cast of an EXISTS column to TIMESTAMP is allowed.
+    run(&s, "set spark.sql.ansi.enabled = false").expect("set");
+    assert_eq!(run(&s, exists), Ok(()));
+}
+
+/// Temporary views are named as written (upper case kept, a global one without a catalog); a permanent
+/// view refuses `REPLACE WHERE` as a view write; the repeated column of a comment list is quoted.
+#[test]
+fn view_names_as_written_and_view_replace_where() {
+    let s = session_with_table();
+    run(&s, "create temporary view TV as select 1 as a").expect("temp view");
+    run(&s, "create global temporary view gv as select 1 as a").expect("global view");
+    run(&s, "create view pv as select 1 as a").expect("view");
+    assert!(
+        message(&s, "comment on column TV.a is 'x'").contains("`TV` is a view"),
+        "{}",
+        message(&s, "comment on column TV.a is 'x'")
+    );
+    let global = message(&s, "comment on column global_temp.gv.a is 'x'");
+    assert!(
+        global.contains("`global_temp`.`gv` is a view") && !global.contains("spark_catalog"),
+        "{global}"
+    );
+    assert_eq!(
+        run(&s, "insert into pv replace where a = 1 select 1"),
+        Err("VIEW_WRITE_NOT_ALLOWED".to_owned())
+    );
+    let same = message(&s, "comment on table tbl column (id is 'a', ID is 'b')");
+    assert!(same.contains("`id`"), "{same}");
 }

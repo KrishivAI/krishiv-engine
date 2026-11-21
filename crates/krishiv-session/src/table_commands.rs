@@ -118,6 +118,10 @@ pub(crate) struct RowChanges<'a> {
     pub(crate) condition: Option<&'a krishiv_sql::ast::Expr>,
     /// The target's `WITH (...)` options.
     pub(crate) options: &'a [krishiv_sql::ast::TableOption],
+    /// More expressions whose subqueries Spark analyzes first (a `MERGE`'s `ON` and clause conditions).
+    pub(crate) more: &'a [&'a krishiv_sql::ast::Expr],
+    /// Queries Spark analyzes first (a `MERGE` source that is a subquery).
+    pub(crate) sources: &'a [&'a krishiv_sql::ast::Query],
 }
 
 /// The scalar subqueries anywhere in the expression.
@@ -129,6 +133,21 @@ fn scalar_subqueries<'a>(
         out.push(q);
     }
     e.for_each_child(&mut |c| scalar_subqueries(c, out));
+}
+
+/// Every subquery (scalar, `IN` and `EXISTS`) anywhere in the expression.
+pub(crate) fn all_subqueries<'a>(
+    e: &'a krishiv_sql::ast::Expr,
+    out: &mut Vec<&'a krishiv_sql::ast::Query>,
+) {
+    match &e.kind {
+        krishiv_sql::ast::ExprKind::Subquery(q) | krishiv_sql::ast::ExprKind::Exists(q) => {
+            out.push(q);
+        }
+        krishiv_sql::ast::ExprKind::InSubquery { query, .. } => out.push(query),
+        _ => {}
+    }
+    e.for_each_child(&mut |c| all_subqueries(c, out));
 }
 
 fn unsupported(feature: &str) -> KrishivError {
@@ -193,7 +212,7 @@ impl TableName {
         Ok(Self {
             namespace,
             name,
-            written: format!("`{}`", parts.join("`.`")),
+            written: krishiv_common::names::quote_parts(parts),
             bare,
         })
     }
@@ -589,6 +608,11 @@ impl Session {
             ids,
         )
         .map_err(|e| e.error)?;
+        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        let case_sensitive = env.analysis.conf.case_sensitive;
+        let analysis = df.analyzed_in(env.clone()).await?;
+        env.catalog
+            .check_reference_options(analysis.analyzed.plan.root())?;
         if let Some(temp) = crate::catalog::reads_temporary(
             &self.state.catalog,
             plan.root(),
@@ -600,11 +624,6 @@ impl Session {
                 "VIEW",
             ));
         }
-        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        let case_sensitive = env.analysis.conf.case_sensitive;
-        let analysis = df.analyzed_in(env.clone()).await?;
-        env.catalog
-            .check_reference_options(analysis.analyzed.plan.root())?;
         self.refuse_session_objects(&name.quoted(), plan.root(), &env)
             .await?;
         let query_columns: Vec<String> = analysis
@@ -1107,6 +1126,10 @@ impl Session {
                     ids,
                 )
                 .map_err(|e| e.error)?;
+                let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+                let analysis = df.analyzed_in(env.clone()).await?;
+                env.catalog
+                    .check_reference_options(analysis.analyzed.plan.root())?;
                 if let Some(temp) = crate::catalog::reads_temporary(
                     &self.state.catalog,
                     plan.root(),
@@ -1118,8 +1141,6 @@ impl Session {
                         "VIEW",
                     ));
                 }
-                let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-                let analysis = df.analyzed_in(env.clone()).await?;
                 self.refuse_session_objects(&name.quoted(), plan.root(), &env)
                     .await?;
                 crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
@@ -1283,7 +1304,9 @@ impl Session {
                     if resolved[..i].contains(at) {
                         return Err(krishiv_common::error::NotSupportedChangeSameColumn {
                             table: name.quoted(),
-                            field_name: changed.columns[*at].name.clone(),
+                            field_name: krishiv_common::names::quote_parts(&[changed.columns[*at]
+                                .name
+                                .clone()]),
                         }
                         .into());
                     }

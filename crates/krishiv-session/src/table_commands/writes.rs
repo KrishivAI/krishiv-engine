@@ -64,12 +64,8 @@ impl Session {
                 env.analysis.conf.case_sensitive,
             );
         if self.temp_entry_of(name, env) || global {
-            // A temporary view is named as written.
-            let view_name = if global {
-                name.quoted()
-            } else {
-                format!("`{}`", name.name)
-            };
+            // A temporary view is named as written (a global one without a catalog).
+            let view_name = name.written.clone();
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
                 operation: operation.to_owned(),
                 view_name,
@@ -128,6 +124,22 @@ impl Session {
         let replace =
             c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some();
         let name = self.table_name(&c.name, &env)?;
+        if replace {
+            // Spark checks the target before the capability: a view is not writable at all.
+            let permanent_view = self
+                .state
+                .catalog
+                .store
+                .table(&name.namespace, &name.name)
+                .is_some_and(|t| t.view.is_some())
+                && !self.temp_entry_of(&name, &env);
+            if permanent_view {
+                return Err(krishiv_common::error::ViewWriteNotAllowed {
+                    name: name.quoted(),
+                }
+                .into());
+            }
+        }
         let table = self.table_for_write(&name, "INSERT", &env)?;
         if replace {
             // A session-catalog table has no replace-by-condition write (Spark: the table lacks the capability).

@@ -683,6 +683,8 @@ impl Session {
                     values: &[],
                     condition: d.where_clause.as_ref(),
                     options: &d.options,
+                    more: &[],
+                    sources: &[],
                 };
                 self.exec_row_level_change(&d.table, d.alias.as_ref(), "DELETE", &changes, query)
                     .await
@@ -695,6 +697,8 @@ impl Session {
                     values: &values,
                     condition: u.where_clause.as_ref(),
                     options: &u.options,
+                    more: &[],
+                    sources: &[],
                 };
                 self.exec_row_level_change(
                     &u.table,
@@ -706,11 +710,20 @@ impl Session {
                 .await
             }
             Statement::Merge(m) => {
+                let more: Vec<&krishiv_sql::ast::Expr> = std::iter::once(&m.on)
+                    .chain(m.clauses.iter().filter_map(|c| c.condition.as_ref()))
+                    .collect();
+                let sources: Vec<&krishiv_sql::ast::Query> = match &m.source {
+                    krishiv_sql::ast::MergeSource::Query { query, .. } => vec![&**query],
+                    _ => Vec::new(),
+                };
                 let changes = crate::table_commands::RowChanges {
                     targets: &[],
                     values: &[],
                     condition: None,
                     options: &m.options,
+                    more: &more,
+                    sources: &sources,
                 };
                 self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
                     .await

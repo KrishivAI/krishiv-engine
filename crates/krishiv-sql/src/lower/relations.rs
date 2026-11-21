@@ -856,26 +856,6 @@ impl Lowerer {
                             path_span,
                         ));
                     }
-                    // Spark prints the whole call for a column type no cast reaches, not Krishiv's internal read.
-                    let source = if matches!(c.kind, Kind::Exists { .. }) {
-                        krishiv_types::DataType::Boolean
-                    } else {
-                        krishiv_types::DataType::String
-                    };
-                    let target = data_type
-                        .without_char_varchar()
-                        .to_data_type()
-                        .map_err(|e| err(e, data_type.span))?;
-                    if krishiv_plan::analyzer::cast_always_refused(&source, &target) {
-                        return Err(err(
-                            krishiv_common::error::DatatypeMismatchCastWithoutSuggestion {
-                                sql_expr: format!("\"{call_text}\""),
-                                src_type: format!("\"{}\"", source.sql()),
-                                target_type: format!("\"{}\"", target.sql()),
-                            },
-                            data_type.span,
-                        ));
-                    }
                     let function = if matches!(c.kind, Kind::Exists { .. }) {
                         "__json_table_exists"
                     } else {
@@ -886,6 +866,9 @@ impl Lowerer {
                         vec![
                             arc(self.column(vec![row.to_owned()], sp)),
                             arc(self.text_literal(&path_text, sp)),
+                            // The call Spark names when no cast reaches the column's type: the analyzer
+                            // checks the cast in the session's mode and prints this text.
+                            arc(self.text_literal(&call_text, sp)),
                         ],
                         sp,
                     );

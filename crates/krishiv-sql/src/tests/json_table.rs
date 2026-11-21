@@ -209,23 +209,3 @@ fn the_invalid_path_message_prints_the_call_as_spark_does() {
     assert!(m.contains("COLUMNS (it's INT PATH '$['it's']')"), "{m}");
     assert!(m.contains(r"'$[\'it\'s\']'"), "{m}");
 }
-
-#[test]
-fn a_column_type_no_cast_reaches_names_the_call() {
-    let e =
-        lowered("SELECT * FROM json_table('{\"a\":1}', '$' COLUMNS (v STRUCT<x: INT> PATH '$.a'))")
-            .unwrap_err();
-    assert_eq!(
-        e.error.error_class(),
-        ErrorClass::DatatypeMismatchCastWithoutSuggestion
-    );
-    let text = e.error.to_string();
-    assert!(
-        text.contains("JSON_TABLE(..., '$' COLUMNS (v STRUCT<x: INT> PATH '$.a') NULL ON ERROR)"),
-        "{text}"
-    );
-    assert!(
-        text.contains("cannot cast \"STRING\" to \"STRUCT<x: INT>\""),
-        "{text}"
-    );
-}

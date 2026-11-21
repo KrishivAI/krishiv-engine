@@ -220,6 +220,20 @@ pub(super) fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
     }
 }
 
+/// Whether `ir` is a NULL literal, or a cast / `parse_json` of one.
+fn folds_to_null(ir: &Expr) -> bool {
+    match &ir.node {
+        ExprNode::Literal(l) => matches!(l, krishiv_plan::Literal::Null(_)),
+        ExprNode::Cast { expr, .. } => folds_to_null(expr),
+        ExprNode::Resolved(krishiv_plan::ResolvedExpr::Function(g)) => {
+            matches!(&g.id, krishiv_plan::FunctionId::Registry { name, .. }
+                if matches!(name.to_ascii_lowercase().as_str(), "parse_json" | "try_parse_json" | "to_variant_object"))
+                && g.args.iter().any(|a| folds_to_null(a))
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn compile(
     name: &str,
     f: &ResolvedFunction,
@@ -227,6 +241,18 @@ pub(super) fn compile(
     input: Input<'_>,
     e: &Expr,
 ) -> Result<Arc<dyn PhysExpr>> {
+    // A null-intolerant variant edit over an argument that is NULL (a NULL literal, possibly cast
+    // or parsed) is NULL before its path is parsed, as Spark folds it.
+    if matches!(
+        name.to_ascii_lowercase().trim_start_matches("try_"),
+        "variant_insert" | "variant_set" | "variant_array_append"
+    ) && f.args.iter().any(|a| folds_to_null(a))
+    {
+        let null = crate::planner::eval::Lit::new(&krishiv_plan::Literal::Null(Some(
+            f.data_type.clone(),
+        )))?;
+        return Ok(on_carrier(Arc::new(null), f.data_type.to_arrow()));
+    }
     let args = wide_args(args);
     let bind_args = f
         .args

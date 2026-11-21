@@ -323,8 +323,24 @@ pub(super) fn bad_cast(
     mode: CastMode,
     zone: Option<SessionZone>,
 ) -> AnalysisError {
+    // A `JSON_TABLE` column: Spark checks the column's cast in `JsonTable.checkInputDataTypes` and names the
+    // whole call (the lowering passes its text as the read's last argument), whatever the refusal.
+    let shown_arg = arg.shown();
+    if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &shown_arg.node
+        && let FunctionId::Registry { name, .. } = &f.id
+        && name.starts_with("__json_table_")
+        && let Some(ExprNode::Literal(Literal::String(call))) = f.args.get(2).map(|a| &a.node)
+    {
+        let error = cast_mismatch(
+            BadCast::Without,
+            format!("\"{call}\""),
+            quoted_type(arg.ty.data_type.as_ref()),
+            quoted_type(Some(to)),
+        );
+        return AnalysisError::new(error, origin);
+    }
     let shown = ExprNode::Cast {
-        expr: arg.shown(),
+        expr: shown_arg,
         to: to.clone(),
         mode,
     };
