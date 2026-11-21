@@ -711,6 +711,57 @@ fn part_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+/// An SQL `INSERT` into a bucketed table, and into a bucketed and partitioned one, places each row in
+/// Spark's bucket too (the files, not just the row count).
+#[test]
+fn sql_insert_into_bucketed_tables_places_rows_in_spark_buckets() {
+    for ddl in [
+        "CREATE TABLE sb (id INT, name STRING) USING parquet CLUSTERED BY (id) INTO 4 BUCKETS",
+        "CREATE TABLE sb (id INT, name STRING, p INT) USING parquet PARTITIONED BY (p) CLUSTERED BY (id) INTO 4 BUCKETS",
+    ] {
+        let s = Session::new().unwrap();
+        let warehouse = tempfile::tempdir().unwrap();
+        s.conf()
+            .set(
+                "spark.sql.warehouse.dir",
+                warehouse.path().to_str().unwrap(),
+            )
+            .unwrap();
+        block_on(block_on(s.sql(ddl)).unwrap().collect()).unwrap();
+        let cols = if ddl.contains("PARTITIONED") {
+            "CAST(id AS INT), CAST(concat('n', id % 5) AS STRING), CAST(id % 3 AS INT)"
+        } else {
+            "CAST(id AS INT), CAST(concat('n', id % 5) AS STRING)"
+        };
+        block_on(
+            block_on(s.sql(&format!("INSERT INTO sb SELECT {cols} FROM range(0, 40)")))
+                .unwrap()
+                .collect(),
+        )
+        .unwrap();
+        let mut files = Vec::new();
+        part_files(warehouse.path(), &mut files);
+        assert!(files.len() >= 2, "{files:?}");
+        let mut total = 0;
+        for f in &files {
+            let bucket =
+                krishiv_io::bucket_id_of_file_name(f.file_name().unwrap().to_str().unwrap())
+                    .expect("a bucketed file name carries its bucket id");
+            let rows = s.read().format("parquet").load([f.to_str().unwrap()]);
+            let wrong = block_on(
+                rows.clone()
+                    .filter_expr(&format!("pmod(hash(id), 4) != {bucket}"))
+                    .unwrap()
+                    .count(),
+            )
+            .unwrap();
+            assert_eq!(wrong, 0, "{f:?}: rows outside bucket {bucket}");
+            total += block_on(rows.count()).unwrap();
+        }
+        assert_eq!(total, 40, "{ddl}");
+    }
+}
+
 /// Every row of every file of a bucketed table is in the bucket its file name says, and that bucket is
 /// Spark's `pmod(hash(columns), n)` (Murmur3, seed 42) over the bucket columns in the order given.
 #[test]

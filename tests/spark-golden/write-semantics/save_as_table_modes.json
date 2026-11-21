@@ -1323,6 +1323,23 @@
    "expect": {
     "kind": "error",
     "class": "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
+    "sqlstate": "KD000",
+    "params": {
+     "srcType": "\"STRING\"",
+     "colName": "`id`",
+     "targetType": "\"INT\"",
+     "tableName": "`spark_catalog`.`default`.`t`"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:240-244 (TableOutputResolver.resolveOutputColumns byName)",
+    "Cast.scala:497-522 (canANSIStoreAssign: string -> int is false)",
+    "QueryCompilationErrors.scala:2883-2894"
+   ],
+   "note": "storeAssignmentPolicy default ANSI; spark.sql.ansi.enabled does not change store assignment",
+   "old_expect": {
+    "kind": "error",
+    "class": "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
     "sqlstate": "42K09",
     "params": {
      "tableName": "`spark_catalog`.`default`.`t`",
@@ -1331,13 +1348,7 @@
      "targetType": "\"INT\""
     },
     "sqlstate_unverified": true
-   },
-   "source": [
-    "sql/core/.../datasources/rules.scala:240-244 (TableOutputResolver.resolveOutputColumns byName)",
-    "Cast.scala:497-522 (canANSIStoreAssign: string -> int is false)",
-    "QueryCompilationErrors.scala:2883-2894"
-   ],
-   "note": "storeAssignmentPolicy default ANSI; spark.sql.ansi.enabled does not change store assignment"
+   }
   },
   {
    "id": "SAT-35-append-long-into-int-ok",
@@ -1411,13 +1422,24 @@
     "kind": "error",
     "class": "CAST_OVERFLOW_IN_TABLE_INSERT",
     "sqlstate": "22003",
-    "thrown_at": "execution",
-    "params_unverified": true
+    "params": {
+     "targetType": "\"INT\"",
+     "sourceType": "\"BIGINT\"",
+     "columnName": "`id`"
+    },
+    "thrown_at": "execution"
    },
    "source": [
     "Cast.scala:500 + ANSI store-assignment runtime check; class text in error-conditions.json"
    ],
-   "note": "runtime error, parameters sourceType/targetType/columnName not derived (unverified-by-run)"
+   "note": "runtime error, parameters sourceType/targetType/columnName not derived (unverified-by-run)",
+   "old_expect": {
+    "kind": "error",
+    "class": "CAST_OVERFLOW_IN_TABLE_INSERT",
+    "sqlstate": "22003",
+    "thrown_at": "execution",
+    "params_unverified": true
+   }
   },
   {
    "id": "SAT-37-append-string-into-int-legacy-policy",
@@ -1495,16 +1517,26 @@
     "class": "_LEGACY_ERROR_TEMP_1159",
     "sqlstate": null,
     "params": {
+     "specifiedProvider": "JsonDataSourceV2",
+     "existingProvider": "ParquetDataSourceV2",
+     "tableName": "spark_catalog.default.t"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/rules.scala:180-185",
+    "QueryCompilationErrors.scala:2164-2172"
+   ],
+   "old_expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_1159",
+    "sqlstate": null,
+    "params": {
      "tableName": "spark_catalog.default.t",
      "existingProvider": "ParquetFileFormat",
      "specifiedProvider": "JsonFileFormat"
     },
     "legacy": true
-   },
-   "source": [
-    "sql/core/.../datasources/rules.scala:180-185",
-    "QueryCompilationErrors.scala:2164-2172"
-   ]
+   }
   },
   {
    "id": "SAT-39-ignore-provider-mismatch",
@@ -1818,14 +1850,25 @@
    "expect": {
     "kind": "error",
     "class": "COLUMN_NOT_DEFINED_IN_TABLE",
-    "sqlstate": null,
-    "params_unverified": true
+    "sqlstate": "42703",
+    "params": {
+     "colName": "`zz`",
+     "tableCols": "`id`, `p`",
+     "colType": "partition",
+     "tableName": "`spark_catalog`.`default`.`t`"
+    }
    },
    "source": [
     "ExternalCatalogUtils.scala:312-322 (normalizeColumnName -> columnNotDefinedInTableError)",
     "QueryCompilationErrors.scala:2143-2155"
    ],
-   "note": "class from source, SQLSTATE and parameters unverified-by-run"
+   "note": "class from source, SQLSTATE and parameters unverified-by-run",
+   "old_expect": {
+    "kind": "error",
+    "class": "COLUMN_NOT_DEFINED_IN_TABLE",
+    "sqlstate": null,
+    "params_unverified": true
+   }
   },
   {
    "id": "SAT-47-all-columns-partitioned",
