@@ -70,7 +70,13 @@ impl Session {
             }
             .into());
         }
-        Err(name.not_found(self.search_path()))
+        // ALTER TABLE resolves a table only, so its path has no `system.builtin` (Spark's goldens).
+        let path = if matches!(operation, "ALTER TABLE" | "COMMENT ON TABLE") {
+            self.table_search_path()
+        } else {
+            self.search_path()
+        };
+        Err(name.not_found(path))
     }
 
     /// `INSERT INTO|OVERWRITE [TABLE] name [(columns)] [BY NAME] query`, or the multi-table

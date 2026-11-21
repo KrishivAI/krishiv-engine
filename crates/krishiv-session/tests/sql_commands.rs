@@ -872,6 +872,31 @@ fn a_commands_not_found_error_names_the_current_namespace() {
     );
 }
 
+/// Commands that resolve a table or view only (`ALTER TABLE`, `SHOW COLUMNS`, `SHOW TABLE EXTENDED ..
+/// PARTITION`) name a search path without `system.builtin`, as Spark 4.2's goldens do.
+#[test]
+fn table_only_commands_name_a_path_without_the_builtin_schema() {
+    let s = session();
+    block_on(s.sql("CREATE DATABASE tdb")).unwrap();
+    block_on(s.sql("USE tdb")).unwrap();
+    let path = |sql: &str| {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound, "{sql}");
+        e.message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "searchPath")
+            .map(|(_, v)| v.clone())
+            .unwrap()
+    };
+    let want = "[`system`.`session`, `spark_catalog`.`tdb`]";
+    assert_eq!(path("ALTER TABLE nosuch ADD COLUMN c INT"), want);
+    assert_eq!(path("SHOW COLUMNS IN nosuch"), want);
+    assert_eq!(
+        path("SHOW TABLE EXTENDED LIKE 'nosuch*' PARTITION(c = 1)"),
+        want
+    );
+}
+
 /// An unresolved variable in `SET VARIABLE` / `DROP TEMPORARY VARIABLE` names the current namespace in
 /// its search path, like a missing table.
 #[test]
