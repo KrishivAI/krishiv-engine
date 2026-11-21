@@ -146,12 +146,13 @@ pub use operator::{
     FlushOutput, GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source,
 };
 pub use operators::{
-    DEFAULT_MAX_MERGE_FAN_IN, Expand, FetchSlot, FileScan, FileScanMetrics, FileScanSource,
-    FileSelections, FileWrite, FileWriteSink, Filter, FilterPushdown, FnPredicate, Generate,
-    LateFetch, Limit, METADATA_COLUMN, MemoryScan, NullOf, PathRoots, Predicate, Project,
-    ProjectItem, PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ReplicateRows,
-    RowStageSettings, RuntimeFilters, Sample, ScalarExpr, ScanPushdown, ScanPushdowns, Sort,
-    SortKey, SortMetrics, SourceRows, SpilledScan, TakeRows, TopN, UnionAlign,
+    BoundScan, BoundScanId, DEFAULT_MAX_MERGE_FAN_IN, DecidedScan, ExecutionReads, Expand,
+    FetchSlot, FileScan, FileScanMetrics, FileScanSource, FileSelections, FileWrite, FileWriteSink,
+    Filter, FilterPushdown, FnPredicate, Generate, LateFetch, Limit, METADATA_COLUMN, MemoryScan,
+    NullOf, OfferedConjunct, PathRoots, Predicate, Project, ProjectItem, PushedFilter,
+    ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ReplicateRows, RowStageSettings, RuntimeFilters, Sample,
+    ScalarExpr, ScanDecision, ScanPushdown, ScanPushdowns, Sort, SortKey, SortMetrics,
+    SourceConjunct, SourceFilter, SourceRows, SpilledScan, TakeRows, TopN, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};

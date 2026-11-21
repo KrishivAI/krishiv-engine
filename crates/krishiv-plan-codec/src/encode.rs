@@ -780,6 +780,11 @@ impl Encoder {
     }
 
     fn scan(&mut self, node: &ScanNode) -> Result<pb::ScanNode> {
+        if node.decided.is_some() {
+            return Err(CodecError::Unsupported(
+                "a Python data source in a distributed plan".to_owned(),
+            ));
+        }
         let Scan {
             source,
             output,

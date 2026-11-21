@@ -1350,6 +1350,7 @@ impl<'a> Planner<'a> {
                 runtime_filters: Vec::new(),
                 row_stage: self.rf.row_stage(),
                 row_id,
+                decided: None,
             }),
             layout,
             explain: ExplainNode::leaf("Scan", detail).with_facts(super::scan_facts::of(

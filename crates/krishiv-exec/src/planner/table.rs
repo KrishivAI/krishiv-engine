@@ -112,6 +112,35 @@ pub trait TableProviderResolver: Send + Sync + fmt::Debug {
     /// `TABLE_OR_VIEW_NOT_FOUND` when the table is gone;
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a source the resolver cannot open.
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>>;
+
+    /// Keeps `bound` for this plan and names it.
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` by default: a resolver that cannot hold one refuses the plan.
+    fn bind_scan(
+        &self,
+        bound: Arc<dyn crate::operators::BoundScan>,
+    ) -> Result<crate::operators::BoundScanId> {
+        let _ = bound;
+        Err(KrishivUnsupportedFeature {
+            feature: "a Python data source in this planning context".to_owned(),
+        }
+        .into())
+    }
+
+    /// The read [`Self::bind_scan`] named.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` by default and for an unknown id.
+    fn bound_scan(
+        &self,
+        id: crate::operators::BoundScanId,
+    ) -> Result<Arc<dyn crate::operators::BoundScan>> {
+        let _ = id;
+        Err(crate::error::internal(
+            "no bound scan in this context".to_owned(),
+        ))
+    }
 }
 
 /// The optimizer's [`Statistics`] read from table providers.

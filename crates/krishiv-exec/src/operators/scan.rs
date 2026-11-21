@@ -182,6 +182,24 @@ pub trait ScanPushdown: Send + Sync {
     /// `INTERNAL_ERROR` for a projection path that does not exist or a
     /// selection the scan cannot honour.
     fn build(&self, pushdowns: ScanPushdowns) -> Result<Arc<dyn Source>>;
+    /// Whether the planner must use [`Self::decide`] instead of [`Self::filter_pushdown`]: the scan sees
+    /// every conjunct at once, once per physical plan. Default false.
+    fn decides_once(&self) -> bool {
+        false
+    }
+    /// Decides every conjunct at once, once per physical plan, even with no filter (an empty `conjuncts`).
+    /// May run user code; never reads rows.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` by default; whatever the scan's planning raises.
+    fn decide(
+        &self,
+        conjuncts: &[super::OfferedConjunct],
+        projection: &[ColumnPath],
+    ) -> Result<super::ScanDecision> {
+        let _ = (conjuncts, projection);
+        Err(internal("this scan does not decide once".to_owned()))
+    }
     /// The same scan reading exactly `files` in `partitions` (split file
     /// indexes refer to the files), as a distributed task does. The default
     /// refuses: only file scans honour it.

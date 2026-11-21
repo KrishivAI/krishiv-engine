@@ -1027,6 +1027,7 @@ impl Decoder {
                 max_pass_rate: row_stage.max_pass_rate,
             },
             row_id: s.row_id,
+            decided: None,
         })
     }
 

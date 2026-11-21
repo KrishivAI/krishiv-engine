@@ -40,6 +40,7 @@ mod replicate;
 mod runtime_filter;
 mod sample;
 mod scan;
+mod scan_decide;
 pub(crate) mod select;
 mod sort;
 mod spilled_scan;
@@ -73,6 +74,10 @@ pub use scan::{
 };
 #[cfg(all(test, not(loom)))]
 use scan::{ScanGlobal, ScanLocal};
+pub use scan_decide::{
+    BoundScan, BoundScanId, DecidedScan, ExecutionReads, OfferedConjunct, ScanDecision,
+    SourceConjunct, SourceFilter,
+};
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};
 pub(crate) use sort::{KeyEncoder, blocking, data_bytes, owned_rows};
 pub use spilled_scan::SpilledScan;

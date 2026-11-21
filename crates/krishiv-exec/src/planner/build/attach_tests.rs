@@ -12,6 +12,7 @@ use crate::physical::ScanNode;
 
 fn scan(id: u64) -> PhysNode {
     PhysNode::Scan(ScanNode {
+        decided: None,
         id: ScanId(id),
         scan: Scan {
             source: ReadSource::Table {

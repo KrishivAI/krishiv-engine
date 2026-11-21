@@ -66,6 +66,7 @@ fn scan_plan(table: Arc<dyn TableProvider>, nullable: bool) -> (PhysicalPlan, Ar
         version: None,
     };
     let node = PhysNode::Scan(ScanNode {
+        decided: None,
         id: ScanId(1),
         scan,
         projection: vec![ColumnPath::new("id")],
