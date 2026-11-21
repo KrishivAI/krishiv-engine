@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `cargo xtask quarantine [--list]`: the flaky-test quarantine registry (owner policy 2026-11-07).
+//! `cargo xtask quarantine [--list | --flaky <nextest-output>]`: the flaky-test quarantine registry (owner policy 2026-11-07).
 //!
 //! `tests/quarantine.toml` lists every quarantined test with an owner, an issue, the day it was added
 //! and a deadline at most three days later. The check fails when a field is missing, a deadline has
@@ -162,7 +162,45 @@ fn problems(registry: &str, nextest: &str, today: i64) -> Vec<String> {
     out
 }
 
-/// Entry point of `cargo xtask quarantine [--list]`.
+/// Tests nextest reported as `FLAKY` (failed, then passed on a retry) in a captured run, as
+/// `(package, test name)` pairs. Colour codes are ignored.
+fn flaky_tests(log: &str) -> BTreeSet<(String, String)> {
+    let mut out = BTreeSet::new();
+    for line in log.lines() {
+        let plain = strip_ansi(line);
+        let Some(rest) = plain.trim_start().strip_prefix("FLAKY") else {
+            continue;
+        };
+        let Some((_, after)) = rest.split_once(']') else {
+            continue;
+        };
+        let mut words = after.split_whitespace();
+        if let (Some(binary), Some(name)) = (words.next(), words.next()) {
+            let package = binary.split("::").next().unwrap_or(binary);
+            out.insert((package.to_owned(), name.to_owned()));
+        }
+    }
+    out
+}
+
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for n in chars.by_ref() {
+                if n.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Entry point of `cargo xtask quarantine [--list | --flaky <nextest-output>]`.
 ///
 /// # Errors
 /// Returns the problems found, or a message when a file cannot be read.
@@ -181,6 +219,28 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
                 );
             }
             return Ok(());
+        }
+        ["--flaky", log] => {
+            let text = std::fs::read_to_string(log).map_err(|e| format!("{log}: {e}"))?;
+            let reg: Registry = toml::from_str(&registry).map_err(|e| e.to_string())?;
+            let known: BTreeSet<&str> = reg.test.iter().map(|e| e.name.as_str()).collect();
+            let new: Vec<_> = flaky_tests(&text)
+                .into_iter()
+                .filter(|(_, n)| !known.contains(n.as_str()))
+                .collect();
+            if new.is_empty() {
+                println!("quarantine: no unregistered flaky tests in {log}");
+                return Ok(());
+            }
+            for (package, name) in &new {
+                println!(
+                    "[[test]]\nname = \"{name}\"\npackage = \"{package}\"\nowner = \"<lane>\"\nissue = \"<#issue>\"\nadded = \"<YYYY-MM-DD today>\"\ndeadline = \"<added + 3 days>\"\n"
+                );
+            }
+            return Err(format!(
+                "{} flaky test(s) passed only on a retry and are not in tests/quarantine.toml: open an issue, fix within 3 days or register them with an owner",
+                new.len()
+            ));
         }
         other => return Err(format!("unknown flags {other:?}")),
     }
@@ -290,6 +350,35 @@ mod tests {
         std::fs::write(dir.join("tests/quarantine.toml"), registry).unwrap();
         std::fs::write(dir.join(".config/nextest.toml"), nextest).unwrap();
         dir
+    }
+
+    #[test]
+    fn flaky_lines_are_found_with_or_without_colour() {
+        let log = "        PASS [   0.1s] a::b ok\n\u{1b}[33m       FLAKY\u{1b}[0m 2/3 [   0.5s] krishiv-session::udaf window_x\n        FLAKY 2/3 [   0.5s] krishiv-exec lib_test\n";
+        let got: Vec<_> = flaky_tests(log).into_iter().collect();
+        assert_eq!(
+            got,
+            vec![
+                ("krishiv-exec".to_owned(), "lib_test".to_owned()),
+                ("krishiv-session".to_owned(), "window_x".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_registered_flaky_test_passes_and_an_unregistered_one_fails() {
+        let dir = repo("flaky", REG, NX);
+        let log = dir.join("run.log");
+        std::fs::write(&log, "FLAKY 2/3 [ 1s] p::bin a\n").unwrap();
+        let path = log.to_str().unwrap();
+        assert!(run(&dir, &["--flaky", path]).is_ok());
+        std::fs::write(&log, "FLAKY 2/3 [ 1s] p::bin zzz\n").unwrap();
+        assert!(
+            run(&dir, &["--flaky", path])
+                .unwrap_err()
+                .contains("1 flaky")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
