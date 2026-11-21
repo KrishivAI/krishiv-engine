@@ -102,6 +102,7 @@ async fn apply(
     task: &mut super::row_delta::MorTask,
     batch: &RecordBatch,
     update: bool,
+    write: &MergeOnReadWrite,
 ) -> Result<(), KrishivError> {
     let n = batch.num_columns();
     if n < 2 {
@@ -131,6 +132,7 @@ async fn apply(
         let rows = batch
             .project(&(0..n - 2).collect::<Vec<_>>())
             .map_err(|e| internal(&e.to_string()))?;
+        write.check_nulls(&rows)?;
         task.insert(&rows).await?;
     }
     Ok(())
@@ -156,7 +158,7 @@ async fn run_task(
             task.abort().await;
             return;
         }
-        if let Err(e) = apply(&mut task, &b, update).await {
+        if let Err(e) = apply(&mut task, &b, update, &write).await {
             *lock(&failed) = Some(e.clone());
             drop(batches);
             task.abort().await;

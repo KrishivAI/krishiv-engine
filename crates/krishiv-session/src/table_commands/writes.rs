@@ -37,12 +37,16 @@ impl Session {
             && !self.temp_entry_of(name, env)
         {
             if table.view.is_none() {
-                // INSERT writes through the Delta writer (`delta_writes.rs`); the other writes are
-                // refused by name (a read command never reaches here as a write).
+                // INSERT writes through the Delta writer (`delta_writes.rs`), DELETE and UPDATE
+                // through its row-level table (`row_level.rs`); the other writes are refused by
+                // name (a read command never reaches here as a write).
                 #[cfg(feature = "delta")]
                 if access == Access::Write
                     && is_delta_table(&table)
-                    && !matches!(operation, "INSERT" | "INSERT OVERWRITE")
+                    && !matches!(
+                        operation,
+                        "INSERT" | "INSERT OVERWRITE" | "DELETE" | "UPDATE TABLE"
+                    )
                 {
                     return Err(delta_write_refused(name.quoted(), operation));
                 }

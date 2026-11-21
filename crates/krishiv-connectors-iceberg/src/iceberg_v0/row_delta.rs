@@ -69,6 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
+use super::types::arrow_schema;
 use arrow_array::RecordBatch;
 use iceberg::spec::{DataFile, FormatVersion, TableMetadata};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
@@ -208,6 +209,12 @@ impl MergeOnReadWrite {
             clock,
             created_by: created_by(),
         }))
+    }
+
+    /// Fails on a NULL in a required column of the replacement rows of an `UPDATE`.
+    pub(crate) fn check_nulls(&self, rows: &RecordBatch) -> Result<(), KrishivError> {
+        let table = arrow_schema(self.target.base.current_schema())?;
+        super::sink::check_required(&table, rows)
     }
 
     /// The writer of one task (`partition_id`, Java's partition id in file

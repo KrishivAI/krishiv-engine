@@ -818,3 +818,17 @@ fn nulls_in_required_positions_of_large_lists_and_maps() {
     );
     assert_eq!(found(&map(None), &mismatched), None);
 }
+
+/// The replacement rows of a merge-on-read UPDATE are checked like a copy-on-write write.
+#[test]
+fn check_required_names_a_null_in_a_required_column() {
+    let table: SchemaRef = Arc::new(Schema::new(vec![Field::new("id", A::Int64, false)]));
+    let loose: SchemaRef = Arc::new(Schema::new(vec![Field::new("id", A::Int64, true)]));
+    let batch = |v: Vec<Option<i64>>| {
+        RecordBatch::try_new(Arc::clone(&loose), vec![Arc::new(Int64Array::from(v))]).unwrap()
+    };
+    super::sink::check_required(&table, &batch(vec![Some(1), Some(2)])).unwrap();
+    let e = super::sink::check_required(&table, &batch(vec![Some(1), None])).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::NotNullAssertViolation, "{e}");
+    assert_eq!(e.sql_state(), Some("42000"));
+}
