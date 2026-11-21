@@ -65,7 +65,6 @@ const PENDING: &[(&str, &str)] = &[
     ("syn_time_travel_at_version", "PARSE_SYNTAX_ERROR"),
     ("syn_time_travel_at_timestamp", "PARSE_SYNTAX_ERROR"),
     ("syn_time_travel_clause_and_at", "PARSE_SYNTAX_ERROR"),
-    ("syn_insert_replace_where", "KRISHIV_UNSUPPORTED_FEATURE"),
     ("syn_insert_replace_where_columns", "PARSE_SYNTAX_ERROR"),
     ("syn_update_with_options", "PARSE_SYNTAX_ERROR"),
     ("syn_delete_with_options", "PARSE_SYNTAX_ERROR"),
