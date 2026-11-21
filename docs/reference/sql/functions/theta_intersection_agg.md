@@ -9,7 +9,7 @@ description: "Returns the ThetaSketch's Compact binary representation by interse
 Returns the ThetaSketch's Compact binary representation
 by intersecting all the Theta sketches in the input column.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -21,7 +21,7 @@ theta_intersection_agg(expr)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.1.0 |
@@ -40,6 +40,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

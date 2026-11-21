@@ -10,7 +10,7 @@ Intersects two binary representations of
 Datasketches ThetaSketch objects from two input columns using a
 ThetaSketch Intersect object.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -22,9 +22,9 @@ theta_intersection(first, second)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.1.0 |
 | In Spark profiles | 4.1 and later |
 | Arguments | 2 |
@@ -41,6 +41,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

@@ -112,6 +112,7 @@ use krishiv_types::batch::{Batch, Weights};
 use super::accumulator::{Accumulator, paired};
 use super::merge_index::{MergeIndex, Slot};
 use super::table::{AggCore, batch, own_bytes};
+use super::theta_sketch::sketch_bytes;
 use super::{AggregateOutput, unsupported};
 use crate::error::{Result, internal};
 use crate::hash::{HashSeed, PARTITIONS, ProbeCount, ProbeTotals, grown, spill_partition};
@@ -953,7 +954,22 @@ impl RowTable {
             .map(|(part, n)| {
                 part.accs
                     .iter()
-                    .map(|a| a.projected_part(n, states))
+                    .zip(&self.core.ranges)
+                    .map(|(a, r)| {
+                        // A partition with no row reads none of the column; the others each take it whole
+                        // (a bound: the fold of a batch adds at most its bytes times a constant in all).
+                        let state_bytes = if n > 0 && a.theta_reads_sketches(states) {
+                            let at = match fold {
+                                Fold::States { offset } => r.start.checked_sub(offset),
+                                Fold::Raw => a.args().first().copied(),
+                            };
+                            at.and_then(|i| cols.get(i))
+                                .map_or(0, |c| sketch_bytes(c.as_ref()))
+                        } else {
+                            0
+                        };
+                        a.projected_part(n, states, state_bytes)
+                    })
                     .sum::<usize>()
             })
             .sum();
@@ -1894,6 +1910,9 @@ impl RowTable {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod theta_projection_tests;
 
 mod merge;
 

@@ -48,6 +48,7 @@ use super::listagg::ListAggAcc;
 use super::mode::ModeAcc;
 use super::moments::Moments;
 use super::quantile::{self, ExactAcc, GkAcc};
+use super::theta_sketch::{ThetaSketchAcc, ThetaSketchOp};
 use super::{
     AggInput, AggregateExpr, AggregateFunction, decimal_sum_overflow, interval_sum_overflow,
     is_ansi_interval, long_overflow, out_of_range, unsupported,
@@ -324,6 +325,8 @@ enum Kind {
     Bitmap(BitmapAcc),
     /// `hll_sketch_agg` and `hll_union_agg`: DataSketches HLL sketches per group (see `hll_sketch`).
     HllSketch(HllSketchAcc),
+    /// The Theta sketch aggregates (see `theta_sketch`).
+    ThetaSketch(ThetaSketchAcc),
 }
 
 /// A bitwise aggregate operation.
@@ -504,6 +507,15 @@ impl Accumulator {
             (F::HllSketchAgg { lg_k }, _) => {
                 Kind::HllSketch(HllSketchAcc::new(HllSketchOp::Sketch(*lg_k))?)
             }
+            (F::ThetaSketchAgg { lg_nom }, _) => {
+                Kind::ThetaSketch(ThetaSketchAcc::new(ThetaSketchOp::Sketch(*lg_nom))?)
+            }
+            (F::ThetaUnionAgg { lg_nom }, _) => {
+                Kind::ThetaSketch(ThetaSketchAcc::new(ThetaSketchOp::Union(*lg_nom))?)
+            }
+            (F::ThetaIntersectionAgg, _) => {
+                Kind::ThetaSketch(ThetaSketchAcc::new(ThetaSketchOp::Intersection)?)
+            }
             (F::HllUnionAgg { allow_different }, _) => {
                 Kind::HllSketch(HllSketchAcc::new(HllSketchOp::Union(*allow_different))?)
             }
@@ -654,6 +666,7 @@ impl Accumulator {
             | Kind::Hist(_)
             | Kind::Bitmap(_)
             | Kind::HllSketch(_)
+            | Kind::ThetaSketch(_)
             | Kind::Udf(_) => Vec::new(),
         }
     }
@@ -671,6 +684,7 @@ impl Accumulator {
             Kind::Hist(h) => h.size(),
             Kind::Bitmap(b) => b.size(),
             Kind::HllSketch(h) => h.size(),
+            Kind::ThetaSketch(h) => h.size(),
             Kind::Udf(u) => u.size(),
             _ => {
                 let heap = match &self.kind {
@@ -690,16 +704,26 @@ impl Accumulator {
     /// the room this partition's groups have left, and (raw values) its largest sketch; from partial states every
     /// row is charged a whole sketch (`states`). The other accumulators read the whole batch's columns instead
     /// (`projected`).
-    pub(crate) fn projected_part(&self, rows: usize, states: bool) -> usize {
+    pub(crate) fn projected_part(&self, rows: usize, states: bool, state_bytes: usize) -> usize {
         match &self.kind {
             Kind::HllSketch(h) => h.projected(rows, rows, states),
+            Kind::ThetaSketch(h) => h.projected(rows, rows, states, state_bytes),
             _ => self.projected(rows, None, None, false),
+        }
+    }
+
+    /// Whether the argument column holds sketches (a Theta union or intersection, raw or partial; any Theta
+    /// aggregate over partial states): its byte length is what the projection reads.
+    pub(crate) fn theta_reads_sketches(&self, states: bool) -> bool {
+        match &self.kind {
+            Kind::ThetaSketch(h) => states || h.takes_sketches(),
+            _ => false,
         }
     }
 
     /// Whether [`projected_part`](Self::projected_part) already covers the rows of a batch (the HLL sketches).
     pub(crate) fn projects_by_partition(&self) -> bool {
-        matches!(self.kind, Kind::HllSketch(_))
+        matches!(self.kind, Kind::HllSketch(_) | Kind::ThetaSketch(_))
     }
 
     /// [`size`](Self::size) after [`resize`](Self::resize) to `new` more
@@ -778,6 +802,19 @@ impl Accumulator {
             Kind::Hist(h) => h.projected(new, arg),
             Kind::Bitmap(b) => b.projected(new),
             Kind::HllSketch(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len), states),
+            Kind::ThetaSketch(h) => {
+                let state_bytes = if states || h.takes_sketches() {
+                    arg.map_or(0, |c| super::theta_sketch::sketch_bytes(c.as_ref()))
+                } else {
+                    0
+                };
+                h.projected(
+                    new,
+                    arg.map_or(0, arrow_array::Array::len),
+                    states,
+                    state_bytes,
+                )
+            }
             _ => 0,
         };
         vecs + heap
@@ -852,6 +889,7 @@ impl Accumulator {
             Kind::Hist(h) => h.resize(n),
             Kind::Bitmap(b) => b.resize(n),
             Kind::HllSketch(h) => h.resize(n),
+            Kind::ThetaSketch(h) => h.resize(n),
             Kind::Udf(u) => u.resize(n),
             Kind::By {
                 values,
@@ -937,6 +975,7 @@ impl Accumulator {
             Kind::Hist(h) => h.reserve(new),
             Kind::Bitmap(b) => b.reserve(new),
             Kind::HllSketch(h) => h.reserve(new),
+            Kind::ThetaSketch(h) => h.reserve(new),
             Kind::Udf(_) => {}
             Kind::By {
                 values,
@@ -1121,7 +1160,8 @@ impl Accumulator {
             | Kind::Hist(_)
             | Kind::Hll(_)
             | Kind::Bitmap(_)
-            | Kind::HllSketch(_) => 1,
+            | Kind::HllSketch(_)
+            | Kind::ThetaSketch(_) => 1,
             Kind::TrySumInt { .. }
             | Kind::SumInterval { .. }
             | Kind::SumDec { .. }

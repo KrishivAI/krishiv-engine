@@ -489,6 +489,16 @@ fn constructs_map_to_one_feature_or_the_baseline() {
             Some(Feature::HllSketchAggregates)
         );
     }
+    for f in [
+        krishiv_exec::aggregate::AggregateFunction::ThetaSketchAgg { lg_nom: 12 },
+        krishiv_exec::aggregate::AggregateFunction::ThetaUnionAgg { lg_nom: 12 },
+        krishiv_exec::aggregate::AggregateFunction::ThetaIntersectionAgg,
+    ] {
+        assert_eq!(
+            feature_of(Construct::AggregateFunction(&f)),
+            Some(Feature::ThetaSketchAggregates)
+        );
+    }
     assert_eq!(
         feature_of(Construct::AggregateFunction(
             &krishiv_exec::aggregate::AggregateFunction::CovarPop
@@ -915,6 +925,7 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
         ("aggregate_histogram_numeric", "histogram_numeric"),
         ("aggregate_bitmaps", "bitmap_aggregates"),
         ("aggregate_hll_sketches", "hll_sketch_aggregates"),
+        ("aggregate_theta_sketches", "theta_sketch_aggregates"),
         ("aggregate_moments", "moment_aggregates"),
         ("aggregate_any_value", "any_value_by_aggregates"),
         ("aggregate_max_min_by", "any_value_by_aggregates"),

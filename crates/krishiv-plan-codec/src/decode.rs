@@ -39,6 +39,7 @@ use krishiv_plan::{
 use krishiv_types::{Collation, DataType, DecimalType, Srid};
 
 use crate::arrow::{schema_from, type_from};
+use crate::decode_sketch::ThetaKind;
 use crate::error::{CodecError, Result, corrupt};
 use crate::features::{Feature, ReaderFeatures, legacy_level, plan_features};
 use crate::proto as pb;
@@ -1341,6 +1342,9 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         BitmapAndAgg => AggregateFunction::BitmapAndAgg,
         HllSketchAgg => crate::decode_sketch::hll_sketch_function(a, true)?,
         HllUnionAgg => crate::decode_sketch::hll_sketch_function(a, false)?,
+        ThetaSketchAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Sketch)?,
+        ThetaUnionAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Union)?,
+        ThetaIntersectionAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Intersection)?,
         Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
             return Err(corrupt("a listagg state of another shape than its orders"));
         } else {

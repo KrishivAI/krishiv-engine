@@ -184,3 +184,5 @@ Files split to stay under 2,000 lines; the parent file keeps the types and the e
 
 ## Vector carrier (P3-T075)
 `carrier::fixed_to_list` turns a vector carrier into a plain list (shared values, offsets 0,N,2N; null rows get empty slots); `recarried_array` has the FSL to List branch. Expressions never see the carrier: `column()` and `Column::eval` (`planner/eval/mod.rs`) convert on input, while a bare projected column keeps it. Grouping and join keys on lists stay unsupported, vector or not.
+
+`aggregate/theta_sketch.rs` (+ `theta_sketch/` tests) the Theta aggregates (`ThetaSketchAgg`, `ThetaUnionAgg`, `ThetaIntersectionAgg`): the partial state is the serialized sketch; wired through `accumulator`/`fold`/`output`; window use is refused.

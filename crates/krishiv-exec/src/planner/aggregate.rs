@@ -483,6 +483,20 @@ pub(super) fn check_constants(f: &ResolvedFunction) -> Result<()> {
         };
         krishiv_functions::sketch::hll::check_lg_k(i32::try_from(v).unwrap_or(i32::MAX))?;
     }
+    // Theta: `THETA_LG_NOM_ENTRIES_MUST_BE_CONSTANT` for a size that is not a literal, `SKETCH_INVALID_LG_NOM_ENTRIES`
+    // for one outside `4..=26` (a NULL is 0), named after the aggregate.
+    if matches!(f.id.name(), "theta_sketch_agg" | "theta_union_agg")
+        && let Some(k) = f.args.get(1)
+    {
+        let name = f.id.name();
+        let Some(v) = integer_literal(k) else {
+            return Err(krishiv_common::error::ThetaLgNomEntriesMustBeConstant {
+                function: format!("`{name}`"),
+            }
+            .into());
+        };
+        krishiv_functions::sketch::theta::check_lg_nom(i32::try_from(v).unwrap_or(i32::MAX), name)?;
+    }
     Ok(())
 }
 
@@ -591,6 +605,23 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
                 AggregateFunction::HllSketchAgg { lg_k },
                 vec![Arc::clone(&f.args[0])],
             )
+        }
+        "theta_sketch_agg" if f.args.len() == 2 => {
+            let lg_nom = u8::try_from(integer_literal(&f.args[1])?).ok()?;
+            (
+                AggregateFunction::ThetaSketchAgg { lg_nom },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
+        "theta_union_agg" if f.args.len() == 2 => {
+            let lg_nom = u8::try_from(integer_literal(&f.args[1])?).ok()?;
+            (
+                AggregateFunction::ThetaUnionAgg { lg_nom },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
+        "theta_intersection_agg" if f.args.len() == 1 => {
+            (AggregateFunction::ThetaIntersectionAgg, f.args.clone())
         }
         "hll_union_agg" if f.args.len() == 2 => {
             // A NULL flag reads as false (Spark's `null.asInstanceOf[Boolean]`).
