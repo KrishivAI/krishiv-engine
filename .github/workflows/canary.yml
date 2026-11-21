@@ -7,8 +7,9 @@ name: canary
 
 on:
   schedule:
-    # 13:00 UTC: the scheduled nightly run on main starts about 02:00 UTC and ends well before this.
-    - cron: "0 13 * * *"
+    # 05:30 UTC, still at night: the scheduled nightly run starts about 22:23 UTC and its jobs end by about
+    # 04:15 (the longest has a 350-minute limit), and this check flags a run that is still going.
+    - cron: "30 5 * * *"
   workflow_dispatch:
 
 permissions:

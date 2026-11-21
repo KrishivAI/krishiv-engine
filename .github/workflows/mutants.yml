@@ -24,7 +24,7 @@ permissions:
 
 concurrency:
   group: mutants
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   # No debug info at all: every mutant is a full rebuild and link of the crate's test binaries, and
@@ -36,10 +36,29 @@ env:
   RUSTC_WRAPPER: "" # every mutant is a different build; nothing to cache
 
 jobs:
-  mutants:
+  # A scheduled run that GitHub delayed into the working day exits at once, so it never holds the runners
+  # the PR checks need. A manual run is not guarded. Window: scheduled runs may start 18:00-06:00 UTC.
+  guard:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 2
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - id: g
+        run: |
+          hour=$((10#$(date -u +%H)))
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$hour" -ge 6 ] && [ "$hour" -lt 18 ]; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "A scheduled run that starts at $hour:xx UTC is outside the night window (18:00-06:00): skipped." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+  mutants:
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -194,8 +213,8 @@ jobs:
           retention-days: 30
 
   score:
-    needs: mutants
-    if: always() && github.repository == 'KrishivAI/krishiv-engine'
+    needs: [guard, mutants]
+    if: needs.guard.outputs.go == 'true' && always() && github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
