@@ -25,7 +25,9 @@ from krishiv.sql.datasource import (
     DataSourceReader,
     DataSourceWriter,
     EqualTo,
+    GreaterThan,
     InputPartition,
+    IsNotNull,
     WriterCommitMessage,
 )
 from krishiv.sql.row import Row
@@ -460,6 +462,99 @@ def test_pushfilters_without_the_conf_is_refused(spark: SparkSession) -> None:
     assert "DATA_SOURCE_PUSHDOWN_DISABLED" in str(e.value)
     spark.conf.set("spark.sql.python.filterPushdown.enabled", "true")
     assert spark.read.format("Plain").option("push", "1").load().filter("a = 1").count() == 1
+
+
+class Recording(DataSource):
+    """A source over `x`, `y` that records what pushFilters saw and takes the filters named in `take`."""
+
+    seen: ClassVar[list[Any]] = []
+    calls: ClassVar[list[str]] = []
+
+    @classmethod
+    def name(cls) -> str:
+        return "recording"
+
+    def schema(self) -> str:
+        return "x INT, y INT"
+
+    def reader(self, schema: Any) -> DataSourceReader:
+        options = self.options
+        Recording.calls.append("reader")
+
+        class R(DataSourceReader):
+            def __init__(self) -> None:
+                self.taken: list[Any] = []
+
+            def pushFilters(self, filters: list[Any]) -> Any:
+                Recording.calls.append("pushFilters")
+                Recording.seen.append(list(filters))
+                if options.get("mode") == "boom":
+                    raise ValueError("boom")
+                if options.get("mode") == "extra":
+                    return [*filters, EqualTo(("zzz",), 1)]
+                if options.get("mode") == "take":
+                    self.taken = [f for f in filters if isinstance(f, EqualTo)]
+                    return [f for f in filters if not isinstance(f, EqualTo)]
+                return filters
+
+            def read(self, partition: InputPartition) -> Any:
+                for x in range(1, 5):
+                    if all(not (isinstance(f, EqualTo) and f.attribute == ("x",)) or x == f.value for f in self.taken):
+                        yield (x, x * 10)
+
+        return R()
+
+
+@pytest.fixture
+def pushdown(spark: SparkSession) -> SparkSession:
+    Recording.seen.clear()
+    Recording.calls.clear()
+    spark.conf.set("spark.sql.python.filterPushdown.enabled", "true")
+    spark.dataSource.register(Recording)
+    return spark
+
+
+def test_pushfilters_receives_the_serializable_conjuncts(pushdown: SparkSession) -> None:
+    df = pushdown.read.format("recording").load().filter("x = 2 AND y > 5")
+    assert [r.x for r in df.collect()] == [2]
+    assert Recording.seen == [[IsNotNull(("x",)), IsNotNull(("y",)), EqualTo(("x",), 2), GreaterThan(("y",), 5)]]
+    assert Recording.calls == ["reader", "pushFilters"]
+
+
+def test_no_filter_never_calls_pushfilters(pushdown: SparkSession) -> None:
+    assert pushdown.read.format("recording").load().count() == 4
+    assert Recording.calls == ["reader"]
+
+
+def test_a_taken_filter_is_applied_by_the_source_only(pushdown: SparkSession) -> None:
+    df = pushdown.read.format("recording").option("mode", "take").load().filter("x = 3")
+    assert [r.x for r in df.collect()] == [3]
+
+
+def test_unhandled_filters_stay_with_the_engine(pushdown: SparkSession) -> None:
+    df = pushdown.read.format("recording").load().filter("x = 3 AND (y = 30 OR y = 99)")
+    assert [r.x for r in df.collect()] == [3]
+
+
+def test_residual_division_by_a_filtered_zero(pushdown: SparkSession) -> None:
+    df = pushdown.read.format("recording").load().filter("x > 0 AND 10 / x > 1")
+    assert sorted(r.x for r in df.collect()) == [1, 2, 3, 4]
+    assert Recording.seen[0] == [IsNotNull(("x",)), GreaterThan(("x",), 0)]
+
+
+def test_pushfilters_failure_is_the_python_data_source_error(pushdown: SparkSession) -> None:
+    df = pushdown.read.format("recording").option("mode", "boom").load().filter("x = 1")
+    with pytest.raises(Exception) as e:  # noqa: PT011
+        df.collect()
+    assert "PYTHON_DATA_SOURCE_ERROR" in str(e.value)
+    assert "boom" in str(e.value)
+
+
+def test_extraneous_filters_are_refused(pushdown: SparkSession) -> None:
+    df = pushdown.read.format("recording").option("mode", "extra").load().filter("x = 1")
+    with pytest.raises(Exception) as e:  # noqa: PT011
+        df.collect()
+    assert "DATA_SOURCE_EXTRANEOUS_FILTERS" in str(e.value)
 
 
 def test_filter_classes_are_dataclasses() -> None:
