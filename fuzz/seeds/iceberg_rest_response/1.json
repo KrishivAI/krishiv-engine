@@ -1,1 +1,1 @@
-{"defaults": {"warehouse": "w"}, "overrides": {"prefix": "p"}, "endpoints": ["GET /v1/{prefix}/namespaces"]}
+?{"defaults": {"warehouse": "w"}, "overrides": {"prefix": "p"}, "endpoints": ["GET /v1/{prefix}/namespaces"]}
