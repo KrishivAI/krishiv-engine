@@ -488,16 +488,22 @@ def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession,
         yield flush(rows)
 
 
-def _plan_and_read(session: SparkSession, source: DataSource, schema: StructType, label: str) -> Any:
-    """One scan's read: ``reader()``, ``partitions()``, ``read()`` of each, as one Arrow table.
+def _plan_and_read(
+    session: SparkSession, source: DataSource, schema: StructType, label: str, filters: list[Filter] | None = None
+) -> tuple[list[bool], Any]:
+    """One scan's planning and read: ``reader()``, ``pushFilters(filters)`` when there are filters,
+    ``partitions()``; returns ``(pushed, read)``: per filter whether the reader took it (so the engine does
+    not apply it again) and the callable that reads each partition as one Arrow table.
 
-    Planning failures (``reader()``, its type, ``pushFilters``, ``partitions()``) are raised once as
+    Planning failures (``reader()``, its type, ``pushFilters``, its answer, ``partitions()``) are raised once as
     ``PYTHON_DATA_SOURCE_ERROR`` of Spark's pairs; what ``read`` raises is not wrapped here (the engine
     raises it as ``PYTHON_EXCEPTION``, as a failed read task)."""
     from krishiv.sql import _convert
     from krishiv.sql.session import _pa_schema
 
     pa = _convert.require_pyarrow("a Python data source read")
+    offered = filters or []
+    pushed = [False] * len(offered)
 
     def initialize() -> DataSourceReader:
         reader = source.reader(schema)
@@ -509,38 +515,81 @@ def _plan_and_read(session: SparkSession, source: DataSource, schema: StructType
                     "actual": f"'{type(reader).__name__}'",
                 },
             )
-        if getattr(reader.pushFilters, "__func__", None) is not DataSourceReader.pushFilters and (
-            not _pushdown_enabled(session)
-        ):
-            raise PySparkAssertionError(
-                errorClass="DATA_SOURCE_PUSHDOWN_DISABLED",
-                messageParameters={"type": type(reader).__name__, "conf": PUSHDOWN_CONF},
-            )
+        if getattr(reader.pushFilters, "__func__", None) is not DataSourceReader.pushFilters:
+            if not _pushdown_enabled(session):
+                raise PySparkAssertionError(
+                    errorClass="DATA_SOURCE_PUSHDOWN_DISABLED",
+                    messageParameters={"type": type(reader).__name__, "conf": PUSHDOWN_CONF},
+                )
+            if offered:
+                rejected = reader.pushFilters(list(offered))
+                kept = list(rejected) if rejected is not None else []
+                if any(not any(r is f for f in offered) for r in kept):
+                    raise PySparkAssertionError(
+                        errorClass="DATA_SOURCE_EXTRANEOUS_FILTERS",
+                        messageParameters={"type": type(reader).__name__},
+                    )
+                for i, f in enumerate(offered):
+                    pushed[i] = not any(r is f for r in kept)
         return reader
 
     reader = _guard("initialize", "reader", initialize)
     partitions = _guard("generate", "read partitions", lambda: _read_partitions(reader))
-    batches: list[Any] = []
-    held = 0
-    for partition in partitions:
-        output = reader.read(partition)
-        if not isinstance(output, Iterator):
-            raise _mismatch(
-                "DATA_SOURCE_INVALID_RETURN_TYPE",
-                type=type(output).__name__,
-                name=source.name(),
-                supported_types="iterator",
-            )
-        for batch in _batches_of(pa, output, schema, session, source):
-            held += batch.nbytes
-            if held > MAX_SOURCE_BYTES:  # before the next batch is pulled: the source is never read whole
-                raise PySparkRuntimeError(
-                    errorClass="KRISHIV_PYTHON_DATA_SOURCE_LIMIT",
-                    messageParameters={"source": label, "bytes": str(held), "limit": str(MAX_SOURCE_BYTES)},
-                    sqlState="53400",
+
+    def read() -> Any:
+        batches: list[Any] = []
+        held = 0
+        for partition in partitions:
+            output = reader.read(partition)
+            if not isinstance(output, Iterator):
+                raise _mismatch(
+                    "DATA_SOURCE_INVALID_RETURN_TYPE",
+                    type=type(output).__name__,
+                    name=source.name(),
+                    supported_types="iterator",
                 )
-            batches.append(batch)
-    return pa.Table.from_batches(batches, schema=_pa_schema(schema, pa))
+            for batch in _batches_of(pa, output, schema, session, source):
+                held += batch.nbytes
+                if held > MAX_SOURCE_BYTES:  # before the next batch is pulled: the source is never read whole
+                    raise PySparkRuntimeError(
+                        errorClass="KRISHIV_PYTHON_DATA_SOURCE_LIMIT",
+                        messageParameters={"source": label, "bytes": str(held), "limit": str(MAX_SOURCE_BYTES)},
+                        sqlState="53400",
+                    )
+                batches.append(batch)
+        return pa.Table.from_batches(batches, schema=_pa_schema(schema, pa))
+
+    return pushed, read
+
+
+_FILTERS: dict[str, type[Filter]] = {
+    cls.__name__: cls
+    for cls in (
+        EqualTo,
+        EqualNullSafe,
+        GreaterThan,
+        GreaterThanOrEqual,
+        LessThan,
+        LessThanOrEqual,
+        In,
+        IsNull,
+        IsNotNull,
+        StringStartsWith,
+        StringEndsWith,
+        StringContains,
+    )
+}
+
+
+def _filter_of(spec: tuple[Any, ...]) -> Filter:
+    """A filter object from the engine's ``(kind, attribute path, value)``."""
+    kind, attribute, value = spec
+    if kind == "Not":
+        return Not(_filter_of(value))
+    cls = _FILTERS[kind]
+    if kind in ("IsNull", "IsNotNull"):
+        return cls(attribute)  # type: ignore[call-arg]
+    return cls(attribute, value)  # type: ignore[call-arg]
 
 
 def _pushdown_enabled(session: SparkSession) -> bool:
@@ -566,13 +615,23 @@ def load(session: SparkSession, entry: _Registered, options: dict[str, str], use
     # The callback lives in the native catalog, which the session owns: hold the session weakly.
     ref = weakref.ref(session)
 
-    def read() -> Any:
+    def owner_of() -> SparkSession:
         owner = ref()
         if owner is None:
             raise PySparkRuntimeError(errorClass="NO_ACTIVE_SESSION", messageParameters={})
-        return _plan_and_read(owner, source, schema, entry.name)
+        return owner
 
-    native = session._native.register_python_source(entry.name, empty, read)
+    def read() -> Any:
+        return _plan_and_read(owner_of(), source, schema, entry.name)[1]()
+
+    def plan(specs: list[tuple[Any, ...]]) -> tuple[list[bool], Any]:
+        owner = owner_of()
+        if not _pushdown_enabled(owner):
+            # Nothing is offered (Spark raises DATA_SOURCE_PUSHDOWN_DISABLED at the action, not at explain()).
+            return [False] * len(specs), read
+        return _plan_and_read(owner, source, schema, entry.name, [_filter_of(spec) for spec in specs])
+
+    native = session._native.register_python_source(entry.name, empty, read, plan)
     return DataFrame(native, session)
 
 
