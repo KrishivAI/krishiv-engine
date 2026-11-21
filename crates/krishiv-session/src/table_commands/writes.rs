@@ -533,7 +533,12 @@ impl Session {
                 };
                 let asked_parts: Vec<&str> =
                     spec.partitioned_by.iter().map(String::as_str).collect();
-                if !same_names(&asked_parts, &table.layout.partition_columns) {
+                // A Delta append that names no partitioning takes the table's own.
+                #[cfg(feature = "delta")]
+                let infer_parts = asked_parts.is_empty() && is_delta_table(&table);
+                #[cfg(not(feature = "delta"))]
+                let infer_parts = false;
+                if !infer_parts && !same_names(&asked_parts, &table.layout.partition_columns) {
                     return Err(krishiv_common::error::LegacyErrorTemp1163 {
                         table_name: spark_name(&name),
                         specified_part_cols: list(asked_parts),
@@ -671,6 +676,13 @@ impl Session {
             {
                 // delta-spark's v1 overwrite of a Delta table is a data overwrite (design 4.1).
                 self.authorize_table_write(&name, false, &env).await?;
+                // A Delta table has no bucketing: refuse before the overwrite truncates it.
+                if spec.bucket.is_some() {
+                    return Err(super::delta::delta_write_refused(
+                        spark_name(&name),
+                        "bucketBy",
+                    ));
+                }
                 let table = self.table_for_write(&name, "INSERT OVERWRITE", &env)?;
                 self.delta_save_as_table_overwrite(df, &table, &spec.options)
                     .await?;

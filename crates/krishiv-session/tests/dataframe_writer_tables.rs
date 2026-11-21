@@ -597,6 +597,21 @@ fn an_overwrite_with_a_missing_layout_column_keeps_the_old_table() {
 }
 
 #[test]
+fn an_empty_bucket_column_list_is_refused_before_the_old_table_is_dropped() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("t")).unwrap();
+    let r = block_on(
+        s.table("people")
+            .write()
+            .bucket_by(4, Vec::<String>::new())
+            .mode("overwrite")
+            .save_as_table("t"),
+    );
+    assert_eq!(class(r), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(count(&s, "t"), 3, "the old table must survive the refusal");
+}
+
+#[test]
 fn a_bucketed_table_of_one_string_column_writes_as_text() {
     let s = session();
     let one = s.table("people").select(["name"]);

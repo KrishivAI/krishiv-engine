@@ -326,6 +326,13 @@ impl DataFrameWriter {
                     }
                     .into());
                 }
+                // `bucketBy` takes at least one column; checked before any overwrite drops a table.
+                if columns.is_empty() {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: "bucketBy with no bucket columns".to_owned(),
+                    }
+                    .into());
+                }
                 Some(crate::table_commands::bucket_spec(
                     u64::from(n.unsigned_abs()),
                     columns,
