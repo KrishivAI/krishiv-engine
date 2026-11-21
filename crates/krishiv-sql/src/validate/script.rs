@@ -34,6 +34,7 @@ fn at(error: impl Into<KrishivError>, span: Span) -> ParseError {
     ParseError {
         error: error.into(),
         span,
+        relation: None,
     }
 }
 

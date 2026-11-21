@@ -370,7 +370,7 @@ async fn analyze_explain_tree_string_and_flags() {
     else {
         panic!("version");
     };
-    assert_eq!(v.version, "4.2.0");
+    assert_eq!(v.version, "4.3.0");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

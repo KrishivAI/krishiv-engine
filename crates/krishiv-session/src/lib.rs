@@ -92,6 +92,8 @@ mod partitions;
 mod plan_round_trip;
 mod profile;
 mod profile_history;
+mod show_json;
+mod time_travel;
 pub use profile_history::{StoredProfile, read_history as read_profile_history};
 mod python_udfs;
 mod query_fold;

@@ -1280,7 +1280,18 @@ impl Parser<'_> {
                     args,
                 }
             } else {
-                let temporal = self.temporal_clause()?;
+                let at = self.at_suffix_clause()?;
+                let clause_at = self.start();
+                let mut temporal = self.temporal_clause()?;
+                if let Some(at) = at {
+                    // The `@` suffix, a `VERSION AS OF` / `TIMESTAMP AS OF` clause and the read options
+                    // each name a version: Spark allows one of them.
+                    if temporal.is_some() {
+                        let span = self.span_from(clause_at);
+                        return Self::fatal(error::multiple_time_travel_spec(span));
+                    }
+                    temporal = Some(at);
+                }
                 let options = self.table_options()?;
                 match name {
                     DdlName::Parts(name) => TableFactorKind::Table {
@@ -1445,6 +1456,79 @@ impl Parser<'_> {
         })
     }
 
+    /// The `@v<n>` (version) or `@<yyyyMMddHHmmssSSS>` (timestamp) suffix of a table name (Spark 4.3), if one
+    /// starts here. Spark's lexer has the tokens `@V` and `@` (whitespace is hidden): `@V` is followed by an
+    /// integer or a string literal (`@v1`, `@v 1`, `@v'1'`), `@` by an integer with anything between them
+    /// (`@2024...`, `@ 2024...`). `@ v1` is `@` and the identifier `v1`, a syntax error, as is a lone `@v`.
+    #[inline(never)]
+    fn at_suffix_clause(&mut self) -> PR<Option<TemporalClause>> {
+        if !(self.kind(0) == Some(TokenKind::Unrecognized) && self.text(0) == "@") {
+            return Ok(None);
+        }
+        let start = self.start();
+        let end_of_at = start + 1;
+        self.bump();
+        let at = self.start();
+        let adjacent = at == end_of_at;
+        let word = (self.kind(0) == Some(TokenKind::Word) && adjacent).then(|| self.text(0));
+        let (kind, value) = match word {
+            // `@v1`: one word (our lexer does not split it).
+            Some(w)
+                if w.len() > 1
+                    && w.as_bytes()[0].eq_ignore_ascii_case(&b'v')
+                    && w.as_bytes()[1..].iter().all(u8::is_ascii_digit) =>
+            {
+                let text = w[1..].to_owned();
+                let value_span = self.tok(0).map_or(Span::new(at, at), |t| t.span);
+                self.bump();
+                (TemporalKind::Version, version_literal(text, value_span))
+            }
+            // `@v`, then an integer or a string.
+            Some(w) if w.eq_ignore_ascii_case("v") => {
+                self.bump();
+                let value_at = self.start();
+                let literal = match self.kind(0) {
+                    Some(TokenKind::Number(NumKind::Int)) => {
+                        let text = self.text(0).to_owned();
+                        self.bump();
+                        Literal::Number {
+                            text,
+                            kind: NumKind::Int,
+                        }
+                    }
+                    _ => match self.string_lit() {
+                        Some(v) => Literal::String(v),
+                        None => return self.fail(),
+                    },
+                };
+                (
+                    TemporalKind::Version,
+                    Expr {
+                        kind: ExprKind::Literal(literal),
+                        span: self.span_from(value_at),
+                    },
+                )
+            }
+            _ if self.kind(0) == Some(TokenKind::Number(NumKind::Int)) => {
+                let digits = self.text(0).to_owned();
+                self.bump();
+                let span = self.span_from(start);
+                if !valid_at_timestamp(&digits) {
+                    return Self::fatal(error::invalid_time_travel_timestamp_format(digits, span));
+                }
+                (TemporalKind::Timestamp, version_literal(digits, span))
+            }
+            _ => return self.fail(),
+        };
+        let span = self.span_from(start);
+        Ok(Some(TemporalClause {
+            kind,
+            value,
+            at_suffix: true,
+            span,
+        }))
+    }
+
     /// `[FOR] (VERSION | SYSTEM_VERSION) AS OF version` or `[FOR]
     /// (TIMESTAMP | SYSTEM_TIME) AS OF expression`, if one starts here.
     #[inline(never)]
@@ -1489,6 +1573,7 @@ impl Parser<'_> {
         Ok(Some(TemporalClause {
             kind,
             value,
+            at_suffix: false,
             span: self.span_from(start),
         }))
     }
@@ -1758,4 +1843,34 @@ impl Parser<'_> {
         }
         Ok(out)
     }
+}
+
+/// An integer literal `Expr` of `text`.
+fn version_literal(text: String, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::Literal(Literal::Number {
+            text,
+            kind: NumKind::Int,
+        }),
+        span,
+    }
+}
+
+/// Whether `digits` is a `yyyyMMddHHmmssSSS` timestamp Spark's `parseAtSyntaxTimestamp` accepts: 17 digits that
+/// make a `LocalDateTime` (year 0-9999, a real day of the month in the proleptic calendar, hour below 24, minute
+/// and second below 60).
+fn valid_at_timestamp(digits: &str) -> bool {
+    if digits.len() != 17 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let n = |r: std::ops::Range<usize>| digits[r].parse::<u32>().unwrap_or(u32::MAX);
+    let (year, month, day) = (n(0..4), n(4..6), n(6..8));
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => 28 + u32::from(leap),
+        _ => return false,
+    };
+    (1..=days).contains(&day) && n(8..10) < 24 && n(10..12) < 60 && n(12..14) < 60
 }

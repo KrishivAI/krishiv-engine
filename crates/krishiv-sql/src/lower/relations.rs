@@ -597,8 +597,29 @@ impl Lowerer {
                 temporal,
                 options,
             } => {
-                if let Some(t) = temporal {
-                    return Err(unsupported("time travel", t.span));
+                if temporal.is_some() {
+                    let parts: Vec<String> = name.parts.iter().map(|p| p.value.clone()).collect();
+                    // A CTE name is Spark's `TIME_TRAVEL` error as written (`CTESubstitution`).
+                    if let [only] = &parts[..]
+                        && self.ctes.iter().any(|c| {
+                            if self.case_sensitive {
+                                c == only
+                            } else {
+                                c.eq_ignore_ascii_case(only)
+                            }
+                        })
+                    {
+                        let relation_id = format!("`{}`", only.replace('`', "``"));
+                        return Err(err(
+                            krishiv_common::error::UnsupportedFeatureTimeTravel { relation_id },
+                            name.span,
+                        ));
+                    }
+                    // Any other relation: the session resolves it to name Spark's error
+                    // (`time_travel_error`) from the parts.
+                    let mut e = unsupported(crate::TIME_TRAVEL_FEATURE, name.span);
+                    e.relation = Some(parts);
+                    return Err(e);
                 }
                 let mut opts = BTreeMap::new();
                 for o in options {

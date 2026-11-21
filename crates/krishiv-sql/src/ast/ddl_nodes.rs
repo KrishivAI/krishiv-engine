@@ -878,6 +878,9 @@ pub enum ChangeColumnAction {
 pub enum AlterColumnAction {
     /// `COMMENT '...'`.
     Comment(String),
+    /// `COMMENT ON COLUMN table.column IS 'comment' | NULL` (Spark 4.3): sets the comment, or drops it for `NULL`.
+    /// A separate variant from `Comment` because Spark names the command in its errors.
+    CommentOn(Option<String>),
     /// `SET NOT NULL`.
     SetNotNull,
     /// `DROP NOT NULL`.
@@ -1051,6 +1054,8 @@ pub struct Delete {
     pub table: DdlName,
     /// Its alias, if written.
     pub alias: Option<Ident>,
+    /// `WITH (key = value, ...)` after the table and its alias (Spark 4.3).
+    pub options: Vec<TableOption>,
     /// `WHERE ...`.
     pub where_clause: Option<Expr>,
     /// Source text, from `DELETE` to the end of the statement.
@@ -1068,13 +1073,15 @@ pub struct UpdateAssignment {
     pub span: Span,
 }
 
-/// `UPDATE name [AS alias] SET ... [WHERE ...]`.
+/// `UPDATE name [AS alias] [WITH (options)] SET ... [WHERE ...]`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Update {
     /// The table to update.
     pub table: DdlName,
     /// Its alias, if written.
     pub alias: Option<Ident>,
+    /// `WITH (key = value, ...)` after the table and its alias (Spark 4.3).
+    pub options: Vec<TableOption>,
     /// The `SET` assignments.
     pub assignments: Vec<UpdateAssignment>,
     /// `WHERE ...`.
@@ -1090,6 +1097,8 @@ pub struct Merge {
     pub target: DdlName,
     /// Its alias, if written.
     pub target_alias: Option<Ident>,
+    /// `WITH (key = value, ...)` after the target and its alias (Spark 4.3).
+    pub target_options: Vec<TableOption>,
     /// The source.
     pub source: MergeSource,
     /// `ON ...`.
@@ -1109,6 +1118,8 @@ pub enum MergeSource {
     Table {
         /// The table name.
         name: DdlName,
+        /// `WITH (...)` options of the source relation (Spark 4.3), written before the alias.
+        options: Vec<TableOption>,
         /// Its alias, if written.
         alias: Option<Ident>,
         /// Source text.
@@ -1199,6 +1210,8 @@ pub struct Truncate {
 pub struct Show {
     /// What to show.
     pub kind: ShowKind,
+    /// `AS JSON` (Spark 4.3): one `json_metadata` string column instead of the rows.
+    pub as_json: bool,
     /// Source text, from `SHOW` to the end of the statement.
     pub span: Span,
 }

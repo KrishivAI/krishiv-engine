@@ -362,8 +362,15 @@ fn try_run(
     let alias = alias.to_owned();
     let condition = condition.map(str::to_owned);
     block_on(session.on_executor(async move {
-        s.run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments)
-            .await
+        s.run_row_level(
+            op,
+            &quoted,
+            &alias,
+            condition.as_deref(),
+            &assignments,
+            None,
+        )
+        .await
     }))
 }
 
@@ -558,6 +565,33 @@ fn assignments_are_checked_before_anything_runs() {
         ErrorClass::KrishivUnsupportedFeature
     );
     assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn with_options_on_a_row_level_table_are_refused_not_ignored() {
+    let files = Files::new();
+    let (session, _) = session(&files);
+    for (op, operation) in [
+        (RowLevelOperation::Delete, "DELETE"),
+        (RowLevelOperation::Update, "UPDATE TABLE"),
+    ] {
+        let s = session.clone();
+        let e = block_on(session.on_executor(async move {
+            s.run_row_level(op, "`t`", "t", Some("t.id = 1"), &[], Some(operation))
+                .await
+        }))
+        .unwrap_err();
+        assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    }
+    assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+    run(
+        &session,
+        "t",
+        RowLevelOperation::Delete,
+        Some("t.id = 1"),
+        vec![],
+    );
+    assert_eq!(files.commits.load(Ordering::Relaxed), 1);
 }
 
 #[test]

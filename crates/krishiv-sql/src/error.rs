@@ -19,12 +19,14 @@
 use krishiv_common::error::{
     CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, IdentifierTooManyNameParts,
     InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidSqlPathSchemaReference,
+    InvalidSqlSyntaxCommentOnColumnIncorrectIdentifier,
     InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace,
     InvalidSqlSyntaxCreateTempFuncWithDatabase, InvalidSqlSyntaxCreateTempFuncWithIfNotExists,
-    InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, KrishivJvmFunctionUnsupported,
-    KrishivUnsupportedFeature, LegacyErrorTemp0035, LegacyErrorTemp0045, LegacyErrorTemp0053,
-    ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
-    UnclosedBracketedComment,
+    InvalidStatementOrClause, InvalidTempObjQualifier, InvalidTimeTravelTimestampFormat,
+    KrishivError, KrishivJvmFunctionUnsupported, KrishivUnsupportedFeature, LegacyErrorTemp0035,
+    LegacyErrorTemp0045, LegacyErrorTemp0053, MultipleTimeTravelSpec, ParseEmptyStatement,
+    ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
+    UnsupportedFeatureShowTableExtendedJsonWithPartition,
 };
 
 use crate::ast::Span;
@@ -84,6 +86,9 @@ pub struct ParseError {
     pub error: KrishivError,
     /// The source text the error refers to (empty at the end of input).
     pub span: Span,
+    /// For the refusal of a time-travel read: the parts of the relation's name as written, which the
+    /// session resolves to name Spark's error.
+    pub relation: Option<Vec<String>>,
 }
 
 impl PartialEq for ParseError {
@@ -123,6 +128,7 @@ fn at(error: impl Into<KrishivError>, span: Span) -> ParseError {
     ParseError {
         error: error.into(),
         span,
+        relation: None,
     }
 }
 
@@ -274,6 +280,35 @@ pub(crate) fn invalid_time_zone_displacement(span: Span) -> ParseError {
 /// (Spark's message names what the change needs).
 pub(crate) fn legacy_error_temp_0035(message: String, span: Span) -> ParseError {
     at(LegacyErrorTemp0035 { message }, span)
+}
+
+/// `INVALID_SQL_SYNTAX.COMMENT_ON_COLUMN_INCORRECT_IDENTIFIER`: `COMMENT ON COLUMN` with one name part.
+pub(crate) fn comment_on_column_incorrect_identifier(span: Span) -> ParseError {
+    at(InvalidSqlSyntaxCommentOnColumnIncorrectIdentifier {}, span)
+}
+
+/// `UNSUPPORTED_FEATURE.SHOW_TABLE_EXTENDED_JSON_WITH_PARTITION`.
+pub(crate) fn show_table_extended_json_with_partition(span: Span) -> ParseError {
+    at(
+        UnsupportedFeatureShowTableExtendedJsonWithPartition {},
+        span,
+    )
+}
+
+/// `MULTIPLE_TIME_TRAVEL_SPEC`: the `@` suffix of a table name and a time-travel clause together.
+pub(crate) fn multiple_time_travel_spec(span: Span) -> ParseError {
+    at(MultipleTimeTravelSpec {}, span)
+}
+
+/// `INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT`: a `@<digits>` suffix that is not `yyyyMMddHHmmssSSS`.
+pub(crate) fn invalid_time_travel_timestamp_format(timestamp: String, span: Span) -> ParseError {
+    at(
+        InvalidTimeTravelTimestampFormat {
+            timestamp,
+            format: "yyyyMMddHHmmssSSS".to_owned(),
+        },
+        span,
+    )
 }
 
 /// `INVALID_SQL_SYNTAX.CREATE_TEMP_FUNC_WITH_DATABASE`: a temporary

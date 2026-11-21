@@ -889,6 +889,8 @@ pub struct TemporalClause {
     pub kind: TemporalKind,
     /// The version (an integer or string literal) or timestamp.
     pub value: Expr,
+    /// Written as the `@v1` / `@20240101000000000` suffix of the table name (Spark 4.3), not a clause.
+    pub at_suffix: bool,
     /// Source text.
     pub span: Span,
 }

@@ -508,7 +508,7 @@ impl Parser<'_> {
         Ok(query)
     }
 
-    /// `DELETE FROM name [AS alias] [WHERE ...]`.
+    /// `DELETE FROM name [AS alias] [WITH (options)] [WHERE ...]`.
     pub(super) fn delete_command(&mut self) -> PR<Statement> {
         self.nested(|p| {
             let start = p.start();
@@ -517,25 +517,28 @@ impl Parser<'_> {
             p.expect_kw_or_missing("FROM", "'FROM'", follows)?;
             let table = p.ddl_name()?;
             let alias = p.stmt_alias("WHERE")?;
+            let options = p.table_options()?;
             let where_clause = p.opt_clause("WHERE")?;
             let span = p.span_from(start);
             p.command_end()?;
             Ok(Statement::Delete(Delete {
                 table,
                 alias,
+                options,
                 where_clause,
                 span,
             }))
         })
     }
 
-    /// `UPDATE name [AS alias] SET ... [WHERE ...]`.
+    /// `UPDATE name [AS alias] [WITH (options)] SET ... [WHERE ...]`.
     pub(super) fn update_command(&mut self) -> PR<Statement> {
         self.nested(|p| {
             let start = p.start();
             p.expect_kw("UPDATE")?;
             let table = p.ddl_name()?;
             let alias = p.stmt_alias("SET")?;
+            let options = p.table_options()?;
             p.expect_kw("SET")?;
             let mut assignments = vec![p.update_assignment()?];
             while p.eat_sym(Sym::Comma) {
@@ -547,6 +550,7 @@ impl Parser<'_> {
             Ok(Statement::Update(Box::new(Update {
                 table,
                 alias,
+                options,
                 assignments,
                 where_clause,
                 span,
@@ -575,6 +579,7 @@ impl Parser<'_> {
             p.expect_kw("INTO")?;
             let target = p.ddl_name()?;
             let target_alias = p.stmt_alias("USING")?;
+            let target_options = p.table_options()?;
             p.expect_kw("USING")?;
             let source = p.merge_source()?;
             p.expect_kw("ON")?;
@@ -590,11 +595,13 @@ impl Parser<'_> {
                 return Self::fatal(ParseError {
                     error: MergeWithoutWhen {}.into(),
                     span,
+                    relation: None,
                 });
             }
             Ok(Statement::Merge(Box::new(Merge {
                 target,
                 target_alias,
+                target_options,
                 source,
                 on,
                 clauses,
@@ -617,9 +624,12 @@ impl Parser<'_> {
             })
         } else {
             let name = self.ddl_name()?;
+            // Spark 4.3: `USING identifierReference optionsClause? tableAlias`; the options come before the alias.
+            let options = self.table_options()?;
             let alias = self.stmt_alias("ON")?;
             Ok(MergeSource::Table {
                 name,
+                options,
                 alias,
                 span: self.span_from(start),
             })

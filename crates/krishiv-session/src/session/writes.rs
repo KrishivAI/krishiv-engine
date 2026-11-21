@@ -129,7 +129,9 @@ pub(super) async fn uses_commit_log(
 }
 
 /// The `maxRecordsPerFile` write option (`FILE_SOURCE_OPTIONS`), case
-/// insensitive; 0 (unlimited) when unset.
+/// insensitive; 0 (unlimited) when unset. Spark reads a long and limits only
+/// above 0, so a negative value means unlimited too (Spark 4.0.0 run: -1 and 0
+/// both write one file).
 pub(super) fn max_records_per_file(
     options: &BTreeMap<String, OptionValue>,
     format: &str,
@@ -149,15 +151,16 @@ pub(super) fn max_records_per_file(
         }
         .into());
     };
-    raw.trim().parse::<u64>().map_err(|_| {
+    let parsed = raw.trim().parse::<i64>().map_err(|_| -> KrishivError {
         krishiv_common::error::KrishivInvalidFormatOptionValue {
             value: format!("'{raw}'"),
             option: format!("\"{key}\""),
             format: format!("\"{format}\""),
-            reason: "expected an integer in 0..=18446744073709551615".to_owned(),
+            reason: "expected an integer in -9223372036854775808..=9223372036854775807".to_owned(),
         }
         .into()
-    })
+    })?;
+    Ok(u64::try_from(parsed).unwrap_or(0))
 }
 
 /// A write directory that could not be opened, as the path-based store

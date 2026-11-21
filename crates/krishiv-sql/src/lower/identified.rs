@@ -48,6 +48,7 @@ impl Lowerer {
             recursive: 0,
             case_sensitive,
             identifier_spans,
+            ctes: Vec::new(),
         }
     }
 

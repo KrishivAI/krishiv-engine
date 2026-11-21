@@ -79,7 +79,7 @@ impl Session {
             env.parser.case_sensitive,
             &env.identifier_spans,
         )
-        .map_err(|e| e.error)?;
+        .map_err(|e| self.lowering_error(e, &env))?;
         // The per-query store check (`check_store_options`: `MANAGE` on the cluster while the
         // session changed a server-scoped store setting) is asked by every analysis: the explained
         // query's (its trial, then a withheld fallback, which folds a refusal into the text) and
@@ -299,7 +299,8 @@ impl Session {
             _ => return Ok(None),
         };
         let plan = krishiv_sql::lower(source, krishiv_plan::SourceId(0)).map_err(|e| {
-            crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
+            let (start, end) = (e.span.start, e.span.end);
+            crate::session::sql_context(self.lowering_error(e, &env), &redacted, start, end)
         })?;
         DataFrame::new(self.clone(), Arc::clone(plan.root()))
             .estimate_inner()

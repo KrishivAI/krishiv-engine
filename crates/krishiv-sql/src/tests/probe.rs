@@ -229,6 +229,7 @@ fn agrees_with_spark_on_the_type_string_fixture() {
                     Ok(t) => ParseError {
                         error: t.to_data_type().unwrap_err(),
                         span: Span::new(0, 0),
+                        relation: None,
                     },
                 };
                 assert!(same_error(ddl, &e, case, None), "{ddl}: {}", e.error);

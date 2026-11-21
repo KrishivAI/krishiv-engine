@@ -76,6 +76,10 @@ pub fn check_temporary_function_name(
     parser::check_temporary_function_name(name, span)
 }
 
+/// The `feature` of the `KRISHIV_UNSUPPORTED_FEATURE` the lowerer raises for time travel, at the relation's name:
+/// the session recognises it to name Spark's error from the resolved relation.
+pub const TIME_TRAVEL_FEATURE: &str = "time travel";
+
 /// The deepest tree the parser builds, counted in nested expressions,
 /// queries and relations; deeper statements fail with
 /// `FAILED_TO_PARSE_TOO_COMPLEX` at the span of the whole statement (Spark's

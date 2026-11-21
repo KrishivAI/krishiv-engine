@@ -125,8 +125,10 @@ impl Session {
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<krishiv_plan::Plan, KrishivError> {
         let cs = env.parser.case_sensitive;
-        krishiv_sql::lower_identified(query, SourceId(0), cs, &env.identifier_spans)
-            .map_err(|e| crate::session::sql_context(e.error, redacted, e.span.start, e.span.end))
+        krishiv_sql::lower_identified(query, SourceId(0), cs, &env.identifier_spans).map_err(|e| {
+            let (start, end) = (e.span.start, e.span.end);
+            crate::session::sql_context(self.lowering_error(e, env), redacted, start, end)
+        })
     }
 
     /// [`Self::resolve_identifier_clauses`], with the span of each substituted name in the

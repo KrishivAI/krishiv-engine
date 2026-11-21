@@ -186,6 +186,7 @@ impl Session {
                 profile: parts.profile,
                 principal: parts.principal,
                 policy: parts.policy,
+                policy_open: parts.policy_open,
                 grants: parts.grants,
                 functions,
                 base_functions,
@@ -253,6 +254,7 @@ impl Session {
             profile: state.profile,
             principal: Arc::clone(&state.principal),
             policy: Arc::clone(&state.policy),
+            policy_open: state.policy_open,
             grants: state.grants.clone(),
             functions: state.base_functions.clone(),
             admission: Some(Arc::clone(&state.admission)),
@@ -279,6 +281,7 @@ impl Session {
             profile: state.profile,
             principal: Arc::new(principal),
             policy,
+            policy_open: false,
             // The base session's grants policy is its own principal's: never the caller's. Without
             // one, the grant statements are refused and nothing created gets an owner (the admins'
             // until granted), which fails closed.
@@ -332,6 +335,7 @@ impl Session {
             profile: state.profile,
             principal: Arc::clone(&state.principal),
             policy: Arc::clone(&state.policy),
+            policy_open: state.policy_open,
             grants: state.grants.clone(),
             functions: state.base_functions.clone(),
             admission: Some(Arc::clone(&state.admission)),

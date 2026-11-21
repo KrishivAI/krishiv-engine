@@ -402,7 +402,7 @@ impl Session {
             self.parser_options().case_sensitive,
             ids,
         )
-        .map_err(|e| e.error)?;
+        .map_err(|e| self.lowering_error(e, &self.query_env()))?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         self.create_table_from(table, &df, mode, layout, &mut None)
             .await
@@ -995,7 +995,14 @@ impl Session {
                 .collect();
             let condition = changes.condition.map(slice);
             if let Some(done) = self
-                .run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments)
+                .run_row_level(
+                    op,
+                    &quoted,
+                    &alias,
+                    condition.as_deref(),
+                    &assignments,
+                    (!changes.options.is_empty()).then_some(operation),
+                )
                 .await?
             {
                 // The table's data changed: what read it is stale (as after an `INSERT`).

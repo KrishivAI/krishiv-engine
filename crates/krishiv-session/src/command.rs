@@ -278,7 +278,7 @@ impl Session {
             .into());
         }
         let plan = krishiv_sql::lower_identified(&v.query, self.next_source_id(), false, ids)
-            .map_err(|e| e.error)?;
+            .map_err(|e| self.lowering_error(e, &env))?;
         crate::catalog::check_view_cycle(
             &self.state.catalog,
             &key,
@@ -1137,7 +1137,7 @@ impl Session {
                 .into());
             }
         }
-        let lower_err = |e: krishiv_sql::ParseError| e.error;
+        let lower_err = |e: krishiv_sql::ParseError| self.lowering_error(e, &self.query_env());
         let mut out_params = Vec::with_capacity(params.len());
         for (n, p) in &params {
             let default = match &p.default {
@@ -1576,6 +1576,9 @@ impl Session {
         s: &krishiv_sql::ast::Show,
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
+        if s.as_json {
+            return self.exec_show_json(s, original).await;
+        }
         match &s.kind {
             krishiv_sql::ast::ShowKind::CurrentNamespace { .. } => {
                 // `system` (and a declared catalog) has no namespace here: after `USE system` the

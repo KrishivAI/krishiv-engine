@@ -157,6 +157,9 @@ pub(crate) struct SessionState {
     /// Decides when each query may start (E5); the default admits at once.
     pub(crate) admission: Arc<dyn AdmissionController>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
+    /// Whether no policy was set (the default [`AllowAll`], not an explicitly passed one): nothing is
+    /// denied, so a lookup that runs before the analysis asks the policy tells no one anything.
+    pub(crate) policy_open: bool,
     /// The grants provider this session's `GRANT`, `REVOKE` and `SHOW GRANTS` change and read
     /// (P3-T062); `None`: those statements are refused.
     pub(crate) grants: Option<Arc<crate::grants::GrantsPolicy>>,
@@ -272,7 +275,7 @@ impl SessionBuilder {
         self
     }
 
-    /// The Spark version whose behaviour queries follow (default 4.2).
+    /// The Spark version whose behaviour queries follow (default 4.3).
     ///
     /// ```
     /// use krishiv_plan::analyzer::SparkProfile;
@@ -432,6 +435,7 @@ impl SessionBuilder {
         let parts = SessionParts {
             profile: self.profile,
             principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
+            policy_open: self.policy.is_none(),
             policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
             grants: self.grants,
             functions: self.functions,
@@ -447,6 +451,7 @@ struct SessionParts {
     profile: SparkProfile,
     principal: Arc<Principal>,
     policy: Arc<dyn AccessPolicy>,
+    policy_open: bool,
     grants: Option<Arc<crate::grants::GrantsPolicy>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
     admission: Option<Arc<dyn AdmissionController>>,
@@ -682,6 +687,7 @@ impl Session {
                     targets: &[],
                     values: &[],
                     condition: d.where_clause.as_ref(),
+                    options: &d.options,
                 };
                 self.exec_row_level_change(&d.table, d.alias.as_ref(), "DELETE", &changes, query)
                     .await
@@ -693,6 +699,7 @@ impl Session {
                     targets: &targets,
                     values: &values,
                     condition: u.where_clause.as_ref(),
+                    options: &u.options,
                 };
                 self.exec_row_level_change(
                     &u.table,
@@ -708,6 +715,7 @@ impl Session {
                     targets: &[],
                     values: &[],
                     condition: None,
+                    options: &m.target_options,
                 };
                 self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
                     .await

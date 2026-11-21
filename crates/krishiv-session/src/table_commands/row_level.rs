@@ -123,6 +123,7 @@ impl Session {
         alias: &str,
         condition: Option<&str>,
         assignments: &[Assignment],
+        with_options: Option<&str>,
     ) -> Result<Option<DataFrame>, KrishivError> {
         let plain = self.with_locals(Vec::new());
         // A table that cannot be planned keeps the statement's old refusal (a v1 table's error
@@ -145,6 +146,14 @@ impl Session {
         let Some(table) = provider.row_level(op) else {
             return Ok(None);
         };
+        // Spark hands `WITH (options)` to the connector's scan and write; none is wired here, so a
+        // statement that would run refuses them rather than ignore them.
+        if let Some(operation) = with_options {
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!("WITH (options) on {operation} of a table with row-level changes"),
+            }
+            .into());
+        }
         // A Delta table's root as delta-spark's errors name it (`file:/..`), for a table by path
         // and for a catalog table over a Delta location alike (its scan keeps the table's name).
         #[cfg(feature = "delta")]

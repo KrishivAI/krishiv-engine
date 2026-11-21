@@ -41,7 +41,7 @@ use krishiv_sql::ast::{
     AlterView, AlterViewAction, Analyze, AnalyzeColumns, ChangeColumnAction, ColumnName,
     CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, CreateView, DdlName,
     DropBehavior, DropNamespace, DropPermanentView, DropTable, Ident, Insert, InsertClause, Query,
-    TableElement, TableOption, Truncate, Use, ViewColumn,
+    TableElement, Truncate, Use, ViewColumn,
 };
 use krishiv_types::DataType;
 
@@ -116,6 +116,8 @@ pub(crate) struct RowChanges<'a> {
     pub(crate) values: &'a [&'a krishiv_sql::ast::Expr],
     /// The `WHERE` condition.
     pub(crate) condition: Option<&'a krishiv_sql::ast::Expr>,
+    /// The `WITH (...)` options of the target relation (Spark 4.3).
+    pub(crate) options: &'a [krishiv_sql::ast::TableOption],
 }
 
 /// The scalar subqueries anywhere in the expression.
@@ -191,7 +193,11 @@ impl TableName {
         Ok(Self {
             namespace,
             name,
-            written: format!("`{}`", parts.join("`.`")),
+            written: parts
+                .iter()
+                .map(|p| format!("`{}`", p.replace('`', "``")))
+                .collect::<Vec<_>>()
+                .join("."),
             bare,
         })
     }
@@ -586,7 +592,7 @@ impl Session {
             self.parser_options().case_sensitive,
             ids,
         )
-        .map_err(|e| e.error)?;
+        .map_err(|e| self.lowering_error(e, &env))?;
         if let Some(temp) = crate::catalog::reads_temporary(
             &self.state.catalog,
             plan.root(),
@@ -1102,7 +1108,7 @@ impl Session {
                     self.parser_options().case_sensitive,
                     ids,
                 )
-                .map_err(|e| e.error)?;
+                .map_err(|e| self.lowering_error(e, &env))?;
                 if let Some(temp) = crate::catalog::reads_temporary(
                     &self.state.catalog,
                     plan.root(),
@@ -1259,7 +1265,10 @@ impl Session {
                 ..
             } => {
                 let change = match action {
-                    AlterColumnAction::Comment(c) => ColumnChange::Comment(c.clone()),
+                    AlterColumnAction::Comment(c) | AlterColumnAction::CommentOn(Some(c)) => {
+                        ColumnChange::Comment(c.clone())
+                    }
+                    AlterColumnAction::CommentOn(None) => ColumnChange::UnsetComment,
                     AlterColumnAction::SetNotNull | AlterColumnAction::DropNotNull => {
                         ColumnChange::Nullability
                     }
@@ -1392,6 +1401,7 @@ impl Session {
                 return Err(current.change_type_error(name.quoted(), &t, declared.as_deref()));
             }
             ColumnChange::Comment(c) => current.comment = Some(c),
+            ColumnChange::UnsetComment => current.comment = None,
             ColumnChange::DropDefault => current.default = None,
             _ => {}
         }
@@ -1417,6 +1427,13 @@ impl Session {
                 // Spark's error for a view here is not recorded in the goldens yet.
                 return Err(unsupported("COMMENT ON TABLE of a view"));
             }
+            if comment_on_column(&a.action) {
+                return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
+                    operation: "COMMENT ON COLUMN".to_owned(),
+                    view_name: name.quoted(),
+                }
+                .into());
+            }
             return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
                 operation: "`ALTER TABLE`".to_owned(),
                 view_name: name.quoted(),
@@ -1425,6 +1442,8 @@ impl Session {
         }
         let operation = if matches!(a.action, AlterTableAction::SetComment(_)) {
             "COMMENT ON TABLE"
+        } else if comment_on_column(&a.action) {
+            "COMMENT ON COLUMN"
         } else {
             "ALTER TABLE"
         };
@@ -1528,6 +1547,7 @@ enum ColumnChange {
     /// The type and the `CHAR(n)` / `VARCHAR(n)` string the new type was written with.
     Type(DataType, Option<String>),
     Comment(String),
+    UnsetComment,
     Position,
     Nullability,
     DropDefault,
@@ -1746,40 +1766,6 @@ pub(crate) enum V2Mode {
     Append,
 }
 
-/// `OPTIONS (...)` / `TBLPROPERTIES (...)` as text pairs, keys lower-cased
-/// for options as Spark does not (kept as written).
-fn options_of(options: &[TableOption], original: &str) -> BTreeMap<String, String> {
-    options
-        .iter()
-        .map(|o| {
-            let key = o
-                .key
-                .parts
-                .iter()
-                .map(|p| p.value.as_str())
-                .collect::<Vec<_>>()
-                .join(".");
-            let value = o
-                .value
-                .as_ref()
-                .map(|v| literal_text(original.get(v.span.start..v.span.end).unwrap_or_default()))
-                .unwrap_or_default();
-            (key, value)
-        })
-        .collect()
-}
-
-/// A literal's text without its quotes.
-fn literal_text(fragment: &str) -> String {
-    let f = fragment.trim();
-    for q in ['\'', '"'] {
-        if f.len() >= 2 && f.starts_with(q) && f.ends_with(q) {
-            return f[1..f.len() - 1].to_owned();
-        }
-    }
-    f.to_owned()
-}
-
 pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1790,7 +1776,11 @@ mod assign;
 use assign::{Source, assign, can_store, overflow_in_table_insert};
 
 mod files;
+mod option_text;
 pub(crate) use files::CheckedDir;
+#[cfg(test)]
+use option_text::literal_text;
+use option_text::options_of;
 mod questions;
 use files::remove_dir;
 mod location;
@@ -1821,3 +1811,14 @@ pub(crate) use delta_writes::{DeltaTarget, delta_source};
 
 mod pipeline;
 mod row_level;
+
+/// Whether `action` is `COMMENT ON COLUMN`, whose errors name that command (Spark's `UnresolvedTable`).
+fn comment_on_column(action: &AlterTableAction) -> bool {
+    matches!(
+        action,
+        AlterTableAction::AlterColumn {
+            action: AlterColumnAction::CommentOn(_),
+            ..
+        }
+    )
+}

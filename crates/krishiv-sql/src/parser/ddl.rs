@@ -15,8 +15,8 @@ use super::{Close, Fail, PR, Parser};
 use crate::ast::{
     AddResource, AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable,
     AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, Cache, CacheKind,
-    ChangeColumnAction, CreatePermanentView, DdlName, Delete, Describe, DescribeKind, DescribeMode,
-    DirectoryFormat, DropPermanentView, FunctionScope, Ident, Insert, InsertClause,
+    ChangeColumnAction, ColumnName, CreatePermanentView, DdlName, Delete, Describe, DescribeKind,
+    DescribeMode, DirectoryFormat, DropPermanentView, FunctionScope, Ident, Insert, InsertClause,
     InsertDirectory, ListResource, LoadData, Merge, MergeAction, MergeClause, MergeInsert,
     MergeMatched, MergeSource, NamespaceKind, PartitionSpec, PartitionSpecPart,
     PartitionWithLocation, PermanentViewColumn, Query, Refresh, RefreshKind, Relation, RelationExt,
@@ -138,7 +138,9 @@ impl<'s> Parser<'s> {
         // Spark's `tableAlias` takes any identifier but the clause keyword
         // that follows (`UPDATE t c1 = 2` names `t` `c1`, then wants
         // `SET`).
-        if self.is_ident_at(0, true) && !self.kw_at(0, terminator) {
+        // `WITH (` opens the table options of Spark 4.3 (`UPDATE t WITH (k = v) SET ...`), not an alias.
+        let options = self.kw_at(0, "WITH") && self.sym_at(1, Sym::LParen);
+        if self.is_ident_at(0, true) && !self.kw_at(0, terminator) && !options {
             return self.any_ident().map(Some);
         }
         Ok(None)
@@ -198,6 +200,31 @@ impl<'s> Parser<'s> {
                     action: AlterNamespaceAction::SetComment(comment),
                     span,
                 }));
+            }
+            if p.eat_kw("COLUMN") {
+                // Spark 4.3: `COMMENT ON COLUMN [catalog.][db.]table.column IS 'comment' | NULL`.
+                let at = p.start();
+                let mut name = p.table_name()?;
+                let last = name.parts.pop().filter(|_| !name.parts.is_empty());
+                name.span = p.span_from(at);
+                p.expect_kw("IS")?;
+                let comment = p.comment_value()?;
+                let span = p.span_from(start);
+                p.command_end()?;
+                // Spark's AstBuilder checks the name's length after the whole statement parsed.
+                let Some(last) = last else {
+                    return Self::fatal(error::comment_on_column_incorrect_identifier(span));
+                };
+                let action = AlterColumnAction::CommentOn(comment);
+                return Ok(Statement::AlterTable(Box::new(AlterTable {
+                    table: DdlName::Parts(name),
+                    action: AlterTableAction::AlterColumn {
+                        name: ColumnName::Ident(last),
+                        action,
+                        span,
+                    },
+                    span,
+                })));
             }
             p.expect_kw("TABLE")?;
             let table = p.ddl_name()?;
@@ -852,9 +879,36 @@ impl<'s> Parser<'s> {
             let start = p.start();
             p.expect_kw("SHOW")?;
             let kind = p.show_kind()?;
+            // Spark 4.3: `SHOW TABLES | TABLE EXTENDED | PARTITIONS ... AS JSON`.
+            let as_json = matches!(
+                kind,
+                ShowKind::Tables { .. }
+                    | ShowKind::TableExtended { .. }
+                    | ShowKind::Partitions { .. }
+            ) && p.kw_at(0, "AS")
+                && p.kw_at(1, "JSON");
+            if as_json {
+                p.pos += 2;
+                if matches!(
+                    &kind,
+                    ShowKind::TableExtended {
+                        partition: Some(_),
+                        ..
+                    }
+                ) {
+                    // Raised once the statement parsed to its end (a stray token is a syntax error).
+                    let span = p.span_from(start);
+                    p.command_end()?;
+                    return Self::fatal(error::show_table_extended_json_with_partition(span));
+                }
+            }
             let span = p.span_from(start);
             p.command_end()?;
-            Ok(Statement::Show(Show { kind, span }))
+            Ok(Statement::Show(Show {
+                kind,
+                as_json,
+                span,
+            }))
         })
     }
 
@@ -1376,6 +1430,7 @@ impl<'s> Parser<'s> {
                             }
                             .into(),
                             span: p.span_from(start),
+                            relation: None,
                         });
                     }
                     path
@@ -1499,6 +1554,7 @@ impl<'s> Parser<'s> {
                         }
                         .into(),
                         span,
+                        relation: None,
                     });
                 }
             };

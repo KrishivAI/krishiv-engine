@@ -96,6 +96,7 @@ fn at(error: impl Into<KrishivError>, span: Span) -> ParseError {
     ParseError {
         error: error.into(),
         span,
+        relation: None,
     }
 }
 
@@ -872,6 +873,7 @@ impl Checker<'_> {
     /// A `DELETE`: its table and its filter.
     fn delete(&self, d: &Delete) -> R {
         self.ddl_name(&d.table)?;
+        self.table_reference(d.table.span(), None, &d.options)?;
         if let Some(e) = &d.where_clause {
             self.expr(e)?;
         }
@@ -881,6 +883,7 @@ impl Checker<'_> {
     /// An `UPDATE`: its table, assignments and filter.
     fn update(&self, u: &Update) -> R {
         self.ddl_name(&u.table)?;
+        self.table_reference(u.table.span(), None, &u.options)?;
         self.update_assignments(&u.assignments)?;
         if let Some(e) = &u.where_clause {
             self.expr(e)?;
@@ -896,8 +899,12 @@ impl Checker<'_> {
     /// A `MERGE`: its names, source, condition and clauses.
     fn merge(&self, m: &Merge) -> R {
         self.ddl_name(&m.target)?;
+        self.table_reference(m.target.span(), None, &m.target_options)?;
         match &m.source {
-            MergeSource::Table { name, .. } => self.ddl_name(name)?,
+            MergeSource::Table { name, options, .. } => {
+                self.ddl_name(name)?;
+                self.table_reference(name.span(), None, options)?;
+            }
             MergeSource::Query { query, .. } => self.query(query)?,
         }
         self.expr(&m.on)?;

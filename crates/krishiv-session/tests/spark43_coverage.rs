@@ -48,27 +48,11 @@ const PENDING: &[(&str, &str)] = &[
         "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
     ),
     ("fn_localtime_9", "UNRESOLVED_ROUTINE"),
-    ("fix_pivot_duplicate_values", "INVALID_ARRAY_INDEX"),
     (
         "fix_insert_struct_by_position_legacy",
         "setup: INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
     ),
-    ("syn_comment_on_column", "PARSE_SYNTAX_ERROR"),
-    (
-        "syn_comment_on_column_describe",
-        "setup: PARSE_SYNTAX_ERROR",
-    ),
-    ("syn_comment_on_column_missing", "PARSE_SYNTAX_ERROR"),
-    ("syn_show_tables_as_json", "PARSE_SYNTAX_ERROR"),
-    ("syn_show_table_extended_as_json", "PARSE_SYNTAX_ERROR"),
-    ("syn_show_partitions_as_json", "PARSE_SYNTAX_ERROR"),
-    ("syn_time_travel_at_version", "PARSE_SYNTAX_ERROR"),
-    ("syn_time_travel_at_timestamp", "PARSE_SYNTAX_ERROR"),
-    ("syn_time_travel_clause_and_at", "PARSE_SYNTAX_ERROR"),
     ("syn_insert_replace_where_columns", "PARSE_SYNTAX_ERROR"),
-    ("syn_update_with_options", "PARSE_SYNTAX_ERROR"),
-    ("syn_delete_with_options", "PARSE_SYNTAX_ERROR"),
-    ("syn_merge_with_options", "PARSE_SYNTAX_ERROR"),
 ];
 
 fn fixture() -> Value {
