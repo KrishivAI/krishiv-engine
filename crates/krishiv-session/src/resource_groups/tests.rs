@@ -834,3 +834,21 @@ fn a_replace_in_a_directory_that_cannot_be_written_is_read_only() {
         assert_eq!(class_of(&e), ErrorClass::KrishivResourceGroupConfigReadOnly);
     }
 }
+
+#[test]
+fn a_waiting_query_reports_the_group_it_queued_in() {
+    let rg = ResourceGroups::from_json(CAPS, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let holders: Vec<QueryRequest> = (0..2).map(|_| request("u")).collect();
+    let _running: Vec<_> = holders
+        .iter()
+        .map(|r| poll(&mut rg.admit(r)).map(Result::unwrap))
+        .collect();
+    let waiting = request("w");
+    let mut fut = rg.admit(&waiting);
+    assert!(poll(&mut fut).is_none());
+    assert_eq!(rg.queued_group(&waiting).as_deref(), Some("root.q"));
+    drop(fut);
+    // the entry is gone once the wait ends: the answer is a fresh selection again
+    assert_eq!(rg.queued_group(&waiting).as_deref(), Some("root.q"));
+    assert!(rg.waiting.lock().unwrap().is_empty());
+}
