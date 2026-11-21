@@ -322,12 +322,30 @@ fn a_nondeterministic_key_is_computed_once_below_the_partial_aggregate() {
     let plan = support::resolve(sql, &ctx);
     let udfs = UdfLibrary::new();
     let on = optimize_with_udfs(&plan, &Stats, &udfs, &config(true)).unwrap();
+    assert_eq!(
+        on.root().resolved_output(),
+        plan.root().resolved_output(),
+        "the output keeps its attributes\n{}",
+        on.root()
+    );
     let text = on.root().to_string();
     assert_eq!(text.matches("rand(7)").count(), 1, "{text}");
-    let partial = text.find("PartialAggregate [c#0, r#5]").expect(&text);
+    let line = text
+        .lines()
+        .find(|l| l.contains("PartialAggregate ["))
+        .expect(&text);
+    let keys = &line[line.find('[').unwrap()..line.find(']').unwrap()];
+    assert!(keys.contains("c#") && keys.contains("r#"), "{text}");
+    let partial = text.find(line).unwrap();
     assert!(text[partial..].contains("rand(7)"), "{text}");
     let again = optimize_with_udfs(&on, &Stats, &udfs, &config(true)).unwrap();
     assert!(again.structurally_eq(&on), "{text}");
+    let off = optimize_with_udfs(&plan, &Stats, &udfs, &config(false)).unwrap();
+    assert!(
+        !off.root().to_string().contains("PartialAggregate"),
+        "switched off\n{}",
+        off.root()
+    );
 }
 
 /// An uncorrelated scalar subquery the key reads becomes a column of the input, so the rule
@@ -337,5 +355,34 @@ fn a_scalar_subquery_key_below_the_expansion_is_a_column() {
     assert_fires(
         "SELECT c, x, count(*) FROM (SELECT c, (SELECT max(w) FROM h) AS x FROM h) \
          GROUP BY ROLLUP(c, x)",
+    );
+}
+
+/// Grouping sets with no aggregate call have no states to merge below the expansion.
+#[test]
+fn grouping_sets_without_a_call_stay() {
+    assert_refuses(
+        "SELECT c, s FROM h GROUP BY ROLLUP(c, s)",
+        "no aggregate call",
+    );
+}
+
+/// A scalar subquery a projection above a join computes, read by the aggregate's key: the
+/// subquery would move below the merge with the projection, so the call stays above the join.
+#[test]
+fn a_subquery_between_the_aggregate_and_the_join_keeps_the_call_above() {
+    let r = run(
+        "SELECT x, sum(w) FROM (SELECT a.w, (SELECT max(v) FROM h) + a.c AS x \
+         FROM h a JOIN h b ON a.c = b.c) GROUP BY x",
+    );
+    assert!(!r.fired(), "{:?}\n{}", r.notes, r.on.root());
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n
+                .contains("a projection between the aggregate and its new input holds a subquery")),
+        "{:?}\n{}",
+        r.notes,
+        r.on.root()
     );
 }

@@ -319,6 +319,17 @@ impl Recur {
 mod tests {
     use super::{FULL, Recur};
 
+    /// Before `start` the set has no slots: `retain` keeps nothing to keep and an insert
+    /// stores nothing, so an unstarted set stays empty and costs no memory.
+    #[test]
+    fn an_unstarted_set_stays_empty() {
+        let mut r = Recur::new();
+        r.retain(|_, _| false);
+        assert!(r.insert(7, 1));
+        assert_eq!((r.len, r.hits, r.touched, r.bytes()), (0, 0, 0, 0));
+        assert!(!r.started());
+    }
+
     /// After an in-place `retain` every kept key is found again where its
     /// probe starts (a hit) and no dropped key is (a new insert), with keys
     /// that wrap around the end of the slots and the hash 0 among them.

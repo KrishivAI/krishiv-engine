@@ -88,6 +88,20 @@ fn a_hint_and_a_pipe_operator_read_their_input_whole() {
 }
 
 #[test]
+fn a_with_columns_and_a_pivot_read_their_input_whole() {
+    reads_whole(|input| PlanNode::WithColumns {
+        input,
+        columns: Vec::new(),
+    });
+    reads_whole(|input| PlanNode::Pivot {
+        input,
+        pivot_columns: Vec::new(),
+        values: Vec::new(),
+        aggregates: Vec::new(),
+    });
+}
+
+#[test]
 fn a_projection_read_for_its_rows_alone_keeps_its_origin() {
     // Nothing reads the projection (a global aggregate with no call), and the
     // union below keeps its columns (it is read by position), so the
