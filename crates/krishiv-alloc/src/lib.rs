@@ -18,10 +18,19 @@
 //! together), and a tight limit needs both costly ones: at 200 MiB under a
 //! 490 MiB cgroup, a 250 ms delay with huge pages off, or a 10 ms delay
 //! with huge pages on, was OOM-killed. So they apply below
-//! [`GENEROUS_MIN`] only. A generous limit keeps mimalloc's defaults (a
-//! fixed delay, as DuckDB keeps one jemalloc decay at every limit) and
-//! returns memory through [`release`] under pressure, as an unlimited
-//! process does.
+//! [`GENEROUS_MIN`] only. A generous limit keeps mimalloc's other defaults
+//! but purges after 30 s instead of 1 s ([`GENEROUS_OPTIONS`]: a fixed
+//! delay, as DuckDB keeps one jemalloc decay at every limit) and returns
+//! memory through [`release`] under pressure. A forced collect purges
+//! whatever the delay, so the pressure hook keeps working. With no limit
+//! mimalloc keeps all its defaults: nothing would apply pressure.
+//!
+//! The 1 s default purged memory a query frees and re-allocates within
+//! seconds (hash tables and vectors growing, batches of the next stage), and
+//! every re-use faulted it back in, zeroing huge pages: TPC-DS SF10 q65 (12
+//! threads, 12 GiB limit, a KVM guest) took 365K page faults and 14 s of
+//! system time per five runs at 1 s, 4.8K and 3.5 s at 30 s, for a peak
+//! resident set 16% higher (1.01 to 1.17 GiB).
 //!
 //! The options must be in force before mimalloc reserves its first arena,
 //! at the process's first allocation, before `main` (set from `main` they
@@ -56,6 +65,13 @@ pub const LIMITED_OPTIONS: [(&CStr, c_int, c_long); 3] = [
     (c"MIMALLOC_ALLOW_THP", 43, 0),
     (c"MIMALLOC_MINIMAL_PURGE_SIZE", 44, 64),
 ];
+
+/// `(environment variable, mimalloc option number, value)` set under a
+/// generous limit ([`is_generous`]): purge after 30,000 ms (mimalloc's
+/// default is 1,000). A finite delay, not `-1`: mimalloc schedules no purge
+/// at all with a delay of 0 or less, and then a forced [`release`] would not
+/// purge either.
+pub const GENEROUS_OPTIONS: [(&CStr, c_int, c_long); 1] = [(c"MIMALLOC_PURGE_DELAY", 15, 30_000)];
 
 /// `(environment variable, mallopt parameter, value)` set for glibc's
 /// malloc unless a limit below [`GENEROUS_MIN`] applies (the bounded path
@@ -199,7 +215,11 @@ mod cpu_check {
 mod init {
     use std::ffi::{CStr, c_char, c_int};
 
-    use super::{LIMIT_VAR, LIMITED_OPTIONS, is_generous, limit_in_args, parse_size};
+    use std::ffi::c_long;
+
+    use super::{
+        GENEROUS_OPTIONS, LIMIT_VAR, LIMITED_OPTIONS, is_generous, limit_in_args, parse_size,
+    };
 
     unsafe extern "C" {
         fn getenv(name: *const c_char) -> *const c_char;
@@ -279,10 +299,17 @@ mod init {
             },
         };
         if is_generous(limit) {
+            set_options(&GENEROUS_OPTIONS);
             return keep_freed_c_memory();
         }
         super::BOUNDED.store(true, std::sync::atomic::Ordering::Relaxed);
-        for &(var, option, value) in &LIMITED_OPTIONS {
+        set_options(&LIMITED_OPTIONS);
+    }
+
+    /// Sets each mimalloc option of `options` whose `MIMALLOC_*` variable
+    /// the user has not set.
+    fn set_options(options: &[(&CStr, c_int, c_long)]) {
+        for &(var, option, value) in options {
             if !is_set(var) {
                 // SAFETY: only stores the value in mimalloc's option table;
                 // no other thread exists yet.
@@ -537,7 +564,7 @@ mod tests {
         c.args(["tests::child_reports_options", "--exact", "--nocapture"])
             .env("KRISHIV_ALLOC_CHILD", "1")
             .env_remove("KRISHIV_MEMORY_LIMIT");
-        for (k, ..) in LIMITED_OPTIONS {
+        for (k, ..) in LIMITED_OPTIONS.iter().chain(&GENEROUS_OPTIONS) {
             c.env_remove(k.to_str().unwrap());
         }
         for (k, ..) in GLIBC_OPTIONS {
@@ -597,16 +624,24 @@ mod tests {
     }
 
     /// A generous limit leaves mimalloc's defaults, huge pages included,
-    /// whatever the machine's memory.
+    /// whatever the machine's memory, except the 30 s purge delay; the
+    /// user's variable wins.
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
-    fn a_generous_limit_leaves_the_defaults() {
-        let unlimited = format!("(1000, 1, 0) THP {}", thp_enabled());
+    fn a_generous_limit_leaves_the_defaults_but_the_purge_delay() {
+        let generous = format!("(30000, 1, 0) THP {}", thp_enabled());
         let limited = "(10, 0, 64) THP 0".to_owned();
-        assert_eq!(child(Some("krishiv.memory.limit=4g"), &[]), unlimited);
-        assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "4096m")]), unlimited);
-        assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "1p")]), unlimited);
-        assert_eq!(child(Some("krishiv.memory.limit=24g"), &[]), unlimited);
+        assert_eq!(child(Some("krishiv.memory.limit=4g"), &[]), generous);
+        assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "4096m")]), generous);
+        assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "1p")]), generous);
+        assert_eq!(child(Some("krishiv.memory.limit=24g"), &[]), generous);
+        assert_eq!(
+            child(
+                Some("krishiv.memory.limit=24g"),
+                &[("MIMALLOC_PURGE_DELAY", "1000")]
+            ),
+            format!("(1000, 1, 0) THP {}", thp_enabled())
+        );
         // Just below the threshold: the options apply.
         assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "4095m")]), limited);
         // A limit that is not a size counts as 0.
