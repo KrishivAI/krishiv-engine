@@ -36,7 +36,9 @@ fn is_vector(t: &DataType) -> bool {
 }
 
 /// Binds the vector function `name` to `args`.
-pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyResult {
+pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
+    // Spark 4.3.0's infinity norm propagates a NaN element; 4.2.0's skips it.
+    let nan = opts.kernel.spark_version() >= krishiv_kernels::SparkVersion::V4_3;
     let listed = listed(NAMES, name)?;
     let types: Vec<DataType> = args.iter().map(BindArg::data_type).collect();
     let norm = matches!(listed, "vector_norm" | "vector_normalize");
@@ -56,7 +58,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             let (v, d) = norm_inputs(x, with_degree)?;
             let mut out = Float32Builder::with_capacity(x.rows());
             for row in 0..x.rows() {
-                out.append_option(row_norm(&v, &d, row, "vector_norm")?);
+                out.append_option(row_norm(&v, &d, row, "vector_norm", nan)?);
             }
             Ok(Arc::new(out.finish()) as ArrayRef)
         }),
@@ -68,7 +70,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 let mut out = ListBuilder::with_capacity(Float32Builder::new(), x.rows())
                     .with_field(Arc::clone(&item));
                 for row in 0..x.rows() {
-                    match row_normalized(&v, &d, row)? {
+                    match row_normalized(&v, &d, row, nan)? {
                         Some(values) => {
                             out.values().append_slice(&values);
                             out.append(true);
@@ -171,10 +173,11 @@ fn degree_of(name: &str, d: f32) -> Result<Degree, KrishivError> {
     Ok(degree)
 }
 
-fn norm_of(v: &[f32], degree: Degree) -> f32 {
+fn norm_of(v: &[f32], degree: Degree, nan_propagates: bool) -> f32 {
     match degree {
         Degree::One => krishiv_kernels::vector::l1_norm(v),
         Degree::Two => krishiv_kernels::vector::l2_norm(v),
+        Degree::Infinity if nan_propagates => krishiv_kernels::vector::inf_norm_nan(v),
         Degree::Infinity => krishiv_kernels::vector::inf_norm(v),
     }
 }
@@ -186,6 +189,7 @@ fn row_norm(
     d: &Float32Array,
     row: usize,
     name: &str,
+    nan: bool,
 ) -> Result<Option<f32>, KrishivError> {
     let Some((values, has_null)) = row_values(v.as_list::<i32>(), row) else {
         return Ok(None);
@@ -200,6 +204,7 @@ fn row_norm(
     Ok(Some(norm_of(
         values.as_primitive::<Float32Type>().values(),
         degree,
+        nan,
     )))
 }
 
@@ -209,6 +214,7 @@ fn row_normalized(
     v: &ArrayRef,
     d: &Float32Array,
     row: usize,
+    nan: bool,
 ) -> Result<Option<Vec<f32>>, KrishivError> {
     let Some((values, has_null)) = row_values(v.as_list::<i32>(), row) else {
         return Ok(None);
@@ -224,7 +230,7 @@ fn row_normalized(
     if values.is_empty() {
         return Ok(Some(Vec::new()));
     }
-    let norm = norm_of(values, degree);
+    let norm = norm_of(values, degree, nan);
     if !krishiv_kernels::vector::is_normalizable(norm) {
         return Ok(None);
     }
