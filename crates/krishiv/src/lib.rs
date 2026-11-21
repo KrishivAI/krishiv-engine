@@ -15,7 +15,7 @@
 //! yet (features are additive, ADR 0027, so they can gain code later without breaking
 //! anyone who names them). The ones that do something are `delta`, `cloud`,
 //! `collations-icu` (on by default), `ui`, `unstable-ir`, `tokio-console`, `telemetry-logs` and
-//! `telemetry-otlp`; `full` names every feature that needs no nightly or system library.
+//! `telemetry-otlp`; `full` turns on the reserved names and the optional backends together.
 //!
 //! ```
 //! use std::sync::Arc;
