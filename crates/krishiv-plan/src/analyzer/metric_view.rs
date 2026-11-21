@@ -293,6 +293,7 @@ impl Resolver<'_> {
             }
         });
         let mut info = rel.agg.as_deref().cloned();
+        let pinned = pin.is_some();
         if let Some(pin) = &pin {
             rel.plan = pin.plan(&rel.plan);
             if let Some(info) = &mut info {
@@ -329,6 +330,15 @@ impl Resolver<'_> {
             }));
         }
         rel.agg = info.map(Arc::new);
+        // A clause that rebuilds the aggregate from `widen` (a sort or filter on a grouping key
+        // the projection dropped) must rebuild the pinned one: the view's operators keep the
+        // creator's mode there too.
+        if pinned
+            && let (Some(agg), Some(widen)) = (&rel.agg, &rel.widen)
+            && matches!(**widen, super::resolve::Widen::Aggregate(_))
+        {
+            rel.widen = Some(Arc::new(super::resolve::Widen::Aggregate(Arc::clone(agg))));
+        }
         Ok(rel)
     }
 

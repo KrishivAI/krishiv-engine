@@ -281,6 +281,9 @@ fn an_operator_keeps_the_creators_mode_and_its_operand_the_readers() {
         "SELECT k, measure(neg) FROM mvo GROUP BY k",
         "SELECT k FROM mvo GROUP BY k ORDER BY measure(neg)",
         "SELECT k FROM mvo GROUP BY k HAVING measure(negl) > 0L",
+        // A sort on a grouping key the output drops rebuilds the aggregate (review cL9v).
+        "SELECT measure(negl) FROM mvo GROUP BY k ORDER BY k",
+        "SELECT measure(neg) FROM mvo GROUP BY k HAVING k = 'a'",
     ] {
         let e = run(&s, q).unwrap_err();
         assert_eq!(class(&e), "ARITHMETIC_OVERFLOW", "{q}");
