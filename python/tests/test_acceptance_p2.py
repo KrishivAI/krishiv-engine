@@ -30,6 +30,12 @@ def test_read_text(spark: SparkSession, tmp_path: Path) -> None:
     assert [r.value for r in rows] == ["one", "two"]
     whole = spark.read.text(str(tmp_path / "a.txt"), wholetext=True).collect()
     assert [r.value for r in whole] == ["one\ntwo\n"]
+    # `wholetext=False` overrides an earlier option, as PySpark's `_set_opts` does.
+    overridden = spark.read.option("wholetext", True).text(str(tmp_path / "a.txt"), wholetext=False)
+    assert overridden.count() == 2
+    (tmp_path / "c.txt").write_text("a,b,c")
+    split = spark.read.text(str(tmp_path / "c.txt"), lineSep=",").collect()
+    assert [r.value for r in split] == ["a", "b", "c"]
 
 
 def test_unknown_attribute_has_class_and_state(spark: SparkSession) -> None:

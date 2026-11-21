@@ -107,8 +107,7 @@ class DataFrameReader:
     ) -> DataFrame:
         """Reads text files into a ``value`` string column, a row per line (``wholetext=True``: a row
         per file), as ``pyspark.sql.DataFrameReader.text``."""
-        if wholetext:
-            options["wholetext"] = True
+        options["wholetext"] = wholetext  # always set, as PySpark: it overrides an earlier option
         if lineSep is not None:
             options["lineSep"] = lineSep
         return self.load(paths, format="text", **options)

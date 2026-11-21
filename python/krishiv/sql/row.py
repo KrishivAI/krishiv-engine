@@ -24,7 +24,7 @@ class Row(tuple[Any, ...]):
 
     def asDict(self, recursive: bool = False) -> dict[str, Any]:
         """The row as a ``dict``; ``recursive=True`` also converts nested rows, as PySpark does
-        (inside lists, tuples and dict values too)."""
+        (inside lists and dict values too)."""
         if not hasattr(self, "__fields__"):
             raise PySparkValueError("Cannot convert a Row class into dict")
         if not recursive:
