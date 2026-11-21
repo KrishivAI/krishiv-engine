@@ -1627,6 +1627,8 @@ mod sortlimit;
 
 mod join;
 
+mod na;
+
 mod distinct;
 
 mod aggregate;

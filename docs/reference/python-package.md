@@ -22,6 +22,9 @@ table = df.toArrow()  # a pyarrow.Table
   `duckdb.from_arrow(df)` read the result without copying.
 - pyarrow is a required dependency (since 0.2.1; `krishiv[pyarrow]` still works as an alias); `toPandas` also needs pandas (`krishiv[pandas]`).
 - `df.profile()` (or `krishiv.ui(df)`) returns a viewer of the query's profile; in a notebook it renders itself.
+- `krishiv.ui()` starts the [web console](../guides/deploy.md#the-web-console) of your session in this process, on
+  `127.0.0.1` behind a token, and prints its URL. It lists the session's queries with their operators, runs SQL in
+  the session and stops when the session stops (builds after 0.2.0).
 - Test your PySpark code without a JVM: `krishiv.testing` has `assertDataFrameEqual`, `assertSchemaEqual` and a
   pytest fixture (`pytest_plugins = ["krishiv.testing.pytest_plugin"]`, then use the `krishiv_session` fixture).
 
