@@ -529,4 +529,66 @@ mod tests {
         assert!(!state.would_cycle("b", &Grantee::Role("c".to_owned())));
         assert!(!state.would_cycle("a", &Grantee::User("b".to_owned())));
     }
+
+    /// `lists_namespace` shows a namespace for each reason a listing has (P3-T067 PR-58b): it owns
+    /// it or something under it, a `Select` covers it, a grant on it, a column grant of a relation
+    /// asked as one, a grant anywhere under it; nothing else.
+    #[test]
+    fn a_namespace_is_listed_for_what_it_holds() {
+        let ns = |parts: &[&str]| {
+            ObjectKey::new(
+                KeyKind::Namespace,
+                parts.iter().map(|p| (*p).to_owned()).collect(),
+            )
+        };
+        let row = |grantee: &str, privilege: Privilege, object: ObjectKey| GrantRow {
+            grantee: Grantee::User(grantee.to_owned()),
+            privilege,
+            object,
+            with_grant_option: false,
+            granted_by: "admin".to_owned(),
+            granted_at: 0,
+        };
+        let who = |name: &str| Principal::new(name, PrincipalKind::User);
+        let mut state = GrantState::default();
+        state.owners.insert(ns(&["c", "own"]), "ana".to_owned());
+        state
+            .owners
+            .insert(table("c", "deep", "t"), "bo".to_owned());
+        state.grants.push(row("cy", Privilege::Select, ns(&["c"])));
+        state
+            .grants
+            .push(row("di", Privilege::Modify, ns(&["c", "s"])));
+        state.grants.push(row(
+            "ed",
+            Privilege::Select,
+            ObjectKey::new(
+                KeyKind::Column,
+                ["c", "s", "t", "x"].map(str::to_owned).to_vec(),
+            ),
+        ));
+        state
+            .grants
+            .push(row("fa", Privilege::Modify, ns(&["c", "s", "inner"])));
+        // Owns the namespace itself, or a relation under it.
+        assert!(state.lists_namespace(&who("ana"), &ns(&["c", "own"]), false));
+        assert!(state.lists_namespace(&who("bo"), &ns(&["c", "deep"]), false));
+        assert!(state.lists_namespace(&who("bo"), &ns(&["c"]), false));
+        // A `Select` on the catalog covers every namespace in it.
+        assert!(state.lists_namespace(&who("cy"), &ns(&["c", "s"]), false));
+        // A grant on the namespace itself, of any privilege.
+        assert!(state.lists_namespace(&who("di"), &ns(&["c", "s"]), false));
+        assert!(state.lists_namespace(&who("di"), &ns(&["C", "S"]), false));
+        assert!(!state.lists_namespace(&who("di"), &ns(&["C", "S"]), true));
+        // A column grant lists its relation asked as one, and the namespaces above it.
+        assert!(state.lists_namespace(&who("ed"), &table("c", "s", "t"), false));
+        assert!(state.lists_namespace(&who("ed"), &ns(&["c", "s"]), false));
+        // A grant on a nested namespace lists its parents, not its siblings.
+        assert!(state.lists_namespace(&who("fa"), &ns(&["c", "s"]), false));
+        assert!(!state.lists_namespace(&who("fa"), &ns(&["c", "other"]), false));
+        // Nothing under it, no grant: not listed; a relation is never listed for what is under it.
+        assert!(!state.lists_namespace(&who("ana"), &ns(&["c", "s"]), false));
+        assert!(!state.lists_namespace(&who("zoe"), &ns(&["c"]), false));
+        assert!(!state.lists_namespace(&who("fa"), &table("c", "s", "t"), false));
+    }
 }
