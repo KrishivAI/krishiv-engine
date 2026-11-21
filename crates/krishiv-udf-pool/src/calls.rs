@@ -248,7 +248,7 @@ impl CallThreads {
         let queue = self.shared.lock();
         // Only the owner's own call is refused: its task may wait for it. Another owner's call waits for a
         // thread (the task never waits for it), even with `max_total` 1 (review R3-4).
-        if self.owner_calls() == 1 && queue.slots.get(&owner).is_some_and(|n| *n > 0) {
+        if self.owner_calls_for(&owner) == 1 && queue.slots.get(&owner).is_some_and(|n| *n > 0) {
             drop(queue);
             drop(job);
             return Err(Refused::Reserve);
@@ -305,6 +305,16 @@ impl CallThreads {
     /// The calls one owner can run at once: its share, within the threads.
     fn owner_calls(&self) -> usize {
         self.shared.max_per_owner.min(self.shared.max_threads)
+    }
+
+    /// [`Self::owner_calls`] for `owner`: within its cap group's share when it is in one (a tenant that can
+    /// run one call at once has no call left beside a relation task, whatever the session's share).
+    fn owner_calls_for(&self, owner: &Owner) -> usize {
+        if owner.group().is_some() {
+            self.owner_calls().min(self.shared.max_per_tenant)
+        } else {
+            self.owner_calls()
+        }
     }
 
     /// The most relation task slots one owner holds: one less than the calls it can run, so its scalar calls
@@ -1023,6 +1033,22 @@ mod tests {
         calls
             .submit(owner("a"), Box::new(|| {}))
             .expect("a after its task");
+    }
+
+    #[test]
+    fn with_one_call_per_tenant_a_scalar_call_beside_a_task_is_refused_not_queued() {
+        // maxPerSession 8, maxPerTenant 1: the tenant can run one call, so a scalar call beside its task would
+        // wait for the task, which waits for it.
+        let calls = CallThreads::with_tenant_cap(8, 8, 1, Duration::from_secs(60));
+        let waker = futures::task::noop_waker();
+        let (take, slots) = calls.take_slots(&tenant_owner("acme", "a"), 1, &mut None, &waker);
+        assert_eq!(take, SlotTake::Taken);
+        let refused = calls.submit(tenant_owner("acme", "a"), Box::new(|| {}));
+        assert!(matches!(refused, Err(Refused::Reserve)), "{refused:?}");
+        drop(slots);
+        calls
+            .submit(tenant_owner("acme", "a"), Box::new(|| {}))
+            .expect("after its task");
     }
 
     #[test]

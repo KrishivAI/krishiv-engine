@@ -64,7 +64,7 @@ impl PythonUdf {
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for an eval type the pool does not run as a scalar UDF; the DDL parser's
-    /// error for a return type that does not parse.
+    /// (or, for a `{` or `"` start, the JSON reader's) error for a return type that does not parse.
     pub fn from_stored(
         name: String,
         deterministic: bool,
@@ -78,7 +78,12 @@ impl PythonUdf {
             deterministic,
             eval_type,
             plan_eval_type: scalar_eval_type(eval_type)?,
-            return_type: krishiv_types::parse_data_type(return_type)?,
+            return_type: if return_type.starts_with(['{', '"']) {
+                // The catalog stores the lossless Spark JSON: field names, nullability and UDT identity.
+                krishiv_types::DataType::from_canonical_json(return_type)?
+            } else {
+                krishiv_types::parse_data_type(return_type)?
+            },
             command,
             python_ver,
         })

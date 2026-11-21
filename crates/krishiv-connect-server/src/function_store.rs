@@ -86,7 +86,7 @@ impl FunctionStore for SqliteFunctionStore {
                     udf.name.clone(),
                     udf.eval_type,
                     udf.deterministic,
-                    udf.return_type.catalog_string(),
+                    udf.return_type.json(),
                     udf.command.clone(),
                     digest,
                     udf.python_ver.clone(),
@@ -122,6 +122,20 @@ mod tests {
     fn udf(name: &str) -> PythonUdf {
         PythonUdf::from_stored(name.into(), true, 101, "bigint", vec![9, 9], "3.12".into())
             .expect("udf")
+    }
+
+    #[test]
+    fn a_struct_return_type_keeps_its_field_names_and_nullability() {
+        let store = SqliteFunctionStore::new(Arc::new(
+            SqliteCatalog::open_in_memory("f", false).expect("catalog"),
+        ));
+        let json = r#"{"type":"struct","fields":[{"name":"a b","type":"long","nullable":false,"metadata":{}}]}"#;
+        let udf = PythonUdf::from_stored("s".into(), true, 101, json, vec![1], "3.12".into())
+            .expect("udf");
+        store.put(None, "alice", &udf, false).expect("put");
+        let listed = store.list(None).expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].return_type, udf.return_type);
     }
 
     #[test]

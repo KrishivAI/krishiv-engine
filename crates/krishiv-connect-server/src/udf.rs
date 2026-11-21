@@ -353,7 +353,7 @@ impl SessionPython {
                 .lock()
                 .payloads
                 .iter()
-                .any(|(name, _, _)| name.eq_ignore_ascii_case(&udf.name));
+                .any(|(name, _, _)| name.to_lowercase() == udf.name.to_lowercase());
             if held {
                 continue;
             }
@@ -403,7 +403,7 @@ impl SessionPython {
                     .payloads
                     .iter()
                     .rev()
-                    .find(|(n, _, _)| n.eq_ignore_ascii_case(name))
+                    .find(|(n, _, _)| n.to_lowercase() == name.to_lowercase())
                     .map(|(_, _, udf)| Arc::clone(udf))
                     .ok_or_else(|| {
                         KrishivError::from(KrishivUnsupportedFeature {

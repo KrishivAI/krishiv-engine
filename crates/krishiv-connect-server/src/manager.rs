@@ -42,6 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use krishiv_common::PrincipalKind;
 use krishiv_common::config::{
     CONNECT_EXECUTE_ABANDONED_TOMBSTONES, CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
     CONNECT_SESSION_IDLE_TIMEOUT, CONNECT_SESSION_TOMBSTONES, Config, ConfigValue,
@@ -569,9 +570,15 @@ impl SessionManager {
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
         let session = (self.factory)(caller, transport)?;
+        // The persisted-function owner and the untenanted key tell a user from a service of the same name.
+        let kind = match caller.principal.kind {
+            PrincipalKind::User => "user",
+            PrincipalKind::Service => "service",
+            _ => "other",
+        };
         let python = SessionPython::new(
             self.udfs.as_ref(),
-            &caller.principal.name,
+            &format!("{kind}:{}", caller.principal.name),
             caller.principal.tenant.as_deref(),
             caller.method != Method::None,
             &session,

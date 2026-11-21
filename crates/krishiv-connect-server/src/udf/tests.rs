@@ -526,6 +526,25 @@ async fn persist_needs_a_registered_udf_and_a_store_and_drop_removes() {
     clippy::disallowed_methods,
     reason = "#[tokio::test] blocks on its own runtime"
 )]
+async fn persist_picks_the_newest_registration_under_the_registrys_name_folding() {
+    let host: Arc<dyn UdfHost> = Arc::new(Host::default());
+    let store = Arc::new(MemStore::default());
+    let s = session();
+    let python = with_store(&host, &store, None, &s);
+    // `Ä` and `ä` are one name to the registry (`to_lowercase`): the later payload is the function.
+    python.register(&s, udf("Ä", b"old")).unwrap();
+    python.register(&s, udf("ä", b"new")).unwrap();
+    python.persist(&s, "Ä", false).await.unwrap();
+    let rows = store.rows.lock().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].2.command, b"new");
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
 async fn load_keeps_the_sessions_own_name_retries_after_a_failure_and_skip_stops_it() {
     let host: Arc<dyn UdfHost> = Arc::new(Host::default());
     let store = Arc::new(MemStore::default());

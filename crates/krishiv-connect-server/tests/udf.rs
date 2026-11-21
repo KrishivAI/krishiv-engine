@@ -1297,8 +1297,8 @@ async fn a_persisted_udf_survives_a_restart_and_is_typed_by_the_first_analysis()
             .expect("read")
             .map(|f| f.owner)
     };
-    assert_eq!(owners("p:dana").as_deref(), Some("dana"));
-    assert_eq!(owners("p:erin").as_deref(), Some("erin"));
+    assert_eq!(owners("p:user:dana").as_deref(), Some("user:dana"));
+    assert_eq!(owners("p:user:erin").as_deref(), Some("user:erin"));
     // `drop` removes it for later sessions.
     execute(&run.channel, persist("plus_one", true), ADMIN)
         .await
