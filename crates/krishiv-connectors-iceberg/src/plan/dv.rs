@@ -9,7 +9,17 @@
 //! `length` counts the magic and bitmap; the CRC covers the same bytes. The
 //! bitmap is the portable 64-bit layout: a little-endian `u64` count of 32-bit
 //! bitmaps, then each as a little-endian `u32` key (the high 32 bits, keys
-//! ascending) and a portable 32-bit roaring bitmap.
+//! ascending) and a portable 32-bit roaring bitmap. [`encode_dv`] writes
+//! Java's layout (PR-36c): every key from 0 to the highest, empty bitmaps
+//! for the gaps, run containers where smaller; the decoder also takes sparse
+//! keys, as Java's does. Byte equality with Java is checked for array
+//! containers only (the fixtures hold no runs). At the run/array size
+//! boundary the two may choose differently: `roaring`'s `optimize` keeps a
+//! run container while `4r + 2 <= 2c` (`r` runs, `c` values), Java's
+//! `RunContainer.toEfficientContainer` compares against an array of
+//! `2c + 2` bytes (recalled, not cited; review 36c1 m7), so at `c = 2r` the
+//! container kinds can differ. Both are valid portable roaring, and every
+//! reader (Java's, Krishiv's) takes either: rows never differ.
 //!
 //! Decoding checks what Java's `BitmapPositionDeleteIndex.deserialize` checks,
 //! in its order and with its texts: the length against the entry's
@@ -179,7 +189,37 @@ fn read_bitmap(b: &mut &[u8], location: &str) -> Result<RoaringTreemap, KrishivE
     Ok(out)
 }
 
-/// The blob of `positions` (the writer side; T027's DV writer and the tests).
+/// Java's `RoaringPositionBitmap.serialize` (apache-iceberg 1.12.0,
+/// `RoaringPositionBitmap.java:265-289`) after `runLengthEncode`
+/// (`BitmapPositionDeleteIndex.java:130`): the count of 32-bit bitmaps as a
+/// little-endian `u64`, then **every** key from 0 to the highest (Java's
+/// array is dense, so a gap is an empty bitmap), each a little-endian `u32`
+/// and a standard 32-bit roaring bitmap with run containers where they are
+/// smaller (`runOptimize`, the same rule as `roaring`'s `optimize`).
+fn write_bitmap(positions: &RoaringTreemap, out: &mut Vec<u8>) -> std::io::Result<()> {
+    let bitmaps: Vec<(u32, &RoaringBitmap)> = positions.bitmaps().collect();
+    let count = bitmaps.last().map_or(0, |(k, _)| u64::from(*k) + 1);
+    out.extend_from_slice(&count.to_le_bytes());
+    let empty = RoaringBitmap::new();
+    let mut next = bitmaps.into_iter().peekable();
+    for key in 0..count {
+        let Ok(key) = u32::try_from(key) else { break };
+        out.extend_from_slice(&key.to_le_bytes());
+        match next.next_if(|(k, _)| *k == key) {
+            Some((_, b)) => {
+                let mut b = b.clone();
+                b.optimize();
+                b.serialize_into(&mut *out)?;
+            }
+            None => empty.serialize_into(&mut *out)?,
+        }
+    }
+    Ok(())
+}
+
+/// The blob of `positions` (the writer side; T027's DV writer and the
+/// tests), as Java's `BitmapPositionDeleteIndex.serialize` (byte for byte
+/// but for the run/array boundary in the module docs).
 ///
 /// # Errors
 /// `KRISHIV_ICEBERG_INVALID_DELETES` for a position Java cannot hold (a key
@@ -195,10 +235,17 @@ pub fn encode_dv(positions: &RoaringTreemap) -> Result<Vec<u8>, KrishivError> {
             positions.max().unwrap_or_default()
         )));
     }
+    // The dense key array is at least 12 bytes a key (the key and an empty bitmap's 8): refuse a
+    // sparse position at a high key before expanding its gaps, not after (a 2 GB body is the limit).
+    let keys = positions
+        .bitmaps()
+        .next_back()
+        .map_or(0, |(k, _)| u64::from(k) + 1);
+    if keys.saturating_mul(12) > u64::from(i32::MAX.unsigned_abs()) - 8 - 12 {
+        return Err(invalid("Can't serialize index > 2GB".to_owned()));
+    }
     let mut body = MAGIC.to_vec();
-    // The treemap's own serialisation is the portable roaring64 layout.
-    positions
-        .serialize_into(&mut body)
+    write_bitmap(positions, &mut body)
         .map_err(|e| invalid(format!("Cannot serialize deletion vector: {e}")))?;
     let length = u32::try_from(body.len())
         .ok()
@@ -217,6 +264,14 @@ mod tests {
 
     fn len(b: &[u8]) -> i64 {
         i64::try_from(b.len()).unwrap()
+    }
+
+    #[test]
+    fn a_sparse_high_key_is_refused_before_its_gaps_are_expanded() {
+        let high =
+            RoaringTreemap::from_iter([((u64::from(i32::MAX.unsigned_abs()) - 1) << 32) + 1]);
+        let err = encode_dv(&high).unwrap_err();
+        assert!(err.to_string().contains("2GB"), "{err}");
     }
 
     #[test]
@@ -374,6 +429,96 @@ mod tests {
             frame_err(&b).starts_with("Invalid deletion vector k.puffin: "),
             "{}",
             frame_err(&b)
+        );
+    }
+
+    /// The blobs of a Puffin file Iceberg 1.12.0 wrote (Spark 4.1.0,
+    /// `tests/fixtures/iceberg-1.12.0/wh/db/dvs`): `(offset, length)` from its
+    /// footer and the positions they hold.
+    fn java_blobs() -> Vec<(Vec<u8>, Vec<u64>)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/iceberg-1.12.0/wh/db/dvs/data");
+        let a = std::fs::read(
+            dir.join("00000-15-77972ffe-990c-40dc-bec0-dcf8b7ba1726-00001-deletes.puffin"),
+        )
+        .unwrap();
+        let b = std::fs::read(
+            dir.join("00000-17-5ab633b0-5fb4-4385-91a2-058f88cc71f6-00001-deletes.puffin"),
+        )
+        .unwrap();
+        let blob = |f: &[u8], at: usize, n: usize| f[at..at + n].to_vec();
+        // (bytes, the footer's `cardinality`).
+        [
+            (blob(&a, 4, 48), 4),
+            (blob(&a, 52, 46), 3),
+            (blob(&b, 4, 50), 5),
+        ]
+        .into_iter()
+        .map(|(bytes, n)| {
+            let positions = decode_dv(&bytes, len(&bytes), n, "x").unwrap();
+            (bytes, positions.iter().collect())
+        })
+        .collect()
+    }
+
+    /// Java's bytes for the same positions (`BitmapPositionDeleteIndex
+    /// .serialize`): the blobs of a Java-written Puffin file re-encoded
+    /// exactly.
+    #[test]
+    fn encode_writes_javas_bytes() {
+        let blobs = java_blobs();
+        let wanted: Vec<Vec<u64>> = blobs.iter().map(|(_, p)| p.clone()).collect();
+        assert_eq!(
+            wanted,
+            [vec![0, 4, 8, 12], vec![3, 7, 11], vec![0, 1, 3, 7, 11]]
+        );
+        for (bytes, positions) in blobs {
+            let bitmap: RoaringTreemap = positions.iter().copied().collect();
+            assert_eq!(encode_dv(&bitmap).unwrap(), bytes, "{positions:?}");
+        }
+    }
+
+    /// Java's 64-bit layout writes every key from 0 to the highest, empty
+    /// bitmaps for the gaps (`RoaringPositionBitmap.serialize`), and run
+    /// containers after `runLengthEncode`; both decode back.
+    #[test]
+    fn encode_writes_dense_keys_and_run_containers() {
+        let positions: RoaringTreemap = [5_u64, (2_u64 << 32) | 9].into_iter().collect();
+        let blob = encode_dv(&positions).unwrap();
+        // count 3: keys 0, 1 (empty) and 2.
+        assert_eq!(&blob[8..16], &3_i64.to_le_bytes());
+        let empty = {
+            let mut e = Vec::new();
+            RoaringBitmap::new().serialize_into(&mut e).unwrap();
+            e
+        };
+        // After the length, magic, count, key 0 and its bitmap of one value
+        // (cookie, size, descriptor, offset, value: 18 bytes).
+        let at = 20 + 18;
+        assert_eq!(&blob[at..at + 4], &1_i32.to_le_bytes());
+        assert_eq!(&blob[at + 4..at + 4 + empty.len()], empty.as_slice());
+        assert_eq!(decode_dv(&blob, len(&blob), 2, "d").unwrap(), positions);
+        // A long run is a run container (cookie 12347).
+        let run: RoaringTreemap = (0_u64..10_000).collect();
+        let blob = encode_dv(&run).unwrap();
+        assert_eq!(&blob[20..22], &12_347_u16.to_le_bytes());
+        assert_eq!(decode_dv(&blob, len(&blob), 10_000, "r").unwrap(), run);
+        assert!(blob.len() < 64, "{}", blob.len());
+    }
+
+    /// The CRC is Java's `java.util.zip.CRC32` over the magic and bitmap,
+    /// stored big-endian after them.
+    #[test]
+    fn the_crc_covers_magic_and_bitmap() {
+        let blob = encode_dv(&[1_u64, 9].into_iter().collect()).unwrap();
+        let n = blob.len();
+        assert_eq!(
+            u32::from_be_bytes(blob[n - 4..].try_into().unwrap()),
+            crc32(&blob[4..n - 4])
+        );
+        assert_eq!(
+            u32::from_be_bytes(blob[..4].try_into().unwrap()) as usize,
+            n - 8
         );
     }
 

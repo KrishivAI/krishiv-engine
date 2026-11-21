@@ -368,18 +368,7 @@ impl IcebergWriteSink {
         if !self.has_required {
             return Ok(());
         }
-        let mut path = Vec::new();
-        for (column, field) in batch.columns().iter().zip(self.table.fields()) {
-            path.push(field.name().clone());
-            if null_in_required(column, field, None, &mut path) {
-                return Err(NotNullAssertViolation {
-                    walked_type_path: format!("\n{}\n", path.join("\n")),
-                }
-                .into());
-            }
-            path.pop();
-        }
-        Ok(())
+        check_required(&self.table, batch)
     }
 
     /// Finishes every combined writer, then commits (module docs).
@@ -565,19 +554,34 @@ fn replaced_partitions(
 /// The files of a write not yet handed to the commit loop: deleted on
 /// failure, or by `Drop` (in a task on the I/O runtime) when the finalize is
 /// dropped first.
-struct Written {
+pub(crate) struct Written {
     file_io: FileIO,
     /// The I/O runtime.
     runtime: Option<tokio::runtime::Handle>,
-    data: Vec<String>,
-    manifests: Vec<String>,
-    armed: bool,
+    /// Data (and delete) files written.
+    pub(crate) data: Vec<String>,
+    /// Manifests written.
+    pub(crate) manifests: Vec<String>,
+    /// Cleared once the commit loop owns the files.
+    pub(crate) armed: bool,
 }
 
 impl Written {
+    /// An armed guard over nothing yet, deleting through `file_io` (on the
+    /// I/O runtime of `registered` when dropped).
+    pub(crate) fn new(file_io: FileIO, registered: &Registered) -> Self {
+        Self {
+            file_io,
+            runtime: registered.io.scheduler().runtime().cloned(),
+            data: Vec::new(),
+            manifests: Vec::new(),
+            armed: true,
+        }
+    }
+
     /// Cancellation-safe: a path leaves the lists only once its delete is
     /// done, so a dropped delete leaves the rest to `Drop`.
-    async fn delete(&mut self) {
+    pub(crate) async fn delete(&mut self) {
         while let Some(p) = self.manifests.last().or(self.data.last()).cloned() {
             let _ = self.file_io.delete(&p).await;
             if self.manifests.pop().is_none() {
@@ -811,6 +815,22 @@ fn has_required(field: &Field) -> bool {
     }
 }
 
+/// Fails on a NULL in a required position of `batch`, whose columns follow `table`'s fields.
+pub(super) fn check_required(table: &SchemaRef, batch: &RecordBatch) -> Result<(), KrishivError> {
+    let mut path = Vec::new();
+    for (column, field) in batch.columns().iter().zip(table.fields()) {
+        path.push(field.name().clone());
+        if null_in_required(column, field, None, &mut path) {
+            return Err(NotNullAssertViolation {
+                walked_type_path: format!("\n{}\n", path.join("\n")),
+            }
+            .into());
+        }
+        path.pop();
+    }
+    Ok(())
+}
+
 /// Whether `array` (of the table field `field`) holds a NULL in a required
 /// position among the rows `reach` marks (`None`: every row); `path` ends
 /// at that position when it does.
@@ -937,7 +957,7 @@ pub(crate) fn unique_u64() -> u64 {
 }
 
 /// A random version-4 UUID's text.
-fn random_uuid() -> String {
+pub(crate) fn random_uuid() -> String {
     let hi = unique_u64();
     let lo = unique_u64();
     let hi = (hi & !0xF000) | 0x4000;
@@ -954,7 +974,7 @@ fn random_uuid() -> String {
 
 /// A positive snapshot id the table does not have (Java's
 /// `SnapshotIdGenerator`: a random positive long).
-fn snapshot_id(base: &TableMetadata) -> i64 {
+pub(crate) fn snapshot_id(base: &TableMetadata) -> i64 {
     loop {
         let id = i64::try_from(unique_u64() >> 1).unwrap_or(i64::MAX);
         if id != 0 && base.snapshot_by_id(id).is_none() {
@@ -966,6 +986,22 @@ fn snapshot_id(base: &TableMetadata) -> i64 {
 /// The production commit clock: wall time, sleeps on the I/O runtime.
 struct IoClock {
     handle: tokio::runtime::Handle,
+}
+
+/// The production commit clock on `registered`'s I/O runtime.
+///
+/// # Errors
+/// `INTERNAL_ERROR` when the I/O scheduler has no runtime.
+pub(crate) fn io_clock(registered: &Registered) -> Result<Arc<dyn CommitClock>, KrishivError> {
+    let handle = registered
+        .io
+        .scheduler()
+        .runtime()
+        .cloned()
+        .ok_or_else(|| {
+            internal("an Iceberg commit needs the I/O scheduler's runtime".to_owned())
+        })?;
+    Ok(Arc::new(IoClock { handle }))
 }
 
 #[async_trait]

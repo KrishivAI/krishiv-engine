@@ -138,6 +138,36 @@ fn strip_port(h: &str) -> &str {
     }
 }
 
+/// The port of a `host[:port]` value, when it names one.
+fn port_of(h: &str) -> Option<&str> {
+    let rest = if h.starts_with('[') {
+        &h[h.find(']')? + 1..]
+    } else {
+        h
+    };
+    match rest.rsplit_once(':') {
+        Some((_, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+            Some(port)
+        }
+        _ => None,
+    }
+}
+
+/// The name of the session cookie for the address a request was sent to: `krishiv_ui_token_<port>`, or
+/// `krishiv_ui_token` when the `Host` header names no port. A browser keeps cookies per host name, not per port,
+/// so two consoles on `127.0.0.1` (one per embedded session, each with its own port and token) would otherwise
+/// overwrite each other's cookie and sign each other out.
+pub(crate) fn session_cookie_name(headers: &HeaderMap) -> String {
+    let port = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| port_of(h.trim()));
+    match port {
+        Some(port) => format!("krishiv_ui_token_{port}"),
+        None => "krishiv_ui_token".to_owned(),
+    }
+}
+
 /// The host check and the same-origin check, before any route (and so before any token check) of the API.
 pub(crate) async fn host_guard(
     State(s): State<UiState>,
@@ -386,8 +416,9 @@ pub(crate) async fn create_session(State(s): State<UiState>, headers: HeaderMap)
     } else {
         ""
     };
+    let name = session_cookie_name(&headers);
     let cookie = format!(
-        "krishiv_ui_token={token}; HttpOnly; SameSite=Strict; Path=/api/internal; Max-Age=28800{secure}"
+        "{name}={token}; HttpOnly; SameSite=Strict; Path=/api/internal; Max-Age=28800{secure}"
     );
     let mut res = Response::new(axum::body::Body::empty());
     *res.status_mut() = StatusCode::NO_CONTENT;

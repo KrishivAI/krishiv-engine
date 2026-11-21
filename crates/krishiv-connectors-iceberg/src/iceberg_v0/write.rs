@@ -708,7 +708,9 @@ async fn drain(f: &mut OpenFile) -> Result<(), KrishivError> {
 }
 
 /// The Parquet options of a write into a table with `props` (module docs).
-fn parquet_options(props: &HashMap<String, String>) -> Result<FormatOptions, KrishivError> {
+pub(crate) fn parquet_options(
+    props: &HashMap<String, String>,
+) -> Result<FormatOptions, KrishivError> {
     let codec = props
         .get(PARQUET_CODEC)
         .map_or(PARQUET_CODEC_DEFAULT, String::as_str);
