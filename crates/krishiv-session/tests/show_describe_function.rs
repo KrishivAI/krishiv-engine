@@ -20,6 +20,48 @@ fn rows(s: &Session, sql: &str) -> R<Vec<String>> {
     Ok(out)
 }
 
+/// A session function that shares the name of the built-in `abs`.
+#[derive(Debug)]
+struct AbsShadow;
+
+impl krishiv_session::ScalarUdf for AbsShadow {
+    fn name(&self) -> &str {
+        "abs"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &krishiv_session::Signature {
+        static SIG: std::sync::OnceLock<krishiv_session::Signature> = std::sync::OnceLock::new();
+        SIG.get_or_init(|| {
+            krishiv_session::Signature::Exact(vec![krishiv_session::UdfInputType::Exact(
+                krishiv_types::DataType::String,
+            )])
+        })
+    }
+
+    fn return_field(
+        &self,
+        _: &[krishiv_session::ArgField],
+    ) -> Result<krishiv_session::ReturnField, krishiv_session::UdfError> {
+        Ok(krishiv_session::ReturnField {
+            data_type: krishiv_types::DataType::String,
+            nullable: true,
+        })
+    }
+
+    fn invoke(
+        &self,
+        args: &[krishiv_session::UdfArg<'_>],
+        _: usize,
+        _: &krishiv_session::InvokeContext,
+    ) -> Result<arrow_array::ArrayRef, krishiv_session::UdfError> {
+        Ok(args[0].array())
+    }
+}
+
 /// The error class a statement fails with (`"OK"` if it does not fail).
 fn err(s: &Session, sql: &str) -> String {
     match block_on(s.sql(sql)).and_then(|d| block_on(d.collect())) {
@@ -40,9 +82,30 @@ fn show_functions_lists_builtins_sorted_and_filters_like_spark() -> R {
     assert!(all.len() > 300);
     assert!(all.windows(2).all(|w| w[0] <= w[1]), "sorted");
     assert!(all.iter().any(|f| f == "abs"));
+    // Every row is a name in Spark's own catalog (the vendored Spark 4.2.0 list): no internal helper.
+    let catalog = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../krishiv-functions/vendored/spark-functions.tsv"
+    ))?;
+    let spark: std::collections::HashSet<&str> = catalog
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| l.split('\t').next())
+        .collect();
+    let unknown: Vec<&String> = all.iter().filter(|f| !spark.contains(f.as_str())).collect();
+    assert!(unknown.is_empty(), "not Spark functions: {unknown:?}");
     // The legacy form names the pattern as a bare word.
     assert_eq!(rows(&s, "SHOW FUNCTIONS abs")?, ["abs"]);
     assert!(rows(&s, "SHOW USER FUNCTIONS")?.is_empty());
+    // A session function that shares a built-in's name is a user function.
+    s.register_udf(AbsShadow)?;
+    assert_eq!(rows(&s, "SHOW USER FUNCTIONS LIKE 'abs'")?, ["abs"]);
+    // A pattern is a regular expression after `*` is expanded, as in Spark.
+    assert_eq!(rows(&s, "SHOW SYSTEM FUNCTIONS LIKE 'a.s'")?, ["abs"]);
+    assert_eq!(
+        err(&s, "SHOW bogus FUNCTIONS LIKE 'abs'"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
     Ok(())
 }
 
@@ -89,9 +152,12 @@ fn describe_function_prints_spark_s_rows() -> R {
         ]
     );
     let long = rows(&s, "DESCRIBE FUNCTION EXTENDED `abs`")?;
-    assert_eq!(long[..3], short[..]);
-    assert!(long[3].starts_with("Extended Usage:\n"));
-    assert!(long[3].contains("      > SELECT abs(-1);\n       1\n"));
+    let mut expected = short;
+    expected.push(
+        "Extended Usage:\n    Examples:\n      > SELECT abs(-1);\n       1\n      > SELECT abs(INTERVAL -'1-1' YEAR TO MONTH);\n       1-1\n  \n    Since: 1.2.0\n"
+            .to_owned(),
+    );
+    assert_eq!(long, expected);
     // An operator has no class row, and no extended text without `EXTENDED`.
     assert_eq!(
         rows(&s, "DESCRIBE FUNCTION `!=`")?,

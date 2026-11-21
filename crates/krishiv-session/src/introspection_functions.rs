@@ -52,20 +52,16 @@ impl Session {
         };
         let listed = self
             .catalog()
-            .list_functions_in(ns.as_deref(), pat.as_deref())
+            .list_functions_tagged(ns.as_deref(), pat.as_deref())
             .await?;
-        let builtins = krishiv_functions::registry::builtins();
         let mut names: Vec<String> = listed
             .into_iter()
-            .filter(|f| {
-                let system = f.is_temporary && builtins.spark_function(&f.name).is_some();
-                match scope {
-                    Some(FunctionScope::User) => !system,
-                    Some(FunctionScope::System) => system,
-                    _ => true,
-                }
+            .filter(|(_, system)| match scope {
+                Some(FunctionScope::User) => !system,
+                Some(FunctionScope::System) => *system,
+                _ => true,
             })
-            .map(|f| match (&f.catalog, &f.namespace) {
+            .map(|(f, _)| match (&f.catalog, &f.namespace) {
                 (Some(c), Some(n)) => format!("{c}.{}.{}", n.join("."), f.name),
                 _ => f.name,
             })
@@ -99,7 +95,15 @@ impl Session {
             }
             other => other,
         };
+        // A built-in the session's Spark profile does not have resolves as an unknown name.
+        let in_profile = |name: &str| {
+            !matches!(
+                krishiv_functions::registry::builtins().lookup(name, self.state.profile),
+                krishiv_functions::registry::Lookup::NotFound
+            )
+        };
         if let [one] = parts
+            && in_profile(one)
             && let Some(rows) =
                 krishiv_functions::registry::spark_function_description(&one.to_lowercase())
         {
@@ -111,6 +115,7 @@ impl Session {
             return self.ordered_frame(cols::DESCRIBE_FUNCTION, &[], rows).await;
         }
         if let [one] = parts
+            && in_profile(one)
             && krishiv_functions::registry::builtins()
                 .spark_function(&one.to_lowercase())
                 .is_some()

@@ -39,8 +39,10 @@ for n in open("/work/names.txt").read().split("\\n"):
     q = "`" + n.replace("`", "``") + "`"
     try:
         out[n] = [r[0] for r in spark.sql("DESCRIBE FUNCTION EXTENDED " + q).collect()]
-    except Exception:
-        pass
+    except Exception as e:
+        # Only a name Spark 4.2.0 does not have (a later release's function) is left out; any other failure stops the run.
+        if getattr(e, "getCondition", lambda: None)() != "UNRESOLVED_ROUTINE":
+            raise
 json.dump(out, open("/work/out.json", "w"))
 """
 

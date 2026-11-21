@@ -1613,7 +1613,17 @@ impl Resolver<'_> {
                 }
                 bound
             }
-            ExprNode::Cast { to, mode, .. } => {
+            ExprNode::Cast {
+                expr: inner,
+                to,
+                mode,
+            } => {
+                // The cast a `TIME '..'` literal binds to (an explicit `Ansi` string cast to `TIME(6)`, never
+                // what the parser writes) passes the gate again, so a plan analyzed once analyzes to itself.
+                let from_literal = *mode == CastMode::Ansi
+                    && *to == DataType::Time { precision: 6 }
+                    && matches!(&inner.node, ExprNode::Literal(Literal::String(v))
+                        if krishiv_kernels::cast::parse_time(v).is_some());
                 let mode = match mode {
                     CastMode::Default if self.ctx.conf.ansi => CastMode::Ansi,
                     CastMode::Default => CastMode::Legacy,
@@ -1622,7 +1632,9 @@ impl Resolver<'_> {
                 // Spark's parser rejects the `TIME` type before any cast
                 // is checked (`spark.sql.timeType.enabled` is false by
                 // default; TIME cannot be evaluated here either way).
-                if !self.ctx.conf.time_type && to.any_type(&|t| matches!(t, DataType::Time { .. }))
+                if !self.ctx.conf.time_type
+                    && !from_literal
+                    && to.any_type(&|t| matches!(t, DataType::Time { .. }))
                 {
                     return Err(AnalysisError::new(
                         krishiv_common::error::UnsupportedTimeType {},

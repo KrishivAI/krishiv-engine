@@ -35,6 +35,14 @@ fn evaluates_what_spark_evaluates_with_the_key_off() {
     ] {
         assert!(run(&s, q).is_ok(), "{q}: {:?}", run(&s, q));
     }
+    assert_eq!(
+        run(&s, "SELECT current_time(0) IS NOT NULL").unwrap(),
+        "true"
+    );
+    assert_eq!(
+        run(&s, "SELECT current_time(3) < current_time(3)").unwrap(),
+        "false"
+    );
     assert_eq!(run(&s, "SELECT typeof(TIME'12:00:00')").unwrap(), "time(6)");
     assert_eq!(
         run(&s, "SELECT typeof(current_time(3))").unwrap(),
