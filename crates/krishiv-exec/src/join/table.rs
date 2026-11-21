@@ -548,16 +548,10 @@ impl RowArena {
     /// row-layout row. `None` for a layout with string views, whose rows
     /// point into a heap.
     pub(crate) fn key_bytes(&self, row: u32) -> Option<&[u8]> {
-        let (part, row) = self.at(row)?;
-        let row = row as usize;
+        let (part, i) = self.at(row)?;
         match &part.keys {
-            Cols::Arrow(k) => Some(k.value(row)),
-            Cols::Rows(RowCols {
-                fixed,
-                stride,
-                heap: None,
-            }) => fixed.get(row * stride..(row + 1) * stride),
-            Cols::Rows(RowCols { heap: Some(_), .. }) => None,
+            Cols::Arrow(k) => Some(k.value(i as usize)),
+            Cols::Rows(_) => self.layout_key_bytes(row),
         }
     }
 

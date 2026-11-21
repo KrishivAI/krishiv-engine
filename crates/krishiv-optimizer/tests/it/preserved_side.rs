@@ -156,7 +156,8 @@ fn no_semi_join_where_it_restricts_nothing_or_does_not_apply() {
             !below_outer(&text).contains("Join LeftSemi"),
             "{sql}\n{text}"
         );
-    } // Nondeterminism (plans only: the interpreter runs no `rand`). A
+    }
+    // Nondeterminism (plans only: the interpreter runs no `rand`). A
     // nondeterministic filter between the outer join and the join above
     // stays on the path (it never moves), and a nondeterministic dimension
     // is computed twice by the rewrite. A nondeterministic outer-join
