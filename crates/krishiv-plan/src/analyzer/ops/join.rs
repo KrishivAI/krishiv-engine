@@ -222,14 +222,23 @@ impl Resolver<'_> {
         // Columns an earlier `USING` join merged away stay reachable above this join, and its
         // condition may read them (`a NATURAL JOIN b JOIN c ON b.k = c.k`): the inputs are
         // revealed, the join runs over the wide inputs and a projection restores the output.
-        // The `_metadata` of a file table an `ON` condition reads is widened into its input first.
+        // The `_metadata` of a file table an `ON` condition or an as-of operand reads is widened
+        // into its input first (Spark's `AddMetadataColumns` adds it to the side's output).
         let (l0, r0) = (l.clone(), r.clone());
-        let (l, r) = match (&condition, &kind) {
-            (JoinCondition::On(c), k) if !matches!(k, JoinKind::Existence(_)) => (
-                self.reveal_exprs(&l0, std::iter::once(c))?,
-                self.reveal_exprs(&r0, std::iter::once(c))?,
-            ),
-            _ => (l0.clone(), r0.clone()),
+        let read: Vec<&Arc<Expr>> = match &condition {
+            JoinCondition::On(c) => Some(c),
+            _ => None,
+        }
+        .into_iter()
+        .chain(as_of.iter().flat_map(|m| [&m.left, &m.right]))
+        .collect();
+        let (l, r) = if read.is_empty() || matches!(kind, JoinKind::Existence(_)) {
+            (l0.clone(), r0.clone())
+        } else {
+            (
+                self.reveal_exprs(&l0, read.iter().copied())?,
+                self.reveal_exprs(&r0, read.iter().copied())?,
+            )
         };
         let wide = if !matches!(kind, JoinKind::Existence(_)) {
             let (wl, wr) = (self.reveal_hidden(&l)?, self.reveal_hidden(&r)?);

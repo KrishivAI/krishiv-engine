@@ -452,3 +452,22 @@ fn a_hidden_using_key_is_a_left_as_of_value() {
     );
     assert_eq!(got, ["1|0", "5|3"]);
 }
+
+/// A file table's `_metadata` is reachable from an as-of operand: Spark's `AddMetadataColumns` adds
+/// it to the side's output for the match condition too, so the join input is widened with it.
+#[test]
+fn an_as_of_operand_may_read_the_metadata_column() {
+    let s = session();
+    for q in [
+        "CREATE TABLE pm(x INT) USING PARQUET",
+        "INSERT INTO pm VALUES (1)",
+    ] {
+        block_on(async { s.sql(q).await?.collect().await }).unwrap();
+    }
+    let got = rows(
+        &s,
+        "SELECT x, v FROM pm ASOF JOIN VALUES (0), (3) AS c(v) \
+         MATCH_CONDITION (pm._metadata.file_size >= c.v)",
+    );
+    assert_eq!(got, ["1|3"]);
+}
