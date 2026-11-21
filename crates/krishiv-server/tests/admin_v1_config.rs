@@ -610,13 +610,17 @@ async fn a_request_dropped_mid_flight_still_stores_its_result_for_the_retry() {
         "document": GROUPS_V2, "etag": etag, "requestId": "req-drop"
     })
     .to_string();
-    let dropped = tokio::time::timeout(
-        std::time::Duration::ZERO,
-        f.call("a:admin", "PUT", "/resourceGroups/config", Some(&body)),
-    )
-    .await;
-    assert!(dropped.is_err(), "the request was dropped unfinished");
-    drop(dropped);
+    // Poll the request once (it hands its mutation to the blocking pool and waits), then drop it:
+    // a request cut off mid-flight.
+    {
+        let mut call =
+            std::pin::pin!(f.call("a:admin", "PUT", "/resourceGroups/config", Some(&body)));
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(call.as_mut().poll(cx).is_pending()))
+                .await,
+            "the request was dropped unfinished"
+        );
+    }
     // The detached mutation finishes on its own: the file holds the new document before any
     // retry could have written it.
     let expected: Value = serde_json::from_str(GROUPS_V2).unwrap();
