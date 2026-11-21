@@ -24,7 +24,9 @@ pub(crate) fn proven_empty(plan: &LogicalPlan) -> bool {
                 ExprNode::Literal(Literal::Boolean(false) | Literal::Null(_))
             ) || proven_empty(input)
         }
-        PlanNode::Limit { input, limit } => limit_value(limit) == Some(0) || proven_empty(input),
+        PlanNode::Limit { input, limit } | PlanNode::Tail { input, limit } => {
+            limit_value(limit) == Some(0) || proven_empty(input)
+        }
         PlanNode::Aggregate {
             input,
             grouping: Grouping::GroupBy(keys),
