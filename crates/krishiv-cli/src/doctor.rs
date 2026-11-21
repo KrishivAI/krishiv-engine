@@ -556,6 +556,38 @@ mod tests {
         }
     }
 
+    /// The mode matrix (T070): every registered key that has a typed value refuses a value of
+    /// the wrong shape at startup, and the refusal names the key. A key whose type accepts any
+    /// string has no such value and is skipped.
+    #[test]
+    fn every_typed_key_refuses_a_value_of_the_wrong_shape() {
+        use krishiv_common::config::{REGISTRY, ValueType};
+        let mut checked = 0;
+        for entry in REGISTRY {
+            let bad = match entry.value_type {
+                ValueType::Bool => "maybe",
+                ValueType::Int | ValueType::SignedSize => "twelve",
+                ValueType::PositiveInt => "0",
+                ValueType::Size => "12 parsecs",
+                ValueType::Duration | ValueType::Millis => "soon",
+                ValueType::TimeZone => "+99:99:99:99",
+                ValueType::Enum(_) => "__no_such_value__",
+                ValueType::String => continue,
+            };
+            let conf = vec![(entry.key.to_owned(), bad.to_owned())];
+            let Err(e) = load_settings(&conf) else {
+                panic!("{} = {bad:?} was accepted at startup", entry.key);
+            };
+            assert!(
+                e.contains(entry.key),
+                "{}: the error does not name the key: {e}",
+                entry.key
+            );
+            checked += 1;
+        }
+        assert!(checked > 50, "only {checked} typed keys were checked");
+    }
+
     #[test]
     fn a_world_readable_secret_file_is_named() {
         use std::os::unix::fs::PermissionsExt;

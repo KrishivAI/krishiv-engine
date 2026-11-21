@@ -1031,6 +1031,35 @@ async fn the_cache_rows_need_the_operator_floor_except_the_reads() {
         .expect("a viewer removes an id");
 }
 
+/// A viewer's checkpoint of a plan that names a cached local relation is refused for its class
+/// (42501) before the relation is built, not with `NOT_FOUND_CACHED_LOCAL_RELATION`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_is_refused_a_checkpoint_before_its_local_relations_are_built() {
+    let run = start().await;
+    execute(&run.channel, range(1), Some(VIEWER))
+        .await
+        .expect("opens the session");
+    let cached = pb::Relation {
+        common: None,
+        rel_type: Some(pb::relation::RelType::CachedLocalRelation(
+            pb::CachedLocalRelation {
+                hash: "0123abcd".to_owned(),
+            },
+        )),
+    };
+    let plan = command(CommandType::CheckpointCommand(Box::new(
+        pb::CheckpointCommand {
+            relation: Some(cached),
+            local: true,
+            eager: true,
+            storage_level: None,
+        },
+    )));
+    let s = execute(&run.channel, plan, Some(VIEWER)).await.unwrap_err();
+    assert_eq!(s.code(), Code::PermissionDenied, "{s:?}");
+    assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+}
+
 /// One `AddArtifacts` stream of `artifacts` (name, bytes) on `SESSION` as `token`.
 async fn add_artifacts_as(
     channel: &Channel,

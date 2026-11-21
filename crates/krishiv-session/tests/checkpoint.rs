@@ -372,3 +372,74 @@ fn a_lazy_checkpoint_lets_go_of_its_source_once_its_rows_are_taken() {
         .unwrap();
     assert_eq!(held, "1");
 }
+
+/// How many entries `system.caches` lists for `cache`.
+fn cache_entries(s: &Session, cache: &str) -> i64 {
+    let b = block_on(async {
+        s.sql(&format!(
+            "SELECT CAST(entries AS BIGINT) FROM system.caches WHERE cache = '{cache}'"
+        ))
+        .await?
+        .collect()
+        .await
+    })
+    .unwrap();
+    b[0].column(0)
+        .as_primitive::<arrow_array::types::Int64Type>()
+        .value(0)
+}
+
+/// GraphFrames' Pregel loop (`checkpoint(eager = false)` every second round, `persist` the new
+/// state, `unpersist` the one from the round before last) with no action between the rounds: the
+/// plan stays bounded, the rows are right at the end, and the cache holds only the live frames.
+#[test]
+fn a_pregel_loop_of_lazy_checkpoints_and_persists_stays_bounded_with_no_action_between_rounds() {
+    use krishiv_session::{ExplainMode, JoinType, StorageLevel};
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), &[]);
+    run(&s, "CREATE TABLE edges (id INT, nxt INT) USING parquet");
+    run(&s, "INSERT INTO edges VALUES (1, 2), (2, 3), (3, 1)");
+    let (sizes, rows, live) = within_a_minute(move || {
+        let edges = s.table("edges");
+        let mut state = s.table("src");
+        let mut sizes = Vec::new();
+        let mut previous: Vec<krishiv_session::DataFrame> = Vec::new();
+        for round in 1..=50 {
+            let joined = state
+                .join_using(&edges, ["id"], JoinType::Inner)
+                .select([krishiv_session::functions::col("nxt").alias("id")]);
+            state = if round % 2 == 0 {
+                block_on(joined.local_checkpoint(false, None)).unwrap()
+            } else {
+                joined
+            };
+            state = state.persist(StorageLevel::MEMORY_AND_DISK);
+            sizes.push(
+                block_on(state.explain(ExplainMode::Extended))
+                    .unwrap()
+                    .len(),
+            );
+            previous.push(state.clone());
+            if previous.len() > 2 {
+                let old = previous.remove(0);
+                block_on(old.unpersist()).unwrap();
+            }
+        }
+        let rows = ids(&state);
+        let live = cache_entries(&s, "relation");
+        (sizes, rows, live)
+    });
+    // The plan is flat: the longest of the last ten rounds is no longer than the longest of the
+    // first four (a checkpoint round is short, the round after it is the long one).
+    let early = *sizes[..4].iter().max().unwrap();
+    let late = *sizes[40..].iter().max().unwrap();
+    assert!(
+        late <= early + early / 10,
+        "the plan grew from {early} to {late} characters: {sizes:?}"
+    );
+    assert_eq!(rows, vec![1, 2, 3]);
+    assert!(
+        live <= 3,
+        "{live} cache entries are live: unpersisted frames stay cached"
+    );
+}
