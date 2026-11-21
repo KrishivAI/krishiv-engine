@@ -1237,6 +1237,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "tail",
+            PhysNode::Tail {
+                input: boxed(scan()),
+                limit: 5,
+            },
+        ),
+        (
             "window_group_limit",
             PhysNode::Window {
                 input: boxed(PhysNode::WindowGroupLimit {

@@ -311,6 +311,10 @@ impl Encoder {
                 limit: *limit,
                 offset: *offset,
             }),
+            PhysNode::Tail { input, limit } => Kind::Tail(pb::TailNode {
+                input: self.node_index(input)?,
+                limit: *limit,
+            }),
             PhysNode::Sample {
                 input,
                 lower,

@@ -76,6 +76,8 @@ export interface AdvisorHint {
 
 export interface Operator {
   operator_id: number;
+  /** The plan node the operator runs (`plan[].id`); several operators can share one. */
+  node_id?: number | null;
   name: string;
   role?: string;
   drivers?: number;
@@ -85,13 +87,28 @@ export interface Operator {
   blocked_io_ns?: number;
   blocked_memory_ns?: number;
   blocked_sink_ns?: number;
+  peak_reserved_bytes?: number;
   spilled_bytes?: number;
+}
+
+/**
+ * One node of a stored plan (the profile's `plan`); `children` index the array. A heading has no id. The
+ * server sends no other member: a node's detail text can hold the statement's literals.
+ */
+export interface PlanNode {
+  id: number | null;
+  name: string;
+  children: number[];
 }
 
 export interface QueryDetail {
   query: Query;
   operators: Operator[];
   hot_operator: { operator_id: number; operator: string; compute_ns: number } | null;
+  /** The plan tree, when the source keeps one for the query. */
+  plan?: PlanNode[] | null;
+  /** The query has ended and its plan is not stored yet but can still arrive: ask again. */
+  plan_pending?: boolean;
 }
 
 export interface CacheRow {

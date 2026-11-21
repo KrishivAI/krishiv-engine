@@ -42,6 +42,7 @@ variants!(
     Filter,
     Project,
     Limit,
+    Tail,
     ReplicateRows,
     Generate,
     PythonEval,
@@ -80,6 +81,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Filter { .. } => Variant::Filter,
         PhysNode::Project { .. } => Variant::Project,
         PhysNode::Limit { .. } => Variant::Limit,
+        PhysNode::Tail { .. } => Variant::Tail,
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
         PhysNode::Generate { .. } => Variant::Generate,
         PhysNode::PythonEval { .. } => Variant::PythonEval,
@@ -651,6 +653,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_filter"
             | "range"
             | "observe"
+            | "tail"
             | "aggregate_collects"
             | "aggregate_vectors"
             | "aggregate_mode_regr_bit_listagg"

@@ -81,6 +81,11 @@ impl Translator<'_> {
                 input: self.input("Offset", o.input.as_deref())?,
                 offset: Arc::new(Expr::literal(Literal::Integer(o.offset))),
             },
+            // A negative count is the analyzer's `INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE`.
+            RelType::Tail(t) => PlanNode::Tail {
+                input: self.input("Tail", t.input.as_deref())?,
+                limit: Arc::new(Expr::literal(Literal::Integer(t.limit))),
+            },
             RelType::Aggregate(a) => self.aggregate(a)?,
             RelType::SubqueryAlias(a) => PlanNode::SubqueryAlias {
                 input: self.input("SubqueryAlias", a.input.as_deref())?,

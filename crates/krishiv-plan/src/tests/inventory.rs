@@ -41,6 +41,7 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Sort { .. } => "PlanNode::Sort",
         PlanNode::Limit { .. } => "PlanNode::Limit",
         PlanNode::Offset { .. } => "PlanNode::Offset",
+        PlanNode::Tail { .. } => "PlanNode::Tail",
         PlanNode::SubqueryAlias { .. } => "PlanNode::SubqueryAlias",
         PlanNode::WithCte { .. } => "PlanNode::WithCte",
         PlanNode::CteRef(_) => "PlanNode::CteRef",

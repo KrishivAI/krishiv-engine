@@ -881,6 +881,11 @@ impl Encoder {
                 self.expr(offset, bias);
                 self.plan(input, bias);
             }
+            PlanNode::Tail { input, limit } => {
+                self.tag("Tail");
+                self.expr(limit, bias);
+                self.plan(input, bias);
+            }
             PlanNode::SubqueryAlias {
                 input,
                 alias,
