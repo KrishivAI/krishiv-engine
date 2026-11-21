@@ -34,7 +34,7 @@ theta_sketch_estimate(expr)
 ```sql
 -- theta_sketch_estimate, example 1
 > SELECT theta_sketch_estimate(theta_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+3
 ```
 
 ## Version history

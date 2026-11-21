@@ -124,6 +124,20 @@ fn lg_nom_entries_4_keeps_sixteen_hashes_as_java_does() -> R {
 }
 
 #[test]
+fn a_size_that_is_not_a_literal_is_refused_by_name() -> R {
+    let s = Session::new()?;
+    let e = rows(
+        &s,
+        "SELECT theta_sketch_agg(id, CAST(id % 2 + 10 AS INT)) FROM range(0, 10)",
+    )
+    .err()
+    .map(|e| e.to_string())
+    .unwrap_or_default();
+    assert!(e.contains("THETA_LG_NOM_ENTRIES_MUST_BE_CONSTANT"), "{e}");
+    Ok(())
+}
+
+#[test]
 fn the_intersection_of_two_groups_and_of_nothing() -> R {
     let s = Session::new()?;
     let q = "SELECT theta_sketch_estimate(theta_intersection_agg(sk)) FROM (\
