@@ -38,8 +38,13 @@ def _ci(value: Any) -> tuple[float, float] | None:
     if not isinstance(value, list | tuple) or len(value) != 2:
         return None
     lo, hi = value
-    ok = all(isinstance(v, int | float) and not isinstance(v, bool) and v > 0 and math.isfinite(v) for v in (lo, hi))
-    return (float(lo), float(hi)) if ok and lo <= hi else None
+    try:
+        ok = all(
+            isinstance(v, int | float) and not isinstance(v, bool) and v > 0 and math.isfinite(v) for v in (lo, hi)
+        )
+        return (float(lo), float(hi)) if ok and lo <= hi else None
+    except OverflowError:  # an integer bound too large for a double (`math.isfinite(10**400)` raises)
+        return None
 
 
 def load_runs(directory: Path) -> dict[tuple[str, str], list[dict[str, Any]]]:
@@ -154,7 +159,8 @@ def render(groups: dict[tuple[str, str], list[dict[str, Any]]], last: int = DEFA
         "below 1 means Krishiv is faster. `x`: the query failed that run (error, timeout or wrong result). "
         "`*`: the machine load was above the bound, so the run is indicative only. Change: latest run against the "
         f"previous measured one (within {FLAT:.0%} is `=`). Latest 95% CI: the bootstrap interval of the latest run's "
-        "ratio (empty when that run failed the query or recorded none); a change inside it is not a measured change.",
+        "ratio (empty when that run failed the query or recorded none). It describes that run's ratio, not the change "
+        "between runs.",
     ]
     if not groups:
         return "\n".join([*head, "", "No `abba` results found.", ""])

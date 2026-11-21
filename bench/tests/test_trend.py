@@ -165,6 +165,7 @@ def test_render_shows_the_latest_runs_ci(tmp_path):
             "q4": rec(1.0, [1.2, 0.8]),  # not an interval
             "q5": rec(1.0, [0.9, float("inf")]),
             "q6": rec(1.0, [0.9]),
+            "q7": rec(1.0, [1, 10**400]),  # a bound past a double: no CI, the run stays
         },
         {"geomean": 1.0, "geomean_ci95": [0.95, 1.06]},
     )
@@ -175,8 +176,12 @@ def test_render_shows_the_latest_runs_ci(tmp_path):
     assert geomean_row.endswith("| 0.95-1.06 |")
     rows = query_rows(text)
     assert rows["q1"].endswith("| -50% | 0.91-1.10 |")  # the latest run's CI, not the first's
-    for q in ("q2", "q3", "q4", "q5", "q6"):  # failed latest, no CI, or not a finite interval
+    for q in ("q2", "q3", "q4", "q5", "q6", "q7"):  # failed latest, no CI, or not a finite interval
         assert rows[q].endswith(" |  |"), rows[q]
+    assert rows["q7"].startswith("| q7 |  | 1.00 |"), rows["q7"]
+    # The CI is the latest run's ratio; the page draws no conclusion about the change from it.
+    assert "a change inside it" not in text
+    assert "not the change between runs" in text
 
 
 def test_render_has_no_ci_when_the_latest_run_lacks_the_query(tmp_path):

@@ -762,14 +762,16 @@ impl RowTable {
         self.sketching && self.sketches.is_none() && self.groups + n >= SKETCH_ROWS
     }
 
-    /// [`sketch_bytes`](Self::sketch_bytes) after an apply of `n` rows.
-    fn projected_sketch_bytes(&self, n: usize) -> usize {
+    /// [`sketch_bytes`](Self::sketch_bytes) after an apply of `n` rows;
+    /// `run_hashes`: the batch's hashes are one per row (`hashes.len() ==
+    /// n`), the only batches whose apply starts the run-start set.
+    fn projected_sketch_bytes(&self, n: usize, run_hashes: bool) -> usize {
         let new = if self.starts_sketches(n) {
             self.parts.len() * Hll::new(PART_HLL_BITS).bytes()
         } else {
             0
         };
-        let recur = if self.starts_recur(n) {
+        let recur = if run_hashes && self.starts_recur(n) {
             Recur::BYTES
         } else {
             0
@@ -879,7 +881,9 @@ impl RowTable {
                 (Mode::Append, Some(a))
                     if a.rows >= a.next && a.fixed > 0 && a.recur.recurs_within(RECUR_KEYS) =>
                 {
-                    Mode::Fixed { limit: a.fixed }
+                    Mode::Fixed {
+                        limit: Self::restored_limit(a.fixed, a.recur.interval_keys()),
+                    }
                 }
                 _ => self.mode,
             };
@@ -898,6 +902,15 @@ impl RowTable {
             Some(limit) => Mode::Fixed { limit },
             None => self.mode,
         }
+    }
+
+    /// The limit an append-only table's index returns with: the limit it
+    /// had, or room for the interval's recurring keys at load 2/3 when that
+    /// is more (an index smaller than the working set clears before its
+    /// keys come back), never past [`RECUR_KEYS`] (the largest index).
+    fn restored_limit(fixed: usize, recurring: usize) -> usize {
+        let slots = (recurring.min(RECUR_KEYS) * 3 / 2).next_power_of_two();
+        fixed.max(slots * 2 / 3).min(RECUR_KEYS.max(fixed))
     }
 
     /// The input's distinct keys, estimated from the sample (1/8 of the
@@ -1069,7 +1082,7 @@ impl RowTable {
             .sum();
         rows + self.index_bytes(self.next_mode(), n)
             + self.projected_accs(&p.counts, &p.cols, Self::fold_of(p))
-            + self.projected_sketch_bytes(n)
+            + self.projected_sketch_bytes(n, p.keys.hashes().len() == n)
             + self.direct.as_ref().map_or(0, direct::Direct::bytes)
     }
 

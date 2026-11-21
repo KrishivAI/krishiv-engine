@@ -1439,7 +1439,12 @@ fn a_small_table_has_no_run_start_set() {
     let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
     feed(&mut t, &core, 100, |i| i);
     assert_eq!(t.adapt.as_ref().unwrap().recur.bytes(), 0);
-    let before = t.projected_sketch_bytes(SKETCH_ROWS);
+    let before = t.projected_sketch_bytes(SKETCH_ROWS, true);
+    // A batch without one hash per row (the direct path) never starts the set: none is charged.
+    assert_eq!(
+        before - t.projected_sketch_bytes(SKETCH_ROWS, false),
+        Recur::BYTES
+    );
     feed(&mut t, &core, SKETCH_ROWS, |i| i);
     assert_eq!(t.adapt.as_ref().unwrap().recur.bytes(), Recur::BYTES);
     assert!(
@@ -1604,4 +1609,16 @@ fn full_sketches_project_little_for_a_further_batch() {
     );
     t.apply(&again).unwrap();
     assert!(t.memory_size() <= projected);
+}
+
+/// An append-only table returns to an index that holds the interval's recurring keys at load
+/// 2/3, never a smaller one than it had, and never past the largest index.
+#[test]
+fn a_restored_index_holds_the_recurring_working_set() {
+    assert_eq!(RowTable::restored_limit(21_845, 1_000), 21_845);
+    let limit = RowTable::restored_limit(21_845, 50_000);
+    assert!(limit >= 50_000, "{limit}");
+    assert_eq!(limit, (1 << 17) * 2 / 3);
+    assert_eq!(RowTable::restored_limit(21_845, RECUR_KEYS), RECUR_KEYS);
+    assert_eq!(RowTable::restored_limit(1, usize::MAX / 2), RECUR_KEYS);
 }
