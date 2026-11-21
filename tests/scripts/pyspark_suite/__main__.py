@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""CLI: `python -m pyspark_suite {static,report,run}` (from tests/scripts)."""
+"""CLI: `python -m pyspark_suite {static,report,run,ratchet}` (from tests/scripts)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from . import manifest as mf
 from .denominator import compute
 from .junit import oracle_skips
-from .report import dashboard, summarize, write_summary
+from .report import dashboard, ratchet_regressions, summarize, write_summary
 from .runner import check_pytest_timeout, run_file
 from .static_count import census
 
@@ -71,6 +71,29 @@ def cmd_report(_: argparse.Namespace) -> None:
     print(f"wrote {DATA / 'DASHBOARD.md'}")
 
 
+def cmd_ratchet(a: argparse.Namespace) -> None:
+    """Fail when a fresh run lost a pass the committed summary had, or (blocking versions) fell under `--min-rate`."""
+
+    previous = json.loads((DATA / "summary" / f"{a.version}.json").read_text())
+    current = json.loads(a.current.read_text())
+    if current["version"] != a.version:
+        raise SystemExit(f"ratchet: {a.current} is for {current['version']}, not {a.version}")
+    if current.get("source") != "run":
+        raise SystemExit("ratchet: the current summary is not from a `run`")
+    lost = ratchet_regressions(previous, current)
+    print(
+        f"{a.version}: {current['passed']} passed ({current['pass_rate']}%), {len(lost)} lost since the committed list"
+    )
+    for t in lost:
+        print(f"  lost: {t}")
+    failed = bool(lost)
+    if a.min_rate is not None and current["pass_rate"] < a.min_rate:
+        print(f"  pass rate {current['pass_rate']}% is under the {a.min_rate}% gate")
+        failed = True
+    if failed and not a.report_only:
+        raise SystemExit(1)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="pyspark_suite")
     sub = p.add_subparsers(required=True)
@@ -93,6 +116,12 @@ def main() -> None:
     u.set_defaults(fn=cmd_run)
     r = sub.add_parser("report", help="render DASHBOARD.md from the committed summaries")
     r.set_defaults(fn=cmd_report)
+    t = sub.add_parser("ratchet", help="fail on lost passes against the committed summary (and `--min-rate`)")
+    t.add_argument("--version", required=True)
+    t.add_argument("--current", type=Path, required=True, help="summary written by a fresh `run`")
+    t.add_argument("--min-rate", type=float, help="blocking pass-rate floor in percent")
+    t.add_argument("--report-only", action="store_true", help="print, never fail (3.5.7)")
+    t.set_defaults(fn=cmd_ratchet)
     a = p.parse_args()
     a.fn(a)
 
