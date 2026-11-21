@@ -71,7 +71,7 @@ use crate::expr::{
     Attrs, builtin, column, conjuncts, data_type, has_outer_reference, has_subquery,
     is_deterministic, lit, output_of, references, references_into, same,
 };
-use crate::payload_above::proven_unique;
+use crate::payload_above::keyed;
 use crate::restrict::{MAX_ID, max_id};
 use crate::stats::{RelStats, Statistics};
 
@@ -95,22 +95,24 @@ const ROW_MARGIN: f64 = 8.0;
 /// it (`EXPLAIN VERBOSE`).
 ///
 /// With `defer`, a join whose other side's join keys are all group keys of the
-/// aggregate and proven unique (by the plan or a key fact) is left alone: that
-/// is the join `PayloadAboveAggregate` moves, and its plan needs no aggregate
-/// above the join. The optimizer runs this pass again without `defer` after
-/// that rule, so a join it refuses is still pushed here; without a proof
-/// nothing is deferred.
+/// aggregate and unique, or could be proven so (by the plan, a key fact or a
+/// key count the rule requests), is left alone: that is the join
+/// `PayloadAboveAggregate` moves, and its plan needs no aggregate above the
+/// join. Leaving it also lets the rule request the count the session answers
+/// on the next optimization. The optimizer runs this pass again without
+/// `defer` after that rule, so a join it refuses is still pushed here.
 pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
     defer: bool,
-) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
+) -> Result<Rewritten, KrishivError> {
     let mut memo = Default::default();
     let mut next = max_id(&root, &mut memo).saturating_add(1);
     let mut est = Estimator::with_propagation(stats, propagate);
     let mut notes = Vec::new();
     let defer = defer.then_some(stats);
+    let mut deferred = false;
     let out = dag::rewrite_up(root, &mut |p| {
         let Some(shape) = Shape::of(&p) else {
             return Ok(p);
@@ -118,10 +120,17 @@ pub(crate) fn rewrite(
         let tried = shape
             .push(shape.join, defer, &mut est, &mut next)
             .or_else(|why| {
+                deferred |= why.starts_with(DEFERRED);
                 // The dimension the keys need may sit below another one.
                 shape
                     .rotated()
-                    .and_then(|join| shape.push(&join, defer, &mut est, &mut next).ok())
+                    .and_then(|join| match shape.push(&join, defer, &mut est, &mut next) {
+                        Ok(pushed) => Some(pushed),
+                        Err(other) => {
+                            deferred |= other.starts_with(DEFERRED);
+                            None
+                        }
+                    })
                     .ok_or(why)
             });
         match tried {
@@ -140,7 +149,24 @@ pub(crate) fn rewrite(
             }
         }
     })?;
-    Ok((out, notes))
+    Ok(Rewritten {
+        plan: out,
+        notes,
+        deferred,
+    })
+}
+
+/// The start of the refusal of a join left to `PayloadAboveAggregate`.
+const DEFERRED: &str = "deferred:";
+
+/// What [`rewrite`] did.
+pub(crate) struct Rewritten {
+    /// The plan, the input `Arc` when nothing moved.
+    pub(crate) plan: Arc<LogicalPlan>,
+    /// One line per aggregate over a join (`EXPLAIN VERBOSE`).
+    pub(crate) notes: Vec<String>,
+    /// Whether a join was left to `PayloadAboveAggregate` (only with `defer`).
+    pub(crate) deferred: bool,
 }
 
 /// An aggregate over projections and expansions over a join.
@@ -255,12 +281,11 @@ impl<'a> Shape<'a> {
             };
             if !other_keys.is_empty()
                 && other_keys.iter().all(grouped)
-                && proven_unique(other, &other_keys, stats)
+                && keyed(other, &other_keys, stats)
             {
-                return Err(
-                    "deferred: the other side's join keys are grouped and unique (PayloadAboveAggregate first)"
-                        .to_owned(),
-                );
+                return Err(format!(
+                    "{DEFERRED} the other side's join keys are grouped and may be unique (PayloadAboveAggregate first)"
+                ));
             }
         }
         let null_supplying = matches!(
