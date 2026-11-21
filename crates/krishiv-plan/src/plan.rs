@@ -682,6 +682,42 @@ pub enum PlanNode {
         /// plan never runs `analyze` again.
         analyzed: Option<Arc<[u8]>>,
     },
+    /// A read of a metric view (Spark's `MetricViewPlaceholder`, design note
+    /// `P3-metric-views.md` §4): its one child is the source with the view's
+    /// filter applied; its output is the stored schema, the dimensions then the
+    /// measures. An aggregate over it rewrites it (`analyzer/metric_view.rs`);
+    /// a resolved plan may still hold it, and planning refuses it.
+    MetricViewRead {
+        /// The source, with the view's filter.
+        input: Arc<LogicalPlan>,
+        /// The view's name (catalog, namespace, name).
+        name: Vec<String>,
+        /// The dimensions, in order.
+        dimensions: Vec<MetricColumn>,
+        /// The measures, in order.
+        measures: Vec<MetricColumn>,
+        /// The output attributes; empty until resolved.
+        output: Vec<BoundColumn>,
+        /// `spark.sql.ansi.enabled` when the view was created: the arithmetic operators its
+        /// dimensions and measures write evaluate in it whatever the reader's mode is (Spark's parser
+        /// builds them with the mode it parses the view's expressions under). `None` follows the
+        /// reader's. Casts carry their mode in [`CastMode`](crate::CastMode) already.
+        ansi: Option<bool>,
+    },
+}
+
+/// A dimension or measure of a [`PlanNode::MetricViewRead`]: its name, its
+/// parsed (unresolved) expression and the stored type of its column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetricColumn {
+    /// The column name.
+    pub name: String,
+    /// The expression as parsed from the view's YAML; never resolved in place.
+    pub expr: Arc<Expr>,
+    /// The stored column type.
+    pub data_type: krishiv_types::DataType,
+    /// The stored nullability.
+    pub nullable: bool,
 }
 
 /// The `TABLE(t)` argument of a [`PlanNode::PythonTableFunction`] (Spark's
@@ -1260,6 +1296,7 @@ impl LogicalPlan {
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
+            | PlanNode::MetricViewRead { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1327,6 +1364,7 @@ impl LogicalPlan {
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
+            | PlanNode::MetricViewRead { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1382,7 +1420,9 @@ impl LogicalPlan {
             | PlanNode::SetOp { .. }
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
-            | PlanNode::Distinct { .. } => {}
+            | PlanNode::Distinct { .. }
+            // Its dimensions and measures are never resolved in place.
+            | PlanNode::MetricViewRead { .. } => {}
             PlanNode::Hint { params, .. }
             | PlanNode::Repartition { exprs: params, .. }
             | PlanNode::CollectMetrics {
@@ -1496,7 +1536,9 @@ impl LogicalPlan {
             | PlanNode::SetOp { .. }
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
-            | PlanNode::Distinct { .. } => {}
+            | PlanNode::Distinct { .. }
+            // Its dimensions and measures are never resolved in place.
+            | PlanNode::MetricViewRead { .. } => {}
             PlanNode::Hint { params, .. }
             | PlanNode::Repartition { exprs: params, .. }
             | PlanNode::CollectMetrics {
@@ -1674,6 +1716,7 @@ impl LogicalPlan {
                 PlanNode::Range { output, .. } => return Some(vec![output.clone()]),
                 PlanNode::UnionLoop { output, .. }
                 | PlanNode::UnionLoopRef { output, .. }
+                | PlanNode::MetricViewRead { output, .. }
                 | PlanNode::MapPartitions { output, .. }
                 | PlanNode::GroupMap { output, .. }
                 | PlanNode::CoGroupMap { output, .. }

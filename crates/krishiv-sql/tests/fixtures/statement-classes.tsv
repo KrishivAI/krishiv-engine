@@ -60,6 +60,7 @@ DropFunction	DDL	DROP FUNCTION f
 CreatePermanentView	DDL	CREATE VIEW db.v AS SELECT * FROM t
 CreatePermanentView::temporary	SESSION	CREATE TEMPORARY VIEW v USING parquet OPTIONS (path '/data/x')
 CreatePermanentView::global	DDL	CREATE GLOBAL TEMPORARY VIEW v AS SELECT 1
+CreateMetricView	DDL	CREATE VIEW db.mv WITH METRICS LANGUAGE YAML AS $$version: 0.1$$
 DropPermanentView	DDL	DROP VIEW db.v
 DropPermanentView	DDL	DROP VIEW global_temp.v
 AlterTable::AddColumns	DDL	ALTER TABLE t ADD COLUMNS (b INT)

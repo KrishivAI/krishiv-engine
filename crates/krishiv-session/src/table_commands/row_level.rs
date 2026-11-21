@@ -663,7 +663,7 @@ fn store_assignment_overflow(
     }
     // delta-spark's `canCauseCastOverflow` (`:729-732`).
     let can_overflow = |from: &DataType, to: &DataType| {
-        contains_integral_or_decimal(to) && !crate::view_schema::can_up_cast(from, to)
+        contains_integral_or_decimal(to) && !krishiv_plan::analyzer::can_up_cast(from, to)
     };
     let sql = |t: &DataType| format!("\"{}\"", t.catalog_string().to_uppercase());
     let (column, value) = columns.iter().find_map(|c| {

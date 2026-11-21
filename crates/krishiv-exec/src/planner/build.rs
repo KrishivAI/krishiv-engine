@@ -726,6 +726,11 @@ impl<'a> Planner<'a> {
                 lateral.as_ref(),
                 analyzed.as_ref(),
             ),
+            // The session refuses one before planning (`krishiv_plan::analyzer::refuse_unplannable`);
+            // named here so that no other path plans it silently.
+            PlanNode::MetricViewRead { .. } => {
+                Err(internal("a metric-view read in a physical plan"))
+            }
             _ => {
                 let text = p.to_string();
                 let name = text.split_whitespace().next().unwrap_or_default();

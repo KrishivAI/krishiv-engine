@@ -720,11 +720,31 @@ impl Session {
             self.state.catalog.drop_table(&name.name);
             self.state.cache.invalidate_table(&name.name);
         } else if let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name) {
+            if table
+                .view
+                .as_ref()
+                .is_some_and(crate::store::ViewDef::is_metric)
+            {
+                // Spark 4.2's `DropTableCommand` drops a metric view (4.2.1 and 4.3.0 goldens):
+                // only a plain `VIEW` is refused.
+                self.forget_cached(name);
+                self.state
+                    .catalog
+                    .store
+                    .drop_table(&name.namespace, &name.name);
+                return Ok(());
+            }
             if table.view.is_some() {
                 return Err(WrongCommandForObjectType {
                     operation: "DROP TABLE".to_owned(),
                     required_type: "EXTERNAL or MANAGED".to_owned(),
-                    object_name: format!("{}.{}", name.namespace, name.name),
+                    // `CatalogTable.qualifiedName`, with the catalog (all releases).
+                    object_name: format!(
+                        "{}.{}.{}",
+                        crate::catalog::CATALOG,
+                        name.namespace,
+                        name.name
+                    ),
                     found_type: "VIEW".to_owned(),
                     alternative: "DROP VIEW".to_owned(),
                 }

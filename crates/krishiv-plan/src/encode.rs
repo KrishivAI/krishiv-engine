@@ -120,6 +120,7 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::PythonTableFunction { .. } => 40,
         PlanNode::CollectMetrics { .. } => 41,
         PlanNode::ColumnNames { .. } => 42,
+        PlanNode::MetricViewRead { .. } => 43,
     }
 }
 
@@ -1010,6 +1011,32 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::CollectMetrics { name, metrics, .. } => {
                 self.str(name);
                 self.exprs(metrics);
+            }
+            PlanNode::MetricViewRead {
+                name,
+                dimensions,
+                measures,
+                output,
+                ansi,
+                ..
+            } => {
+                self.strs(name);
+                for cols in [dimensions, measures] {
+                    self.len(cols.len());
+                    for c in cols {
+                        self.str(&c.name);
+                        self.expr(&c.expr);
+                        self.data_type(&c.data_type);
+                        self.u8(u8::from(c.nullable));
+                    }
+                }
+                self.len(output.len());
+                output.iter().for_each(|c| self.bound(c));
+                self.u8(match ansi {
+                    None => 0,
+                    Some(false) => 1,
+                    Some(true) => 2,
+                });
             }
             PlanNode::JoinHint { strategy, .. } => {
                 self.str(strategy.name());

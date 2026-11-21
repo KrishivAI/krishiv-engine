@@ -1398,6 +1398,8 @@ pub(crate) struct Expansion {
     pub(crate) keeps: Vec<Keep>,
     /// Every stored view inlined, at any depth (review r10 M10).
     pub(crate) reached: Vec<ReachedView>,
+    /// The inlined query of each temporary view read (`AnalysisContext::temp_view_texts`).
+    pub(crate) temp_texts: Vec<Arc<LogicalPlan>>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a

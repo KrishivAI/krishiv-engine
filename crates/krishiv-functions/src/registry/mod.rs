@@ -184,6 +184,8 @@ pub enum Aggregate {
     /// deterministic)` and `mode() WITHIN GROUP (ORDER BY col)` forms.
     /// The input type.
     Mode,
+    /// `measure(m)` (Spark 4.2 metric views): never evaluated. The input type.
+    Measure,
     /// `listagg(expr[, delimiter])` (and `string_agg`, which the analyzer
     /// resolves as `listagg` for Spark's display name): the non-NULL
     /// values joined by the delimiter. The input type (`STRING` or

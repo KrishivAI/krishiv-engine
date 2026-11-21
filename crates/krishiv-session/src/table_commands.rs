@@ -706,6 +706,7 @@ impl Session {
                 // The store sets the version (review r10 M10).
                 revision: 0,
                 author: self.state.principal.name.clone(),
+                kind: crate::store::ViewKind::Sql,
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -982,6 +983,7 @@ impl Session {
                     default: None,
                     comment: None,
                     char_varchar: None,
+                    metric: None,
                 })
             })
             .collect()
@@ -1042,8 +1044,22 @@ impl Session {
             }
             Some(t) => Err(WrongCommandForObjectType {
                 operation: "DROP VIEW".to_owned(),
-                required_type: "VIEW".to_owned(),
-                object_name: format!("{}.{}", name.namespace, name.name),
+                // Spark 4.2 drops either view kind and names both (`ddl.scala`); earlier
+                // releases have no metric view (3.5.7 and 4.1.0 gate goldens).
+                required_type: match self.state.profile {
+                    krishiv_plan::analyzer::SparkProfile::V3_5
+                    | krishiv_plan::analyzer::SparkProfile::V4_0
+                    | krishiv_plan::analyzer::SparkProfile::V4_1 => "VIEW",
+                    _ => "VIEW or METRIC_VIEW",
+                }
+                .to_owned(),
+                // `CatalogTable.qualifiedName`, with the catalog (all releases).
+                object_name: format!(
+                    "{}.{}.{}",
+                    crate::catalog::CATALOG,
+                    name.namespace,
+                    name.name
+                ),
                 found_type: if t.managed { "MANAGED" } else { "EXTERNAL" }.to_owned(),
                 alternative: "DROP TABLE".to_owned(),
             }
@@ -1088,6 +1104,17 @@ impl Session {
                 operation: "ALTER VIEW".to_owned(),
             }
             .into());
+        }
+        let metric = existing
+            .view
+            .as_ref()
+            .is_some_and(crate::store::ViewDef::is_metric);
+        if let (true, AlterViewAction::RenameTo { name: to, .. }) = (metric, &a.action) {
+            // A metric view keeps its kind, YAML and column metadata under the new name (4.2.1
+            // golden). A plain view's rename is not built yet.
+            return self
+                .rename_table(&existing, &self.table_name(to, &env)?)
+                .await;
         }
         let mut changed = (*existing).clone();
         match &a.action {
@@ -1160,6 +1187,12 @@ impl Session {
                     // A new text: the store gives it a new version (review r10 M10).
                     revision: 0,
                     author: self.state.principal.name.clone(),
+                    // Spark's `AlterViewAsCommand` keeps the table type: a metric view's text
+                    // becomes the query, read later as YAML (4.2.1 golden).
+                    kind: existing
+                        .view
+                        .as_ref()
+                        .map_or(crate::store::ViewKind::Sql, |v| v.kind.clone()),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {
@@ -1417,9 +1450,55 @@ impl Session {
                 // Spark's error for a view here is not recorded in the goldens yet.
                 return Err(unsupported("COMMENT ON TABLE of a view"));
             }
+            let metric = self
+                .state
+                .catalog
+                .store
+                .table(&name.namespace, &name.name)
+                .and_then(|t| t.view.as_ref().map(crate::store::ViewDef::is_metric))
+                .unwrap_or(false);
+            // The partition commands resolve a table by name (`UnresolvedTable`, `AstBuilder`);
+            // a metric view there is refused with no alternative (4.2.1 golden).
+            let partition_operation = match a.action {
+                AlterTableAction::AddPartition { .. } => Some("ALTER TABLE ... ADD PARTITION ..."),
+                AlterTableAction::DropPartition { .. } => {
+                    Some("ALTER TABLE ... DROP PARTITION ...")
+                }
+                AlterTableAction::RenamePartition { .. } => {
+                    Some("ALTER TABLE ... RENAME TO PARTITION")
+                }
+                AlterTableAction::RecoverPartitions => Some("ALTER TABLE ... RECOVER PARTITIONS"),
+                _ => None,
+            };
+            if let (true, Some(operation)) = (metric, partition_operation) {
+                return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
+                    operation: operation.to_owned(),
+                    view_name: name.quoted(),
+                }
+                .into());
+            }
             return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
-                operation: "`ALTER TABLE`".to_owned(),
-                view_name: name.quoted(),
+                // Spark quotes the operation for a plain view only (4.2.1 goldens).
+                operation: if metric {
+                    "ALTER TABLE"
+                } else {
+                    "`ALTER TABLE`"
+                }
+                .to_owned(),
+                // ... and names a metric view as written, a plain one fully qualified.
+                view_name: if metric {
+                    match &a.table {
+                        DdlName::Parts(n) => n
+                            .parts
+                            .iter()
+                            .map(|p| format!("`{}`", p.value.replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join("."),
+                        _ => format!("`{}`", name.name.replace('`', "``")),
+                    }
+                } else {
+                    name.quoted()
+                },
             }
             .into());
         }
@@ -1812,6 +1891,7 @@ mod writes;
 mod create;
 #[cfg(feature = "delta")]
 mod delta;
+mod metric_view;
 #[cfg(feature = "delta")]
 pub(crate) use delta::{delta_write_refused, is_delta_table};
 #[cfg(feature = "delta")]

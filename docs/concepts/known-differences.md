@@ -675,3 +675,34 @@ both forms, so a sketch written by one engine can be estimated or unioned by the
 `length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
 `hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
 (`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.
+
+## Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)
+
+Metric views follow Spark 4.2.1 and 4.3.0 (goldens in `tests/fixtures/spark-{4.2.1,4.3.0}/metric-views/`), with
+these differences:
+
+- **Malformed YAML.** `INVALID_METRIC_VIEW_YAML` keeps Spark's `Failed to parse YAML:` prefix; the rest of the
+  message is Krishiv's YAML parser's, not SnakeYAML's scanner text.
+- **YAML Krishiv refuses where Spark reads on.** An alias to an anchor the document never defined is a YAML
+  syntax error (Spark's binding reads the alias name as the value). A `name` or `expr` that is null is refused when
+  the view is created, with a Krishiv message (Spark keeps it and fails later).
+- **Spark internal errors, reproduced by class.** Where Spark fails with an internal error, Krishiv raises the same
+  class and SQLSTATE (`INTERNAL_ERROR`, `XX000`, or the `MISSING_ATTRIBUTES.*` class) with Spark's message prefix;
+  plan dumps, expression ids and Java exception text after it differ. This covers: a 4.2 `CREATE VIEW` missing
+  `WITH METRICS` or `LANGUAGE` (Spark 4.2 cannot find `MISSING_CLAUSES_FOR_OPERATION`); a read with no aggregate;
+  `measure(<dimension>)` (`key not found: ExprId(..)`); a read through a view, a temporary view or a CTE over a
+  metric view; `source: ~`; a constant dimension (`expr: 1`); a measure column read anywhere but as the argument of
+  `measure(..)`.
+- **Errors that are not Spark exceptions.** The 1,024-character expression limit, `measure(<dimension>)` and
+  `SHOW CREATE TABLE .. AS SERDE` are plain JVM exceptions in Spark, with no error class: Spark Connect clients
+  see `UnknownException` or `IllegalArgumentException`. Krishiv raises `INTERNAL_ERROR` with Spark's text, and its
+  Connect server withholds the text of internal errors, as for any other.
+- **4.3 missing clause.** Krishiv has no Spark 4.3 profile yet, so a missing `WITH METRICS` or `LANGUAGE` is 4.2's
+  internal error on every release from 4.2 (Spark 4.3 raises `MISSING_CLAUSES_FOR_OPERATION`).
+- **`CANNOT_UP_CAST_DATATYPE` after a source column changed type.** The class, SQLSTATE and types are Spark's;
+  the `expression` parameter is Krishiv's form of the dimension, where Spark qualifies its columns
+  (`spark_catalog.default.t.k`).
+- **Not matched yet:** `DESCRIBE EXTENDED .. AS JSON` of a metric view (refused, as for every view: Krishiv does not
+  record the SQL configuration a view captures); a self-join of a metric view (Spark's
+  `UNRESOLVED_COLUMN`, Krishiv's internal error); `WHERE measure(m)` under an aggregate (Spark's
+  `MISSING_ATTRIBUTES.*`, Krishiv's `INVALID_WHERE_CONDITION`); the physical plan `EXPLAIN` prints.

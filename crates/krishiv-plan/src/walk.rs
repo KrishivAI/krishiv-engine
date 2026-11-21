@@ -238,7 +238,8 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 // Lowering builds the generator without its columns.
                 PlanNode::Generate { output, .. }
                 | PlanNode::UnionLoop { output, .. }
-                | PlanNode::UnionLoopRef { output, .. } => !output.is_empty(),
+                | PlanNode::UnionLoopRef { output, .. }
+                | PlanNode::MetricViewRead { output, .. } => !output.is_empty(),
             },
             Node::Expr(e) => match &e.node {
                 ExprNode::Column(_)
@@ -476,6 +477,16 @@ impl Teardown {
             } => {
                 self.plans.push(input);
                 self.exprs.extend(params);
+            }
+            PlanNode::MetricViewRead {
+                input,
+                dimensions,
+                measures,
+                ..
+            } => {
+                self.plans.push(input);
+                self.exprs
+                    .extend(dimensions.into_iter().chain(measures).map(|c| c.expr));
             }
             PlanNode::SetOp { left, right, .. } => self.plans.extend([left, right]),
             PlanNode::MapPartitions { input, .. } => self.plans.push(input),
