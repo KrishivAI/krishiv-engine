@@ -113,6 +113,25 @@ fn insert_overwrite_directory_writes_the_rows_and_replaces_the_directory() {
 }
 
 #[test]
+fn insert_overwrite_directory_takes_the_path_and_options_from_the_options_list() {
+    let s = session();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("o2");
+    let sql = format!(
+        "INSERT OVERWRITE DIRECTORY USING csv OPTIONS (path '{}', header true, sep ';', maxColumns 10) \
+         SELECT 1 AS a, 'x' AS b",
+        out.display()
+    );
+    block_on(async { s.sql(&sql).await?.collect().await }).expect("insert");
+    let part = std::fs::read_dir(&out)
+        .expect("dir")
+        .map(|e| e.expect("entry").path())
+        .find(|p| p.extension().is_some_and(|e| e == "csv"))
+        .expect("a csv part file");
+    assert_eq!(std::fs::read_to_string(part).expect("read"), "a;b\n1;x\n");
+}
+
+#[test]
 fn insert_overwrite_directory_hive_form_is_refused_by_name() {
     let s = session();
     let e = error(
