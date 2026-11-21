@@ -562,9 +562,12 @@ fn order_by_and_having_over_an_aggregate_with_no_measure_follow_sparks_rule_orde
     }
 }
 
-/// A source with two columns of one name reads as Spark 4.2.1 reads it (#941 review thread; probe
-/// `~/krishiv-data/tmp/opus-2/probe-941/probe.py`, 2026-11-21): the passthrough columns keep
-/// their identity, so a measure and a dimension that do not use them resolve (`(1)`, `(3, 1)`).
+/// A source with two columns of one name reads as Spark 4.2.1 reads it (#941 review thread; a real
+/// run, 2026-11-21): the passthrough columns keep their identity, so a measure and a dimension that
+/// do not use them resolve (`(1)`, `(3, 1)`). A measure or dimension that names the repeated column
+/// is ambiguous when the view is created (review 49995de79): Spark prints
+/// `[AMBIGUOUS_REFERENCE] Reference `a` is ambiguous, could be: [`a`, `a`]. SQLSTATE: 42704` for
+/// both `sum(a)` and `a + 0` over `SELECT 1 AS a, 2 AS a`, and the view does not exist after.
 #[test]
 fn a_source_with_a_repeated_column_name_reads_its_measures() {
     let (s, _dir) = session();
@@ -584,12 +587,29 @@ fn a_source_with_a_repeated_column_name_reads_its_measures() {
     .unwrap();
     let out = run(&s, "SELECT b, measure(c) FROM mvdup2 GROUP BY b").unwrap();
     assert_eq!(longs(&out, 1), vec![1]);
+    for (name, body) in [
+        ("mvdupm", "measures:\n  - name: s\n    expr: sum(a)\n"),
+        (
+            "mvdupd",
+            "dimensions:\n  - name: d\n    expr: a + 0\nmeasures:\n  - name: c\n    expr: count(1)\n",
+        ),
+    ] {
+        let create = format!(
+            "CREATE VIEW {name} WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsource: SELECT 1 AS a, 2 AS a\n{body}$$"
+        );
+        let e = run(&s, &create).unwrap_err();
+        assert_eq!(class(&e), "AMBIGUOUS_REFERENCE", "{name}: {e}");
+        let e = run(&s, &format!("SELECT * FROM {name}")).unwrap_err();
+        assert_eq!(class(&e), "TABLE_OR_VIEW_NOT_FOUND", "{name}: {e}");
+    }
 }
 
 /// Only the built-in `measure` reads a measure: a qualified SQL function of that name is that
 /// function, never the measure's aggregate (#941 review thread). Spark 4.2.1 raises
-/// `MISSING_AGGREGATION` for it (probe `~/krishiv-data/tmp/opus-2/probe-941/`), as it does for
-/// such a function over a plain table's non-grouped column; Krishiv inlines a SQL function's body
+/// `MISSING_AGGREGATION` for it (a real run, 2026-11-21: `[MISSING_AGGREGATION] The
+/// non-aggregating expression "total" is based on columns which are not participating in the GROUP
+/// BY clause.`, for both qualified forms), as it does for such a function over a plain table's
+/// non-grouped column; Krishiv inlines a SQL function's body
 /// before that check, so a parameter the body never reads is not checked (a general SQL-function
 /// gap, queued apart): here the call's argument is then the view's measure column, unresolved.
 #[test]

@@ -121,3 +121,49 @@ fn a_leftover_measure_is_refused_before_a_leftover_read() {
     assert!(e.to_string().contains("UnevaluableAggregateFunc"), "{e}");
     assert!(is_unplannable(&e));
 }
+
+/// A read over a source that repeats a name (#941 review 49995de79). A dimension or measure that
+/// names it is ambiguous, as Spark 4.2.1's `CREATE` over `SELECT 1 AS a, 2 AS a` is
+/// (`[AMBIGUOUS_REFERENCE] Reference `a` is ambiguous, could be: [`a`, `a`]. SQLSTATE: 42704`,
+/// for `sum(a)` and for `a + 0`); one that does not reads (`count(1)` gives `(1)`). The session
+/// refuses such a view at `CREATE`, so only this test reaches the read's branch.
+#[test]
+fn a_repeated_source_name_is_ambiguous_only_where_named() {
+    let over = |dimensions: Vec<MetricColumn>, measures: Vec<MetricColumn>| {
+        LogicalPlan::new(PlanNode::MetricViewRead {
+            input: Arc::new(
+                LogicalPlan::table(["part"])
+                    .project(vec![c("p_size").alias("a"), c("p_partkey").alias("a")]),
+            ),
+            name: vec!["spark_catalog".into(), "default".into(), "mv".into()],
+            dimensions,
+            measures,
+            output: Vec::new(),
+            ansi: None,
+        })
+    };
+    let count = || column("c", f("count", vec![super::dsl::int(1)]), DataType::Long);
+    let sum = over(
+        Vec::new(),
+        vec![column("s", f("sum", vec![c("a")]), DataType::Long)],
+    );
+    assert_eq!(
+        class(sum.project(vec![measure("s")])),
+        "AMBIGUOUS_REFERENCE"
+    );
+    let dim = over(
+        vec![column(
+            "d",
+            super::dsl::add(c("a"), super::dsl::int(0)),
+            DataType::Integer,
+        )],
+        vec![count()],
+    );
+    assert_eq!(
+        class(dim.aggregate(vec![c("d")], vec![c("d"), measure("c")])),
+        "AMBIGUOUS_REFERENCE"
+    );
+    let plain = over(Vec::new(), vec![count()]).project(vec![measure("c")]);
+    let analyzed = run(plain, &ctx()).unwrap();
+    assert!(!has_read(analyzed.plan.root()), "{}", analyzed.plan.root());
+}

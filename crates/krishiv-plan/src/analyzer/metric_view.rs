@@ -879,17 +879,16 @@ fn holds_no_aggregate(grouping: &Grouping, aggregates: &[Arc<Expr>]) -> bool {
 /// Whether an expression of `columns` (unresolved) names a column `name` (its last part).
 fn names_column(columns: &[&MetricColumn], name: &str, same: impl Fn(&str, &str) -> bool) -> bool {
     columns.iter().any(|m| {
-        let mut found = false;
-        let _ = visit_distinct(Node::Expr(&m.expr), |n| {
+        visit_distinct(Node::Expr(&m.expr), |n| {
             if let Node::Expr(x) = n
                 && let ExprNode::Column(c) = &x.node
                 && c.name.last().is_some_and(|l| same(l, name))
             {
-                found = true;
+                return std::ops::ControlFlow::Break(());
             }
-            std::ops::ControlFlow::<()>::Continue(())
-        });
-        found
+            std::ops::ControlFlow::Continue(())
+        })
+        .is_break()
     })
 }
 
