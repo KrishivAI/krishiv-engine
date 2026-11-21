@@ -141,6 +141,24 @@ pub trait UiSource: Send + Sync + 'static {
     /// `KRISHIV_QUERY_KILLED`); `false` when it is not running.
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool>;
 
+    /// The plan tree of the finished query whose `system.queries` row is `query`, as the profile document
+    /// stores it (an array of nodes: `id`, `name`, `children` as indexes into the array), `None` when this
+    /// source keeps no plan for it. The page joins the nodes to the query's operators by `node_id`, and lists
+    /// the operators alone when there is none. Only a node's id, name and children reach the page
+    /// (`plan_nodes`).
+    fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
+        let _ = query;
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Whether the plan of the ended query whose row is `query` can still arrive: the source writes a history
+    /// store and the query ended a moment ago, so its profile may not be written yet. The page asks again
+    /// only while this holds; a source that will never have the plan says `false` and the page says so at once.
+    fn plan_pending(&self, query: &Row) -> bool {
+        let _ = query;
+        false
+    }
+
     /// Which console this is, as `/api/internal/health` reports it and the page reads it: `server` (every
     /// session of a server), `embedded` (one session of the host process) or `profiles` (stored profiles, no
     /// engine).
@@ -877,14 +895,56 @@ async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Respo
         .filter(|r| text(r, "query_id") == id)
         .collect();
     ops.sort_by_key(|r| int(r, "operator_id"));
+    // A source with no plan for the query leaves the page its flat operator list. A query that has not ended
+    // has no stored plan, and its page asks again every second: the store is not searched for it.
+    let ended = !matches!(text(query, "state"), "running" | "queued");
+    let plan = if !ended {
+        None
+    } else {
+        s.source
+            .plan(query)
+            .await
+            .ok()
+            .flatten()
+            .as_ref()
+            .and_then(plan_nodes)
+    };
     json_response(
         StatusCode::OK,
         &json!({
             "query": pick_query(query),
             "operators": ops.iter().map(|r| Value::Object(pick(r, OPERATOR_COLUMNS))).collect::<Vec<_>>(),
             "hot_operator": hot_operator(&ops),
+            // A query with no operator rows (one refused before it ran) has nothing to draw a plan over: no wait.
+            "plan_pending": ended && plan.is_none() && !ops.is_empty() && s.source.plan_pending(query),
+            "plan": plan,
         }),
     )
+}
+
+/// The nodes of a stored plan as the page gets them: `id`, `name` and `children`, nothing else. A node's
+/// `detail` and `facts` are the plan's own text: with `krishiv.history.literals = keep` they hold the
+/// statement's literals, which the page never shows (the statement's text is masked on the same page, and a
+/// signed link reads this response with no session); with the default they are blanked to `?`. `None` when
+/// `plan` is not an array of nodes.
+fn plan_nodes(plan: &Value) -> Option<Value> {
+    let nodes = plan.as_array()?;
+    Some(Value::Array(
+        nodes
+            .iter()
+            .map(|n| {
+                json!({
+                    "id": n.get("id").filter(|v| v.is_u64()),
+                    "name": n.get("name").and_then(Value::as_str).unwrap_or(""),
+                    "children": n
+                        .get("children")
+                        .and_then(Value::as_array)
+                        .map(|c| c.iter().filter(|i| i.is_u64()).cloned().collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                })
+            })
+            .collect(),
+    ))
 }
 
 fn now_secs() -> u64 {
