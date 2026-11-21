@@ -32,6 +32,11 @@
 //! nondeterministic or holds an outer reference: the chain stays per
 //! instance, as the copies would evaluate it.
 //!
+//! A group whose aggregate core differs from another group's only by null
+//! tests on its group keys below the aggregate (`key_filters`, TPC-DS q01's
+//! inferred `isnotnull(sr_customer_sk)`) joins that group: its members read
+//! the other group's core and filter the shared groups by those tests.
+//!
 //! The rewrite replaces each member `Shift` alone by a `CteRef` that
 //! produces exactly the ids the shift produced, so no parent changes, and
 //! wraps the root in one `WithCte` holding the definitions. Members nested
@@ -49,9 +54,11 @@ use krishiv_plan::{
     normalized_subtree_hash,
 };
 
-use crate::expr::has_outer_reference;
+use crate::expr::{and_all, has_outer_reference};
 use crate::inline_cte::deterministic;
 use crate::restrict::subquery_plans;
+
+mod key_filters;
 
 /// The name prefix of the definitions this rule adds.
 pub(crate) const SHARED_PREFIX: &str = "__shared_";
@@ -85,18 +92,20 @@ pub(crate) fn share(
     let mut replace: HashMap<*const LogicalPlan, Arc<LogicalPlan>> = HashMap::new();
     let mut bodies: Vec<(String, Arc<LogicalPlan>)> = Vec::new();
     let mut keys: HashSet<Vec<AttrId>> = HashSet::new();
-    for group in groups {
+    for g in groups {
+        let group = &g.members;
         let first = &members[group[0]];
         // Equal bodies are shared whole when the whole body may be shared;
         // bodies that differ only in the filters and projections above an
         // equal core, or whose chain over it is nondeterministic or
         // correlated, share the core (each member evaluates its own chain).
-        let whole = worth_sharing(&first.body)
+        let whole = g.def.is_none()
+            && worth_sharing(&first.body)
             && group.iter().all(|&i| equal(&members[i].body, &first.body));
-        let def = if whole {
-            Arc::clone(&first.body)
-        } else {
-            Arc::clone(core(&first.body))
+        let def = match &g.def {
+            Some(d) => Arc::clone(d),
+            None if whole => Arc::clone(&first.body),
+            None => Arc::clone(core(&first.body)),
         };
         let Some(output) = def.resolved_output() else {
             continue;
@@ -107,19 +116,36 @@ pub(crate) fn share(
         }
         let name = format!("{SHARED_PREFIX}{}", bodies.len());
         bodies.push((name.clone(), Arc::clone(&def)));
-        for &i in &group {
+        for &i in group {
             let m = &members[i];
             if !whole && !equal(&m.body, &def) {
                 // The member keeps its `Shift` and the chain above its core;
-                // the core reads the definition in the body's own ids.
-                replace.insert(
-                    Arc::as_ptr(core(&m.body)),
-                    Arc::new(LogicalPlan::new(PlanNode::CteRef(CteRef {
-                        name: name.clone(),
-                        source: source.clone(),
-                        output: output.clone(),
-                    }))),
-                );
+                // the core reads the definition in the body's own ids, and a
+                // member whose core held null tests on its group keys
+                // evaluates them over the shared groups (L4).
+                let read = Arc::new(LogicalPlan::new(PlanNode::CteRef(CteRef {
+                    name: name.clone(),
+                    source: source.clone(),
+                    output: output.clone(),
+                })));
+                let read = match g.tests.get(&i).and_then(|t| and_all(t.iter().cloned())) {
+                    Some(predicate) => Arc::new(LogicalPlan::new(PlanNode::Filter {
+                        input: read,
+                        predicate,
+                    })),
+                    None => read,
+                };
+                // A member whose aggregate lists fewer outputs (pruned) reads
+                // its own columns of the definition.
+                let mine = core(&m.body).resolved_output();
+                let read = match mine {
+                    Some(cols) if cols != output => Arc::new(LogicalPlan::new(PlanNode::Project {
+                        input: read,
+                        exprs: cols.iter().map(crate::expr::column).collect(),
+                    })),
+                    _ => read,
+                };
+                replace.insert(Arc::as_ptr(core(&m.body)), read);
                 continue;
             }
             let shifted: Option<Vec<BoundColumn>> = output
@@ -309,8 +335,83 @@ fn direct_members(members: &[Member], paths: &HashMap<*const LogicalPlan, u64>) 
     out
 }
 
-/// The groups worth sharing, as indices into `members`.
-fn groups(members: &[Member]) -> Vec<Vec<usize>> {
+/// A group of members read as one definition.
+struct Group {
+    /// Indices into the members.
+    members: Vec<usize>,
+    /// The definition when it is not the first member's core or body: the
+    /// aggregate merged groups share (`key_filters::merge`).
+    def: Option<Arc<LogicalPlan>>,
+    /// The null tests a member evaluates over the definition (L4).
+    tests: HashMap<usize, Vec<Arc<Expr>>>,
+}
+
+/// The groups worth sharing. Groups of equal cores come first; then a group
+/// whose aggregate core equals another's modulo null tests on its group keys
+/// and pruned outputs joins it (L4, `key_filters`), so the query computes the
+/// aggregate once and each member filters and projects its own part.
+fn groups(members: &[Member]) -> Vec<Group> {
+    let mut out: Vec<Group> = equal_core_groups(members)
+        .into_iter()
+        .map(|members| Group {
+            members,
+            def: None,
+            tests: HashMap::new(),
+        })
+        .collect();
+    let mut i = 0;
+    while i < out.len() {
+        let a = out[i]
+            .def
+            .clone()
+            .unwrap_or_else(|| Arc::clone(core(&members[out[i].members[0]].body)));
+        let found = (i + 1..out.len()).find_map(|j| {
+            let b = out[j]
+                .def
+                .clone()
+                .unwrap_or_else(|| Arc::clone(core(&members[out[j].members[0]].body)));
+            key_filters::merge(&a, &b).map(|m| (j, m))
+        });
+        let Some((j, merged)) = found else {
+            i += 1;
+            continue;
+        };
+        let other = out.remove(j);
+        let g = &mut out[i];
+        // Earlier tests were over the old definition's outputs, which the
+        // merged one keeps (it only adds outputs); a group's new tests join
+        // the ones it had.
+        for (side, tests) in [
+            (&g.members, &merged.tests_a),
+            (&other.members, &merged.tests_b),
+        ] {
+            for &m in side {
+                if !tests.is_empty() {
+                    g.tests.entry(m).or_default().extend(tests.iter().cloned());
+                }
+            }
+        }
+        for (m, t) in other.tests {
+            g.tests.entry(m).or_default().extend(t);
+        }
+        g.members.extend(other.members);
+        g.def = Some(merged.def);
+        // Try the merged group against the rest again.
+    }
+    out.retain(|g| {
+        g.members.iter().map(|&i| members[i].uses).sum::<u64>() >= 2
+            && worth_sharing(
+                g.def
+                    .as_ref()
+                    .unwrap_or_else(|| core(&members[g.members[0]].body)),
+            )
+    });
+    out
+}
+
+/// The groups of members whose cores are equal, as indices into `members`,
+/// by first member.
+fn equal_core_groups(members: &[Member]) -> Vec<Vec<usize>> {
     let mut buckets: HashMap<u128, Vec<Vec<usize>>> = HashMap::new();
     for (i, m) in members.iter().enumerate() {
         let groups = buckets
@@ -324,14 +425,7 @@ fn groups(members: &[Member]) -> Vec<Vec<usize>> {
             None => groups.push(vec![i]),
         }
     }
-    let mut out: Vec<Vec<usize>> = buckets
-        .into_values()
-        .flatten()
-        .filter(|g| {
-            g.iter().map(|&i| members[i].uses).sum::<u64>() >= 2
-                && worth_sharing(core(&members[g[0]].body))
-        })
-        .collect();
+    let mut out: Vec<Vec<usize>> = buckets.into_values().flatten().collect();
     // A stable order: by first member.
     out.sort_by_key(|g| g[0]);
     out

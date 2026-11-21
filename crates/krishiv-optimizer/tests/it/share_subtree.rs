@@ -294,3 +294,67 @@ fn an_instance_equal_to_the_core_reads_it_without_its_shift() {
         again.root()
     );
 }
+
+/// TPC-DS q01 reads `customer_total_return` twice; the main instance carries an inferred
+/// `isnotnull(sr_customer_sk)` below the aggregate (it joins `customer` on that key), the
+/// average's instance does not. The filter reads only a group key, so it commutes with the
+/// aggregate: the aggregate without it is computed once, and the main instance filters the
+/// shared groups (L4).
+#[test]
+fn a_filter_on_group_keys_below_the_aggregate_shares_the_aggregate() {
+    let plan = tpcds(1);
+    let table = "spark_catalog.default.store_returns";
+    assert_eq!(scans(plan.root(), table), 1, "q01:\n{}", plan.root());
+    assert_eq!(
+        plan.root().resolved_output(),
+        support::resolve(
+            &crate::tpcds::sql(1),
+            &support::ctx_over(crate::tpcds::catalog())
+        )
+        .root()
+        .resolved_output()
+    );
+    Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
+    let again = optimize_with_udfs(
+        &plan,
+        &krishiv_optimizer::NoStatistics,
+        &UdfLibrary::new(),
+        &Config::new(),
+    )
+    .unwrap();
+    assert!(
+        again.structurally_eq(&plan),
+        "q01 is a fixed point:\n{}",
+        again.root()
+    );
+}
+
+/// q01's shape over TPC-H: the CTE's aggregate is read by a join on its customer key (so that
+/// instance holds an inferred `isnotnull(o_custkey)`) and by a per-status average that never
+/// reads the customer key (so pruning drops it from that instance's outputs). The aggregate is
+/// computed once, and the rows are the unshared plan's.
+#[test]
+fn null_tests_and_pruned_keys_share_one_aggregate_with_the_same_rows() {
+    use crate::support::{data, eval};
+    let sql = "WITH t AS (SELECT o_custkey AS k, o_orderstatus AS s, sum(o_totalprice) AS tot \
+                 FROM orders GROUP BY o_custkey, o_orderstatus) \
+               SELECT c_name, t1.s, t1.tot FROM t t1 JOIN customer ON t1.k = c_custkey \
+               WHERE t1.tot > (SELECT avg(t2.tot) * 1.2 FROM t t2 WHERE t2.s = t1.s)";
+    let plan = run(sql, false);
+    let orders = "spark_catalog.default.orders";
+    assert_eq!(scans(plan.root(), orders), 1, "{}", plan.root());
+    let text = plan.root().to_string();
+    assert_eq!(text.matches("CteRef").count(), 2, "{text}");
+    Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
+    let again = optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &Config::new()).unwrap();
+    assert!(
+        again.structurally_eq(&plan),
+        "a fixed point:\n{}",
+        again.root()
+    );
+    let db = data::tpch(7, 150);
+    let written = support::resolve(sql, &support::ctx());
+    let want = eval::rows(&db, written.root());
+    assert!(!want.is_empty());
+    assert_eq!(eval::rows(&db, plan.root()), want, "{}", plan.root());
+}
