@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The arrow-rs `FlightSqlService` implementation (design P3-T101 §2, §4, §5): Handshake,
-//! statement queries (`GetFlightInfo` / `DoGet`), `GetSqlInfo`, `GetXdbcTypeInfo`, the metadata listings (§5), `CancelFlightInfo`, `CancelQuery`. Every RPC
-//! starts with the drain check and the caller `AuthLayer` attached (fail closed); what 65a does
+//! statement queries (`GetFlightInfo` / `DoGet`), `GetSqlInfo`, `GetXdbcTypeInfo`, the metadata listings (§5), `CancelFlightInfo`, `CancelQuery`. Every RPC has the
+//! caller `AuthLayer` attached (fail closed), and an RPC that starts new work (via `admit_new`) first
+//! passes the drain check; what 65a does
 //! not serve never reaches it: [`crate::gate`] answers `UNIMPLEMENTED` first (§16 m5).
 
 use std::pin::Pin;
@@ -21,11 +22,11 @@ use arrow_flight::{
 };
 use futures::stream::{self, Peekable, Stream};
 use krishiv_common::error::{InvalidHandleFormat, KrishivError};
-use krishiv_session::auth::Authenticated;
+use krishiv_session::auth::{Authenticated, BasicHeader, basic_header};
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::call::shutting_down;
+use crate::call::draining;
 use crate::gate::CANCEL_FLIGHT_INFO;
 use crate::metadata::{Listing, batch_stream, fixed_info};
 use crate::metrics::Command;
@@ -43,12 +44,23 @@ const CANCEL_RESULT_CANCELLED: i32 = 1;
 type HandshakeStream = Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>;
 
 impl FlightSqlServer {
-    /// The drain check and the caller (design §2 "Drain", §3.1).
+    /// The caller of a call that works on something that already exists: a fetch of a ticket
+    /// issued before a drain, a cancel, `ClosePreparedStatement` (design P3-T066 §5.1: these are
+    /// allowed while draining). Binding rows to a prepared handle starts an execution, so it is
+    /// refused (`admit_new`).
     fn admit<T>(&self, request: &Request<T>) -> Result<Authenticated, Status> {
-        if self.draining() {
-            return Err(shutting_down());
-        }
         self.inner.auth.caller(request)
+    }
+
+    /// The caller of a call that starts new work (handshake, statement, update, prepared-statement create/execute/bind,
+    /// metadata command): refused
+    /// with `KRISHIV_SERVER_DRAINING` while the server drains (design P3-T066 §5.1), a
+    /// non-retryable `FAILED_PRECONDITION` and not `UNAVAILABLE`.
+    fn admit_new<T>(&self, request: &Request<T>) -> Result<Authenticated, Status> {
+        if self.draining() {
+            return Err(draining());
+        }
+        self.admit(request)
     }
 
     /// Counts `result` under `command` (`krishiv_flight_sql_requests_total`).
@@ -73,7 +85,7 @@ impl FlightSqlServer {
     ) -> Result<Response<FlightInfo>, Status> {
         let command = listing.command();
         let result = self
-            .admit(request)
+            .admit_new(request)
             .and_then(|_| Self::listing_info(listing, request.get_ref().clone()));
         self.counted(command, result)
     }
@@ -85,7 +97,7 @@ impl FlightSqlServer {
         request: &Request<Ticket>,
     ) -> Result<Response<DoGetStream>, Status> {
         let command = listing.command();
-        let result = match self.admit(request) {
+        let result = match self.admit_new(request) {
             Ok(caller) => self.listing(listing, request.metadata(), &caller).await,
             Err(s) => Err(s),
         };
@@ -98,7 +110,7 @@ impl FlightSqlServer {
         update: CommandStatementUpdate,
         request: &Request<()>,
     ) -> Result<Response<DoPutStream>, Status> {
-        let caller = self.admit(request)?;
+        let caller = self.admit_new(request)?;
         self.statement_update(update, request.metadata(), &caller)
             .await
     }
@@ -110,7 +122,7 @@ impl FlightSqlServer {
         stream: Peekable<Streaming<FlightData>>,
         request: &Request<()>,
     ) -> Result<Response<DoPutStream>, Status> {
-        let caller = self.admit(request)?;
+        let caller = self.admit_new(request)?;
         self.prepared_bind(bind, stream, request.metadata(), &caller)
             .await
     }
@@ -122,7 +134,7 @@ impl FlightSqlServer {
         stream: Peekable<Streaming<FlightData>>,
         request: &Request<()>,
     ) -> Result<Response<DoPutStream>, Status> {
-        let caller = self.admit(request)?;
+        let caller = self.admit_new(request)?;
         self.prepared_update(&update, stream, request.metadata(), &caller)
             .await
     }
@@ -133,7 +145,7 @@ impl FlightSqlServer {
         create: ActionCreatePreparedStatementRequest,
         request: &Request<Action>,
     ) -> Result<Response<ActionStream>, Status> {
-        let caller = self.admit(request)?;
+        let caller = self.admit_new(request)?;
         self.prepared_create(create, request.metadata(), &caller)
             .await
     }
@@ -154,7 +166,7 @@ impl FlightSqlServer {
         set: SetSessionOptionsRequest,
         request: &Request<Action>,
     ) -> Result<Response<ActionStream>, Status> {
-        let caller = self.admit(request)?;
+        let caller = self.admit_new(request)?;
         self.set_session_options(set, request.metadata(), &caller)
             .await
     }
@@ -164,7 +176,7 @@ impl FlightSqlServer {
         &self,
         request: &Request<Action>,
     ) -> Result<Response<ActionStream>, Status> {
-        let caller = self.admit(request)?;
+        let caller = self.admit_new(request)?;
         self.get_session_options(request.metadata(), &caller).await
     }
 
@@ -209,21 +221,32 @@ impl FlightSqlService for FlightSqlServer {
     type FlightService = Self;
 
     /// Authenticates like any RPC (`AuthLayer`) and answers with the caller's bearer token in
-    /// the `authorization` header, which both drivers send back (design §3.1). Creates no session.
+    /// the `authorization` header, which both drivers send back (design §3.1; for a `Basic`
+    /// login, its password). Creates no session.
     async fn do_handshake(
         &self,
         request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<Response<HandshakeStream>, Status> {
-        let result = self.admit(&request).map(|_| {
-            let bearer = request
+        let result = self.admit_new(&request).map(|_| {
+            let header = request
                 .metadata()
                 .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .filter(|v| {
-                    v.get(..7)
-                        .is_some_and(|s| s.eq_ignore_ascii_case("bearer "))
-                })
-                .and_then(|v| v.parse().ok());
+                .and_then(|v| v.to_str().ok());
+            // A `Basic` login answers its password as the bearer token (P3-T101 note §3.1):
+            // Arrow's clients send that from then on (`authenticateBasicToken`).
+            let bearer = header.and_then(|v| match basic_header(v) {
+                BasicHeader::Credentials(b) => {
+                    let mut text = format!("Bearer {}", b.password());
+                    let value = text.parse().ok();
+                    krishiv_common::secret::wipe(&mut text);
+                    value
+                }
+                _ => v
+                    .get(..7)
+                    .is_some_and(|s| s.eq_ignore_ascii_case("bearer "))
+                    .then(|| v.parse().ok())
+                    .flatten(),
+            });
             let out: HandshakeStream = Box::pin(stream::iter([Ok(HandshakeResponse {
                 protocol_version: 0,
                 payload: Default::default(),
@@ -242,7 +265,7 @@ impl FlightSqlService for FlightSqlServer {
         query: CommandStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let result = match self.admit(&request) {
+        let result = match self.admit_new(&request) {
             Ok(caller) => {
                 let descriptor = request.get_ref().clone();
                 self.statement_info(query, request.metadata(), descriptor, &caller)
@@ -258,7 +281,7 @@ impl FlightSqlService for FlightSqlServer {
         query: CommandPreparedStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let result = match self.admit(&request) {
+        let result = match self.admit_new(&request) {
             Ok(caller) => {
                 let descriptor = request.get_ref().clone();
                 self.prepared_info(&query, request.metadata(), descriptor, &caller)
@@ -290,7 +313,7 @@ impl FlightSqlService for FlightSqlServer {
         query: CommandGetSqlInfo,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let result = self.admit(&request).and_then(|_| {
+        let result = self.admit_new(&request).and_then(|_| {
             let schema = query.clone().into_builder(&self.inner.sql_info).schema();
             fixed_info(&schema, &query.as_any(), request.get_ref().clone()).map(Response::new)
         });
@@ -302,7 +325,7 @@ impl FlightSqlService for FlightSqlServer {
         query: CommandGetSqlInfo,
         request: Request<Ticket>,
     ) -> Result<Response<DoGetStream>, Status> {
-        let result = self.admit(&request).and_then(|_| {
+        let result = self.admit_new(&request).and_then(|_| {
             query
                 .into_builder(&self.inner.sql_info)
                 .build()
@@ -318,7 +341,7 @@ impl FlightSqlService for FlightSqlServer {
         query: CommandGetXdbcTypeInfo,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let result = self.admit(&request).and_then(|_| {
+        let result = self.admit_new(&request).and_then(|_| {
             let schema = query.into_builder(&self.inner.xdbc_type_info).schema();
             fixed_info(&schema, &query.as_any(), request.get_ref().clone()).map(Response::new)
         });
@@ -330,7 +353,7 @@ impl FlightSqlService for FlightSqlServer {
         query: CommandGetXdbcTypeInfo,
         request: Request<Ticket>,
     ) -> Result<Response<DoGetStream>, Status> {
-        let result = self.admit(&request).and_then(|_| {
+        let result = self.admit_new(&request).and_then(|_| {
             query
                 .into_builder(&self.inner.xdbc_type_info)
                 .build()

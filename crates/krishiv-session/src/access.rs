@@ -1167,6 +1167,15 @@ impl Session {
                     .collect(),
             ),
             TargetObject::CurrentCatalog => namespaces(vec![current_catalog()]),
+            // `SHOW NAMESPACES IN name`: a catalog when `name` is one, else a namespace of the
+            // current catalog.
+            TargetObject::NamedCatalog(name) => {
+                let written = parts(name)?;
+                match written.as_slice() {
+                    [only] if catalogs.catalog(only).is_some() => namespaces(vec![only.clone()]),
+                    _ => namespaces(namespace_parts(catalogs, &written)),
+                }
+            }
             TargetObject::Path(path) => vec![Securable::Path(OptionValue::from_user(
                 "path",
                 self.qualify_path(path)?,

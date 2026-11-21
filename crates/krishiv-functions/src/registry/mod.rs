@@ -142,6 +142,9 @@ pub enum Aggregate {
     CollectList,
     /// `collect_set(x)`.
     CollectSet,
+    /// `collect_union(x)` (Spark 4.3): the distinct non-NULL elements of the arrays of `x`. The analyzer rewrites it to
+    /// `array_distinct(array_compact(flatten(collect_list(x))))`, so no executor ever sees it.
+    CollectUnion,
     /// `vector_sum(x)`: element-wise sums over `ARRAY<FLOAT>`.
     VectorSum,
     /// `vector_avg(x)`: element-wise means over `ARRAY<FLOAT>`.
@@ -340,6 +343,10 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__substring_index_lcase" => "__substring_index_lcase",
         // The run-time `INDETERMINATE_COLLATION` of a call whose operands have no one collation (`str_to_map`, `split_part`).
         "__indeterminate_collation" => "__indeterminate_collation",
+        // `JSON_TABLE`'s lowering: the row texts of a document, and a column's value or existence in a row text.
+        "__json_table_rows" => "__json_table_rows",
+        "__json_table_value" => "__json_table_value",
+        "__json_table_exists" => "__json_table_exists",
         _ => return None,
     };
     let arity = if name == "__time_windows" {
@@ -360,6 +367,8 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
             | "__startswith_lcase"
             | "__endswith_lcase"
             | "__find_in_set_lcase"
+            | "__json_table_value"
+            | "__json_table_exists"
     ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {

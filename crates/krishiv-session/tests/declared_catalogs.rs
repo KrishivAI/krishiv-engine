@@ -401,6 +401,11 @@ fn sql_namespace_commands_never_answer_for_a_declared_catalog() {
     );
     assert_eq!(&column(&describe, 1)[..2], ["spark_catalog", "default"]);
     assert_eq!(strings(&s, "SHOW TABLES IN global_temp", 1), ["tv"]);
+    // Review 58b2 F1: a catalog named in `SHOW NAMESPACES IN` wins over the current one.
+    assert_eq!(
+        strings(&s, "SHOW NAMESPACES IN spark_catalog", 0),
+        ["default", "n0"]
+    );
     assert_eq!(strings(&s, "SELECT CAST(a AS STRING) FROM tv", 0), ["1"]);
     assert!(run(&s, "DROP VIEW tv").unwrap().is_empty());
     assert!(run(&s, "SELECT * FROM tv").is_err());

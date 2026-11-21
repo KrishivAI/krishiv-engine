@@ -420,12 +420,13 @@ fn to_decimal(v: Num, p: u8, s: i8) -> Result<Option<i128>, text::BigDec> {
                 Some(half_up(x, pow10(from.saturating_sub(scale))))
             }
         }
-        Num::Float(..) => {
-            let Some(d) = v.big_dec() else {
-                // NaN / infinity: NULL in every mode.
+        // `Decimal(d)` takes `Double.toString`'s digits; read them without the text.
+        Num::Float(f, _) => {
+            let Some(d) = text::java_shortest(f) else {
+                // NaN / infinity: NULL in every mode (`java_shortest` is `None` for nothing else).
                 return Ok(None);
             };
-            d.to_scale(scale).and_then(i256::to_i128)
+            d.to_scale(scale)
         }
     };
     let bound = pow10(p);

@@ -1,0 +1,1 @@
+Python Data Source API (batch): register a `DataSource` class with `spark.dataSource.register`, then read it with `spark.read.format(name)` and write it with `df.write.format(name)`; the reader's partitions are planned for every action, and rows may be tuples, `Row`s or Arrow batches.

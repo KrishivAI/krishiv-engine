@@ -14,7 +14,7 @@ import json
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).parent
 ASSETS = HERE.parent.parent / "crates" / "krishiv-ui-assets" / "assets"
@@ -43,6 +43,22 @@ FILES = {
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
     "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
+)
+
+
+# The embedding console the embed check frames the profile from (its origin is the one allowed origin).
+EMBED_PARENT = "http://parent.test"
+# Framed by the page's CSP but absent from the allowed origins: its theme messages must be ignored.
+EMBED_OTHER = "http://other.test"
+# The paths the page serves as deep links (routes.json); the page itself is `index.html`.
+DEEP_LINKS = (
+    "health",
+    "queries",
+    "history",
+    "resources",
+    "catalog",
+    "sql",
+    "environment",
 )
 
 
@@ -110,11 +126,13 @@ def route(path: str) -> object | None:
 
 
 class Handler(BaseHTTPRequestHandler):
+    csp = CSP
+
     def log_message(self, *_: object) -> None:
         pass
 
     def end_headers(self) -> None:
-        self.send_header("Content-Security-Policy", CSP)
+        self.send_header("Content-Security-Policy", self.csp)
         super().end_headers()
 
     def send_json(self, status: int, body: object) -> None:
@@ -127,6 +145,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         url = urlparse(self.path)
+        self.csp = CSP
+        if url.path == "/api/internal/embed/config":
+            # Needs no token, as on the real server (the embedded page has no session).
+            return self.send_json(
+                200, {"allowed_origins": [EMBED_PARENT], "hide_attribution": False}
+            )
+        if url.path.startswith("/api/internal/embed/queries/"):
+            if "sig=ok" not in url.query:
+                return self.send_json(401, {"error": "unauthorized"})
+            return self.send_json(200, DATA["detail"])
         if url.path.startswith("/api/internal/"):
             authorised = (
                 self.headers.get("Authorization") == f"Bearer {TOKEN}"
@@ -166,11 +194,33 @@ class Handler(BaseHTTPRequestHandler):
             )
         # Only files that were in the asset folder at start-up are served, looked up by their relative name:
         # no path is built from the request, so nothing outside the folder can be named.
-        served = FILES.get(url.path.lstrip("/") or "index.html")
+        name = url.path.lstrip("/") or "index.html"
+        parts = name.split("/")
+        framed = (
+            len(parts) == 3
+            and parts[0] == "queries"
+            and parts[2] == "profile"
+            and parse_qs(url.query).get("embed") == ["1"]
+        )
+        # The page's asset links are relative, so on a deep link they are asked for below the path: the root's files,
+        # as the real server serves them.
+        if "assets/" in name:
+            name = name[name.rfind("assets/") :]
+        elif name.endswith("/favicon.svg"):
+            name = "favicon.svg"
+        elif parts[0] in DEEP_LINKS or (parts[0] == "queries" and len(parts) <= 3):
+            name = "index.html"
+        served = FILES.get(name)
         if served is None:
             return self.send_json(404, {"error": "not_found"})
         file, content_type = served
         raw = file.read_bytes()
+        if framed:
+            # Only the embedded profile may be framed, and only from the allowed origin.
+            self.csp = CSP.replace(
+                "frame-ancestors 'none'",
+                f"frame-ancestors {EMBED_PARENT} {EMBED_OTHER}",
+            )
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(raw)))
