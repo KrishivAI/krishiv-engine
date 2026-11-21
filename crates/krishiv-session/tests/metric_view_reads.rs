@@ -260,3 +260,32 @@ fn an_operator_keeps_the_creators_mode_and_its_operand_the_readers() {
     let e = run(&s, "SELECT n, measure(c) FROM mvo GROUP BY n").unwrap_err();
     assert_eq!(class(&e), "ARITHMETIC_OVERFLOW");
 }
+
+/// A dimension or measure ending in a `--` comment (each parses alone, as Spark parses it) ends
+/// there: the create aggregate keeps its alias and its source (review b047d8901 finding 1).
+#[test]
+fn an_expression_ending_in_a_comment_keeps_its_name_and_source() {
+    let (s, _dir) = session();
+    let yaml = |source: &str| {
+        format!(
+            "CREATE VIEW mv3 WITH METRICS LANGUAGE YAML AS $$
+version: 0.1
+source: {source}
+dimensions:
+  - name: r
+    expr: upper(region) -- the region
+measures:
+  - name: rows
+    expr: count(1) -- every row
+$$"
+        )
+    };
+    let err = run(&s, &yaml("no_such_table")).unwrap_err();
+    assert_eq!(class(&err), "TABLE_OR_VIEW_NOT_FOUND");
+    run(&s, &yaml("src")).unwrap();
+    let rows = run(&s, "SELECT r, measure(rows) FROM mv3 GROUP BY r ORDER BY r").unwrap();
+    let schema = rows[0].schema();
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, ["r", "measure(rows)"]);
+    assert_eq!(longs(&rows, 1), vec![1, 2]);
+}

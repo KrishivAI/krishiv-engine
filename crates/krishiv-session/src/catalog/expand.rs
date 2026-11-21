@@ -621,21 +621,8 @@ impl Expander<'_> {
             .into());
         }
         let spec = crate::metric_view::parse_metric_view_yaml(&view.sql, &def.parser)?;
-        let mut text = String::from("SELECT * FROM ");
-        match &spec.source {
-            crate::metric_view::MetricViewSource::Asset(name) => text.push_str(name),
-            crate::metric_view::MetricViewSource::Sql(query) => {
-                text.push('(');
-                text.push_str(query);
-                text.push_str("\n)");
-            }
-        }
-        if let Some(filter) = &spec.filter {
-            // On a line of its own: a filter ending in a `--` comment leaves the parenthesis.
-            text.push_str(" WHERE (");
-            text.push_str(filter);
-            text.push_str("\n)");
-        }
+        let mut text = String::from("SELECT *");
+        spec.push_from(&mut text);
         let query = krishiv_sql::parse_query(&text, &def.parser).map_err(|e| e.error)?;
         let lowered = krishiv_sql::lower_identified(
             &query,

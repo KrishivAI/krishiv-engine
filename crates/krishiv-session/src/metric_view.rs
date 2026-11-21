@@ -27,6 +27,30 @@ pub(crate) struct MetricViewSpec {
     pub(crate) measures: Vec<MetricViewColumn>,
 }
 
+impl MetricViewSpec {
+    /// Appends ` FROM source [WHERE (filter)]` to `text` and returns where the filter's text sits
+    /// in it. A query source and the filter each close on a line of their own, so one ending in a
+    /// `--` comment leaves the parenthesis (and what follows) in place.
+    pub(crate) fn push_from(&self, text: &mut String) -> Option<std::ops::Range<usize>> {
+        text.push_str(" FROM ");
+        match &self.source {
+            MetricViewSource::Asset(name) => text.push_str(name),
+            MetricViewSource::Sql(query) => {
+                text.push('(');
+                text.push_str(query);
+                text.push_str("\n)");
+            }
+        }
+        let filter = self.filter.as_ref()?;
+        text.push_str(" WHERE (");
+        let start = text.len();
+        text.push_str(filter);
+        let range = start..text.len();
+        text.push_str("\n)");
+        Some(range)
+    }
+}
+
 /// Spark's `Source`: a name that parses as a multipart identifier is an asset, else a query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MetricViewSource {

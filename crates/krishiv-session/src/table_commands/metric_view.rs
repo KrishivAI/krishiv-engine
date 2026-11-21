@@ -63,24 +63,14 @@ impl Aggregate {
                 out.text.push_str(", ");
             }
             out.push_expr(&c.expr);
-            out.text.push_str(" AS `");
+            // On a line of its own: an expression ending in a `--` comment (each parses alone)
+            // leaves its alias and the rest of the statement.
+            out.text.push_str("\n AS `");
             out.text.push_str(&c.name.replace('`', "``"));
             out.text.push('`');
         }
-        out.text.push_str(" FROM ");
-        match &spec.source {
-            MetricViewSource::Asset(name) => out.text.push_str(name),
-            MetricViewSource::Sql(query) => {
-                out.text.push('(');
-                out.text.push_str(query);
-                out.text.push_str("\n)");
-            }
-        }
-        if let Some(filter) = &spec.filter {
-            out.text.push_str(" WHERE (");
-            out.push_expr(filter);
-            // On a line of its own: a filter ending in a `--` comment leaves the parenthesis.
-            out.text.push_str("\n)");
+        if let (Some(range), Some(filter)) = (spec.push_from(&mut out.text), &spec.filter) {
+            out.parts.push((range, filter.clone()));
         }
         let keys = (1..=spec.dimensions.len()).filter(|n| !ungrouped.contains(n));
         for (i, n) in keys.enumerate() {
