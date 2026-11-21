@@ -168,6 +168,13 @@ impl Session {
         env: &QueryEnv,
         skip_unplaced: bool,
     ) -> Result<(), KrishivError> {
+        // A bare `DROP VIEW` of a stored view is checked as the qualified one when it runs.
+        if let Statement::DropView(v) = statement
+            && let Some(stored) = self.stored_drop_view(v, env)
+            && self.stored_namespace_in(env).is_ok()
+        {
+            return self.add_targets(securables, &stored, env, skip_unplaced);
+        }
         for target in required_targets(statement, &env.parser) {
             let placed = match self.securables_of(target.object, env) {
                 Ok(placed) => placed,

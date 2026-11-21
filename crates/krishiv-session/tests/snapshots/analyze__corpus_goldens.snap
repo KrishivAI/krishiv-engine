@@ -397,7 +397,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "statement_class":"SESSION",
 "explain":null,
 "partial":false,
-"securables":[],
+"securables":[{"kind":"view","name":["spark_catalog","default","v"],"display":"view `spark_catalog`.`default`.`v`","privilege":"DROP","columns":[]}],
 "output_schema":[],
 "lineage":[],
 "filters":[],

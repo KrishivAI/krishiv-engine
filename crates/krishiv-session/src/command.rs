@@ -36,11 +36,13 @@ use krishiv_plan::analyzer::{
 use krishiv_plan::{
     Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SubqueryKind,
 };
+use krishiv_sql::StatementClass;
+use krishiv_sql::ast::Statement;
 use krishiv_sql::ast::{
     Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeSpec, DdlName,
-    DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind, FunctionBodyKind,
-    FunctionReturnsKind, Ident, ObjectName, Query, Refresh, RefreshKind, Reset, Set, SetExprKind,
-    SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
+    DeclareVariable, DropFunction, DropPermanentView, DropVariable, DropView, Expr, ExprKind,
+    FunctionBodyKind, FunctionReturnsKind, Ident, ObjectName, Query, Refresh, RefreshKind, Reset,
+    Set, SetExprKind, SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
 };
 use krishiv_types::DataType;
 
@@ -378,18 +380,49 @@ impl Session {
         v: &DropView,
         env: &crate::session::QueryEnv,
     ) -> Result<DataFrame, KrishivError> {
+        let Some(stored) = self.stored_drop_view(v, env) else {
+            self.state.catalog.drop_table(&v.name.value);
+            self.state.cache.forget_table(&v.name.value);
+            return self.empty_frame().await;
+        };
+        // The stored view of the bare name: the checks and ownership change of
+        // `DROP VIEW <current namespace>.<name>`, which `statement_targets` cannot give a
+        // statement that may name a temporary view. The name is placed first, so a current
+        // namespace that holds no stored views (`system`) keeps its `SCHEMA_NOT_FOUND`.
+        self.stored_namespace_in(env)?;
+        self.authorize_statement(&stored, StatementClass::Ddl, env)
+            .await?;
+        let drop = async { self.drop_bare_stored_view(&v.name.value, v.if_exists, env) };
+        match self.owner_change(&stored, env) {
+            Some(change) => self.with_owner_change(change, env, drop).await?,
+            None => drop.await?,
+        }
+        self.empty_frame().await
+    }
+
+    /// The `DROP VIEW <current namespace>.<name>` that `DROP VIEW name` stands for when `name`
+    /// names no temporary view of the session (`None` when it does: that view is dropped).
+    pub(crate) fn stored_drop_view(
+        &self,
+        v: &DropView,
+        env: &crate::session::QueryEnv,
+    ) -> Option<Statement> {
         if !is_global_key(&v.name.value)
             && self
                 .state
                 .catalog
                 .exists(&v.name.value, env.analysis.conf.case_sensitive)
         {
-            self.state.catalog.drop_table(&v.name.value);
-            self.state.cache.forget_table(&v.name.value);
-        } else {
-            self.drop_bare_stored_view(&v.name.value, v.if_exists, env)?;
+            return None;
         }
-        self.empty_frame().await
+        Some(Statement::DropPermanentView(DropPermanentView {
+            if_exists: v.if_exists,
+            name: DdlName::Parts(ObjectName {
+                parts: vec![v.name.clone()],
+                span: v.name.span,
+            }),
+            span: v.span,
+        }))
     }
 
     /// The name the cache knows the table `parts` by: a temporary view or table by its name, a
