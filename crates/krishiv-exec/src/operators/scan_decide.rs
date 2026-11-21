@@ -108,6 +108,12 @@ impl std::fmt::Debug for dyn BoundScan {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BoundScanId(pub u32);
 
+impl BoundScanId {
+    /// The id of a deciding scan planned without its decision (a plan that is only looked at): it
+    /// is never bound, and a plan that holds it does not run.
+    pub const UNDECIDED: Self = Self(u32::MAX);
+}
+
 /// What a [`ScanNode`](crate::physical::ScanNode) records of a decision.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DecidedScan {
@@ -115,6 +121,23 @@ pub struct DecidedScan {
     pub id: BoundScanId,
     /// Indices of the offered conjuncts the scan honoured, for `EXPLAIN` and tests.
     pub pushed: Vec<u32>,
+}
+
+impl DecidedScan {
+    /// A deciding scan with a filter over it, planned with decisions off.
+    #[must_use]
+    pub fn undecided() -> Self {
+        Self {
+            id: BoundScanId::UNDECIDED,
+            pushed: Vec::new(),
+        }
+    }
+
+    /// Whether this scan was planned without its decision.
+    #[must_use]
+    pub fn is_undecided(&self) -> bool {
+        self.id == BoundScanId::UNDECIDED
+    }
 }
 
 /// The rows one execution read, by bound scan: shared by the execution's tasks, dropped with the job's

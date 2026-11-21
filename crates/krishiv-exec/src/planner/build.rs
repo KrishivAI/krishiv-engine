@@ -1391,7 +1391,13 @@ impl<'a> Planner<'a> {
                 runtime_filters: Vec::new(),
                 row_stage: self.rf.row_stage(),
                 row_id,
-                decided: decision.as_ref().map(|d| Box::new(d.decided.clone())),
+                decided: match &decision {
+                    Some(d) => Some(Box::new(d.decided.clone())),
+                    None if deciding && !self.cx.decisions => {
+                        Some(Box::new(crate::operators::DecidedScan::undecided()))
+                    }
+                    None => None,
+                },
             }),
             layout,
             explain: ExplainNode::leaf("Scan", detail).with_facts(super::scan_facts::of(

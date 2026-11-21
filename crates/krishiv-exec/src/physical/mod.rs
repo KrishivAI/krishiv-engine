@@ -1557,6 +1557,16 @@ impl PhysicalPlan {
         &self.root
     }
 
+    /// Whether a scan in any tree of the plan decided once (a Python data source): such a plan
+    /// holds a bound scan of its query's resolver and cannot leave the process.
+    pub fn has_decided_scan(&self) -> bool {
+        fn any(n: &PhysNode) -> bool {
+            matches!(n, PhysNode::Scan(s) if s.decided.is_some())
+                || n.children().into_iter().any(any)
+        }
+        self.roots().any(any)
+    }
+
     /// The plans [`PhysNode::SharedRead`]s read, inner first.
     pub fn shared(&self) -> &[SharedPlan] {
         &self.shared

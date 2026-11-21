@@ -32,6 +32,20 @@ impl Session {
         Ok((optimized, physical))
     }
 
+    /// As [`Self::physical_inspected`] for a plan that only feeds a number or a list
+    /// (`DataFrame::warnings`, `DataFrame::estimate`): no scan that decides once runs user code.
+    pub(crate) async fn physical_counted(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        self.authorize_shown_definer_reads(analyzed).await?;
+        let (optimized, physical, _) = self
+            .physical_with(analyzed, env, false, false, true, false)
+            .await?;
+        Ok((optimized, physical))
+    }
+
     /// As [`Self::physical_inspected`] (the plan is only shown, never run);
     /// with `trace`, also every optimizer rule application that changed the
     /// plan (`EXPLAIN VERBOSE`).

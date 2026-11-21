@@ -301,4 +301,50 @@ mod planned {
         assert_eq!(count(&session, "SELECT count(*) FROM p WHERE k + 1 > 2"), 2);
         assert!(seen.lock().unwrap().is_empty());
     }
+
+    #[test]
+    fn plans_that_are_only_looked_at_run_no_user_code() {
+        let session = Session::new().unwrap();
+        let seen = register(&session);
+        block_on(async {
+            let df = session.sql("SELECT k FROM p WHERE k > 1").await?;
+            df.warnings().await?;
+            df.estimate().await?;
+            Ok::<(), KrishivError>(())
+        })
+        .unwrap();
+        assert!(seen.lock().unwrap().is_empty());
+        // EXPLAIN is the planning call Spark runs: it asks the source once.
+        block_on(async {
+            session
+                .sql("SELECT k FROM p WHERE k > 1")
+                .await?
+                .explain(krishiv_session::ExplainMode::Simple)
+                .await
+        })
+        .unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn round_trip_mode_refuses_a_decided_plan_with_the_named_class() {
+        let session = Session::new().unwrap();
+        let _seen = register(&session);
+        session
+            .conf()
+            .set("krishiv.exec.debug.planRoundTrip", "true")
+            .unwrap();
+        let err = block_on(async {
+            session
+                .sql("SELECT k FROM p WHERE k > 1")
+                .await?
+                .collect()
+                .await
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("KRISHIV_UNSUPPORTED_FEATURE"),
+            "{err}"
+        );
+    }
 }

@@ -239,11 +239,25 @@ fn without_a_filter_the_source_is_not_asked() {
 fn a_plan_made_without_decisions_keeps_its_whole_filter() {
     let f = fixture();
     let plan = f.plan("SELECT b FROM t WHERE a > 5", false);
-    assert!(!decided(&plan), "{plan}");
     assert!(has_filter(&plan), "{plan}");
     assert!(f.log.decides.lock().unwrap().is_empty());
-    // a is 6, 8, 9 (7 is NULL).
-    assert_eq!(f.rows(&plan), 3);
+}
+
+#[test]
+fn undecided_deciding_scan_does_not_run() {
+    let f = fixture();
+    let plan = f.plan("SELECT b FROM t WHERE a > 5", false);
+    let err = run(&plan).unwrap_err();
+    assert!(err.to_string().contains("without its decision"), "{err}");
+    assert_eq!(*f.log.reads.lock().unwrap(), 0);
+}
+
+#[test]
+fn a_deciding_scan_with_no_filter_runs_without_decisions() {
+    let f = fixture();
+    let plan = f.plan("SELECT b FROM t", false);
+    assert!(!decided(&plan), "{plan}");
+    assert_eq!(f.rows(&plan), 10);
 }
 
 #[test]

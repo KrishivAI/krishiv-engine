@@ -333,7 +333,7 @@ impl DataFrame {
         let analysis = self.analysis().await?;
         let (optimized, physical) = self
             .session
-            .physical_inspected(&analysis.analyzed, &analysis.env)
+            .physical_counted(&analysis.analyzed, &analysis.env)
             .await?;
         Ok(estimate_of(&optimized, &physical, &analysis.env.catalog))
     }

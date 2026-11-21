@@ -1372,6 +1372,11 @@ impl Instantiation<'_> {
 
     fn scan(&mut self, s: &ScanNode) -> Result<Built> {
         let factory = match &s.decided {
+            Some(decided) if decided.is_undecided() => {
+                return Err(internal(
+                    "a deciding scan planned without its decision".to_owned(),
+                ));
+            }
             Some(decided) => {
                 let Some(reads) = &self.worker.execution_reads else {
                     return Err(internal("a decided scan outside an execution".to_owned()));
