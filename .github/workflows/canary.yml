@@ -44,6 +44,7 @@ jobs:
             -q '.[] | "\(.status) \(.conclusion // "none") \(.createdAt) \(.url)"') || runs="query-failed"
           run=$(echo "$runs" | sed -n 1p)
           fallback=""
+          what="the latest"
           problem=""
           judged=yes
           if [ "$runs" = "query-failed" ]; then
@@ -58,20 +59,21 @@ jobs:
               # checked: the running one proves the schedule is alive), and never call that night green.
               fallback=$(echo "$runs" | sed -n 2p)
               echo "the latest scheduled run is still $status and younger than 8 hours; judging the previous completed run" >> "$GITHUB_STEP_SUMMARY"
+              what="the previous"
               if [ -n "$fallback" ] && [ "$(echo "$fallback" | cut -d' ' -f1)" = completed ]; then run="$fallback"; else run=""; judged=no; fi
             fi
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
-          echo "Latest scheduled ci run on main: $run" >> "$GITHUB_STEP_SUMMARY"
+          echo "Judged scheduled ci run on main ($what): $run" >> "$GITHUB_STEP_SUMMARY"
           if [ -z "$problem" ] && [ -n "$run" ]; then
             status=$(echo "$run" | cut -d' ' -f1)
             conclusion=$(echo "$run" | cut -d' ' -f2)
             created=$(echo "$run" | cut -d' ' -f3)
             url=$(echo "$run" | cut -d' ' -f4)
             if [ "$status" != "completed" ]; then
-              problem="the latest scheduled ci run is still $status after 8 hours ($url)"
+              problem="$what scheduled ci run is still $status after 8 hours ($url)"
             elif [ "$conclusion" != "success" ]; then
-              problem="the latest scheduled ci run on main ended $conclusion ($url)"
+              problem="$what scheduled ci run on main ended $conclusion ($url)"
             elif [ -z "$fallback" ]; then
               age=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
               if [ "$age" -gt $((26 * 3600)) ]; then
@@ -81,18 +83,25 @@ jobs:
           fi
           # The late-start guard of the scheduled workflows ends a run `success` with every job skipped:
           # a night on which nothing ran must not look green. The key job of each must not be skipped.
+          # The daily workflows are read for their two newest scheduled runs: a skipped run is created in the
+          # working day, so by the next canary a newer run may already be the newest (and the judged run
+          # above may be the second). The weekly ones need one run: a daily canary reads between two of their
+          # runs. A skipped weekly run alerts on each of the next seven days; a manual run does not clear it
+          # (only scheduled runs are read).
           if [ -z "$problem" ]; then
-            for spec in "nightly.yml:all-features" "mutants.yml:mutants" "fuzz-weekly.yml:kernels" "connect-clients.yml:smoke"; do
-              wf=${spec%%:*}; job=${spec#*:}
-              id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --branch main --event schedule \
-                --limit 1 --json databaseId -q '.[0].databaseId') || id=""
-              if [ -z "$id" ]; then echo "could not list $wf runs (no run, or the query failed): not checked" >> "$GITHUB_STEP_SUMMARY"; continue; fi
-              skipped=$(gh run view "$id" --repo "$GITHUB_REPOSITORY" --json jobs \
-                -q "[.jobs[] | select(.name | startswith(\"$job\")) | select(.conclusion == \"skipped\")] | length") \
-                || { skipped=0; echo "could not read run $id of $wf: not checked" >> "$GITHUB_STEP_SUMMARY"; }
-              if [ "${skipped:-0}" -gt 0 ]; then
-                problem="the latest scheduled $wf run on main skipped its $job job(s): it started outside the night window (run $id)"
-              fi
+            for spec in "nightly.yml:all-features:2" "mutants.yml:mutants:2" "fuzz-weekly.yml:kernels:1" "connect-clients.yml:smoke:1"; do
+              wf=${spec%%:*}; rest=${spec#*:}; job=${rest%%:*}; count=${rest#*:}
+              ids=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --branch main --event schedule \
+                --limit "$count" --json databaseId -q '.[].databaseId') || ids=""
+              if [ -z "$ids" ]; then echo "could not list $wf runs (no run, or the query failed): not checked" >> "$GITHUB_STEP_SUMMARY"; continue; fi
+              for id in $ids; do
+                skipped=$(gh run view "$id" --repo "$GITHUB_REPOSITORY" --json jobs \
+                  -q "[.jobs[] | select(.name | startswith(\"$job\")) | select(.conclusion == \"skipped\")] | length") \
+                  || { skipped=0; echo "could not read run $id of $wf: not checked" >> "$GITHUB_STEP_SUMMARY"; }
+                if [ "${skipped:-0}" -gt 0 ]; then
+                  problem="a recent scheduled $wf run on main skipped its $job job(s): it started outside the night window (run $id)"
+                fi
+              done
             done
           fi
           echo "problem=$problem" >> "$GITHUB_OUTPUT"
