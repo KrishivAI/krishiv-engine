@@ -68,6 +68,8 @@ _SHOW_MAX = 2**31 - 17
 
 #: The session key of the notebook preview size, as Spark's ``spark.sql.repl.eagerEval.maxNumRows``.
 EAGER_MAX_ROWS_KEY = "spark.sql.repl.eagerEval.maxNumRows"
+#: The session key that turns the notebook preview on, as Spark's ``spark.sql.repl.eagerEval.enabled`` (off by default).
+EAGER_ENABLED_KEY = "spark.sql.repl.eagerEval.enabled"
 
 #: The preview size when the key is unset or not a number, as Spark's default of 20.
 EAGER_DEFAULT_MAX_ROWS = 20
@@ -176,7 +178,11 @@ class DataFrame:
         if name == "rdd":
             raise unsupported_attribute("DataFrame.rdd (RDDs; use the DataFrame API)")
         if name.startswith("_") or name not in self.columns:
-            raise PySparkAttributeError(f"'DataFrame' object has no attribute '{name}'")
+            raise PySparkAttributeError(
+                errorClass="ATTRIBUTE_NOT_SUPPORTED",
+                messageParameters={"attr_name": name},
+                sqlState="0A000",
+            )
         return Column(self._df.col(name))
 
     # Transformations.
@@ -190,9 +196,13 @@ class DataFrame:
         return f"DataFrame[{fields}]"
 
     def _repr_html_(self) -> str | None:
-        """The first ``spark.sql.repl.eagerEval.maxNumRows`` rows (default 20) as an HTML table,
-        for notebooks: column names and types in the header, HTML-escaped values. Without
+        """With ``spark.sql.repl.eagerEval.enabled`` on (off by default, as in Spark; otherwise ``None``
+        and the notebook shows :meth:`__repr__`), the first ``spark.sql.repl.eagerEval.maxNumRows`` rows
+        (default 20) as an HTML table, for notebooks: column names and types in the header, HTML-escaped values. Without
         pyarrow there is no preview, so ``None`` (the notebook falls back to :meth:`__repr__`)."""
+        enabled = self._session.conf.get(EAGER_ENABLED_KEY, "false")
+        if enabled is None or enabled.strip().lower() != "true":
+            return None
         try:
             _convert.require_pyarrow("_repr_html_")
         except ImportError:
@@ -204,7 +214,7 @@ class DataFrame:
         return _convert.repr_html_string(columns, cells)
 
     def select(self, *cols: ColumnsOrNames) -> DataFrame:
-        return self._new(self._df.select([_named(c) for c in _flatten(cols)]))
+        return self._new(self._df.select([_named(c, "col") for c in _flatten(cols)]))
 
     def selectExpr(self, *expr: str | list[str]) -> DataFrame:
         """Projects a set of SQL expressions, as ``pyspark.sql.DataFrame.selectExpr``: each string

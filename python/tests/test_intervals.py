@@ -103,6 +103,7 @@ def test_show_prints_null_intervals_and_keeps_other_columns(
 
 
 def test_repr_html_prints_intervals(spark: SparkSession) -> None:
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", "true")
     html = spark.sql("select interval '3' month a")._repr_html_()
     assert html is not None
     assert "INTERVAL &#x27;3&#x27; MONTH" in html or "INTERVAL '3' MONTH" in html

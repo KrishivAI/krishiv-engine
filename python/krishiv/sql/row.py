@@ -22,10 +22,24 @@ class Row(tuple[Any, ...]):
             return row
         return tuple.__new__(cls, args)
 
-    def asDict(self) -> dict[str, Any]:
+    def asDict(self, recursive: bool = False) -> dict[str, Any]:
+        """The row as a ``dict``; ``recursive=True`` also converts nested rows, as PySpark does
+        (inside lists, tuples and dict values too)."""
         if not hasattr(self, "__fields__"):
             raise PySparkValueError("Cannot convert a Row class into dict")
-        return dict(zip(self.__fields__, self, strict=True))
+        if not recursive:
+            return dict(zip(self.__fields__, self, strict=True))
+
+        def conv(obj: Any) -> Any:
+            if isinstance(obj, Row):
+                return obj.asDict(True)
+            if isinstance(obj, list):
+                return [conv(o) for o in obj]
+            if isinstance(obj, dict):
+                return {k: conv(v) for k, v in obj.items()}
+            return obj
+
+        return dict(zip(self.__fields__, (conv(o) for o in self), strict=True))
 
     def __contains__(self, item: object) -> bool:
         """Like PySpark: on a named row, ``in`` tests the field names."""

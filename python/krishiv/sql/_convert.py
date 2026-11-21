@@ -85,11 +85,37 @@ def rows_of(table: Any) -> list[Row]:
     columns = [_column_values(table.column(i)) for i in range(table.num_columns)]
     if not names:
         return [Row() for _ in range(table.num_rows)]  # no columns: one empty Row per row, as PySpark
-    return [_create_row(names, list(values)) for values in zip(*columns, strict=True)]
+    # One field list for every row (as PySpark does) and `tuple.__new__` directly: this loop runs once per
+    # result row, so a per-row copy and a call to `_create_row` were most of a `collect()`'s time (PY-071).
+    new = tuple.__new__
+    rows = [new(Row, values) for values in zip(*columns, strict=True)]
+    for row in rows:
+        row.__fields__ = names
+    return rows
 
 
 def _column_values(column: Any) -> list[Any]:
-    return [_value(v, column.type) for v in column.to_pylist()]
+    values = column.to_pylist()
+    if _is_plain(column.type):
+        return values
+    return [_value(v, column.type) for v in values]
+
+
+def _is_plain(arrow_type: Any) -> bool:
+    """True when ``to_pylist`` already gives PySpark's Python value for this type (no zone change,
+    no nested ``Row``, ``dict`` or variant)."""
+    import pyarrow as pa
+
+    t = arrow_type
+    if pa.types.is_timestamp(t):
+        return t.tz is None
+    return not (
+        pa.types.is_struct(t)
+        or pa.types.is_map(t)
+        or pa.types.is_list(t)
+        or pa.types.is_large_list(t)
+        or pa.types.is_fixed_size_list(t)
+    )
 
 
 def _value(value: Any, arrow_type: Any) -> Any:
