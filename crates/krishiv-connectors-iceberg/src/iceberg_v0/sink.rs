@@ -368,18 +368,7 @@ impl IcebergWriteSink {
         if !self.has_required {
             return Ok(());
         }
-        let mut path = Vec::new();
-        for (column, field) in batch.columns().iter().zip(self.table.fields()) {
-            path.push(field.name().clone());
-            if null_in_required(column, field, None, &mut path) {
-                return Err(NotNullAssertViolation {
-                    walked_type_path: format!("\n{}\n", path.join("\n")),
-                }
-                .into());
-            }
-            path.pop();
-        }
-        Ok(())
+        check_required(&self.table, batch)
     }
 
     /// Finishes every combined writer, then commits (module docs).
@@ -824,6 +813,22 @@ fn has_required(field: &Field) -> bool {
         DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => has_required(f),
         _ => false,
     }
+}
+
+/// Fails on a NULL in a required position of `batch`, whose columns follow `table`'s fields.
+pub(super) fn check_required(table: &SchemaRef, batch: &RecordBatch) -> Result<(), KrishivError> {
+    let mut path = Vec::new();
+    for (column, field) in batch.columns().iter().zip(table.fields()) {
+        path.push(field.name().clone());
+        if null_in_required(column, field, None, &mut path) {
+            return Err(NotNullAssertViolation {
+                walked_type_path: format!("\n{}\n", path.join("\n")),
+            }
+            .into());
+        }
+        path.pop();
+    }
+    Ok(())
 }
 
 /// Whether `array` (of the table field `field`) holds a NULL in a required

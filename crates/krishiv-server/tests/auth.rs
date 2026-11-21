@@ -25,6 +25,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 const VIEWER: &str = "viewer-token-0123456789abcdef0123456789";
 const OPERATOR: &str = "operator-token-0123456789abcdef012345678";
+const ADMIN: &str = "admin-token-0123456789abcdef0123456789ab";
 /// A configured token holding characters a URL must escape (`encodeURIComponent` writes `%2B`, `%2F`, `%3D`).
 const RESERVED: &str = "ops+token/0123456789abcdef0123456789==";
 
@@ -36,6 +37,9 @@ impl UiSource for Empty {
     }
     fn cancel<'a>(&'a self, _: &'a str) -> UiFuture<'a, bool> {
         Box::pin(async { Ok(false) })
+    }
+    fn environment(&self) -> UiFuture<'_, Vec<(String, String)>> {
+        Box::pin(async { Ok(vec![("krishiv.sql.ansi".to_owned(), "true".to_owned())]) })
     }
 }
 
@@ -50,10 +54,11 @@ fn secret(dir: &std::path::Path, name: &str, value: &str) -> String {
 /// throttle that blocks a peer after two failures.
 async fn start() -> SocketAddr {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (v, o, r) = (
+    let (v, o, r, a) = (
         secret(dir.path(), "v", VIEWER),
         secret(dir.path(), "o", OPERATOR),
         secret(dir.path(), "r", RESERVED),
+        secret(dir.path(), "a", ADMIN),
     );
     let settings = [
         ("krishiv.auth.tokens.prom.secret", v.as_str()),
@@ -67,6 +72,9 @@ async fn start() -> SocketAddr {
         ("krishiv.auth.tokens.bo.secret", r.as_str()),
         ("krishiv.auth.tokens.bo.principal", "bo"),
         ("krishiv.auth.tokens.bo.role", "operator"),
+        ("krishiv.auth.tokens.root.secret", a.as_str()),
+        ("krishiv.auth.tokens.root.principal", "cy"),
+        ("krishiv.auth.tokens.root.role", "admin"),
         ("krishiv.auth.failureThrottle.maxFailures", "2"),
     ];
     let config = AuthConfig::from_settings(settings).expect("auth config");
@@ -153,6 +161,60 @@ async fn each_role_reaches_what_the_matrix_gives_it() {
     // The probes stay open.
     assert_eq!(status(&call(addr, "GET", "/healthz", None).await), "200");
     assert_eq!(status(&call(addr, "GET", "/readyz", None).await), "200");
+}
+
+/// The start of the event stream `token` gets: everything up to the first `queries` event.
+async fn stream_opening(addr: SocketAddr, token: &str) -> String {
+    let mut s = TcpStream::connect(addr).await.expect("connect");
+    let request = format!(
+        "GET /api/internal/events HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n\r\n"
+    );
+    s.write_all(request.as_bytes()).await.expect("write");
+    let mut seen = String::new();
+    while !seen.contains("event: queries") {
+        let mut buf = [0_u8; 8192];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(10), s.read(&mut buf))
+            .await
+            .expect("the stream sends its first events in time")
+            .expect("read");
+        assert_ne!(n, 0, "the stream closed early: {seen}");
+        seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+    }
+    seen
+}
+
+/// ADR 0024, the modes table: a server's settings are the administrator's, on the page's own route and in the
+/// event stream an operator may open.
+#[tokio::test]
+async fn the_settings_are_for_an_administrator_only() {
+    let addr = start().await;
+    let environment = "/api/internal/environment";
+    assert_eq!(
+        status(&call(addr, "GET", environment, Some(VIEWER)).await),
+        "403"
+    );
+    assert_eq!(
+        status(&call(addr, "GET", environment, Some(OPERATOR)).await),
+        "403"
+    );
+    let admin = call(addr, "GET", environment, Some(ADMIN)).await;
+    assert_eq!(status(&admin), "200", "{admin}");
+    assert!(admin.contains("krishiv.sql.ansi"), "{admin}");
+
+    let operator = stream_opening(addr, OPERATOR).await;
+    assert_eq!(status(&operator), "200", "{operator}");
+    assert!(!operator.contains("event: environment"), "{operator}");
+    assert!(!operator.contains("krishiv.sql.ansi"), "{operator}");
+    let admin = stream_opening(addr, ADMIN).await;
+    assert!(admin.contains("event: environment"), "{admin}");
+    assert!(admin.contains("krishiv.sql.ansi"), "{admin}");
+
+    // The page reads the caller's role from the health answer and leaves the Environment link out.
+    let health = "/api/internal/health";
+    let operator = call(addr, "GET", health, Some(OPERATOR)).await;
+    assert!(operator.contains(r#""role":"operator""#), "{operator}");
+    let admin = call(addr, "GET", health, Some(ADMIN)).await;
+    assert!(admin.contains(r#""role":"admin""#), "{admin}");
 }
 
 #[tokio::test]

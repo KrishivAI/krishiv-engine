@@ -96,7 +96,7 @@ pub use write::{WriteSpec, WriteTarget, WriteV2Spec, write_spec, write_v2_spec};
 
 pub use cached::{CACHED_REMOTE_NAMESPACE, CachedRemoteIds, cached_remote_table};
 pub use catalog::{CatalogCall, CreateTable, catalog_call};
-pub use local::{LocalRelations, LocalRequest};
+pub use local::{LocalRelations, LocalRequest, cached_request};
 pub use schema::{parse_datatype_string, parse_local_schema, parse_table_schema};
 
 use krishiv_common::error::{FailedToParseTooComplex, KrishivError};

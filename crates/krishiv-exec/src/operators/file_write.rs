@@ -52,6 +52,8 @@ pub struct FileWriteSink {
     schema: SchemaRef,
     format_options: FormatOptions,
     options: WriteOptions,
+    /// The input column holding each row's bucket id, for bucketed output.
+    bucket_column: Option<usize>,
     output: SchemaRef,
     /// The files of the finished write, with their statistics.
     files: Mutex<Vec<WrittenFileInfo>>,
@@ -171,14 +173,43 @@ impl FileWriteSink {
         format_options: FormatOptions,
         options: WriteOptions,
     ) -> Result<Self> {
+        Self::try_new_bucketed(format, io, schema, format_options, options, None)
+    }
+
+    /// [`Self::try_new`] for a bucketed write: `bucket_column` of `schema` holds each row's bucket id,
+    /// which no file holds, so the format checks the schema without it.
+    ///
+    /// # Errors
+    /// As [`Self::try_new`].
+    pub fn try_new_bucketed(
+        format: Arc<dyn FileFormat>,
+        io: IoContext,
+        schema: SchemaRef,
+        format_options: FormatOptions,
+        options: WriteOptions,
+        bucket_column: Option<usize>,
+    ) -> Result<Self> {
         if !format.capabilities(&format_options).write {
             return Err(krishiv_common::error::KrishivUnsupportedFeature {
                 feature: format!("writing the {} format", format.name()),
             }
             .into());
         }
+        // The columns the writer stores: all but the partition columns and the bucket id column.
+        let keep: Vec<usize> = (0..schema.fields().len())
+            .filter(|i| Some(*i) != bucket_column && !options.partition_by.contains(i))
+            .collect();
+        let written = if keep.len() == schema.fields().len() {
+            Arc::clone(&schema)
+        } else {
+            Arc::new(
+                schema
+                    .project(&keep)
+                    .map_err(|e| internal(format!("cannot drop the layout columns: {e}")))?,
+            )
+        };
         format
-            .check_write(&schema, &format_options)
+            .check_write(&written, &format_options)
             .map_err(|e| e.into_error(&format!("{}/{}", options.store, options.dir)))?;
         let output = Arc::new(Schema::new(vec![
             Field::new("path", krishiv_types::DataType::String.to_arrow(), false),
@@ -191,9 +222,18 @@ impl FileWriteSink {
             schema,
             format_options,
             options,
+            bucket_column,
             output,
             files: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Makes the output bucketed: `column` of the input holds each row's bucket id (see
+    /// [`FileWriter::bucketed_by`]).
+    #[must_use]
+    pub fn with_bucket_column(mut self, column: Option<usize>) -> Self {
+        self.bucket_column = column;
+        self
     }
 
     /// The schema of the rows written.
@@ -260,14 +300,19 @@ impl Sink for FileWriteSink {
 
     fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
         let g = global_ref::<WriteGlobal>(global, "FileWrite")?;
-        let writer = FileWriter::new(
+        let writer = FileWriter::new_bucketed(
             &self.io,
             Arc::clone(&self.format),
             &self.schema,
             self.format_options.clone(),
             self.options.clone(),
             ctx.consumer().reservation(),
-        )?
+            self.bucket_column,
+        )?;
+        let writer = match self.bucket_column {
+            Some(column) => writer.bucketed_by(&self.schema, column)?,
+            None => writer,
+        }
         .sharing_file_numbers(Arc::clone(&g.file_numbers));
         let stop = Arc::new(AtomicBool::new(false));
         let writer = writer.stopping_on(Arc::clone(&stop));

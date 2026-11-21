@@ -974,3 +974,55 @@ fn the_ui_host_allowlist_follows_krishiv_ui_allowed_hosts() {
     );
     assert!(other.starts_with("HTTP/1.1 403"), "{other}");
 }
+
+/// The open line's token: the one a server without authentication settings prints at start.
+#[cfg(feature = "ui")]
+fn startup_token(server: &mut Running) -> String {
+    let line = server
+        ._stdout
+        .next()
+        .expect("the open line")
+        .expect("utf-8");
+    line.split("?token=")
+        .nth(1)
+        .expect("token")
+        .trim()
+        .to_owned()
+}
+
+/// A server started on a history folder lists what an earlier run stored there; a folder that cannot be read
+/// costs the old history, not the server.
+#[cfg(feature = "ui")]
+#[test]
+fn a_restarted_server_lists_the_stored_history() {
+    use krishiv_session::{EngineRuntime, Session};
+    let history = tempfile::tempdir().expect("tempdir");
+    {
+        let rt = EngineRuntime::builder()
+            .config(
+                "krishiv.history.path",
+                history.path().to_str().expect("utf-8"),
+            )
+            .build()
+            .expect("runtime");
+        let session = Session::builder()
+            .runtime(std::sync::Arc::clone(&rt))
+            .build()
+            .expect("session");
+        let df = futures::executor::block_on(
+            session.sql("SELECT count(*) AS before_restart FROM range(0, 100)"),
+        )
+        .expect("sql");
+        futures::executor::block_on(df.collect()).expect("collect");
+        // Dropping the runtime flushes the history writer.
+    }
+    let spill = tempfile::tempdir().expect("tempdir");
+    let mut server = start_with(
+        spill.path(),
+        &[format!("krishiv.history.path={}", history.path().display())],
+    );
+    let token = startup_token(&mut server);
+    let listed = http_get_as(&server.admin, "/api/internal/history", Some(&token));
+    assert!(listed.starts_with("HTTP/1.1 200"), "{listed}");
+    assert!(listed.contains("before_restart"), "{listed}");
+}
