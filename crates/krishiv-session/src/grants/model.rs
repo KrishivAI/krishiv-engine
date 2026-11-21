@@ -586,7 +586,9 @@ mod tests {
         // A grant on a nested namespace lists its parents, not its siblings.
         assert!(state.lists_namespace(&who("fa"), &ns(&["c", "s"]), false));
         assert!(!state.lists_namespace(&who("fa"), &ns(&["c", "other"]), false));
-        // Nothing under it, no grant: not listed; a relation is never listed for what is under it.
+        // A covering grant of a privilege other than `Select` does not list what it covers.
+        assert!(!state.lists_namespace(&who("di"), &ns(&["c", "s", "x"]), false));
+        // Nothing under it, no grant: not listed; a grant beside a relation does not list it.
         assert!(!state.lists_namespace(&who("ana"), &ns(&["c", "s"]), false));
         assert!(!state.lists_namespace(&who("zoe"), &ns(&["c"]), false));
         assert!(!state.lists_namespace(&who("fa"), &table("c", "s", "t"), false));
