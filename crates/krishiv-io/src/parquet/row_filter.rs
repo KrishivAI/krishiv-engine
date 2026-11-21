@@ -1558,6 +1558,105 @@ mod tests {
         assert_eq!(kept(&other_scale, &dec), [true; 2]);
     }
 
+    /// A long list holding one value of another type is not evaluated on any
+    /// column type (every row kept); a `Decimal64` column looks its values
+    /// up unless one lies beyond the carrier; a type without a lookup (a
+    /// double) runs one pass per value, which keeps what `compare` keeps.
+    #[test]
+    fn a_long_in_list_with_a_foreign_value_keeps_every_row() {
+        let in_list = |values: Vec<ScalarValue>| PushdownExpr::In {
+            column: c("a"),
+            values,
+            collation: Collation::Utf8Binary,
+        };
+        let with_foreign = |mut values: Vec<ScalarValue>| {
+            values.push(match values[0] {
+                ScalarValue::Utf8(_) => ScalarValue::Int32(1),
+                _ => ScalarValue::Utf8("1".to_owned()),
+            });
+            values
+        };
+        let columns: Vec<(ArrayRef, Vec<ScalarValue>)> = vec![
+            (
+                Arc::new(Int8Array::from(vec![1_i8, 50])),
+                (0..10).map(ScalarValue::Int8).collect(),
+            ),
+            (
+                Arc::new(Int16Array::from(vec![1_i16, 50])),
+                (0..10).map(ScalarValue::Int16).collect(),
+            ),
+            (
+                Arc::new(Int32Array::from(vec![1, 50])),
+                (0..10).map(ScalarValue::Int32).collect(),
+            ),
+            (
+                Arc::new(Int64Array::from(vec![1_i64, 50])),
+                (0..10).map(ScalarValue::Int64).collect(),
+            ),
+            (
+                Arc::new(Date32Array::from(vec![1, 50])),
+                (0..10).map(ScalarValue::Date32).collect(),
+            ),
+            (
+                Arc::new(TimestampMicrosecondArray::from(vec![1_i64, 50])),
+                (0..10).map(ScalarValue::TimestampMicros).collect(),
+            ),
+            (
+                Arc::new(StringArray::from(vec!["1", "50"])),
+                (0..10).map(|v| ScalarValue::Utf8(v.to_string())).collect(),
+            ),
+        ];
+        for (a, values) in columns {
+            let ty = a.data_type().clone();
+            let b = batch(vec![("a", a)]);
+            assert_eq!(kept(&in_list(values.clone()), &b), [true, false], "{ty}");
+            assert_eq!(kept(&in_list(with_foreign(values)), &b), [true; 2], "{ty}");
+        }
+        let bin = batch(vec![(
+            "a",
+            Arc::new(BinaryArray::from(vec![b"1".as_slice(), b"50".as_slice()])) as ArrayRef,
+        )]);
+        let mut bins: Vec<ScalarValue> = (0..10)
+            .map(|v: i32| ScalarValue::Binary(v.to_string().into_bytes()))
+            .collect();
+        assert_eq!(kept(&in_list(bins.clone()), &bin), [true, false]);
+        bins.push(ScalarValue::Int32(1));
+        assert_eq!(kept(&in_list(bins), &bin), [true; 2]);
+
+        let d64 = batch(vec![(
+            "a",
+            Arc::new(
+                arrow_array::Decimal64Array::from(vec![100_i64, 5_000])
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ) as ArrayRef,
+        )]);
+        let decimals = |extra: Option<i128>| -> Vec<ScalarValue> {
+            (0..10)
+                .map(|v| v * 100)
+                .chain(extra)
+                .map(|unscaled| ScalarValue::Decimal128 {
+                    unscaled,
+                    precision: 10,
+                    scale: 2,
+                })
+                .collect()
+        };
+        assert_eq!(kept(&in_list(decimals(None)), &d64), [true, false]);
+        let beyond = Some(i128::from(i64::MAX) + 1);
+        assert_eq!(kept(&in_list(decimals(beyond)), &d64), [true; 2]);
+
+        let doubles = batch(vec![(
+            "a",
+            Arc::new(Float64Array::from(vec![1.0, 50.0])) as ArrayRef,
+        )]);
+        let values = (0..10)
+            .map(|v| ScalarValue::Float64(f64::from(v)))
+            .collect();
+        // `compare` never filters a double (NaN and -0.0), so neither does the list.
+        assert_eq!(kept(&in_list(values), &doubles), [true; 2]);
+    }
+
     #[test]
     fn columns_are_the_top_level_leaves() {
         let e = PushdownExpr::And(vec![
