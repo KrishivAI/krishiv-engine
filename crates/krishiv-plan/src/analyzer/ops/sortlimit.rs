@@ -3,8 +3,30 @@
 
 use super::*;
 
+/// Which row-count operator [`Resolver::limit_node`] binds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::analyzer) enum LimitKind {
+    /// `LIMIT n`.
+    Limit,
+    /// `OFFSET n`.
+    Offset,
+    /// `Dataset.tail(n)`.
+    Tail,
+}
+
+impl LimitKind {
+    /// The operator name Spark's limit-like check reports.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Limit => "limit",
+            Self::Offset => "offset",
+            Self::Tail => "tail",
+        }
+    }
+}
+
 impl Resolver<'_> {
-    /// A `LIMIT` (`offset` false) or `OFFSET` over `input`. Kept out of line:
+    /// A `LIMIT`, `OFFSET` or `Tail` over `input`. Kept out of line:
     /// `resolve` recurses per plan level.
     #[inline(never)]
     pub(in crate::analyzer) fn limit_node(
@@ -12,18 +34,17 @@ impl Resolver<'_> {
         p: &LogicalPlan,
         input: &Arc<LogicalPlan>,
         count: &Arc<Expr>,
-        offset: bool,
+        kind: LimitKind,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
-        let name = if offset { "offset" } else { "limit" };
-        let expr = self.limit_like(count, name, &c, env)?;
+        let expr = self.limit_like(count, kind.name(), &c, env)?;
         // `LIMIT l OFFSET o` is a limit over an offset; Spark bounds `l + o`.
         if let (
-            false,
+            LimitKind::Limit,
             PlanNode::Offset { offset: below, .. },
             ExprNode::Literal(Literal::Integer(l)),
-        ) = (offset, &c.plan.node, &expr.node)
+        ) = (kind, &c.plan.node, &expr.node)
             && let ExprNode::Literal(Literal::Integer(o)) = &below.node
             && i64::from(*l) + i64::from(*o) > i64::from(i32::MAX)
         {
@@ -36,13 +57,13 @@ impl Resolver<'_> {
             ));
         }
         let input = Arc::clone(&c.plan);
-        let node = if offset {
-            PlanNode::Offset {
+        let node = match kind {
+            LimitKind::Offset => PlanNode::Offset {
                 input,
                 offset: expr,
-            }
-        } else {
-            PlanNode::Limit { input, limit: expr }
+            },
+            LimitKind::Limit => PlanNode::Limit { input, limit: expr },
+            LimitKind::Tail => PlanNode::Tail { input, limit: expr },
         };
         let mut r = self.make(p.origin, node, c.out.to_vec(), &[&c]);
         r.widen = Some(Arc::new(Widen::Through { child: c }));
@@ -71,7 +92,11 @@ impl Resolver<'_> {
             &input.out,
             &rels,
             env,
-            if name == "limit" { "Limit" } else { "Offset" },
+            match name {
+                "limit" => "Limit",
+                "tail" => "Tail",
+                _ => "Offset",
+            },
         );
         cx.lenient = true;
         let b = self.bind(e, &cx)?;

@@ -127,6 +127,7 @@ impl Graph {
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
+            | PlanNode::Tail { input, .. }
             | PlanNode::JoinHint { input, .. }
             // A repartition reads its expressions' columns whatever is
             // read above it: Spark evaluates them under `count(*)` too.

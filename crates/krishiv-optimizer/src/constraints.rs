@@ -694,6 +694,7 @@ impl Memo {
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
+            | PlanNode::Tail { input, .. }
             | PlanNode::WithCte { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Repartition { input, .. }

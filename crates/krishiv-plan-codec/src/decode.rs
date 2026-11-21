@@ -534,6 +534,7 @@ impl Decoder {
                 offset: l.offset,
                 limit: l.limit,
             },
+            Kind::Tail(t) => crate::decode_tail::tail(self.boxed(t.input)?, t),
             Kind::Sample(s) => {
                 // The planner writes finite bounds with `0 <= lower <= upper`,
                 // or `lower = 0` over a negative `upper`: a fraction within

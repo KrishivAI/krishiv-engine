@@ -367,6 +367,7 @@ impl Display for NodeLine<'_> {
             }
             PlanNode::Limit { limit, .. } => write!(f, "Limit {}", Text(limit)),
             PlanNode::Offset { offset, .. } => write!(f, "Offset {}", Text(offset)),
+            PlanNode::Tail { limit, .. } => write!(f, "Tail {}", Text(limit)),
             PlanNode::SubqueryAlias { alias, columns, .. } => {
                 let parts: Vec<String> = alias
                     .split(crate::plan::ALIAS_PART_SEP)

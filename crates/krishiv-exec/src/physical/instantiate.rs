@@ -1143,6 +1143,16 @@ impl Instantiation<'_> {
                     built
                 })
             }
+            PhysNode::Tail { input, limit } => {
+                let input = self.node(input)?;
+                let op = crate::operators::Tail::new(Arc::clone(&input.schema), *limit);
+                let built = operator(input, op);
+                // The last rows are those of the stream's order: one driver.
+                Ok(Built {
+                    schema: built.schema,
+                    node: Arc::new(OrderedNode { inner: built.node }),
+                })
+            }
             PhysNode::Sample {
                 input,
                 lower,

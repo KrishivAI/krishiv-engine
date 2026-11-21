@@ -1624,6 +1624,7 @@ mod lift;
 pub(in crate::analyzer) use lift::*;
 
 mod sortlimit;
+pub(super) use sortlimit::LimitKind;
 
 mod join;
 

@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 13 done, 14 partial, 31 missing, 4 out of scope.
+62 arms: 14 done, 14 partial, 30 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -33,7 +33,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 19 | with_columns_renamed | missing |  | lowering: Project | P3-T012 | 4 |
 | 20 | show_string | missing |  | server-side: execute, then format as Spark's Dataset.showString (truncate, vertical); returns a one-row, one-column relation | P3-T012 | 4 |
 | 21 | drop | missing |  | lowering: Project without the dropped columns (names or column references) | P3-T012 | 4 |
-| 22 | tail | missing |  | new Tail (the last n rows in plan order; not Sort + Limit) | P3-T012 | 3 |
+| 22 | tail | done |  | Tail (the last n rows in plan order; not Sort + Limit); a negative n is INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE from the analyzer | P3-T012 | 3 |
 | 23 | with_columns | partial | Alias.metadata | WithColumns; metadata on the column field | P3-T012 | 4 |
 | 24 | hint | done |  | Hint; as Spark 4.2: parameters are literals or lists of them, a partitioning hint is dropped with a warning (3.5 reads parameters differently) | P3-T012 | 3 |
 | 25 | unpivot | partial | absent values, values that are not columns, and a column that is also an id or listed twice | Project(ids, values) then Unpivot with nulls kept; values absent → every non-id column, known only after analysis | P3-T012 | 2 |

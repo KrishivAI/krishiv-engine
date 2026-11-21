@@ -279,6 +279,11 @@ fn project_filter_limit_and_alias() {
         offset: 3,
     })));
     assert_eq!(show(&offset), "Offset 3\n+- Read t\n");
+    let tail = relation(RelType::Tail(Box::new(pb::Tail {
+        input: input(),
+        limit: 4,
+    })));
+    assert_eq!(show(&tail), "Tail 4\n+- Read t\n");
     let alias = relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
         input: input(),
         alias: "x".into(),
