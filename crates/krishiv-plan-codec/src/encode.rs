@@ -1652,6 +1652,10 @@ fn write_plan(write: &WritePlan, nested: &Cell<bool>) -> Result<pb::WritePlan> {
                 })
             })
             .collect::<Result<_>>()?,
+        bucket: write.bucket.as_ref().map(|b| pb::WriteBucket {
+            column: b.column as u64,
+            sort_by: indexes(&b.sort_by),
+        }),
     })
 }
 

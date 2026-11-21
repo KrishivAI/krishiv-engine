@@ -591,6 +591,12 @@ async fn grace_spill_with_recursion_equals_the_in_memory_join() {
         assert!(metric(&q, "HashJoinBuild", "spill_file_bytes") > 0);
         assert!(metric(&q, "HashJoinProbe", "probe_spilled_rows") > 0);
         assert!(metric(&q, "HashJoinProbe", "grace_partitions") > 0);
+        // Every repartition follows a load refused even with arbitration.
+        assert!(
+            metric(&q, "HashJoinProbe", "grace_loads_refused")
+                >= metric(&q, "HashJoinProbe", "repartitions"),
+            "{jt:?}"
+        );
         assert_eq!(metric(&q, "HashJoinBuild", "build_rows"), 30_000);
         assert_eq!(metric(&q, "HashJoinProbe", "probe_rows"), 40_000);
     }
@@ -726,6 +732,11 @@ async fn a_partition_that_fits_after_others_spill_is_not_repartitioned() {
     assert!(render(&out) == expect, "grace result differs");
     assert!(metric(&q, "HashJoinProbe", "grace_partitions") > 0);
     assert_eq!(metric(&q, "HashJoinProbe", "repartitions"), 0);
+    // The load next to the hog's memory was refused once, then retried
+    // alone with the arbitrator.
+    assert!(metric(&q, "HashJoinProbe", "grace_loads_refused") > 0);
+    // That load had read rows before it was refused.
+    assert!(metric(&q, "HashJoinProbe", "grace_refused_bytes") > 0);
     hog.abort();
     assert_eq!(spill_files(&scope), 0);
 }

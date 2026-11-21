@@ -1299,6 +1299,20 @@ pub struct WritePlan {
     /// Input columns whose Spark type their Arrow type doesn't say.
     #[prost(message, repeated, tag = "9")]
     pub column_types: ::prost::alloc::vec::Vec<WriteColumnType>,
+    /// feature: write_bucketed
+    /// Bucketed output: the input column with each row's bucket id, and the columns each bucket is sorted by.
+    #[prost(message, optional, tag = "10")]
+    pub bucket: ::core::option::Option<WriteBucket>,
+}
+/// feature: write_bucketed
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WriteBucket {
+    /// feature: write_bucketed
+    #[prost(uint64, tag = "1")]
+    pub column: u64,
+    /// feature: write_bucketed
+    #[prost(uint64, repeated, tag = "2")]
+    pub sort_by: ::prost::alloc::vec::Vec<u64>,
 }
 /// feature: write_column_types
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

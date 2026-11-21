@@ -253,6 +253,195 @@
  ],
  "format_version": 1,
  "generator": "tests/scripts/gen_delta_fixtures.py",
+ "insert_into_overwrite_mode": [
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "a"
+       },
+       "path": "p=a/part-00000-27086561-0805-44fa-b498-05aca6e70d7a.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3
+        },
+        "minValues": {
+         "id": 3
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "691",
+       "numOutputRows": "1",
+       "numRemovedBytes": "1382",
+       "numRemovedFiles": "2"
+      },
+      "operationParameters": {
+       "mode": "Overwrite",
+       "partitionBy": "[]"
+      },
+      "readVersion": 1
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "b"
+       },
+       "path": "p=b/part-00000-4855688a-a0cc-4975-9471-446900e03891.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "a"
+       },
+       "path": "p=a/part-00000-5178e22b-4f2d-4bd7-aff3-121d4f795dad.c000.snappy.parquet"
+      }
+     ],
+     "version": 2
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     3,
+     "a"
+    ]
+   ],
+   "step": "option_dynamic_conf_unset"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "b"
+       },
+       "path": "p=b/part-00000-1aa231bd-c1f7-4666-bf8b-fbebb46cc0c7.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4
+        },
+        "minValues": {
+         "id": 4
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "691",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 2
+     },
+     "removes": [],
+     "version": 3
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     3,
+     "a"
+    ],
+    [
+     4,
+     "b"
+    ]
+   ],
+   "sql": "INSERT INTO iom VALUES (4, 'b')",
+   "step": "insert_b"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "a"
+       },
+       "path": "p=a/part-00000-85416bcf-0f1c-44b8-99e5-68149dbdf4b1.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 5
+        },
+        "minValues": {
+         "id": 5
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "691",
+       "numOutputRows": "1",
+       "numRemovedBytes": "691",
+       "numRemovedFiles": "1"
+      },
+      "operationParameters": {
+       "isDynamicPartitionOverwrite": true,
+       "mode": "Overwrite",
+       "partitionBy": "[]"
+      },
+      "readVersion": 3
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "a"
+       },
+       "path": "p=a/part-00000-27086561-0805-44fa-b498-05aca6e70d7a.c000.snappy.parquet"
+      }
+     ],
+     "version": 4
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     4,
+     "b"
+    ],
+    [
+     5,
+     "a"
+    ]
+   ],
+   "step": "option_static_conf_dynamic"
+  }
+ ],
  "max_records": [
   {
    "commits": [

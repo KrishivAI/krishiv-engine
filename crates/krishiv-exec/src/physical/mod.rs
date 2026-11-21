@@ -1079,6 +1079,18 @@ pub struct WritePlan {
     /// The input columns whose Spark type their Arrow type doesn't say (an
     /// interval's fields), for the writer's footers and text forms.
     pub column_types: BTreeMap<usize, krishiv_types::DataType>,
+    /// Bucketed output (Spark's `bucketBy`), or `None`.
+    pub bucket: Option<BucketWrite>,
+}
+
+/// The bucketing of a write: Spark's `BucketSpec` after the planner computed each row's bucket id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BucketWrite {
+    /// The input column (an `Int32`) holding each row's bucket id, `pmod(hash(bucket columns), n)`. It is not written
+    /// to the files; a file holds one bucket and its name carries the id.
+    pub column: usize,
+    /// The input columns each bucket's rows are sorted by (`sortBy`), ascending.
+    pub sort_by: Vec<usize>,
 }
 
 impl WritePlan {
@@ -1253,8 +1265,10 @@ plan_data!(struct WritePlan {
     max_records_per_file,
     target_file_bytes,
     partition_by,
-    column_types
+    column_types,
+    bucket
 });
+plan_data!(struct BucketWrite { column, sort_by });
 plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage, row_id });
 plan_data!(
     enum FetchSlot {
@@ -1630,29 +1644,57 @@ impl PhysicalPlan {
             };
             names.push(field.name().as_str());
         }
-        let (root, explain) = if names.is_empty() {
+        if let Some(b) = &write.bucket {
+            for c in std::iter::once(&b.column).chain(&b.sort_by) {
+                if *c >= fields.len() {
+                    return Err(crate::error::internal(format!(
+                        "bucket column {c} is out of range"
+                    )));
+                }
+            }
+        }
+        let (root, explain) = if names.is_empty() && write.bucket.is_none() {
             (
                 Arc::unwrap_or_clone(self.root),
                 ExplainNode::new("WriteFiles", write.describe(), vec![self.explain]),
             )
         } else {
+            // Spark's required ordering: the partition columns, then the bucket id, then the `sortBy` columns.
+            let bucket_cols: Vec<usize> = write
+                .bucket
+                .iter()
+                .flat_map(|b| std::iter::once(b.column).chain(b.sort_by.iter().copied()))
+                .collect();
             let keys: Vec<SortKey> = write
                 .partition_by
                 .iter()
-                .map(|&c| SortKey::asc(c))
+                .copied()
+                .chain(bucket_cols.iter().copied())
+                .map(SortKey::asc)
                 .collect();
             let detail = format!(
                 "[{}]",
-                names
+                write
+                    .partition_by
                     .iter()
-                    .map(|n| format!("{n} ASC NULLS FIRST"))
+                    .chain(&bucket_cols)
+                    .filter_map(|&c| fields.get(c))
+                    .map(|f| format!("{} ASC NULLS FIRST", f.name()))
                     .collect::<Vec<_>>()
                     .join(", ")
             );
             let sort = ExplainNode::new("Sort", detail, vec![self.explain]);
             let explain = ExplainNode::new(
                 "WriteFiles",
-                format!("{} partitioned by [{}]", write.describe(), names.join(", ")),
+                format!(
+                    "{} partitioned by [{}]{}",
+                    write.describe(),
+                    names.join(", "),
+                    write.bucket.as_ref().map_or_else(String::new, |b| format!(
+                        " bucketed by column {}",
+                        fields.get(b.column).map_or("?", |f| f.name().as_str())
+                    ))
+                ),
                 vec![sort],
             );
             (

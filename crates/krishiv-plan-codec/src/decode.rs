@@ -398,11 +398,11 @@ fn slot(i: u32, len: usize) -> Result<usize> {
     }
 }
 
-fn usize_of(v: u64) -> Result<usize> {
+pub(crate) fn usize_of(v: u64) -> Result<usize> {
     usize::try_from(v).map_err(|_| corrupt("a count or index out of range"))
 }
 
-fn usizes(v: &[u64]) -> Result<Vec<usize>> {
+pub(crate) fn usizes(v: &[u64]) -> Result<Vec<usize>> {
     v.iter().map(|i| usize_of(*i)).collect()
 }
 
@@ -1624,6 +1624,7 @@ fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
                 Ok((usize_of(c.column)?, spark_type(t)?))
             })
             .collect::<Result<_>>()?,
+        bucket: crate::decode_bucket::bucket_of(m.bucket.as_ref())?,
     })
 }
 
