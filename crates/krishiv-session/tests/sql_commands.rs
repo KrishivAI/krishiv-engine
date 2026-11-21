@@ -872,6 +872,34 @@ fn a_commands_not_found_error_names_the_current_namespace() {
     );
 }
 
+/// REFRESH, INSERT, ALTER VIEW and a global temp view name a missing relation with the full current
+/// path (no Spark golden covers these four; they follow the analyzer's own error).
+#[test]
+fn other_commands_name_the_current_namespace_when_the_relation_is_missing() {
+    let s = session();
+    block_on(s.sql("CREATE DATABASE odb")).unwrap();
+    block_on(s.sql("USE odb")).unwrap();
+    for sql in [
+        "REFRESH TABLE nosuch",
+        "INSERT INTO nosuch VALUES (1)",
+        "ALTER VIEW nosuch AS SELECT 1",
+        "SELECT * FROM global_temp.nosuch",
+    ] {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound, "{sql}");
+        let path = e
+            .message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "searchPath")
+            .map(|(_, v)| v.clone());
+        assert_eq!(
+            path.as_deref(),
+            Some("[`system`.`builtin`, `system`.`session`, `spark_catalog`.`odb`]"),
+            "{sql}"
+        );
+    }
+}
+
 /// Commands that resolve a table or view only (`ALTER TABLE`, `SHOW COLUMNS`, `SHOW TABLE EXTENDED ..
 /// PARTITION`) name a search path without `system.builtin`, as Spark 4.2's goldens do.
 #[test]
