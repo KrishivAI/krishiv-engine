@@ -1313,6 +1313,25 @@ async fn a_persisted_udf_survives_a_restart_and_is_typed_by_the_first_analysis()
     };
     assert_eq!(owners("p:user:dana").as_deref(), Some("user:dana"));
     assert_eq!(owners("p:user:erin").as_deref(), Some("user:erin"));
+    // A `spark.sql()` statement as a new session's first request (the `SqlCommand` path) finds dana's function.
+    let sql_first = start_store(
+        None,
+        Some(Arc::new(Spy::default())),
+        Some(file_store(&file)),
+    )
+    .await;
+    let command = pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(CommandType::SqlCommand(Box::new(pb::SqlCommand {
+                sql: "SELECT plus_one(id) FROM range(3)".to_owned(),
+                ..Default::default()
+            }))),
+        }))),
+    };
+    execute(&sql_first.channel, command, ADMIN)
+        .await
+        .expect("a first-request statement resolves the persisted function");
+    drop(sql_first);
     // `drop` removes it for later sessions.
     execute(&run.channel, persist("plus_one", true), ADMIN)
         .await

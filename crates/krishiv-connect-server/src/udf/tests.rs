@@ -526,6 +526,71 @@ async fn persist_needs_a_registered_udf_and_a_store_and_drop_removes() {
     clippy::disallowed_methods,
     reason = "#[tokio::test] blocks on its own runtime"
 )]
+async fn a_clone_keeps_the_kind_qualified_principal_for_loading_and_ownership() {
+    let host: Arc<dyn UdfHost> = Arc::new(Host::default());
+    let store = Arc::new(MemStore::default());
+    store
+        .put(
+            Some("p:user:dana"),
+            "user:dana",
+            &udf("f", b"stored"),
+            false,
+        )
+        .unwrap();
+    let (source, clone) = (session(), session());
+    let dyn_store: Arc<dyn super::FunctionStore> = Arc::clone(&store) as _;
+    let python = SessionPython::new(Some(&host), "user:dana", None, true, &source)
+        .with_store(Some(&dyn_store));
+    let copy = python.copy_for("user:dana", None, true, &clone);
+    // The clone reads dana's key, not another principal's.
+    copy.load_persisted(&clone).await;
+    assert_eq!(copy.lock().payloads.len(), 1);
+    // A persist from the clone replaces dana's row as dana: no `Manage` needed, and the owner stays.
+    copy.register(&clone, udf("g", b"clone")).unwrap();
+    copy.persist(&clone, "g", false).await.unwrap();
+    let rows = store.rows.lock().unwrap();
+    let owners: Vec<_> = rows
+        .iter()
+        .map(|(key, owner, u)| (key.clone(), owner.clone(), u.name.clone()))
+        .collect();
+    assert!(
+        owners.contains(&(
+            Some("p:user:dana".to_owned()),
+            "user:dana".to_owned(),
+            "g".to_owned()
+        )),
+        "{owners:?}"
+    );
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn persist_never_picks_an_inline_udf_of_the_same_name() {
+    let host: Arc<dyn UdfHost> = Arc::new(Host::default());
+    let store = Arc::new(MemStore::default());
+    let s = session();
+    let python = with_store(&host, &store, None, &s);
+    python.register(&s, udf("f", b"registered")).unwrap();
+    // A later inline UDF named `f` is stored in the same list under a top-bit version.
+    python.lock().payloads.push((
+        "f".to_owned(),
+        1 | super::ANONYMOUS_VERSION_BIT,
+        Arc::new(udf("f", b"inline")),
+    ));
+    python.persist(&s, "f", false).await.unwrap();
+    let rows = store.rows.lock().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].2.command, b"registered");
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
 async fn persist_picks_the_newest_registration_under_the_registry_name_folding() {
     let host: Arc<dyn UdfHost> = Arc::new(Host::default());
     let store = Arc::new(MemStore::default());

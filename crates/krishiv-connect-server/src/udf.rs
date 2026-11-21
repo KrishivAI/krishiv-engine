@@ -403,7 +403,10 @@ impl SessionPython {
                     .payloads
                     .iter()
                     .rev()
-                    .find(|(n, _, _)| n.to_lowercase() == name.to_lowercase())
+                    // A registered function only: an inline UDF of the same name (top-bit version) is not it.
+                    .find(|(n, v, _)| {
+                        v & ANONYMOUS_VERSION_BIT == 0 && n.to_lowercase() == name.to_lowercase()
+                    })
                     .map(|(_, _, udf)| Arc::clone(udf))
                     .ok_or_else(|| {
                         KrishivError::from(KrishivUnsupportedFeature {
