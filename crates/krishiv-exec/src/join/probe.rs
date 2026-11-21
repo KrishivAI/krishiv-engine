@@ -14,6 +14,7 @@ use krishiv_memory::SpillSignal;
 use krishiv_types::batch::{Batch, Weights};
 
 use super::build::{BuildGlobal, Built, Level0, nanos};
+use super::direct::Direct;
 use super::grace::{self, Flush, Part, WRITE_SLICE, choose, reserve_chunks, spill_parts};
 use super::keys::{Hashing, MAX_RADIX_BITS};
 use super::table::{JoinTable, NONE, RowArena};
@@ -115,6 +116,7 @@ impl Cursor {
         sel: Option<Selection>,
         tables: &Tables<'_>,
         detailed: bool,
+        direct: Option<&Direct>,
     ) -> Result<(Self, Vec<Vec<u32>>)> {
         let n = sel.as_ref().map_or(batch.num_rows(), Selection::len);
         let picked = sel.as_ref().map(Selection::array);
@@ -131,6 +133,36 @@ impl Cursor {
                 }
             })
             .collect::<Result<_>>()?;
+        // A tiny build with one integer key: an array lookup per row, no
+        // encoding or hashing (`direct`, perf lever J1).
+        if let (Some(d), [col], false) = (
+            direct,
+            cols.as_slice(),
+            shared.join_type == JoinType::NullAwareAnti,
+        ) {
+            let started = Instant::now();
+            let mut heads = vec![NONE; n];
+            let mut parts = vec![0u8; n];
+            if d.find(col, &mut heads, &mut parts).is_some() {
+                shared
+                    .counters
+                    .add(Counter::ProbeTableNs, nanos(started.elapsed()));
+                shared.counters.add(Counter::DirectProbeRows, n as u64);
+                let matches = heads.iter().filter(|&&h| h != NONE).count();
+                let cursor = Self {
+                    batch,
+                    sel,
+                    matches,
+                    heads,
+                    parts,
+                    state: vec![UNMATCHED; n],
+                    pos: 0,
+                    chain: NONE,
+                    rows: hashing.rows(),
+                };
+                return Ok((cursor, Vec::new()));
+            }
+        }
         let keys = shared.keys.encode(&cols, hashing)?;
         let hashes = keys.hashes();
         let mut state = vec![UNMATCHED; n];
@@ -519,6 +551,11 @@ struct ProbeLocal {
     flushing: bool,
     /// Count probe lengths (`ExecConfig::detailed_metrics`).
     detailed: bool,
+    /// The direct index of the level-0 tables (perf lever J1): `None` until
+    /// this driver first holds them, then whether the build qualifies;
+    /// `Some(None)` from the start when `krishiv.exec.join.directIndex` is
+    /// off or detailed metrics count probe lengths.
+    direct: Option<Option<Direct>>,
     cursor: Option<Cursor>,
     /// Rows of spilled partitions.
     parts: Vec<Part>,
@@ -652,12 +689,23 @@ impl ProbeOp {
         }
         let level0 = held_level0(&mut l.level0, built)?;
         let tables = Tables::Level0(&level0.tables, built.spilled);
+        let direct = l
+            .direct
+            .get_or_insert_with(|| Direct::of(&level0.tables, built.spilled, &s.keys))
+            .as_ref();
         if l.cursor.is_none() {
             if input.num_rows() == 0 {
                 return Ok(OperatorOutput::NeedMoreInput(None));
             }
-            let (cursor, deferred) =
-                Cursor::new(s, &g.hashing, input.clone(), sel, &tables, l.detailed)?;
+            let (cursor, deferred) = Cursor::new(
+                s,
+                &g.hashing,
+                input.clone(),
+                sel,
+                &tables,
+                l.detailed,
+                direct,
+            )?;
             let mut chunks = Vec::new();
             for (p, rows) in deferred
                 .into_iter()
@@ -763,6 +811,9 @@ impl Operator for ProbeOp {
             releases,
             flushing: false,
             detailed: ctx.query().config().detailed_metrics,
+            direct: (!ctx.query().config().join_direct_index
+                || ctx.query().config().detailed_metrics)
+                .then_some(None),
             cursor: None,
             parts: (0..fanout)
                 .map(|_| Part::with_memory(memory.reservation()))

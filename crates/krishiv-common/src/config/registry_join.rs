@@ -20,6 +20,21 @@ pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Probe a tiny build with one integer key through an array indexed by the key.
+pub static EXEC_JOIN_DIRECT_INDEX: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.directIndex",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: a hash join build of at most 4,096 rows with one integer key whose values \
+          span at most four slots a row is probed through an array indexed by the key, without \
+          encoding or hashing the probe keys (dimension joins such as TPC-DS q62's). Results \
+          are the same either way; `false` keeps the hashed probe.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 /// Fuse a filter and a scan's row stage into the hash probe above them
 /// (design P2-E3 U2).
 pub static EXEC_JOIN_FUSE_PROBE_SELECT: ConfigEntry = ConfigEntry {

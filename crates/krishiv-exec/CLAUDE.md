@@ -37,6 +37,10 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 `join/` hash join (P2-T052a): `mod.rs` API + Spark semantics · `keys.rs` row-format keys, seeded foldhash,
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
+`direct.rs` (perf lever J1, `krishiv.exec.join.directIndex`) the direct index of a tiny build: at most 4,096 rows, one
+non-null-safe `Int32`/`Int64` row-layout key spanning at most four slots a row; each probe driver builds it from the
+level-0 tables it holds (none spilled), and `Cursor::new` then finds each row's partition and newest row by `key - min`
+(no encode, no hash; null-aware anti, grace partitions and detailed metrics keep the hashed probe; `direct_probe_rows`) ·
 `probe.rs` probe operator + match cursor (its first read of the build, `BuildGlobal::built`, ends the build's idle
 window: until then a finished build's tables are an `OutputSpill` written partition by partition, largest first, and
 idle after `krishiv.exec.join.idleSpillAfter`, so the arbitrator asks them before a running consumer self-spills; study
