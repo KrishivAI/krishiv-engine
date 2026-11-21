@@ -197,6 +197,77 @@ proptest! {
     }
 }
 
+/// Integer sets over at most `DENSE_MAX_BITS` values are a bit per value
+/// (row cost 1 ns), exact at both ends and outside, through the codec;
+/// wider spans, float keys and spans that overflow `i64` stay hashed.
+#[test]
+fn short_integer_ranges_are_bit_sets() {
+    let o = KeyFilterOptions::default();
+    let dense_cost = 1.0;
+    // TPC-DS q34's shape: 1,040 of 1-7,200 (`hd_demo_sk`).
+    let keys: Vec<i64> = (1..=7_200).filter(|k| k % 7 == 0).collect();
+    let f = filter(&Int64Array::from(keys.clone()), o);
+    assert_eq!(f.form(), FilterForm::HashSet(keys.len()));
+    assert!((f.row_cost_ns() - dense_cost).abs() < 1e-9);
+    let probe: Vec<i64> = (-70..7_300).collect();
+    let want: Vec<bool> = probe.iter().map(|k| keys.contains(k)).collect();
+    assert_eq!(pass(&f, &Int64Array::from(probe.clone())), want);
+    // The wire form is the members: decoded, it is a bit set again.
+    let back = round_trip(&f);
+    assert!((back.row_cost_ns() - dense_cost).abs() < 1e-9);
+    assert_eq!(pass(&back, &Int64Array::from(probe)), want);
+    // A narrower probe type widens onto the same bits.
+    let narrow: Vec<i32> = (0..100).collect();
+    let want: Vec<bool> = narrow
+        .iter()
+        .map(|&k| keys.contains(&i64::from(k)))
+        .collect();
+    assert_eq!(pass(&f, &Int32Array::from(narrow)), want);
+    // Negative keys and a span of exactly `DENSE_MAX_BITS` values.
+    let top = i64::try_from(super::member::DENSE_MAX_BITS).unwrap_or_else(|e| panic!("{e}")) - 1;
+    let edge = Int64Array::from(vec![-5, -3, 1, 2, 3, 4, 5, 9, top - 5]);
+    let f = filter(&edge, o);
+    assert!((f.row_cost_ns() - dense_cost).abs() < 1e-9);
+    assert_eq!(
+        pass(
+            &f,
+            &Int64Array::from(vec![
+                -6,
+                -5,
+                -4,
+                -3,
+                9,
+                top - 5,
+                top - 4,
+                i64::MIN,
+                i64::MAX
+            ])
+        ),
+        [false, true, false, true, true, true, false, false, false]
+    );
+    round_trip(&f);
+    // One value more is hashed.
+    let f = filter(
+        &Int64Array::from(vec![-5, -3, 1, 2, 3, 4, 5, 9, top - 4]),
+        o,
+    );
+    assert!(f.row_cost_ns() > dense_cost);
+    assert_eq!(
+        pass(&f, &Int64Array::from(vec![top - 4, top - 5])),
+        [true, false]
+    );
+    // Spans past `i64` and float bit patterns are not bit sets.
+    let ends = Int64Array::from(vec![i64::MIN, 0, 1, 2, 3, 4, 5, 6, 7, i64::MAX]);
+    let f = filter(&ends, o);
+    assert!(f.row_cost_ns() > dense_cost);
+    assert_eq!(
+        pass(&f, &Int64Array::from(vec![i64::MIN, i64::MAX, 8])),
+        [true, true, false]
+    );
+    let floats = Float64Array::from((0..20).map(f64::from).collect::<Vec<_>>());
+    assert!(filter(&floats, o).row_cost_ns() > dense_cost);
+}
+
 /// The form follows the distinct key count: the range alone for dense
 /// integers, a small set, a hash set, then a Bloom filter (or the range
 /// when no Bloom was planned).
@@ -228,8 +299,11 @@ fn form_follows_build_size() {
         filter(&spread(at_cap + 1), forced(50, EXACT_SET_MAX, false)).form(),
         FilterForm::Range
     );
-    // The exact forms cost less than a Bloom; the range least.
-    let costs: Vec<f64> = [dense, filter(&spread(8), o), filter(&spread(9), o)]
+    // The exact forms cost less than a Bloom; the range least; a hash set
+    // over a wide range most.
+    let wide = |n: i64| Int64Array::from_iter_values((0..n).map(|i| i << 21));
+    assert_eq!(filter(&wide(9), o).form(), FilterForm::HashSet(9));
+    let costs: Vec<f64> = [dense, filter(&spread(8), o), filter(&wide(9), o)]
         .iter()
         .map(KeyFilter::row_cost_ns)
         .collect();
