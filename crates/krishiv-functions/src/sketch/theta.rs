@@ -11,9 +11,8 @@
 //! seed; Spark's `CompactSketch.wrap(memory)` does not check the seed, so `theta_sketch_estimate` of such a sketch
 //! works there.
 //!
-//! Known gap: `lgNomEntries` 4 (legal in Spark, `4..=26`) is refused with `KRISHIV_UNSUPPORTED_FEATURE` in
-//! `theta_sketch_agg`, `theta_union_agg` and `theta_union`, because the crate builds nothing below 5. The vendored
-//! golden statement that uses it stays in the known-failures baseline.
+//! `lgNomEntries` 4 (legal in Spark, `4..=26`): the crate builds nothing below 5, so such a sketch or union is built
+//! at 5 and every result is cut by [`finish`] to the 16 smallest hashes with theta the 17th.
 //!
 //! Profiles: the empty-state rule of `theta_intersection_agg` (a group with no sketch) is new in Spark 4.3.0; this
 //! module has one behaviour for every profile until the 4.2.1 and 4.1.4 oracles are run (see the PR notes).
@@ -62,20 +61,41 @@ fn invalid_buffer(function: &str) -> KrishivError {
     .into()
 }
 
-/// The `datasketches` crate builds no sketch below `lg_k` 5; Spark accepts 4. A size of 4 is refused by name with
-/// `KRISHIV_UNSUPPORTED_FEATURE`, not misreported as a buffer or an engine fault.
-fn crate_minimum(k: u8, function: &str) -> Result<(), KrishivError> {
-    if k < CRATE_MIN_LG_K {
-        return Err(krishiv_common::error::KrishivUnsupportedFeature {
-            feature: format!("`{function}` with lgNomEntries {k} (the sketch library's minimum is {CRATE_MIN_LG_K})"),
-        }
-        .into());
-    }
-    Ok(())
+/// Smallest `lg_k` the `datasketches` crate builds. Spark accepts 4: such a sketch is built at 5 and cut back to
+/// Spark's size by [`finish`].
+const CRATE_MIN_LG_K: u8 = 5;
+
+/// The `lg_k` the crate is asked for: `lg_nom`, but at least the crate's minimum.
+fn build_lg(k: u8) -> u8 {
+    k.max(CRATE_MIN_LG_K)
 }
 
-/// Smallest `lg_k` the `datasketches` crate builds.
-const CRATE_MIN_LG_K: u8 = 5;
+/// Cut a compact sketch to what a sketch of `lg_nom` keeps. Only `lg_nom` 4 differs from what the crate built
+/// (at 5): the sketch keeps the 16 smallest hashes and its theta is the 17th smallest, which is the state Java's
+/// quick-select rebuild leaves at `lgNomEntries` 4. A sketch of 16 hashes or fewer is returned as it is.
+#[must_use]
+pub fn finish(sketch: CompactThetaSketch, lg_nom: u8) -> CompactThetaSketch {
+    const K: usize = 16; // also written as `16u32` below
+    if lg_nom >= CRATE_MIN_LG_K || sketch.num_retained() <= K {
+        return sketch;
+    }
+    let mut hashes: Vec<u64> = sketch.iter().map(|e| e.hash()).collect();
+    hashes.sort_unstable();
+    let theta = hashes[K];
+    let original = sketch.serialize();
+    // Preamble of 8 bytes: preLongs, version, family, 2 unused, flags, seed hash.
+    let mut head = original[..8].to_vec();
+    head[0] = 3;
+    head[5] |= 0x10; // ordered
+    let mut out = head;
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&0u32.to_be_bytes());
+    out.extend_from_slice(&theta.to_le_bytes());
+    for h in &hashes[..K] {
+        out.extend_from_slice(&h.to_le_bytes());
+    }
+    CompactThetaSketch::deserialize(&out).unwrap_or(sketch)
+}
 
 /// A sketch builder refused parameters this module already checked: an engine fault, not a user buffer.
 fn builder_failure(function: &str, e: &dyn std::fmt::Display) -> KrishivError {
@@ -116,13 +136,11 @@ fn family_name(id: u8) -> Option<&'static str> {
 /// A new updatable sketch of `lg_nom` (already checked).
 ///
 /// # Errors
-/// `SKETCH_INVALID_LG_NOM_ENTRIES` when `lg_nom` is out of range; `KRISHIV_UNSUPPORTED_FEATURE` for 4 (see the
-/// module doc).
+/// `SKETCH_INVALID_LG_NOM_ENTRIES` when `lg_nom` is out of range. A 4 is built at 5 and cut by [`finish`].
 pub fn new_sketch(lg_nom: i32, function: &str) -> Result<ThetaSketch, KrishivError> {
     let k = check_lg_nom(lg_nom, function)?;
-    crate_minimum(k, function)?;
     ThetaSketchBuilder::default()
-        .lg_k(k)
+        .lg_k(build_lg(k))
         .build()
         .map_err(|e| builder_failure(function, &e))
 }
@@ -130,13 +148,11 @@ pub fn new_sketch(lg_nom: i32, function: &str) -> Result<ThetaSketch, KrishivErr
 /// A new union of `lg_nom`.
 ///
 /// # Errors
-/// `SKETCH_INVALID_LG_NOM_ENTRIES` when `lg_nom` is out of range; `KRISHIV_UNSUPPORTED_FEATURE` for 4 (see the
-/// module doc).
+/// `SKETCH_INVALID_LG_NOM_ENTRIES` when `lg_nom` is out of range. A 4 is built at 5 and cut by [`finish`].
 pub fn new_union(lg_nom: i32, function: &str) -> Result<ThetaUnion, KrishivError> {
     let k = check_lg_nom(lg_nom, function)?;
-    crate_minimum(k, function)?;
     ThetaUnionBuilder::default()
-        .lg_k(k)
+        .lg_k(build_lg(k))
         .build()
         .map_err(|e| builder_failure(function, &e))
 }
@@ -247,7 +263,10 @@ pub fn union(
     let mut u = new_union(lg_nom, function)?;
     u.update(a).map_err(|_| invalid_buffer(function))?;
     u.update(b).map_err(|_| invalid_buffer(function))?;
-    Ok(u.to_sketch(true))
+    Ok(finish(
+        u.to_sketch(true),
+        u8::try_from(lg_nom).unwrap_or(CRATE_MIN_LG_K),
+    ))
 }
 
 /// `theta_intersection(a, b)`.

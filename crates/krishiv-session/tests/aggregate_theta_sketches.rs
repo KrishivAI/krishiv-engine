@@ -110,14 +110,15 @@ fn the_intersection_does_not_depend_on_partitions() -> R {
 }
 
 #[test]
-fn lg_nom_entries_4_is_refused_by_name() -> R {
+fn lg_nom_entries_4_keeps_sixteen_hashes_as_java_does() -> R {
+    // Java datasketches 6.2.0, longs 0..999 at lgNomEntries 4: estimate 945.5839687772802 over 16 retained hashes.
     let s = Session::new()?;
     for q in [
-        "SELECT theta_sketch_agg(id, 4) FROM range(0, 10)",
-        "SELECT theta_union_agg(sk, 4) FROM (SELECT theta_sketch_agg(id) AS sk FROM range(0, 10))",
+        "SELECT theta_sketch_estimate(theta_sketch_agg(id, 4)) FROM range(0, 1000)",
+        "SELECT theta_sketch_estimate(theta_union_agg(sk, 4)) FROM (SELECT theta_sketch_agg(id) AS sk FROM range(0, 1000))",
+        "SELECT theta_sketch_estimate(theta_union(theta_sketch_agg(id), theta_sketch_agg(id), 4)) FROM range(0, 1000)",
     ] {
-        let e = rows(&s, q).expect_err(q);
-        assert!(e.to_string().contains("lgNomEntries 4"), "{q}: {e}");
+        assert_eq!(rows(&s, q)?, ["946"], "{q}");
     }
     Ok(())
 }
