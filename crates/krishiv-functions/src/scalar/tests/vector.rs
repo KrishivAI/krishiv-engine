@@ -77,6 +77,36 @@ fn norms_follow_the_degree() {
     );
 }
 
+/// `vector_norm` / `vector_normalize` of `[NaN, 5]` with degree `inf` on `version`.
+fn nan_inf(name: &str, version: krishiv_kernels::SparkVersion) -> Vec<f32> {
+    let v = plain(&[f32::NAN, 5.0]);
+    let d = floats(&[Some(f32::INFINITY)]);
+    let opts = BindOptions::new()
+        .with_kernel(krishiv_kernels::KernelCtx::new().with_spark_version(version));
+    let args = [&v, &d];
+    let f = super::bind_with(name, &args, &opts);
+    let out = f
+        .invoke(&args.iter().map(|a| col(a)).collect::<Vec<_>>(), 1)
+        .unwrap();
+    if name == "vector_norm" {
+        out.as_primitive::<Float32Type>().values().to_vec()
+    } else {
+        let list = out.as_list::<i32>().value(0);
+        list.as_primitive::<Float32Type>().values().to_vec()
+    }
+}
+
+#[test]
+fn a_nan_element_is_skipped_by_the_infinity_norm_in_42_and_propagated_in_43() {
+    use krishiv_kernels::SparkVersion::{V4_2, V4_3};
+    assert_eq!(nan_inf("vector_norm", V4_2), vec![5.0]);
+    assert!(nan_inf("vector_norm", V4_3)[0].is_nan());
+    // normalize divides by the norm: 4.2 by 5.0, 4.3 by NaN.
+    assert!(nan_inf("vector_normalize", V4_2)[0].is_nan());
+    assert_eq!(nan_inf("vector_normalize", V4_2)[1], 1.0);
+    assert!(nan_inf("vector_normalize", V4_3).iter().all(|x| x.is_nan()));
+}
+
 #[test]
 fn null_inputs_are_null_and_a_null_vector_skips_the_degree_check() {
     let two = floats(&[Some(2.0)]);
