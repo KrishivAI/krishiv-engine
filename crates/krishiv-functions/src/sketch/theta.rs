@@ -62,7 +62,7 @@ fn invalid_buffer(function: &str) -> KrishivError {
 }
 
 /// Smallest `lg_k` the `datasketches` crate builds. Spark accepts 4: such a sketch is built at 5 and cut back to
-/// Spark's size by [`finish`].
+/// Spark's size by [`finish`] (which holds the details of the cut).
 const CRATE_MIN_LG_K: u8 = 5;
 
 /// The `lg_k` the crate is asked for: `lg_nom`, but at least the crate's minimum.
@@ -73,28 +73,34 @@ fn build_lg(k: u8) -> u8 {
 /// Cut a compact sketch to what a sketch of `lg_nom` keeps. Only `lg_nom` 4 differs from what the crate built
 /// (at 5): the sketch keeps the 16 smallest hashes and its theta is the 17th smallest, which is the state Java's
 /// quick-select rebuild leaves at `lgNomEntries` 4. A sketch of 16 hashes or fewer is returned as it is.
-#[must_use]
-pub fn finish(sketch: CompactThetaSketch, lg_nom: u8) -> CompactThetaSketch {
-    const K: usize = 16; // also written as `16u32` below
+///
+/// # Errors
+/// An internal error if the cut sketch's bytes do not read back (an invariant of this function, not user input).
+pub fn finish(sketch: CompactThetaSketch, lg_nom: u8) -> Result<CompactThetaSketch, KrishivError> {
+    const K: usize = 16;
     if lg_nom >= CRATE_MIN_LG_K || sketch.num_retained() <= K {
-        return sketch;
+        return Ok(sketch);
     }
     let mut hashes: Vec<u64> = sketch.iter().map(|e| e.hash()).collect();
     hashes.sort_unstable();
     let theta = hashes[K];
     let original = sketch.serialize();
     // Preamble of 8 bytes: preLongs, version, family, 2 unused, flags, seed hash.
-    let mut head = original[..8].to_vec();
-    head[0] = 3;
-    head[5] |= 0x10; // ordered
-    let mut out = head;
-    out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&0u32.to_be_bytes());
+    let mut out = original[..8].to_vec();
+    out[0] = 3;
+    out[5] |= 0x10; // ordered
+    out.extend_from_slice(&16u32.to_le_bytes()); // retained entries
+    out.extend_from_slice(&1.0f32.to_le_bytes()); // the float p of preamble long 1, as Java writes it
     out.extend_from_slice(&theta.to_le_bytes());
     for h in &hashes[..K] {
         out.extend_from_slice(&h.to_le_bytes());
     }
-    CompactThetaSketch::deserialize(&out).unwrap_or(sketch)
+    CompactThetaSketch::deserialize(&out).map_err(|e| {
+        builder_failure(
+            "theta sketch",
+            &format!("the lg 4 cut does not read back: {e}"),
+        )
+    })
 }
 
 /// A sketch builder refused parameters this module already checked: an engine fault, not a user buffer.
@@ -263,10 +269,10 @@ pub fn union(
     let mut u = new_union(lg_nom, function)?;
     u.update(a).map_err(|_| invalid_buffer(function))?;
     u.update(b).map_err(|_| invalid_buffer(function))?;
-    Ok(finish(
+    finish(
         u.to_sketch(true),
         u8::try_from(lg_nom).unwrap_or(CRATE_MIN_LG_K),
-    ))
+    )
 }
 
 /// `theta_intersection(a, b)`.
@@ -310,6 +316,37 @@ mod tests {
             update_long(&mut s, *v);
         }
         compact(&mut s)
+    }
+
+    #[test]
+    fn finish_cuts_lg_4_to_sixteen_hashes_with_theta_the_next() {
+        let at5 = |n: i64| {
+            let mut s = new_sketch(5, "f").unwrap();
+            for v in 0..n {
+                update_long(&mut s, v);
+            }
+            compact(&mut s)
+        };
+        // 16 or fewer hashes: untouched.
+        for n in [1, 16] {
+            let c = at5(n);
+            let kept = c.num_retained();
+            assert_eq!(finish(c, 4).unwrap().num_retained(), kept);
+        }
+        // More than 16: the 16 smallest, theta the 17th smallest.
+        for n in [17, 1000] {
+            let c = at5(n);
+            let mut all: Vec<u64> = c.iter().map(|e| e.hash()).collect();
+            all.sort_unstable();
+            let cut = finish(c, 4).unwrap();
+            assert_eq!(cut.num_retained(), 16);
+            let mut kept: Vec<u64> = cut.iter().map(|e| e.hash()).collect();
+            kept.sort_unstable();
+            assert_eq!(kept, all[..16]);
+        }
+        // A union of two estimation-mode inputs with different thetas.
+        let u = union(&at5(5000), &at5(300), 4, "theta_union").unwrap();
+        assert_eq!(u.num_retained(), 16);
     }
 
     #[test]

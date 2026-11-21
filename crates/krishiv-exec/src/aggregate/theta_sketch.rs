@@ -125,12 +125,12 @@ impl Slot {
     }
 
     /// The compact sketch of the state; `None` for an intersection that saw no sketch.
-    fn compact(&self, lg: u8) -> Option<CompactThetaSketch> {
+    fn compact(&self, lg: u8) -> Result<Option<CompactThetaSketch>> {
         match self {
             // Trimmed after every batch (`recharge`), so this is Spark's `rebuild.compact`.
-            Self::Updatable(s) => Some(theta::finish(s.compact(true), lg)),
-            Self::Union(u) => Some(theta::finish(u.to_sketch(true), lg)),
-            Self::Intersection(i) => i.to_sketch(true),
+            Self::Updatable(s) => theta::finish(s.compact(true), lg).map(Some),
+            Self::Union(u) => theta::finish(u.to_sketch(true), lg).map(Some),
+            Self::Intersection(i) => Ok(i.to_sketch(true)),
         }
     }
 }
@@ -391,7 +391,7 @@ impl ThetaSketchAcc {
             // Spark's `createUnionWith(buffer.compact, input)`.
             let mut u = theta::new_union(lg, function)?;
             s.trim();
-            u.update(&theta::finish(s.compact(true), self_lg))
+            u.update(&theta::finish(s.compact(true), self_lg)?)
                 .map_err(|_| internal("a Theta union refused its own sketch".to_owned()))?;
             *slot = Slot::Union(u);
         }
@@ -513,7 +513,7 @@ impl ThetaSketchAcc {
             .get(g as usize)
             .ok_or_else(|| self.missing_group())?;
         Ok(slot
-            .compact(self.lg_nom())
+            .compact(self.lg_nom())?
             .map(|c| theta::to_bytes(&c))
             .unwrap_or_default())
     }

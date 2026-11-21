@@ -1,7 +1,6 @@
 {
   "cases": {
     "fn-aggregate": [
-      50,
       80
     ],
     "parser-pipe-collate": [
