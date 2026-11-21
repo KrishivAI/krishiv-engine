@@ -996,6 +996,10 @@ fn the_bucket_id_is_read_from_a_file_name_as_spark_reads_it() {
     assert_eq!(id("x_7a.parquet"), None);
     assert_eq!(id("a_1_22.c000"), Some(22));
     assert_eq!(id("a_1.b_22x"), Some(1));
+    // Spark parses the last match with `toInt`: past `i32::MAX` it throws, so no earlier hit stands in.
+    assert_eq!(id("a_2147483647.c"), Some(2_147_483_647));
+    assert_eq!(id("a_2147483648.c"), None);
+    assert_eq!(id("a_1_2147483648.c"), None);
 }
 
 #[test]

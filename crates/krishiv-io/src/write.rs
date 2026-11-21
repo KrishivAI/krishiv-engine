@@ -61,7 +61,9 @@ pub fn spark_bucketed_file_name(
 }
 
 /// The bucket id in a data file name (Spark's `BucketingUtils.getBucketId`, regex `.*_(\d+)(?:\..*)?$`): the digits
-/// after the last `_` when they end the name or are followed by a `.`. `None` for a file without one.
+/// after the last `_` when they end the name or are followed by a `.`, as an `i32` (Spark's `toInt`). `None` for a file
+/// without one, and for one whose digits overflow an `i32` (Spark throws there; the last match is the one it parses, so
+/// an overflow is not replaced by an earlier hit).
 #[must_use]
 pub fn bucket_id_of_file_name(name: &str) -> Option<u32> {
     // The regex is greedy, so the last `_` that is followed by digits and then the end or a dot wins.
@@ -70,7 +72,10 @@ pub fn bucket_id_of_file_name(name: &str) -> Option<u32> {
         let rest = &name[at + 1..];
         let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
         if digits > 0 && (digits == rest.len() || rest.as_bytes()[digits] == b'.') {
-            found = rest[..digits].parse().ok();
+            found = rest[..digits]
+                .parse::<i32>()
+                .ok()
+                .and_then(|v| u32::try_from(v).ok());
         }
     }
     found

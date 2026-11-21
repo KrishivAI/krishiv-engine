@@ -578,6 +578,26 @@ fn a_new_table_round_trips() {
     );
 }
 
+/// delta-spark runs REPLACE WHERE on a Delta table; the engine does not yet, so it refuses with an
+/// engine class (never Spark's `UNSUPPORTED_FEATURE.TABLE_OPERATION`, which would claim Spark refuses).
+#[test]
+fn replace_where_into_a_delta_table_is_an_engine_refusal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("t").to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE rw (id BIGINT, v STRING) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    let e = run(
+        &s,
+        "INSERT INTO rw REPLACE WHERE id = 1 SELECT CAST(1 AS BIGINT), 'x'",
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
 /// An `INSERT` whose rows read a file table (a frame analyzed afresh by each action) writes into
 /// the Delta table it opened: the target is opened in the analysis that is planned. An append of
 /// no rows commits nothing.

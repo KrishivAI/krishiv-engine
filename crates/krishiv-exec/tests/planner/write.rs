@@ -967,6 +967,52 @@ fn a_partitioned_write_sorts_by_the_partition_columns_below_the_writer() {
     assert!(text.contains("partitioned by [s]"), "{text}");
 }
 
+/// A bucketed write sorts by the partition columns, then the bucket id, then the `sortBy` columns, in
+/// that order (Spark's required ordering), and the explain lists them so.
+#[test]
+fn a_bucketed_write_sorts_by_partition_bucket_id_then_sort_columns() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/planner");
+    let db = parquet_dir(&fixtures, &["t"], true, &rt);
+    // Columns: 0 id, 1 s, 2 the bucket id.
+    let plan = db.plan_sql("SELECT id, s, id AS bid FROM t").unwrap();
+    let write = plan
+        .into_write(WritePlan {
+            format: "parquet".to_owned(),
+            options: BTreeMap::new(),
+            store: "file://out".to_owned(),
+            dir: "out".to_owned(),
+            job_uuid: "job-1".to_owned(),
+            max_records_per_file: 0,
+            target_file_bytes: 0,
+            partition_by: vec![1],
+            column_types: BTreeMap::new(),
+            bucket: Some(krishiv_exec::physical::BucketWrite {
+                column: 2,
+                sort_by: vec![0],
+            }),
+        })
+        .unwrap();
+    let PhysNode::Exchange(gather) = write.root() else {
+        panic!("no gather above the writer");
+    };
+    let PhysNode::WriteFiles { input, .. } = gather.input.as_ref() else {
+        panic!("not a write");
+    };
+    let PhysNode::Sort { keys, .. } = input.as_ref() else {
+        panic!("no sort below the writer");
+    };
+    assert_eq!(keys.iter().map(|k| k.column).collect::<Vec<_>>(), [1, 2, 0]);
+    let text = write.to_string();
+    assert!(
+        text.contains("[s ASC NULLS FIRST, bid ASC NULLS FIRST, id ASC NULLS FIRST]"),
+        "{text}"
+    );
+}
+
 /// A partition column the plan's input does not have is refused at
 /// instantiation, not indexed.
 #[test]

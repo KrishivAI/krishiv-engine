@@ -823,6 +823,17 @@ fn insert_column_lists_by_name_and_conflicts() {
         class(&s, "INSERT INTO t REPLACE WHERE a = 1 VALUES (1, 'x')"),
         "UNSUPPORTED_FEATURE.TABLE_OPERATION"
     );
+    // REPLACE WHERE into a view is `VIEW_WRITE_NOT_ALLOWED` (golden `RW-temp-view`), not the plain
+    // INSERT's class.
+    run(&s, "CREATE TEMPORARY VIEW rw_view AS SELECT * FROM t");
+    assert_eq!(
+        class(&s, "INSERT INTO rw_view REPLACE WHERE a = 1 SELECT 1, 'x'"),
+        "VIEW_WRITE_NOT_ALLOWED"
+    );
+    assert_eq!(
+        class(&s, "INSERT INTO rw_view SELECT 1, 'x'"),
+        "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"
+    );
     // The multi-table insert writes one row per clause (`tests/multi_insert.rs`).
     let before = col0(&s, "SELECT CAST(count(*) AS STRING) FROM t");
     run(

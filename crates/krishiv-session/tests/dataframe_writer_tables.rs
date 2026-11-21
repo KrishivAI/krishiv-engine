@@ -660,9 +660,83 @@ fn an_unhashable_bucket_column_keeps_the_table_an_overwrite_would_replace() {
             .save_as_table("keep"),
     )
     .unwrap_err();
+    // The class the SQL path gets from `hash` over a MAP (the kernel does not yet raise Spark's
+    // `DATATYPE_MISMATCH.HASH_MAP_TYPE`: a follow-up for both paths together).
+    let sql =
+        block_on(async { s.sql("SELECT hash(map('k', 'a'))").await?.collect().await }).unwrap_err();
+    assert_eq!(e.error_class().name(), sql.error_class().name());
+    assert_eq!(count(&s, "keep"), 3);
+}
+
+/// A sort column the write cannot order (an array) is found before an overwrite drops the old table.
+#[test]
+fn an_unorderable_sort_column_keeps_the_table_an_overwrite_would_replace() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("keep")).unwrap();
+    let a = s
+        .table("people")
+        .select_expr(["id", "array(name) AS a"])
+        .unwrap();
+    let e = block_on(
+        a.write()
+            .mode("overwrite")
+            .bucket_by(2, ["id"])
+            .sort_by(["a"])
+            .save_as_table("keep"),
+    )
+    .unwrap_err();
     assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
     assert_eq!(count(&s, "keep"), 3);
+}
+
+/// With `id` an integer and `ID` a map, a case-sensitive session finds the map for `ID`.
+#[test]
+fn the_bucket_preflight_resolves_names_by_the_sessions_case_rule() {
+    let s = session();
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    block_on(s.table("people").write().save_as_table("keep")).unwrap();
+    let m = s
+        .table("people")
+        .select_expr(["id", "map('k', name) AS `ID`"])
+        .unwrap();
+    let e = block_on(
+        m.write()
+            .mode("overwrite")
+            .bucket_by(2, ["ID"])
+            .save_as_table("keep"),
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
     assert_eq!(count(&s, "keep"), 3);
+}
+
+/// Overwriting a partitioned text table checks only the stored column, as its creation does.
+#[test]
+fn a_partitioned_text_table_can_be_overwritten() {
+    let s = session();
+    let two = || {
+        s.table("people")
+            .select_expr(["name", "CAST(id AS STRING) AS p"])
+            .unwrap()
+    };
+    block_on(
+        two()
+            .write()
+            .format("text")
+            .partition_by(["p"])
+            .save_as_table("tp"),
+    )
+    .unwrap();
+    block_on(
+        two()
+            .write()
+            .format("text")
+            .partition_by(["p"])
+            .mode("overwrite")
+            .save_as_table("tp"),
+    )
+    .unwrap();
+    assert_eq!(count(&s, "tp"), 3);
 }
 
 #[test]
@@ -799,6 +873,58 @@ fn sql_insert_into_bucketed_tables_places_rows_in_spark_buckets() {
             total += block_on(rows.count()).unwrap();
         }
         assert_eq!(total, 40, "{ddl}");
+    }
+}
+
+/// `bucketBy(n, k).sortBy(v)`: each file's rows are in `v` order, for a bucketed table and for a
+/// bucketed and partitioned one, with the input in reverse `v` order.
+#[test]
+fn sort_by_orders_the_rows_of_each_bucket_file() {
+    use arrow_array::cast::AsArray;
+    for partitioned in [false, true] {
+        let s = Session::new().unwrap();
+        let warehouse = tempfile::tempdir().unwrap();
+        s.conf()
+            .set(
+                "spark.sql.warehouse.dir",
+                warehouse.path().to_str().unwrap(),
+            )
+            .unwrap();
+        let df = block_on(s.sql(
+            "SELECT CAST(id AS INT) AS k, CAST(100 - id AS INT) AS v, CAST(id % 2 AS INT) AS p \
+             FROM range(0, 40)",
+        ))
+        .unwrap();
+        let mut w = df.write().bucket_by(2, ["k"]).sort_by(["v"]);
+        if partitioned {
+            w = w.partition_by(["p"]);
+        }
+        block_on(w.save_as_table("sorted")).unwrap();
+        let mut files = Vec::new();
+        part_files(warehouse.path(), &mut files);
+        assert!(files.len() >= 2, "{files:?}");
+        let mut total = 0;
+        for f in &files {
+            let rows = s
+                .read()
+                .format("parquet")
+                .load([f.to_str().unwrap()])
+                .select_expr(["v"])
+                .unwrap();
+            let v: Vec<i32> = block_on(rows.collect())
+                .unwrap()
+                .iter()
+                .flat_map(|b| {
+                    b.column(0)
+                        .as_primitive::<arrow_array::types::Int32Type>()
+                        .values()
+                        .to_vec()
+                })
+                .collect();
+            assert!(v.windows(2).all(|w| w[0] <= w[1]), "{f:?}: {v:?}");
+            total += v.len();
+        }
+        assert_eq!(total, 40, "partitioned: {partitioned}");
     }
 }
 

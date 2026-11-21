@@ -11,8 +11,9 @@
 //!   value `CAST(... AS STRING)`) and a directory `<table>/<col>=<value>/...`, escaped as Spark escapes it.
 //! - `INSERT` into a partitioned table registers the partitions found under the table's directory afterwards;
 //!   a `CREATE TABLE ... AS SELECT` registers them with their file counts and sizes (`RepairTableCommand`).
-//! - Bucketed tables keep their bucket specification as metadata; the engine writes no bucketed files, so a
-//!   write to one fails with `KRISHIV_UNSUPPORTED_FEATURE` before anything is written.
+//! - Bucketed tables keep their bucket specification as metadata, and a write to one writes bucketed files: each
+//!   row goes to bucket `pmod(hash(columns), n)` (Murmur3, seed 42), rows are sorted by partition, bucket id and
+//!   `sortBy`, and a file's name carries its bucket id (`BucketingUtils`).
 //! - Reading a partitioned table's rows (`catalog.rs` `known_partitions`, `krishiv_exec::files::KnownPartitions`):
 //!   its registered partitions at their default directories, values typed as declared (strings, integers and dates
 //!   so far). A directory the catalog does not know is not read, as Spark's `CatalogFileIndex` lists only the
@@ -160,6 +161,34 @@ fn can_partition_on(t: &DataType) -> bool {
 /// `COLUMN_ALREADY_EXISTS` when `names` repeat one (`SchemaUtils.checkColumnNameDuplication`).
 fn check_duplicates(names: &[String], case_sensitive: bool) -> Result<(), KrishivError> {
     check_column_name_duplication(names.iter().map(String::as_str), case_sensitive)
+}
+
+/// `name` as the existing table spells it (`CatalogUtils.normalizePartCols` and `normalizeBucketSpec`):
+/// `COLUMN_NOT_DEFINED_IN_TABLE` for a column the table lacks. `kind` is `partition`, `bucket` or `sort`.
+pub(crate) fn normalize_asked_column(
+    table: &TableName,
+    table_columns: &[String],
+    name: &str,
+    kind: &str,
+    case_sensitive: bool,
+) -> Result<String, KrishivError> {
+    table_columns
+        .iter()
+        .find(|c| same_name(c, name, case_sensitive))
+        .cloned()
+        .ok_or_else(|| {
+            ColumnNotDefinedInTable {
+                col_type: kind.to_owned(),
+                col_name: quote_identifier(name),
+                table_name: table.quoted(),
+                table_cols: table_columns
+                    .iter()
+                    .map(|c| quote_identifier(c))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            }
+            .into()
+        })
 }
 
 /// The table's layout from `PARTITIONED BY` names and `CLUSTERED BY`, checked against `columns`, which are

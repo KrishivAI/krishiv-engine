@@ -312,16 +312,40 @@ impl Session {
 
     /// What a write of `schema` in `format` with `options` would refuse before it
     /// touches anything: a format the engine does not write, duplicate output
-    /// columns, options the format rejects. `saveAsTable` in overwrite mode asks
+    /// columns, options the format rejects (`partition_by` columns are left out of the format check). `saveAsTable` in overwrite mode asks
     /// this before it drops the old table.
     pub(crate) fn check_write_ready(
         &self,
         format: &str,
         options: &BTreeMap<String, OptionValue>,
         schema: &SchemaRef,
+        partition_by: &[String],
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
-        unique_columns(schema, env.analysis.conf.case_sensitive)?;
+        let case_sensitive = env.analysis.conf.case_sensitive;
+        unique_columns(schema, case_sensitive)?;
+        // The files hold the data columns only: the partition columns live in the directory names
+        // (the text format takes one string data column beside them), as `write_files` checks.
+        let data_schema: SchemaRef = if partition_by.is_empty() {
+            Arc::clone(schema)
+        } else {
+            let fields: Vec<_> = schema
+                .fields()
+                .iter()
+                .filter(|f| {
+                    !partition_by.iter().any(|p| {
+                        if case_sensitive {
+                            p == f.name()
+                        } else {
+                            p.eq_ignore_ascii_case(f.name())
+                        }
+                    })
+                })
+                .cloned()
+                .collect();
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+        let schema = &data_schema;
         let format = self.writable_format(format)?;
         let (parsed, _) = format.options().parse(options, &env.config)?;
         // The framework options the format schema skips (`maxRecordsPerFile`).

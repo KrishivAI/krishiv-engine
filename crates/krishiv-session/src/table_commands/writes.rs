@@ -127,10 +127,31 @@ impl Session {
             return Err(unsupported("INSERT ... REPLACE"));
         }
         let name = self.table_name(&c.name, &env)?;
-        let table = self.table_for_write(&name, "INSERT", &env)?;
+        let table = match self.table_for_write(&name, "INSERT", &env) {
+            // A view of any kind (temporary, global or stored) is refused by REPLACE WHERE with its
+            // own class, not the plain INSERT's (`Analyzer.scala:1203-1205`, golden `RW-temp-view`).
+            Err(e)
+                if c.replace_where.is_some()
+                    && e.error_class().name() == "EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE" =>
+            {
+                return Err(krishiv_common::error::ViewWriteNotAllowed {
+                    name: name.quoted(),
+                }
+                .into());
+            }
+            other => other?,
+        };
         if c.replace_where.is_some() {
-            // Spark 4.3.0 runs REPLACE WHERE on DSv2 tables only; a Parquet or Hive table (every table
-            // here) fails with this class, with or without a column list
+            // delta-spark runs REPLACE WHERE on a Delta table (`OverwriteByExpression`); the engine
+            // does not yet, so that table is refused by an engine class, not Spark's.
+            #[cfg(feature = "delta")]
+            if is_delta_table(&table) {
+                return Err(unsupported(
+                    "INSERT INTO ... REPLACE WHERE on a Delta table",
+                ));
+            }
+            // Spark 4.3.0 runs REPLACE WHERE on DSv2 tables only; a Parquet or Hive table fails with
+            // this class, with or without a column list
             // (`tests/fixtures/spark-4.3.0/write-semantics/replace_where.json`).
             return Err(table_operation(&name, "INSERT INTO ... REPLACE WHERE"));
         }
@@ -522,6 +543,30 @@ impl Session {
                     }
                     .into());
                 }
+                // `_LEGACY_ERROR_TEMP_1160`: a `path` that is not the table's own location.
+                if let Some(asked) = spec
+                    .options
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("path"))
+                    .and_then(|(_, v)| v.as_plain())
+                {
+                    let bare = |p: &str| {
+                        p.strip_prefix("file://")
+                            .or_else(|| p.strip_prefix("file:"))
+                            .unwrap_or(p)
+                            .trim_end_matches('/')
+                            .to_owned()
+                    };
+                    let have = table.location.display().to_string();
+                    if bare(asked) != bare(&have) {
+                        return Err(krishiv_common::error::LegacyErrorTemp1160 {
+                            identifier: spark_name(&name),
+                            existing_table_loc: format!("file:{}", bare(&have)),
+                            table_desc_loc: format!("file:{}", bare(asked)),
+                        }
+                        .into());
+                    }
+                }
                 let schema = df.schema().await?;
                 let case_sensitive = env.analysis.conf.case_sensitive;
                 let same = |a: &str, b: &str| {
@@ -599,8 +644,43 @@ impl Session {
                     }
                     .into());
                 }
-                let asked_parts: Vec<&str> =
-                    spec.partitioned_by.iter().map(String::as_str).collect();
+                // The asked names are the table's own spellings (an unknown one is
+                // `COLUMN_NOT_DEFINED_IN_TABLE`), as `PreprocessTableCreation` normalizes them
+                // before it compares.
+                let table_cols: Vec<String> =
+                    table.columns.iter().map(|c| c.name.clone()).collect();
+                let norm = |n: &str, kind: &str| {
+                    crate::partitions::normalize_asked_column(
+                        &name,
+                        &table_cols,
+                        n,
+                        kind,
+                        case_sensitive,
+                    )
+                };
+                let asked_parts_owned = spec
+                    .partitioned_by
+                    .iter()
+                    .map(|p| norm(p, "partition"))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let asked_bucket_owned = spec
+                    .bucket
+                    .as_ref()
+                    .map(|a| {
+                        let c = a
+                            .clustered_by
+                            .iter()
+                            .map(|c| norm(&c.value, "bucket"))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let s = a
+                            .sorted_by
+                            .iter()
+                            .map(|c| norm(&c.name.value, "sort"))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok::<_, KrishivError>((a.buckets, c, s))
+                    })
+                    .transpose()?;
+                let asked_parts: Vec<&str> = asked_parts_owned.iter().map(String::as_str).collect();
                 // A Delta append that names no partitioning takes the table's own.
                 #[cfg(feature = "delta")]
                 let infer_parts = asked_parts.is_empty() && is_delta_table(&table);
@@ -617,11 +697,11 @@ impl Session {
                 // Bucketing is compared as options: an append with no `bucketBy` into a bucketed
                 // table is refused, as is a bucketed one into a plain table (`BucketSpec.toString`).
                 let asked_bucket: Option<(u64, Vec<&str>, Vec<&str>)> =
-                    spec.bucket.as_ref().map(|a| {
+                    asked_bucket_owned.as_ref().map(|(n, c, s)| {
                         (
-                            a.buckets,
-                            a.clustered_by.iter().map(|c| c.value.as_str()).collect(),
-                            a.sorted_by.iter().map(|c| c.name.value.as_str()).collect(),
+                            *n,
+                            c.iter().map(String::as_str).collect(),
+                            s.iter().map(String::as_str).collect(),
                         )
                     });
                 let same_bucket = match (&asked_bucket, &table.layout.bucket) {
@@ -737,23 +817,48 @@ impl Session {
                 // not come after the drop.
                 let provider = self.provider_of(spec.provider.clone())?;
                 let schema = df.schema().await?;
-                // A bucket column the write cannot hash (a MAP, inside or not) is refused here, not
-                // after the drop.
+                // A bucket column the write cannot hash and a sort column the
+                // write cannot order are refused here, not after the drop. Names resolve as
+                // `table_layout` and the bucket expression resolve them.
                 if let Some(b) = &spec.bucket {
+                    let case_sensitive = env.analysis.conf.case_sensitive;
+                    let find = |name: &str| {
+                        schema.fields().iter().find(|f| {
+                            if case_sensitive {
+                                f.name() == name
+                            } else {
+                                f.name().eq_ignore_ascii_case(name)
+                            }
+                        })
+                    };
+                    // A bucket column `hash` cannot take (a MAP, inside or not): refused as the SQL path's
+                    // `hash` refuses it, before the drop.
                     for c in &b.clustered_by {
-                        let field = schema
-                            .fields()
-                            .iter()
-                            .find(|f| f.name().eq_ignore_ascii_case(&c.value));
-                        if field.is_some_and(|f| arrow_type_has_map(f.data_type())) {
+                        if find(&c.value).is_some_and(|f| arrow_type_has_map(f.data_type())) {
+                            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                                feature: format!("hashing a value of type {}", "MAP"),
+                            }
+                            .into());
+                        }
+                    }
+                    for c in &b.sorted_by {
+                        if let Some(f) = find(&c.name.value)
+                            && !sortable_type(f.data_type())
+                        {
                             return Err(unsupported(&format!(
-                                "bucketing by the MAP column {}",
-                                c.value
+                                "ORDER BY on a {} key",
+                                f.data_type()
                             )));
                         }
                     }
                 }
-                self.check_write_ready(&provider, &spec.options, &schema, &env)?;
+                self.check_write_ready(
+                    &provider,
+                    &spec.options,
+                    &schema,
+                    &spec.partitioned_by,
+                    &env,
+                )?;
                 // The write asks the policy about the table's directory, in the form
                 // `write_files` asks it (`locate_write_path`), and the create refuses
                 // a directory that is already there other than the old table's own;
@@ -1001,6 +1106,29 @@ fn arrow_type_has_map(t: &arrow_schema::DataType) -> bool {
         T::List(f) | T::LargeList(f) | T::FixedSizeList(f, _) => arrow_type_has_map(f.data_type()),
         T::Struct(fs) => fs.iter().any(|f| arrow_type_has_map(f.data_type())),
         _ => false,
+    }
+}
+
+/// Whether the write's sort can order a column of this type (the sort operator refuses nested
+/// types, `Float16`, day-time intervals and the like: `operators/sort/keys.rs`).
+fn sortable_type(t: &arrow_schema::DataType) -> bool {
+    use arrow_schema::DataType as T;
+    match t {
+        T::Dictionary(_, values) => sortable_type(values),
+        T::Float16
+        | T::Interval(
+            arrow_schema::IntervalUnit::DayTime | arrow_schema::IntervalUnit::MonthDayNano,
+        )
+        | T::List(_)
+        | T::LargeList(_)
+        | T::ListView(_)
+        | T::LargeListView(_)
+        | T::FixedSizeList(..)
+        | T::Struct(_)
+        | T::Map(..)
+        | T::Union(..)
+        | T::RunEndEncoded(..) => false,
+        _ => true,
     }
 }
 
