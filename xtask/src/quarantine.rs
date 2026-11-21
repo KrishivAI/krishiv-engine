@@ -174,7 +174,8 @@ fn flaky_tests(log: &str) -> BTreeSet<(String, String)> {
         let Some((_, after)) = rest.split_once(']') else {
             continue;
         };
-        let mut words = after.split_whitespace();
+        // nextest 0.9.x prints a counter such as `(2/2)` or `(───)` after the duration.
+        let mut words = after.split_whitespace().skip_while(|w| w.starts_with('('));
         if let (Some(binary), Some(name)) = (words.next(), words.next()) {
             let package = binary.split("::").next().unwrap_or(binary);
             out.insert((package.to_owned(), name.to_owned()));
@@ -354,11 +355,12 @@ mod tests {
 
     #[test]
     fn flaky_lines_are_found_with_or_without_colour() {
-        let log = "        PASS [   0.1s] a::b ok\n\u{1b}[33m       FLAKY\u{1b}[0m 2/3 [   0.5s] krishiv-session::udaf window_x\n        FLAKY 2/3 [   0.5s] krishiv-exec lib_test\n";
+        let log = "        FLAKY 2/3 [   0.005s] (2/2) flk flips\n        PASS [   0.1s] a::b ok\n\u{1b}[33m       FLAKY\u{1b}[0m 2/3 [   0.5s] krishiv-session::udaf window_x\n        FLAKY 2/3 [   0.5s] krishiv-exec lib_test\n";
         let got: Vec<_> = flaky_tests(log).into_iter().collect();
         assert_eq!(
             got,
             vec![
+                ("flk".to_owned(), "flips".to_owned()),
                 ("krishiv-exec".to_owned(), "lib_test".to_owned()),
                 ("krishiv-session".to_owned(), "window_x".to_owned())
             ]
