@@ -1430,6 +1430,25 @@ fn late_payload_join_defaults_on_and_parses() {
     assert!(c.set("krishiv.optimizer.latePayloadJoin", "maybe").is_err());
 }
 
+#[test]
+fn semi_below_outer_join_defaults_on_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&SEMI_BELOW_OUTER_JOIN).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    c.set("krishiv.optimizer.semiBelowOuterJoin", "false")
+        .unwrap();
+    assert_eq!(
+        c.get(&SEMI_BELOW_OUTER_JOIN).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(
+        c.set("krishiv.optimizer.semiBelowOuterJoin", "maybe")
+            .is_err()
+    );
+}
+
 mod flight_sql;
 mod payload_above;
 

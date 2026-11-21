@@ -47,6 +47,11 @@
 //!    A5): an aggregate grouping by a dimension's proven-unique key and its
 //!    payload groups by the other side's key, the dimension joined above it;
 //!    then join order, eager aggregation, prune and tidy again when it moved.
+//!    **Semi join below an outer join**, once, with statistics
+//!    (`outer_semi`; `krishiv.optimizer.semiBelowOuterJoin`): a filtered
+//!    relation an inner join above an outer join joins to the outer join's
+//!    preserved side reduces that side below it with a key-only semi join;
+//!    then join order, prune and tidy again when it added one.
 //!    **Late payload join**, once, with statistics (`late_payload`): a
 //!    dimension's payload columns join above the semi, anti and outer joins
 //!    that never read them, a key-only semi join left in place; then join
@@ -82,6 +87,7 @@ mod join_order;
 mod late_payload;
 mod limit;
 mod narrow;
+mod outer_semi;
 mod partition_advice;
 mod payload_above;
 mod plan_stats;
@@ -101,8 +107,8 @@ use std::sync::Arc;
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
     EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
-    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE,
-    SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER, SEMI_BELOW_OUTER_JOIN,
+    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -190,6 +196,11 @@ pub struct Options {
     /// join above the semi and anti joins that never read them. Needs
     /// statistics; a session configuration, when given, can switch it off.
     pub late_payload_join: bool,
+    /// Semi joins below outer joins (`outer_semi`): a filtered relation an
+    /// inner join above an outer join joins to its preserved side also
+    /// reduces that side below it. Needs statistics; a session
+    /// configuration, when given, can switch it off.
+    pub semi_below_outer_join: bool,
     /// Payload above the aggregate (`payload_above`, design P2b A5): an
     /// aggregate grouping by a dimension's key and payload groups by the
     /// other side's key, and the dimension joins above it. Needs statistics
@@ -228,6 +239,7 @@ impl Default for Options {
             stats_propagation: true,
             eager_aggregation: true,
             late_payload_join: true,
+            semi_below_outer_join: true,
             payload_above_aggregate: true,
             subquery_as_window: true,
             share_repeated_subtrees: true,
@@ -697,6 +709,34 @@ fn run(
                     root = prune_and_tidy(&ordered, Some(stats), &mut t)?;
                 }
                 root
+            }
+            _ => root,
+        };
+        // After the final join order and pruning, before the late payload
+        // join (whose key-only semi joins it leaves alone, and which leaves
+        // its semi joins alone): a filtered relation an inner join above an
+        // outer join joins to the preserved side reduces that side below the
+        // outer join too. The outer join's input estimates change, so the
+        // joins above it are ordered again, then pruned and tidied.
+        let below = options.semi_below_outer_join
+            && udfs.is_none_or(|(_, config)| {
+                config
+                    .get(&SEMI_BELOW_OUTER_JOIN)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
+        let root = match stats {
+            Some(stats) if below => {
+                let (after, notes) =
+                    outer_semi::rewrite(Arc::clone(&root), stats, options.stats_propagation)?;
+                t.step("SemiBelowOuterJoin", 1, "SemiBelowOuterJoin", &root, &after);
+                t.notes("SemiBelowOuterJoin", &after, notes);
+                if Arc::ptr_eq(&after, &root) {
+                    after
+                } else {
+                    let ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
+                    prune_and_tidy(&ordered, Some(stats), &mut t)?
+                }
             }
             _ => root,
         };

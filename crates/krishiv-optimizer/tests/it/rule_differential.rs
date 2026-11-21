@@ -58,7 +58,7 @@ type Rule = (&'static str, Off);
 type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
 
 /// The switched rules.
-const RULES: [Rule; 8] = [
+const RULES: [Rule; 9] = [
     ("cse", Off::Option(|o| o.cse = false)),
     (
         "stats_propagation",
@@ -75,6 +75,10 @@ const RULES: [Rule; 8] = [
     (
         "late_payload_join",
         Off::Option(|o| o.late_payload_join = false),
+    ),
+    (
+        "semi_below_outer_join",
+        Off::Option(|o| o.semi_below_outer_join = false),
     ),
     ("group_key_code", Off::Option(|o| o.group_key_code = false)),
     (

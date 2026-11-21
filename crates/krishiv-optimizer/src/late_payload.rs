@@ -254,7 +254,7 @@ fn null_aware(on: &Arc<Expr>) -> bool {
 }
 
 /// The rows the scans of `p` read, as estimated.
-fn scanned_rows(p: &Arc<LogicalPlan>, est: &mut Estimator<'_>) -> f64 {
+pub(crate) fn scanned_rows(p: &Arc<LogicalPlan>, est: &mut Estimator<'_>) -> f64 {
     let mut total = 0.0;
     let mut seen = HashSet::new();
     let mut stack = vec![Arc::clone(p)];

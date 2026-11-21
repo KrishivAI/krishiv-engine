@@ -85,6 +85,24 @@ pub static LATE_PAYLOAD_JOIN: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// A key-only semi join below an outer join's preserved side, from a filtered relation an inner join
+/// above joins to it (`krishiv.optimizer.semiBelowOuterJoin`).
+pub static SEMI_BELOW_OUTER_JOIN: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.semiBelowOuterJoin",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "When an inner join above an outer join joins a filtered relation to the outer join's \
+          preserved side (TPC-DS q40's sales joined to returns, then to a filtered item), also \
+          reduce the preserved side below the outer join with a semi join on that relation's join \
+          keys, so the outer join builds and probes only the rows the inner join keeps. Applies \
+          when statistics show the semi join keeps at most a quarter of the rows. Results are the \
+          same either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
 /// Whether a dimension's payload columns join above the aggregate that groups by them (P2b A5,
 /// `krishiv.optimizer.payloadAboveAggregate`).
 pub static PAYLOAD_ABOVE_AGGREGATE: ConfigEntry = ConfigEntry {

@@ -16,6 +16,7 @@ mod join_enumerator;
 mod join_order;
 mod late_payload;
 mod oracle;
+mod outer_semi;
 mod payload_above;
 mod plan_stats;
 mod props;

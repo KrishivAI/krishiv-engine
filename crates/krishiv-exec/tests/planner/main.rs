@@ -30,6 +30,7 @@ mod late_fetch;
 mod late_payload;
 mod listing;
 mod orientation;
+mod outer_semi;
 mod output_filter;
 mod partial_aggregate;
 mod payload_above;

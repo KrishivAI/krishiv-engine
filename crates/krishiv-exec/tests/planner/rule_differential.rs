@@ -45,7 +45,7 @@ enum Off {
 }
 
 /// The switched rules: the optimizer differential's list.
-const RULES: [(&str, Off); 8] = [
+const RULES: [(&str, Off); 9] = [
     ("cse", Off::Option(|o| o.cse = false)),
     (
         "stats_propagation",
@@ -62,6 +62,10 @@ const RULES: [(&str, Off); 8] = [
     (
         "late_payload_join",
         Off::Option(|o| o.late_payload_join = false),
+    ),
+    (
+        "semi_below_outer_join",
+        Off::Option(|o| o.semi_below_outer_join = false),
     ),
     ("group_key_code", Off::Option(|o| o.group_key_code = false)),
     (
