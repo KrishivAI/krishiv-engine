@@ -1,0 +1,1 @@
+The `krishiv` crate now exports `ErrorClass` and `ErrorQueryContext`, so code can match on `error.error_class()` without depending on `krishiv-common`; the crate docs say which Cargo features are reserved names.

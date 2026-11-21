@@ -12,6 +12,8 @@ pub use krishiv::DataType
 pub use krishiv::EngineRuntime
 pub use krishiv::EngineRuntimeBuilder
 pub use krishiv::Error
+pub use krishiv::ErrorClass
+pub use krishiv::ErrorQueryContext
 pub use krishiv::Estimate
 pub use krishiv::ExplainMode
 pub use krishiv::ExplainVerbose
