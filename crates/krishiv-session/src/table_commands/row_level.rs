@@ -145,6 +145,10 @@ impl Session {
         let Some(table) = provider.row_level(op) else {
             return Ok(None);
         };
+        // A Delta table's root as delta-spark's errors name it (`file:/..`), for a table by path
+        // and for a catalog table over a Delta location alike (its scan keeps the table's name).
+        #[cfg(feature = "delta")]
+        let delta_root = probe.env.catalog.delta_root(&scan).transpose()?;
         let columns: Vec<TableColumn> = probe
             .analyzed
             .output
@@ -307,12 +311,27 @@ impl Session {
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let target = first_scan(physical.root())
             .ok_or_else(|| internal("a row-level rewrite that reads no table".to_owned()))?;
-        // The condition as the table's conflict check and commit record take it (the parsed,
-        // unresolved expression: column names as written).
-        let read_filter = match condition {
-            Some(c) => Some(Arc::new(crate::functions::expr(c)?.expr)),
-            None => None,
+        // The rewrite's own read is the hidden provider: a scan of the target in it is a subquery's
+        // (or a view's) read of the table. A Delta target is compared by its resolved root, so
+        // `/t`, `/t/`, `file:/t` and the catalog table over that location are one table.
+        #[cfg(feature = "delta")]
+        let rereads_target = match &delta_root {
+            Some(root) => crate::catalog::reads_delta_root(
+                analysis.analyzed.plan.root(),
+                root,
+                &analysis.env.catalog,
+            ),
+            None => crate::catalog::reads_source(analysis.analyzed.plan.root(), &scan.source),
         };
+        #[cfg(not(feature = "delta"))]
+        let rereads_target =
+            crate::catalog::reads_source(analysis.analyzed.plan.root(), &scan.source);
+        let read_filter = read_filter(condition, rereads_target)?;
+        #[cfg(test)]
+        tests::READ_FILTERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((quoted.to_string(), read_filter.is_some()));
         let mut request = RowLevelWrite::new(
             op,
             quoted,
@@ -514,6 +533,25 @@ impl<F> Drop for Swept<F> {
     }
 }
 
+/// What the statement read, for the table's conflict check: the condition (the parsed,
+/// unresolved expression: column names as written), or `None` for every row. A statement whose
+/// subquery (in an assignment, or through a view) reads the target table again reads every row:
+/// delta-spark records that scan's own predicates in the transaction's read set, and the whole
+/// table is a superset of them, so no conflict is missed (an over-approximation: delta-spark
+/// conflicts only on the subquery's predicates). A subquery over another table records nothing on
+/// the target, so the condition stays (#909 review, finding 2).
+fn read_filter(
+    condition: Option<&str>,
+    rereads_target: bool,
+) -> Result<Option<Arc<krishiv_plan::Expr>>, KrishivError> {
+    if rereads_target {
+        return Ok(None);
+    }
+    condition
+        .map(|c| Ok(Arc::new(crate::functions::expr(c)?.expr)))
+        .transpose()
+}
+
 /// Whether `e` holds a subquery anywhere.
 fn has_subquery(e: &krishiv_plan::Expr) -> bool {
     let mut stack: Vec<&krishiv_plan::Expr> = vec![e];
@@ -550,11 +588,11 @@ pub(super) fn write_failed(
 
 /// The assigned column an arithmetic error `e` (SQLSTATE 22003 or 22012: Spark's
 /// `ArithmeticException`s, such as `CAST_OVERFLOW`, `ARITHMETIC_OVERFLOW` and
-/// `DIVIDE_BY_ZERO`) may come from: one whose store-assignment cast can overflow (an integral
-/// or decimal column whose value's type does not up-cast to it; delta-spark's
-/// `CheckOverflowInTableWrite`, `UpdateExpressionsSupport.scala:729-757`), with the value's
-/// and the column's types. Krishiv cannot tell which value raised: the first such column in
-/// table order.
+/// `DIVIDE_BY_ZERO`) may come from: one whose store-assignment cast can overflow (a column
+/// whose type holds an integral or decimal type, at any depth, and that the value's type does
+/// not `Cast.canUpCast` to; delta-spark's `CheckOverflowInTableWrite`,
+/// `UpdateExpressionsSupport.scala:719-757`), with the value's and the column's types. Krishiv
+/// cannot tell which value raised: the first such column in table order.
 fn store_assignment_overflow<'a>(
     e: &KrishivError,
     columns: &'a [TableColumn],
@@ -563,17 +601,9 @@ fn store_assignment_overflow<'a>(
     if !matches!(e.sql_state(), Some("22003" | "22012")) {
         return None;
     }
-    let rank = |t: &DataType| match t {
-        DataType::Byte => Some(1),
-        DataType::Short => Some(2),
-        DataType::Integer => Some(3),
-        DataType::Long => Some(4),
-        _ => None,
-    };
+    // delta-spark's `canCauseCastOverflow` (`:729-732`).
     let can_overflow = |from: &DataType, to: &DataType| {
-        let target = rank(to).is_some() || matches!(to, DataType::Decimal(..));
-        let up_cast = matches!((rank(from), rank(to)), (Some(a), Some(b)) if a <= b);
-        target && from != to && !up_cast
+        contains_integral_or_decimal(to) && !crate::view_schema::can_up_cast(from, to)
     };
     columns.iter().find_map(|c| {
         value_types
@@ -583,6 +613,27 @@ fn store_assignment_overflow<'a>(
             })
             .map(|(_, value)| (c.name.as_str(), value, &c.data_type))
     })
+}
+
+/// delta-spark's `containsIntegralOrDecimalType` (`UpdateExpressionsSupport.scala:719-727`).
+fn contains_integral_or_decimal(t: &DataType) -> bool {
+    match t {
+        DataType::Byte
+        | DataType::Short
+        | DataType::Integer
+        | DataType::Long
+        | DataType::Decimal(_) => true,
+        DataType::Array(a) => contains_integral_or_decimal(a.element_type()),
+        DataType::Map(m) => {
+            contains_integral_or_decimal(m.key_type())
+                || contains_integral_or_decimal(m.value_type())
+        }
+        DataType::Struct(s) => s
+            .fields()
+            .iter()
+            .any(|f| contains_integral_or_decimal(f.data_type())),
+        _ => false,
+    }
 }
 
 /// The touched files (each once) and the total hit count of the find query's rows.

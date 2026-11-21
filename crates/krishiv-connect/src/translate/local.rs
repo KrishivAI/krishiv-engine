@@ -37,6 +37,8 @@ pub enum LocalRequest {
         /// The hash the client names.
         hash: String,
     },
+    /// `Relation.catalog`: a call of `spark.catalog` the host runs, answering its result rows.
+    Catalog(super::catalog::CatalogCall),
 }
 
 /// Where the translator gets its local relations from.

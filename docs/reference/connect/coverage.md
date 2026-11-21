@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 11 done, 9 partial, 38 missing, 4 out of scope.
+62 arms: 13 done, 14 partial, 31 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -23,9 +23,9 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 9 | aggregate | partial | GROUP_TYPE_PIVOT | Aggregate; pivot → Pivot (exists) | P3-T012 | 2 |
 | 10 | sql | partial | DataFrame arguments (with_relations) | Sql; the with_relations form (#41) for DataFrame arguments | P3-T012 | 4 |
 | 11 | local_relation | done |  | Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit | P3-T012a | 1 |
-| 12 | sample | missing |  | new Sample (Bernoulli/Poisson with seed, Spark's XORShiftRandom order) | P3-T012 | 3 |
+| 12 | sample | partial | with_replacement (Poisson) and deterministic_order (randomSplit) | Sample (Bernoulli, seed or one drawn per plan, Spark's XORShiftRandom order); Poisson needs a new IR field; deterministic_order needs the per-partition sort | P3-T012 | 3 |
 | 13 | offset | done |  | Offset | P2-T091a | 0 |
-| 14 | deduplicate | missing |  | lowering: Distinct (all columns) or Aggregate with first per non-key column; within_watermark → P4 | P3-T012 | 3 |
+| 14 | deduplicate | partial | a column subset and within_watermark | Distinct (all columns); a subset is Aggregate with first per non-key column and needs the input columns (analyzer node); within_watermark → P4 | P3-T012 | 3 |
 | 15 | range | done |  | Range | P2-T091a | 0 |
 | 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
 | 17 | repartition | missing |  | Repartition (round robin / coalesce) | P3-T012 | 3 |
@@ -35,10 +35,10 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 21 | drop | missing |  | lowering: Project without the dropped columns (names or column references) | P3-T012 | 4 |
 | 22 | tail | missing |  | new Tail (the last n rows in plan order; not Sort + Limit) | P3-T012 | 3 |
 | 23 | with_columns | partial | Alias.metadata | WithColumns; metadata on the column field | P3-T012 | 4 |
-| 24 | hint | missing |  | Hint | P3-T012 | 3 |
-| 25 | unpivot | missing |  | Unpivot | P3-T012 | 2 |
+| 24 | hint | done |  | Hint; as Spark 4.2: parameters are literals or lists of them, a partitioning hint is dropped with a warning (3.5 reads parameters differently) | P3-T012 | 3 |
+| 25 | unpivot | partial | absent values, values that are not columns, and a column that is also an id or listed twice | Project(ids, values) then Unpivot with nulls kept; values absent → every non-id column, known only after analysis | P3-T012 | 2 |
 | 26 | to_schema | missing |  | lowering: Project of by-name Cast and reorder (Spark's Dataset.to) | P3-T012 | 4 |
-| 27 | repartition_by_expression | missing |  | Repartition (hash or range) | P3-T012 | 3 |
+| 27 | repartition_by_expression | partial | num_partitions, no expressions (round robin), repartitionByRange | Repartition (hash); a partition count, a round-robin repartition and SortOrder expressions need IR fields | P3-T012 | 3 |
 | 28 | map_partitions | partial | is_barrier = true, profile_id, Scala/Java functions (56K00), eval types other than 205/207 (FUNCTION_EVAL_TYPE_NOT_SUPPORTED), additional_includes | MapPartitions (mapInPandas 205, mapInArrow 207) over the PythonUdfRef the server's UdfHost names (Usage on System(udf), as for inline UDFs); runs on the session's Python workers | P3-T014 | 6 |
 | 29 | collect_metrics | done |  | CollectMetrics (observe); the server returns ObservedMetrics after the action | P3-T084 | 6 |
 | 30 | parse | missing |  | lowering: Project of from_json / from_csv over a string relation | P3-T012 | 4 |
@@ -71,14 +71,14 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 105 | approx_quantile | missing |  | Aggregate approx_percentile with relative error | P3-T012 | 5 |
 | 106 | freq_items | missing |  | new aggregate (Spark's frequent-items sketch, support) | P3-T012 | 5 |
 | 107 | sample_by | missing |  | lowering: Filter with a seeded rand() against the per-stratum fraction | P3-T012 | 5 |
-| 200 | catalog | missing |  | the 36 catalog operations | P3-T082 | 9 |
+| 200 | catalog | done |  | a call of the session's `spark.catalog` run by the host while the plan is prepared (`LocalRequest::Catalog`), its rows the local relation the plan reads; `execute/catalog_call.rs`, tests/catalog.rs | P3-T082 | 9 |
 | 300 | ml_relation | out of scope |  | machine learning is out of scope |  | 0 |
-| 998 | extension | missing |  | the krishiv.v1 extension handler; a message no handler claims is refused | P3-T015 | 10 |
+| 998 | extension | partial | every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); Echo is a one-row Project over OneRowRelation | P3-T015 | 10 |
 | 999 | unknown | out of scope |  | Spark falls to case other and answers 56K00 with UNKNOWN(999) |  | 0 |
 
 ## Expression.expr_type
 
-22 arms: 4 done, 6 partial, 11 missing, 1 out of scope.
+22 arms: 4 done, 7 partial, 10 missing, 1 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -103,11 +103,11 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 20 | typed_aggregate_expression | out of scope |  | Scala typed Dataset aggregation; unsupported row |  | 0 |
 | 21 | subquery_expression | missing |  | Subquery (scalar, EXISTS, IN) referencing with_relations | P3-T012 | 4 |
 | 22 | direct_shuffle_partition_id | missing |  | partition id passed through for repartition_by_expression (expressions.proto §DirectShufflePartitionID); Repartition by explicit id | P3-T012 | 3 |
-| 999 | extension | missing |  | T015 | P3-T015 | 10 |
+| 999 | extension | partial | every krishiv.v1 message but Echo, and any other package (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); Echo is a string Literal | P3-T015 | 10 |
 
 ## Command.command_type
 
-20 arms: 2 done, 4 partial, 8 missing, 6 out of scope.
+20 arms: 2 done, 5 partial, 7 missing, 6 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -130,50 +130,50 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 17 | ml_command | out of scope |  | machine learning is out of scope; a client may send it for cache cleanup when a session ends |  | 0 |
 | 18 | execute_external_command | missing |  | refusal: runs a command on an external JDBC source (executeExternal); no JDBC connector in P3 | P3-T012 | 4 |
 | 19 | pipeline_command | out of scope |  | pipelines are out of scope until P4 |  | 0 |
-| 999 | extension | missing |  | T015 | P3-T015 | 10 |
+| 999 | extension | partial | every krishiv.v1 message: none is registered for a command yet (KRISHIV_UNSUPPORTED_FEATURE naming the capability) | the krishiv.v1 registry (`extension::resolve`); the server runs a command extension when one is registered | P3-T015 | 10 |
 
 ## Catalog.cat_type
 
-36 arms: 0 done, 0 partial, 36 missing, 0 out of scope.
+36 arms: 36 done, 0 partial, 0 missing, 0 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
-| 1 | current_database | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 2 | set_current_database | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 3 | list_databases | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 4 | list_tables | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 5 | list_functions | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 6 | list_columns | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 7 | get_database | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 8 | get_table | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 9 | get_function | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 10 | database_exists | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 11 | table_exists | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 12 | function_exists | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 13 | create_external_table | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 14 | create_table | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 15 | drop_temp_view | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 16 | drop_global_temp_view | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 17 | recover_partitions | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 18 | is_cached | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 19 | cache_table | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 20 | uncache_table | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 21 | clear_cache | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 22 | refresh_table | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 23 | refresh_by_path | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 24 | current_catalog | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 25 | set_current_catalog | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 26 | list_catalogs | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 27 | drop_table | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 28 | drop_view | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 29 | create_database | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 30 | drop_database | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 31 | list_partitions | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 32 | list_views | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 33 | get_table_properties | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 34 | get_create_table_string | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 35 | truncate_table | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
-| 36 | analyze_table | missing |  | lowered to the statement of its SQL path | P3-T082 | 9 |
+| 1 | current_database | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 2 | set_current_database | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 3 | list_databases | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 4 | list_tables | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 5 | list_functions | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 6 | list_columns | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 7 | get_database | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 8 | get_table | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 9 | get_function | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 10 | database_exists | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 11 | table_exists | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 12 | function_exists | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 13 | create_external_table | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 14 | create_table | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 15 | drop_temp_view | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 16 | drop_global_temp_view | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 17 | recover_partitions | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 18 | is_cached | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 19 | cache_table | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 20 | uncache_table | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 21 | clear_cache | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 22 | refresh_table | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 23 | refresh_by_path | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 24 | current_catalog | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 25 | set_current_catalog | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 26 | list_catalogs | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 27 | drop_table | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 28 | drop_view | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 29 | create_database | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 30 | drop_database | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 31 | list_partitions | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 32 | list_views | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 33 | get_table_properties | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 34 | get_create_table_string | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 35 | truncate_table | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
+| 36 | analyze_table | done |  | the session catalog's call of that name (`CatalogCall`); Spark's overload by `db_name`; the result rows of Spark's `Dataset` | P3-T082 | 9 |
 
 ## Expression.Literal.literal_type
 
@@ -208,7 +208,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## DataType.kind
 
-30 arms: 23 done, 0 partial, 7 missing, 0 out of scope.
+30 arms: 23 done, 1 partial, 6 missing, 0 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -234,7 +234,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 20 | array | done |  | DataType | P2-T091a | 1 |
 | 21 | struct | done |  | DataType | P2-T091a | 1 |
 | 22 | map | done |  | DataType | P2-T091a | 1 |
-| 23 | udt | missing |  | no IR type | P3-T012 | 1 |
+| 23 | udt | partial | a JVM UDT with no sql_type (Spark builds it from the JVM class alone; Krishiv cannot load JVM classes, so `sql_type` is required and the answer is INVALID_ONE_OF_FIELD_NOT_SET) | DataType::Udt | P3-T079 | 1 |
 | 24 | unparsed | missing |  | a type string parsed by the SQL type parser | P3-T012 | 1 |
 | 25 | variant | done |  | DataType | P2-T091a | 1 |
 | 26 | geometry | done |  | DataType | P2-T091a | 1 |

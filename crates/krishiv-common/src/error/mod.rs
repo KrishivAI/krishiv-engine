@@ -286,6 +286,32 @@ impl KrishivError {
         self
     }
 
+    /// This error with every occurrence of `value` in its message parameters
+    /// replaced by [`crate::redact::REDACTED`] and the message rendered again:
+    /// for an error about the setting `key` whose value must not be shown
+    /// ([`crate::redact::is_redacted_setting`]). Other parameter text stays,
+    /// and so does each occurrence of `key`, so the key is still named; a
+    /// value inside a longer word goes too, the safe side. When keeping the
+    /// key would leave the value readable (the value contains the key and is
+    /// longer, or overlaps it), the value is replaced everywhere, key
+    /// included. A value equal to the key stays: the key already shows it. The
+    /// class, the SQLSTATE and the query contexts are kept; a cause is
+    /// dropped. An empty `value` changes nothing.
+    #[must_use]
+    pub fn with_value_redacted(mut self, value: &str, key: &str) -> Self {
+        if value.is_empty() {
+            return self;
+        }
+        for (_, text) in &mut self.parameters {
+            if text.contains(value) {
+                *text = redact_outside_key(text, value, key);
+            }
+        }
+        self.message = template::render(self.class.message_template(), &self.parameters);
+        self.cause = None;
+        self
+    }
+
     /// The same error caused by `cause` (replacing any earlier cause).
     #[must_use]
     pub fn with_cause(mut self, cause: KrishivError) -> Self {
@@ -431,3 +457,42 @@ pub fn docs_markdown() -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// `text` with every occurrence of `value` that is not wholly inside an
+/// occurrence of `key` replaced by [`crate::redact::REDACTED`] (a run of
+/// touching or overlapping occurrences becomes one marker). An occurrence
+/// that straddles a key's edge is replaced, key text included, so the value
+/// never stays readable.
+fn redact_outside_key(text: &str, value: &str, key: &str) -> String {
+    let all = |needle: &str| -> Vec<usize> {
+        let mut found = Vec::new();
+        let mut from = 0;
+        while let Some(at) = text.get(from..).and_then(|rest| rest.find(needle)) {
+            found.push(from + at);
+            from += at + needle.chars().next().map_or(1, char::len_utf8);
+        }
+        found
+    };
+    let keys = if key.is_empty() { Vec::new() } else { all(key) };
+    let mut hidden = vec![false; text.len()];
+    for at in all(value) {
+        let end = at + value.len();
+        if !keys.iter().any(|&k| k <= at && end <= k + key.len()) {
+            hidden[at..end].iter_mut().for_each(|h| *h = true);
+        }
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut in_run = false;
+    for (at, c) in text.char_indices() {
+        if hidden[at] {
+            if !in_run {
+                out.push_str(crate::redact::REDACTED);
+            }
+            in_run = true;
+        } else {
+            out.push(c);
+            in_run = false;
+        }
+    }
+    out
+}

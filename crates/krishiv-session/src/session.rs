@@ -120,6 +120,8 @@ pub struct Session {
     /// The statement's fixed query start ([`crate::QueryOptions::query_start`]); `None`: each
     /// plan reads the clock.
     pub(crate) query_start: Option<i64>,
+    /// The statement is work accepted before a drain ([`crate::QueryOptions::admitted_before_drain`]).
+    pub(crate) drain_exempt: bool,
     /// The statement's request tags ([`crate::QueryOptions::tags`]).
     pub(crate) request_tags: Arc<[Arc<str>]>,
     /// The trace of the request that started the statement ([`crate::QueryOptions::inbound_trace`]):
@@ -1248,6 +1250,7 @@ impl Session {
             Arc::clone(&paths),
             Arc::clone(&config),
         ));
+        let declared_paths = Arc::clone(&paths);
         let delta = Arc::new(crate::delta::DeltaReads::new(crate::delta::DeltaInputs {
             io: io.clone(),
             paths,
@@ -1275,6 +1278,14 @@ impl Session {
             relations: Arc::clone(&self.state.relations),
             memory: Arc::clone(&self.state.memory),
         };
+        let declared =
+            self.declared_catalogs()
+                .for_query(crate::catalog_registry::ScanInputs::new(
+                    io.clone(),
+                    declared_paths,
+                    Arc::clone(&config),
+                    scans.slots,
+                ));
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
             Arc::clone(&self.state.cache),
@@ -1297,7 +1308,7 @@ impl Session {
                     self.state.runtime.profile_history.clone(),
                     Arc::clone(&self.state.runtime.executor),
                 )),
-                catalogs: self.declared_catalogs(),
+                catalogs: declared,
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1383,7 +1394,6 @@ impl Session {
             identifier_spans: Arc::default(),
             identifier_written: Arc::default(),
             observers: Arc::default(),
-            view_keeps: Arc::default(),
             withhold_profile: Arc::default(),
             cache_generation,
             cache_cap,
@@ -1401,13 +1411,15 @@ impl Session {
 
     /// Analyzes `plan` (`text` is the redacted query the plan came
     /// from, if it came from SQL text: analysis errors carry its span
-    /// as their query context).
+    /// as their query context). Also returns what the temporary view entries the analysis
+    /// inlined kept (`TempTable::View::keeps`), the query's and its function bodies': the handles
+    /// of the definitions the query runs, whatever replaced them since.
     pub(crate) async fn analyze_in(
         &self,
         plan: &Arc<LogicalPlan>,
         env: &QueryEnv,
         text: Option<&RedactedSql>,
-    ) -> Result<AnalyzedPlan, KrishivError> {
+    ) -> Result<(AnalyzedPlan, Vec<crate::catalog::Keep>), KrishivError> {
         // A store setting this session redirected (endpoint, region, account) could send the
         // server's credentials to another host:
         // asked once per analysis, before any table or file is read (P3-T067b).
@@ -1454,9 +1466,7 @@ impl Session {
         let mut inlined = std::mem::take(&mut expansion.views);
         // What a definer view being created pins (review r10 M10).
         env.sql_functions.note_views(&expansion.reached);
-        *env.view_keeps
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = std::mem::take(&mut expansion.keeps);
+        let mut keeps = std::mem::take(&mut expansion.keeps);
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
@@ -1595,6 +1605,7 @@ impl Session {
         }
         // The view side table: where each view the query and its functions' bodies inlined landed.
         inlined.extend(env.sql_functions.body_views());
+        keeps.extend(env.sql_functions.body_keeps());
         analyzed.views = krishiv_plan::analyzer::views::locate_views(analyzed.plan.root(), inlined);
         for view in views {
             let securable = krishiv_plan::analyzer::Securable::View(view);
@@ -1608,7 +1619,7 @@ impl Session {
                     });
             }
         }
-        Ok(analyzed)
+        Ok((analyzed, keeps))
     }
 
     /// Runs `physical`; the stream's batches are its result rows.
@@ -1665,12 +1676,18 @@ impl Session {
 
     /// `error`, when it is a memory error of a query whose spill directory could not be set up,
     /// as that failure (the memory error stays its cause): the query may have needed to spill
-    /// (PY-078). Applied below the metrics fold, so `system.queries` and the caller agree.
+    /// (PY-078). A refused reservation and an arbitration abort are both such errors: which
+    /// one ends a query that cannot spill depends on timing. Applied below the metrics fold,
+    /// so `system.queries` and the caller agree.
     fn name_spill_failure(
         error: KrishivError,
         failure: &std::sync::Mutex<Option<KrishivError>>,
     ) -> KrishivError {
-        if error.error_class() != krishiv_common::error::ErrorClass::UnableToAcquireMemory {
+        use krishiv_common::error::ErrorClass;
+        if !matches!(
+            error.error_class(),
+            ErrorClass::UnableToAcquireMemory | ErrorClass::KrishivQueryAbortedOutOfMemory
+        ) {
             return error;
         }
         let found = failure
@@ -1736,7 +1753,8 @@ impl Session {
     ///
     /// Every run completes the frame's observations: a delivered stream as it ends, a run that
     /// fails before it has one (closed session, refused admission, failed submit) with its
-    /// error, and a caller that drops this future during the setup with `OPERATION_CANCELED`.
+    /// error, and a run dropped during the setup with the reason it was dropped for (the action's
+    /// cancellation, a panic, else the caller giving up: `OPERATION_CANCELED`).
     async fn run_on_query_logged(
         &self,
         physical: &PhysicalPlan,
@@ -1821,6 +1839,11 @@ impl Session {
                     None
                 } else {
                     env.history_job(self, &row_id, physical, detailed)
+                },
+                advisor: if withheld {
+                    None
+                } else {
+                    crate::query_fold::AdvisorJob::of(physical, &env.config)
                 },
                 withhold_operators: withheld,
             }),

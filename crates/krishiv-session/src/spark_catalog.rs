@@ -7,6 +7,8 @@
 
 use krishiv_common::error::KrishivError;
 
+mod ops;
+
 use crate::catalog::{GLOBAL_NAMESPACE, global_key};
 use crate::session::Session;
 use crate::store::{CatalogStore, CatalogTable};
@@ -342,6 +344,29 @@ impl Catalog<'_> {
         &self,
         pattern: Option<&str>,
     ) -> Result<Vec<Database>, KrishivError> {
+        // A declared current catalog: its own namespaces (design P3-T067 PR-58b).
+        let current = self.current_catalog();
+        if self.is_declared(&current) {
+            self.authorize_as(&format!("SHOW NAMESPACES IN {}", quoted(&current)))
+                .await?;
+            let found = match self.session.declared_namespaces(&current, &[]).await {
+                Some(found) => found?,
+                None => return Err(Self::refuse_declared(&current)),
+            };
+            let mut out: Vec<Database> = found
+                .iter()
+                .map(|n| n.join("."))
+                .filter(|n| pattern.is_none_or(|p| crate::introspection::matches(p, n)))
+                .map(|name| Database {
+                    name,
+                    catalog: current.clone(),
+                    description: None,
+                    location_uri: String::new(),
+                })
+                .collect();
+            out.sort_by(|a, b| a.name.cmp(&b.name));
+            return Ok(out);
+        }
         self.authorize_as("SHOW NAMESPACES").await?;
         self.check_current()?;
         // Only what the principal may see, as `SHOW NAMESPACES` lists (P3-T062 §2.4).
@@ -352,6 +377,26 @@ impl Catalog<'_> {
             }
         }
         Ok(out)
+    }
+
+    /// The namespaces of the embedded catalog `spark_catalog` whatever the current catalog is,
+    /// sorted by name: the Arrow Flight SQL `GetDbSchemas` listing (design P3-T101 §5), which
+    /// names its catalog rather than following `USE`.
+    ///
+    /// # Errors
+    /// The access error `SHOW NAMESPACES` gives with `spark_catalog` current: `Browse` on the
+    /// catalog, audited as a read.
+    pub async fn list_embedded_databases(&self) -> Result<Vec<Database>, KrishivError> {
+        self.session
+            .authorize_privilege(
+                &krishiv_plan::analyzer::Securable::Namespace(vec![
+                    crate::catalog::CATALOG.to_owned(),
+                ]),
+                Privilege::Browse,
+                krishiv_sql::StatementClass::Read,
+            )
+            .await?;
+        Ok(self.databases(None))
     }
 
     fn databases(&self, pattern: Option<&str>) -> Vec<Database> {
@@ -486,6 +531,33 @@ impl Catalog<'_> {
         database: Option<&str>,
         pattern: Option<&str>,
     ) -> Result<Vec<Table>, KrishivError> {
+        // `cat.ns` of a declared catalog: the catalog's own listing (design P3-T067 PR-58b).
+        if let Some(d) = database
+            && let [catalog, ns @ ..] = parts(d).as_slice()
+            && !ns.is_empty()
+            && self.is_declared(catalog)
+        {
+            self.authorize_as(&format!("SHOW TABLES IN {}", quoted(d)))
+                .await?;
+            let found = match self.session.declared_tables(catalog, ns).await {
+                Some(found) => found?,
+                None => return Err(Self::refuse_declared(catalog)),
+            };
+            let mut out: Vec<Table> = found
+                .into_iter()
+                .filter(|n| pattern.is_none_or(|p| crate::introspection::matches(p, n)))
+                .map(|name| Table {
+                    name,
+                    catalog: Some(catalog.clone()),
+                    namespace: Some(ns.to_vec()),
+                    description: None,
+                    table_type: "EXTERNAL".to_owned(),
+                    is_temporary: false,
+                })
+                .collect();
+            out.sort_by(|a, b| a.name.cmp(&b.name));
+            return Ok(out);
+        }
         let statement = match database {
             Some(d) => format!("SHOW TABLES IN {}", quoted(d)),
             None => "SHOW TABLES".to_owned(),
@@ -736,10 +808,27 @@ impl Catalog<'_> {
         &self,
         pattern: Option<&str>,
     ) -> Result<Vec<Function>, KrishivError> {
+        self.list_functions_in(None, pattern).await
+    }
+
+    /// `spark.catalog.listFunctions(db, pattern)`: the built-in and session functions, and the stored
+    /// functions of `database` (the current one for `None`). The session's current database is not changed.
+    ///
+    /// # Errors
+    /// `SCHEMA_NOT_FOUND` for an unknown `database`, or the access error `SHOW FUNCTIONS` would give.
+    pub async fn list_functions_in(
+        &self,
+        database: Option<&str>,
+        pattern: Option<&str>,
+    ) -> Result<Vec<Function>, KrishivError> {
         self.authorize_as("SHOW FUNCTIONS").await?;
+        let db = match database {
+            Some(d) => self.get_database(d).await?.name,
+            None => self.current_database(),
+        };
         // A stored function is listed only to a principal that may see it (P3-T062 §2.4).
         let mut out = Vec::new();
-        for f in self.functions(pattern) {
+        for f in self.functions(&db, pattern) {
             if self.function_listed(&f).await {
                 out.push(f);
             }
@@ -764,7 +853,7 @@ impl Catalog<'_> {
         }
     }
 
-    fn functions(&self, pattern: Option<&str>) -> Vec<Function> {
+    fn functions(&self, db: &str, pattern: Option<&str>) -> Vec<Function> {
         let keep = |n: &str| pattern.is_none_or(|p| crate::introspection::matches(p, n));
         let mut out: Vec<Function> = krishiv_functions::registry::builtins()
             .functions()
@@ -811,14 +900,13 @@ impl Catalog<'_> {
                 });
             }
         }
-        let db = self.current_database();
         let stored = self.session.state.catalog.store.functions();
-        for f in stored.in_namespace(&db) {
+        for f in stored.in_namespace(db) {
             if keep(&f) {
                 out.push(Function {
                     name: f,
                     catalog: Some(crate::catalog::CATALOG.to_owned()),
-                    namespace: Some(vec![db.clone()]),
+                    namespace: Some(vec![db.to_owned()]),
                     description: None,
                     class_name: String::new(),
                     is_temporary: false,
@@ -854,7 +942,10 @@ impl Catalog<'_> {
             _ => return Err(not_found()),
         };
         let found = match database {
-            None => self.functions(None).into_iter().find(|f| f.name == last),
+            None => self
+                .functions(&self.current_database(), None)
+                .into_iter()
+                .find(|f| f.name == last),
             Some(db) => {
                 let db = self.lookup_database(db).map_err(|_| not_found())?.name;
                 self.stored_function(&db, &last)
@@ -905,17 +996,38 @@ impl Catalog<'_> {
         self.session.drop_temp_view(name)
     }
 
-    /// Drops the global temporary view; whether it existed.
-    #[must_use = "whether the view existed"]
-    pub fn drop_global_temp_view(&self, name: &str) -> bool {
+    /// Drops the global temporary view; whether it existed. Makes the access check of
+    /// `DROP VIEW global_temp.name` (`Drop` on the view) first, so the API removes no more than the SQL does.
+    ///
+    /// # Errors
+    /// The access error `DROP VIEW` would give.
+    pub async fn drop_global_temp_view(&self, name: &str) -> Result<bool, KrishivError> {
         let catalog = &self.session.state.catalog;
         let key = global_key(name);
         if !catalog.exists(&key, self.case_sensitive()) {
-            return false;
+            return Ok(false);
         }
+        self.authorize_as(&format!(
+            "DROP VIEW IF EXISTS {GLOBAL_NAMESPACE}.{}",
+            quote(name)
+        ))
+        .await?;
         let dropped = catalog.drop_table(&key);
         self.session.state.cache.invalidate_table(name);
-        dropped
+        Ok(dropped)
+    }
+
+    /// Checks that `name` can be cached (`CACHE TABLE name`): the access check of the statement, then the
+    /// name is analysed, so a missing table is `TABLE_OR_VIEW_NOT_FOUND` here and not a failure that only a
+    /// later query would meet. For a cache entry registered another way, such as at a storage level.
+    ///
+    /// # Errors
+    /// The access error `CACHE TABLE` would give, `TABLE_OR_VIEW_NOT_FOUND`.
+    pub async fn check_cache_target(&self, name: &str) -> Result<(), KrishivError> {
+        self.authorize_as(&format!("CACHE TABLE {}", quoted(name)))
+            .await?;
+        self.session.table(name).schema_for_metadata().await?;
+        Ok(())
     }
 
     /// `CACHE TABLE name`.
@@ -1073,8 +1185,14 @@ impl Catalog<'_> {
     }
 
     /// `CLEAR CACHE`.
-    pub fn clear_cache(&self) {
+    ///
+    /// # Errors
+    /// The access error of `CLEAR CACHE`, which drops the cached data of every session and so needs
+    /// `Manage` on the cluster.
+    pub async fn clear_cache(&self) -> Result<(), KrishivError> {
+        self.authorize_as("CLEAR CACHE").await?;
         self.session.clear_cache();
+        Ok(())
     }
 
     /// `REFRESH TABLE name`.

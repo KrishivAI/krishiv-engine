@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use crate::extension::{Extension, Slot, resolve};
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
     Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, Literal, NullOrdering, PlanId,
@@ -151,6 +152,9 @@ impl Translator<'_> {
                     mode,
                 }
             }
+            ExprType::Extension(any) => match resolve(any, Slot::Expression)? {
+                Extension::Echo(echo) => ExprNode::Literal(Literal::String(echo.message)),
+            },
             other => {
                 return Err(unsupported_variant(
                     "spark.connect.Expression",

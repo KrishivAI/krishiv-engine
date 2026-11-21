@@ -1104,6 +1104,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
         bloom_fpp,
         bloom_max_fpp,
         bloom_bytes,
+        bloom_spill_bytes,
     } = f.options;
     pb::JoinFilter {
         id: f.id.0,
@@ -1118,6 +1119,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
             bloom_fpp,
             bloom_max_fpp,
             bloom_bytes,
+            bloom_spill_bytes,
         }),
     }
 }
@@ -1184,6 +1186,15 @@ fn window_function(f: &WindowFunctionPlan, nested: &Cell<bool>) -> Result<pb::Wi
             input: *input as u64,
             n: *n,
             ignore_nulls: *ignore_nulls,
+            data_type: arrow_bytes(data_type, nested),
+        }),
+        WindowFunction::CounterDiff {
+            counter,
+            start_time,
+            data_type,
+        } => Function::CounterDiff(pb::CounterDiffFunction {
+            counter: *counter as u64,
+            start_time: start_time.map(|c| c as u64),
             data_type: arrow_bytes(data_type, nested),
         }),
     };
@@ -1742,6 +1753,24 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
             });
         }
         DataType::CalendarInterval => (Kind::CalendarInterval, 0, 0, 0),
+        DataType::Udt(u) => {
+            // Spark's JSON form: the class names and the storage type. A storage type that is an
+            // array, map or struct is a nested type the reader needs `nested_types` for.
+            if u.sql_type().any_type(&DataType::is_nested) {
+                nested.set(true);
+            }
+            // The decoder reads the UDT object as one depth level: refuse here what it would refuse there.
+            if t.nesting_depth() > DataType::MAX_NESTING_DEPTH {
+                return Err(CodecError::Unsupported(
+                    "a user-defined type nested deeper than the decoder reads".to_owned(),
+                ));
+            }
+            return Ok(pb::DataType {
+                kind: Kind::Udt as i32,
+                json: t.json(),
+                ..pb::DataType::default()
+            });
+        }
         DataType::CollatedString(c) => {
             // By canonical name: ids index an ICU build's table. INDETERMINATE is `null`.
             if c.is_utf8_binary() {

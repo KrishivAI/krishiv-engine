@@ -361,6 +361,15 @@ impl DeltaReads {
         has_delta_log(&engine).await
     }
 
+    /// The root of the table `source` reads, as delta-spark's errors name it (`file:/abs/dir`).
+    ///
+    /// # Errors
+    /// As [`Self::root_of`].
+    pub(crate) fn hadoop_root(&self, source: &ReadSource) -> Result<String, KrishivError> {
+        let (_, root) = self.root_of(source)?;
+        Ok(hadoop_path(&root))
+    }
+
     /// The provider of the table `source` reads, opened before planning.
     ///
     /// # Errors

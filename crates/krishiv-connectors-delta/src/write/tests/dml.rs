@@ -37,9 +37,12 @@ pub(super) fn row_files(
     op: RowLevelOperation,
 ) -> Vec<(i64, Vec<u8>, i64)> {
     let rl = table.row_level(op).unwrap();
-    let source = rl
-        .scan()
-        .unwrap()
+    scan_rows(env, &*rl.scan().unwrap())
+}
+
+/// `(id, file, position)` of every row `scan` reads.
+fn scan_rows(env: &Env, scan: &dyn krishiv_exec::ScanPushdown) -> Vec<(i64, Vec<u8>, i64)> {
+    let source = scan
         .build(ScanPushdowns {
             projection: Some(vec![
                 ColumnPath::new("id"),
@@ -181,6 +184,34 @@ fn the_row_id_is_the_logged_path_and_the_position_in_the_file_past_deletion_vect
         assert_eq!(*pos, *id, "row {id}");
         assert!(paths.iter().any(|p| p.as_bytes() == file.as_slice()));
     }
+    assert_eq!(env.query_pool.reserved(), 0);
+}
+
+#[test]
+fn the_scan_of_the_touched_files_reads_only_their_rows() {
+    let env = Env::new();
+    two_file_table(&env, &[]);
+    let table = env.open().unwrap();
+    let all = row_files(&env, &table, RowLevelOperation::Update);
+    let touched = the_file_of(&all, 5);
+    let rl = table.row_level(RowLevelOperation::Update).unwrap();
+    let read = scan_rows(
+        &env,
+        &*rl.scan_files(std::slice::from_ref(&touched)).unwrap(),
+    );
+    let expected: Vec<_> = all
+        .iter()
+        .filter(|(_, f, _)| *f == touched)
+        .cloned()
+        .collect();
+    assert_eq!(read, expected);
+    assert_eq!(
+        read.iter().map(|(id, ..)| *id).collect::<Vec<_>>(),
+        [4, 5, 6],
+        "the second append's file"
+    );
+    // No file named: nothing is read.
+    assert!(scan_rows(&env, &*rl.scan_files(&[]).unwrap()).is_empty());
     assert_eq!(env.query_pool.reserved(), 0);
 }
 
@@ -808,4 +839,122 @@ fn a_concurrent_remove_of_an_untouched_candidate_file_conflicts() {
             assert_eq!(env.latest(), after + 1);
         }
     }
+}
+
+/// `TASK_WRITE_FAILED` around an error of a Delta rewrite, through `RowLevelTable::error`.
+fn write_failed(
+    e: &KrishivError,
+    overflow: Option<(&str, &krishiv_types::DataType, &krishiv_types::DataType)>,
+) -> (KrishivError, String) {
+    use krishiv_exec::planner::RowLevelProblem;
+    let env = Env::new();
+    two_file_table(&env, &[]);
+    let table = env.open().unwrap();
+    let root = crate::table::hadoop_path(table.engine().table_root());
+    let rl = table.row_level(RowLevelOperation::Update).unwrap();
+    let out = rl
+        .error(
+            RowLevelOperation::Update,
+            &RowLevelProblem::WriteFailed { error: e, overflow },
+        )
+        .unwrap();
+    (out, root)
+}
+
+/// A Delta rewrite's own errors stay as they came: the commit's `DELTA_*` conflicts, Krishiv's
+/// refusals, `UNSUPPORTED_FEATURE`, internal errors and cancellations (moved here from the
+/// session with the wrapping, #909 review).
+#[test]
+fn delta_rewrite_errors_that_are_not_the_tasks_are_not_wrapped() {
+    use krishiv_common::error::{
+        DeltaConcurrentAppendWithoutHint, DeltaUnsupportedSubquery, InternalError,
+        KrishivUnsupportedFeature, OperationCanceled, UnsupportedFeatureTableOperation,
+    };
+    let kept: Vec<KrishivError> = vec![
+        DeltaConcurrentAppendWithoutHint {
+            operation: "UPDATE".into(),
+            table_name: "t".into(),
+            version: "3".into(),
+            doc_link: "d".into(),
+        }
+        .into(),
+        DeltaUnsupportedSubquery {
+            operation: "DELETE".into(),
+            cond: "x".into(),
+        }
+        .into(),
+        KrishivUnsupportedFeature {
+            feature: "f".into(),
+        }
+        .into(),
+        // The change-data-feed refusal: `UNSUPPORTED_FEATURE.TABLE_OPERATION`.
+        UnsupportedFeatureTableOperation {
+            table_name: "t".into(),
+            operation: "UPDATE".into(),
+        }
+        .into(),
+        InternalError {
+            message: "m".into(),
+        }
+        .into(),
+        OperationCanceled {}.into(),
+    ];
+    for e in kept {
+        let (out, _) = write_failed(&e, None);
+        assert_eq!(out.error_class(), e.error_class());
+        assert!(out.cause().is_none());
+    }
+}
+
+/// Any other error of the rewrite is `TASK_WRITE_FAILED` naming the table's `file:/..` root,
+/// caused by the error; an arithmetic error under a store cast that can overflow is caused by
+/// `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE` naming the column (a backquote doubled) and the types.
+#[test]
+fn a_delta_rewrite_error_is_task_write_failed_caused_by_it() {
+    use krishiv_common::error::ErrorClass;
+    use krishiv_types::DataType;
+    let param = |e: &KrishivError, k: &str| {
+        e.message_parameters()
+            .iter()
+            .find(|(n, _)| *n == k)
+            .map(|(_, v)| v.clone())
+    };
+    let e: KrishivError = krishiv_common::error::DivideByZero {
+        config: "\"spark.sql.ansi.enabled\"".into(),
+    }
+    .into();
+    let (out, root) = write_failed(&e, None);
+    assert!(root.starts_with("file:/"), "{root}");
+    assert_eq!(out.error_class(), ErrorClass::TaskWriteFailed);
+    assert_eq!(param(&out, "path"), Some(root));
+    assert_eq!(
+        out.cause().map(KrishivError::error_class),
+        Some(ErrorClass::DivideByZero)
+    );
+
+    let overflow: KrishivError = krishiv_common::error::ArithmeticOverflow {
+        message: "overflow".to_owned(),
+        alternative: String::new(),
+        config: "\"spark.sql.ansi.enabled\"".to_owned(),
+    }
+    .into();
+    let (out, _) = write_failed(
+        &overflow,
+        Some(("small", &DataType::Integer, &DataType::Short)),
+    );
+    assert_eq!(out.error_class(), ErrorClass::TaskWriteFailed);
+    let cause = out.cause().unwrap();
+    assert_eq!(
+        cause.error_class(),
+        ErrorClass::DeltaCastOverflowInTableWrite
+    );
+    assert_eq!(param(cause, "columnName").as_deref(), Some("`small`"));
+    assert_eq!(param(cause, "sourceType").as_deref(), Some("\"INT\""));
+    assert_eq!(param(cause, "targetType").as_deref(), Some("\"SMALLINT\""));
+    let decimal = DataType::Decimal(krishiv_types::DecimalType::try_new(5, 2).unwrap());
+    let (out, _) = write_failed(&overflow, Some(("`d`", &DataType::Long, &decimal)));
+    assert_eq!(
+        param(out.cause().unwrap(), "columnName").as_deref(),
+        Some("```d```")
+    );
 }

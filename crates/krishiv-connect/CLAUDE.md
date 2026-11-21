@@ -17,9 +17,11 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
 - `src/translate/udf.rs` Python UDFs (P3-T014): `python_udf` reads a `CommonInlineUserDefinedFunction` into a `PythonUdf`
   (scalar eval types 100/101/200/250; Scala/Java 56K00), `UdfHost` is the server's hook naming an inline call
   (`translate_relation_with`; without a host inline UDFs are refused), `translate_command` reads `register_function`
+- `src/translate/catalog.rs` (P3-T082, PR-46) `catalog_call`: a `Relation.catalog` message (36 operations) as a `CatalogCall` (Spark's overload by `db_name`; `createTable` / `createExternalTable` as `CreateTable`: the `path` becomes the last option, a struct schema becomes a DDL column list, a non-struct is `ASSERTION_FAILURE`); the translator records it as `LocalRequest::Catalog` and the host answers it (`krishiv-connect-server` `execute/catalog_call.rs`); `translate/catalog/tests.rs`
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
 - `src/artifact.rs` `parse_artifact_name`: `AddArtifacts` names (prefixes, segments, fragments), fuzzed by
   `connect_artifact_name` in `fuzz/`
+- `src/extension.rs` the `krishiv.v1` extensions (P3-T015): `resolve(any, slot)` reads an `Any` once (registered message, or `KRISHIV_UNSUPPORTED_FEATURE` naming the capability), the registry, `capabilities()`; messages mirror `proto/krishiv/v1/krishiv.proto` (additive only, compared by a test)
 - `src/arrow.rs` result columns Spark sends in another Arrow shape than the engine holds (geometry/geography)
 - `tests/fuzz_regressions.rs` fuzz findings (inputs that once ran out of memory) must end in a typed error
 - `src/translate/write.rs` (PR-24) `write_spec` / `write_v2_spec`: a `WriteOperation` / `WriteOperationV2` as the writer state (`WriteSpec`, `WriteV2Spec`; Spark 4.3 `transformWriteOperation{,V2}` order), refusing V1 `clustering_columns`, `with_schema_evolution` and V2 partition transforms; INVALID_ENUM for unknown save methods and modes; `Debug` hides paths, option values and table names; `translate/write/tests.rs`
@@ -73,7 +75,7 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
   `design/P3-connect-mapping.md` s6). A supported arm with an unsupported **field** fails with
   `KRISHIV_UNSUPPORTED_FEATURE` naming the message and field, and an invalid plan with Spark's other
   `CONNECT_INVALID_PLAN.*` classes; never a silent approximation.
-- Krishiv extensions only in `google.protobuf.Any` slots, package `krishiv.v1`.
+- Krishiv extensions only in `google.protobuf.Any` slots, package `krishiv.v1`: add one by a message in `proto/krishiv/v1/krishiv.proto`, a prost type and a registry row in `extension.rs`, and a translator arm; a stock client never receives one unless it sent one.
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 

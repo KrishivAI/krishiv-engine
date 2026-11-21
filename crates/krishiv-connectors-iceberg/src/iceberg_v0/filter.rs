@@ -104,6 +104,11 @@ pub(crate) struct Removals {
     /// A `ReplacePartitions` (operation `overwrite` always, summary
     /// `replace-partitions=true`).
     pub(crate) replace_partitions: bool,
+    /// A delete file of [`Self::delete_files`] no longer live is skipped, not
+    /// "Missing required files to delete": a merge-on-read `DELETE`'s
+    /// `RowDelta` without `validateDeletedFiles` (Java checks
+    /// `failMissingDeletePaths` only when it is set, `BaseRowDelta.java:151-153`).
+    pub(crate) ignore_missing_deletes: bool,
 }
 
 /// A partition of a spec: its id and the tuple, each value as
@@ -343,6 +348,40 @@ pub(crate) struct Metrics {
 }
 
 impl Metrics {
+    /// Java's `addedFile` for a delete file (`SnapshotSummary.java:290-310`:
+    /// a DV is `added-dvs`, sized by its blob, `ScanTaskUtil
+    /// .contentSizeInBytes`).
+    fn add_delete(&mut self, f: &DataFile) {
+        let dv = is_dv(f);
+        self.added_size += if dv {
+            f.content_size_in_bytes()
+                .and_then(|n| u64::try_from(n).ok())
+                .unwrap_or(0)
+        } else {
+            f.file_size_in_bytes()
+        };
+        match f.content_type() {
+            DataContentType::Data => {
+                self.added_files += 1;
+                self.added_records += f.record_count();
+            }
+            DataContentType::PositionDeletes => {
+                if dv {
+                    self.added_dvs += 1;
+                } else {
+                    self.added_pos_delete_files += 1;
+                }
+                self.added_delete_files += 1;
+                self.added_pos_deletes += f.record_count();
+            }
+            DataContentType::EqualityDeletes => {
+                self.added_delete_files += 1;
+                self.added_eq_delete_files += 1;
+                self.added_eq_deletes += f.record_count();
+            }
+        }
+    }
+
     /// Java's `removedFile`.
     fn remove(&mut self, f: &DataFile) {
         let dv = is_dv(f);
@@ -639,7 +678,7 @@ pub(crate) async fn filter_manifests(
             removals
                 .delete_files
                 .iter()
-                .filter(|k| !found_deletes.contains(*k))
+                .filter(|k| !removals.ignore_missing_deletes && !found_deletes.contains(*k))
                 .map(DeleteKey::describe),
         )
         .collect();
@@ -754,7 +793,9 @@ async fn rewrite(
         m.content,
     )?;
     let mut removed: Vec<DataFile> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    // A DV's identity is its blob (one Puffin file holds many), as `DeleteKey`; a data file's is
+    // its path (its other fields are `None`).
+    let mut seen: HashSet<DeleteKey> = HashSet::new();
     let mut duplicates = 0;
     for l in &live {
         let Some(e) = entries.get(l.index) else {
@@ -780,7 +821,7 @@ async fn rewrite(
         let data_seq = explicit(l.data_seq, "data")?;
         let file_seq = explicit(l.file_seq, "file")?;
         if l.marked {
-            if seen.insert(file.file_path().to_owned()) {
+            if seen.insert(DeleteKey::of(&file)) {
                 removed.push(file.clone());
             } else {
                 duplicates += 1;
@@ -850,6 +891,51 @@ pub(crate) fn overwrite_summary(
         }
     }
     props
+}
+
+/// The summary values of added delete files (`files`, each with its
+/// partition path, `""` unpartitioned): the totals and each partition's
+/// `partitions.<path>` text, as Java's `SnapshotSummary.addedFile` counts
+/// them (a row delta's, PR-36c).
+pub(crate) fn add_delete_files(out: &mut HashMap<String, String>, files: &[(String, &DataFile)]) {
+    let mut total = Metrics::default();
+    let mut parts: HashMap<&str, Metrics> = HashMap::new();
+    for (path, f) in files {
+        total.add_delete(f);
+        if !path.is_empty() {
+            parts.entry(path.as_str()).or_default().add_delete(f);
+        }
+    }
+    for (k, v) in total.pairs() {
+        if v > 0 {
+            out.insert(k.to_owned(), v.to_string());
+        }
+    }
+    for (path, m) in parts {
+        out.insert(format!("partitions.{path}"), m.text());
+    }
+}
+
+/// `extra`'s values added into `added`: counters summed, partition texts
+/// merged (their keys in Java's order).
+pub(crate) fn merge_summary(added: &mut HashMap<String, String>, extra: &HashMap<String, String>) {
+    for (k, v) in extra {
+        if k.starts_with("partitions.") {
+            let mut m = Metrics::default();
+            if let Some(old) = added.get(k) {
+                m.add_text(old);
+            }
+            m.add_text(v);
+            added.insert(k.clone(), m.text());
+            continue;
+        }
+        let sum = added
+            .get(k)
+            .and_then(|a| a.parse::<u64>().ok())
+            .unwrap_or(0)
+            .saturating_add(v.parse::<u64>().unwrap_or(0));
+        added.insert(k.clone(), sum.to_string());
+    }
 }
 
 fn internal(message: String) -> KrishivError {

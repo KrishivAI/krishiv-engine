@@ -50,6 +50,7 @@ DataFrame.def cache(self) -> DataFrame
 DataFrame.def checkpoint(self, eager: bool=...) -> DataFrame
 DataFrame.def col(self, name: str) -> Column
 DataFrame.def count(self) -> int
+DataFrame.def create_global_temp_view(self, name: str, replace: bool) -> None
 DataFrame.def create_or_replace_temp_view(self, name: str) -> None
 DataFrame.def distinct(self) -> DataFrame
 DataFrame.def except_all(self, other: DataFrame) -> DataFrame
@@ -119,13 +120,18 @@ Session.def conf_set(self, key: str, value: str) -> None
 Session.def conf_unset(self, key: str) -> None
 Session.def create_dataframe(self, data: object) -> DataFrame
 Session.def drop_temp_view(self, name: str) -> bool
+Session.def interrupt_all(self) -> list[str]
+Session.def interrupt_operation(self, id: str) -> list[str]
+Session.def interrupt_tag(self, tag: str) -> list[str]
 Session.def metrics(self) -> list[dict[str, object]]
 Session.def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None=..., schema_json: str | None=..., schema_ddl: str | None=...) -> DataFrame
 Session.def refresh_files(self) -> None
 Session.def refresh_table(self, name: str) -> None
+Session.def register_python_source(self, label: str, schema: object, read: object) -> DataFrame
 Session.def register_python_udf(self, name: str, eval_type: int, return_type: str, deterministic: bool, thread_safe: bool, wrapper: object) -> int
 Session.def sql(self, query: str) -> DataFrame
 Session.def table(self, name: str) -> DataFrame
+Session.def tagged(self, tags: list[str]) -> Session
 Session.def temp_table_names(self) -> list[str]
 Session.def uncache_table(self, name: str) -> None
 WindowSpec.def __new__(cls) -> WindowSpec
@@ -230,7 +236,7 @@ __all__
 __all__ = ['Catalog', 'Column', 'DataFrame', 'DataFrameNaFunctions', 'DataFrameReader', 'DataFrameStatFunctions', 'DataFrameWriter', 'DataFrameWriterV2', 'GroupedData', 'Observation', 'Row', 'RuntimeConfig', 'SparkSession', 'UDFRegistration', 'Window', 'WindowSpec', 'functions', 'types']
 ## sql/_generated_functions.py
 __all__
-__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'any_value', 'approxCountDistinct', 'approx_count_distinct', 'approx_percentile', 'array', 'array_agg', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitmap_and_agg', 'bitmap_bit_position', 'bitmap_bucket_number', 'bitmap_construct_agg', 'bitmap_count', 'bitmap_or_agg', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'chr', 'coalesce', 'collate', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'count_min_sketch', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'every', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_csv', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'from_xml', 'get', 'get_json_object', 'getbit', 'greatest', 'grouping', 'grouping_id', 'hash', 'hex', 'histogram_numeric', 'hll_sketch_agg', 'hll_sketch_estimate', 'hll_union', 'hll_union_agg', 'hour', 'hypot', 'ifnull', 'ilike', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_valid_variant', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'java_method', 'json_array_length', 'json_object_keys', 'json_tuple', 'kll_merge_agg_bigint', 'kll_merge_agg_double', 'kll_merge_agg_float', 'kll_sketch_agg_bigint', 'kll_sketch_agg_double', 'kll_sketch_agg_float', 'kll_sketch_get_n_bigint', 'kll_sketch_get_n_double', 'kll_sketch_get_n_float', 'kll_sketch_get_quantile_bigint', 'kll_sketch_get_quantile_double', 'kll_sketch_get_quantile_float', 'kll_sketch_get_rank_bigint', 'kll_sketch_get_rank_double', 'kll_sketch_get_rank_float', 'kll_sketch_merge_bigint', 'kll_sketch_merge_double', 'kll_sketch_merge_float', 'kll_sketch_to_string_bigint', 'kll_sketch_to_string_double', 'kll_sketch_to_string_float', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'like', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'max_by', 'md5', 'mean', 'median', 'min', 'min_by', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negate', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'power', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'random', 'randstr', 'rank', 'reflect', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'rlike', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_csv', 'schema_of_json', 'schema_of_variant', 'schema_of_variant_agg', 'schema_of_xml', 'sec', 'second', 'sentences', 'sequence', 'session_user', 'session_window', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'some', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'string_agg', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'theta_difference', 'theta_intersection', 'theta_intersection_agg', 'theta_sketch_agg', 'theta_sketch_estimate', 'theta_union', 'theta_union_agg', 'time_bucket', 'timestamp_add', 'timestamp_diff', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_csv', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'to_xml', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_reflect', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'tuple_difference_double', 'tuple_difference_integer', 'tuple_difference_theta_double', 'tuple_difference_theta_integer', 'tuple_intersection_agg_double', 'tuple_intersection_agg_integer', 'tuple_intersection_double', 'tuple_intersection_integer', 'tuple_intersection_theta_double', 'tuple_intersection_theta_integer', 'tuple_sketch_agg_double', 'tuple_sketch_agg_integer', 'tuple_sketch_estimate_double', 'tuple_sketch_estimate_integer', 'tuple_sketch_summary_double', 'tuple_sketch_summary_integer', 'tuple_sketch_theta_double', 'tuple_sketch_theta_integer', 'tuple_union_agg_double', 'tuple_union_agg_integer', 'tuple_union_double', 'tuple_union_integer', 'tuple_union_theta_double', 'tuple_union_theta_integer', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xpath', 'xpath_boolean', 'xpath_double', 'xpath_float', 'xpath_int', 'xpath_long', 'xpath_number', 'xpath_short', 'xpath_string', 'xxhash64', 'year', 'zeroifnull']
+__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'any_value', 'approxCountDistinct', 'approx_count_distinct', 'approx_percentile', 'array', 'array_agg', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitmap_and_agg', 'bitmap_bit_position', 'bitmap_bucket_number', 'bitmap_construct_agg', 'bitmap_count', 'bitmap_or_agg', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'chr', 'coalesce', 'collate', 'collation', 'collect_list', 'collect_set', 'collect_union', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'count_min_sketch', 'counter_diff', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'every', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_base32', 'from_csv', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'from_xml', 'get', 'get_json_object', 'getbit', 'greatest', 'grouping', 'grouping_id', 'hash', 'hex', 'histogram_numeric', 'hll_sketch_agg', 'hll_sketch_estimate', 'hll_union', 'hll_union_agg', 'hmac', 'hour', 'hypot', 'ifnull', 'ilike', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_valid_variant', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'jaro_winkler_similarity', 'java_method', 'json_array_length', 'json_object_keys', 'json_tuple', 'kll_merge_agg_bigint', 'kll_merge_agg_double', 'kll_merge_agg_float', 'kll_sketch_agg_bigint', 'kll_sketch_agg_double', 'kll_sketch_agg_float', 'kll_sketch_get_n_bigint', 'kll_sketch_get_n_double', 'kll_sketch_get_n_float', 'kll_sketch_get_quantile_bigint', 'kll_sketch_get_quantile_double', 'kll_sketch_get_quantile_float', 'kll_sketch_get_rank_bigint', 'kll_sketch_get_rank_double', 'kll_sketch_get_rank_float', 'kll_sketch_merge_bigint', 'kll_sketch_merge_double', 'kll_sketch_merge_float', 'kll_sketch_to_string_bigint', 'kll_sketch_to_string_double', 'kll_sketch_to_string_float', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'like', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'max_by', 'md5', 'mean', 'median', 'min', 'min_by', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negate', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'power', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'random', 'randstr', 'rank', 'reflect', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'rlike', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_csv', 'schema_of_json', 'schema_of_variant', 'schema_of_variant_agg', 'schema_of_xml', 'sec', 'second', 'sentences', 'sequence', 'session_user', 'session_window', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'some', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'string_agg', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'theta_difference', 'theta_intersection', 'theta_intersection_agg', 'theta_sketch_agg', 'theta_sketch_estimate', 'theta_union', 'theta_union_agg', 'time_bucket', 'timestamp_add', 'timestamp_diff', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_base32', 'to_binary', 'to_char', 'to_csv', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'to_xml', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_reflect', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_array_append', 'try_variant_get', 'try_variant_insert', 'try_variant_set', 'tuple_difference_double', 'tuple_difference_integer', 'tuple_difference_theta_double', 'tuple_difference_theta_integer', 'tuple_intersection_agg_double', 'tuple_intersection_agg_integer', 'tuple_intersection_double', 'tuple_intersection_integer', 'tuple_intersection_theta_double', 'tuple_intersection_theta_integer', 'tuple_sketch_agg_double', 'tuple_sketch_agg_integer', 'tuple_sketch_estimate_double', 'tuple_sketch_estimate_integer', 'tuple_sketch_summary_double', 'tuple_sketch_summary_integer', 'tuple_sketch_theta_double', 'tuple_sketch_theta_integer', 'tuple_union_agg_double', 'tuple_union_agg_integer', 'tuple_union_double', 'tuple_union_integer', 'tuple_union_theta_double', 'tuple_union_theta_integer', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_array_append', 'variant_delete', 'variant_get', 'variant_insert', 'variant_set', 'variant_strip_nulls', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xpath', 'xpath_boolean', 'xpath_double', 'xpath_float', 'xpath_int', 'xpath_long', 'xpath_number', 'xpath_short', 'xpath_string', 'xxhash64', 'year', 'zeroifnull']
 def abs(col: ColumnOrName) -> Column
 def acos(col: ColumnOrName) -> Column
 def acosh(col: ColumnOrName) -> Column
@@ -302,6 +308,7 @@ def collate(col: ColumnOrName, collation: str) -> Column
 def collation(col: ColumnOrName) -> Column
 def collect_list(col: ColumnOrName) -> Column
 def collect_set(col: ColumnOrName) -> Column
+def collect_union(col: ColumnOrName) -> Column
 def concat_ws(sep: str, *cols: ColumnOrName) -> Column
 def contains(left: ColumnOrName, right: ColumnOrName) -> Column
 def conv(col: ColumnOrName, fromBase: int, toBase: int) -> Column
@@ -311,6 +318,7 @@ def cosh(col: ColumnOrName) -> Column
 def cot(col: ColumnOrName) -> Column
 def count_if(col: ColumnOrName) -> Column
 def count_min_sketch(col: ColumnOrName, eps: Column | float, confidence: Column | float, seed: Column | int | None=None) -> Column
+def counter_diff(value: ColumnOrName, startTime: ColumnOrName | None=None) -> Column
 def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def covar_samp(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def crc32(col: ColumnOrName) -> Column
@@ -362,6 +370,7 @@ def flatten(col: ColumnOrName) -> Column
 def floor(col: ColumnOrName, scale: Column | int | None=None) -> Column
 def format_number(col: ColumnOrName, d: int) -> Column
 def format_string(format: str, *cols: ColumnOrName) -> Column
+def from_base32(col: ColumnOrName) -> Column
 def from_csv(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
 def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
 def from_unixtime(timestamp: ColumnOrName, format: str='yyyy-MM-dd HH:mm:ss') -> Column
@@ -380,6 +389,7 @@ def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None=None) -> Co
 def hll_sketch_estimate(col: ColumnOrName) -> Column
 def hll_union(col1: ColumnOrName, col2: ColumnOrName, allowDifferentLgConfigK: bool | None=None) -> Column
 def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | None=None) -> Column
+def hmac(key: ColumnOrName, message: ColumnOrName, algorithm: ColumnOrName | None=None) -> Column
 def hour(col: ColumnOrName) -> Column
 def hypot(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
 def ifnull(col1: ColumnOrName, col2: ColumnOrName) -> Column
@@ -388,13 +398,14 @@ def initcap(col: ColumnOrName) -> Column
 def input_file_block_length() -> Column
 def input_file_block_start() -> Column
 def input_file_name() -> Column
-def instr(str: ColumnOrName, substr: str | Column) -> Column
+def instr(str: ColumnOrName, substr: str | Column, start: int | Column | None=None, occurrence: int | Column | None=None) -> Column
 def is_valid_utf8(str: ColumnOrName) -> Column
 def is_valid_variant(v: ColumnOrName) -> Column
 def is_variant_null(v: ColumnOrName) -> Column
 def isnan(col: ColumnOrName) -> Column
 def isnotnull(col: ColumnOrName) -> Column
 def isnull(col: ColumnOrName) -> Column
+def jaro_winkler_similarity(left: ColumnOrName, right: ColumnOrName) -> Column
 def java_method(*cols: ColumnOrName) -> Column
 def json_array_length(col: ColumnOrName) -> Column
 def json_object_keys(col: ColumnOrName) -> Column
@@ -595,6 +606,7 @@ def timestamp_millis(col: ColumnOrName) -> Column
 def timestamp_seconds(col: ColumnOrName) -> Column
 def toDegrees(col: ColumnOrName) -> Column
 def toRadians(col: ColumnOrName) -> Column
+def to_base32(col: ColumnOrName) -> Column
 def to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
 def to_char(col: ColumnOrName, format: ColumnOrName) -> Column
 def to_csv(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
@@ -633,7 +645,10 @@ def try_to_number(col: ColumnOrName, format: ColumnOrName) -> Column
 def try_to_timestamp(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
 def try_url_decode(str: ColumnOrName) -> Column
 def try_validate_utf8(str: ColumnOrName) -> Column
+def try_variant_array_append(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
 def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def try_variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
+def try_variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool=True) -> Column
 def tuple_difference_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def tuple_difference_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def tuple_difference_theta_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
@@ -676,7 +691,12 @@ def validate_utf8(str: ColumnOrName) -> Column
 def var_pop(col: ColumnOrName) -> Column
 def var_samp(col: ColumnOrName) -> Column
 def variance(col: ColumnOrName) -> Column
+def variant_array_append(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
+def variant_delete(v: ColumnOrName, *paths: str) -> Column
 def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
+def variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool=True) -> Column
+def variant_strip_nulls(v: ColumnOrName, include_arrays: bool=True) -> Column
 def version() -> Column
 def weekday(col: ColumnOrName) -> Column
 def weekofyear(col: ColumnOrName) -> Column
@@ -695,7 +715,7 @@ def year(col: ColumnOrName) -> Column
 def zeroifnull(col: ColumnOrName) -> Column
 ## sql/_generated_functions.pyi
 __all__
-__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'any_value', 'approxCountDistinct', 'approx_count_distinct', 'approx_percentile', 'array', 'array_agg', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitmap_and_agg', 'bitmap_bit_position', 'bitmap_bucket_number', 'bitmap_construct_agg', 'bitmap_count', 'bitmap_or_agg', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'chr', 'coalesce', 'collate', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'count_min_sketch', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'every', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_csv', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'from_xml', 'get', 'get_json_object', 'getbit', 'greatest', 'grouping', 'grouping_id', 'hash', 'hex', 'histogram_numeric', 'hll_sketch_agg', 'hll_sketch_estimate', 'hll_union', 'hll_union_agg', 'hour', 'hypot', 'ifnull', 'ilike', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_valid_variant', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'java_method', 'json_array_length', 'json_object_keys', 'json_tuple', 'kll_merge_agg_bigint', 'kll_merge_agg_double', 'kll_merge_agg_float', 'kll_sketch_agg_bigint', 'kll_sketch_agg_double', 'kll_sketch_agg_float', 'kll_sketch_get_n_bigint', 'kll_sketch_get_n_double', 'kll_sketch_get_n_float', 'kll_sketch_get_quantile_bigint', 'kll_sketch_get_quantile_double', 'kll_sketch_get_quantile_float', 'kll_sketch_get_rank_bigint', 'kll_sketch_get_rank_double', 'kll_sketch_get_rank_float', 'kll_sketch_merge_bigint', 'kll_sketch_merge_double', 'kll_sketch_merge_float', 'kll_sketch_to_string_bigint', 'kll_sketch_to_string_double', 'kll_sketch_to_string_float', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'like', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'max_by', 'md5', 'mean', 'median', 'min', 'min_by', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negate', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'power', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'random', 'randstr', 'rank', 'reflect', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'rlike', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_csv', 'schema_of_json', 'schema_of_variant', 'schema_of_variant_agg', 'schema_of_xml', 'sec', 'second', 'sentences', 'sequence', 'session_user', 'session_window', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'some', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'string_agg', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'theta_difference', 'theta_intersection', 'theta_intersection_agg', 'theta_sketch_agg', 'theta_sketch_estimate', 'theta_union', 'theta_union_agg', 'time_bucket', 'timestamp_add', 'timestamp_diff', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_csv', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'to_xml', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_reflect', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'tuple_difference_double', 'tuple_difference_integer', 'tuple_difference_theta_double', 'tuple_difference_theta_integer', 'tuple_intersection_agg_double', 'tuple_intersection_agg_integer', 'tuple_intersection_double', 'tuple_intersection_integer', 'tuple_intersection_theta_double', 'tuple_intersection_theta_integer', 'tuple_sketch_agg_double', 'tuple_sketch_agg_integer', 'tuple_sketch_estimate_double', 'tuple_sketch_estimate_integer', 'tuple_sketch_summary_double', 'tuple_sketch_summary_integer', 'tuple_sketch_theta_double', 'tuple_sketch_theta_integer', 'tuple_union_agg_double', 'tuple_union_agg_integer', 'tuple_union_double', 'tuple_union_integer', 'tuple_union_theta_double', 'tuple_union_theta_integer', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xpath', 'xpath_boolean', 'xpath_double', 'xpath_float', 'xpath_int', 'xpath_long', 'xpath_number', 'xpath_short', 'xpath_string', 'xxhash64', 'year', 'zeroifnull']
+__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'any_value', 'approxCountDistinct', 'approx_count_distinct', 'approx_percentile', 'array', 'array_agg', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitmap_and_agg', 'bitmap_bit_position', 'bitmap_bucket_number', 'bitmap_construct_agg', 'bitmap_count', 'bitmap_or_agg', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'chr', 'coalesce', 'collate', 'collation', 'collect_list', 'collect_set', 'collect_union', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'count_min_sketch', 'counter_diff', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'every', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_base32', 'from_csv', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'from_xml', 'get', 'get_json_object', 'getbit', 'greatest', 'grouping', 'grouping_id', 'hash', 'hex', 'histogram_numeric', 'hll_sketch_agg', 'hll_sketch_estimate', 'hll_union', 'hll_union_agg', 'hmac', 'hour', 'hypot', 'ifnull', 'ilike', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_valid_variant', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'jaro_winkler_similarity', 'java_method', 'json_array_length', 'json_object_keys', 'json_tuple', 'kll_merge_agg_bigint', 'kll_merge_agg_double', 'kll_merge_agg_float', 'kll_sketch_agg_bigint', 'kll_sketch_agg_double', 'kll_sketch_agg_float', 'kll_sketch_get_n_bigint', 'kll_sketch_get_n_double', 'kll_sketch_get_n_float', 'kll_sketch_get_quantile_bigint', 'kll_sketch_get_quantile_double', 'kll_sketch_get_quantile_float', 'kll_sketch_get_rank_bigint', 'kll_sketch_get_rank_double', 'kll_sketch_get_rank_float', 'kll_sketch_merge_bigint', 'kll_sketch_merge_double', 'kll_sketch_merge_float', 'kll_sketch_to_string_bigint', 'kll_sketch_to_string_double', 'kll_sketch_to_string_float', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'like', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'max_by', 'md5', 'mean', 'median', 'min', 'min_by', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negate', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'power', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'random', 'randstr', 'rank', 'reflect', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'rlike', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_csv', 'schema_of_json', 'schema_of_variant', 'schema_of_variant_agg', 'schema_of_xml', 'sec', 'second', 'sentences', 'sequence', 'session_user', 'session_window', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'some', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'string_agg', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'theta_difference', 'theta_intersection', 'theta_intersection_agg', 'theta_sketch_agg', 'theta_sketch_estimate', 'theta_union', 'theta_union_agg', 'time_bucket', 'timestamp_add', 'timestamp_diff', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_base32', 'to_binary', 'to_char', 'to_csv', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'to_xml', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_reflect', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_array_append', 'try_variant_get', 'try_variant_insert', 'try_variant_set', 'tuple_difference_double', 'tuple_difference_integer', 'tuple_difference_theta_double', 'tuple_difference_theta_integer', 'tuple_intersection_agg_double', 'tuple_intersection_agg_integer', 'tuple_intersection_double', 'tuple_intersection_integer', 'tuple_intersection_theta_double', 'tuple_intersection_theta_integer', 'tuple_sketch_agg_double', 'tuple_sketch_agg_integer', 'tuple_sketch_estimate_double', 'tuple_sketch_estimate_integer', 'tuple_sketch_summary_double', 'tuple_sketch_summary_integer', 'tuple_sketch_theta_double', 'tuple_sketch_theta_integer', 'tuple_union_agg_double', 'tuple_union_agg_integer', 'tuple_union_double', 'tuple_union_integer', 'tuple_union_theta_double', 'tuple_union_theta_integer', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_array_append', 'variant_delete', 'variant_get', 'variant_insert', 'variant_set', 'variant_strip_nulls', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xpath', 'xpath_boolean', 'xpath_double', 'xpath_float', 'xpath_int', 'xpath_long', 'xpath_number', 'xpath_short', 'xpath_string', 'xxhash64', 'year', 'zeroifnull']
 def abs(col: ColumnOrName) -> Column
 def acos(col: ColumnOrName) -> Column
 def acosh(col: ColumnOrName) -> Column
@@ -767,6 +787,7 @@ def collate(col: ColumnOrName, collation: str) -> Column
 def collation(col: ColumnOrName) -> Column
 def collect_list(col: ColumnOrName) -> Column
 def collect_set(col: ColumnOrName) -> Column
+def collect_union(col: ColumnOrName) -> Column
 def concat_ws(sep: str, *cols: ColumnOrName) -> Column
 def contains(left: ColumnOrName, right: ColumnOrName) -> Column
 def conv(col: ColumnOrName, fromBase: int, toBase: int) -> Column
@@ -776,6 +797,7 @@ def cosh(col: ColumnOrName) -> Column
 def cot(col: ColumnOrName) -> Column
 def count_if(col: ColumnOrName) -> Column
 def count_min_sketch(col: ColumnOrName, eps: Column | float, confidence: Column | float, seed: Column | int | None=None) -> Column
+def counter_diff(value: ColumnOrName, startTime: ColumnOrName | None=None) -> Column
 def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def covar_samp(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def crc32(col: ColumnOrName) -> Column
@@ -827,6 +849,7 @@ def flatten(col: ColumnOrName) -> Column
 def floor(col: ColumnOrName, scale: Column | int | None=None) -> Column
 def format_number(col: ColumnOrName, d: int) -> Column
 def format_string(format: str, *cols: ColumnOrName) -> Column
+def from_base32(col: ColumnOrName) -> Column
 def from_csv(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
 def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
 def from_unixtime(timestamp: ColumnOrName, format: str='yyyy-MM-dd HH:mm:ss') -> Column
@@ -845,6 +868,7 @@ def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None=None) -> Co
 def hll_sketch_estimate(col: ColumnOrName) -> Column
 def hll_union(col1: ColumnOrName, col2: ColumnOrName, allowDifferentLgConfigK: bool | None=None) -> Column
 def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | None=None) -> Column
+def hmac(key: ColumnOrName, message: ColumnOrName, algorithm: ColumnOrName | None=None) -> Column
 def hour(col: ColumnOrName) -> Column
 def hypot(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
 def ifnull(col1: ColumnOrName, col2: ColumnOrName) -> Column
@@ -853,13 +877,14 @@ def initcap(col: ColumnOrName) -> Column
 def input_file_block_length() -> Column
 def input_file_block_start() -> Column
 def input_file_name() -> Column
-def instr(str: ColumnOrName, substr: str | Column) -> Column
+def instr(str: ColumnOrName, substr: str | Column, start: int | Column | None=None, occurrence: int | Column | None=None) -> Column
 def is_valid_utf8(str: ColumnOrName) -> Column
 def is_valid_variant(v: ColumnOrName) -> Column
 def is_variant_null(v: ColumnOrName) -> Column
 def isnan(col: ColumnOrName) -> Column
 def isnotnull(col: ColumnOrName) -> Column
 def isnull(col: ColumnOrName) -> Column
+def jaro_winkler_similarity(left: ColumnOrName, right: ColumnOrName) -> Column
 def java_method(*cols: ColumnOrName) -> Column
 def json_array_length(col: ColumnOrName) -> Column
 def json_object_keys(col: ColumnOrName) -> Column
@@ -1060,6 +1085,7 @@ def timestamp_millis(col: ColumnOrName) -> Column
 def timestamp_seconds(col: ColumnOrName) -> Column
 def toDegrees(col: ColumnOrName) -> Column
 def toRadians(col: ColumnOrName) -> Column
+def to_base32(col: ColumnOrName) -> Column
 def to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
 def to_char(col: ColumnOrName, format: ColumnOrName) -> Column
 def to_csv(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
@@ -1098,7 +1124,10 @@ def try_to_number(col: ColumnOrName, format: ColumnOrName) -> Column
 def try_to_timestamp(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
 def try_url_decode(str: ColumnOrName) -> Column
 def try_validate_utf8(str: ColumnOrName) -> Column
+def try_variant_array_append(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
 def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def try_variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
+def try_variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool=True) -> Column
 def tuple_difference_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def tuple_difference_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def tuple_difference_theta_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
@@ -1141,7 +1170,12 @@ def validate_utf8(str: ColumnOrName) -> Column
 def var_pop(col: ColumnOrName) -> Column
 def var_samp(col: ColumnOrName) -> Column
 def variance(col: ColumnOrName) -> Column
+def variant_array_append(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
+def variant_delete(v: ColumnOrName, *paths: str) -> Column
 def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
+def variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool=True) -> Column
+def variant_strip_nulls(v: ColumnOrName, include_arrays: bool=True) -> Column
 def version() -> Column
 def weekday(col: ColumnOrName) -> Column
 def weekofyear(col: ColumnOrName) -> Column
@@ -1291,6 +1325,8 @@ DataFrame.def collect(self) -> list[Row]
 DataFrame.def corr(self, col1: str, col2: str, method: str | None=None) -> float
 DataFrame.def count(self) -> int
 DataFrame.def cov(self, col1: str, col2: str) -> float
+DataFrame.def createGlobalTempView(self, name: str) -> None
+DataFrame.def createOrReplaceGlobalTempView(self, name: str) -> None
 DataFrame.def createOrReplaceTempView(self, name: str) -> None
 DataFrame.def crossJoin(self, other: DataFrame) -> DataFrame
 DataFrame.def crosstab(self, col1: str, col2: str) -> DataFrame
@@ -1354,6 +1390,88 @@ DataFrame.where
 EAGER_DEFAULT_MAX_ROWS
 EAGER_MAX_ROWS_KEY
 class DataFrame()
+## sql/datasource.py
+CaseInsensitiveDict.def __contains__(self, key: object) -> bool
+CaseInsensitiveDict.def __delitem__(self, key: str) -> None
+CaseInsensitiveDict.def __getitem__(self, key: str) -> Any
+CaseInsensitiveDict.def __init__(self, *args: Any, **kwargs: Any) -> None
+CaseInsensitiveDict.def __setitem__(self, key: str, value: Any) -> None
+CaseInsensitiveDict.def copy(self) -> CaseInsensitiveDict
+CaseInsensitiveDict.def get(self, key: str, default: Any=None) -> Any
+CaseInsensitiveDict.def pop(self, key: str, *default: Any) -> Any
+CaseInsensitiveDict.def setdefault(self, key: str, default: Any=None) -> Any
+CaseInsensitiveDict.def update(self, *args: Any, **kwargs: Any) -> None
+ColumnPath
+DataSource.@classmethod def name(cls) -> str
+DataSource.def __init__(self, options: dict[str, str]) -> None
+DataSource.def reader(self, schema: StructType) -> DataSourceReader
+DataSource.def schema(self) -> StructType | str
+DataSource.def streamReader(self, schema: StructType) -> Any
+DataSource.def streamWriter(self, schema: StructType, overwrite: bool) -> Any
+DataSource.def writer(self, schema: StructType, overwrite: bool) -> DataSourceWriter
+DataSourceReader.@abstractmethod def read(self, partition: InputPartition) -> Iterator[tuple[Any, ...]] | Iterator[Any]
+DataSourceReader.def partitions(self) -> Sequence[InputPartition]
+DataSourceReader.def pushFilters(self, filters: list[Filter]) -> Iterable[Filter]
+DataSourceRegistration.def __init__(self, session: SparkSession) -> None
+DataSourceRegistration.def register(self, dataSource: type[DataSource]) -> None
+DataSourceWriter.@abstractmethod def write(self, iterator: Iterator[Any]) -> WriterCommitMessage
+DataSourceWriter.def abort(self, messages: list[WriterCommitMessage | None]) -> None
+DataSourceWriter.def commit(self, messages: list[WriterCommitMessage | None]) -> None
+EqualNullSafe.attribute: ColumnPath
+EqualNullSafe.value: Any
+EqualTo.attribute: ColumnPath
+EqualTo.value: Any
+GreaterThan.attribute: ColumnPath
+GreaterThan.value: Any
+GreaterThanOrEqual.attribute: ColumnPath
+GreaterThanOrEqual.value: Any
+In.attribute: ColumnPath
+In.value: tuple[Any, ...]
+InputPartition.def __init__(self, value: Any) -> None
+InputPartition.def __repr__(self) -> str
+IsNotNull.attribute: ColumnPath
+IsNull.attribute: ColumnPath
+LessThan.attribute: ColumnPath
+LessThan.value: Any
+LessThanOrEqual.attribute: ColumnPath
+LessThanOrEqual.value: Any
+MAX_BATCH_ROWS
+MAX_SOURCE_BYTES
+Not.child: Filter
+PUSHDOWN_CONF
+StringContains.attribute: ColumnPath
+StringContains.value: str
+StringEndsWith.attribute: ColumnPath
+StringEndsWith.value: str
+StringStartsWith.attribute: ColumnPath
+StringStartsWith.value: str
+__all__
+__all__ = ['CaseInsensitiveDict', 'DataSource', 'DataSourceArrowWriter', 'DataSourceReader', 'DataSourceRegistration', 'DataSourceWriter', 'EqualNullSafe', 'EqualTo', 'Filter', 'GreaterThan', 'GreaterThanOrEqual', 'In', 'InputPartition', 'IsNotNull', 'IsNull', 'LessThan', 'LessThanOrEqual', 'Not', 'StringContains', 'StringEndsWith', 'StringStartsWith', 'WriterCommitMessage']
+class CaseInsensitiveDict(dict)
+class DataSource(ABC)
+class DataSourceArrowWriter(DataSourceWriter)
+class DataSourceReader(ABC)
+class DataSourceRegistration()
+class DataSourceWriter(ABC)
+class EqualNullSafe(Filter)
+class EqualTo(Filter)
+class Filter(ABC)
+class GreaterThan(Filter)
+class GreaterThanOrEqual(Filter)
+class In(Filter)
+class InputPartition()
+class IsNotNull(Filter)
+class IsNull(Filter)
+class LessThan(Filter)
+class LessThanOrEqual(Filter)
+class Not(Filter)
+class StringContains(Filter)
+class StringEndsWith(Filter)
+class StringStartsWith(Filter)
+class WriterCommitMessage()
+def load(session: SparkSession, entry: _Registered, options: dict[str, str], user_schema: Any) -> DataFrame
+def registered(session: SparkSession, name: str) -> _Registered | None
+def save(session: SparkSession, entry: _Registered, df: DataFrame, mode: str, options: dict[str, str]) -> None
 ## sql/functions.py
 __all__
 __all__ = [*_HAND_WRITTEN, *_generated_functions.__all__]
@@ -1568,6 +1686,8 @@ Catalog.def uncacheTable(self, tableName: str) -> None
 SPARK_VERSION
 SparkSession.@property def catalog(self) -> Catalog
 SparkSession.@property def conf(self) -> RuntimeConfig
+SparkSession.@property def dataSource(self) -> DataSourceRegistration
+SparkSession.@property def profile(self) -> Profile
 SparkSession.@property def read(self) -> DataFrameReader
 SparkSession.@property def sparkContext(self) -> Any
 SparkSession.@property def udf(self) -> UDFRegistration
@@ -1582,11 +1702,18 @@ SparkSession.Builder.def master(self, master: str) -> SparkSession.Builder
 SparkSession.Builder.def remote(self, url: str) -> SparkSession.Builder
 SparkSession.builder: Builder
 SparkSession.class Builder()
-SparkSession.def __init__(self, native: _native.Session, config: list[tuple[str, str]] | None=None) -> None
+SparkSession.def __init__(self, native: _NativeSession, config: list[tuple[str, str]] | None=None) -> None
+SparkSession.def addTag(self, tag: str) -> None
+SparkSession.def clearTags(self) -> None
 SparkSession.def createDataFrame(self, data: Any, schema: Any=None, samplingRatio: float | None=None, verifySchema: bool=True) -> DataFrame
 SparkSession.def emptyDataFrame(self, schema: StructType | str) -> DataFrame
+SparkSession.def getTags(self) -> set[str]
+SparkSession.def interruptAll(self) -> list[str]
+SparkSession.def interruptOperation(self, op_id: str) -> list[str]
+SparkSession.def interruptTag(self, tag: str) -> list[str]
 SparkSession.def newSession(self) -> SparkSession
 SparkSession.def range(self, start: int, end: int | None=None, step: int=1, numPartitions: int | None=None) -> DataFrame
+SparkSession.def removeTag(self, tag: str) -> None
 SparkSession.def sql(self, sqlQuery: str, args: Any=None, **kwargs: Any) -> DataFrame
 SparkSession.def stop(self) -> None
 SparkSession.def table(self, tableName: str) -> DataFrame

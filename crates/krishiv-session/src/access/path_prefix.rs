@@ -161,7 +161,7 @@ impl PathPrefixPolicy {
     }
 
     /// Whether the qualified path `path` lies under a root or an object-store prefix.
-    fn allows(&self, path: &OptionValue) -> bool {
+    pub(crate) fn allows(&self, path: &OptionValue) -> bool {
         let text = match path {
             OptionValue::Plain(text) => text.as_str(),
             // `container@account.host` reads as user info, so an Azure path arrives typed as a

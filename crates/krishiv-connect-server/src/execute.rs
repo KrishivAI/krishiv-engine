@@ -46,6 +46,7 @@
 
 pub mod arrow;
 mod cache_command;
+mod catalog_call;
 #[cfg(test)]
 pub(crate) mod hooks;
 pub mod observed;
@@ -884,6 +885,7 @@ async fn build_local_relation(
                 .local_relation(data.as_deref(), schema)
                 .await
         }
+        LocalRequest::Catalog(call) => catalog_call::run(entry.session(), call).await,
         LocalRequest::Cached { hash } => Err(ConnectInvalidPlanNotFoundCachedLocalRelation {
             hash,
             session_u_u_i_d: entry.server_side_id().to_owned(),

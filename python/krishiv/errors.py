@@ -22,6 +22,9 @@ from typing import Any
 # file; the JVM `error-conditions.json` vendored in krishiv-common carries none of these,
 # not even the pre-existing ones like `NOT_EXPECTED_TYPE`).
 _TEMPLATES = {
+    "_LEGACY_ERROR_TEMP_1312": "'<operation>' does not support bucketBy right now.",
+    "_LEGACY_ERROR_TEMP_1313": "'<operation>' does not support bucketBy and sortBy right now.",
+    "SORT_BY_WITHOUT_BUCKETING": "sortBy must be used together with bucketBy.",
     "NOT_IMPLEMENTED": "<feature> is not implemented.",
     "CONTEXT_ONLY_VALID_ON_DRIVER": (
         "It appears that you are attempting to reference SparkContext from a broadcast variable, action, or "
@@ -58,6 +61,7 @@ _TEMPLATES = {
     "NOT_LIST_OF_COLUMN": "Argument `<arg_name>` should be a list[Column], got <arg_type>.",
     "REUSE_OBSERVATION": "An Observation can be used with a DataFrame only once.",
     "NO_OBSERVE_BEFORE_GET": "Should observe by calling `DataFrame.observe` before `get`.",
+    "VALUE_ALLOWED": "Value for `<arg_name>` does not allow <disallowed_value>.",
     "VALUE_NOT_NON_EMPTY_STR": "Value for `<arg_name>` must be a non-empty string, got '<arg_value>'.",
     "CANNOT_BE_EMPTY": "At least one <item> must be specified.",
     "VALUE_NOT_POSITIVE": "Value for `<arg_name>` must be positive, got '<arg_value>'.",
@@ -105,6 +109,35 @@ _TEMPLATES = {
     "STOP_ITERATION_OCCURRED": "Caught StopIteration thrown from user's code; failing the task: <exc>",
     "CANNOT_SPECIFY_RETURN_TYPE_FOR_UDF": (
         "returnType can not be specified when `<arg_name>` is a user-defined function, but got <return_type>."
+    ),
+    "DATA_SOURCE_PUSHDOWN_DISABLED": (
+        "<type> implements pushFilters() but filter pushdown is disabled because configuration '<conf>' is false. "
+        "Set it to true to enable filter pushdown."
+    ),
+    "DATA_SOURCE_INVALID_RETURN_TYPE": (
+        "Unsupported return type ('<type>') from Python data source '<name>'. Expected types: <supported_types>."
+    ),
+    "DATA_SOURCE_RETURN_SCHEMA_MISMATCH": (
+        "Return schema mismatch in the result from 'read' method. Expected: <expected> columns, Found: <actual> "
+        "columns. Make sure the returned values match the required output schema."
+    ),
+    "DATA_SOURCE_TYPE_MISMATCH": "Expected <expected>, but got <actual>.",
+    "DATA_SOURCE_EXTRANEOUS_FILTERS": (
+        "<type>.pushFilters() returned filters that are not part of the input. Make sure that each returned filter "
+        "is one of the input filters by reference."
+    ),
+    # JVM classes the Python data source API raises itself (the engine's registry has them too).
+    "PYTHON_DATA_SOURCE_ERROR": "Failed to <action> Python data source <type>: <msg>",
+    "NO_ACTIVE_SESSION": "No active Spark session found. Please create a new Spark session before running the code.",
+    "PYTHON_EXCEPTION": "<msg>: <traceback>",
+    "KRISHIV_PYTHON_DATA_SOURCE_LIMIT": (
+        "The Python data source <source> returned <bytes> bytes, over the <limit> byte limit of this embedded read "
+        "path, which holds a source's rows in memory when a scan runs. Read less of it per query (narrow "
+        "the source's options or split it into smaller sources)."
+    ),
+    "UNSUPPORTED_DATA_SOURCE_SAVE_MODE": (
+        'The data source "<source>" cannot be written in the <createMode> mode. '
+        'Please use either the "Append" or "Overwrite" mode instead.'
     ),
     "INVALID_UDF_EVAL_TYPE": "Eval type for UDF must be <eval_type>.",
     "INVALID_PANDAS_UDF_TYPE": "`<arg_name>` should be one of the values from PandasUDFType, got <arg_type>",
@@ -428,6 +461,8 @@ _BY_PREFIX: tuple[tuple[str, type[PySparkException]], ...] = (
     ("INVALID_ARRAY_INDEX", ArrayIndexOutOfBoundsException),
     ("INVALID_PARAMETER_VALUE", IllegalArgumentException),
     ("PARSE_", ParseException),
+    # Spark raises it from `QueryCompilationErrors` for every `action`/`type` pair.
+    ("PYTHON_DATA_SOURCE_ERROR", AnalysisException),
     ("UNSUPPORTED_DATATYPE", ParseException),
     ("INVALID_SQL_SYNTAX", ParseException),
     # Spark's unnamed errors: 0xxx come from `QueryParsingErrors`, 1xxx from `QueryCompilationErrors`.

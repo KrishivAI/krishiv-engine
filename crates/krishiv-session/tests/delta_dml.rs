@@ -602,3 +602,64 @@ fn spark_reads_tables_after_krishiv_dml() {
         );
     }
 }
+
+/// Allows everything but `Modify` on a path (#909 review thread: a Delta table by path is
+/// changed only with `Modify` on the path, as a Delta save to it asks).
+struct NoPathModify;
+
+impl krishiv_session::AccessPolicy for NoPathModify {
+    fn version(&self) -> krishiv_plan::analyzer::PolicyVersion {
+        krishiv_plan::analyzer::PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a krishiv_session::Principal,
+        securable: &'a krishiv_session::Securable,
+        privilege: krishiv_session::Privilege,
+    ) -> krishiv_plan::analyzer::BoxFuture<'a, Result<krishiv_session::AccessDecision, KrishivError>>
+    {
+        let decision = if matches!(securable, krishiv_session::Securable::Path(_))
+            && privilege == krishiv_session::Privilege::Modify
+        {
+            krishiv_session::AccessDecision::Deny {
+                reason: "no path modify".to_owned(),
+            }
+        } else {
+            krishiv_session::AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+#[test]
+fn a_delta_dml_by_path_needs_modify_on_the_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    copy_dir(&fixtures().join("unpartitioned").join("before"), &dir);
+    let log = |d: &Path| std::fs::read_dir(d.join("_delta_log")).unwrap().count();
+    let before = log(&dir);
+    let session = Session::builder()
+        .principal(krishiv_session::Principal::new(
+            "ana",
+            krishiv_session::PrincipalKind::User,
+        ))
+        .access_policy(std::sync::Arc::new(NoPathModify))
+        .build()
+        .unwrap();
+    let t = format!("delta.`{}`", dir.display());
+    for text in [
+        format!("DELETE FROM {t} WHERE id = 1"),
+        format!("UPDATE {t} SET id = id + 100"),
+    ] {
+        let e = sql(&session, &text).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INSUFFICIENT_PERMISSIONS",
+            "{text}: {e}"
+        );
+    }
+    assert_eq!(log(&dir), before, "nothing was committed");
+    // Reads by path are still allowed.
+    sql(&session, &format!("SELECT * FROM {t}")).unwrap();
+}

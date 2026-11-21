@@ -10,6 +10,7 @@ use krishiv_common::config::{
 use krishiv_common::error::{
     CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
 };
+use krishiv_common::redact::is_redacted_setting;
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::datetime::{resolve_zone, zone_id};
 use krishiv_plan::analyzer::SparkProfile;
@@ -413,7 +414,24 @@ impl RuntimeConf {
     /// of the wrong type. Unknown keys of other prefixes are kept.
     /// `INVALID_CONF_VALUE.TIME_ZONE` for a session time zone (`spark.sql.session.timeZone`
     /// or `krishiv.sql.session.timeZone`) no zone database entry or offset names.
+    ///
+    /// When the pair is one `Config.get` hides
+    /// ([`krishiv_common::redact::is_redacted_setting`]: a secret-like key, or a value that looks
+    /// like a credential), the error shows `*********(redacted)` wherever it would repeat the value.
+    /// Spark repeats it; this is a difference toward safety (threat model T-C8), and every other
+    /// pair keeps Spark's text. Settings given at startup (`SessionBuilder::config`, the CLI's
+    /// `--conf`) are the operator's own input and are not covered: their errors repeat the value.
     pub fn set(&self, key: &str, value: &str) -> Result<(), KrishivError> {
+        self.set_unredacted(key, value).map_err(|e| {
+            if is_redacted_setting(key, Some(value)) {
+                e.with_value_redacted(value, key)
+            } else {
+                e
+            }
+        })
+    }
+
+    fn set_unredacted(&self, key: &str, value: &str) -> Result<(), KrishivError> {
         if !self.is_modifiable(key) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),

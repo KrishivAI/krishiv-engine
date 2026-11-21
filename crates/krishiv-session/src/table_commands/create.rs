@@ -873,7 +873,7 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        let (name, quoted) = self.row_level_target(table, operation, &env)?;
+        let (name, quoted) = self.row_level_target(table, operation, &env).await?;
         // Spark analyzes the condition and the new values against the table before it finds that the
         // table cannot change: an unknown column is the error then.
         // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own
@@ -970,7 +970,7 @@ impl Session {
     /// The table a row-level statement changes and the name it is read under: a Delta table by
     /// path (`delta.`/path``, no catalog entry) as written, else a permanent table that may be
     /// written by `operation`.
-    pub(crate) fn row_level_target(
+    pub(crate) async fn row_level_target(
         &self,
         table: &DdlName,
         operation: &str,
@@ -978,6 +978,7 @@ impl Session {
     ) -> Result<(TableName, String), KrishivError> {
         let name = self.table_name(table, env)?;
         // `delta.`/path``: a Delta table by path (no catalog entry), read as its scans read it.
+        // The raw path beside its quoted form.
         #[cfg(feature = "delta")]
         let by_path = match crate::access::ddl_parts(table, env)?.as_slice() {
             [format, path]
@@ -991,14 +992,31 @@ impl Session {
                         .is_none() =>
             {
                 // The path as written: a table name is case-folded, a path is not.
-                Some(format!("delta.`{}`", path.replace('`', "``")))
+                Some((path.clone(), format!("delta.`{}`", path.replace('`', "``"))))
             }
             _ => None,
         };
         #[cfg(not(feature = "delta"))]
-        let by_path: Option<String> = None;
+        let by_path: Option<(String, String)> = None;
         let quoted = match by_path {
-            Some(q) => q,
+            Some((path, quoted)) => {
+                // The statement's own check named the target as a table; a table by path changes
+                // the files at that path, so `Modify` on it is asked first, as a Delta save to the
+                // path asks.
+                #[cfg(feature = "delta")]
+                {
+                    let qualified = self.qualify_path(&path)?;
+                    self.authorize_qualified_root(
+                        &qualified,
+                        &[Privilege::Modify],
+                        krishiv_sql::StatementClass::Write,
+                    )
+                    .await?;
+                }
+                #[cfg(not(feature = "delta"))]
+                let _ = path;
+                quoted
+            }
             None => {
                 self.table_for_write(&name, operation, env)?;
                 name.quoted()

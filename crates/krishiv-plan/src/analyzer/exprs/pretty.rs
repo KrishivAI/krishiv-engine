@@ -303,6 +303,37 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
                 text
             }
         }
+        // Spark 4.3 shows the defaults its constructors fill in: `hmac(key, message)` is
+        // `hmac(key, message, SHA-256)` and `instr(str, sub, pos)` `instr(str, sub, pos, 1)`; `counter_diff(c)`
+        // is called with a NULL `start_time` here (the named-parameter default) and shows only `c`.
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.filter.is_none()
+                && ((f.id.name() == "hmac" && k.len() == 2)
+                    || (f.id.name() == "instr" && k.len() == 3)
+                    || (f.id.name() == "counter_diff"
+                        && k.len() == 2
+                        && matches!(
+                            f.args.get(1).map(|a| &a.node),
+                            Some(ExprNode::Literal(Literal::Null(_)))
+                        ))) =>
+        {
+            let mut shown: Vec<&str> = k.to_vec();
+            match f.id.name() {
+                "hmac" => shown.push("SHA-256"),
+                "instr" => shown.push("1"),
+                _ => {
+                    shown.pop();
+                }
+            }
+            call(
+                f.id.name(),
+                None,
+                f.distinct,
+                &shown,
+                None,
+                Some(&f.data_type),
+            )
+        }
         // The resolved call of the same (SQL-26).
         ExprNode::Resolved(ResolvedExpr::Function(f))
             if f.id.name() == "current_time" && k.is_empty() && f.filter.is_none() =>

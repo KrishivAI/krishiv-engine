@@ -760,7 +760,9 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         use krishiv_sql::ast::{MergeAction, MergeInsert, MergeMatched, MergeSource};
         let env = self.query_env();
-        let (name, quoted) = self.row_level_target(&m.target, "MERGE INTO TABLE", &env)?;
+        let (name, quoted) = self
+            .row_level_target(&m.target, "MERGE INTO TABLE", &env)
+            .await?;
         let slice = |span: krishiv_sql::ast::Span| {
             original
                 .get(span.start..span.end)
