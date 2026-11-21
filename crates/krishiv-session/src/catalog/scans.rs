@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, ReadSource, Scan};
 
+#[cfg(feature = "delta")]
+use super::QueryCatalog;
 use crate::store::CatalogStore as _;
 
 /// Whether the analyzed `plan` reads the permanent table `namespace.name` (directly, or through a view or a
@@ -44,6 +46,39 @@ pub(crate) fn reads_files_at(plan: &LogicalPlan, path: &str) -> bool {
             p.as_plain()
                 .is_some_and(|t| t.trim_end_matches('/') == want)
         }),
+        _ => false,
+    })
+}
+
+/// Whether the analyzed `plan` (or a subquery or view in it) reads the Delta table whose root is
+/// `root` (as [`QueryCatalog::delta_root`] names it): any scan resolving to that root, whatever the
+/// spelling of its path (`/t`, `/t/`, `file:/t`) or whether it names the catalog table or its
+/// location. A Delta scan whose root cannot be resolved counts as a read of it (the safe side: the
+/// conflict check then reads the whole table).
+#[cfg(feature = "delta")]
+pub(crate) fn reads_delta_root(plan: &LogicalPlan, root: &str, catalog: &QueryCatalog) -> bool {
+    let mut scans = Vec::new();
+    collect_scans(plan, &mut scans);
+    scans.iter().any(|scan| match catalog.delta_root(scan) {
+        Some(Ok(r)) => r == root,
+        Some(Err(_)) => true,
+        None => false,
+    })
+}
+
+/// Whether the analyzed `plan` (or a subquery or view in it) scans `source`: the same table name
+/// (parts compared ignoring ASCII case, as written: `t` and `default.t` do not match) or the same
+/// paths as written. Used for row-level targets that are not Delta tables (Iceberg), where the
+/// read filter is the condition anyway and the table's own copy-on-write validation checks it, so a
+/// spelling it misses loses nothing; a Delta target compares roots ([`reads_delta_root`]).
+pub(crate) fn reads_source(plan: &LogicalPlan, source: &ReadSource) -> bool {
+    let mut scans = Vec::new();
+    collect_scans(plan, &mut scans);
+    scans.iter().any(|scan| match (&scan.source, source) {
+        (ReadSource::Table { name: a, .. }, ReadSource::Table { name: b, .. }) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.eq_ignore_ascii_case(y))
+        }
+        (ReadSource::Files { paths: a, .. }, ReadSource::Files { paths: b, .. }) => a == b,
         _ => false,
     })
 }
