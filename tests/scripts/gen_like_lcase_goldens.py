@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: RUF001
 """Record Spark's `LIKE` / `ILIKE` over `UTF8_LCASE` (SQL-40) from real Spark runs.
 
 Spark source: `Like` / `ILike` in `sql/catalyst/.../expressions/regexpExpressions.scala` at each tag
@@ -104,7 +105,7 @@ SETUP = [
     "CREATE OR REPLACE TEMPORARY VIEW t AS SELECT id, collate(c, 'utf8_lcase') AS c, "
     "collate(p, 'utf8_lcase') AS p FROM VALUES "
     + ", ".join(
-        "(%d, %s, %s)" % (i, *("NULL" if v is None else "'" + v.replace("'", "''") + "'" for v in (c, p)))
+        f"({i}, " + ", ".join("NULL" if v is None else "'" + v.replace("'", "''") + "'" for v in (c, p)) + ")"
         for i, c, p in COL_ROWS
     )
     + " AS v(id, c, p)"
@@ -139,7 +140,7 @@ def runner(setup: list[str], cases: list[list[str]]) -> None:
             rec["columns"] = df.columns
             rec["types"] = [f.dataType.simpleString() for f in df.schema.fields]
             rec["rows"] = [[None if v is None else str(v) for v in r] for r in df.collect()]
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             je = getattr(e, "_origin", None) or getattr(e, "java_exception", None)
             err = {}
             if je is not None:
@@ -147,12 +148,12 @@ def runner(setup: list[str], cases: list[list[str]]) -> None:
                     try:
                         err["class"] = str(getattr(je, g)())
                         break
-                    except Exception:  # noqa: BLE001, S112
+                    except Exception:
                         continue
                 try:
                     err["sqlState"] = str(je.getSqlState())
                     err["params"] = {str(k): str(v) for k, v in sorted(je.getMessageParameters().items())}
-                except Exception:  # noqa: BLE001, S110
+                except Exception:
                     pass
                 err["message"] = str(je.getMessage()).split("\n")[0]
             else:
@@ -173,14 +174,29 @@ def main() -> None:
         ver, ctr = spec.split("=")
         subprocess.run(["docker", "cp", str(me), f"{ctr}:/tmp/gen_like_lcase.py"], check=True)
         p = subprocess.run(
-            ["docker", "exec", "-e", "PYTHONIOENCODING=utf-8", "-e", "LC_ALL=C.UTF-8", ctr,
-             "/opt/spark/bin/spark-submit", "--conf", "spark.driver.extraJavaOptions=-Dfile.encoding=UTF-8",
-             "/tmp/gen_like_lcase.py", "--runner", json.dumps(SETUP, ensure_ascii=True),
-             json.dumps(cases, ensure_ascii=True)],
-            check=True, capture_output=True, text=True, encoding="utf-8",
+            [
+                "docker",
+                "exec",
+                "-e",
+                "PYTHONIOENCODING=utf-8",
+                "-e",
+                "LC_ALL=C.UTF-8",
+                ctr,
+                "/opt/spark/bin/spark-submit",
+                "--conf",
+                "spark.driver.extraJavaOptions=-Dfile.encoding=UTF-8",
+                "/tmp/gen_like_lcase.py",
+                "--runner",
+                json.dumps(SETUP, ensure_ascii=True),
+                json.dumps(cases, ensure_ascii=True),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
         )
         line = next(x for x in p.stdout.splitlines() if x.startswith("@@JSON@@"))
-        doc = json.loads(line[len("@@JSON@@"):])
+        doc = json.loads(line[len("@@JSON@@") :])
         assert doc["version"] == ver, (doc["version"], ver)
         doc = {
             "format_version": 1,
