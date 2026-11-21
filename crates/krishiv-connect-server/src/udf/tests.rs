@@ -526,7 +526,7 @@ async fn persist_needs_a_registered_udf_and_a_store_and_drop_removes() {
     clippy::disallowed_methods,
     reason = "#[tokio::test] blocks on its own runtime"
 )]
-async fn persist_picks_the_newest_registration_under_the_registrys_name_folding() {
+async fn persist_picks_the_newest_registration_under_the_registry_name_folding() {
     let host: Arc<dyn UdfHost> = Arc::new(Host::default());
     let store = Arc::new(MemStore::default());
     let s = session();
