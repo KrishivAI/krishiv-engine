@@ -1387,6 +1387,7 @@ DataFrame.groupby
 DataFrame.sort
 DataFrame.where
 EAGER_DEFAULT_MAX_ROWS
+EAGER_ENABLED_KEY
 EAGER_MAX_ROWS_KEY
 class DataFrame()
 ## sql/functions.py
@@ -1534,6 +1535,7 @@ DataFrameReader.def option(self, key: str, value: object) -> DataFrameReader
 DataFrameReader.def options(self, **options: object) -> DataFrameReader
 DataFrameReader.def parquet(self, *paths: str) -> DataFrame
 DataFrameReader.def schema(self, schema: StructType | str) -> DataFrameReader
+DataFrameReader.def text(self, paths: str | list[str], wholetext: bool=False, lineSep: str | None=None, **options: object) -> DataFrame
 DataFrameWriter.def __init__(self, df: DataFrame) -> None
 DataFrameWriter.def bucketBy(self, numBuckets: int, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
 DataFrameWriter.def csv(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
@@ -1573,7 +1575,7 @@ Row.def __getitem__(self, item: Any) -> Any
 Row.def __new__(cls, *args: Any, **kwargs: Any) -> Row
 Row.def __reduce__(self) -> tuple[Any, ...]
 Row.def __repr__(self) -> str
-Row.def asDict(self) -> dict[str, Any]
+Row.def asDict(self, recursive: bool=False) -> dict[str, Any]
 class Row(tuple[Any, ...])
 ## sql/session.py
 Catalog.def __init__(self, session: SparkSession) -> None
