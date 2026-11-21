@@ -287,4 +287,58 @@ mod tests {
         assert!(has_section("# C\n\n## 0.3.0\n\nx\n", "0.3.0"));
         assert!(!has_section("## 0.3.0-rc.1\n", "0.3.0"));
     }
+    fn fixture(version: &str, list: &str, b_dep: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().expect("tempdir");
+        let w = |p: &str, t: &str| {
+            let f = d.path().join(p);
+            std::fs::create_dir_all(f.parent().expect("parent")).expect("mkdir");
+            std::fs::write(f, t).expect("write");
+        };
+        w(
+            "Cargo.toml",
+            &format!("[workspace.package]\nversion = \"{version}\"\n"),
+        );
+        for f in REQUIRED_FILES {
+            w(f, "");
+        }
+        w(".github/scripts/publish-crates.txt", list);
+        w("CHANGELOG.md", "## 0.3.0\n");
+        std::fs::create_dir_all(d.path().join("changelog.d")).expect("mkdir");
+        let inherit = "[package]\nname = \"x\"\nversion.workspace = true\n";
+        w("crates/krishiv-a/Cargo.toml", inherit);
+        w(
+            "crates/krishiv-b/Cargo.toml",
+            &format!("{inherit}[dependencies]\n{b_dep}\n"),
+        );
+        d
+    }
+
+    #[test]
+    fn a_consistent_tree_passes() {
+        let d = fixture(
+            "0.3.0",
+            "# order\nkrishiv-a\nkrishiv-b\n",
+            "krishiv-a = \"1\"",
+        );
+        run(d.path(), &[]).expect("passes");
+        run(d.path(), &["0.3.0"]).expect("passes with the version given");
+    }
+
+    #[test]
+    fn a_broken_tree_fails() {
+        let d = fixture(
+            "0.3.0",
+            "krishiv-b\nkrishiv-a\nkrishiv-a\nkrishiv-zz\n",
+            "krishiv-a = \"1\"",
+        );
+        let err = run(d.path(), &["0.4.0"]).expect_err("fails");
+        assert!(err.contains("check(s) failed"), "{err}");
+        assert!(run(d.path(), &["1", "2"]).is_err());
+    }
+
+    #[test]
+    fn a_missing_manifest_is_an_error() {
+        let d = tempfile::tempdir().expect("tempdir");
+        assert!(run(d.path(), &[]).is_err());
+    }
 }
