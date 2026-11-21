@@ -322,7 +322,7 @@ async fn a_running_query_does_not_show_the_stored_operators_of_an_earlier_run_of
     assert!(task.await.unwrap().is_err());
 }
 
-/// The console's own reads are stored like any query, about two a second while a page is open. A restarted
+/// The console's own reads are stored like any query, about one a second while a page is open. A restarted
 /// server must still list what its users ran: the console's profiles take no place among the newest it shows, and
 /// none of them is listed.
 #[tokio::test]
@@ -339,9 +339,9 @@ async fn the_consoles_own_reads_do_not_push_the_users_history_out_after_a_restar
         let user = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
         let df = user.sql("SELECT 5 AS the_users_query").await.unwrap();
         df.collect().await.unwrap();
-        // An open page: each read is two stored queries, so these are more than the 1,000 a server lists.
+        // An open page: each read is one stored query, so these are more than the 1,000 a server lists.
         let console = SessionSource::new(Arc::clone(&rt)).unwrap();
-        for _ in 0..520 {
+        for _ in 0..1_040 {
             console.rows(SystemTable::Queries).await.unwrap();
         }
         // Dropping the runtime flushes the history writer.
@@ -429,4 +429,33 @@ async fn a_query_row_carries_its_tags_and_its_sessions_client_type() {
     let plain = of("8 AS plain");
     assert_eq!(plain["client_type"], Value::Null);
     assert_eq!(plain["tags"], serde_json::json!({}));
+}
+
+/// How many statements the console itself has run on `rt`, read through an ordinary session.
+async fn console_statements(rt: &Arc<EngineRuntime>) -> usize {
+    let reader = Session::builder().runtime(Arc::clone(rt)).build().unwrap();
+    let batches = reader
+        .sql("SELECT principal FROM system.queries")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    krishiv_server::session_source::batches_to_rows(&batches)
+        .iter()
+        .filter(|r| r["principal"] == UI_PRINCIPAL)
+        .count()
+}
+
+/// A read of the queries is one engine statement, the session's client type included, and a read of another
+/// table is one too: the console's polling is not what fills the runtime's history.
+#[tokio::test]
+async fn one_read_of_a_table_is_one_statement() {
+    let rt = runtime();
+    let source = SessionSource::new(Arc::clone(&rt)).unwrap();
+    let before = console_statements(&rt).await;
+    source.rows(SystemTable::Queries).await.unwrap();
+    assert_eq!(console_statements(&rt).await, before + 1);
+    source.rows(SystemTable::Sessions).await.unwrap();
+    assert_eq!(console_statements(&rt).await, before + 2);
 }

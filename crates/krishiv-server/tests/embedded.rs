@@ -458,3 +458,31 @@ async fn a_dropped_handle_stops_the_server_and_leaves_the_session_open() {
     assert!(!mine.is_closed());
     run(&mine, "SELECT 1").await;
 }
+
+/// The embedded console's read of the memory pools is two statements: the session's query ids, then the
+/// pools. Its read of the queries is one.
+#[tokio::test]
+async fn a_read_runs_no_more_statements_than_it_needs() {
+    let (mine, other) = two_sessions();
+    run(&mine, "SELECT 1 AS own").await;
+    let source = EmbeddedSource::new(&mine).unwrap();
+    let console = || async {
+        let batches = other
+            .sql("SELECT principal FROM system.queries")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        krishiv_server::session_source::batches_to_rows(&batches)
+            .iter()
+            .filter(|r| r["principal"] == krishiv_server::session_source::UI_PRINCIPAL)
+            .count()
+    };
+    let before = console().await;
+    source.rows(SystemTable::Memory).await.unwrap();
+    assert_eq!(console().await, before + 2);
+    let listed = source.rows(SystemTable::Queries).await.unwrap();
+    assert_eq!(console().await, before + 3);
+    assert_eq!(texts(&listed), ["SELECT 1 AS own"]);
+}

@@ -74,13 +74,7 @@ impl EmbeddedSource {
 
     /// The ids of the session's own queries.
     async fn own_ids(&self) -> Result<HashSet<String>, UiError> {
-        Ok(self
-            .own_queries()
-            .await?
-            .iter()
-            .filter_map(|r| r.get("query_id").and_then(Value::as_str))
-            .map(str::to_owned)
-            .collect())
+        self.inner.query_ids_of(self.session.id()).await
     }
 }
 
