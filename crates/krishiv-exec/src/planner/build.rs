@@ -1317,6 +1317,12 @@ impl<'a> Planner<'a> {
         let id = self.next_scan_id()?;
         let sites = if self.rf.enabled() {
             let scan_rows = self.estimated_rows(plan);
+            // `plan` is the pushed `Filter` when there is one: the table's own
+            // estimate is that of the scan below it.
+            let table_rows = match &plan.node {
+                PlanNode::Filter { input, .. } => self.estimated_rows(input),
+                _ => scan_rows,
+            };
             let name = source_name(scan);
             let source = Arc::new(scan.source.clone());
             scan.output
@@ -1327,6 +1333,7 @@ impl<'a> Planner<'a> {
                     column: column.clone(),
                     scan: id,
                     scan_rows,
+                    table_rows,
                     scan_name: name.clone(),
                     source: Arc::clone(&source),
                 })
