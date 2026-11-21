@@ -877,8 +877,11 @@ impl Session {
         if let Err(refusal) = self.table_for_write(&name, operation, &env) {
             // Spark analyzes the subqueries before it finds the target cannot change: a time travel
             // clause in one is the error then.
-            self.refuse_time_travel_in_subqueries(changes, original)
-                .await?;
+            // A target that does not exist is reported first.
+            if refusal.error_class().name() != "TABLE_OR_VIEW_NOT_FOUND" {
+                self.refuse_time_travel_in_subqueries(changes, original)
+                    .await?;
+            }
             return Err(refusal);
         }
         self.refuse_time_travel_in_subqueries(changes, original)

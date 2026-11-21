@@ -198,7 +198,6 @@ impl Expander<'_> {
         plan: Arc<LogicalPlan>,
         scope: &mut Vec<String>,
     ) -> Result<Arc<LogicalPlan>, KrishivError> {
-        self.refuse_time_travel_here(&plan, scope)?;
         // Snapshot pins and cached snapshots are unreachable from user
         // input however a read spells them: a read of one behaves exactly
         // as a missing table, with or without read options. (The pins
@@ -217,6 +216,8 @@ impl Expander<'_> {
             }
             .into());
         }
+        // After the reserved-name guard: a read of a hidden name is a missing table, options or not.
+        self.refuse_time_travel_here(&plan, scope)?;
         // Inside a stored view a bare table name is the view's own namespace's, never a temporary view.
         if let Some(namespace) = &self.view_namespace
             && let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
@@ -468,16 +469,24 @@ impl Expander<'_> {
             return Ok(plan);
         };
         if travel {
-            // Spark's `failTimeTravel` names the view in full.
-            return Err(krishiv_common::error::UnsupportedFeatureTimeTravel {
-                relation_id: format!(
-                    "{}.{}.{}",
-                    quote(CATALOG),
-                    quote(&entry.namespace),
-                    quote(&entry.name)
-                ),
+            // Spark's `failTimeTravel` names the view in full. Raised once the reads are authorized
+            // (as a failure inside the view's text is), so a caller who may not read the view is
+            // denied exactly as for a missing one: no existence oracle.
+            if self.deferred.is_none() {
+                self.deferred_in_definer = !self.in_definer.is_empty() || view.definer.is_some();
+                self.deferred = Some(
+                    krishiv_common::error::UnsupportedFeatureTimeTravel {
+                        relation_id: format!(
+                            "{}.{}.{}",
+                            quote(CATALOG),
+                            quote(&entry.namespace),
+                            quote(&entry.name)
+                        ),
+                    }
+                    .into(),
+                );
             }
-            .into());
+            return Ok(plan);
         }
         match self.inline_stored(&plan, entry, view, &namespace, &table_key, scope) {
             Ok(done) => Ok(done),

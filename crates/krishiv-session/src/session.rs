@@ -711,7 +711,18 @@ impl Session {
             }
             Statement::Merge(m) => {
                 let more: Vec<&krishiv_sql::ast::Expr> = std::iter::once(&m.on)
-                    .chain(m.clauses.iter().filter_map(|c| c.condition.as_ref()))
+                    .chain(m.clauses.iter().flat_map(|c| {
+                        let action: Vec<&krishiv_sql::ast::Expr> = match &c.action {
+                            krishiv_sql::ast::MergeAction::Update(assignments) => {
+                                assignments.iter().map(|a| &a.value).collect()
+                            }
+                            krishiv_sql::ast::MergeAction::Insert(
+                                krishiv_sql::ast::MergeInsert::Values { values, .. },
+                            ) => values.iter().collect(),
+                            _ => Vec::new(),
+                        };
+                        c.condition.iter().chain(action)
+                    }))
                     .collect();
                 let sources: Vec<&krishiv_sql::ast::Query> = match &m.source {
                     krishiv_sql::ast::MergeSource::Query { query, .. } => vec![&**query],

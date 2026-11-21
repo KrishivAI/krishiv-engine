@@ -21,10 +21,50 @@ fn message(session: &Session, sql: &str) -> String {
     }
 }
 
-fn describe(session: &Session) -> String {
-    let rows =
+/// The comment of each column of `tbl` (`None` for no comment), by column name, from `DESCRIBE`.
+fn comments(session: &Session) -> Vec<(String, Option<String>)> {
+    use arrow_array::{Array, StringArray};
+    let batches =
         block_on(async { session.sql("describe tbl").await?.collect().await }).expect("describe");
-    format!("{rows:?}")
+    let mut out = Vec::new();
+    for b in &batches {
+        let as_text = |i: usize| {
+            arrow_cast::cast(b.column(i), &arrow_schema::DataType::Utf8).expect("cast to text")
+        };
+        let (names, comment) = (as_text(0), as_text(2));
+        let names = names.as_any().downcast_ref::<StringArray>().expect("names");
+        let comment = comment
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("comments");
+        for i in 0..b.num_rows() {
+            out.push((
+                names.value(i).to_owned(),
+                (!comment.is_null(i)).then(|| comment.value(i).to_owned()),
+            ));
+        }
+    }
+    out
+}
+
+/// Whether `sql` returns exactly one row of one column and that cell is NULL.
+fn is_one_null(session: &Session, sql: &str) -> bool {
+    use arrow_array::Array;
+    let batches = block_on(async { session.sql(sql).await?.collect().await }).expect(sql);
+    let rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
+    rows == 1
+        && batches
+            .iter()
+            .find(|b| b.num_rows() == 1)
+            .is_some_and(|b| b.num_columns() == 1 && b.column(0).is_null(0))
+}
+
+fn comment_of(session: &Session, column: &str) -> Option<String> {
+    comments(session)
+        .into_iter()
+        .find(|(n, _)| n == column)
+        .unwrap_or_else(|| panic!("no column {column}"))
+        .1
 }
 
 fn session_with_table() -> Session {
@@ -150,15 +190,15 @@ fn the_suffix_is_off_with_its_config() {
 fn comment_on_column_sets_and_removes_the_comment() {
     let s = session_with_table();
     run(&s, "comment on column tbl.name is 'the name'").expect("comment");
-    assert!(describe(&s).contains("the name"));
+    assert_eq!(comment_of(&s, "name"), Some("the name".to_owned()));
+    assert_eq!(comment_of(&s, "id"), None);
     // `IS NULL` removes it (the DESCRIBE cell is NULL); `IS ''` sets the empty one.
     run(&s, "comment on column tbl.name is null").expect("clear");
-    assert!(!describe(&s).contains("the name"));
-    let cleared = describe(&s);
+    assert_eq!(comment_of(&s, "name"), None);
     run(&s, "comment on column tbl.name is ''").expect("empty");
-    assert_ne!(
-        describe(&s),
-        cleared,
+    assert_eq!(
+        comment_of(&s, "name"),
+        Some(String::new()),
         "an empty comment is not a missing one"
     );
     assert_eq!(
@@ -175,9 +215,11 @@ fn comment_on_column_sets_and_removes_the_comment() {
 fn comment_on_table_column_changes_several_columns() {
     let s = session_with_table();
     run(&s, "comment on table tbl column (id is 'a', name is 'b')").expect("comments");
-    let text = describe(&s);
-    assert!(text.contains('a') && text.contains('b'), "{text}");
+    assert_eq!(comment_of(&s, "id"), Some("a".to_owned()));
+    assert_eq!(comment_of(&s, "name"), Some("b".to_owned()));
     run(&s, "comment on table tbl column (id is null)").expect("clear");
+    assert_eq!(comment_of(&s, "id"), None);
+    assert_eq!(comment_of(&s, "name"), Some("b".to_owned()));
     assert_eq!(
         run(&s, "comment on table tbl column (id is 'a', ID is 'b')"),
         Err("NOT_SUPPORTED_CHANGE_SAME_COLUMN".to_owned())
@@ -307,8 +349,8 @@ fn the_clause_is_refused_for_every_kind_of_relation() {
     let s = session_with_table();
     run(&s, "create view pv as select 1 as a").expect("view");
     run(&s, "create temporary view tv as select 1 as a").expect("temp view");
-    let dir = std::env::temp_dir().join("krishiv_tt_path_dir");
-    std::fs::create_dir_all(&dir).expect("dir");
+    let holder = tempfile::tempdir().expect("temp dir");
+    let dir = holder.path().to_path_buf();
     for (sql, relation) in [
         ("with c as (select 1 a) select * from c@v1", "`c`"),
         (
@@ -407,7 +449,7 @@ fn a_variant_edit_over_an_argument_that_folds_to_null_is_null() {
         "select variant_insert(parse_json('{}'), 'bad', parse_json(cast(null as string)))",
         "select try_variant_insert(to_variant_object(cast(null as struct<a:int>)), 'bad', 1)",
     ] {
-        assert_eq!(run(&s, sql), Ok(()), "{sql}");
+        assert!(is_one_null(&s, sql), "{sql}");
     }
     assert_eq!(
         run(&s, "select variant_insert(parse_json('{}'), 'bad', 1)"),
@@ -487,4 +529,77 @@ fn view_names_as_written_and_view_replace_where() {
     );
     let same = message(&s, "comment on table tbl column (id is 'a', ID is 'b')");
     assert!(same.contains("`id`"), "{same}");
+}
+
+/// Review threads of #937: where each refusal sits relative to the others.
+#[test]
+fn refusals_keep_their_order() {
+    let s = session_with_table();
+    run(&s, "create view pv as select 1 as a").expect("view");
+    // MERGE: a `VERSION AS OF` in an action's value is the time travel refusal, not TABLE_OPERATION.
+    for sql in [
+        "merge into tbl t using tbl s on t.id = s.id when matched then update set name = (select max(name) from tbl@v1)",
+        "merge into tbl t using tbl s on t.id = s.id when not matched then insert (id, name) values (1, (select max(name) from tbl@v1))",
+    ] {
+        assert_eq!(
+            run(&s, sql),
+            Err("UNSUPPORTED_FEATURE.TIME_TRAVEL".to_owned()),
+            "{sql}"
+        );
+    }
+    // A missing target is reported before a time travel clause in a subquery.
+    assert_eq!(
+        run(
+            &s,
+            "delete from missing where exists (select 1 from tbl version as of 1)"
+        ),
+        Err("TABLE_OR_VIEW_NOT_FOUND".to_owned())
+    );
+    // A hidden name read with a time travel clause is a missing table, as without one.
+    for sql in [
+        "select * from __krishiv_snapshot_x@v1",
+        "select * from __krishiv_snapshot_x version as of 1",
+    ] {
+        assert_eq!(
+            run(&s, sql),
+            Err("TABLE_OR_VIEW_NOT_FOUND".to_owned()),
+            "{sql}"
+        );
+    }
+    // A multi-table insert refuses `REPLACE WHERE` into a view as a single one does.
+    assert_eq!(
+        run(
+            &s,
+            "from (select 1 as a) insert into pv replace where a = 1 select a insert into tbl select a, 'x'"
+        ),
+        Err("VIEW_WRITE_NOT_ALLOWED".to_owned())
+    );
+    // The validator visits the columns of COMMENT ON TABLE ... COLUMN.
+    assert_eq!(
+        run(
+            &s,
+            "comment on table tbl column (identifier(1 in ()) is 'x')"
+        ),
+        Err("INVALID_SQL_SYNTAX.EMPTY_IN_PREDICATE".to_owned())
+    );
+}
+
+/// The `@` suffix faults are Spark's `AstBuilder` checks: a syntax error later in the statement comes first.
+#[test]
+fn a_syntax_error_comes_before_a_time_travel_fault() {
+    let s = session_with_table();
+    for sql in [
+        "select * from tbl@20240230000000000 where (",
+        "select * from tbl@v1 version as of 1 where (",
+    ] {
+        assert_eq!(run(&s, sql), Err("PARSE_SYNTAX_ERROR".to_owned()), "{sql}");
+    }
+    assert_eq!(
+        run(&s, "select * from tbl@20240230000000000"),
+        Err("INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT".to_owned())
+    );
+    assert_eq!(
+        run(&s, "select * from tbl@v1 version as of 1"),
+        Err("MULTIPLE_TIME_TRAVEL_SPEC".to_owned())
+    );
 }

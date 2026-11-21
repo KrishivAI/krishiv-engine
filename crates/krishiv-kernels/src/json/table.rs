@@ -339,11 +339,13 @@ mod tests {
         ] {
             let e = json_table_rows(&StringArray::from(vec![input]), path, true).unwrap_err();
             assert_eq!(e.error_class(), class, "{input:?} {path}");
-            // Without the clause the same inputs have no rows.
-            assert!(
-                json_table_rows(&StringArray::from(vec![input]), path, false).is_ok(),
-                "{input:?} {path}"
-            );
+            // Without the clause the same inputs have no rows: one valid, empty list.
+            let out = json_table_rows(&StringArray::from(vec![input]), path, false)
+                .unwrap_or_else(|e| panic!("{input:?} {path}: {e}"));
+            let lists = arrow_array::cast::AsArray::as_list::<i32>(&out);
+            assert_eq!(lists.len(), 1, "{input:?} {path}");
+            assert!(lists.is_valid(0), "{input:?} {path}");
+            assert_eq!(lists.value(0).len(), 0, "{input:?} {path}");
         }
         // A missing container has no rows, even with ERROR ON ERROR.
         for path in ["$.b[*]", "$.b"] {
@@ -368,6 +370,31 @@ mod tests {
             .next()
             .flatten()
             .map(str::to_owned)
+    }
+
+    /// The unusual key spellings the SQL lowering accepts select the key written, and `EXISTS` agrees.
+    #[test]
+    fn unusual_key_spellings_select_their_keys() {
+        for (key, path) in [
+            ("c'd", "$.c'd"),
+            ("a b", "$.a b"),
+            ("a]b", "$.a]b"),
+            ("a b", "$['a b']"),
+        ] {
+            let doc = format!("{{{key:?}:7,\"other\":8}}");
+            assert_eq!(value(&doc, path).as_deref(), Some("7"), "{path}");
+            let exists = json_table_exists(
+                &StringArray::from(vec![doc.as_str()]),
+                &StringArray::from(vec![path]),
+            );
+            assert!(
+                arrow_array::cast::AsArray::as_boolean(&exists).value(0),
+                "{path}"
+            );
+            assert_eq!(value("{\"other\":8}", path), None, "{path}");
+        }
+        let nested = r#"{"a b":{"c":9}}"#;
+        assert_eq!(value(nested, "$['a b'].c").as_deref(), Some("9"));
     }
 
     #[test]

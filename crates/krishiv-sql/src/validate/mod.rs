@@ -84,8 +84,8 @@ use crate::ast::{
     PartitionFieldKind, PartitionSpec, Query, RefreshKind, Relation, RelationExt, RowFormat,
     RowFormatKind, SchemaBindingClause, Select, SelectItem, SetExpr, SetExprKind, SetVariableKind,
     Show, ShowKind, SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind,
-    TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause, Truncate, Update,
-    UpdateAssignment, WindowRef, WindowSpec, With,
+    TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause, TemporalFault,
+    Truncate, Update, UpdateAssignment, WindowRef, WindowSpec, With,
 };
 use crate::error::{self, ParseError};
 use crate::lexer::{Sym, TokenKind, tokenize};
@@ -766,9 +766,11 @@ impl Checker<'_> {
                 self.partition_values(Some(partition))?;
                 non_optional(partition)
             }
+            AlterTableAction::CommentOnColumns { columns, .. } => {
+                columns.iter().try_for_each(|(c, _)| self.column_name(c))
+            }
             AlterTableAction::SetLocation(_)
             | AlterTableAction::SetComment(_)
-            | AlterTableAction::CommentOnColumns { .. }
             | AlterTableAction::RecoverPartitions => Ok(()),
         }
     }
@@ -1421,6 +1423,21 @@ impl Checker<'_> {
     ) -> R {
         if let Some(t) = temporal {
             self.expr(&t.value)?;
+            match &t.fault {
+                Some(TemporalFault::AtSyntaxDisabled(span)) => {
+                    return Err(error::time_travel_at_syntax(*span));
+                }
+                Some(TemporalFault::InvalidAtTimestamp(digits, span)) => {
+                    return Err(error::invalid_time_travel_timestamp_format(
+                        digits.clone(),
+                        *span,
+                    ));
+                }
+                Some(TemporalFault::Multiple(span)) => {
+                    return Err(error::multiple_time_travel_spec(*span));
+                }
+                None => {}
+            }
         }
         self.property_keys(options)?;
         let missing = misvalued_keys(options, true);

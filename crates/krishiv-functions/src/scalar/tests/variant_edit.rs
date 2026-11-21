@@ -348,20 +348,28 @@ fn a_literal_path_is_checked_at_bind_and_a_column_path_per_row() {
         );
     }
     // A NULL literal folds insert/set/append to NULL before the path is parsed; `variant_delete` still raises.
-    let bad_lit = || BindArg::Literal(text_col(&[Some("bad")]));
-    let null_variant = || BindArg::Literal(variants(&[None]));
-    let null_int = || BindArg::Literal(Arc::new(arrow_array::Int32Array::from(vec![None::<i32>])));
-    for (name, args) in [
-        ("variant_insert", vec![null_variant(), bad_lit(), arg(&val)]),
-        ("variant_set", vec![null_variant(), bad_lit(), arg(&val)]),
+    let bad_text = text_col(&[Some("bad")]);
+    let null_variant: ArrayRef = variants(&[None]);
+    let null_int: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![None::<i32>]));
+    let bad_lit = || BindArg::Literal(Arc::clone(&bad_text));
+    let lit = |a: &ArrayRef| (BindArg::Literal(Arc::clone(a)), Arg::Scalar(Arc::clone(a)));
+    let (bad, null_v, null_i) = (lit(&bad_text), lit(&null_variant), lit(&null_int));
+    let col = |a: &ArrayRef| (arg(a), Arg::Array(Arc::clone(a)));
+    for (name, cases) in [
         (
-            "variant_array_append",
-            vec![null_variant(), bad_lit(), arg(&val)],
+            "variant_insert",
+            vec![null_v.clone(), bad.clone(), col(&val)],
         ),
-        ("variant_insert", vec![arg(&doc0), bad_lit(), null_int()]),
+        ("variant_set", vec![null_v.clone(), bad.clone(), col(&val)]),
+        ("variant_array_append", vec![null_v, bad.clone(), col(&val)]),
+        ("variant_insert", vec![col(&doc0), bad, null_i]),
     ] {
-        assert!(bind(name, &args).is_ok(), "{name}");
+        let (binds, args): (Vec<BindArg>, Vec<Arg>) = cases.into_iter().unzip();
+        let f = bind(name, &binds).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let out = f.invoke(&args, 1).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(show(&out), vec![None], "{name}");
     }
+    let null_variant = || BindArg::Literal(Arc::clone(&null_variant));
     assert_eq!(
         bind("variant_delete", &[null_variant(), bad_lit()])
             .err()

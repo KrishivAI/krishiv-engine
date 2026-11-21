@@ -65,9 +65,10 @@ pub static TIME_TRAVEL_AT_SYNTAX_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.timeTravel.atSyntax.enabled",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
-    doc: "Whether a table name in a query can carry a time travel suffix: `name@v123` reads version \
-          123 of the table and `name@20240101000000000` (yyyyMMddHHmmssSSS, in the session time \
-          zone) reads it as of that timestamp. Off, `@` in a table name is \
+    doc: "Whether a table name in a query can carry a time travel suffix: `name@v123` (a version) or \
+          `name@20240101000000000` (yyyyMMddHHmmssSSS). This setting only enables parsing the \
+          suffix: reading an older version or timestamp is not supported yet, so a read with a \
+          suffix is `UNSUPPORTED_FEATURE.TIME_TRAVEL`. Off, `@` in a table name is \
           `UNSUPPORTED_FEATURE.TIME_TRAVEL_AT_SYNTAX` at parse time (Spark 4.3).",
     scope: Scope::Session,
     settable_by: SettableBy::User,

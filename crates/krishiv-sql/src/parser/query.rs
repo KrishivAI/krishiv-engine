@@ -1283,8 +1283,11 @@ impl Parser<'_> {
             } else {
                 let at_suffix = self.at_suffix_clause(name_start)?;
                 let temporal = match (at_suffix, self.temporal_clause()?) {
-                    (Some(_), Some(clause)) => {
-                        return Self::fatal(error::multiple_time_travel_spec(clause.span));
+                    (Some(mut at), Some(clause)) => {
+                        // Spark's `AstBuilder` reports it after the statement parsed; an earlier
+                        // fault of the suffix is the first error.
+                        at.fault.get_or_insert(TemporalFault::Multiple(clause.span));
+                        Some(at)
                     }
                     (at, clause) => at.or(clause),
                 };
@@ -1515,14 +1518,16 @@ impl Parser<'_> {
             return self.fail();
         };
         let whole = Span::new(name_start, value_span.end);
+        let mut fault = None;
         if !self.opts.time_travel_at_syntax {
-            return Self::fatal(error::time_travel_at_syntax(whole));
+            fault = Some(TemporalFault::AtSyntaxDisabled(whole));
         }
         let literal = match (kind, literal) {
             (TemporalKind::Timestamp, Literal::String(digits)) => match at_timestamp(&digits) {
                 Some(text) => Literal::String(text),
                 None => {
-                    return Self::fatal(error::invalid_time_travel_timestamp_format(digits, whole));
+                    fault.get_or_insert(TemporalFault::InvalidAtTimestamp(digits.clone(), whole));
+                    Literal::String(digits)
                 }
             },
             (_, literal) => literal,
@@ -1534,6 +1539,7 @@ impl Parser<'_> {
                 span: value_span,
             },
             span: self.span_from(start),
+            fault,
         }))
     }
 
@@ -1582,6 +1588,7 @@ impl Parser<'_> {
             kind,
             value,
             span: self.span_from(start),
+            fault: None,
         }))
     }
 

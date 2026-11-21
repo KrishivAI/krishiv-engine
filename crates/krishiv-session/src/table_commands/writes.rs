@@ -100,6 +100,12 @@ impl Session {
             let env = self.query_env();
             for clause in &clauses {
                 let name = self.table_name(&clause.name, &env)?;
+                if clause.replace_where.is_some()
+                    || clause.replace_on.is_some()
+                    || clause.replace_using.is_some()
+                {
+                    self.refuse_replace_into_view(&name, &env)?;
+                }
                 self.table_for_write(&name, "INSERT", &env)?;
             }
             for clause in &clauses {
@@ -110,6 +116,28 @@ impl Session {
             self.insert_clause(clause, original, ids, false).await?;
         }
         self.empty_frame().await
+    }
+
+    /// Spark checks the target before the capability of a `REPLACE` write: a view is not writable at all.
+    fn refuse_replace_into_view(
+        &self,
+        name: &TableName,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let permanent_view = self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some_and(|t| t.view.is_some())
+            && !self.temp_entry_of(name, env);
+        if permanent_view {
+            return Err(krishiv_common::error::ViewWriteNotAllowed {
+                name: name.quoted(),
+            }
+            .into());
+        }
+        Ok(())
     }
 
     /// `c` checked through to the rows it would write (`dry`), or written.
@@ -125,20 +153,7 @@ impl Session {
             c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some();
         let name = self.table_name(&c.name, &env)?;
         if replace {
-            // Spark checks the target before the capability: a view is not writable at all.
-            let permanent_view = self
-                .state
-                .catalog
-                .store
-                .table(&name.namespace, &name.name)
-                .is_some_and(|t| t.view.is_some())
-                && !self.temp_entry_of(&name, &env);
-            if permanent_view {
-                return Err(krishiv_common::error::ViewWriteNotAllowed {
-                    name: name.quoted(),
-                }
-                .into());
-            }
+            self.refuse_replace_into_view(&name, &env)?;
         }
         let table = self.table_for_write(&name, "INSERT", &env)?;
         if replace {
