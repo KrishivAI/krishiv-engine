@@ -728,14 +728,15 @@ async fn a_task_error_fails_the_query_and_frees_everything() {
         }
         errors
     });
-    // A query that fails before its disk phase says so rather than timing out.
+    // A query that fails or ends before its disk phase says so rather than timing out.
     wait_until("a disk task at the gate", || {
-        gate.reached() || q.error().is_some()
+        gate.reached() || q.error().is_some() || q.is_finished()
     })
     .await;
     assert!(
         gate.reached(),
-        "the query failed before a disk task: {:?}",
+        "the query ended before a disk task (finished: {}): {:?}",
+        q.is_finished(),
         q.error()
     );
     // A task holds its table at the gate: every spill file is damaged, so
