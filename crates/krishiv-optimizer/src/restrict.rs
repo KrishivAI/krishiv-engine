@@ -752,6 +752,7 @@ pub(crate) fn max_id(
         | PlanNode::Sort { .. }
         | PlanNode::Limit { .. }
         | PlanNode::Offset { .. }
+        | PlanNode::Tail { .. }
         | PlanNode::WithCte { .. }
         | PlanNode::JoinHint { .. }
         | PlanNode::Repartition { .. }
