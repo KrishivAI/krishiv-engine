@@ -670,7 +670,8 @@ jobs:
   # the job. `min_rate` is the blocking floor (percent); empty = report-only. 4.0.5 and 4.1.4 take
   # 75 once the owner freezes the manifest and a first run is committed; 3.5.7 stays report-only.
   pyspark-suite:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -679,11 +680,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { version: "4.3.0", min_rate: "", pyspark: "pyspark-client" }
-          - { version: "4.2.1", min_rate: "", pyspark: "pyspark-client" }
-          - { version: "4.1.4", min_rate: "", pyspark: "pyspark-client" }
-          - { version: "4.0.5", min_rate: "", pyspark: "pyspark-client" }
-          - { version: "3.5.7", min_rate: "", pyspark: "pyspark[connect]", report_only: "1" }
+          - { version: "4.3.0", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
+          - { version: "4.2.1", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
+          - { version: "4.1.4", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
+          - { version: "4.0.5", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
+          - { version: "3.5.7", python: "3.11", deps: "pandas<2.3 numpy<2 pyarrow<18", min_rate: "", pyspark: "pyspark[connect]", report_only: "1" }
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -703,15 +704,18 @@ jobs:
         env:
           VERSION: ${{ matrix.version }}
         run: |
-          git clone --filter=blob:none --depth 1 --branch "v${VERSION}" https://github.com/apache/spark.git "$RUNNER_TEMP/spark"
-          git -C "$RUNNER_TEMP/spark" sparse-checkout set python/pyspark/sql/tests python/pyspark/testing python/pyspark/errors
+          git clone --no-checkout --filter=blob:none --depth 1 --branch "v${VERSION}" https://github.com/apache/spark.git "$RUNNER_TEMP/spark"
+          git -C "$RUNNER_TEMP/spark" sparse-checkout set python/pyspark/sql/tests python/pyspark/testing
+          git -C "$RUNNER_TEMP/spark" checkout
       - name: Python 3.12 venv for the version
         env:
           VERSION: ${{ matrix.version }}
           PYSPARK: ${{ matrix.pyspark }}
+          PYTHON: ${{ matrix.python }}
+          DEPS: ${{ matrix.deps }}
         run: |
-          uv venv --python 3.12 "$RUNNER_TEMP/venv"
-          uv pip install --python "$RUNNER_TEMP/venv/bin/python" "${PYSPARK}==${VERSION}" pytest pytest-timeout pandas numpy pyarrow \
+          uv venv --python "$PYTHON" "$RUNNER_TEMP/venv"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" "${PYSPARK}==${VERSION}" pytest pytest-timeout ${DEPS} \
             grpcio grpcio-status googleapis-common-protos zstandard
       - name: Run the suite
         env:
@@ -720,16 +724,14 @@ jobs:
           cd tests/scripts
           "$RUNNER_TEMP/venv/bin/python" -m pyspark_suite run --version "$VERSION" --checkout "$RUNNER_TEMP/spark" \
             --port 15002 --server-cmd "$GITHUB_WORKSPACE/target/release/krishiv" server --port 0 --connect-port 15002
-      # `run` writes the full summary over the committed one: keep the fresh copy before the ratchet.
+      # `run --out` leaves the committed summary alone; the ratchet compares the fresh one with it.
       - name: Pass-list ratchet
         env:
           VERSION: ${{ matrix.version }}
           MIN_RATE: ${{ matrix.min_rate }}
           REPORT_ONLY: ${{ matrix.report_only }}
         run: |
-          cp "tests/pyspark/summary/${VERSION}.json" "$RUNNER_TEMP/current.json"
-          git checkout -- "tests/pyspark/summary/${VERSION}.json"
-          args=(--version "$VERSION" --current "$RUNNER_TEMP/current.json")
+          args=(--version "$VERSION" --current "$RUNNER_TEMP/out/${VERSION}.json")
           [ -n "$MIN_RATE" ] && args+=(--min-rate "$MIN_RATE")
           [ -n "$REPORT_ONLY" ] && args+=(--report-only)
           cd tests/scripts
@@ -738,9 +740,7 @@ jobs:
         if: always()
         with:
           name: pyspark-suite-${{ matrix.version }}
-          path: |
-            tests/pyspark/results/${{ matrix.version }}
-            ${{ runner.temp }}/current.json
+          path: ${{ runner.temp }}/out
 
   # The vendored Spark Connect protos still equal apache/spark at their tags (P3-T010).
   connect-proto-upstream:

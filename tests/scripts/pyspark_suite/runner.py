@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -42,6 +43,30 @@ def check_pytest_timeout() -> None:
         raise RuntimeError("pytest-timeout is not installed in the version venv")
 
 
+def stage_tests(checkout: Path) -> Path:
+    """Copy the tag's test sources into the installed `pyspark` and return its `sql/tests/connect` dir.
+
+    The installed wheel stays the only `pyspark` on the path: a sparse checkout on `PYTHONPATH` would shadow it
+    with a partial package (no `pyspark.logger`, `pyspark.sql.connect`) and nothing would import.
+    """
+    probe = subprocess.run(
+        [sys.executable, "-c", "import pathlib, pyspark; print(pathlib.Path(pyspark.__file__).parent)"],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd="/",
+    )
+    if probe.returncode:
+        raise RuntimeError(f"pyspark is not installed in the version venv: {probe.stderr.strip()}")
+    installed = Path(probe.stdout.strip())
+    src = checkout / "python" / "pyspark"
+    for sub in ("sql/tests", "testing"):
+        if not (src / sub).is_dir():
+            raise RuntimeError(f"{src / sub} is missing from the Spark checkout")
+        shutil.copytree(src / sub, installed / sub, dirs_exist_ok=True)
+    return installed / "sql" / "tests" / "connect"
+
+
 @contextmanager
 def server(cmd: list[str], port: int) -> Generator[None]:
     """Start the server command, wait for its port, stop it (and wait) on exit."""
@@ -67,12 +92,11 @@ def _killpg(proc: subprocess.Popen, sig: int) -> None:
         os.killpg(proc.pid, sig)
 
 
-def run_file(version: str, checkout: Path, rel: str, out_dir: Path, server_cmd: list[str], port: int) -> list[Record]:
-    """One file, one server. A crash or timeout yields a `timeout`/`error` record, never an abort."""
-    tests_dir = checkout / "python" / "pyspark" / "sql" / "tests" / "connect"
+def run_file(version: str, tests_dir: Path, rel: str, out_dir: Path, server_cmd: list[str], port: int) -> list[Record]:
+    """One file under `tests_dir` (the staged tests), one server; a crash or timeout is a record, not an abort."""
     xml = out_dir / (rel.replace("/", "__") + ".xml")
     env = {k: v for k, v in os.environ.items() if k != "SPARK_HOME"}
-    env["PYTHONPATH"] = str(checkout / "python")
+    env.pop("PYTHONPATH", None)  # the installed pyspark is the only one (see `stage_tests`)
     env["SPARK_CONNECT_TESTING_REMOTE"] = f"sc://127.0.0.1:{port}"
     cmd = [
         sys.executable,

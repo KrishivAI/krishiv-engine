@@ -218,3 +218,53 @@ def test_ratchet_cli_fails_on_lost_pass_or_low_rate(tmp_path, monkeypatch):
         run({}, min_rate=90.0)  # under the floor
     with pytest.raises(SystemExit):
         run({"source": "static"})  # not a run
+
+
+def test_ratchet_with_no_committed_summary_and_report_only_with_min_rate(tmp_path, monkeypatch):
+    import argparse
+    import json
+
+    from pyspark_suite import __main__ as cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)  # no summary/ dir: 3.5.7 before its first commit
+    cur = {"version": "3.5.7", "source": "run", "passed": 1, "pass_rate": 10.0, "passed_ids": ["a"]}
+    f = tmp_path / "cur.json"
+    f.write_text(json.dumps(cur))
+    ns = argparse.Namespace(version="3.5.7", current=f, min_rate=None, report_only=False)
+    cli.cmd_ratchet(ns)  # an empty baseline loses nothing
+    ns.min_rate = 50.0
+    with pytest.raises(SystemExit):
+        cli.cmd_ratchet(ns)
+    ns.report_only = True
+    cli.cmd_ratchet(ns)  # report-only silences the floor too
+    ns.version = "4.0.5"
+    with pytest.raises(SystemExit):
+        cli.cmd_ratchet(ns)  # the file is for another version
+
+
+def test_run_fails_when_every_file_fails_to_run(tmp_path, monkeypatch):
+    import argparse
+
+    from pyspark_suite import __main__ as cli
+    from pyspark_suite.junit import Record
+
+    conn = tmp_path / "co" / "python" / "pyspark" / "sql" / "tests" / "connect"
+    conn.mkdir(parents=True)
+    (conn / "test_a.py").write_text("import unittest\nclass FooTests(unittest.TestCase):\n    def test_x(self): pass\n")
+    monkeypatch.setattr(cli, "DATA", tmp_path / "data")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "manifest.toml").write_text("")
+    monkeypatch.setattr(cli, "check_pytest_timeout", lambda: None)
+    monkeypatch.setattr(cli, "stage_tests", lambda _c: conn)
+    monkeypatch.setattr(cli, "run_file", lambda v, _t, rel, *_a: [Record(v, rel, "<file>", "<file>", "error", 0)])
+    a = argparse.Namespace(
+        version="4.0.5",
+        checkout=tmp_path / "co",
+        port=1,
+        oracle_junit=None,
+        only=None,
+        out=tmp_path / "out",
+        server_cmd=["x"],
+    )
+    with pytest.raises(SystemExit, match="every selected file failed"):
+        cli.cmd_run(a)
