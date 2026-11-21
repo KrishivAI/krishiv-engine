@@ -54,9 +54,60 @@ use object_store::ObjectStore;
 use object_store::memory::InMemory;
 use object_store::path::Path as StorePath;
 
-const TABLES: [&str; 8] = [
-    "customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier",
+/// The TPC-H tables, then `vt`: the generated vectors of the top-k scenario (`vt_parquet`).
+const TABLES: [&str; 9] = [
+    "customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier", "vt",
 ];
+
+/// Vectors in `vt`, and their dimension: about 1 MB of floats, so a scan deals as several splits.
+const VT_ROWS: i32 = 4000;
+const VT_DIM: usize = 64;
+
+/// The `vt` table as Parquet: `id INT`, `v ARRAY<FLOAT>` with every 97th vector NULL, in row groups of 500.
+fn vt_parquet() -> Vec<u8> {
+    use arrow_array::builder::{Float32Builder, ListBuilder};
+    use arrow_array::{ArrayRef, Int32Array};
+    let field = Arc::new(arrow_schema::Field::new(
+        "element",
+        arrow_schema::DataType::Float32,
+        true,
+    ));
+    let mut vectors = ListBuilder::new(Float32Builder::new()).with_field(Arc::clone(&field));
+    for i in 0..VT_ROWS {
+        if i % 97 == 5 {
+            vectors.append(false);
+            continue;
+        }
+        // splitmix64 over the row, as the session tests' fixtures do.
+        let mut state = u64::try_from(i).unwrap() * 2 + 100;
+        for _ in 0..VT_DIM {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            vectors
+                .values()
+                .append_value(((z >> 40) as f32) / 8_388_608.0 - 1.0);
+        }
+        vectors.append(true);
+    }
+    let schema = Arc::new(arrow_schema::Schema::new(vec![
+        arrow_schema::Field::new("id", arrow_schema::DataType::Int32, false),
+        arrow_schema::Field::new("v", arrow_schema::DataType::List(field), true),
+    ]));
+    let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(0..VT_ROWS));
+    let batch =
+        RecordBatch::try_new(Arc::clone(&schema), vec![ids, Arc::new(vectors.finish())]).unwrap();
+    let props = parquet::file::properties::WriterProperties::builder()
+        .set_max_row_group_row_count(Some(500))
+        .build();
+    let mut out = Vec::new();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(&mut out, schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    out
+}
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -77,7 +128,11 @@ fn store() -> Arc<dyn ObjectStore> {
         .build()
         .unwrap();
     for t in TABLES {
-        let bytes = std::fs::read(data_dir().join(format!("{t}.parquet"))).unwrap();
+        let bytes = if t == "vt" {
+            vt_parquet()
+        } else {
+            std::fs::read(data_dir().join(format!("{t}.parquet"))).unwrap()
+        };
         let path = object_store::path::Path::from(format!("{t}.parquet").as_str());
         rt.block_on(object_store::ObjectStoreExt::put(
             &store,
@@ -185,6 +240,20 @@ impl Tpch {
 
     async fn plan_sql(&self, text: &str) -> Result<PhysicalPlan, KrishivError> {
         self.plan_sql_with(text, Arc::clone(&self.config)).await
+    }
+
+    /// As `plan_sql`, with the optimizer's UDF folding on (`optimize_with_udfs`), which is where a `vector_*`
+    /// call's `array(literals)` argument folds to one array literal.
+    async fn plan_sql_folded(&self, text: &str) -> Result<PhysicalPlan, KrishivError> {
+        let plan =
+            krishiv_sql::parse_and_lower(text, &krishiv_sql::ParserOptions::default(), SourceId(0))
+                .map_err(KrishivError::from)?;
+        let plan: Plan = DefaultAnalyzer.analyze(&plan, &self.ctx).await?.plan;
+        let stats = ProviderStatistics(Arc::clone(&self.tables) as _);
+        let udfs = krishiv_udf_sdk::UdfLibrary::new();
+        let plan = krishiv_optimizer::optimize_with_udfs(&plan, &stats, &udfs, &self.config)?;
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        DefaultPlanner.plan(&plan, &cx)
     }
 
     async fn plan_sql_with(
@@ -303,6 +372,22 @@ async fn rows(
     rows_with(config, scheduler, plan, worker, pool, id).await
 }
 
+/// `plan`'s rows through `scheduler`, as text, in the order the query emits them (a top-k's order is its result).
+async fn ordered_rows(
+    seed: u64,
+    scheduler: &dyn Scheduler,
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+    pool: &Arc<dyn MemoryPool>,
+    id: u64,
+) -> Result<Vec<String>, KrishivError> {
+    let config = ExecConfig {
+        seed: Some(seed),
+        ..ExecConfig::default()
+    };
+    rows_in_order(config, scheduler, plan, worker, pool, id, false).await
+}
+
 /// `plan`'s rows through `scheduler` under `config`, as text, sorted.
 async fn rows_with(
     config: ExecConfig,
@@ -311,6 +396,19 @@ async fn rows_with(
     worker: &WorkerContext,
     pool: &Arc<dyn MemoryPool>,
     id: u64,
+) -> Result<Vec<String>, KrishivError> {
+    rows_in_order(config, scheduler, plan, worker, pool, id, true).await
+}
+
+/// `rows_with`, sorting the text only when `sort`.
+async fn rows_in_order(
+    config: ExecConfig,
+    scheduler: &dyn Scheduler,
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+    pool: &Arc<dyn MemoryPool>,
+    id: u64,
+    sort: bool,
 ) -> Result<Vec<String>, KrishivError> {
     let query = QueryContext::new(
         QueryId(id),
@@ -335,7 +433,9 @@ async fn rows_with(
     }
     drop(stream);
     query.finished().await;
-    out.sort();
+    if sort {
+        out.sort();
+    }
     Ok(out)
 }
 
@@ -438,6 +538,73 @@ fn tpch_on_two_workers_equals_one_worker() {
             "{w}: {:?}",
             run.trace
         );
+    }
+}
+
+/// Exact top-k vector search on two workers (design P3-T077, section 8.5): the partition-local top-k runs on both
+/// workers over their dealt splits, the gather and final top-k on the client, and the rows equal one worker's.
+#[test]
+fn a_vector_top_k_on_two_workers_equals_one_worker() {
+    let store = store();
+    let config = ClusterConfig {
+        sim: SimConfig::with_seed(7),
+        workers: 2,
+        partitions: 4,
+        slots: 2,
+        fault: None,
+    };
+    let q: Vec<String> = (0..VT_DIM)
+        .map(|i| format!("CAST({} AS FLOAT)", (i % 7) as f64 / 7.0 - 0.4))
+        .collect();
+    let q = format!("array({})", q.join(", "));
+    let queries: Vec<String> = [
+        ("vector_l2_distance", "ASC NULLS LAST"),
+        ("vector_cosine_similarity", "DESC"),
+        ("vector_inner_product", "DESC"),
+    ]
+    .iter()
+    .flat_map(|(f, o)| {
+        [1, 10, 100].map(|k| {
+            format!("SELECT id, {f}(v, {q}) AS d FROM vt ORDER BY {f}(v, {q}) {o} LIMIT {k}")
+        })
+    })
+    .collect();
+    let results = Arc::new(Mutex::new(Vec::new()));
+    let out = Arc::clone(&results);
+    let client_store = Arc::clone(&store);
+    let trace = simulate(
+        config,
+        Arc::new(Setup(store)),
+        move |coordinator: Coordinator, worker: WorkerContext| async move {
+            let tpch = open(client_store).await?;
+            coordinator.deal_scans(dealer(&tpch, 64 << 10));
+            let executor: Arc<dyn Executor> = TokioExecutor::deterministic(config.slots)?;
+            let plain = QueryRunner::new(executor);
+            let pool: Arc<dyn MemoryPool> =
+                TreePool::with_clock(&MemoryConfig::default(), Arc::new(TokioClock));
+            for (i, sql) in queries.iter().enumerate() {
+                let plan = tpch.plan_sql_folded(sql).await?;
+                let id = 2 * i as u64;
+                let want = ordered_rows(7, &plain, &plan, &worker, &pool, id).await?;
+                let got = ordered_rows(7, &coordinator, &plan, &worker, &pool, id + 1).await?;
+                out.lock().unwrap().push((sql.clone(), got, want));
+            }
+            Ok(())
+        },
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let results = std::mem::take(&mut *results.lock().unwrap());
+    assert_eq!(results.len(), 9);
+    for (sql, got, want) in &results {
+        let label = sql
+            .rsplit(" ORDER BY ")
+            .next()
+            .map_or("", |t| t.rsplit(") ").next().unwrap_or(t));
+        assert!(!want.is_empty(), "{label}: no rows");
+        assert_eq!(got, want, "{label}");
+    }
+    for w in ["worker-0", "worker-1"] {
+        assert!(trace.iter().any(|e| e.contains(w)), "{w}: {trace:?}");
     }
 }
 
@@ -590,6 +757,7 @@ fn write_on_two_workers(fault: Option<Fault>) -> (Vec<String>, Vec<String>) {
                 target_file_bytes: 0,
                 partition_by: Vec::new(),
                 column_types: BTreeMap::new(),
+                bucket: None,
             })?;
             let mut files = Vec::new();
             for b in batches(11, &coordinator, &write, &worker, &pool, 1).await? {

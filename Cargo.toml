@@ -258,6 +258,11 @@ uuid = { version = "1.28", default-features = false }
 # 95% CI 0.976-0.997; up to 10% on single queries) and ~5% smaller than thin LTO, for a
 # longer link step. panic stays "unwind": the Python bridge catches panics at the FFI
 # boundary with `catch_unwind`.
+# Test builds keep line tables only (backtraces and panics still name file:line): full debug info made a lane's
+# test target 60-70 GB and filled the build machines' disks (2026-11-20). Coverage instruments without debug info.
+[profile.test]
+debug = "line-tables-only"
+
 [profile.dist]
 inherits = "release"
 lto = "fat"

@@ -312,6 +312,16 @@ which the embedded session does not take).
 +-----+---+
 ```
 
+### `dataSource`
+
+```python
+@property
+def dataSource(self) -> DataSourceRegistration
+```
+
+`spark.dataSource.register(cls)`: registers a Python data source class (see
+`krishiv.sql.datasource`).
+
 ### `emptyDataFrame`
 
 ```python

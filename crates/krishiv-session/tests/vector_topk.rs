@@ -184,9 +184,9 @@ fn top_k_matches_spark_4_2_0() {
 
 /// `LIMIT k` is the first k rows of the full ordering, for the distances random data gives (all distinct), against
 /// the kernels run row by row.
-#[test]
-fn top_k_is_the_first_k_of_a_brute_force_ordering() {
-    let (n, dim) = (3000_i32, 96_usize);
+/// `ORDER BY` each distance over `n` random vectors of `dim` elements, `LIMIT k`, equals the first `k` rows of a sort
+/// of the kernels' own values (ids and distance bits), for l2, cosine and inner product.
+fn brute_force(n: i32, dim: usize, ks: &[usize]) {
     let s = Session::new().unwrap();
     let field = Arc::new(Field::new("element", DataType::Float32, true));
     let mut vectors = ListBuilder::new(Float32Builder::new()).with_field(field);
@@ -209,12 +209,15 @@ fn top_k_is_the_first_k_of_a_brute_force_ordering() {
     let qv = random_vector(dim, 6000, 1, 1.0);
     let q: Vec<f32> = qv.iter().flatten().copied().collect();
     let lit = literal(&qv);
+    type Kernel = fn(&[f32], &[f32]) -> f32;
+    let cosine: Kernel = |a, b| krishiv_kernels::vector::cosine_similarity(a, b).unwrap();
     for (function, order, kernel) in [
         (
             "vector_l2_distance",
             "ASC",
-            krishiv_kernels::vector::l2_distance as fn(&[f32], &[f32]) -> f32,
+            krishiv_kernels::vector::l2_distance as Kernel,
         ),
+        ("vector_cosine_similarity", "DESC", cosine),
         (
             "vector_inner_product",
             "DESC",
@@ -226,15 +229,17 @@ fn top_k_is_the_first_k_of_a_brute_force_ordering() {
             .enumerate()
             .map(|(i, v)| (i32::try_from(i).unwrap(), kernel(v, &q).to_bits()))
             .collect();
+        // Ties are not guaranteed to keep row order in Spark; the random distances here never tie.
         expected.sort_by(|a, b| {
             let (x, y) = (f32::from_bits(a.1), f32::from_bits(b.1));
-            if order == "ASC" {
+            let o = if order == "ASC" {
                 x.total_cmp(&y)
             } else {
                 y.total_cmp(&x)
-            }
+            };
+            o.then(a.0.cmp(&b.0))
         });
-        for k in [1_usize, 10, 1000] {
+        for &k in ks {
             let sql = format!(
                 "SELECT id, {function}(v, {lit}) AS d FROM vt ORDER BY {function}(v, {lit}) {order} LIMIT {k}"
             );
@@ -244,6 +249,34 @@ fn top_k_is_the_first_k_of_a_brute_force_ordering() {
             assert_eq!(got, want, "{function} {order} k={k}");
         }
     }
+}
+
+#[test]
+fn top_k_is_the_first_k_of_a_brute_force_ordering() {
+    brute_force(3000, 96, &[1, 10, 1000]);
+}
+
+/// Design section 8.3 at full size: 100k x 768, k in {1, 10, 1000}. Slow in a debug build:
+/// `cargo test --release -p krishiv-session --test vector_topk -- --ignored`.
+#[test]
+#[ignore = "100k x 768 vectors: run in release (design 8.3)"]
+fn top_k_brute_force_at_100k_by_768() {
+    brute_force(100_000, 768, &[1, 10, 1000]);
+}
+
+/// A NULL query vector gives NULL distances and the query still runs (design 8.1; golden:
+/// tests/spark-golden/v4.2.0/inputs/vector-distance.sql:59).
+#[test]
+fn a_null_query_vector_gives_null_distances() {
+    let s = session_with(table(50, 8, None));
+    let got = rows(
+        &s,
+        "SELECT id, vector_l2_distance(v, CAST(NULL AS ARRAY<FLOAT>)) AS d FROM vt \
+         ORDER BY vector_l2_distance(v, CAST(NULL AS ARRAY<FLOAT>)) LIMIT 5",
+    )
+    .unwrap();
+    assert_eq!(got.len(), 5);
+    assert!(got.iter().all(|r| r.1.is_none()), "{got:?}");
 }
 
 /// The plan is a partition-local top-k and a final top-k over the projected distance: no full sort.
@@ -282,4 +315,20 @@ fn the_plan_has_a_top_n_and_no_sort() {
         lines.iter().all(|l| !l.starts_with("Sort")),
         "a full sort in the plan:\n{text}"
     );
+}
+
+/// `array(literals)` outside a vector call is still the constructor: its values, NULL elements, a column element and
+/// the empty array are as they were.
+#[test]
+fn array_of_literals_keeps_its_values() {
+    let s = Session::new().unwrap();
+    let text = |sql: &str| -> String {
+        let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+        arrow_cast::display::array_value_to_string(b[0].column(0), 0).unwrap()
+    };
+    assert_eq!(text("SELECT array(1, 2, 3)"), "[1, 2, 3]");
+    assert_eq!(text("SELECT array(1, NULL, 3)"), "[1, , 3]");
+    assert_eq!(text("SELECT array(CAST(1.5 AS FLOAT), 2)"), "[1.5, 2.0]");
+    assert_eq!(text("SELECT array()"), "[]");
+    assert_eq!(text("SELECT array(1, id) FROM (SELECT 7 AS id)"), "[1, 7]");
 }

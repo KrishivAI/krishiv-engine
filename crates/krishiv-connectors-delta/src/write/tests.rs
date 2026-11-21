@@ -196,6 +196,12 @@ impl Env {
             input: Arc::new(Leaf(input)),
             sink,
         }));
+        // An ended driver's row groups are shipped by a background flush (`release_combined`) that returns its
+        // memory a moment after the query finished: wait for it, but not forever.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while self.query_pool.reserved() != 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert_eq!(
             self.query_pool.reserved(),
             0,
@@ -1182,6 +1188,7 @@ fn column_mapping_writes_physical_names_and_field_ids() {
     assert_eq!(ids(&env.read(&env.open().unwrap())), vec![1, 2]);
 }
 
+mod dml;
 mod lifecycle;
 mod readback;
 mod streaming;

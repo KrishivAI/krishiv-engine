@@ -207,10 +207,18 @@ pub(crate) async fn arrange(
         .into_iter()
         .filter(keep)
         .partition(|m| m.content == ManifestContentType::Data);
-    let data: Vec<ManifestFile> = fresh.into_iter().filter(keep).chain(base_data).collect();
+    // A row delta's new delete manifests lead the delete group, as Java's
+    // `MergingSnapshotProducer.apply` concatenates them before the filtered
+    // base's (PR-36c).
+    let (fresh_data, fresh_deletes): (Vec<_>, Vec<_>) = fresh
+        .into_iter()
+        .filter(keep)
+        .partition(|m| m.content == ManifestContentType::Data);
+    let data: Vec<ManifestFile> = fresh_data.into_iter().chain(base_data).collect();
+    let deletes: Vec<ManifestFile> = fresh_deletes.into_iter().chain(base_deletes).collect();
     let mut replaced = 0;
     let mut manifests = Vec::new();
-    for group in [data, base_deletes] {
+    for group in [data, deletes] {
         match merge {
             Some(config) if config.enabled => {
                 let (merged, n) = merge_manifests(cx, group, config).await?;

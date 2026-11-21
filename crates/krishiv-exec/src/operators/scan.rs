@@ -271,6 +271,9 @@ pub struct MemoryScan {
     output: SchemaRef,
     rows_read: AtomicU64,
     runtime: super::RuntimeFilters,
+    /// Something that lives as long as the batches do (a memory reservation); shared by every scan
+    /// derived from this one.
+    guard: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 pub(super) struct ScanGlobal {
@@ -331,7 +334,16 @@ impl MemoryScan {
             limit: None,
             rows_read: AtomicU64::new(0),
             runtime: super::RuntimeFilters::default(),
+            guard: None,
         })
+    }
+
+    /// This scan, keeping `guard` alive for as long as it (or a scan derived from it) lives: the
+    /// way a memory reservation follows the batches it counts.
+    #[must_use]
+    pub fn with_guard(mut self, guard: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        self.guard = Some(guard);
+        self
     }
 
     /// A scan of the same batches reading `pushdowns` (which replace this
@@ -356,6 +368,7 @@ impl MemoryScan {
             output,
             rows_read: AtomicU64::new(0),
             runtime: pushdowns.dynamic,
+            guard: self.guard.clone(),
         })
     }
 
@@ -511,6 +524,7 @@ impl ScanPushdown for MemoryScan {
             output: Arc::clone(&self.output),
             rows_read: AtomicU64::new(0),
             runtime: self.runtime.clone(),
+            guard: None,
         }))
     }
 

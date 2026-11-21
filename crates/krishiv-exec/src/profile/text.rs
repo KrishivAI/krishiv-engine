@@ -237,8 +237,15 @@ impl Printer<'_> {
             self.pl(m.drivers)
         ));
         // Sources always show their I/O wait (a golden text stays stable
-        // when a run happens not to wait).
-        if e.role == OperatorRole::Source || !m.blocked_on_io.is_zero() {
+        // when a run happens not to wait). A sink's is its `finalize`
+        // waiting for other drivers, present or not by timing alone, so a
+        // masked text leaves it out.
+        let shown = match e.role {
+            OperatorRole::Source => true,
+            OperatorRole::Sink if self.opts.mask_volatile => false,
+            _ => !m.blocked_on_io.is_zero(),
+        };
+        if shown {
             parts.push(format!(
                 "io {} (max {})",
                 self.time(m.blocked_on_io),

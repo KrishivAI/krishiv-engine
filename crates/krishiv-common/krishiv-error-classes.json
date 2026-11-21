@@ -333,6 +333,12 @@
     ],
     "sqlState" : "22023"
   },
+  "KRISHIV_PYTHON_DATA_SOURCE_LIMIT" : {
+    "message" : [
+      "The Python data source <source> returned <bytes> bytes, over the <limit> byte limit of this embedded read path, which holds a source's rows in memory when a scan runs. Read less of it per query (narrow the source's options or split it into smaller sources)."
+    ],
+    "sqlState" : "53400"
+  },
   "KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH" : {
     "message" : [
       "The Python UDF <name>@<version> is registered with eval type <registered> but the plan calls it as <called> (eval type <evalType>): register the function on the executing session as the kind of call the query makes."

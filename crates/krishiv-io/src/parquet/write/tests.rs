@@ -643,3 +643,45 @@ fn collated_columns_write_the_spark_row_metadata() {
         "{json}"
     );
 }
+
+/// A UDT column writes the UDT in Spark's row metadata, as Spark 4.2.0 does (`tests/spark-golden/udt`): its class
+/// names and storage type, and a collation under it inline (no `__COLLATIONS`).
+#[test]
+fn a_udt_column_writes_the_udt_in_the_spark_row_metadata() {
+    use krishiv_types::{Collation, DataType as Spark, UdtType};
+    let key = "org.apache.spark.sql.parquet.row.metadata";
+    let footer = |field: Field| {
+        let schema = Arc::new(Schema::new(vec![field]));
+        let file = write(&[RecordBatch::new_empty(schema)], &options(&[])).unwrap();
+        SerializedFileReader::new(file)
+            .unwrap()
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .and_then(|kv| kv.iter().find(|e| e.key == key))
+            .and_then(|e| e.value.clone())
+            .unwrap()
+    };
+    let storage = Spark::Array(Arc::new(krishiv_types::ArrayType::new(
+        Spark::Double,
+        false,
+    )));
+    let point = Spark::Udt(Arc::new(UdtType::jvm(
+        storage,
+        "org.apache.spark.sql.test.ExamplePointUDT".to_owned(),
+        Some("pyspark.testing.objects.ExamplePointUDT".to_owned()),
+    )));
+    assert_eq!(
+        footer(point.to_arrow_field("p", true)),
+        r#"{"type":"struct","fields":[{"name":"p","type":{"type":"udt","class":"org.apache.spark.sql.test.ExamplePointUDT","pyClass":"pyspark.testing.objects.ExamplePointUDT","sqlType":{"type":"array","elementType":"double","containsNull":false}},"nullable":true,"metadata":{}}]}"#
+    );
+    let text = Spark::Udt(Arc::new(UdtType::python(
+        Spark::collated_string(Collation::parse("UTF8_LCASE").unwrap()),
+        "__main__.LUDT".to_owned(),
+        "gAWV".to_owned(),
+    )));
+    assert_eq!(
+        footer(text.to_arrow_field("p", true)),
+        r#"{"type":"struct","fields":[{"name":"p","type":{"type":"udt","pyClass":"__main__.LUDT","serializedClass":"gAWV","sqlType":"string collate UTF8_LCASE"},"nullable":true,"metadata":{}}]}"#
+    );
+}

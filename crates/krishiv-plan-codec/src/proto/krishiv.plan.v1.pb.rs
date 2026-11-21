@@ -1271,6 +1271,20 @@ pub struct WritePlan {
     /// Input columns whose Spark type their Arrow type doesn't say.
     #[prost(message, repeated, tag = "9")]
     pub column_types: ::prost::alloc::vec::Vec<WriteColumnType>,
+    /// feature: write_bucketed
+    /// Bucketed output: the input column with each row's bucket id, and the columns each bucket is sorted by.
+    #[prost(message, optional, tag = "10")]
+    pub bucket: ::core::option::Option<WriteBucket>,
+}
+/// feature: write_bucketed
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WriteBucket {
+    /// feature: write_bucketed
+    #[prost(uint64, tag = "1")]
+    pub column: u64,
+    /// feature: write_bucketed
+    #[prost(uint64, repeated, tag = "2")]
+    pub sort_by: ::prost::alloc::vec::Vec<u64>,
 }
 /// feature: write_column_types
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1694,8 +1708,10 @@ pub struct DataType {
     #[prost(uint32, tag = "3")]
     pub scale: u32,
     /// feature: nested_types
-    /// `KIND_NESTED` only: an array, map or struct type as Spark's JSON form
+    /// `KIND_NESTED`: an array, map or struct type as Spark's JSON form
     /// (`DataType.json`), which keeps nullability and field metadata.
+    /// `KIND_UDT`: the user-defined type as Spark's JSON form (class names and
+    /// the storage type).
     #[prost(string, tag = "4")]
     pub json: ::prost::alloc::string::String,
     /// feature: geo_types
@@ -1774,6 +1790,8 @@ pub mod data_type {
         CollatedString = 22,
         /// feature: variant_type
         Variant = 23,
+        /// feature: udt_type
+        Udt = 24,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -1806,6 +1824,7 @@ pub mod data_type {
                 Self::CalendarInterval => "KIND_CALENDAR_INTERVAL",
                 Self::CollatedString => "KIND_COLLATED_STRING",
                 Self::Variant => "KIND_VARIANT",
+                Self::Udt => "KIND_UDT",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1835,6 +1854,7 @@ pub mod data_type {
                 "KIND_CALENDAR_INTERVAL" => Some(Self::CalendarInterval),
                 "KIND_COLLATED_STRING" => Some(Self::CollatedString),
                 "KIND_VARIANT" => Some(Self::Variant),
+                "KIND_UDT" => Some(Self::Udt),
                 _ => None,
             }
         }

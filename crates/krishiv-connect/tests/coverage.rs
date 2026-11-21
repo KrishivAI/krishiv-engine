@@ -3,7 +3,7 @@
 //! `Relation`, `Expression`, `Command`, `Expression.Literal` and `DataType`, an empty message of that
 //! arm answers `INVALID_ONE_OF_FIELD_NOT_SUPPORTED` exactly when its row says the arm is not translated;
 //! every field name and number matches the vendored descriptor; the table holds one row per arm.
-//! (`Catalog.cat_type` is reached only through `Relation.catalog`, a missing arm.)
+//! (`Catalog.cat_type` is reached only through `Relation.catalog`, which the host answers: see `translate/catalog` and the server's `tests/catalog.rs`.)
 #![forbid(unsafe_code)]
 
 use krishiv_common::error::ErrorClass;

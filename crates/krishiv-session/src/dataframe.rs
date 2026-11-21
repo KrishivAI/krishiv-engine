@@ -1595,6 +1595,7 @@ impl DataFrame {
             partition_by: Vec::new(),
             bucket_by: None,
             sort_by: None,
+            bucket_table: false,
             format_set: false,
         }
     }

@@ -27,7 +27,9 @@ pub use collation::{CatalogEntry, Collation, CollationFamily};
 pub use data_type::{DataType, DayTimeField, DecimalStorage, DecimalType, Srid, YearMonthField};
 pub use ddl::parse_data_type;
 pub use json::parse_metadata;
-pub use nested::{ArrayType, MapType, Metadata, StructField, StructType, equals_ignore_case};
+pub use nested::{
+    ArrayType, MapType, Metadata, StructField, StructType, UdtType, equals_ignore_case,
+};
 
 #[cfg(test)]
 mod tests;

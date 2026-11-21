@@ -178,6 +178,7 @@ registry! {
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
+    (udt_type, UdtType, POST_MIGRATION_READER_VERSION, Semantic, "User-defined types (Spark `UserDefinedType`): stored as their SQL type, with the class names in the plan."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
     (variant_explode, VariantExplode, POST_MIGRATION_READER_VERSION, Semantic, "The `variant_explode` generator (and `variant_explode_outer`): the fields of a variant object or the elements of a variant array."),
     (variant_type, VariantType, POST_MIGRATION_READER_VERSION, Semantic, "The `VARIANT` type (Parquet Variant v1 values, unshredded in memory)."),
@@ -189,6 +190,7 @@ registry! {
     (window_range_bounds, WindowRangeBounds, POST_MIGRATION_READER_VERSION, Semantic, "`RANGE` window frame bounds at a value distance from the current row's ordering key (`RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING`)."),
     (window_range_day_time_bounds, WindowRangeDayTimeBounds, POST_MIGRATION_READER_VERSION, Semantic, "`RANGE` window frame bounds that are a day-time interval over a timestamp ordering key (`RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW`): whole days on the session zone's clock for a `TIMESTAMP`, elapsed time below a day."),
     (window_range_month_bounds, WindowRangeMonthBounds, POST_MIGRATION_READER_VERSION, Semantic, "`RANGE` window frame bounds that are a year-month interval, moving a date or timestamp ordering key by calendar months (`RANGE BETWEEN CURRENT ROW AND INTERVAL '1' MONTH FOLLOWING`)."),
+    (write_bucketed, WriteBucketed, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` with a bucket column: the writer drops it from the files, names each file with its bucket id and expects the rows sorted by partition, bucket and `sortBy` columns; a reader without it would write the bucket id as data."),
     (write_column_types, WriteColumnTypes, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` naming the Spark types of input columns whose Arrow type doesn't say them (an interval's fields): without them a file's footer and text forms would use other fields."),
     (write_plan, WritePlan, POST_MIGRATION_READER_VERSION, Semantic, "The `WriteFiles` node's `WritePlan` (format, store, directory, job id and file limits): the file sink is built at instantiation from it with the task's partition and attempt."),
 }
@@ -250,6 +252,8 @@ pub enum Construct<'a> {
     Lambda,
     /// An expression pinned to an ANSI mode (`ResolvedExpr::EvalMode`).
     EvalMode,
+    /// A `WritePlan` with a bucket column.
+    WriteBucketed,
     /// A `WritePlan` naming the Spark types of input columns.
     WriteColumnTypes,
     /// The type of a nested literal (array, map or struct): a nested type
@@ -289,6 +293,7 @@ fn type_feature(t: &DataType) -> Option<Feature> {
         }
         DataType::CollatedString(c) if !c.is_utf8_binary() => Some(Feature::CollatedStrings),
         DataType::Variant => Some(Feature::VariantType),
+        DataType::Udt(_) => Some(Feature::UdtType),
         _ => t.is_nested().then_some(Feature::NestedTypes),
     }
 }
@@ -300,6 +305,7 @@ fn collated(t: &DataType) -> bool {
         DataType::Array(a) => collated(a.element_type()),
         DataType::Map(m) => collated(m.key_type()) || collated(m.value_type()),
         DataType::Struct(s) => s.fields().iter().any(|x| collated(x.data_type())),
+        DataType::Udt(u) => collated(u.sql_type()),
         _ => false,
     }
 }
@@ -371,6 +377,8 @@ fn visit_type<'a>(t: &'a DataType, f: &mut impl FnMut(Construct<'a>)) {
             visit_type(m.value_type(), f);
         }
         DataType::Struct(s) => s.fields().iter().for_each(|x| visit_type(x.data_type(), f)),
+        // A user-defined type is stored as its SQL type: what that holds is a construct too.
+        DataType::Udt(u) => visit_type(u.sql_type(), f),
         _ => {}
     }
 }
@@ -551,6 +559,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // it misreads the higher-order call's argument.
         Construct::Lambda => Some(Feature::LambdaFunctions),
         Construct::EvalMode => Some(Feature::CapturedEvalMode),
+        Construct::WriteBucketed => Some(Feature::WriteBucketed),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
         Construct::NestedLiteralType | Construct::SchemaType => Some(Feature::NestedTypes),
         Construct::FileSourceSchema => Some(Feature::FileSourceSchema),
@@ -826,6 +835,9 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::WriteFiles { write, .. } => {
             if write.as_ref().is_some_and(|w| !w.column_types.is_empty()) {
                 f(Construct::WriteColumnTypes);
+            }
+            if write.as_ref().is_some_and(|w| w.bucket.is_some()) {
+                f(Construct::WriteBucketed);
             }
         }
     }

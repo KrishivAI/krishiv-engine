@@ -17,6 +17,7 @@ description: "Every public module of the krishiv Python package: classes, functi
 | [`krishiv.sql.column`](krishiv.sql.column.md) | `Column`: a column expression, as `pyspark.sql.Column` (a thin wrapper on the native handle). |
 | [`krishiv.sql.conf`](krishiv.sql.conf.md) | `RuntimeConfig`: `spark.conf`. |
 | [`krishiv.sql.dataframe`](krishiv.sql.dataframe.md) | `DataFrame`: a lazily evaluated query, as `pyspark.sql.DataFrame`. |
+| [`krishiv.sql.datasource`](krishiv.sql.datasource.md) | The Python Data Source API (batch), shaped like `pyspark.sql.datasource` of Spark 4.3.0. |
 | [`krishiv.sql.functions`](krishiv.sql.functions.md) | `pyspark.sql.functions`: column builders. A function resolves by name in the engine's |
 | [`krishiv.sql.group`](krishiv.sql.group.md) | `GroupedData`: a DataFrame grouped by key columns, as `pyspark.sql.GroupedData`. |
 | [`krishiv.sql.na`](krishiv.sql.na.md) | `DataFrameNaFunctions` (`DataFrame.na`): handling of missing data, as `pyspark.sql.DataFrameNaFunctions`. |

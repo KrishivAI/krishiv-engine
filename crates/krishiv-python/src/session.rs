@@ -266,6 +266,91 @@ impl PySession {
         })
     }
 
+    /// A DataFrame over a Python data source (design P3-T040): `schema` is any Arrow
+    /// object carrying the source's schema (read now, from an empty table), `read` a
+    /// callable returning an Arrow object of that schema. The engine calls it once for
+    /// every scan of the table in a query, so a source that lists its
+    /// partitions in `read` sees new ones on the next action. A failure of `read` is `PYTHON_EXCEPTION`; a planning failure the
+    /// Python side classed as `PYTHON_DATA_SOURCE_ERROR` keeps its action and type.
+    fn register_python_source(
+        &self,
+        py: Python<'_>,
+        label: &str,
+        schema: &Bound<'_, PyAny>,
+        read: Py<PyAny>,
+    ) -> PyResult<PyDataFrame> {
+        let (schema, _) = ArrowStream::from_arrow(schema)?.read_all()?;
+        let name = format!(
+            "{ARROW_TABLE_PREFIX}{}",
+            ARROW_TABLES.fetch_add(1, Ordering::Relaxed)
+        );
+        let source: krishiv_session::BatchSource = std::sync::Arc::new(move || {
+            Python::attach(|py| {
+                // One wrap: a planning failure the reader's Python side already classed as
+                // `PYTHON_DATA_SOURCE_ERROR` keeps its action and type (Spark's
+                // `pythonDataSourceError` pairs); every other exception of user code is
+                // Spark's `PYTHON_EXCEPTION`, as a task of the read raises it.
+                let fail = |err: &PyErr| {
+                    let value = err.value(py);
+                    let class = value
+                        .call_method0("getCondition")
+                        .and_then(|c| c.extract::<String>())
+                        .ok();
+                    if matches!(
+                        class.as_deref(),
+                        Some("PYTHON_DATA_SOURCE_ERROR" | "KRISHIV_PYTHON_DATA_SOURCE_LIMIT")
+                    ) {
+                        let parameter = |key: &str| {
+                            value
+                                .call_method0("getMessageParameters")
+                                .and_then(|p| p.get_item(key))
+                                .and_then(|v| v.extract::<String>())
+                                .unwrap_or_default()
+                        };
+                        if class.as_deref() == Some("KRISHIV_PYTHON_DATA_SOURCE_LIMIT") {
+                            return krishiv_common::error::KrishivError::from(
+                                krishiv_common::error::KrishivPythonDataSourceLimit {
+                                    source: parameter("source"),
+                                    bytes: parameter("bytes"),
+                                    limit: parameter("limit"),
+                                },
+                            );
+                        }
+                        return krishiv_common::error::KrishivError::from(
+                            krishiv_common::error::PythonDataSourceError {
+                                action: parameter("action"),
+                                r#type: parameter("type"),
+                                msg: parameter("msg"),
+                            },
+                        );
+                    }
+                    let traceback = err
+                        .traceback(py)
+                        .and_then(|t| t.format().ok())
+                        .unwrap_or_default();
+                    krishiv_common::error::KrishivError::from(
+                        krishiv_common::error::PythonException {
+                            msg: "An exception was thrown from the Python worker".to_owned(),
+                            traceback: format!("{traceback}{err}"),
+                        },
+                    )
+                };
+                let table = read.call0(py).map_err(|e| fail(&e))?;
+                let (_, batches) = ArrowStream::from_arrow(table.bind(py))
+                    .and_then(|s| s.read_all())
+                    .map_err(|e| fail(&e))?;
+                Ok(batches)
+            })
+        });
+        self.inner
+            .register_batch_source(&name, label, schema, source)
+            .map_err(|e| to_py(py, &e))?;
+        Ok(PyDataFrame {
+            inner: self.inner.table(&name),
+            owned: vec![OwnedTable::new(self.inner.clone(), name)],
+        })
+    }
+
     /// Names of the session's temporary tables and views (with the tables
     /// that hold `create_dataframe` data).
     fn temp_table_names(&self) -> Vec<String> {

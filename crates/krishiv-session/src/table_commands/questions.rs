@@ -94,7 +94,7 @@ impl Session {
         crate::char_write::refuse_indeterminate_schema(analyzed)?;
         let mut columns = crate::char_write::output_columns(analyzed, Some(true));
         self.refuse_collated_namespace(&name)?;
-        let table_layout = crate::partitions::table_layout(
+        crate::partitions::table_layout(
             &name,
             &mut columns,
             layout.partition_by,
@@ -106,10 +106,6 @@ impl Session {
         }
         if !external {
             push_lexical(out, &location, &[Privilege::Modify, Privilege::Create]);
-        }
-        // The writer refuses a bucketed table before it asks (`table_writer`).
-        if table_layout.bucket.is_some() {
-            return Ok(());
         }
         // The writer asks about the location as it locates it (`write_files`).
         let options: BTreeMap<String, OptionValue> = options

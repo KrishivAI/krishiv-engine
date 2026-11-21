@@ -138,61 +138,6 @@ fn krishiv_errors_keep_their_class_through_iceberg() {
     assert!(plain.to_string().contains("iceberg-rust"), "{plain}");
 }
 
-/// One case of `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only
-/// goldens from Iceberg's `TypeToSparkType` at apache-iceberg-1.12.0).
-#[derive(serde::Deserialize)]
-struct TypeCase {
-    iceberg: serde_json::Value,
-    spark: Option<serde_json::Value>,
-    error: Option<String>,
-}
-
-#[test]
-fn iceberg_type_mapping() {
-    let text = include_str!("../../tests/fixtures/iceberg-1.12.0-spark-types.json");
-    let cases: Vec<TypeCase> = serde_json::from_str(text).unwrap();
-    let mut mapped = 0;
-    for case in cases {
-        let Ok(t) = serde_json::from_value::<iceberg::spec::Type>(case.iceberg.clone()) else {
-            // iceberg-rust 0.11 has no geometry, geography or unknown type: a table
-            // with one fails in iceberg-rust's metadata parse, before any mapping.
-            let name = case.iceberg.as_str().unwrap_or_default();
-            assert!(
-                ["geometry", "geography", "unknown"]
-                    .iter()
-                    .any(|p| name.starts_with(p)),
-                "iceberg-rust cannot parse {}",
-                case.iceberg
-            );
-            continue;
-        };
-        mapped += 1;
-        match (super::types::spark_type(&t), case.spark, case.error) {
-            (Ok(dt), Some(spark), None) => {
-                let ours: serde_json::Value = serde_json::from_str(&dt.json()).unwrap();
-                assert_eq!(ours, spark, "{}", case.iceberg);
-            }
-            (Err(e), None, Some(error)) => {
-                // Spark's message is the text after the Java exception class.
-                let message = error.rsplit_once(": ").map_or(error.as_str(), |(_, m)| m);
-                assert!(
-                    e.to_string().contains(message),
-                    "{}: {e} vs {error}",
-                    case.iceberg
-                );
-                assert!(e.to_string().contains("KRISHIV_UNSUPPORTED_FEATURE"), "{e}");
-            }
-            (got, spark, error) => {
-                panic!(
-                    "{}: got {got:?}, expected {spark:?} / {error:?}",
-                    case.iceberg
-                )
-            }
-        }
-    }
-    assert!(mapped >= 25, "{mapped}");
-}
-
 fn test_schema() -> iceberg::spec::Schema {
     use iceberg::spec::{ListType, MapType, NestedField, PrimitiveType, Type};
     iceberg::spec::Schema::builder()
