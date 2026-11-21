@@ -163,6 +163,8 @@ def fresh_sessions() -> list[dict]:
             "created_at": now - 10 * MINUTE,
             "last_active_at": now - 9 * MINUTE,
             "tags": {XSS: XSS},
+            # The session the console's editor runs in: the console cannot end it.
+            "endable": False,
         },
         base
         | {

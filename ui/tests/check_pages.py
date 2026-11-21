@@ -827,6 +827,12 @@ def workload_checks() -> list[str]:
 
         page.evaluate("window.location.hash = '#/sessions'")
         count("sessions: the open sessions", 3)
+        if page.get_by_role("button", name="End session").count() != 2 or not shows(
+            page, ["The console's editor"], "main"
+        ):
+            problems.append(
+                "sessions: the editor's session is not marked, or offers End session"
+            )
         if "idle_timeout" in page.inner_text("main"):
             problems.append(
                 "sessions: an ended session is listed before it is asked for"

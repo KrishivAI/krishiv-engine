@@ -39,6 +39,8 @@ const SESSION_COLUMNS: &[&str] = &[
     "queries_running",
     "queries_started",
     "delegated_by",
+    // `false` on a session the console cannot end (the source adds it); absent otherwise.
+    "endable",
 ];
 
 const GROUP_COLUMNS: &[&str] = &[

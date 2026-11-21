@@ -130,6 +130,7 @@ async fn the_sessions_the_console_itself_runs_in_cannot_be_ended() {
     // The one client session listed before any client connects is the editor's shared one.
     let rows = sessions(&source).await;
     assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["endable"], false, "{rows:?}");
     let shared = rows[0]["session_id"].as_str().unwrap().to_owned();
     assert_eq!(source.close_session(&shared).await.unwrap(), None);
     let id = source.sql_start("SELECT 7", None).await.unwrap();

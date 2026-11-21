@@ -8,7 +8,7 @@
   import { fieldClass } from "$lib/components/ui/input";
   import Id from "$lib/components/id.svelte";
   import ResponsiveTable, { type Column } from "$lib/components/responsive-table.svelte";
-  import { cn } from "$lib/utils";
+  import { cn, keyOf } from "$lib/utils";
 
   let stateFilter = $state("");
   let principal = $state("");
@@ -152,7 +152,7 @@
 {:else if q.isError}
   <p class="text-error">Could not load history: {q.error.message}</p>
 {:else}
-  <ResponsiveTable {columns} rows={q.data.queries} rowKey={(r) => r.query_id} empty="No finished queries match.">
+  <ResponsiveTable {columns} rows={q.data.queries} rowKey={keyOf(q.data.queries, (r) => r.query_id)} empty="No finished queries match.">
     {#snippet cell(r, c)}
       {#if c.key === "query"}
         <label class="mr-2 inline-flex min-h-11 min-w-11 items-center justify-center align-middle">

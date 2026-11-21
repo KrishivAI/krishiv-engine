@@ -161,6 +161,8 @@ export interface Session {
   queries_running: number;
   queries_started: number;
   delegated_by?: string | null;
+  /** `false` on the session the console's editor runs in, which the console cannot end. */
+  endable?: boolean | null;
 }
 
 /** One row of `system.resource_groups`; a group's counters include its subgroups'. */

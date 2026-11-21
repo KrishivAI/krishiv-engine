@@ -431,6 +431,46 @@ async fn a_query_row_carries_its_tags_and_its_sessions_client_type() {
     assert_eq!(plain["tags"], serde_json::json!({}));
 }
 
+/// An operation id is the client's and is scoped to its session, so two sessions may run a query under the
+/// same one: the console lists both, each with its own session's client type.
+#[tokio::test]
+async fn two_sessions_queries_under_one_operation_id_are_both_listed() {
+    const OP: &str = "00112233-4455-6677-8899-aabbccddeeff";
+    let rt = runtime();
+    let mut sessions = Vec::new();
+    for client in ["client-a", "client-b"] {
+        let s = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+        s.set_client_info(
+            krishiv_session::Transport::Connect,
+            Some(client),
+            None,
+            None,
+        );
+        s.sql_with(
+            "SELECT 9 AS shared_id",
+            krishiv_session::QueryOptions::new().operation_id(OP),
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+        sessions.push(s);
+    }
+    let rows = SessionSource::new(rt)
+        .unwrap()
+        .rows(SystemTable::Queries)
+        .await
+        .unwrap();
+    let mut clients: Vec<&str> = rows
+        .iter()
+        .filter(|r| r["query_id"] == OP)
+        .filter_map(|r| r["client_type"].as_str())
+        .collect();
+    clients.sort_unstable();
+    assert_eq!(clients, ["client-a", "client-b"], "{rows:?}");
+}
+
 /// How many statements the console itself has run on `rt`, read through an ordinary session.
 async fn console_statements(rt: &Arc<EngineRuntime>) -> usize {
     let reader = Session::builder().runtime(Arc::clone(rt)).build().unwrap();

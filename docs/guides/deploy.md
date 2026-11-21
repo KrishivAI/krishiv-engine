@@ -111,7 +111,8 @@ its current catalog and namespace, when it was last active and how many queries 
 count opens History on that session). Sessions that ended (closed, expired, killed) are listed on request.
 **End session** asks once, then ends the session: its running queries fail with `KRISHIV_QUERY_KILLED` and the
 client's next call is refused with `INVALID_HANDLE.SESSION_CLOSED`, so the client must open a new session. Ending
-a session needs the operator role, like a cancel, and each writes one `krishiv::audit` record. The Workload page lists
+a session needs the operator role, like a cancel, and each writes one `krishiv::audit` record. The session the
+console's own editor runs in is listed and cannot be ended from the page. The Workload page lists
 the resource groups of `krishiv.workload.resourceGroups.file`, each under its parent, with what runs and waits
 against its limits, its memory in use and its scan quota; a server started without that file admits every query
 as it arrives, and the page says so.

@@ -126,7 +126,9 @@
       {:else}0{/if}
     {/snippet}
     {#snippet actions(s)}
-      {#if isOpen(s)}
+      {#if isOpen(s) && s.endable === false}
+        <span class="text-muted-foreground">The console's editor</span>
+      {:else if isOpen(s)}
         {#if asked === s.session_id}
           <span class="flex flex-wrap items-center gap-2">
             <Button variant="destructive" onclick={() => end(s)}>

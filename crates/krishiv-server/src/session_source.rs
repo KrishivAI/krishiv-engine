@@ -605,15 +605,21 @@ impl UiSource for SessionSource {
             let batches = df.collect_boxed().await.map_err(ui_error)?;
             let mut rows = batches_to_rows(&batches);
             if table == SystemTable::Queries {
+                // The runtime mints a session's id, so `system.sessions` holds one row per id and the join
+                // answers each query once. Two sessions may run a query under one operation id (the client
+                // chooses it, per session): both are listed.
                 rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
-                // A client may open a session under an id an ended session had: the join then answers a
-                // query once per session row, and the page lists it once.
-                let mut seen = std::collections::HashSet::new();
-                rows.retain(|r| query_id(r).is_none_or(|id| seen.insert(id.to_owned())));
             }
-            // The console's own session is not a client's.
+            // The console's own session is not a client's. The session the editor runs in is listed (what
+            // it runs shows on it) and marked: `close_session` refuses it, so the page offers no action.
             if table == SystemTable::Sessions {
                 rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
+                let editor = self.anonymous.id();
+                for row in &mut rows {
+                    if row.get("session_id").and_then(Value::as_str) == Some(editor) {
+                        row.insert("endable".to_owned(), Value::Bool(false));
+                    }
+                }
             }
             if self.stored.is_none()
                 || !matches!(table, SystemTable::Queries | SystemTable::Operators)
@@ -698,6 +704,8 @@ impl UiSource for SessionSource {
         Box::pin(async move {
             // The console reads through its own session, and the editor of an unidentified caller runs in one
             // shared session: ending either would break the console for everyone, so neither can be ended here.
+            // Any other session ends as an operator's kill (`killed` / `admin_kill`), the caller's own editor
+            // session included: the console does not know which session is the caller's.
             if session_id == self.session.id() || session_id == self.anonymous.id() {
                 return Ok(None);
             }

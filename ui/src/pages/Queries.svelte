@@ -5,7 +5,7 @@
   import { Badge, stateVariant } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { fieldClass } from "$lib/components/ui/input";
-  import { cn } from "$lib/utils";
+  import { cn, keyOf } from "$lib/utils";
   import Id from "$lib/components/id.svelte";
   import ResponsiveTable, { type Column } from "$lib/components/responsive-table.svelte";
 
@@ -74,7 +74,7 @@
   {#if shown.length !== queries.length}<span class="text-muted-foreground" data-query-count>{shown.length} of {queries.length} shown</span>{/if}
   {#if message}<span class="text-muted-foreground wrap-anywhere">{message}</span>{/if}
 </div>
-<ResponsiveTable {columns} rows={shown} rowKey={(q) => q.query_id} empty={queries.length ? "No running query matches." : consoleInfo.mode === "embedded" ? "No query of this session is running." : "No query is running."}>
+<ResponsiveTable {columns} rows={shown} rowKey={keyOf(shown, (q) => q.query_id)} empty={queries.length ? "No running query matches." : consoleInfo.mode === "embedded" ? "No query of this session is running." : "No query is running."}>
   {#snippet cell(q, c)}
     {#if c.key === "query"}
       <a class="flex min-h-11 items-center underline underline-offset-4" href={`#/queries/${encodeURIComponent(q.query_id)}`}>{oneLine(q.query_text, 80)}</a>
