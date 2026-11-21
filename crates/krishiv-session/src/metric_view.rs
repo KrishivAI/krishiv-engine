@@ -83,5 +83,23 @@ pub(crate) fn parse_metric_view_yaml(
     yaml::read(text, options).map_err(|message| InvalidMetricViewYaml { message }.into())
 }
 
+/// Each column's expression without an alias of its own: Spark parses `expr` with
+/// `parseExpression`, which takes a named expression, and aliases the result again with the
+/// column's name, so `sum(n) AS subtotal` is the measure `sum(n)` named by the column. The text
+/// built over the columns (`.. AS <name>`) must not carry the inner alias, or it would not parse.
+/// An expression that does not parse is left as written for the caller's own check to report.
+pub(crate) fn bare_expressions(spec: &mut MetricViewSpec, options: &ParserOptions) {
+    for c in spec.dimensions.iter_mut().chain(spec.measures.iter_mut()) {
+        let Ok(item) = krishiv_sql::parse_named_expression(&c.expr, options) else {
+            continue;
+        };
+        if item.alias.is_some()
+            && let Some(bare) = c.expr.get(item.expr.span.start..item.expr.span.end)
+        {
+            c.expr = bare.to_owned();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -626,7 +626,8 @@ impl Expander<'_> {
             }
             .into());
         }
-        let spec = crate::metric_view::parse_metric_view_yaml(&view.sql, &def.parser)?;
+        let mut spec = crate::metric_view::parse_metric_view_yaml(&view.sql, &def.parser)?;
+        crate::metric_view::bare_expressions(&mut spec, &def.parser);
         let mut text = String::from("SELECT *");
         spec.push_from(&mut text);
         let query = krishiv_sql::parse_query(&text, &def.parser).map_err(|e| e.error)?;

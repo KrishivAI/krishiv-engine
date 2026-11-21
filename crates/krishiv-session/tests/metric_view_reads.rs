@@ -661,3 +661,31 @@ fn an_asset_source_with_a_line_comment_reads_the_table() {
     .unwrap();
     assert_eq!(longs(&filtered, 1), vec![5]);
 }
+
+/// An expression with an alias of its own (`sum(n) AS subtotal`): Spark's `parseExpression` takes a
+/// named expression and the column's name aliases it again, so the view is created and read under
+/// the column names (Spark 4.2.1 probe, #941 review thread: `('a', 3), ('b', 5)`; `DESCRIBE` shows
+/// `r`, `total`).
+#[test]
+fn an_expression_with_its_own_alias_is_named_by_its_column() {
+    let (s, _dir) = session();
+    let create = "CREATE VIEW mva WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsource: src\ndimensions:\n  - name: r\n    expr: region AS reg\nmeasures:\n  - name: total\n    expr: sum(n) AS subtotal\n$$";
+    run(&s, create).unwrap_or_else(|e| panic!("{create}: {e}"));
+    let batches = run(
+        &s,
+        "SELECT r, measure(total) FROM mva GROUP BY r ORDER BY r",
+    )
+    .unwrap();
+    assert_eq!(longs(&batches, 1), vec![3, 5]);
+    let schema = batches[0].schema();
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names[0], "r");
+    let described = run(&s, "DESCRIBE mva").unwrap();
+    let col = described[0].column(0);
+    let name = |i| match col.as_string_opt::<i32>() {
+        Some(a) => a.value(i).to_owned(),
+        None => col.as_string_view().value(i).to_owned(),
+    };
+    assert_eq!(name(0), "r");
+    assert_eq!(name(1), "total");
+}

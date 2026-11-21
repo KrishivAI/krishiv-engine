@@ -24,7 +24,9 @@ use krishiv_sql::ast::{ColumnName, CreateMetricView, ExprKind};
 
 use super::{check_new_name, now_ms, options_of, unsupported};
 use crate::dataframe::DataFrame;
-use crate::metric_view::{MetricViewSource, MetricViewSpec, parse_metric_view_yaml};
+use crate::metric_view::{
+    MetricViewSource, MetricViewSpec, bare_expressions, parse_metric_view_yaml,
+};
 use crate::session::Session;
 use crate::store::{
     CatalogStore, CatalogTable, CreateMode, MetricColumn, MetricColumnKind, MetricViewDef,
@@ -232,7 +234,7 @@ impl Session {
             .into());
         }
         let env = self.query_env();
-        let spec = parse_metric_view_yaml(&v.body, &env.parser)?;
+        let mut spec = parse_metric_view_yaml(&v.body, &env.parser)?;
         let statement = original.get(v.span.start..v.span.end).unwrap_or(original);
         let at_statement = |e: KrishivError| whole_statement(e, statement);
         // Spark parses each expression alone (`MetricViewPlanner.buildInputColumns`) before
@@ -263,6 +265,8 @@ impl Session {
             krishiv_sql::parse_named_expression(filter, &env.parser)
                 .map_err(|e| at_statement(e.error))?;
         }
+        let constant = constant.cloned();
+        bare_expressions(&mut spec, &env.parser);
         let name = self.table_name(&v.name, &env)?;
         self.refuse_collated_namespace(&name)?;
         check_new_name(&name.namespace)?;
