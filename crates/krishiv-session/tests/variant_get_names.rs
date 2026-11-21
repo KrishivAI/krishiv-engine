@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Output column names of `variant_get` / `try_variant_get` (acceptance
-//! SQL-41): Spark drops the type argument. Spark 4.1 to 4.3 goldens.
+//! SQL-41): Spark drops the type argument. Spark 4.0 to 4.3 goldens.
 #![cfg(test)]
 
 use futures::executor::block_on;
@@ -10,7 +10,7 @@ use krishiv_session::Session;
 fn variant_get_column_names_match_spark() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
     let mut bad = Vec::new();
-    for ver in ["4.1.0", "4.2.0", "4.3.0"] {
+    for ver in ["4.0.0", "4.1.0", "4.2.0", "4.3.0"] {
         let text = std::fs::read_to_string(
             root.join(format!("spark-{ver}/column-names-variant-get.json")),
         )
@@ -28,7 +28,7 @@ fn variant_get_column_names_match_spark() {
             .unwrap();
         }
         for case in v["results"].as_array().unwrap() {
-            if case.get("columns").is_none() || case["sql"].as_str().unwrap().contains("::") {
+            if case.get("columns").is_none() {
                 continue;
             }
             let sql = case["sql"].as_str().unwrap();
