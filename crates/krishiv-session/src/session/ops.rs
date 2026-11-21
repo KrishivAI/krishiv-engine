@@ -456,10 +456,19 @@ impl Session {
             {
                 return Ok(Vec::new());
             }
-            // A key under `commitProtocol=NONE` with no log to record it is refused before `begin`,
-            // which deletes what an overwrite replaces.
-            super::writes::refuse_unlogged_key_early(&env.config, &options, &io, &store, &at)
-                .await?;
+            // A key the directory cannot record (no commit log) is refused before `begin`, which deletes
+            // what an overwrite replaces.
+            super::writes::refuse_unlogged_key_early(
+                &env.config,
+                &options,
+                &self.state.commit_log_probes,
+                &io,
+                &store,
+                &at,
+                &job,
+                mode,
+            )
+            .await?;
             let Some(write) = DirectoryWrite::begin(
                 &io,
                 store.clone(),

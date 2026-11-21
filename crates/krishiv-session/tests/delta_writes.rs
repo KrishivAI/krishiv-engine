@@ -993,6 +993,20 @@ fn a_keyed_save_as_table_creation_is_retried_once() {
         .unwrap();
     }
     assert_eq!(query(&s, "SELECT a FROM keyed_t"), serde_json::json!([[1]]));
+    // The key is not kept in the table's options: a later append without a key writes.
+    block_on(
+        block_on(s.sql("SELECT CAST(2 AS INT) AS a"))
+            .unwrap()
+            .write()
+            .format("delta")
+            .mode("append")
+            .save_as_table("keyed_t"),
+    )
+    .unwrap();
+    assert_eq!(
+        query(&s, "SELECT a FROM keyed_t ORDER BY a"),
+        serde_json::json!([[1], [2]])
+    );
 }
 
 #[test]

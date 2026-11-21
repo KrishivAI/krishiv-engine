@@ -113,41 +113,49 @@ pub(super) async fn key_already_committed(
     Ok(log.exists().await? && log.key_version(&key).await?.is_some())
 }
 
-/// Refuses a write key before anything is touched when the write cannot be logged for sure:
-/// `commitProtocol=NONE` and no commit log in the directory. Unlike [`uses_commit_log`] it probes
-/// nothing (the probe writes into the directory), so the later refusal of [`logged_or_plain`] still
-/// covers the store without put-if-absent.
+/// Refuses a write key before anything is touched when the directory cannot be logged: the
+/// commit log is what records a key, and `DirectoryWrite::begin` deletes what an overwrite replaces.
+/// For `overwrite` and `append` the store is probed for put-if-absent now (once per store, cached in
+/// `probes`, as [`logged_or_plain`] reads it later). `errorifexists` and `ignore` are not probed here:
+/// the probe leaves the directory behind, and they test whether it exists; they are refused early only
+/// for `commitProtocol=NONE` or a store already known to lack put-if-absent.
 ///
 /// # Errors
-/// An invalid key; `KRISHIV_UNSUPPORTED_FEATURE` for the case above; the log's read errors.
+/// An invalid key; `KRISHIV_UNSUPPORTED_FEATURE` for a directory that cannot be logged; the log's and
+/// the probe's errors.
+#[expect(clippy::too_many_arguments, reason = "the pieces of one write's setup")]
 pub(super) async fn refuse_unlogged_key_early(
     config: &Config,
     options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+    probes: &Mutex<HashMap<String, bool>>,
     io: &krishiv_io::IoContext,
     store: &StoreId,
     at: &krishiv_exec::files::LocatedPath,
+    job: &str,
+    mode: krishiv_io::SaveMode,
 ) -> Result<(), KrishivError> {
     if write_idempotency_key(config, options)?.is_none() {
         return Ok(());
     }
+    let probe = matches!(
+        mode,
+        krishiv_io::SaveMode::Append | krishiv_io::SaveMode::Overwrite
+    );
     let none = config
         .get(&krishiv_common::config::FILES_COMMIT_PROTOCOL)
         .and_then(ConfigValue::as_str)
         .is_some_and(|p| p.eq_ignore_ascii_case("NONE"));
-    if !none {
-        return Ok(());
+    let known_unsupported = probes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(at.store.key())
+        == Some(&false);
+    if (probe || none || known_unsupported)
+        && !Box::pin(uses_commit_log(config, probes, io, store, at, job)).await?
+    {
+        return Err(unlogged_key(&at.display));
     }
-    let log = krishiv_io::commit_log::CommitLog::new(
-        io,
-        store.clone(),
-        at.path.clone(),
-        at.display.clone(),
-    );
-    if log.exists().await? {
-        Ok(())
-    } else {
-        Err(unlogged_key(&at.display))
-    }
+    Ok(())
 }
 
 /// `write`, through the commit log when the directory uses one (with the write's idempotency key,
@@ -460,4 +468,58 @@ pub(super) fn schema_simple_string(schema: &SchemaRef) -> String {
         })
         .collect();
     format!("struct<{}>", fields.join(","))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Session;
+    use futures::executor::block_on;
+
+    /// A key on an overwrite of a directory with no commit log, on a store that reports no put-if-absent
+    /// (the probe cache says so), is refused before the overwrite deletes the files.
+    #[test]
+    fn a_key_is_refused_before_an_overwrite_deletes_on_a_store_without_put_if_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Session::new().unwrap();
+        let frame = || block_on(s.sql("SELECT 1 AS id")).unwrap();
+        let plain = tmp.path().join("plain");
+        let other = tmp.path().join("other");
+        // `plain` is written without a commit log.
+        s.conf()
+            .set("krishiv.sql.files.commitProtocol", "NONE")
+            .unwrap();
+        block_on(
+            frame()
+                .write()
+                .mode("overwrite")
+                .parquet(plain.to_str().unwrap()),
+        )
+        .unwrap();
+        // A write that fills the probe cache, then the store is marked as lacking put-if-absent.
+        s.conf()
+            .set("krishiv.sql.files.commitProtocol", "AUTO")
+            .unwrap();
+        block_on(
+            frame()
+                .write()
+                .mode("overwrite")
+                .parquet(other.to_str().unwrap()),
+        )
+        .unwrap();
+        for v in s.state.commit_log_probes.lock().unwrap().values_mut() {
+            *v = false;
+        }
+        let r = block_on(
+            frame()
+                .write()
+                .mode("overwrite")
+                .option("krishiv.write.idempotencyKey", "k")
+                .parquet(plain.to_str().unwrap()),
+        );
+        assert!(r.unwrap_err().message().contains("commit log"));
+        assert!(
+            std::fs::read_dir(&plain).unwrap().next().is_some(),
+            "the overwrite deleted the files before the refusal"
+        );
+    }
 }
