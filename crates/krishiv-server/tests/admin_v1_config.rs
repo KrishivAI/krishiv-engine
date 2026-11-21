@@ -557,6 +557,39 @@ async fn a_replayed_request_id_answers_the_stored_response_and_applies_once() {
 }
 
 #[tokio::test]
+async fn a_request_dropped_mid_flight_still_stores_its_result_for_the_retry() {
+    let f = fixture(true);
+    let (_, current) = f
+        .call("a:admin", "GET", "/resourceGroups/config", None)
+        .await;
+    let etag = current["etag"].as_str().unwrap();
+    let body = serde_json::json!({
+        "document": GROUPS_V2, "etag": etag, "requestId": "req-drop"
+    })
+    .to_string();
+    // The client goes away right after the request starts: the future is dropped unfinished.
+    let dropped = tokio::time::timeout(
+        std::time::Duration::ZERO,
+        f.call("a:admin", "PUT", "/resourceGroups/config", Some(&body)),
+    )
+    .await;
+    drop(dropped);
+    // Let the detached mutation finish, then retry with the same id: the stored response comes
+    // back; run again it would be a 412 (the etag moved).
+    let mut answer = (StatusCode::PRECONDITION_FAILED, serde_json::Value::Null);
+    for _ in 0..50 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        answer = f
+            .call("a:admin", "PUT", "/resourceGroups/config", Some(&body))
+            .await;
+        if answer.0 == StatusCode::OK {
+            break;
+        }
+    }
+    assert_eq!(answer.0, StatusCode::OK, "{}", answer.1);
+}
+
+#[tokio::test]
 async fn a_file_edited_after_it_was_read_is_a_412_on_replace() {
     let f = fixture(true);
     let (_, current) = f

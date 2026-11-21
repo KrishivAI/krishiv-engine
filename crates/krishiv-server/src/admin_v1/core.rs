@@ -12,7 +12,7 @@ use super::action::{self, Action};
 use super::idempotency::{Idempotency, MAX_ID_LEN, Run};
 use super::{
     AdminApi, AdminError, AdminResult, Call, CancelQueriesByTagRequest, CancelQueryRequest,
-    DrainRequest, GetCapabilitiesRequest, GetConfigRequest, GetDrainStatusRequest,
+    DrainRequest, ErrorKind, GetCapabilitiesRequest, GetConfigRequest, GetDrainStatusRequest,
     GetReadinessRequest, GetResourceGroupConfigRequest, GetVersionRequest, KillSessionRequest,
     ListQueriesRequest, ListResourceGroupsRequest, ListSessionsRequest,
     ReloadResourceGroupConfigRequest, ReplaceResourceGroupConfigRequest, ResumeServingRequest,
@@ -34,14 +34,14 @@ const MUTATING: &[&str] = &[
 
 pub(super) struct Core {
     api: Arc<dyn AdminApi>,
-    idempotency: Idempotency,
+    idempotency: Arc<Idempotency>,
 }
 
 impl Core {
     pub(super) fn new(api: Arc<dyn AdminApi>, ttl: Duration) -> Self {
         Self {
             api,
-            idempotency: Idempotency::new(ttl),
+            idempotency: Arc::new(Idempotency::new(ttl)),
         }
     }
 
@@ -60,7 +60,7 @@ impl Core {
         header_id: Option<&str>,
     ) -> AdminResult<Vec<u8>> {
         if !Self::is_mutating(rpc) {
-            return self.invoke(rpc, &call, request).await;
+            return Self::invoke(self.api.as_ref(), rpc, &call, request).await;
         }
         let refuse = |call: &Call, error: AdminError| {
             // A refused mutation still leaves its action record.
@@ -100,15 +100,33 @@ impl Core {
         let mut fingerprint = rpc.as_bytes().to_vec();
         fingerprint
             .extend_from_slice(&without_request_id(rpc, request).map_err(|e| refuse(&call, e))?);
-        let (result, how) = self
-            .idempotency
-            .run(
-                &self.api.idempotency_scope(&call),
-                &sent,
-                &fingerprint,
-                || self.invoke(rpc, &call, request),
+        // The mutation and the storing of its result run on their own task: a request dropped
+        // mid-flight (a client disconnect) must not leave the work done with no result stored, or
+        // a retry with the same id would run it again.
+        let api = Arc::clone(&self.api);
+        let idempotency = Arc::clone(&self.idempotency);
+        let scope = api.idempotency_scope(&call);
+        let (rpc_owned, request_owned, call_owned) =
+            (rpc.to_owned(), request.to_vec(), call.clone());
+        let sent_owned = sent.clone();
+        let task = tokio::spawn(async move {
+            idempotency
+                .run(&scope, &sent_owned, &fingerprint, || {
+                    Self::invoke(api.as_ref(), &rpc_owned, &call_owned, &request_owned)
+                })
+                .await
+        });
+        let (result, how) = task.await.unwrap_or_else(|_| {
+            (
+                Err(AdminError::new(
+                    ErrorKind::Internal,
+                    "INTERNAL_ERROR",
+                    "XX000",
+                    "The request could not be completed.",
+                )),
+                Run::Ran,
             )
-            .await;
+        });
         if how != Run::Ran {
             let class = result.as_ref().err().map_or("", |e| e.error_class.as_str());
             let outcome = match &result {
@@ -134,9 +152,13 @@ impl Core {
         result
     }
 
-    async fn invoke(&self, rpc: &str, call: &Call, request: &[u8]) -> AdminResult<Vec<u8>> {
+    async fn invoke(
+        api: &dyn AdminApi,
+        rpc: &str,
+        call: &Call,
+        request: &[u8],
+    ) -> AdminResult<Vec<u8>> {
         let bad = |e: prost::DecodeError| AdminError::invalid_argument(e.to_string());
-        let api = self.api.as_ref();
         match rpc {
             "GetVersion" => {
                 GetVersionRequest::decode(request).map_err(bad)?;
