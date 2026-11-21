@@ -831,6 +831,8 @@ fn listings_and_deletes_are_retried() {
         .block_on(env.io.delete(&env.store, &Path::from("t/_SUCCESS")))
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::TaskWriteFailed);
+    // The reason is the cause, not lost (PY-075).
+    assert!(e.cause().is_some_and(|c| !c.to_string().is_empty()));
     fault.fail_next_deletes(0);
     // The failed delete left the object in place.
     assert!(env.names("t").contains(&"t/_SUCCESS".to_owned()));
@@ -1606,6 +1608,43 @@ fn a_logged_write_killed_before_its_commit_leaves_the_old_state_visible() {
     // The next write commits normally on top of the committed version.
     env.write_logged("t", SaveMode::Append, "job-4", 1, true);
     assert_eq!(env.visible("t").len(), 2);
+}
+
+/// PY-054: a killed overwrite's complete files and the old `_SUCCESS` do not survive the next
+/// overwrite; a file younger than the grace period (a concurrent write's) does.
+#[test]
+fn a_logged_overwrite_sweeps_unlogged_files_of_a_killed_write_and_the_old_marker() {
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    env.write_logged("t", SaveMode::Overwrite, "job-2", 3, false);
+    let w = env
+        .begin("t", SaveMode::Overwrite, "job-3")
+        .unwrap()
+        .unwrap();
+    let w = env.rt.block_on(w.logged(&env.io)).unwrap();
+    // The marker of job-1 is gone before job-3 writes anything.
+    assert!(!env.names("t").iter().any(|n| n.ends_with("_SUCCESS")));
+    drop(w);
+    // With a one-hour grace the killed write's file stays; with none, the commit sweeps it.
+    let young = env
+        .begin("t", SaveMode::Overwrite, "job-4")
+        .unwrap()
+        .unwrap();
+    let young = env.rt.block_on(young.logged(&env.io)).unwrap();
+    assert!(young.log.as_ref().unwrap().stale.is_empty());
+    let old = env
+        .begin("t", SaveMode::Overwrite, "job-5")
+        .unwrap()
+        .unwrap();
+    let old = env
+        .rt
+        .block_on(old.with_grace(chrono::Duration::zero()).logged(&env.io))
+        .unwrap();
+    let stale = &old.log.as_ref().unwrap().stale;
+    assert!(
+        stale.iter().any(|p| p.as_ref().contains("job-2")),
+        "{stale:?}"
+    );
 }
 
 /// A concurrent overwrite replaces only the files its base snapshot shows: the task files of an append that
