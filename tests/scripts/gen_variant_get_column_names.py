@@ -21,7 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-LIT = "parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}')"
+LIT = 'parse_json(\'{"a":1,"b":{"c":"x"}}\')'
 CASES: list[tuple[str, str]] = []
 for tag, fn in (("vg", "variant_get"), ("tvg", "try_variant_get")):
     for ty in ("int", "string", "double", "array<int>"):
@@ -41,7 +41,7 @@ CASES += [
     ("path_lit_cast_int", f"SELECT {LIT}:a::int"),
     ("path_lit_two", f"SELECT {LIT}:a:b"),
 ]
-SETUP = ["CREATE OR REPLACE TEMPORARY VIEW t AS SELECT parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}') AS v"]
+SETUP = ['CREATE OR REPLACE TEMPORARY VIEW t AS SELECT parse_json(\'{"a":1,"b":{"c":"x"}}\') AS v']
 COL_CASES: list[tuple[str, str]] = []
 
 
@@ -61,7 +61,7 @@ def runner(setup: list[str], cases: list[list[str]]) -> None:
             rec["columns"] = df.columns
             rec["types"] = [f.dataType.simpleString() for f in df.schema.fields]
             rec["rows"] = [[None if v is None else str(v) for v in r] for r in df.collect()]
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             je = getattr(e, "_origin", None) or getattr(e, "java_exception", None)
             err = {}
             if je is not None:
@@ -69,12 +69,12 @@ def runner(setup: list[str], cases: list[list[str]]) -> None:
                     try:
                         err["class"] = str(getattr(je, g)())
                         break
-                    except Exception:  # noqa: BLE001, S112
+                    except Exception:
                         continue
                 try:
                     err["sqlState"] = str(je.getSqlState())
                     err["params"] = {str(k): str(v) for k, v in sorted(je.getMessageParameters().items())}
-                except Exception:  # noqa: BLE001, S110
+                except Exception:
                     pass
                 err["message"] = str(je.getMessage()).split("\n")[0]
             else:
@@ -95,14 +95,29 @@ def main() -> None:
         ver, ctr = spec.split("=")
         subprocess.run(["docker", "cp", str(me), f"{ctr}:/tmp/gen_variant_get_names.py"], check=True)
         p = subprocess.run(
-            ["docker", "exec", "-e", "PYTHONIOENCODING=utf-8", "-e", "LC_ALL=C.UTF-8", ctr,
-             "/opt/spark/bin/spark-submit", "--conf", "spark.driver.extraJavaOptions=-Dfile.encoding=UTF-8",
-             "/tmp/gen_variant_get_names.py", "--runner", json.dumps(SETUP, ensure_ascii=True),
-             json.dumps(cases, ensure_ascii=True)],
-            check=True, capture_output=True, text=True, encoding="utf-8",
+            [
+                "docker",
+                "exec",
+                "-e",
+                "PYTHONIOENCODING=utf-8",
+                "-e",
+                "LC_ALL=C.UTF-8",
+                ctr,
+                "/opt/spark/bin/spark-submit",
+                "--conf",
+                "spark.driver.extraJavaOptions=-Dfile.encoding=UTF-8",
+                "/tmp/gen_variant_get_names.py",
+                "--runner",
+                json.dumps(SETUP, ensure_ascii=True),
+                json.dumps(cases, ensure_ascii=True),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
         )
         line = next(x for x in p.stdout.splitlines() if x.startswith("@@JSON@@"))
-        doc = json.loads(line[len("@@JSON@@"):])
+        doc = json.loads(line[len("@@JSON@@") :])
         assert doc["version"] == ver, (doc["version"], ver)
         doc = {
             "format_version": 1,
@@ -114,7 +129,9 @@ def main() -> None:
         }
         d = root / "tests/fixtures" / f"spark-{ver}"
         d.mkdir(parents=True, exist_ok=True)
-        (d / "column-names-variant-get.json").write_text(json.dumps(doc, indent=1, ensure_ascii=True) + "\n", encoding="utf-8")
+        (d / "column-names-variant-get.json").write_text(
+            json.dumps(doc, indent=1, ensure_ascii=True) + "\n", encoding="utf-8"
+        )
         print(ver, len(doc["results"]), "cases")
 
 
