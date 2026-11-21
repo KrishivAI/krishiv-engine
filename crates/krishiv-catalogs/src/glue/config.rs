@@ -8,8 +8,8 @@ use krishiv_common::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnsu
 use krishiv_common::secret::SecretString;
 use url::Url;
 
-/// The limits of one call, checked before or while a response is parsed. `max_response_bytes` is
-/// `krishiv.catalog.maxMetadataBytes`, `request_timeout` is `krishiv.catalog.requestTimeout`.
+/// The limits of one call, checked before or while a response is parsed. Callers set the fields directly:
+/// the `krishiv.catalog.maxMetadataBytes` and `krishiv.catalog.requestTimeout` settings do not apply to Glue.
 #[derive(Debug, Clone)]
 pub struct GlueLimits {
     /// The whole call, a paged listing included.
@@ -50,10 +50,19 @@ fn invalid(key: &str, reason: &str) -> KrishivError {
 
 impl GlueLimits {
     /// # Errors
-    /// `KRISHIV_INVALID_CONFIG_VALUE` for a zero limit, a zero timeout or a depth over 128.
+    /// `KRISHIV_INVALID_CONFIG_VALUE` for a zero limit, a zero timeout or a depth over 127.
     pub fn validate(&self) -> Result<(), KrishivError> {
         if self.request_timeout.is_zero() {
             return Err(invalid("requestTimeout", "it must be more than zero"));
+        }
+        if std::time::Instant::now()
+            .checked_add(self.request_timeout)
+            .is_none()
+        {
+            return Err(invalid(
+                "requestTimeout",
+                "it is too long to form a deadline",
+            ));
         }
         for (key, value) in [
             ("maxMetadataBytes", self.max_response_bytes),
@@ -66,8 +75,9 @@ impl GlueLimits {
                 return Err(invalid(key, "it must be more than zero"));
             }
         }
-        if self.max_depth > 128 {
-            return Err(invalid("maxDepth", "it must be at most 128"));
+        // serde_json refuses the 128th nested container, so 127 is the deepest that always decodes.
+        if self.max_depth > 127 {
+            return Err(invalid("maxDepth", "it must be at most 127"));
         }
         Ok(())
     }
@@ -130,9 +140,10 @@ impl GlueConfig {
         if !is_region(region) {
             return Err(invalid("region", "it is not an AWS region name"));
         }
-        let endpoint = Url::parse(&format!("https://glue.{region}.amazonaws.com"))
+        let suffix = if region.starts_with("cn-") { ".cn" } else { "" };
+        let endpoint = Url::parse(&format!("https://glue.{region}.amazonaws.com{suffix}"))
             .map_err(|_| invalid("region", "it is not an AWS region name"))?;
-        Ok(Self {
+        let config = Self {
             region: region.to_owned(),
             endpoint,
             access_key_id: access_key_id.to_owned(),
@@ -142,7 +153,9 @@ impl GlueConfig {
             allow_http: false,
             limits: GlueLimits::default(),
             egress: None,
-        })
+        };
+        config.validate()?;
+        Ok(config)
     }
 
     /// Checks the declaration before anything connects: region, keys, endpoint scheme and shape, limits.

@@ -344,7 +344,7 @@ impl Session {
             touched,
             read_filter,
         );
-        apply_idempotency_key(&analysis.env.config, &mut request.options)?;
+        refuse_idempotency_key(&analysis.env.config)?;
         request.write_id = Some(crate::session::job_uuid());
         request
             .options
@@ -669,11 +669,33 @@ fn the_delta_connector_reads_the_same_option_keys() {
 #[cfg(test)]
 mod tests;
 
+/// Row-level (DML) writes do not take `krishiv.write.idempotencyKey` yet (E34): a set key is refused
+/// instead of deduplicating on some table formats only.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` when the session setting names a key.
+pub(super) fn refuse_idempotency_key(
+    config: &krishiv_common::config::Config,
+) -> Result<(), KrishivError> {
+    match config
+        .get(&krishiv_common::config::WRITE_IDEMPOTENCY_KEY)
+        .and_then(krishiv_common::config::ConfigValue::as_str)
+    {
+        Some(_) => Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "krishiv.write.idempotencyKey on UPDATE, DELETE or MERGE; unset it for this statement"
+                .to_owned(),
+        }
+        .into()),
+        None => Ok(()),
+    }
+}
+
 /// Puts `krishiv.write.idempotencyKey` into a write's `options` when it names none (the per-write
 /// option wins over the session setting). E34.
 ///
 /// # Errors
 /// `INVALID_CONF_VALUE` for an empty key.
+#[cfg(feature = "delta")]
 pub(super) fn apply_idempotency_key(
     config: &krishiv_common::config::Config,
     options: &mut std::collections::BTreeMap<String, String>,

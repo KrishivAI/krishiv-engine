@@ -359,6 +359,15 @@ fn column(c: &GlueColumn, catalog: &str, relation: &str) -> Result<TableColumn, 
         })
     };
     if declared.starts_with("varchar(") || declared.starts_with("char(") {
+        let well_formed = declared
+            .split_once('(')
+            .and_then(|(_, rest)| rest.strip_suffix(')'))
+            .is_some_and(|n| {
+                !n.is_empty() && n.len() <= 10 && n.bytes().all(|b| b.is_ascii_digit())
+            });
+        if !well_formed {
+            return Err(fault("a CHAR/VARCHAR type string has no valid length"));
+        }
         let mut col = TableColumn::new(&c.name, DataType::String, true);
         col.char_varchar =
             Some(bounded_declared(&declared).ok_or_else(|| {

@@ -81,7 +81,8 @@ pub static WRITE_IDEMPOTENCY_KEY: ConfigEntry = ConfigEntry {
           deduplicated across statements. Set it per logical write: while it is set on a session, \
           every later write to the same table with the same key writes nothing. A key lasts as long \
           as the commit that holds it (Delta `txn` retention, Iceberg snapshot expiry, the \
-          commit log). A directory without a commit log refuses a key. A writer from before this \
+          commit log). A directory without a commit log refuses a key. UPDATE, DELETE and MERGE refuse a key set \
+          on the session (row-level writes do not take one yet). A writer from before this \
           setting drops the keys of a commit-log checkpoint it writes.",
     scope: Scope::Session,
     settable_by: SettableBy::User,

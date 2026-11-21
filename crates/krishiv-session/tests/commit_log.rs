@@ -572,7 +572,8 @@ fn a_retried_write_with_the_same_idempotency_key_appends_once() {
 
     // An empty key is invalid.
     s.conf().set("krishiv.write.idempotencyKey", "").unwrap();
-    assert!(block_on(s.table("t").write().mode("append").parquet(&path)).is_err());
+    let e = block_on(s.table("t").write().mode("append").parquet(&path)).unwrap_err();
+    assert!(e.message().contains("must not be empty"), "{e}");
 }
 
 #[test]
@@ -590,5 +591,30 @@ fn an_idempotency_key_on_a_directory_without_a_log_is_refused() {
             .option("krishiv.write.idempotencyKey", "k")
             .parquet(&path),
     );
-    assert!(r.is_err());
+    let e = r.unwrap_err();
+    assert!(e.message().contains("commit log"), "{e}");
+}
+
+/// E34: a keyed retry under `errorifexists` or `overwrite` finds its key in the log and writes nothing,
+/// instead of failing on the directory the first try created or replacing what it wrote.
+#[test]
+fn a_keyed_retry_succeeds_under_errorifexists_and_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = session_with(&[1, 2]);
+    for mode in ["errorifexists", "errorifexists", "overwrite"] {
+        block_on(
+            s.table("t")
+                .write()
+                .mode(mode)
+                .option("krishiv.write.idempotencyKey", "job-1")
+                .parquet(&path),
+        )
+        .unwrap();
+    }
+    assert_eq!(ids(&s, &path), [1, 2]);
+    // Without the key the directory still exists.
+    let e = block_on(s.table("t").write().mode("errorifexists").parquet(&path)).unwrap_err();
+    assert!(e.message().contains("already exists"), "{e}");
 }

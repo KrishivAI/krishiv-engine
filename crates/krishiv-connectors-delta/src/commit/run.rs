@@ -51,6 +51,8 @@ enum Outcome {
 enum Round {
     /// One of them is this write's commit.
     Landed(u64),
+    /// One of them carries this write's idempotency key: a retry of the same statement committed.
+    Keyed(u64),
     /// None conflicts; the last checked version.
     Clear(u64),
 }
@@ -149,6 +151,7 @@ pub async fn commit(
                     .await??;
                 let last = match round {
                     Round::Landed(v) => return Ok(landed(v, attempts)),
+                    Round::Keyed(v) => return Ok(deduplicated(v)),
                     Round::Clear(_) if out_of_attempts => {
                         return Err(retries_exceeded(
                             attempts,
@@ -181,7 +184,10 @@ pub async fn commit(
 }
 
 /// The winners of the race lost at `version`, on the log pool: this write's commit among any
-/// of them is a landing; otherwise, unless `skip_checks`, each is checked in order.
+/// of them is a landing, and one carrying this write's idempotency key a deduplicated write
+/// (both before any conflict check and whatever `skip_checks`, so neither a conflict with the
+/// same statement's commit nor running out of attempts hides it); otherwise, unless
+/// `skip_checks`, each is checked in order.
 fn check_winners(
     e: &DeltaEngine,
     version: u64,
@@ -200,6 +206,12 @@ fn check_winners(
         .find(|w| w.tag(WRITE_ID_TAG) == Some(p.staged.write_id.as_str()))
     {
         return Ok(Round::Landed(w.version));
+    }
+    if let Some(key) = &p.staged.idempotency_key {
+        let app = super::idempotency_app_id(key);
+        if let Some(w) = winners.iter().find(|w| w.app_ids.contains(&app)) {
+            return Ok(Round::Keyed(w.version));
+        }
     }
     if !skip_checks {
         for w in &winners {

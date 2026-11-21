@@ -770,6 +770,11 @@ impl Session {
         }
         let mut options = BTreeMap::new();
         for (k, v) in &spec.options {
+            // The idempotency key belongs to this one write, never to the table: stored, it would
+            // deduplicate every later write of the table.
+            if k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION) {
+                continue;
+            }
             // Table metadata is stored as plain text: a secret never is.
             let Some(text) = v.as_plain() else {
                 return Err(unsupported("secret table options"));

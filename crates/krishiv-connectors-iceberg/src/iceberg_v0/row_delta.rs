@@ -354,7 +354,7 @@ impl MergeOnReadWrite {
             branch: BRANCH,
             write_id: &self.write_id,
             query_id,
-            // Row-level changes do not take the write idempotency key yet (E34 DML wiring).
+            // Row-level changes take no idempotency key: the session refuses one on DML (E34).
             idempotency_key: None,
         };
         commit_validated(t.committer.as_ref(), cx, base, &mut new, ids, &validation).await

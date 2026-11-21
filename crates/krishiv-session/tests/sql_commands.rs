@@ -515,6 +515,19 @@ fn drop_view_needs_the_view() {
             ("searchPath", "[`spark_catalog`.`default`]".to_owned()),
         ]
     );
+    // A qualified name in another database reports that database, not the current one.
+    block_on(s.sql("CREATE DATABASE otherdb")).unwrap();
+    let e = block_on(s.sql("DROP VIEW otherdb.nosuch")).unwrap_err();
+    assert_eq!(
+        e.message_parameters(),
+        [
+            (
+                "relationName",
+                "`spark_catalog`.`otherdb`.`nosuch`".to_owned()
+            ),
+            ("searchPath", "[`spark_catalog`.`otherdb`]".to_owned()),
+        ]
+    );
     // `IF EXISTS` tolerates it, returning an empty frame as in Spark.
     let df = block_on(s.sql("DROP VIEW IF EXISTS nosuch")).unwrap();
     assert_eq!(block_on(df.schema()).unwrap().fields().len(), 0);

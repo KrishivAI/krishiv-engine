@@ -75,11 +75,11 @@ impl GlueError {
                 status,
                 code,
                 message,
-            } => format!(
+            } => shortened(&format!(
                 "HTTP {status} {}: {}",
                 code.as_deref().unwrap_or("(no error code)"),
-                shortened(message.as_deref().unwrap_or(""))
-            ),
+                message.as_deref().unwrap_or("")
+            )),
             Self::Protocol(d) => format!("protocol: {}", shortened(d)),
             Self::Transport(d) => format!("transport: {}", shortened(d)),
         }

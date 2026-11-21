@@ -1050,7 +1050,7 @@ impl Session {
             }
             .into()),
             None if if_exists => Ok(()),
-            None => Err(self.drop_view_not_found(&name.name)),
+            None => Err(self.drop_view_not_found(&name.namespace, &name.name)),
         }
     }
 
@@ -1548,6 +1548,10 @@ fn table_writer(
         writer = writer.partition_by(&table.layout.partition_columns);
     }
     for (k, v) in &table.options {
+        // A key stored before this rule would deduplicate every later write.
+        if k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION) {
+            continue;
+        }
         writer = writer.option(k, v);
     }
     // Stored when an admin (or a `Manage` holder) created or altered the table: not asked again.

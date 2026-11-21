@@ -41,6 +41,8 @@ impl std::fmt::Debug for Request {
 pub(crate) struct Response {
     pub(crate) status: u16,
     pub(crate) body: Vec<u8>,
+    /// The `X-Amzn-Errortype` header, which AWS JSON 1.1 allows as the only error discriminator.
+    pub(crate) error_type: Option<String>,
 }
 
 struct Job {
@@ -198,6 +200,11 @@ async fn send(
     {
         return Err(GlueError::Limit(GlueLimit::Bytes));
     }
+    let error_type = response
+        .headers()
+        .get("x-amzn-errortype")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.chars().take(256).collect::<String>());
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
         if body.len().saturating_add(chunk.len()) > max_bytes {
@@ -205,5 +212,9 @@ async fn send(
         }
         body.extend_from_slice(&chunk);
     }
-    Ok(Response { status, body })
+    Ok(Response {
+        status,
+        body,
+        error_type,
+    })
 }

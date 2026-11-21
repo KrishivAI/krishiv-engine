@@ -98,4 +98,4 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
 0014, 0028, 0046
 
 ## Tests
-`cargo nextest run -p krishiv-catalogs --no-tests=pass` · `cargo clippy -p krishiv-catalogs --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-catalogs --no-tests=pass` · `cargo nextest run -p krishiv-catalogs --features glue` (the Glue fixtures; the default set does not compile them) · `cargo clippy -p krishiv-catalogs --all-targets -- -D warnings`

@@ -423,6 +423,27 @@ fn row_level_refusal_unchanged() {
 }
 
 #[test]
+fn a_session_idempotency_key_is_refused_on_row_level_writes() {
+    let files = Files::new();
+    let (session, name) = session(&files);
+    session
+        .conf()
+        .set("krishiv.write.idempotencyKey", "job-1")
+        .unwrap();
+    let e = try_run(
+        &session,
+        &name,
+        RowLevelOperation::Delete,
+        "t",
+        Some("id = 1"),
+        vec![],
+    )
+    .expect_err("refused");
+    assert!(e.message().contains("idempotencyKey"), "{e}");
+    assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+}
+
+#[test]
 fn row_level_counts_output() {
     // A table without an output: no rows, no columns.
     let files = Files::new();

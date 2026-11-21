@@ -145,7 +145,7 @@ impl NewDeltaTable {
         new.engine
             .clone()
             .delta_blocking(move |e| -> Result<(), KrishivError> {
-                match plan_create(e, &new, &write_id, FileLimits::default())? {
+                match plan_create(e, &new, &write_id, None, FileLimits::default())? {
                     Planned::Landed => Ok(()),
                     Planned::Ready { create, .. } => {
                         let txn = take_create(&create)?;
@@ -378,6 +378,8 @@ struct WriteGlobal {
     target: Target,
     mode: Mode,
     write_id: String,
+    /// `krishiv.write.idempotencyKey` (E34): a create records it in version 0.
+    idempotency_key: Option<String>,
     files: FileLimits,
     planned: OnceCell<Arc<Planned>>,
     /// The writers of the drivers that ended their input.
@@ -417,12 +419,15 @@ impl WriteGlobal {
                 let target = self.target.clone();
                 let mode = self.mode.clone();
                 let write_id = self.write_id.clone();
+                let key = self.idempotency_key.clone();
                 let files = self.files;
                 let planned = self
                     .engine
                     .delta_blocking(move |e| match &target {
                         Target::Existing(table) => plan_existing(e, table, &mode, files),
-                        Target::Create(new) => plan_create(e, new, &write_id, files),
+                        Target::Create(new) => {
+                            plan_create(e, new, &write_id, key.as_deref(), files)
+                        }
                     })
                     .await??;
                 Ok(Arc::new(planned))
@@ -524,6 +529,7 @@ impl Sink for DeltaWriteSink {
             target: self.target.clone(),
             mode: self.mode.clone(),
             write_id: self.write_id.clone(),
+            idempotency_key: self.idempotency_key.clone(),
             files: self.files,
             planned: OnceCell::new(),
             writers: Mutex::new(Vec::new()),
@@ -942,13 +948,15 @@ fn plan_existing(
 }
 
 /// The plan of a create: the kernel's `create_table` transaction with the table-features
-/// protocol, carrying the write's id. When the transaction cannot be built because version 0
+/// protocol, carrying the write's id and, for a keyed write, the key's `txn` action (E34: in
+/// version 0 itself, so a retry of the statement on the created table finds it). When the transaction cannot be built because version 0
 /// exists, it is this write's when version 0 carries its id (a retried task: [`Planned::Landed`]),
 /// else `TABLE_OR_VIEW_ALREADY_EXISTS`.
 pub(super) fn plan_create(
     e: &DeltaEngine,
     new: &NewTable,
     write_id: &str,
+    key: Option<&str>,
     files: FileLimits,
 ) -> Result<Planned, KrishivError> {
     let name = new.name.as_str();
@@ -973,7 +981,10 @@ pub(super) fn plan_create(
         )
         .build(e, Box::new(FileSystemCommitter::new()));
     let txn = match built {
-        Ok(txn) => txn,
+        Ok(txn) => match key {
+            Some(k) => txn.with_transaction_id(crate::commit::idempotency_app_id(k), 1),
+            None => txn,
+        },
         Err(err) => {
             return match version_zero(e, name)? {
                 Some(owner) if owner.as_deref() == Some(write_id) => Ok(Planned::Landed),

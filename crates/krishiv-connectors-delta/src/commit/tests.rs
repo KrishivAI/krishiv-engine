@@ -623,6 +623,54 @@ fn a_retried_statement_with_the_same_idempotency_key_commits_once() {
     assert_eq!(env.latest(), latest + 1);
 }
 
+/// E34: a keyed write that reads the table and loses its race to a retry of the same statement
+/// (same key, another write id) is deduplicated before the winner is checked for conflicts: the
+/// winner's append would otherwise be a concurrent-append conflict.
+#[test]
+fn a_same_key_winner_is_deduplicated_before_conflict_checks() {
+    let env = Env::new();
+    let s = env.snapshot();
+    let reads = |write_id: &str, file: &str| {
+        let mut c = staged(write_id, vec![add(file, Some("x"))], whole_table());
+        c.idempotency_key = Some("job-9".to_owned());
+        c
+    };
+    let first = env.commit(&s, reads("w1", "a.parquet")).unwrap();
+    let latest = env.latest();
+    let retry = env.commit(&s, reads("w2", "b.parquet")).unwrap();
+    assert!(retry.deduplicated, "{retry:?}");
+    assert_eq!(retry.version, first.version);
+    assert_eq!(env.latest(), latest, "no commit was made");
+    // An unrelated winner still conflicts.
+    let (c, _) = class(env.commit(
+        &s,
+        staged("w3", vec![add("c.parquet", Some("x"))], whole_table()),
+    ));
+    assert!(
+        format!("{c:?}").starts_with("DeltaConcurrentAppend"),
+        "{c:?}"
+    );
+}
+
+/// E34: with no attempt left, a winner carrying this write's key is still a deduplicated write,
+/// not `DELTA_MAX_COMMIT_RETRIES_EXCEEDED`.
+#[test]
+fn a_same_key_winner_is_deduplicated_when_out_of_attempts() {
+    let env = Env::new();
+    let s = env.snapshot();
+    let first = env.commit(&s, keyed("w1", "job-10", "a.parquet")).unwrap();
+    let limits = RetryLimits {
+        max_attempts: 0,
+        ..fast()
+    };
+    let retry = env
+        .commit_with(&s, keyed("w2", "job-10", "b.parquet"), limits)
+        .unwrap();
+    assert!(retry.deduplicated, "{retry:?}");
+    assert_eq!(retry.version, first.version);
+    assert_eq!(env.latest(), first.version);
+}
+
 #[test]
 fn the_attempt_bound_is_deltas_max_commit_attempts() {
     let env = Env::new();

@@ -513,14 +513,18 @@ fn columns_differ(quoted: &str) -> KrishivError {
     .into()
 }
 
-/// The write options the Delta writer reads from its request (`maxRecordsPerFile`, matched
+/// The write options the Delta writer reads from its request (`maxRecordsPerFile` and the write's
+/// idempotency key, matched
 /// ignoring case as Spark's case-insensitive options are), forwarded as written.
 pub(crate) fn writer_options<'a>(
     options: impl IntoIterator<Item = (&'a String, &'a String)>,
 ) -> BTreeMap<String, String> {
     options
         .into_iter()
-        .filter(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
+        .filter(|(k, _)| {
+            k.eq_ignore_ascii_case("maxRecordsPerFile")
+                || k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION)
+        })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }

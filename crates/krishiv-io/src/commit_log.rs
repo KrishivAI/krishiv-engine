@@ -340,15 +340,22 @@ impl<'a> CommitLog<'a> {
                     if entry.mode == CommitMode::Overwrite {
                         return Err(self.conflict(version));
                     }
-                    if let Some(key) = entry.idempotency_key.as_deref().filter(|_| recheck_key)
-                        && let Some(v) = self.key_version(key).await?
+                    let newest = if let Some(key) =
+                        entry.idempotency_key.as_deref().filter(|_| recheck_key)
                     {
-                        return Ok(Keyed::Replayed(v));
-                    }
-                    // One listing finds the newest version, instead of one
-                    // put_if_absent per commit that overtook this append.
-                    let (entries, checkpoint) = self.versions().await?;
-                    let newest = entries.last().copied().max(checkpoint);
+                        // The key and the next slot come from one snapshot: a commit of the same
+                        // key after it takes that slot, so this append loses again and looks again.
+                        let snap = self.snapshot_if_exists().await?;
+                        if let Some(found) = self.key_in(snap.as_ref(), key, entry).await? {
+                            return Ok(found);
+                        }
+                        snap.and_then(|s| s.version)
+                    } else {
+                        // One listing finds the newest version, instead of one
+                        // put_if_absent per commit that overtook this append.
+                        let (entries, checkpoint) = self.versions().await?;
+                        entries.last().copied().max(checkpoint)
+                    };
                     version = newest.map_or(version, |n| n + 1).max(version + 1);
                 }
             }
@@ -360,29 +367,55 @@ impl<'a> CommitLog<'a> {
     /// commit with the key (before the first try, and again after every lost race), nothing is
     /// written and the version that has it is returned. An entry without a key commits as usual.
     ///
+    /// A key found after a failed put whose entry is this attempt's own (the store took it, the
+    /// answer was lost) is [`Keyed::Committed`], not a replay: its files are the log's.
+    ///
     /// # Errors
     /// As [`Self::commit`].
     pub async fn commit_keyed(&self, base: Option<u64>, entry: &LogEntry) -> Result<Keyed> {
         let Some(key) = &entry.idempotency_key else {
             return self.commit_inner(base, entry, false).await;
         };
-        for _ in 0..=MAX_RACES {
-            if let Some(v) = self.key_version(key).await? {
-                return Ok(Keyed::Replayed(v));
-            }
-            match self.commit_inner(base, entry, true).await {
-                Ok(k) => return Ok(k),
-                // An overwrite that lost a race may have lost it to the same statement: look again
-                // before reporting the conflict.
-                Err(e) => {
-                    if self.key_version(key).await?.is_some() {
-                        continue;
-                    }
-                    return Err(e);
+        let snap = self.snapshot_if_exists().await?;
+        if let Some(found) = self.key_in(snap.as_ref(), key, entry).await? {
+            return Ok(found);
+        }
+        match self.commit_inner(base, entry, true).await {
+            Ok(k) => Ok(k),
+            // An overwrite that lost a race may have lost it to the same statement, and a put that
+            // failed may have landed: look again before reporting the error.
+            Err(e) => {
+                let snap = self.snapshot_if_exists().await?;
+                match self.key_in(snap.as_ref(), key, entry).await? {
+                    Some(found) => Ok(found),
+                    None => Err(e),
                 }
             }
         }
-        Err(self.conflict(0))
+    }
+
+    /// The version of `snap` that carries `key`: [`Keyed::Committed`] when that entry is `entry`'s
+    /// own (the same query and write ids), else [`Keyed::Replayed`] (an earlier commit of the key).
+    async fn key_in(
+        &self,
+        snap: Option<&Snapshot>,
+        key: &str,
+        entry: &LogEntry,
+    ) -> Result<Option<Keyed>> {
+        let Some(v) = snap.and_then(|s| s.idempotency_keys.get(key).copied()) else {
+            return Ok(None);
+        };
+        // An entry no longer listed (behind a checkpoint) is older than this attempt.
+        let own = match self.io.get_object(&self.store, &self.entry_path(v)).await? {
+            Some(bytes) => decode_entry(&bytes)
+                .is_ok_and(|e| e.write_id == entry.write_id && e.query_id == entry.query_id),
+            None => false,
+        };
+        Ok(Some(if own {
+            Keyed::Committed(v)
+        } else {
+            Keyed::Replayed(v)
+        }))
     }
 
     /// The log version of the commit that carries `key`, if any.

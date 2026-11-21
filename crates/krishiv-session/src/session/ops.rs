@@ -435,6 +435,10 @@ impl Session {
             // An overwrite deletes what it replaces here: from now on a cancel
             // reaches the write through its query, not by dropping it (`action.rs`).
             crate::action::commit_point();
+            if super::writes::key_already_committed(&env.config, &options, &io, &store, &at).await?
+            {
+                return Ok(Vec::new());
+            }
             let Some(write) = DirectoryWrite::begin(
                 &io,
                 store.clone(),

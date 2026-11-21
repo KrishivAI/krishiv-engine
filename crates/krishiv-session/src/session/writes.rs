@@ -50,10 +50,15 @@ pub(super) fn write_idempotency_key(
     let key = options
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case(name))
-        .and_then(|(_, v)| match v {
-            OptionValue::Plain(s) => Some(s.clone()),
-            _ => None,
+        .map(|(_, v)| match v {
+            OptionValue::Plain(s) => Ok(s.clone()),
+            _ => Err(krishiv_common::error::KrishivInvalidConfigValue {
+                key: name.to_owned(),
+                value: String::new(),
+                reason: "an idempotency key must be a plain option value, not a secret".to_owned(),
+            }),
         })
+        .transpose()?
         .or_else(|| {
             config
                 .get(&krishiv_common::config::WRITE_IDEMPOTENCY_KEY)
@@ -81,6 +86,31 @@ pub(super) fn unlogged_key(display: &str) -> KrishivError {
         ),
     }
     .into()
+}
+
+/// Whether the directory's commit log already holds this write's idempotency key: the retry of a keyed
+/// write then writes nothing, whatever the save mode says about a directory that exists (an
+/// `ErrorIfExists` retry must not fail, an overwrite must not delete what the first try wrote).
+///
+/// # Errors
+/// An invalid key, or the log's read errors.
+pub(super) async fn key_already_committed(
+    config: &Config,
+    options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+    io: &krishiv_io::IoContext,
+    store: &StoreId,
+    at: &krishiv_exec::files::LocatedPath,
+) -> Result<bool, KrishivError> {
+    let Some(key) = write_idempotency_key(config, options)? else {
+        return Ok(false);
+    };
+    let log = krishiv_io::commit_log::CommitLog::new(
+        io,
+        store.clone(),
+        at.path.clone(),
+        at.display.clone(),
+    );
+    Ok(log.exists().await? && log.key_version(&key).await?.is_some())
 }
 
 /// `write`, through the commit log when the directory uses one (with the write's idempotency key,

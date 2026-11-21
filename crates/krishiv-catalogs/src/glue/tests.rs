@@ -594,3 +594,76 @@ fn a_server_that_trickles_bytes_is_cut_at_the_deadline() {
     assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
     assert!(started.elapsed() < Duration::from_secs(3));
 }
+
+#[test]
+fn an_error_type_header_alone_makes_a_table_absent() {
+    let body = r#"{"Message": "Table not found"}"#;
+    let raw = format!(
+        "HTTP/1.1 400 Bad Request\r\ncontent-type: application/x-amz-json-1.1\r\nx-amzn-errortype: EntityNotFoundException:http://internal.amazon.com/coral/\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let server = serve(move |_| Reply::Raw(raw.clone().into_bytes()));
+    assert!(load(&catalog_of(&server)).unwrap().is_none());
+}
+
+#[test]
+fn a_listing_that_is_not_an_object_is_a_failure() {
+    let server = serve(|_| Reply::Json(200, "[]".into()));
+    let e = catalog_of(&server).list_databases().unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
+}
+
+#[test]
+fn a_spark_schema_property_that_is_not_a_string_is_a_failure() {
+    let server = serve(|_| {
+        Reply::Json(
+            200,
+            table(
+                r#""spark.sql.sources.provider": "parquet", "spark.sql.sources.schema": 7"#,
+                "s3://b/t",
+                "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
+            ),
+        )
+    });
+    let e = load(&catalog_of(&server)).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
+}
+
+#[test]
+fn a_malformed_varchar_length_is_a_failure() {
+    let server = serve(|_| {
+        Reply::Json(
+            200,
+            table(
+                "",
+                "s3://b/t",
+                "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
+            )
+            .replace("varchar(10)", "varchar(not_a_length)"),
+        )
+    });
+    let e = load(&catalog_of(&server)).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
+}
+
+#[test]
+fn the_declaration_is_checked_at_construction() {
+    let key = || SecretString::new(SECRET);
+    assert!(GlueConfig::new("eu-west-1", "", key()).is_err());
+    assert!(GlueConfig::new("eu-west-1", "AKID", SecretString::new("")).is_err());
+    let cn = GlueConfig::new("cn-north-1", "AKID", key()).unwrap();
+    assert_eq!(
+        cn.endpoint.as_str(),
+        "https://glue.cn-north-1.amazonaws.com.cn/"
+    );
+    let limits = super::GlueLimits {
+        request_timeout: Duration::MAX,
+        ..super::GlueLimits::default()
+    };
+    assert!(limits.validate().is_err());
+    let mut limits = super::GlueLimits::default();
+    limits.max_depth = 128;
+    assert!(limits.validate().is_err());
+    limits.max_depth = 127;
+    assert!(limits.validate().is_ok());
+}

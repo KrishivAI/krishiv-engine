@@ -9,7 +9,7 @@
 //! errors everywhere is a failure, not an empty catalog. Nothing a server says in free text reaches a Krishiv error.
 
 use std::collections::{BTreeMap, HashSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use krishiv_common::error::KrishivError;
 use krishiv_common::secret::SecretString;
@@ -23,7 +23,7 @@ use super::transport::{Request, Response, Transport};
 /// The longest token Krishiv follows.
 const MAX_PAGE_TOKEN: usize = 4096;
 
-/// The longest column name or type string accepted.
+/// The longest column name accepted (the type string is bounded by `MAX_DECLARED_LEN` in `catalog.rs`).
 const MAX_COLUMN_TEXT: usize = 4096;
 
 /// Entries asked for per page (Glue's own maximum for `GetTables` and `GetDatabases`).
@@ -174,7 +174,11 @@ impl GlueClient {
         if let Some(t) = &token {
             headers.push(("x-amz-security-token", SecretString::new(t)));
         }
-        let Response { status, body } = self.transport.call(
+        let Response {
+            status,
+            body,
+            error_type,
+        } = self.transport.call(
             Request {
                 url: self.config.endpoint.clone(),
                 headers,
@@ -197,9 +201,12 @@ impl GlueClient {
             };
             return Err(GlueError::Status {
                 status,
-                // `com.amazonaws.glue#EntityNotFoundException` or `EntityNotFoundException`.
-                code: text(&["__type", "code"])
-                    .map(|c| c.rsplit('#').next().unwrap_or_default().to_owned()),
+                // `com.amazonaws.glue#EntityNotFoundException`, `EntityNotFoundException` or the header form
+                // `EntityNotFoundException:http://internal.amazon.com/...`.
+                code: text(&["__type", "code"]).or(error_type).map(|c| {
+                    let c = c.split(':').next().unwrap_or_default();
+                    c.rsplit('#').next().unwrap_or_default().to_owned()
+                }),
                 message: text(&["Message", "message"]),
             });
         }
@@ -212,7 +219,7 @@ impl GlueClient {
     /// A listing: `key` names the array in each page, whose entries each carry a `Name`.
     fn list(&self, action: &str, request: &Value, key: &str) -> Result<Vec<String>, GlueError> {
         let limits = &self.config.limits;
-        let deadline = Instant::now() + limits.request_timeout;
+        let deadline = deadline_in(limits.request_timeout)?;
         let mut names = Vec::new();
         let mut seen_tokens = HashSet::new();
         let mut token: Option<String> = None;
@@ -226,6 +233,9 @@ impl GlueClient {
                 body["NextToken"] = json!(t);
             }
             let page = self.call(action, &body, deadline)?;
+            if !page.is_object() {
+                return Err(protocol("a listing that is not a JSON object"));
+            }
             let entries = match page.get(key) {
                 None | Some(Value::Null) => &[][..],
                 Some(Value::Array(a)) => a.as_slice(),
@@ -243,8 +253,8 @@ impl GlueClient {
                 names.push(name.to_owned());
             }
             match page.get("NextToken") {
-                None | Some(Value::Null) => return Ok(names),
-                Some(Value::String(t)) if t.is_empty() => return Ok(names),
+                None | Some(Value::Null) => return within(deadline).map(|()| names),
+                Some(Value::String(t)) if t.is_empty() => return within(deadline).map(|()| names),
                 Some(Value::String(t)) => {
                     if t.len() > MAX_PAGE_TOKEN {
                         return Err(protocol("a page token over 4 KiB"));
@@ -304,9 +314,13 @@ impl GlueClient {
             if let Some(id) = &self.config.catalog_id {
                 body["CatalogId"] = json!(id);
             }
-            let deadline = Instant::now() + self.config.limits.request_timeout;
+            let deadline = deadline_in(self.config.limits.request_timeout)?;
             match self.call("GetTable", &body, deadline) {
-                Ok(v) => parse_table(&v, self.config.limits.max_columns).map(Some),
+                Ok(v) => {
+                    let table = parse_table(&v, self.config.limits.max_columns)?;
+                    within(deadline)?;
+                    Ok(Some(table))
+                }
                 Err(GlueError::Status {
                     status: 400,
                     code: Some(code),
@@ -320,6 +334,22 @@ impl GlueClient {
 
     fn fail(&self, e: GlueError, relation: &str) -> KrishivError {
         e.into_error(&self.name, relation, &self.config.limits)
+    }
+}
+
+/// `now + timeout`, or a timeout when that cannot be represented.
+fn deadline_in(timeout: Duration) -> Result<Instant, GlueError> {
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or(GlueError::Timeout)
+}
+
+/// A call that finished after its deadline timed out, whatever it returned.
+fn within(deadline: Instant) -> Result<(), GlueError> {
+    if Instant::now() > deadline {
+        Err(GlueError::Timeout)
+    } else {
+        Ok(())
     }
 }
 
@@ -364,6 +394,15 @@ fn parse_table(v: &Value, max_columns: usize) -> Result<GlueTableRaw, GlueError>
     let partition_keys = parse_columns(t.get("PartitionKeys"), max_columns)?;
     if columns.len().saturating_add(partition_keys.len()) > max_columns {
         return Err(GlueError::Limit(GlueLimit::Columns));
+    }
+    // A Spark schema marker that is not a string would vanish below and let the placeholder columns be read.
+    if let Some(o) = t.get("Parameters").and_then(Value::as_object)
+        && o.iter().any(|(k, v)| {
+            (k == "spark.sql.sources.schema" || k.starts_with("spark.sql.sources.schema."))
+                && !v.is_string()
+        })
+    {
+        return Err(protocol("a Spark schema property that is not a string"));
     }
     let parameters = t
         .get("Parameters")
