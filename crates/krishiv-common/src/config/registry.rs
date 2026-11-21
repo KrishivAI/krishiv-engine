@@ -250,6 +250,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
     &EAGER_AGGREGATION,
+    &PRE_AGGREGATE_EXPAND,
     &ARROW_MAX_RECORDS_PER_BATCH,
     &ARROW_PYSPARK_VALIDATE_SCHEMA,
     &PYTHON_UDF_ARROW_ENABLED,
@@ -1713,6 +1714,23 @@ pub static NDV_SAMPLING_TIMEOUT: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Grouping sets aggregate their input before the expansion
+/// (`krishiv.optimizer.preAggregateExpand`).
+pub static PRE_AGGREGATE_EXPAND: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.preAggregateExpand",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Where an aggregate reads an expansion (GROUP BY ROLLUP, CUBE and GROUPING SETS, and the \
+          rewrite of several DISTINCT calls), aggregate the input rows into their finest groups before \
+          each row is repeated once per projection, and merge those groups' states per projection. \
+          Only calls whose result cannot depend on row order are moved; it runs with \
+          krishiv.optimizer.eagerAggregation. Results are the same either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
     spark_alias: None,
 };
 
