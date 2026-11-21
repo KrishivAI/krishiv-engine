@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 L = "collate utf8_lcase"
@@ -172,29 +173,34 @@ def main() -> None:
     cases = [[a, b] for a, b in CASES + COL_CASES]
     for spec in sys.argv[1:]:
         ver, ctr = spec.split("=")
-        subprocess.run(["docker", "cp", str(me), f"{ctr}:/tmp/gen_like_lcase.py"], check=True)
-        p = subprocess.run(
-            [
-                "docker",
-                "exec",
-                "-e",
-                "PYTHONIOENCODING=utf-8",
-                "-e",
-                "LC_ALL=C.UTF-8",
-                ctr,
-                "/opt/spark/bin/spark-submit",
-                "--conf",
-                "spark.driver.extraJavaOptions=-Dfile.encoding=UTF-8",
-                "/tmp/gen_like_lcase.py",
-                "--runner",
-                json.dumps(SETUP, ensure_ascii=True),
-                json.dumps(cases, ensure_ascii=True),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
+        # A per-run path: concurrent runs must not replace each other's script.
+        remote = f"/tmp/gen_like_lcase_{uuid.uuid4().hex}.py"
+        subprocess.run(["docker", "cp", str(me), f"{ctr}:{remote}"], check=True)
+        try:
+            p = subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    "-e",
+                    "PYTHONIOENCODING=utf-8",
+                    "-e",
+                    "LC_ALL=C.UTF-8",
+                    ctr,
+                    "/opt/spark/bin/spark-submit",
+                    "--conf",
+                    "spark.driver.extraJavaOptions=-Dfile.encoding=UTF-8",
+                    remote,
+                    "--runner",
+                    json.dumps(SETUP, ensure_ascii=True),
+                    json.dumps(cases, ensure_ascii=True),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+        finally:
+            subprocess.run(["docker", "exec", ctr, "rm", "-f", remote], check=False)
         line = next(x for x in p.stdout.splitlines() if x.startswith("@@JSON@@"))
         doc = json.loads(line[len("@@JSON@@") :])
         assert doc["version"] == ver, (doc["version"], ver)
