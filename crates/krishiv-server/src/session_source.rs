@@ -523,8 +523,20 @@ pub(crate) async fn catalog_rows(session: &Session, path: &[String]) -> Result<V
         [c, s, t] => format!("DESCRIBE TABLE {}.{}.{}", quote(c), quote(s), quote(t)),
         _ => return Ok(Vec::new()),
     };
-    let df = session.sql_boxed(&sql).await.map_err(ui_error)?;
-    let batches = df.collect_boxed().await.map_err(ui_error)?;
+    let batches = match collect(session, &sql).await {
+        Ok(batches) => batches,
+        // A temporary view is listed under every schema, but its name has one part: `c.s.v` does not name
+        // it. The three-part name is tried first, so a table of the schema with the view's name is the one
+        // described, and a name that is neither keeps the first statement's error.
+        Err(e) => match path {
+            [c, s, t] if is_temporary_view(session, c, s, t).await => {
+                collect(session, &format!("DESCRIBE TABLE {}", quote(t)))
+                    .await
+                    .map_err(ui_error)?
+            }
+            _ => return Err(ui_error(e)),
+        },
+    };
     let mut out = Vec::new();
     for r in batches_to_rows(&batches) {
         let first = |keys: &[&str]| {
@@ -553,6 +565,22 @@ pub(crate) async fn catalog_rows(session: &Session, path: &[String]) -> Result<V
         out.push(row);
     }
     Ok(out)
+}
+
+/// The batches of one statement of the catalog page.
+async fn collect(session: &Session, sql: &str) -> Result<Vec<RecordBatch>, KrishivError> {
+    session.sql_boxed(sql).await?.collect_boxed().await
+}
+
+/// Whether `SHOW TABLES IN c.s` lists `t` as a temporary view. `false` when the listing fails.
+async fn is_temporary_view(session: &Session, c: &str, s: &str, t: &str) -> bool {
+    let sql = format!("SHOW TABLES IN {}.{}", quote(c), quote(s));
+    collect(session, &sql).await.is_ok_and(|batches| {
+        batches_to_rows(&batches).iter().any(|r| {
+            r.get("tableName").and_then(Value::as_str) == Some(t)
+                && r.get("isTemporary") == Some(&Value::Bool(true))
+        })
+    })
 }
 
 impl UiSource for SessionSource {

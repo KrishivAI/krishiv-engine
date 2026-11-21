@@ -88,7 +88,13 @@ ENVIRONMENT = {
 CATALOG = {
     "catalogs": [{"name": "spark_catalog"}, {"name": XSS}],
     "spark_catalog": {"schemas": [{"name": "default"}]},
-    "default": {"tables": [{"name": "orders"}, {"name": "lineitem"}]},
+    "default": {
+        "tables": [
+            {"name": "orders", "is_temporary": False},
+            {"name": "lineitem", "is_temporary": False},
+            {"name": "recent_orders", "is_temporary": True},
+        ]
+    },
     "orders": {
         "columns": [
             {"name": "o_orderkey", "data_type": "bigint"},

@@ -484,9 +484,22 @@ def page_checks(origin: str) -> list[str]:
         no_markup("catalog")
         page.get_by_role("button", name="spark_catalog").click()
         page.get_by_role("button", name="default").click()
-        page.get_by_role("button", name="orders").click()
+        page.get_by_role("button", name="orders", exact=True).click()
         page.get_by_text("o_orderkey").wait_for(timeout=10000)
         no_markup("catalog columns")
+        # The editor's draft names a table by its three parts and a temporary view by its one.
+        for name, want in (
+            ("orders", "SELECT * FROM `spark_catalog`.`default`.`orders` LIMIT 100"),
+            ("recent_orders", "SELECT * FROM `recent_orders` LIMIT 100"),
+        ):
+            page.evaluate("window.location.hash = '#/catalog'")
+            for pick in ("spark_catalog", "default", name):
+                page.get_by_role("button", name=pick, exact=True).click()
+            page.get_by_role("link", name="Open in the SQL editor").click()
+            page.locator(".cm-content").wait_for(timeout=10000)
+            draft = page.locator(".cm-content").inner_text().strip()
+            if draft != want:
+                problems.append(f"catalog: the draft for {name} is {draft!r}")
         page.evaluate("window.location.hash = '#/sql'")
         editor = page.locator(".cm-content")
         editor.wait_for(timeout=10000)

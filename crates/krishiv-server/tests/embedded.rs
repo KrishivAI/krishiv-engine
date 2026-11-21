@@ -216,6 +216,44 @@ async fn spark_catalog_is_listed_whatever_the_sessions_current_catalog() {
     assert_ne!(listed(&source, &["system"]).await, schemas);
 }
 
+/// A temporary view is listed under every schema but has a one-part name: its columns are read by that name.
+/// A table of the schema with the same name comes first, as the three-part name the page asked for names it.
+#[tokio::test]
+async fn the_catalog_lists_the_columns_of_a_temporary_view() {
+    let (mine, _other) = two_sessions();
+    run(
+        &mine,
+        "CREATE TEMPORARY VIEW only_a_view AS SELECT 1 AS from_the_view",
+    )
+    .await;
+    run(
+        &mine,
+        "CREATE TABLE shadowed (from_the_table INT) USING parquet",
+    )
+    .await;
+    run(
+        &mine,
+        "CREATE TEMPORARY VIEW shadowed AS SELECT 1 AS from_the_view",
+    )
+    .await;
+    let source = EmbeddedSource::new(&mine).unwrap();
+    for (name, column) in [
+        ("only_a_view", "from_the_view"),
+        ("shadowed", "from_the_table"),
+    ] {
+        let columns = listed(&source, &["spark_catalog", "default", name]).await;
+        assert_eq!(columns, [column], "{name}");
+    }
+    // A name that is neither is still an error, and the first statement's.
+    let path = ["spark_catalog", "default", "no_such_table"].map(str::to_owned);
+    let missing = source.catalog(&path).await.unwrap_err();
+    assert!(
+        missing.message.contains("no_such_table"),
+        "{}",
+        missing.message
+    );
+}
+
 #[tokio::test]
 async fn the_editor_shares_the_sessions_views_and_the_catalog_lists_them() {
     let (mine, other) = two_sessions();
