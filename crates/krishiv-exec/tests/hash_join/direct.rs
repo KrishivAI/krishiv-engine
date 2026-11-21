@@ -377,8 +377,8 @@ const LONG: &str = "a payload string long enough that three thousand rows of it 
 
 /// A direct build too large to decode its payload once (perf lever P3)
 /// keeps the direct index and decodes its build columns per pair; a small
-/// one takes them from the payload decoded once, once per build (not per
-/// probe driver). Both match the oracle, with `Utf8` and `Utf8View`
+/// one takes them from the payload decoded once (`direct_payload_rows`
+/// counts its rows). Both match the oracle, with `Utf8` and `Utf8View`
 /// payloads, a residual filter and the build-preserving join types.
 #[tokio::test]
 async fn the_payload_cap_keeps_the_direct_index_either_way() {
