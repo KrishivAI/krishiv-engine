@@ -105,6 +105,16 @@ impl DataLocations {
             Self::ObjectStore(g) => g.generate_location(Some(&key), name),
         })
     }
+
+    /// The location of the file `name` outside any partition directory
+    /// (Java's `newDataLocation(filename)`: a DV Puffin file, which holds the
+    /// DVs of many partitions).
+    pub(crate) fn unpartitioned(&self, name: &str) -> String {
+        match self {
+            Self::Default(g) => g.generate_location(None, name),
+            Self::ObjectStore(g) => g.generate_location(None, name),
+        }
+    }
 }
 
 /// Whether `partition` is a tuple of `spec` over `schema`: the spec binds to
@@ -152,6 +162,19 @@ pub(crate) fn check_partition(
 /// to five digits as Java's).
 pub(crate) fn file_name(partition: u32, task: u64, write_id: &str, n: u32) -> String {
     format!("{partition:05}-{task}-{write_id}-{n:05}.parquet")
+}
+
+/// The name of the `n`th delete file (from 1) task `task` of the write
+/// `write_id` wrote: Java's delete `OutputFileFactory` (`.suffix("deletes")`,
+/// a counter of its own), `<partition>-<task>-<write id>-<n>-deletes.<ext>`.
+pub(crate) fn delete_file_name(
+    partition: u32,
+    task: u64,
+    write_id: &str,
+    n: u32,
+    ext: &str,
+) -> String {
+    format!("{partition:05}-{task}-{write_id}-{n:05}-deletes.{ext}")
 }
 
 /// The partition tuple of a file whose rows all have the transformed values
