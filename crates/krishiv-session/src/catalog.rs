@@ -1673,7 +1673,9 @@ impl Pinner<'_> {
                     Some(table)
                         if matches!(
                             &*table,
-                            TempTable::Memory { .. } | TempTable::Files { .. }
+                            TempTable::Memory { .. }
+                                | TempTable::Files { .. }
+                                | TempTable::Provider { .. }
                         ) =>
                     {
                         let hidden = self.catalog.next_hidden_name();

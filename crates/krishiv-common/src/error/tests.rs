@@ -670,6 +670,27 @@ fn python_exception_renders_message_and_traceback() {
     );
 }
 
+#[test]
+fn python_data_source_error_renders_action_type_and_message() {
+    // Spark 4.2.0 `PYTHON_DATA_SOURCE_ERROR`: `Failed to <action> Python data
+    // source <type>: <msg>`, SQLSTATE 38000.
+    assert_eq!(
+        ErrorClass::PythonDataSourceError.name(),
+        "PYTHON_DATA_SOURCE_ERROR"
+    );
+    let e = KrishivError::from(PythonDataSourceError {
+        action: "plan".to_owned(),
+        r#type: "reader".to_owned(),
+        msg: "no such path".to_owned(),
+    });
+    assert_eq!(e.sql_state(), Some("38000"));
+    assert!(
+        e.to_string()
+            .contains("Failed to plan Python data source reader: no such path"),
+        "{e}"
+    );
+}
+
 /// The three Iceberg commit classes (design note P3-T026-T027 §7.2.1, §7.3),
 /// one per Java exception: `ValidationException` (conflict, 40001),
 /// `CommitFailedException` (a lost race, 40001) and
@@ -789,4 +810,20 @@ fn a_value_that_holds_or_straddles_the_key_is_hidden_everywhere() {
         }
         assert!(!hidden.to_string().contains(value), "{hidden}");
     }
+}
+
+#[test]
+fn a_value_equal_to_the_key_stays() {
+    // `SET k.a = k.a`: the value is the key's own text, which the error names anyway.
+    let key = "k.a";
+    let e: KrishivError = InvalidConfValueTimeZone {
+        conf_name: key.to_owned(),
+        conf_value: "x".to_owned(),
+    }
+    .into();
+    let hidden = e.with_value_redacted(key, key);
+    assert_eq!(
+        hidden.message_parameters(),
+        [("confValue", "x".to_owned()), ("confName", key.to_owned())]
+    );
 }
