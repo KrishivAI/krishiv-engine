@@ -10,8 +10,10 @@ krishiv-internal `design/P3-pyspark-suite-runner.md`.
 
 Current summaries are `source: static`: an `ast` census of the pinned tag (never imported or executed), 0 passed.
 The first CI-sandbox run (pytest `--collect-only`, then the oracle run for `ORACLE_ENV`) replaces them.
-The `run` step needs `pytest-timeout` in the version venv and a `krishiv server` command (not wired yet: it
-needs the P2b server stub).
+`run` needs `pytest-timeout` in the version venv and a `krishiv server` command; the nightly `pyspark-suite` job
+(`.github/workflows/nightly.yml`) does both, writes to `--out` (never over the committed summary) and then runs
+`ratchet`. `run` copies the tag's `sql/tests` and `testing` into the installed `pyspark`, so the wheel stays the
+only `pyspark` on the path.
 
 ```text
 cd tests/scripts
