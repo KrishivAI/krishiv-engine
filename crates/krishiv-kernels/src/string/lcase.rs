@@ -52,7 +52,7 @@ fn java_fold(c: char) -> char {
 }
 
 /// The text `LIKE` and `ILIKE` compare over a `UTF8_LCASE` string (SQL-40). Spark matches each
-/// character by Java's case folding, so both operands go through [`java_fold`]. With `ilike` the
+/// character by Java's case folding, so both operands go through `java_fold`. With `ilike` the
 /// operand is first lower-cased in full (`İ` becomes `i` and U+0307, which is why `ILIKE` and `LIKE`
 /// differ for `İ`). One key per character cannot express Java's one-directional matches: the pattern
 /// `ß` matches only `ß` while the pattern `ẞ` matches both, so value `ẞ` against pattern `ß` is true here
