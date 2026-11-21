@@ -9,10 +9,9 @@ pub(crate) const GAPS: &[&str] = &[
     // database (every command, not only metric views).
     "yaml_dimension_bool",
     "yaml_dimension_number",
-    // Spark's rule order: `ORDER BY measure(m)` of a measure not selected works, `WHERE measure(m)`
-    // under an aggregate is `MISSING_ATTRIBUTES`, a self-join's qualified name is unresolved.
+    // Spark's rule order: `WHERE measure(m)` under an aggregate is `MISSING_ATTRIBUTES`, a
+    // self-join's qualified name is unresolved.
     "read_measure_in_where",
-    "read_order_by_measure_not_selected",
     "read_self_join",
     // EXPLAIN's physical plan is Krishiv's.
     "read_explain_aggregate",

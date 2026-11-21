@@ -69,6 +69,9 @@ pub(super) struct AggInfo {
     /// output, one row per distinct set, so an aggregate added to it later (a `HAVING` or `ORDER BY`
     /// call the select list does not hold) would run over those rows, not the query's.
     pub(super) distinct_rewritten: bool,
+    /// The aggregate of a metric-view read whose select list holds no aggregate yet: Spark rewrites
+    /// it only once it does, so an `ORDER BY` or `HAVING` over it still reads the view's measures.
+    pub(super) metric: Option<Arc<super::metric_view::Deferred>>,
 }
 
 impl AggInfo {
@@ -213,6 +216,9 @@ pub(super) struct Resolver<'a> {
     /// `exprs::expr_in`): every [`RESOLVE_STEP`] levels run on a fresh
     /// stack.
     pub(super) expr_depth: usize,
+    /// How many implicit casts binding has inserted (`implicit_cast_as`): a metric-view `ORDER BY`
+    /// or `HAVING` whose expressions need one fails as Spark's does (`metric_view.rs`).
+    pub(super) implicit_casts: std::cell::Cell<usize>,
     /// Nodes under the key argument of an AES call (ADR 0042), shared by
     /// every nested `expr_in` (lambda bodies, subqueries) so the secret
     /// context is inherited on all analysis paths; cleared when the
@@ -296,6 +302,7 @@ pub(super) fn resolve(
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
         expr_depth: 0,
+        implicit_casts: std::cell::Cell::new(0),
         secret: std::collections::HashSet::new(),
         secret_scope: false,
         op_outer: None,

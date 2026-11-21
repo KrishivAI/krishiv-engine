@@ -276,6 +276,24 @@ impl Resolver<'_> {
         );
         let mut rel = self.rel(&agg, env)?;
         check_dimension_up_casts(&rel.plan, dimensions, p.origin)?;
+        if holds_no_aggregate(grouping, aggregates)
+            && let Some(info) = &rel.agg
+        {
+            let input: Vec<String> = source_names
+                .iter()
+                .filter(|n| !dimensions.iter().any(|d| self.same_name(&d.name, n)))
+                .chain(dimensions.iter().map(|d| &d.name))
+                .map(|n| format!("\"{n}\""))
+                .collect();
+            let mut info = (**info).clone();
+            info.metric = Some(Arc::new(Deferred {
+                first,
+                measures: measures.clone(),
+                input: input.join(", "),
+                origin: p.origin,
+            }));
+            rel.agg = Some(Arc::new(info));
+        }
         if let Some(creator) = ansi.filter(|a| *a != self.ctx.conf.ansi) {
             // The operators the view's text wrote: its expressions' and its source's sources.
             let sources: HashSet<SourceId> = dimensions
@@ -288,6 +306,58 @@ impl Resolver<'_> {
             rel.plan = pin_written_operators(&rel.plan, &sources, creator, self.ctx.conf.ansi);
         }
         Ok(rel)
+    }
+
+    /// The expressions of an `ORDER BY` (`op` `Sort`) or `HAVING` (`Filter`) over an aggregate of a
+    /// metric-view read whose select list holds no aggregate (`m`), as Spark's rule order gives
+    /// them (probed on Spark 4.2.1): Spark resolves the clause over the aggregate before the
+    /// view's rewrite, so its `measure(m)` calls are added to the aggregate and rewritten with it,
+    /// and each is replaced here by `m`'s expression. When the clause's expressions, typed over the
+    /// read (a `measure(m)` has its measure's type), need an implicit cast anywhere (`ORDER BY
+    /// measure(m) + 1` over a `BIGINT`, `HAVING measure(m) > 100`), Spark resolves the clause one
+    /// pass later, after the rewrite, and its measures are missing from the rewritten input
+    /// (`MISSING_ATTRIBUTES`). Expressions without `measure(..)` are returned as they are.
+    pub(super) fn deferred_measures(
+        &mut self,
+        m: &Deferred,
+        exprs: &[Arc<Expr>],
+        env: &Arc<Env>,
+        op: &'static str,
+    ) -> Result<Vec<Arc<Expr>>, AnalysisError> {
+        let mut used: Vec<String> = Vec::new();
+        let mut rewritten = Vec::with_capacity(exprs.len());
+        for e in exprs {
+            rewritten.push(Arc::clone(e).transform_up(&mut |x| {
+                Ok::<_, AnalysisError>(match self.measure_expr(&x, &m.measures) {
+                    Some(r) => {
+                        if let Some(name) = measure_name(&x)
+                            && !used.iter().any(|u| self.same_name(u, name))
+                        {
+                            used.push(name.to_owned());
+                        }
+                        r
+                    }
+                    None => x,
+                })
+            })?);
+        }
+        if used.is_empty() {
+            return Ok(exprs.to_vec());
+        }
+        let before = self.implicit_casts.get();
+        let typed = self.over_agg(&m.first, exprs, env, op);
+        if typed.is_ok() && self.implicit_casts.get() != before {
+            let names: Vec<String> = used.iter().map(|n| format!("\"{n}\"")).collect();
+            return Err(AnalysisError::new(
+                MissingAttributesResolvedAttributeMissingFromInput {
+                    missing_attributes: names.join(", "),
+                    input: m.input.clone(),
+                    operator: "Aggregate".to_owned(),
+                },
+                m.origin,
+            ));
+        }
+        Ok(rewritten)
     }
 
     /// Whether the unresolved chain from `input` down to its metric-view read passes the inlined
@@ -374,18 +444,10 @@ impl Resolver<'_> {
         }
     }
 
-    /// `measure(m)` with `m` naming a measure of the view: that measure's expression.
+    /// `measure(m)` with `m` naming a measure of the view: that measure's expression (`m` itself:
+    /// [`measure_name`]).
     fn measure_expr(&self, x: &Arc<Expr>, measures: &[MetricColumn]) -> Option<Arc<Expr>> {
-        let ExprNode::Function(f) = &x.node else {
-            return None;
-        };
-        if !f.name.eq_ignore_ascii_case(MEASURE) || f.args.len() != 1 {
-            return None;
-        }
-        let ExprNode::Column(c) = &f.args.first()?.node else {
-            return None;
-        };
-        let name = c.name.last()?;
+        let name = measure_name(x)?;
         measures
             .iter()
             .find(|m| self.same_name(&m.name, name))
@@ -691,4 +753,48 @@ pub fn is_unplannable(e: &KrishivError) -> bool {
         && e.message_parameters()
             .iter()
             .any(|(k, v)| *k == "message" && (v == PLANNING_FAILED || v == UNEVALUABLE))
+}
+
+/// What an `ORDER BY` or `HAVING` over a metric-view aggregate whose select list holds no aggregate
+/// needs ([`Resolver::deferred_measures`]).
+pub(super) struct Deferred {
+    /// The aggregate as written, over the read (pass 1): the clause is typed over it.
+    pub(super) first: Rel,
+    /// The view's measures.
+    pub(super) measures: Vec<MetricColumn>,
+    /// The rewritten input's columns, as `MISSING_ATTRIBUTES` lists them.
+    pub(super) input: String,
+    /// The aggregate's origin.
+    pub(super) origin: crate::Origin,
+}
+
+/// Whether Spark's rule leaves an aggregate over a metric-view read for a later pass: its select
+/// list holds only columns and literals (aliased or not) and it groups by columns, so it holds no
+/// aggregate (probed on Spark 4.2.1: `upper(region)` in the select list or as a grouping key, and
+/// `GROUP BY 1`, have Spark rewrite it at once). `GROUP BY ALL` is the column `all` here.
+fn holds_no_aggregate(grouping: &Grouping, aggregates: &[Arc<Expr>]) -> bool {
+    let plain = |e: &Expr| matches!(e.node, ExprNode::Column(_) | ExprNode::Literal(_));
+    let Grouping::GroupBy(keys) = grouping else {
+        return false;
+    };
+    !keys.is_empty()
+        && keys.iter().all(|k| matches!(k.node, ExprNode::Column(_)))
+        && aggregates.iter().all(|e| match &e.node {
+            ExprNode::Alias { expr, .. } => plain(expr),
+            _ => plain(e),
+        })
+}
+
+/// The measure `measure(m)` names (unresolved).
+fn measure_name(x: &Expr) -> Option<&str> {
+    let ExprNode::Function(f) = &x.node else {
+        return None;
+    };
+    if !f.name.eq_ignore_ascii_case(MEASURE) || f.args.len() != 1 {
+        return None;
+    }
+    let ExprNode::Column(c) = &f.args.first()?.node else {
+        return None;
+    };
+    c.name.last().map(String::as_str)
 }

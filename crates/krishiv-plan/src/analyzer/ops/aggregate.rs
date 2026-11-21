@@ -24,6 +24,16 @@ impl Resolver<'_> {
         let Some(info) = agg.agg.clone() else {
             return Err(unsupported("a plan shape", agg.plan.origin));
         };
+        // Spark rewrites a metric-view aggregate only once it holds an aggregate: until then an
+        // `ORDER BY` or `HAVING` reads the view's measures (`metric_view.rs`).
+        let deferred;
+        let exprs = match &info.metric {
+            Some(m) if matches!(op, "Sort" | "Filter") && !info.has_windows() => {
+                deferred = self.deferred_measures(m, exprs, env, op)?;
+                deferred.as_slice()
+            }
+            _ => exprs,
+        };
         let rels = [agg];
         let mut cx = Self::cx(&agg.out, &rels, env, op);
         cx.extra = Some(&info.keys);
@@ -51,6 +61,8 @@ impl Resolver<'_> {
             .collect();
         let visible: HashSet<AttrId> = agg.out.iter().map(|a| a.col.id).collect();
         let mut grown = (*info).clone();
+        // Once it holds one, Spark has rewritten it: a later clause reads the rewrite.
+        grown.metric = None;
         // What the aggregate adds to the output it shows.
         let mut pass: Vec<Attr> = Vec::new();
         let mut bounds = Vec::new();
@@ -655,6 +667,7 @@ impl Resolver<'_> {
             analytics,
             having: None,
             distinct_rewritten: false,
+            metric: None,
         };
         if base.len() == items.len() {
             return self.aggregate_rel(origin, info, &[]);

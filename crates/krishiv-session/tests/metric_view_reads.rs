@@ -448,3 +448,81 @@ fn save_as_table_append_onto_a_permanent_view_is_refused_as_spark_does() {
         .and_then(|df| block_on(df.write().mode("append").save_as_table("pv")));
     assert_eq!(class(&got.unwrap_err()), "_LEGACY_ERROR_TEMP_1158");
 }
+
+/// Spark rewrites a metric-view aggregate only once it holds an aggregate, so an `ORDER BY` or
+/// `HAVING` over one whose select list holds none still reads the measures; one needing an
+/// implicit cast resolves after the rewrite and misses them. Every case probed on Spark 4.2.1.
+#[test]
+fn order_by_and_having_over_an_aggregate_with_no_measure_follow_sparks_rule_order() {
+    let (s, _dir) = session();
+    run(&s, "INSERT INTO src VALUES ('c', 4)").unwrap();
+    let regions = |sql: &str| -> Vec<String> {
+        run(&s, sql)
+            .unwrap_or_else(|e| panic!("{sql}: {e}"))
+            .iter()
+            .flat_map(|b| {
+                let c = b.column(0);
+                (0..c.len())
+                    .map(|i| arrow_cast::display::array_value_to_string(c, i).unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    // Totals: a 3, b 5, c 4.
+    for sql in [
+        "SELECT region FROM mv GROUP BY region ORDER BY measure(total) DESC",
+        "SELECT region AS r, 'x' AS c FROM mv GROUP BY region ORDER BY -measure(total)",
+        "SELECT region FROM mv GROUP BY region ORDER BY CAST(measure(total) AS INT) DESC",
+        "SELECT region FROM mv GROUP BY region ORDER BY measure(total) + measure(total) DESC",
+        "SELECT region FROM mv GROUP BY ALL ORDER BY measure(total) DESC",
+    ] {
+        assert_eq!(regions(sql), ["b", "c", "a"], "{sql}");
+    }
+    assert_eq!(
+        regions("SELECT region FROM mv GROUP BY region HAVING measure(total) > 3L ORDER BY region"),
+        ["b", "c"]
+    );
+    // An implicit cast anywhere in the clause: the measure is missing from the rewritten input.
+    for (sql, missing) in [
+        (
+            "SELECT region FROM mv GROUP BY region ORDER BY measure(total) + 1",
+            "\"total\"",
+        ),
+        (
+            "SELECT region FROM mv GROUP BY region HAVING measure(total) > 3",
+            "\"total\"",
+        ),
+        (
+            "SELECT region FROM mv GROUP BY region ORDER BY concat(region, 1), measure(total)",
+            "\"total\"",
+        ),
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert_eq!(
+            class(&e),
+            "MISSING_ATTRIBUTES.RESOLVED_ATTRIBUTE_MISSING_FROM_INPUT",
+            "{sql}: {e}"
+        );
+        let text = e.to_string();
+        assert!(
+            text.contains(&format!(
+                "{missing} missing from \"n\", \"region\" in operator Aggregate"
+            )),
+            "{sql}: {text}"
+        );
+    }
+    // Rewritten at once (an aggregate or an expression in the select list, an ordinal or an
+    // expression as a key), or by a `HAVING` before the sort: the measure is unresolved.
+    for sql in [
+        "SELECT region, measure(total) FROM mv GROUP BY region ORDER BY measure(total)",
+        "SELECT region, count(1) FROM mv GROUP BY region ORDER BY measure(total)",
+        "SELECT upper(region) AS u FROM mv GROUP BY region ORDER BY measure(total)",
+        "SELECT region FROM mv GROUP BY 1 ORDER BY measure(total)",
+        "SELECT region FROM mv GROUP BY region, upper(region) ORDER BY measure(total)",
+        "SELECT region FROM mv GROUP BY region HAVING region <> 'a' ORDER BY measure(total)",
+        "SELECT region FROM mv GROUP BY region HAVING measure(total) > 3L ORDER BY measure(total)",
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert_eq!(class(&e), "UNRESOLVED_COLUMN.WITH_SUGGESTION", "{sql}: {e}");
+    }
+}

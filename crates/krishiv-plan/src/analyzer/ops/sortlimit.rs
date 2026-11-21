@@ -256,9 +256,14 @@ impl Resolver<'_> {
                             .name()
                             .starts_with("AMBIGUOUS_REFERENCE") =>
                 {
-                    let Some((layers, inner)) = Self::through_to_agg(&c) else {
+                    let Some((layers, mut inner)) = Self::through_to_agg(&c) else {
                         return Err(reported(e));
                     };
+                    // Over a `HAVING`, Spark has rewritten a metric-view aggregate already: the
+                    // sort no longer reads the view's measures (probed on Spark 4.2.1).
+                    if let Some(info) = inner.agg.as_mut().filter(|i| i.metric.is_some()) {
+                        Arc::make_mut(info).metric = None;
+                    }
                     // Over windows, Spark's `ORDER BY` reads the select list
                     // only: nothing resolves through them to the aggregate.
                     if inner.agg.as_ref().is_some_and(|i| i.has_windows()) {

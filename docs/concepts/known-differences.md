@@ -657,7 +657,6 @@ these differences:
   the `expression` parameter is Krishiv's form of the dimension, where Spark qualifies its columns
   (`spark_catalog.default.t.k`).
 - **Not matched yet:** `DESCRIBE EXTENDED .. AS JSON` of a metric view (refused, as for every view: Krishiv does not
-  record the SQL configuration a view captures); `ORDER BY measure(m)` of a measure the select list does not hold
-  (Spark sorts by it, Krishiv says the column cannot be resolved); a self-join of a metric view (Spark's
+  record the SQL configuration a view captures); a self-join of a metric view (Spark's
   `UNRESOLVED_COLUMN`, Krishiv's internal error); `WHERE measure(m)` under an aggregate (Spark's
   `MISSING_ATTRIBUTES.*`, Krishiv's `INVALID_WHERE_CONDITION`); the physical plan `EXPLAIN` prints.
