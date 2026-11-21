@@ -872,3 +872,87 @@ fn saving_into_a_view_is_refused() {
         "_LEGACY_ERROR_TEMP_1158"
     );
 }
+
+fn param(e: &KrishivError, name: &str) -> String {
+    e.message_parameters()
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| panic!("no parameter {name}"))
+}
+
+/// Spark compares the writer's source always: an append with no `format` is `spark.sql.sources.default`
+/// (parquet) against the table's, with Spark's class names in the message.
+#[test]
+fn an_append_with_no_format_is_checked_against_the_tables_format() {
+    let s = session();
+    block_on(s.table("people").write().format("json").save_as_table("j")).unwrap();
+    let e = block_on(s.table("people").write().mode("append").save_as_table("j")).unwrap_err();
+    assert_eq!(e.error_class().name(), "_LEGACY_ERROR_TEMP_1159");
+    assert_eq!(param(&e, "existingProvider"), "JsonDataSourceV2");
+    assert_eq!(param(&e, "specifiedProvider"), "ParquetDataSourceV2");
+}
+
+/// Spark's check order is 1159, 1161, 1162, 1163, 1164: a partitioned table with an append of an extra
+/// column and no `partitionBy` is 1161 (not 1163), and one with other names is 1162.
+#[test]
+fn append_refusals_come_in_spark_order_and_1164_prints_spark_text() {
+    let s = session();
+    block_on(
+        s.table("people")
+            .write()
+            .partition_by(["name"])
+            .save_as_table("pt"),
+    )
+    .unwrap();
+    let extra = s
+        .table("people")
+        .select_expr(["id", "name", "1 AS x"])
+        .unwrap();
+    assert_eq!(
+        class(block_on(extra.write().mode("append").save_as_table("pt"))),
+        "_LEGACY_ERROR_TEMP_1161"
+    );
+    let renamed = s.table("people").select_expr(["id AS i", "name"]).unwrap();
+    assert_eq!(
+        class(block_on(renamed.write().mode("append").save_as_table("pt"))),
+        "_LEGACY_ERROR_TEMP_1162"
+    );
+    block_on(
+        s.table("people")
+            .write()
+            .bucket_by(4, ["id"])
+            .sort_by(["name"])
+            .save_as_table("bk"),
+    )
+    .unwrap();
+    let e = block_on(s.table("people").write().mode("append").save_as_table("bk")).unwrap_err();
+    assert_eq!(param(&e, "specifiedBucketString"), "not bucketed");
+    assert_eq!(
+        param(&e, "existingBucketString"),
+        "4 buckets, bucket columns: [id], sort columns: [name]"
+    );
+    block_on(
+        s.table("people")
+            .write()
+            .bucket_by(4, ["id"])
+            .save_as_table("bn"),
+    )
+    .unwrap();
+    let e = block_on(
+        s.table("people")
+            .write()
+            .bucket_by(8, ["id"])
+            .mode("append")
+            .save_as_table("bn"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        param(&e, "existingBucketString"),
+        "4 buckets, bucket columns: [id]"
+    );
+    assert_eq!(
+        param(&e, "specifiedBucketString"),
+        "8 buckets, bucket columns: [id]"
+    );
+}

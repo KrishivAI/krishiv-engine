@@ -982,7 +982,8 @@ fn datasource_class(provider: &str) -> String {
         "csv" => "CSVDataSourceV2".to_owned(),
         "orc" => "OrcDataSourceV2".to_owned(),
         "text" => "TextDataSourceV2".to_owned(),
-        "avro" => "AvroDataSourceV2".to_owned(),
+        "avro" => "AvroFileFormat".to_owned(),
+        "delta" => "DeltaDataSource".to_owned(),
         _ => provider.to_owned(),
     }
 }
