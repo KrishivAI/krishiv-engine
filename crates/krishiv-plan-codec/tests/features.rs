@@ -2336,6 +2336,22 @@ fn a_sample_needs_its_feature() {
     );
 }
 
+/// A `Dataset.tail` plan lists `tail` (a semantic feature: no other node keeps
+/// the last rows), and a reader without it refuses the plan naming it.
+#[test]
+fn a_tail_needs_its_feature() {
+    assert_eq!(message("tail").features, ["tail"]);
+    assert_eq!(Feature::Tail.kind(), FeatureKind::Semantic);
+    let bytes = message("tail").encode_to_vec();
+    let older = ReaderFeatures::only(Feature::ALL.iter().copied().filter(|f| *f != Feature::Tail));
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["tail".to_owned()]
+        }
+    );
+}
+
 // ---- nested literals (nested_literals) ------------------------------------
 
 #[test]

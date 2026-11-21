@@ -177,6 +177,7 @@ registry! {
     (sort_merge_join, SortMergeJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `SortMergeJoin` node: a join of its inputs sorted on the keys (a `MERGE` hint or `krishiv.exec.join.strategy`)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
+    (tail, Tail, POST_MIGRATION_READER_VERSION, Semantic, "The `Tail` node (the last rows of the input in plan order, Spark's `Dataset.tail`)."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (udt_type, UdtType, POST_MIGRATION_READER_VERSION, Semantic, "User-defined types (Spark `UserDefinedType`): stored as their SQL type, with the class names in the plan."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
@@ -483,6 +484,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             PhysNode::PythonEval { .. } => Some(Feature::PythonUdf),
             PhysNode::Sample { .. } => Some(Feature::Sample),
+            PhysNode::Tail { .. } => Some(Feature::Tail),
             PhysNode::CollectMetrics { .. } => Some(Feature::Observe),
             PhysNode::PythonAggregate {
                 window: Some(_), ..
@@ -817,6 +819,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Range(_)
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
+        | PhysNode::Tail { .. }
         | PhysNode::ReplicateRows { .. }
         | PhysNode::Sample { .. }
         | PhysNode::Sort { .. }
@@ -1025,6 +1028,7 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         | PhysNode::UnionLoop { .. }
         | PhysNode::LoopRef { .. }
         | PhysNode::Limit { .. }
+        | PhysNode::Tail { .. }
         | PhysNode::Sample { .. }
         | PhysNode::Range(_)
         | PhysNode::Sort { .. }

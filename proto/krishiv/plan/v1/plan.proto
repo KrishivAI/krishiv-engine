@@ -188,6 +188,8 @@ message Node {
     CollectMetricsNode collect_metrics = 33;
     // feature: python_udtf
     PythonUdtfNode python_udtf = 34;
+    // feature: tail
+    TailNode tail = 35;
   }
 }
 
@@ -272,6 +274,13 @@ message SampleNode {
   double lower = 2;
   double upper = 3;
   int64 seed = 4;
+}
+
+// feature: tail
+// `Dataset.tail`: the last `limit` rows of `input` in plan order.
+message TailNode {
+  uint32 input = 1;
+  uint64 limit = 2;
 }
 
 // feature: observe

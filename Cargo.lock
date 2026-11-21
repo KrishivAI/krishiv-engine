@@ -3739,6 +3739,7 @@ dependencies = [
  "arrow-buffer 60.1.0",
  "arrow-ipc 60.1.0",
  "arrow-schema 60.1.0",
+ "flate2",
  "futures",
  "krishiv-common",
  "krishiv-exec",

@@ -57,6 +57,13 @@
     );
     if (g === generation) columns = r;
   }
+  // A temporary view is listed under every schema but its name has one part. A table of the schema with
+  // the same name is what the three-part name reads (and whose columns the server lists), so it comes first.
+  const tableName = $derived(
+    tables.some((t) => t.name === table && t.is_temporary) && !tables.some((t) => t.name === table && !t.is_temporary)
+      ? quoteName(table)
+      : [catalog, schema, table].map(quoteName).join("."),
+  );
   const levels = $derived<Level[]>([
     { title: "Catalogs", key: "catalog", items: catalogs, selected: catalog },
     { title: "Schemas", key: "schema", items: schemas, selected: schema },
@@ -106,5 +113,5 @@
       </tbody>
     </table>
   </div>
-  <p class="mt-3"><a class="underline underline-offset-4" href="#/sql" onclick={() => sessionStorage.setItem("krishiv_sql_draft", `SELECT * FROM ${[catalog, schema, table].map(quoteName).join(".")} LIMIT 100`)}>Open in the SQL editor</a></p>
+  <p class="mt-3"><a class="underline underline-offset-4" href="#/sql" onclick={() => sessionStorage.setItem("krishiv_sql_draft", `SELECT * FROM ${tableName} LIMIT 100`)}>Open in the SQL editor</a></p>
 {/if}
