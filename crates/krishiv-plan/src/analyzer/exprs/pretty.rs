@@ -594,6 +594,14 @@ pub(super) fn call(
         }
         // `uuid(seed)`: the seed is no child of Spark's `Uuid`, so it is
         // not shown (Spark 4.2.0 names `uuid(5)` as `uuid()`).
+        // Spark names `variant_get(v, path, type)` without the type
+        // (golden `column-names-variant-get.json`, 4.0 to 4.3).
+        _ if (name.eq_ignore_ascii_case("variant_get")
+            || name.eq_ignore_ascii_case("try_variant_get"))
+            && k.len() == 3 =>
+        {
+            format!("{name}({}, {})", k[0], k[1])
+        }
         _ if name.eq_ignore_ascii_case("uuid") && k.len() == 1 => "uuid()".to_owned(),
         // Spark's own spellings of `if` and `positive`.
         _ if name.eq_ignore_ascii_case("if") && k.len() == 3 => {
