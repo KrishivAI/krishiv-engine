@@ -316,3 +316,58 @@ fn a_metric_view_inside_execute_immediate_or_a_script_is_refused_before_4_2() {
     let err = run(&s, "SELECT * FROM mv41").unwrap_err();
     assert_eq!(class(&err), "TABLE_OR_VIEW_NOT_FOUND");
 }
+
+/// A dimension is Spark's `UpCast` to its stored type: a source column widened after the create
+/// fails the read at analysis, whatever the ANSI mode; one narrowed still reads (a Spark 4.2.1
+/// run, 2026-11-21; review b047d8901 finding 3).
+#[test]
+fn a_source_column_widened_after_the_create_fails_the_read_as_an_up_cast() {
+    let (s, _dir) = session();
+    run(&s, "CREATE TABLE w (k INT, n INT) USING parquet").unwrap();
+    run(
+        &s,
+        "CREATE VIEW mvw WITH METRICS LANGUAGE YAML AS $$
+version: 0.1
+source: w
+dimensions:
+  - name: k
+    expr: k
+  - name: k1
+    expr: k + 1
+measures:
+  - name: c
+    expr: count(1)
+$$",
+    )
+    .unwrap();
+    for (ty, value) in [("BIGINT", "5000000000"), ("STRING", "'x'")] {
+        run(&s, "DROP TABLE w").unwrap();
+        run(&s, &format!("CREATE TABLE w (k {ty}, n INT) USING parquet")).unwrap();
+        run(&s, &format!("INSERT INTO w VALUES ({value}, 1)")).unwrap();
+        for ansi in ["true", "false"] {
+            s.conf().set("spark.sql.ansi.enabled", ansi).unwrap();
+            for q in [
+                "SELECT k, measure(c) FROM mvw GROUP BY k",
+                "SELECT k1, measure(c) FROM mvw GROUP BY k1",
+                "SELECT measure(c) FROM mvw",
+            ] {
+                let err = run(&s, q).unwrap_err();
+                assert_eq!(class(&err), "CANNOT_UP_CAST_DATATYPE", "{ty} {ansi} {q}");
+                let params = err.message_parameters();
+                let p = |k: &str| {
+                    params
+                        .iter()
+                        .find(|(n, _)| *n == k)
+                        .map(|(_, v)| v.as_str())
+                };
+                assert_eq!(p("sourceType"), Some(format!("\"{ty}\"").as_str()));
+                assert_eq!(p("targetType"), Some("\"INT\""));
+            }
+        }
+    }
+    run(&s, "DROP TABLE w").unwrap();
+    run(&s, "CREATE TABLE w (k SMALLINT, n INT) USING parquet").unwrap();
+    run(&s, "INSERT INTO w VALUES (3, 1)").unwrap();
+    let rows = run(&s, "SELECT k, measure(c) FROM mvw GROUP BY k").unwrap();
+    assert_eq!(longs(&rows, 1), vec![1]);
+}

@@ -134,6 +134,7 @@ pub mod table_functions;
 pub mod testing;
 mod unexecutable;
 mod unpivot;
+mod up_cast;
 mod variables;
 mod variant;
 mod view_ctes;
@@ -174,6 +175,7 @@ pub use table_change::{
     AlterInput, AlterRules, AlteredTable, CatalogCapabilities, ColumnPosition, NamespaceChange,
     TableChange, TypeWidening, apply_changes,
 };
+pub use up_cast::can_up_cast;
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, VariableValue, variable_name};
 pub use view_ctes::{inline_view_ctes, unscoped_read};
 
