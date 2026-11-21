@@ -44,8 +44,9 @@ use arrow_schema::{FieldRef, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::config::Config;
 use krishiv_common::error::{
-    CannotMergeIncompatibleDataType, FailedReadFileUnsupportedFileSystem, InvalidEmptyLocation,
-    KrishivError, KrishivUnsupportedFeature, PathNotFound, UnableToInferSchema,
+    CannotMergeIncompatibleDataType, ErrorClass, FailedReadFileUnsupportedFileSystem,
+    InvalidEmptyLocation, KrishivError, KrishivUnsupportedFeature, PathNotFound,
+    UnableToInferSchema,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_io::{
@@ -127,6 +128,9 @@ pub struct LocalPaths {
     store: StoreId,
     cwd: String,
 }
+
+/// How often a read lists again when a commit log appears during its listing.
+const READ_RELISTS: u32 = 3;
 
 impl LocalPaths {
     /// Paths in `store`, relative ones under the absolute directory `cwd`.
@@ -495,7 +499,21 @@ impl FileReads {
             if krishiv_io::partition::glob::has_glob(text) {
                 // Boxed, as the listing below: these futures sit on the recursion of nested scripts, where a
                 // larger one overflows the stack (`script_nesting_is_bounded_at_the_limit`).
-                let at = Box::pin(self.list_glob(text, options, &mode, &mut listed)).await?;
+                // A log that appears while a read lists is not the reader's conflict: list again.
+                let keep = listed.len();
+                let mut tries = 0;
+                let at = loop {
+                    match Box::pin(self.list_glob(text, options, &mode, &mut listed)).await {
+                        Err(e)
+                            if e.error_class() == ErrorClass::KrishivConcurrentCommit
+                                && tries < READ_RELISTS =>
+                        {
+                            tries += 1;
+                            listed.truncate(keep);
+                        }
+                        other => break other?,
+                    }
+                };
                 roots.extend(spark_root(&at));
                 continue;
             }
@@ -503,7 +521,20 @@ impl FileReads {
             // (plans stay pure data): the read's `fs.*` options override
             // the session configuration.
             let at = self.paths.locate_with_options(text, options)?;
-            Box::pin(self.list_path(&at, &mode, known.is_some(), &mut listed)).await?;
+            let keep = listed.len();
+            let mut tries = 0;
+            loop {
+                match Box::pin(self.list_path(&at, &mode, known.is_some(), &mut listed)).await {
+                    Err(e)
+                        if e.error_class() == ErrorClass::KrishivConcurrentCommit
+                            && tries < READ_RELISTS =>
+                    {
+                        tries += 1;
+                        listed.truncate(keep);
+                    }
+                    other => break other?,
+                }
+            }
             roots.extend(spark_root(&at));
         }
         let path_roots = PathRoots::new(roots);
