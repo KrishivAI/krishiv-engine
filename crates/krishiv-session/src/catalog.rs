@@ -55,9 +55,10 @@ mod script_results;
 mod session_catalog;
 
 use self::file_tables::{FileScanOf, reference_key};
-#[cfg(feature = "delta")]
-pub(crate) use self::scans::reads_files_at;
+pub(crate) use self::scans::reads_source;
 pub(crate) use self::scans::reads_stored_table;
+#[cfg(feature = "delta")]
+pub(crate) use self::scans::{reads_delta_root, reads_files_at};
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -442,6 +443,24 @@ impl QueryCatalog {
             _ => return FileMetadata::None,
         };
         file_metadata(&format)
+    }
+
+    /// The root of the Delta table `scan` reads, as [`crate::delta::DeltaReads::hadoop_root`] names it
+    /// (`file:/..`): a read by path (`` delta.`p` ``, `format("delta")`) or a catalog table whose entry
+    /// this query opened as a Delta read. `None`: not a Delta read (the hidden target of a row-level
+    /// statement is a provider entry, so it is none). `Some(Err)`: a Delta read whose root cannot be
+    /// resolved.
+    #[cfg(feature = "delta")]
+    pub(crate) fn delta_root(&self, scan: &Scan) -> Option<Result<String, KrishivError>> {
+        let source = match &scan.source {
+            source @ ReadSource::Files { .. } => source.clone(),
+            ReadSource::Table { name, .. } => match self.loaded_for(name).as_deref() {
+                Some(TempTable::Files { source, .. }) => source.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        crate::delta::is_delta(&source).then(|| self.delta.hadoop_root(&source))
     }
 
     /// The entry a scan of `name` (as the analyzer kept it) reads: a
@@ -850,6 +869,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::Generate { input, .. }
             | PhysNode::Expand { input, .. }
             | PhysNode::Limit { input, .. }
+            | PhysNode::Tail { input, .. }
             | PhysNode::Sort { input, .. }
             | PhysNode::TopN { input, .. }
             | PhysNode::LateFetch { input, .. }
@@ -1654,7 +1674,9 @@ impl Pinner<'_> {
                     Some(table)
                         if matches!(
                             &*table,
-                            TempTable::Memory { .. } | TempTable::Files { .. }
+                            TempTable::Memory { .. }
+                                | TempTable::Files { .. }
+                                | TempTable::Provider { .. }
                         ) =>
                     {
                         let hidden = self.catalog.next_hidden_name();

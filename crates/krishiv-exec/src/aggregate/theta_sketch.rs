@@ -147,6 +147,9 @@ pub(crate) struct ThetaSketchAcc {
     new_group: usize,
     /// A failure to build a group's state in `resize`, raised when the group is first used.
     fault: Option<String>,
+    /// Raw rows of this batch for groups that hold a union, one sketch per group; folded into the unions once at
+    /// the end of `update_values` (`flush_pending`), so a row costs a hash insert, not a sketch.
+    pending: std::collections::HashMap<usize, ThetaSketch>,
 }
 
 impl ThetaSketchAcc {
@@ -169,6 +172,7 @@ impl ThetaSketchAcc {
             peak: 0,
             new_group: 0,
             fault: None,
+            pending: std::collections::HashMap::new(),
         };
         acc.new_group = acc.fresh()?.charge();
         Ok(acc)
@@ -355,7 +359,14 @@ impl ThetaSketchAcc {
             ));
         }
         match self.op {
-            ThetaSketchOp::Sketch(_) => self.update_values(groups, arg, &valid)?,
+            ThetaSketchOp::Sketch(_) => {
+                let done = self.update_values(groups, arg, &valid);
+                if done.is_err() {
+                    self.pending.clear();
+                }
+                done?;
+                self.flush_pending()?;
+            }
             ThetaSketchOp::Union(_) | ThetaSketchOp::Intersection => {
                 let function = self.function();
                 let rows = BinaryRows::of(arg, function)?;
@@ -410,7 +421,8 @@ impl ThetaSketchAcc {
     }
 
     /// Applies a raw update to group `g`. A group whose table was widened holds a union (its sketch was merged
-    /// into one), so the update goes through a one-off sketch of the same size that the union then takes.
+    /// into one), so the update goes into that group's pending sketch for this batch, which `flush_pending`
+    /// hands to the union once.
     fn apply(&mut self, g: usize, update: impl FnOnce(&mut ThetaSketch)) -> Result<()> {
         let function = self.function();
         let lg_nom = self.lg_nom();
@@ -419,17 +431,35 @@ impl ThetaSketchAcc {
                 update(s);
                 Ok(())
             }
-            Slot::Union(u) => {
-                let mut one = theta::new_sketch(i32::from(lg_nom), function)?;
-                update(&mut one);
-                one.trim();
-                u.update(&theta::finish(one.compact(true), lg_nom)?)
-                    .map_err(|_| internal("a Theta union refused its own sketch".to_owned()))
+            Slot::Union(_) => {
+                let one = match self.pending.entry(g) {
+                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(theta::new_sketch(i32::from(lg_nom), function)?)
+                    }
+                };
+                update(one);
+                Ok(())
             }
             Slot::Intersection(_) => {
                 Err(internal("a raw update of a Theta intersection".to_owned()))
             }
         }
+    }
+
+    /// Folds the pending sketches of this batch into their groups' unions (always empties `pending`).
+    fn flush_pending(&mut self) -> Result<()> {
+        let lg_nom = self.lg_nom();
+        let pending = std::mem::take(&mut self.pending);
+        for (g, mut one) in pending {
+            one.trim();
+            let compact = theta::finish(one.compact(true), lg_nom)?;
+            if let Slot::Union(u) = self.slot_mut(g)? {
+                u.update(&compact)
+                    .map_err(|_| internal("a Theta union refused its own sketch".to_owned()))?;
+            }
+        }
+        Ok(())
     }
 
     fn update_values(

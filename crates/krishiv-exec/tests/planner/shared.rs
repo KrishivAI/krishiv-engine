@@ -240,3 +240,46 @@ fn optimizing_a_shared_plan_again_is_a_fixed_point() {
         krishiv_optimizer::optimize_with_udfs(&once, &NoStatistics, &udfs, &config).unwrap();
     assert_eq!(once.root(), twice.root());
 }
+
+/// Two instances that differ only in a filter on a window column above the window (TPC-DS q47's
+/// shape) compute the windowed aggregate once and return what the copies return.
+#[test]
+fn instances_differing_above_their_common_window_share_it() {
+    let env = env();
+    let sql = "WITH c AS (SELECT a % 3 AS k, count(*) AS n, \
+                 sum(count(*)) OVER (PARTITION BY a % 3 > 0) AS w FROM t GROUP BY a % 3) \
+               SELECT k, n, w FROM c WHERE w > 3 UNION ALL SELECT k, n, -1 FROM c";
+    let (shared, rows) = sharing(&env, sql, &[]);
+    let (copies, same) = sharing(
+        &env,
+        sql,
+        &[("krishiv.sql.optimizer.shareCteInstances", "false")],
+    );
+    assert_eq!(copies, 0);
+    assert_eq!(rows, same, "sharing changes no result");
+    assert_eq!(shared, 1, "the window over the aggregate is one definition");
+    assert!(rows.len() > 3, "{rows:?}");
+}
+
+/// A group where one instance has its own filter above the window and the other has none
+/// (both keep the CTE's renaming projection, so neither body equals the core): both read the
+/// one definition through their `Shift`s and return what the copies return. The member whose
+/// body is the core itself is `krishiv-optimizer`'s
+/// `an_instance_equal_to_the_core_reads_it_without_its_shift`.
+#[test]
+fn an_unfiltered_instance_reads_the_common_window_beside_a_filtered_one() {
+    let env = env();
+    let sql = "WITH c AS (SELECT a % 3 AS k, count(*) AS n, \
+                 sum(count(*)) OVER (PARTITION BY a % 3 > 0) AS w FROM t GROUP BY a % 3) \
+               SELECT k, n, w FROM c WHERE w > 3 UNION ALL SELECT k, n, w FROM c";
+    let (shared, rows) = sharing(&env, sql, &[]);
+    let (copies, same) = sharing(
+        &env,
+        sql,
+        &[("krishiv.sql.optimizer.shareCteInstances", "false")],
+    );
+    assert_eq!(copies, 0);
+    assert_eq!(rows, same, "sharing changes no result");
+    assert_eq!(shared, 1, "the window over the aggregate is one definition");
+    assert!(rows.len() > 3, "{rows:?}");
+}

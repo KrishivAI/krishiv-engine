@@ -88,6 +88,28 @@ fn a_raw_update_after_a_merge_goes_into_the_union_the_merge_made() {
         .unwrap();
     // {1, 2} merged, then 2 (again), 3 and the array {7, 8} as one value: 4 distinct.
     assert_eq!(estimate_of(&b.evaluate(&[0]).unwrap(), 0), 4);
+    // A second batch after the first post-merge update: a pending sketch folded twice or dropped shows here.
+    b.update(&[0, 0], &longs(&[Some(3), Some(9)]), |_| true)
+        .unwrap();
+    assert_eq!(estimate_of(&b.evaluate(&[0]).unwrap(), 0), 5);
+    // Two groups in one batch keep separate pending sketches.
+    let mut c = ThetaSketchAcc::new(ThetaSketchOp::Sketch(12)).unwrap();
+    c.resize(2);
+    c.update(&[0, 1], &longs(&[Some(1), Some(1)]), |_| true)
+        .unwrap();
+    let state = c.state(&[0, 1]).unwrap().remove(0);
+    let state = state.as_any().downcast_ref::<BinaryArray>().unwrap();
+    let mut d = ThetaSketchAcc::new(ThetaSketchOp::Sketch(12)).unwrap();
+    d.resize(2);
+    d.merge(&[0, 1], state).unwrap();
+    d.update(
+        &[0, 1, 1, 1],
+        &longs(&[Some(5), Some(5), Some(6), Some(7)]),
+        |_| true,
+    )
+    .unwrap();
+    assert_eq!(estimate_of(&d.evaluate(&[0]).unwrap(), 0), 2);
+    assert_eq!(estimate_of(&d.evaluate(&[1]).unwrap(), 0), 4);
 }
 
 #[test]

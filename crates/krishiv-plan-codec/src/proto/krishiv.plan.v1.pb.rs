@@ -145,7 +145,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -241,6 +241,9 @@ pub mod node {
         /// feature: python_udtf
         #[prost(message, tag = "34")]
         PythonUdtf(super::PythonUdtfNode),
+        /// feature: tail
+        #[prost(message, tag = "35")]
+        Tail(super::TailNode),
     }
 }
 /// feature: table_write
@@ -338,6 +341,15 @@ pub struct SampleNode {
     pub upper: f64,
     #[prost(int64, tag = "4")]
     pub seed: i64,
+}
+/// feature: tail
+/// `Dataset.tail`: the last `limit` rows of `input` in plan order.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TailNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(uint64, tag = "2")]
+    pub limit: u64,
 }
 /// feature: observe
 /// `Dataset.observe`: the rows of `input` pass through unchanged while the
@@ -1271,6 +1283,20 @@ pub struct WritePlan {
     /// Input columns whose Spark type their Arrow type doesn't say.
     #[prost(message, repeated, tag = "9")]
     pub column_types: ::prost::alloc::vec::Vec<WriteColumnType>,
+    /// feature: write_bucketed
+    /// Bucketed output: the input column with each row's bucket id, and the columns each bucket is sorted by.
+    #[prost(message, optional, tag = "10")]
+    pub bucket: ::core::option::Option<WriteBucket>,
+}
+/// feature: write_bucketed
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WriteBucket {
+    /// feature: write_bucketed
+    #[prost(uint64, tag = "1")]
+    pub column: u64,
+    /// feature: write_bucketed
+    #[prost(uint64, repeated, tag = "2")]
+    pub sort_by: ::prost::alloc::vec::Vec<u64>,
 }
 /// feature: write_column_types
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

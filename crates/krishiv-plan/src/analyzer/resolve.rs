@@ -10,7 +10,7 @@ use krishiv_common::stack::on_big_stack;
 use super::bind::{Bindings, BoundTable, addr, same, unsupported};
 use super::catalog::quoted;
 use super::exprs::{Bound, Cx};
-use super::ops::col_expr;
+use super::ops::{LimitKind, col_expr};
 use super::{AnalysisContext, AnalysisError, SecurableUse};
 use crate::{
     AttrId, BoundColumn, Cte, Expr, ExprNode, LogicalPlan, Origin, Plan, PlanId, PlanNode,
@@ -743,6 +743,7 @@ impl Resolver<'_> {
                 | PlanNode::Sort { .. }
                 | PlanNode::Limit { .. }
                 | PlanNode::Offset { .. }
+                | PlanNode::Tail { .. }
                 | PlanNode::Repartition { .. }
                 | PlanNode::Sample { .. }
                 | PlanNode::CollectMetrics { .. }
@@ -974,8 +975,15 @@ impl Resolver<'_> {
             } => self.set_op(p, left, right, *op, *all, env),
             PlanNode::InlineTable { rows, columns } => self.inline_table(p, rows, columns, env),
             PlanNode::WithColumns { input, columns } => self.with_columns(p, input, columns, env),
-            PlanNode::Limit { input, limit } => self.limit_node(p, input, limit, false, env),
-            PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
+            PlanNode::Limit { input, limit } => {
+                self.limit_node(p, input, limit, LimitKind::Limit, env)
+            }
+            PlanNode::Offset { input, offset } => {
+                self.limit_node(p, input, offset, LimitKind::Offset, env)
+            }
+            PlanNode::Tail { input, limit } => {
+                self.limit_node(p, input, limit, LimitKind::Tail, env)
+            }
             PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
             PlanNode::UnionLoop {
                 id,
@@ -1020,6 +1028,16 @@ impl Resolver<'_> {
                 params,
             } => self.hint(p, input, name, params, env),
             PlanNode::PipeOperator { input } => self.pipe_operator(input, env),
+            PlanNode::ColumnNames { input, op } => {
+                let mut r = self.column_names(p, input, op, env)?;
+                // The result is a relation of its own: `renamed["x"]` resolves against it, also when the
+                // operation changed nothing and returned the child.
+                if let Some(id) = p.origin.plan_id {
+                    let out = Arc::clone(&r.out);
+                    Arc::make_mut(&mut r.carriers).insert(id, vec![out]);
+                }
+                Ok(r)
+            }
             PlanNode::Repartition { input, exprs } => self.repartition(p, input, exprs, env),
             PlanNode::CollectMetrics {
                 input,
@@ -1244,9 +1262,11 @@ impl Resolver<'_> {
             | PlanNode::Sort { .. }
             | PlanNode::Limit { .. }
             | PlanNode::Offset { .. }
+            | PlanNode::Tail { .. }
             | PlanNode::SubqueryAlias { .. }
             | PlanNode::WithCte { .. }
             | PlanNode::Hint { .. }
+            | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::Repartition { .. }
             | PlanNode::CollectMetrics { .. }

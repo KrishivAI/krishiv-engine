@@ -310,6 +310,10 @@ impl Encoder {
                 limit: *limit,
                 offset: *offset,
             }),
+            PhysNode::Tail { input, limit } => Kind::Tail(pb::TailNode {
+                input: self.node_index(input)?,
+                limit: *limit,
+            }),
             PhysNode::Sample {
                 input,
                 lower,
@@ -1678,6 +1682,10 @@ fn write_plan(write: &WritePlan, nested: &Cell<bool>) -> Result<pb::WritePlan> {
                 })
             })
             .collect::<Result<_>>()?,
+        bucket: write.bucket.as_ref().map(|b| pb::WriteBucket {
+            column: b.column as u64,
+            sort_by: indexes(&b.sort_by),
+        }),
     })
 }
 
