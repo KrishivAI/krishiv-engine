@@ -30,6 +30,7 @@ from krishiv.storagelevel import StorageLevel
 _NativeSession = _native.Session
 
 if TYPE_CHECKING:
+    from krishiv._console import Console
     from krishiv._udf.profiler import Profile
     from krishiv.sql.datasource import DataSourceRegistration
     from krishiv.sql.udf import UDFRegistration
@@ -128,6 +129,10 @@ class SparkSession:
         self._profile_registry = Registry()
         # The options the session was built with: `newSession` starts from them.
         self._config = list(config or [])
+        # The session's web console once `krishiv.ui()` has started one; `stop` stops it.
+        self._console: Console | None = None
+        # Held to read and to change `_console`, here and by `krishiv.ui()`.
+        self._console_lock = threading.Lock()
 
     @property
     def _native(self) -> _NativeSession:
@@ -499,6 +504,10 @@ class SparkSession:
         with _lock:
             if _active is self:
                 _active = None
+        with self._console_lock:
+            console, self._console = self._console, None
+        if console is not None:
+            console.stop()
 
 
 def _is_pandas(data: Any) -> bool:

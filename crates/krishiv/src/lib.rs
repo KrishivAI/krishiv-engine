@@ -63,6 +63,11 @@ pub mod arrow {
 #[cfg(feature = "ui")]
 pub use krishiv_server as server;
 
+#[cfg(feature = "ui")]
+mod console;
+#[cfg(feature = "ui")]
+pub use console::{Console, ConsoleError, ui, ui_on_port};
+
 /// Starts the tokio-console subscriber when the `tokio-console` feature is
 /// on and `KRISHIV_TOKIO_CONSOLE=1` (see `krishiv_exec::console`); a no-op
 /// otherwise. The CLI calls this at startup; embedders call it before
