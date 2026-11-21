@@ -75,12 +75,8 @@ impl Resolver<'_> {
                 kind: TypedLiteralKind::Time,
                 value,
             } => {
-                if !self.ctx.conf.time_type {
-                    return Err(AnalysisError::new(
-                        krishiv_common::error::UnsupportedTimeType {},
-                        e.origin,
-                    ));
-                }
+                // Spark evaluates a `TIME '..'` literal with the gate off too (4.2.0 probe); the
+                // functions that take one refuse it (`unexecutable`).
                 // A time is a string cast to `TIME(6)` (design P2-T181): the
                 // value is checked again here, in case the plan came from a
                 // front end other than the SQL parser.

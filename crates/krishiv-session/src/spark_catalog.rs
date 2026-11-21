@@ -858,7 +858,14 @@ impl Catalog<'_> {
         let mut out: Vec<Function> = krishiv_functions::registry::builtins()
             .functions()
             .into_iter()
-            .filter(|d| keep(d.name))
+            // Only the names Spark itself lists: the engine's internal helpers (`__subscript`, ...) and the
+            // grammar-owned `timestampadd` are no catalog functions.
+            .filter(|d| {
+                keep(d.name)
+                    && krishiv_functions::registry::builtins()
+                        .spark_function(d.name)
+                        .is_some()
+            })
             .map(|d| Function {
                 name: d.name.to_owned(),
                 catalog: None,
