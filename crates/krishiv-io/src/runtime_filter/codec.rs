@@ -272,6 +272,12 @@ fn put_exact(out: &mut Vec<u8>, e: &Exact) {
             t.iter()
                 .for_each(|x| out.extend_from_slice(&x.to_le_bytes()));
         }
+        // The members, as `Int` writes them: a reader rebuilds the bit set.
+        Exact::Dense(d) => {
+            put_u32(out, d.values().count());
+            d.values()
+                .for_each(|x| out.extend_from_slice(&x.to_le_bytes()));
+        }
         Exact::Wide(t) => {
             put_u32(out, t.len());
             t.iter()
@@ -426,7 +432,7 @@ impl Reader<'_> {
                         t.insert_unique(h, v, |&x| class.hash64(x));
                     }
                 }
-                Exact::Int(t)
+                Exact::Int(t).densify(class)
             }
             Class::Decimal => {
                 let mut t = HashTable::with_capacity(n);
