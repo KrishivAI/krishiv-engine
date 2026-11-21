@@ -293,6 +293,20 @@ impl Session {
                 )
                 .await;
         }
+        // A write whose key the table already records writes nothing and succeeds, under any save mode
+        // (as a directory write does): the retry of a keyed `errorifexists` save must not fail.
+        let mut keyed: BTreeMap<String, String> = plain
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION))
+            .cloned()
+            .collect();
+        super::row_level::apply_idempotency_key(&env.config, &mut keyed)?;
+        if let Some(key) = keyed.remove(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION) {
+            let table = env.catalog.delta.open(&source, None).await?;
+            if table.has_idempotency_key(&key).await? {
+                return Ok(());
+            }
+        }
         let write_mode = match mode {
             SaveMode::Ignore => return Ok(()),
             SaveMode::ErrorIfExists => {

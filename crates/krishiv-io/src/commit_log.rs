@@ -630,6 +630,11 @@ fn decode_entry(bytes: &[u8]) -> std::result::Result<LogEntry, String> {
                 .ok_or_else(|| "bad remove".to_owned())
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    let idempotency_key = match &v["idempotency_key"] {
+        Value::Null => None,
+        Value::String(k) => Some(k.clone()),
+        _ => return Err("bad idempotency_key".to_owned()),
+    };
     Ok(LogEntry {
         query_id: key["query_id"].as_str().ok_or("no query_id")?.to_owned(),
         write_id: key["write_id"].as_str().ok_or("no write_id")?.to_owned(),
@@ -637,7 +642,7 @@ fn decode_entry(bytes: &[u8]) -> std::result::Result<LogEntry, String> {
         mode,
         add,
         remove,
-        idempotency_key: v["idempotency_key"].as_str().map(str::to_owned),
+        idempotency_key,
     })
 }
 

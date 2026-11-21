@@ -933,6 +933,46 @@ fn a_retried_insert_with_the_same_idempotency_key_appends_once() {
     );
 }
 
+/// E34: a keyed `save` whose key the table records succeeds under `errorifexists` and `overwrite`
+/// and writes nothing (as a directory write does); without the key the path still exists.
+#[test]
+fn a_keyed_save_retry_succeeds_under_errorifexists_and_overwrite() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("k");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    let mut after_first = 0;
+    for mode in ["errorifexists", "errorifexists", "overwrite"] {
+        block_on(
+            block_on(s.sql("SELECT CAST(1 AS INT) AS a UNION ALL SELECT 2"))
+                .unwrap()
+                .write()
+                .format("delta")
+                .mode(mode)
+                .option("krishiv.write.idempotencyKey", "job-1")
+                .save(&path),
+        )
+        .unwrap();
+        if after_first == 0 {
+            after_first = versions(&dir);
+        }
+        assert_eq!(versions(&dir), after_first, "{mode} committed again");
+    }
+    let e = block_on(
+        block_on(s.sql("SELECT 1 AS a"))
+            .unwrap()
+            .write()
+            .format("delta")
+            .mode("errorifexists")
+            .save(&path),
+    )
+    .unwrap_err();
+    assert!(
+        e.message().contains(&path) || e.message().contains("exists"),
+        "{e}"
+    );
+}
+
 #[test]
 fn a_bucketed_save_as_table_of_delta_is_refused_before_the_table_exists() {
     let s = Session::new().unwrap();

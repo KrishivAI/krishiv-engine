@@ -145,6 +145,8 @@ impl Session {
         let Some(table) = provider.row_level(op) else {
             return Ok(None);
         };
+        // Refused here, before any scan or path split and for merge-on-read tables alike (E34).
+        refuse_idempotency_key(&probe.env.config)?;
         // A Delta table's root as delta-spark's errors name it (`file:/..`), for a table by path
         // and for a catalog table over a Delta location alike (its scan keeps the table's name).
         #[cfg(feature = "delta")]
@@ -359,7 +361,6 @@ impl Session {
             touched,
             read_filter,
         );
-        refuse_idempotency_key(&analysis.env.config)?;
         request.write_id = Some(crate::session::job_uuid());
         request
             .options
