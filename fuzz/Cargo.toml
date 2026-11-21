@@ -27,6 +27,7 @@ arrow-array = { version = "60", default-features = false, features = ["ffi"] }
 arrow-buffer = { version = "60", default-features = false }
 arrow-data = { version = "60", default-features = false, features = ["ffi"] }
 arrow-schema = { version = "60", default-features = false, features = ["ffi"] }
+krishiv-catalogs = { path = "../crates/krishiv-catalogs", features = ["iceberg-rest"] }
 krishiv-common = { path = "../crates/krishiv-common" }
 krishiv-connectors-delta = { path = "../crates/krishiv-connectors-delta" }
 krishiv-connect = { path = "../crates/krishiv-connect" }
@@ -109,6 +110,13 @@ bench = false
 [[bin]]
 name = "udf_result_ipc"
 path = "fuzz_targets/udf_result_ipc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "iceberg_rest_response"
+path = "fuzz_targets/iceberg_rest_response.rs"
 test = false
 doc = false
 bench = false
