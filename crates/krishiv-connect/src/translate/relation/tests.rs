@@ -279,6 +279,11 @@ fn project_filter_limit_and_alias() {
         offset: 3,
     })));
     assert_eq!(show(&offset), "Offset 3\n+- Read t\n");
+    let tail = relation(RelType::Tail(Box::new(pb::Tail {
+        input: input(),
+        limit: 4,
+    })));
+    assert_eq!(show(&tail), "Tail 4\n+- Read t\n");
     let alias = relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
         input: input(),
         alias: "x".into(),
@@ -895,7 +900,6 @@ fn unsupported_relations_are_named() {
     for (kind, name) in [
         (RelType::ShowString(Box::default()), "SHOW_STRING(20)"),
         (RelType::Transpose(Box::default()), "TRANSPOSE(42)"),
-        (RelType::Tail(Box::default()), "TAIL(22)"),
         (RelType::WithRelations(Box::default()), "WITH_RELATIONS(41)"),
     ] {
         let r = relation(kind);

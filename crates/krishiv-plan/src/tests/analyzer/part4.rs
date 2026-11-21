@@ -124,6 +124,37 @@ fn limit_over_a_column_is_unfoldable() {
     );
 }
 
+/// `Dataset.tail(n)` binds its count as `LIMIT` does and names the operator
+/// `tail` in the limit-like errors; the resolved node stays a `Tail`.
+#[test]
+fn tail_binds_its_count_like_a_limit() {
+    let ctx = ctx();
+    let a = run(LogicalPlan::table(["t"]).tail(add(int(1), int(2))), &ctx).unwrap();
+    assert!(
+        matches!(a.plan.root().node, PlanNode::Tail { .. })
+            && a.plan.root().to_string().lines().next() == Some("Tail 3"),
+        "{}",
+        a.plan.root()
+    );
+    let e = run(LogicalPlan::table(["t"]).tail(int(-1)), &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE"
+    );
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(params.get("name").map(String::as_str), Some("tail"));
+    let e = run(LogicalPlan::table(["t"]).tail(c("a")), &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE"
+    );
+}
+
 /// `LIMIT` resolves against the select list: an alias the projection
 /// defines is visible (then fails folding when it names a column), and
 /// duplicates in the projection stay ambiguous rather than resolving
