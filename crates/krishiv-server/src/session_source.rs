@@ -527,7 +527,8 @@ pub(crate) async fn catalog_rows(session: &Session, path: &[String]) -> Result<V
         Ok(batches) => batches,
         // A temporary view is listed under every schema, but its name has one part: `c.s.v` does not name
         // it. The three-part name is tried first, so a table of the schema with the view's name is the one
-        // described, and a name that is neither keeps the first statement's error.
+        // described, and a name that is neither keeps the first statement's error. So does a table of that
+        // name whose own `DESCRIBE` fails: the view is described only when the schema has no such table.
         Err(e) => match path {
             [c, s, t] if is_temporary_view(session, c, s, t).await => {
                 collect(session, &format!("DESCRIBE TABLE {}", quote(t)))
@@ -572,15 +573,24 @@ async fn collect(session: &Session, sql: &str) -> Result<Vec<RecordBatch>, Krish
     session.sql_boxed(sql).await?.collect_boxed().await
 }
 
-/// Whether `SHOW TABLES IN c.s` lists `t` as a temporary view. `false` when the listing fails.
+/// Whether `SHOW TABLES IN c.s` lists `t` as a temporary view and as nothing else. `false` when the listing fails.
 async fn is_temporary_view(session: &Session, c: &str, s: &str, t: &str) -> bool {
     let sql = format!("SHOW TABLES IN {}.{}", quote(c), quote(s));
-    collect(session, &sql).await.is_ok_and(|batches| {
-        batches_to_rows(&batches).iter().any(|r| {
-            r.get("tableName").and_then(Value::as_str) == Some(t)
-                && r.get("isTemporary") == Some(&Value::Bool(true))
-        })
-    })
+    collect(session, &sql)
+        .await
+        .is_ok_and(|batches| only_temporary(&batches_to_rows(&batches), t))
+}
+
+/// Whether the `SHOW TABLES` rows `listing` name `t` as a temporary view and hold no other row of that name.
+/// A table of the schema with the view's name is what the three-part name means, so its own error is the one
+/// to show: the view's columns under the table's name would hide it.
+fn only_temporary(listing: &[Row], t: &str) -> bool {
+    let mut named = listing
+        .iter()
+        .filter(|r| r.get("tableName").and_then(Value::as_str) == Some(t))
+        .map(|r| r.get("isTemporary") == Some(&Value::Bool(true)))
+        .peekable();
+    named.peek().is_some() && named.all(|temporary| temporary)
 }
 
 impl UiSource for SessionSource {
@@ -1193,6 +1203,26 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// The page describes a temporary view by its one-part name only when the schema has no table of that
+    /// name: a table whose `DESCRIBE` failed keeps its error.
+    #[test]
+    fn a_view_is_described_only_when_no_table_has_its_name() {
+        let listing: Vec<Row> = [("t", false), ("t", true), ("v", true), ("u", false)]
+            .into_iter()
+            .map(|(name, temporary)| {
+                let mut r = Row::new();
+                r.insert("tableName".into(), json!(name));
+                r.insert("isTemporary".into(), json!(temporary));
+                r
+            })
+            .collect();
+        assert!(only_temporary(&listing, "v"));
+        assert!(!only_temporary(&listing, "t"), "a table has the name too");
+        assert!(!only_temporary(&listing, "u"), "a table alone");
+        assert!(!only_temporary(&listing, "missing"));
+        assert!(!only_temporary(&[], "v"));
+    }
 
     /// Every column type a system table uses, with a null in the second row of each.
     #[test]
