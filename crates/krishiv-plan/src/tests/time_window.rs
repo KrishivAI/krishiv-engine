@@ -366,6 +366,35 @@ fn nested_windows_and_window_time() {
 }
 
 #[test]
+fn a_window_over_a_window_column_of_a_derived_table_reads_its_window_time() {
+    // `SELECT window(inner_window, '5 minutes') AS w, sum(cnt) FROM (SELECT window(ts, '1 minute') AS
+    // inner_window, count(*) AS cnt FROM t GROUP BY window(ts, '1 minute')) GROUP BY window(inner_window, ..)`.
+    let inner = LogicalPlan::table(["t"]).aggregate(
+        vec![window("ts", &["1 minute"])],
+        vec![
+            window("ts", &["1 minute"]).alias("inner_window"),
+            count_star().alias("cnt"),
+        ],
+    );
+    let outer = inner.aggregate(
+        vec![f("window", vec![c("inner_window"), s("5 minutes")])],
+        vec![c("window.start"), f("sum", vec![c("cnt")])],
+    );
+    let r = run(outer);
+    assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    // A struct that no `window(..)` made is not a window column.
+    let plain = LogicalPlan::table(["t"])
+        .project(vec![
+            f("named_struct", vec![s("start"), c("ts"), s("end"), c("ts")]).alias("inner_window"),
+        ])
+        .aggregate(
+            vec![f("window", vec![c("inner_window"), s("5 minutes")])],
+            vec![c("window.start")],
+        );
+    assert_ne!(class(&run(plain)), "OK");
+}
+
+#[test]
 fn qualify_reads_the_window_below_the_select_list() {
     let qualified = LogicalPlan::table(["t"])
         .project(vec![
