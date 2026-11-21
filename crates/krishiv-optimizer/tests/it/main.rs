@@ -18,6 +18,7 @@ mod late_payload;
 mod oracle;
 mod payload_above;
 mod plan_stats;
+mod preserved_side;
 mod props;
 mod python_relations;
 mod qerror;

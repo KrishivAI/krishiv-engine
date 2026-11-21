@@ -549,6 +549,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PAYLOAD_ABOVE_AGGREGATE,
     ),
     (
+        "krishiv.optimizer.preservedSideSemiJoin",
+        &PRESERVED_SIDE_SEMI_JOIN,
+    ),
+    (
         "krishiv.optimizer.shareRepeatedSubtrees",
         &SHARE_REPEATED_SUBTREES,
     ),

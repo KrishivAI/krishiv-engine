@@ -975,6 +975,24 @@ fn semi_anti_join_order_defaults_on_and_is_user_settable() {
 }
 
 #[test]
+fn preserved_side_semi_join_defaults_on_and_is_user_settable() {
+    let mut c = Config::new();
+    let key = "krishiv.optimizer.preservedSideSemiJoin";
+    assert_eq!(
+        c.get(&PRESERVED_SIDE_SEMI_JOIN)
+            .and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(PRESERVED_SIDE_SEMI_JOIN.settable_by, SettableBy::User);
+    c.set(key, "false").unwrap();
+    assert_eq!(
+        c.get(&PRESERVED_SIDE_SEMI_JOIN)
+            .and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+}
+
+#[test]
 fn eager_aggregation_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(
