@@ -890,10 +890,31 @@ async fn reload_on_hangup(tls: ServerTls, hangups: Hangups) {
 async fn watch_signals(mut signals: Signals, drainer: Arc<Drainer>, grace: Duration) {
     signals.next().await;
     eprintln!("krishiv server: draining (a second signal exits at once)");
+    signal_action("Drain", "ok");
     drainer.start(grace, true);
     signals.next().await;
     eprintln!("krishiv server: second signal, exiting");
+    signal_action("Drain", "forced_exit");
     std::process::exit(130);
+}
+
+/// The action record (`krishiv::admin_action`) for a drain the operating system asked for, so the
+/// log shows every drain, not only the ones made through `admin.v1` (design P3-T066 §5.6). The
+/// caller is the process's own signal handler: no principal, no secret.
+fn signal_action(rpc: &str, result: &str) {
+    krishiv_server::admin_v1::action::record(&krishiv_server::admin_v1::action::Action {
+        principal: "signal",
+        role: "none",
+        auth_method: "signal",
+        rpc,
+        transport: "signal",
+        target: "",
+        own: false,
+        request_id: "",
+        result,
+        error_class: "",
+        replay: false,
+    });
 }
 
 /// What starts, drives and undoes a drain: the signal handler and the admin API's `Drain` /
