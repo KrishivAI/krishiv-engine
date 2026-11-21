@@ -233,7 +233,9 @@ impl VendedCache {
     /// Keeps the `loadTable` answer `answer` for `key` unless the entry held was fetched later (an answer that raced
     /// a refresh) or a `REFRESH TABLE` dropped answers since its request (`answer.drops`: a query analyzed before
     /// the refresh and run after it must not put back what the refresh discarded), under one lock. Any
-    /// `REFRESH TABLE` counts, as for [`Self::publish`].
+    /// `REFRESH TABLE` counts, as for [`Self::publish`]. Takes only `loadTable` answers
+    /// ([`VendedAnswer::of_table`] with the count read before their request): a refresh's answer carries 0 and goes
+    /// through [`Self::publish`], which would refuse it here after the first `REFRESH TABLE`.
     pub(crate) fn put_if_newer(
         &self,
         key: Key,
@@ -402,9 +404,13 @@ pub(crate) struct VendedTable {
 }
 
 impl VendedTable {
-    /// The cached answer, else a new one (kept).
-    pub(crate) async fn answer(&self) -> Result<Arc<VendedAnswer>, KrishivError> {
-        if let Some(a) = self.cache.get(&self.key) {
+    /// The cached answer, else `own` (the `loadTable` answer of this query, used for it alone when the cache did
+    /// not keep it: a `REFRESH TABLE` since its request, review 2ed68fa67 F1), else a new one (kept).
+    pub(crate) async fn answer(
+        &self,
+        own: Option<&Arc<VendedAnswer>>,
+    ) -> Result<Arc<VendedAnswer>, KrishivError> {
+        if let Some(a) = self.cache.get(&self.key).or_else(|| own.cloned()) {
             return Ok(a);
         }
         self.refreshed(None).await
@@ -486,13 +492,18 @@ impl VendedTable {
         Ok(out)
     }
 
-    /// The source of the scope at `location`.
-    pub(crate) fn source(&self, location: &str) -> Result<VendedSource, KrishivError> {
+    /// The source of the scope at `location`; `own` is the query's `loadTable` answer ([`Self::answer`]).
+    pub(crate) fn source(
+        &self,
+        location: &str,
+        own: Option<Arc<VendedAnswer>>,
+    ) -> Result<VendedSource, KrishivError> {
         let url = parse_object_url(location)
             .map_err(|_| self.refetch.refused(LocationRule::NoVendedCredential))?;
         Ok(VendedSource {
             table: self.clone(),
             url,
+            own,
             served: Mutex::new(None),
         })
     }
@@ -513,6 +524,9 @@ fn scheme_scope(url: &ParsedUrl) -> String {
 pub(crate) struct VendedSource {
     table: VendedTable,
     url: ParsedUrl,
+    /// The query's own `loadTable` answer: used when the cache holds none and nothing was served yet, so its table
+    /// token is the bearer of the first refresh (review 2ed68fa67 F1).
+    own: Option<Arc<VendedAnswer>>,
     /// The answer this source last served a credential from.
     served: Mutex<Option<Arc<VendedAnswer>>>,
 }
@@ -523,13 +537,19 @@ impl VendedSource {
     /// store asks again only when it refused it or it is about to expire, by the same rule).
     pub(crate) async fn current(&self) -> Result<ScopedCredential, KrishivError> {
         let t = &self.table;
-        let held = t.cache.get(&t.key);
-        let (served_before, served) = {
+        // The held answer, else (it expired, was evicted or never kept) the one this source served, whose token may
+        // still be good when its storage credential is not, else the query's own `loadTable` answer.
+        let (served_before, candidate) = {
             let served = self.served.lock().unwrap_or_else(PoisonError::into_inner);
-            let before = matches!((&*served, &held), (Some(s), Some(h)) if Arc::ptr_eq(s, h));
-            (before, served.clone())
+            let candidate = t
+                .cache
+                .get(&t.key)
+                .or_else(|| served.clone())
+                .or_else(|| self.own.clone());
+            let before = matches!((&*served, &candidate), (Some(s), Some(c)) if Arc::ptr_eq(s, c));
+            (before, candidate)
         };
-        if let Some(a) = &held
+        if let Some(a) = &candidate
             && !served_before
             && let Some(c) = t.pick(a, &self.url)?
             && c.expires_at()
@@ -538,9 +558,8 @@ impl VendedSource {
             self.serve(a);
             return Ok(c);
         }
-        // The answer replaced carries the table token: the held one, else (it expired or was evicted) the one this
-        // source served, whose token may still be good when its storage credential is not.
-        let fresh = t.refreshed(held.as_deref().or(served.as_deref())).await?;
+        // The answer replaced carries the table token.
+        let fresh = t.refreshed(candidate.as_deref()).await?;
         let c = t
             .pick(&fresh, &self.url)?
             .ok_or_else(|| t.refetch.refused(LocationRule::NoVendedCredential))?;

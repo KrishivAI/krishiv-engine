@@ -236,6 +236,12 @@ impl RestCatalog {
         };
         let loaded = Arc::new(self.keep(namespace, name, found, drops)?);
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        // A `REFRESH TABLE` since the request (any table's, as in the vended cache): this answer serves its own
+        // query only, so no later query reuses metadata the refresh discarded (review 2ed68fa67 nit 1). Checked under
+        // the cache lock; `refresh` moves the count before its `retain`, so no stale insert survives.
+        if self.vended.drops() != drops {
+            return Ok(Some(loaded));
+        }
         if cache.len() >= MAX_ENTRIES && !cache.contains_key(&key) {
             let oldest = cache
                 .iter()
@@ -418,13 +424,14 @@ impl CallerCatalog for RestCatalog {
         Box::pin(async move {
             // REST identifiers go to the catalog as written, by the analyzer and by `REFRESH
             // TABLE` alike (the catalog decides what a spelling names), so the entries of this
-            // exact spelling are the ones a refresh drops.
+            // exact spelling are the ones a refresh drops. The count moves first: a load that read the old one and
+            // inserts before this `retain` is removed by it, and one inserting after sees the new count (`loaded`).
+            self.vended
+                .drop_table(self.instance, &id.namespace, &id.name);
             self.cache
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .retain(|(_, ns, name), _| !(ns == &id.namespace && name == &id.name));
-            self.vended
-                .drop_table(self.instance, &id.namespace, &id.name);
             self.epoch.fetch_add(1, Ordering::SeqCst);
             if id.namespace.is_empty() {
                 return Ok(false);
@@ -520,11 +527,13 @@ impl RestTable {
                 .unwrap_or(krishiv_store::DEFAULT_REFRESH_SKEW),
             refetch: v.refetch.clone(),
         };
-        // The answer `loadTable` gave, kept unless the cache holds a newer one for this identity.
-        if let Some(a) = &self.loaded.vended {
+        // The answer `loadTable` gave, kept unless the cache holds a newer one for this identity or a `REFRESH TABLE`
+        // came since its request; either way this query reads with it when the cache holds nothing.
+        let own = self.loaded.vended.clone();
+        if let Some(a) = &own {
             table.offer(Arc::clone(a));
         }
-        let answer = table.answer().await?;
+        let answer = table.answer(own.as_ref()).await?;
         let refuse = |rule| refused(&table.refetch.catalog, &self.relation, rule);
         if answer.is_empty() {
             return Err(refuse(LocationRule::NoVendedCredential));
@@ -536,7 +545,7 @@ impl RestTable {
             let scope = krishiv_store::CredentialScope::new(location)
                 .map_err(|_| refuse(LocationRule::NoVendedCredential))?;
             let source: Arc<dyn krishiv_store::CredentialSource> =
-                Arc::new(table.source(location)?);
+                Arc::new(table.source(location, own.clone())?);
             sources.push((scope, source));
             prefixes.push(
                 VendedPrefix::parse(location)

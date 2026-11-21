@@ -401,10 +401,16 @@ fn azure_scheme_scope_keeps_the_location_host() {
     assert_eq!(super::scheme_scope(&s3), s3.store_id.key());
 }
 
-/// Review 7e24f4a71 F2: once the answer a source served is evicted from the cache (another table's answer, past
-/// `vended.maxEntries = 1`), the source's next refresh still sends that answer's table token, not the caller's.
-#[test]
-fn a_refresh_after_eviction_sends_the_served_answers_table_token() {
+/// A catalog serving `/credentials` with a new key, a `VendedTable` over it holding at most `max_entries`, and the
+/// `loadTable` answer with the table's own token `table-token` (requested before any refresh).
+fn token_fixture(
+    max_entries: usize,
+) -> (
+    crate::http_test_server::Server,
+    Arc<VendedCache>,
+    super::VendedTable,
+    VendedAnswer,
+) {
     use crate::declared::tests::{decl, deps, path};
     use crate::iceberg_rest::test_server::{Reply, serve};
     use krishiv_session::catalog_decl::DeclMode;
@@ -453,7 +459,7 @@ fn a_refresh_after_eviction_sends_the_served_answers_table_token() {
     let table = super::VendedTable {
         cache: Arc::clone(&cache),
         key: key_of(1, IdentityKey::server("lake".to_owned()), "t"),
-        max_entries: 1,
+        max_entries,
         default_ttl: TTL,
         skew: Duration::from_secs(300),
         refetch: super::Refetch {
@@ -488,8 +494,28 @@ fn a_refresh_after_eviction_sends_the_served_answers_table_token() {
         "s3://bucket/wh/db/t".to_owned(),
     );
     loaded.table_token = Some(SecretString::new("table-token"));
+    (server, cache, table, loaded)
+}
+
+/// The `/credentials` requests the catalog saw, by bearer.
+fn credential_bearers(server: &crate::http_test_server::Server) -> Vec<Option<String>> {
+    use crate::declared::tests::path;
+    server
+        .seen()
+        .iter()
+        .filter(|r| path(r) == "/v1/namespaces/db/tables/t/credentials")
+        .map(|r| r.header("authorization").map(str::to_owned))
+        .collect()
+}
+
+/// Review 7e24f4a71 F2: once the answer a source served is evicted from the cache (another table's answer, past
+/// `vended.maxEntries = 1`), the source's next refresh still sends that answer's table token, not the caller's.
+#[test]
+fn a_refresh_after_eviction_sends_the_served_answers_table_token() {
+    use crate::declared::tests::path;
+    let (server, cache, table, loaded) = token_fixture(1);
     table.offer(Arc::new(loaded));
-    let source = table.source("s3://bucket/wh/db/t").unwrap();
+    let source = table.source("s3://bucket/wh/db/t", None).unwrap();
     futures::executor::block_on(source.current()).unwrap();
     assert!(
         server.seen().iter().all(|r| path(r) == "/v1/config"),
@@ -509,11 +535,40 @@ fn a_refresh_after_eviction_sends_the_served_answers_table_token() {
     );
     // The store asks again (it refused the credential): the refresh carries the served answer's token.
     futures::executor::block_on(source.current()).unwrap();
-    let bearers: Vec<Option<String>> = server
-        .seen()
-        .iter()
-        .filter(|r| path(r) == "/v1/namespaces/db/tables/t/credentials")
-        .map(|r| r.header("authorization").map(str::to_owned))
-        .collect();
-    assert_eq!(bearers, vec![Some("Bearer table-token".to_owned())]);
+    assert_eq!(
+        credential_bearers(&server),
+        vec![Some("Bearer table-token".to_owned())]
+    );
+}
+
+/// Review 2ed68fa67 F1: a `loadTable` answer offered after a `REFRESH TABLE` is kept nowhere, but its own query
+/// still reads with it, so no `/credentials` request goes out, and the first refresh carries its table token.
+#[test]
+fn an_answer_the_cache_refused_still_serves_its_query_with_its_table_token() {
+    use crate::declared::tests::path;
+    let (server, cache, table, mut loaded) = token_fixture(10);
+    loaded.drops = cache.drops();
+    cache.drop_table(1, &["db".to_owned()], "t");
+    let own = Arc::new(loaded);
+    table.offer(Arc::clone(&own));
+    let key = key_of(1, IdentityKey::server("lake".to_owned()), "t");
+    assert!(cache.get(&key).is_none(), "refused by the cache");
+    let answer = futures::executor::block_on(table.answer(Some(&own))).unwrap();
+    assert!(Arc::ptr_eq(&answer, &own));
+    let source = table
+        .source("s3://bucket/wh/db/t", Some(Arc::clone(&own)))
+        .unwrap();
+    futures::executor::block_on(source.current()).unwrap();
+    assert!(
+        server.seen().iter().all(|r| path(r) == "/v1/config"),
+        "read with its own answer: {:?}",
+        server.seen().iter().map(path).collect::<Vec<_>>()
+    );
+    assert!(cache.get(&key).is_none(), "still kept nowhere");
+    // The store asks again: the refresh carries the table's own token, not the caller's.
+    futures::executor::block_on(source.current()).unwrap();
+    assert_eq!(
+        credential_bearers(&server),
+        vec![Some("Bearer table-token".to_owned())]
+    );
 }
