@@ -874,7 +874,47 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(table, &env)?;
-        self.table_for_write(&name, operation, &env)?;
+        // `delta.`/path``: a Delta table by path (no catalog entry), read as its scans read it.
+        #[cfg(feature = "delta")]
+        let by_path = match crate::access::ddl_parts(table, &env)?.as_slice() {
+            [format, path]
+                if format.eq_ignore_ascii_case("delta")
+                    && path.contains('/')
+                    && self
+                        .state
+                        .catalog
+                        .store
+                        .table(&name.namespace, &name.name)
+                        .is_none() =>
+            {
+                // The path as written: a table name is case-folded, a path is not.
+                Some(format!("delta.`{}`", path.replace('`', "``")))
+            }
+            _ => None,
+        };
+        #[cfg(not(feature = "delta"))]
+        let by_path: Option<String> = None;
+        // The statement's own check named the target as a table; a table by path changes the
+        // files at that path, so `Modify` on it is asked first, as a Delta save to the path asks.
+        #[cfg(feature = "delta")]
+        if by_path.is_some()
+            && let [_, path] = crate::access::ddl_parts(table, &env)?.as_slice()
+        {
+            let qualified = self.qualify_path(path)?;
+            self.authorize_qualified_root(
+                &qualified,
+                &[Privilege::Modify],
+                krishiv_sql::StatementClass::Write,
+            )
+            .await?;
+        }
+        let quoted = match by_path {
+            Some(q) => q,
+            None => {
+                self.table_for_write(&name, operation, &env)?;
+                name.quoted()
+            }
+        };
         // Spark analyzes the condition and the new values against the table before it finds that the
         // table cannot change: an unknown column is the error then.
         // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own
@@ -887,7 +927,7 @@ impl Session {
                 .map(|p| format!("`{}`", p.value.replace('`', "``")))
                 .collect::<Vec<_>>()
                 .join(".");
-            let sql = format!("SELECT {written} FROM {}", name.quoted());
+            let sql = format!("SELECT {written} FROM {quoted}");
             plain.analyze_variable_query(&sql).await?;
         }
         let slice = |e: &krishiv_sql::ast::Expr| {
@@ -906,7 +946,7 @@ impl Session {
         if select.is_empty() {
             select.push("1".to_owned());
         }
-        let mut sql = format!("SELECT {} FROM {}", select.join(", "), name.quoted());
+        let mut sql = format!("SELECT {} FROM {quoted}", select.join(", "));
         if let Some(alias) = alias {
             sql.push_str(&format!(" AS `{}`", alias.value.replace('`', "``")));
         }
@@ -948,13 +988,7 @@ impl Session {
                 .collect();
             let condition = changes.condition.map(slice);
             if let Some(done) = self
-                .run_row_level(
-                    op,
-                    &name.quoted(),
-                    &alias,
-                    condition.as_deref(),
-                    &assignments,
-                )
+                .run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments)
                 .await?
             {
                 // The table's data changed: what read it is stale (as after an `INSERT`).
@@ -965,7 +999,7 @@ impl Session {
             }
         }
         Err(UnsupportedFeatureTableOperation {
-            table_name: name.quoted(),
+            table_name: quoted,
             operation: operation.to_owned(),
         }
         .into())

@@ -23,6 +23,9 @@ then copy ``$OUT/*`` to ``tests/fixtures/delta-4.4.1/``. Each table's ``EXPECTED
 records the rows Spark reads back (ordered by ``id``) and the files of ``_delta_log``, so the
 consuming test checks what the oracle wrote, never a hand-written value.
 
+``... /out dml`` writes the DML oracle (``dml_cases``): per scenario a ``before`` table and
+``dml/DML.json`` with each ``DELETE``/``UPDATE`` step's output, commits, rows and history.
+
 ``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
 (``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
 
@@ -151,6 +154,30 @@ def oracle_error(e: Exception, path: str) -> dict:
         record["parameters"] = {k: v.replace(path, "<path>") for k, v in params.items()}
     message = java.getMessage() if java is not None else str(e)
     record["message"] = (message or "").splitlines()[0].replace(path, "<path>")[:600]
+    # The classified causes below it, nearest first (Spark's `TASK_WRITE_FAILED` wraps the
+    # condition the write raised).
+    causes = []
+    cause = java.getCause() if java is not None else None
+    while cause is not None and len(causes) < 8:
+        try:
+            condition = cause.getErrorClass()
+        except Exception:
+            condition = None
+        if condition is not None:
+            causes.append(
+                {
+                    "jvm_class": cause.getClass().getName(),
+                    "condition": condition,
+                    "sqlstate": cause.getSqlState(),
+                    "parameters": {
+                        k: str(v).replace(path, "<path>") for k, v in dict(cause.getMessageParameters()).items()
+                    },
+                    "message": (cause.getMessage() or "").splitlines()[0].replace(path, "<path>")[:600],
+                }
+            )
+        cause = cause.getCause()
+    if causes:
+        record["causes"] = causes
     return record
 
 
@@ -595,7 +622,10 @@ def commits(path: str) -> list[dict]:
                     )
                 elif "remove" in action:
                     rm = action["remove"]
-                    record["removes"].append({"path": rm["path"], "partitionValues": rm.get("partitionValues")})
+                    removed = {"path": rm["path"], "partitionValues": rm.get("partitionValues")}
+                    if rm.get("deletionVector"):
+                        removed["deletionVector"] = rm["deletionVector"]
+                    record["removes"].append(removed)
                 elif "protocol" in action:
                     record["protocol"] = action["protocol"]
                 elif "metaData" in action:
@@ -858,7 +888,8 @@ def write_edges(spark: SparkSession, out: str) -> None:
     ``replaceWhere``; a NULL written into a ``NOT NULL`` column (top level and nested) through
     the DataFrame writer and SQL; a ``''`` into a ``NOT NULL`` partition column;
     ``maxRecordsPerFile`` (a number, ``0``, ``-1`` and a value that is not one; also through
-    ``insertInto`` and ``saveAsTable`` on a catalog table)."""
+    ``insertInto`` and ``saveAsTable`` on a catalog table); whether ``insertInto`` overwrite reads a
+    ``partitionOverwriteMode`` writer option (it does not: the session configuration decides)."""
     record: dict = {
         "format_version": FORMAT_VERSION,
         "generator": "tests/scripts/gen_delta_fixtures.py",
@@ -997,7 +1028,37 @@ def write_edges(spark: SparkSession, out: str) -> None:
         ],
     )
     spark.sql("DROP TABLE mrt")
-    for d in (empty, nn, np_, mr, mt):
+    # ``insertInto`` overwrite of a partitioned catalog table: is the overwrite dynamic by a
+    # ``partitionOverwriteMode`` writer option, or by the session configuration only? (review
+    # of 7ba0c47db, nit 2.)
+    om = os.path.join(out, "write-insert-into-overwrite-mode")
+    spark.sql(f"CREATE TABLE iom (id BIGINT, p STRING) USING delta PARTITIONED BY (p) LOCATION '{om}'")
+    spark.sql("INSERT INTO iom VALUES (1, 'a'), (2, 'b')")
+
+    def overwrite_with_option(row_id: int, option: str, conf: str | None):
+        def step(s: SparkSession) -> None:
+            if conf is not None:
+                s.conf.set("spark.sql.sources.partitionOverwriteMode", conf)
+            try:
+                s.sql(f"SELECT CAST({row_id} AS BIGINT) AS id, 'a' AS p").write.mode("overwrite").option(
+                    "partitionOverwriteMode", option
+                ).insertInto("iom")
+            finally:
+                s.conf.unset("spark.sql.sources.partitionOverwriteMode")
+
+        return step
+
+    record["insert_into_overwrite_mode"] = run_steps(
+        spark,
+        om,
+        [
+            ("option_dynamic_conf_unset", overwrite_with_option(3, "dynamic", None)),
+            ("insert_b", "INSERT INTO iom VALUES (4, 'b')"),
+            ("option_static_conf_dynamic", overwrite_with_option(5, "static", "dynamic")),
+        ],
+    )
+    spark.sql("DROP TABLE iom")
+    for d in (empty, nn, np_, mr, mt, om):
         shutil.rmtree(d, ignore_errors=True)
     with open(os.path.join(out, "WRITE-EDGES.json"), "w") as f:
         json.dump(record, f, indent=1, sort_keys=True)
@@ -1143,6 +1204,242 @@ def write_feature_tables(spark: SparkSession, out: str) -> None:
         f.write("\n")
 
 
+#: The DML scenarios (``gen_delta_fixtures.py /out dml``): a table set up by ``setup`` (``{t}`` is
+#: the table), copied to ``dml/<name>/before``, then each step run on its own copy of ``before``.
+#: A step is (name, SQL, Spark confs set around it).
+DML_COLUMNS = "id BIGINT, v STRING, n INT"
+DML_ROWS = [
+    "(1, 'a', 1), (2, 'b', NULL), (3, 'c', 3)",
+    "(4, 'd', 4), (5, NULL, 50), (6, 'f', NULL)",
+]
+DML_PART_ROWS = [
+    "(1, 'a', 1, 'x'), (2, 'b', NULL, 'x'), (3, 'c', 3, 'y')",
+    "(4, 'd', 4, 'y'), (5, NULL, 50, NULL), (6, 'f', NULL, 'z')",
+]
+NO_DVS = {
+    "spark.databricks.delta.delete.deletionVectors.persistent": "false",
+    "spark.databricks.delta.update.deletionVectors.persistent": "false",
+}
+DML_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
+    (
+        "unpartitioned",
+        [f"CREATE TABLE {{t}} ({DML_COLUMNS}) USING delta"] + [f"INSERT INTO {{t}} VALUES {r}" for r in DML_ROWS],
+        [
+            ("delete_rows", "DELETE FROM {t} WHERE id = 2", {}),
+            ("delete_null_condition", "DELETE FROM {t} WHERE n > 3", {}),
+            ("delete_whole_file_by_rows", "DELETE FROM {t} WHERE id <= 3", {}),
+            ("delete_nothing", "DELETE FROM {t} WHERE id = 999", {}),
+            ("delete_all", "DELETE FROM {t}", {}),
+            ("delete_alias", "DELETE FROM {t} AS x WHERE x.v = 'c' OR x.v IS NULL", {}),
+            ("update_rows", "UPDATE {t} SET v = 'u', n = n + 1 WHERE id >= 3", {}),
+            ("update_null_condition", "UPDATE {t} SET n = 0 WHERE n < 4", {}),
+            ("update_is_null", "UPDATE {t} SET n = -1 WHERE n IS NULL", {}),
+            ("update_all", "UPDATE {t} SET v = concat(v, '!')", {}),
+            ("update_store_assignment", "UPDATE {t} SET n = id * 10, v = 7 WHERE id = 1", {}),
+            ("update_overflow", "UPDATE {t} SET n = id * 10000000000 WHERE id = 1", {}),
+            ("update_nothing", "UPDATE {t} SET n = 0 WHERE id = 999", {}),
+            # Errors raised while the new values are written (`TASK_WRITE_FAILED` around them).
+            ("update_divide_by_zero", "UPDATE {t} SET n = n div 0 WHERE id = 1", {}),
+            ("update_arithmetic_overflow", "UPDATE {t} SET n = n + 2147483647 WHERE id = 3", {}),
+            ("update_explicit_cast_overflow", "UPDATE {t} SET n = CAST(id * 10000000000 AS INT) WHERE id = 1", {}),
+            # Subqueries in the condition (delta-spark refuses them).
+            ("delete_in_subquery", "DELETE FROM {t} WHERE id IN (SELECT id FROM {t} WHERE n = 3)", {}),
+            ("delete_exists_subquery", "DELETE FROM {t} WHERE EXISTS (SELECT 1)", {}),
+            ("delete_scalar_subquery", "DELETE FROM {t} WHERE id = (SELECT max(id) FROM {t})", {}),
+            ("update_in_subquery", "UPDATE {t} SET n = 0 WHERE id IN (SELECT 2)", {}),
+        ],
+    ),
+    (
+        "partitioned",
+        [f"CREATE TABLE {{t}} ({DML_COLUMNS}, p STRING) USING delta PARTITIONED BY (p)"]
+        + [f"INSERT INTO {{t}} VALUES {r}" for r in DML_PART_ROWS],
+        [
+            ("delete_partition", "DELETE FROM {t} WHERE p = 'x'", {}),
+            ("delete_partition_null", "DELETE FROM {t} WHERE p IS NULL", {}),
+            ("delete_partition_in", "DELETE FROM {t} WHERE p IN ('y', 'z')", {}),
+            ("delete_partition_and_rows", "DELETE FROM {t} WHERE p = 'y' AND id = 3", {}),
+            ("delete_rows_any_partition", "DELETE FROM {t} WHERE n IS NULL", {}),
+            ("delete_all", "DELETE FROM {t}", {}),
+            ("update_partition_only", "UPDATE {t} SET v = 'all' WHERE p = 'y'", {}),
+            ("update_moves_partition", "UPDATE {t} SET p = 'w' WHERE id = 4", {}),
+            ("update_partition_to_null", "UPDATE {t} SET p = NULL WHERE p = 'z'", {}),
+            ("update_rows", "UPDATE {t} SET n = n * 2 WHERE id > 1", {}),
+            ("delete_partition_and_subquery", "DELETE FROM {t} WHERE p = 'y' AND id IN (SELECT 3)", {}),
+        ],
+    ),
+    (
+        "column-mapping",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}, p STRING) USING delta PARTITIONED BY (p) "
+            "TBLPROPERTIES ('delta.columnMapping.mode' = 'name')"
+        ]
+        + [f"INSERT INTO {{t}} VALUES {r}" for r in DML_PART_ROWS]
+        + ["ALTER TABLE {t} RENAME COLUMN v TO v2"],
+        [
+            ("delete_rows", "DELETE FROM {t} WHERE v2 = 'c'", {}),
+            ("delete_partition", "DELETE FROM {t} WHERE p = 'x'", {}),
+            ("update_rows", "UPDATE {t} SET v2 = 'u' WHERE n IS NOT NULL", {}),
+        ],
+    ),
+    (
+        "deletion-vectors",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}) USING delta TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')",
+            "INSERT INTO {t} SELECT id, CAST(id AS STRING), CAST(id % 7 AS INT) FROM range(1, 101)",
+            "DELETE FROM {t} WHERE id % 10 = 0",
+        ],
+        [
+            ("delete_rows_copy_on_write", "DELETE FROM {t} WHERE id < 5", NO_DVS),
+            ("update_rows_copy_on_write", "UPDATE {t} SET v = 'u' WHERE n = 3", NO_DVS),
+            ("delete_all", "DELETE FROM {t}", NO_DVS),
+            ("delete_rows_with_dvs", "DELETE FROM {t} WHERE id < 5", {}),
+            ("update_rows_with_dvs", "UPDATE {t} SET v = 'u' WHERE n = 3", {}),
+        ],
+    ),
+    (
+        "change-data-feed",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}, p STRING) USING delta PARTITIONED BY (p) "
+            "TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')"
+        ]
+        + [f"INSERT INTO {{t}} VALUES {r}" for r in DML_PART_ROWS],
+        [
+            ("delete_partition", "DELETE FROM {t} WHERE p = 'x'", {}),
+            ("delete_all", "DELETE FROM {t}", {}),
+            ("delete_rows", "DELETE FROM {t} WHERE id = 3", {}),
+            ("update_rows", "UPDATE {t} SET v = 'u' WHERE id = 3", {}),
+            ("update_partition_only", "UPDATE {t} SET v = 'u' WHERE p = 'y'", {}),
+        ],
+    ),
+    (
+        # A struct column `s` with a field `p` beside the partition column `p`: `s.p` is the
+        # struct's field, never the partition column (`x.p` under the alias `x` is the partition).
+        "struct-partition",
+        [
+            "CREATE TABLE {t} (id BIGINT, s STRUCT<p: INT, q: INT>, p INT) USING delta PARTITIONED BY (p)",
+            "INSERT INTO {t} VALUES (1, named_struct('p', 1, 'q', 1), 1), (2, named_struct('p', 2, 'q', 2), 1)",
+            "INSERT INTO {t} VALUES (3, named_struct('p', 2, 'q', 3), 1), (4, named_struct('p', 1, 'q', 4), 2)",
+            "INSERT INTO {t} VALUES (5, named_struct('p', 3, 'q', 5), 1), (6, named_struct('p', 3, 'q', 6), 2)",
+        ],
+        [
+            ("delete_struct_field", "DELETE FROM {t} WHERE s.p = 1", {}),
+            ("delete_struct_field_none_match", "DELETE FROM {t} WHERE s.p = 9", {}),
+            ("delete_qualified_partition", "DELETE FROM {t} AS x WHERE x.p = 2", {}),
+            ("delete_struct_field_and_partition", "DELETE FROM {t} WHERE p = 1 AND s.p = 2", {}),
+            ("update_struct_field", "UPDATE {t} SET id = id + 100 WHERE s.p = 2", {}),
+        ],
+    ),
+    (
+        # A TIMESTAMP partition column compared with a string literal under a non-UTC session
+        # zone: Spark casts the literal in the session zone.
+        "timestamp-partition",
+        [
+            "CREATE TABLE {t} (id BIGINT, ts TIMESTAMP) USING delta PARTITIONED BY (ts)",
+            "INSERT INTO {t} VALUES (1, TIMESTAMP '2024-01-01 00:00:00'), (2, TIMESTAMP '2024-01-01 08:00:00')",
+            "INSERT INTO {t} VALUES (3, TIMESTAMP '2024-01-01 08:00:00'), (4, TIMESTAMP '2024-01-01 16:00:00')",
+        ],
+        [
+            ("delete_string_literal_utc", "DELETE FROM {t} WHERE ts = '2024-01-01 08:00:00'", {}),
+            (
+                "delete_string_literal_zone",
+                "DELETE FROM {t} WHERE ts = '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
+            (
+                "delete_timestamp_literal_zone",
+                "DELETE FROM {t} WHERE ts = TIMESTAMP '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
+            (
+                "delete_string_range_zone",
+                "DELETE FROM {t} WHERE ts < '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
+            (
+                "update_string_literal_zone",
+                "UPDATE {t} SET id = id + 100 WHERE ts = '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
+        ],
+    ),
+    (
+        "append-only",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}) USING delta TBLPROPERTIES ('delta.appendOnly' = 'true')",
+            f"INSERT INTO {{t}} VALUES {DML_ROWS[0]}",
+        ],
+        [
+            ("delete_rows", "DELETE FROM {t} WHERE id = 2", {}),
+            ("delete_all", "DELETE FROM {t}", {}),
+            ("update_rows", "UPDATE {t} SET n = 0 WHERE id = 2", {}),
+        ],
+    ),
+]
+
+
+def dml_cases(spark: SparkSession, out: str) -> None:
+    """``dml/``: per scenario of ``DML_SCENARIOS`` the table before the steps (``before``) and
+    ``DML.json``: per step its SQL, the command's output (columns and rows) or error, the commits
+    it wrote, the rows read back (by ``id``) and ``DESCRIBE HISTORY``'s newest row (operation,
+    parameters, metrics). Each step runs on its own copy of ``before``."""
+    root = os.path.join(out, "dml")
+    os.makedirs(root, exist_ok=True)
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py dml",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "scenarios": {},
+    }
+    for name, setup, steps in DML_SCENARIOS:
+        before = os.path.join(root, name, "before")
+        for q in setup:
+            spark.sql(q.format(t=f"delta.`{before}`")).collect()
+        df = spark.read.format("delta").load(before)
+        scenario: dict = {
+            "setup": [q.replace("{t}", "<t>") for q in setup],
+            "fields": [f.name for f in df.schema.fields],
+            "rows": [[typed(r[i]) for i in range(len(r))] for r in df.orderBy("id").collect()],
+            "versions": len(commits(before)),
+            "steps": [],
+        }
+        for step, sql, confs in steps:
+            work = os.path.join(out, "dml-work", name, step)
+            shutil.copytree(before, work)
+            text = sql.format(t=f"delta.`{work}`")
+            entry: dict = {"step": step, "sql": sql.replace("{t}", "<t>"), "confs": confs}
+            for k, v in confs.items():
+                spark.conf.set(k, v)
+            try:
+                result = spark.sql(text)
+                entry["output_fields"] = [f.name for f in result.schema.fields]
+                entry["output"] = [[typed(r[i]) for i in range(len(r))] for r in result.collect()]
+                entry["error"] = None
+            except Exception as e:  # the oracle's error is the record
+                entry["error"] = oracle_error(e, work)
+            finally:
+                for k in confs:
+                    spark.conf.unset(k)
+            log = commits(work)
+            entry["commits"] = log[scenario["versions"] :]
+            back = spark.read.format("delta").load(work)
+            entry["rows"] = [[typed(r[i]) for i in range(len(r))] for r in back.orderBy("id").collect()]
+            newest = spark.sql(f"DESCRIBE HISTORY delta.`{work}` LIMIT 1").collect()[0]
+            entry["history"] = {
+                "version": newest["version"],
+                "operation": newest["operation"],
+                "operationParameters": dict(newest["operationParameters"] or {}),
+                "operationMetrics": dict(newest["operationMetrics"] or {}),
+            }
+            scenario["steps"].append(entry)
+            shutil.rmtree(work)
+        record["scenarios"][name] = scenario
+    shutil.rmtree(os.path.join(out, "dml-work"), ignore_errors=True)
+    with open(os.path.join(root, "DML.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
 def readback(spark: SparkSession, out: str, src: str) -> None:
     """Spark reads the Krishiv-written tables under ``src`` (``krishiv-written/``, made by the
     connector's ``write_readback_tables``): per table its rows as ``to_json(struct(*))`` by
@@ -1202,6 +1499,11 @@ def main(out: str, which: str = "checkpoint", src: str = "") -> None:
     spark = session()
     if which == "readback":
         readback(spark, out, src)
+        spark.stop()
+        return
+    if which == "dml":
+        dml_cases(spark, out)
+        drop_hadoop_crc(out)
         spark.stop()
         return
     if which == "writes":
