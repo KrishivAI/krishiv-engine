@@ -541,13 +541,18 @@ impl<'s> Parser<'s> {
     /// The action of an `ALTER VIEW`, after the view name.
     fn alter_view_action(&mut self) -> PR<AlterViewAction> {
         let start = self.start();
-        if self.kw_at(0, "WITH") && self.kw_at(1, "SCHEMA") {
+        // `WITH SCHEMA` followed by a binding mode; otherwise `WITH` starts a query's CTEs, one of
+        // which may be named `SCHEMA` (Spark 4.2.1 run, 2026-11-21).
+        if self.kw_at(0, "WITH")
+            && self.kw_at(1, "SCHEMA")
+            && self.any_kw_at(2, &["BINDING", "EVOLUTION", "COMPENSATION", "TYPE"])
+        {
             let binding = self.schema_binding()?;
             return Ok(AlterViewAction::SetSchemaBinding(binding));
         }
         // `ALTER VIEW identifierReference AS? query` (Spark's `alterViewQuery`): without `AS`, a
-        // `WITH` starts the query's CTEs.
-        if self.eat_kw("AS") || self.query_starts() {
+        // `WITH` starts the query's CTEs, and `TABLE t` is a query too.
+        if self.eat_kw("AS") || self.query_starts() || self.kw_at(0, "TABLE") {
             let query = Box::new(self.query()?);
             return Ok(AlterViewAction::SetQuery {
                 query,

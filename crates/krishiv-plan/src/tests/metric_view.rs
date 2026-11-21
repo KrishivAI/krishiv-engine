@@ -77,9 +77,28 @@ fn an_aggregate_over_a_read_computes_the_measure_over_the_source() {
     let names: Vec<&str> = analyzed.output.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["brand", "measure(total)"]);
     assert_eq!(analyzed.output[1].data_type, DataType::Long);
+    // The fixture's declared `sum(p_size)` over the source's own `p_size` is the oracle.
+    let top = |a: &crate::analyzer::AnalyzedPlan| {
+        a.plan
+            .root()
+            .to_string()
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert_eq!(
+        top(&analyzed),
+        "Aggregate [brand#13], [brand#13, sum(p_size#5) AS measure(total)#14]"
+    );
     // A global aggregate (`SELECT measure(total) FROM mv`, a projection) too.
     let analyzed = run(read().project(vec![measure("total")]), &ctx()).unwrap();
     assert!(!has_read(analyzed.plan.root()));
+    assert!(
+        top(&analyzed).ends_with("[sum(p_size#5) AS measure(total)#15]"),
+        "{}",
+        analyzed.plan.root()
+    );
 }
 
 #[test]
