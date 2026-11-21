@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -132,10 +133,23 @@ def generate(sf: int, out: Path | None = None, rows: dict[str, int] | None = Non
     final = out or asof_dir(sf)
     if final.exists():
         raise FileExistsError(f"{final} exists; a dataset is never regenerated in place")
-    tmp = final.with_name(final.name + ".tmp")
-    if tmp.exists():
-        shutil.rmtree(tmp)
-    tmp.mkdir(parents=True)
+    final.parent.mkdir(parents=True, exist_ok=True)
+    # A directory of this invocation's own, next to the destination (same filesystem, so the rename is atomic):
+    # two generators for one destination never share or remove each other's files.
+    tmp = Path(tempfile.mkdtemp(prefix=final.name + ".", suffix=".tmp", dir=final.parent))
+    try:
+        _write(sf, rows, tmp)
+        if final.exists():
+            raise FileExistsError(f"{final} was created by another generator while this one ran")
+        tmp.rename(final)  # fails too if another generator published a non-empty `final` since the check
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    return final
+
+
+def _write(sf: int, rows: dict[str, int], tmp: Path) -> None:
+    """Writes the tables, the manifest and the session settings into ``tmp``."""
     tables = {}
     for table, n in rows.items():
         schema = TRADES_SCHEMA if table == "trades" else QUOTES_SCHEMA
@@ -156,8 +170,6 @@ def generate(sf: int, out: Path | None = None, rows: dict[str, int] | None = Non
     (tmp / MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     # The settings every engine run of this suite needs (read by the Krishiv adapter).
     (tmp / "session.conf").write_text("spark.sql.join.asofJoin.enabled=true\n")
-    tmp.rename(final)
-    return final
 
 
 def verify(root: Path) -> list[str]:

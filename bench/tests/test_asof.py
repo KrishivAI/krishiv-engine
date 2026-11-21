@@ -59,22 +59,77 @@ def test_duckdb_answers_match_a_brute_force_oracle(tiny):
     con = duckdb.connect()
     for t in ("trades", "quotes"):
         con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{tiny / (t + '.parquet')}')")
-    trades = con.execute("SELECT ts, symbol, qty FROM trades").fetchall()
+    trades = con.execute("SELECT ts, symbol, qty, price_cents FROM trades").fetchall()
     quotes = con.execute("SELECT ts, symbol, bid_cents, ask_cents FROM quotes").fetchall()
     by_symbol: dict[str, list] = {}
     for q in quotes:
         by_symbol.setdefault(q[1], []).append(q)
-    n = bid = qty = 0
-    for ts, sym, q_qty in trades:
-        cands = [q for q in by_symbol.get(sym, []) if q[0] <= ts]
-        if cands:
-            best = max(cands, key=lambda q: q[0])
-            n += 1
-            bid += best[2]
-            qty += q_qty
+    # Each query's exact answer, by brute force: the nearest quote per trade in the query's direction.
+    q01 = [0, 0, 0]  # backward, same symbol: n, sum(bid), sum(qty)
+    q02 = [0, 0, 0]  # strictly forward, same symbol: n, sum(ask), sum(price)
+    q03 = [0, 0, 0]  # backward LEFT over symbols < S0900: n (every trade), matched, sum(bid)
+    small = [q for q in quotes if q[1] < "S0100"]
+    q04 = [0, 0]  # backward with no key, both sides symbols < S0100: n, sum(bid)
+    for ts, sym, qty, price in trades:
+        same = by_symbol.get(sym, [])
+        back = [q for q in same if q[0] <= ts]
+        if back:
+            best = max(back, key=lambda q: q[0])
+            q01[0] += 1
+            q01[1] += best[2]
+            q01[2] += qty
+        fwd = [q for q in same if q[0] > ts]
+        if fwd:
+            best = min(fwd, key=lambda q: q[0])
+            q02[0] += 1
+            q02[1] += best[3]
+            q02[2] += price
+        q03[0] += 1
+        if back and sym < "S0900":
+            q03[1] += 1
+            q03[2] += max(back, key=lambda q: q[0])[2]
+        if sym < "S0100":
+            cands = [q for q in small if q[0] <= ts]
+            if cands:
+                q04[0] += 1
+                q04[1] += max(cands, key=lambda q: q[0])[2]  # quote timestamps are unique: no tie
     duck = {q.id: q.sql for q in load_queries("asof", "duckdb")}
-    assert con.execute(duck["q01"]).fetchone() == (n, bid, qty)
-    for name in ("q02", "q03", "q04"):
-        row = con.execute(duck[name]).fetchone()
-        assert row is not None, name
-        assert row[0] > 0, name
+    # An empty match sums to NULL; the tiny dataset matches every variant, so no NULL is expected.
+    assert all(v > 0 for v in (q01[0], q02[0], q03[1], q04[0]))
+    assert con.execute(duck["q01"]).fetchone() == tuple(q01)
+    assert con.execute(duck["q02"]).fetchone() == tuple(q02)
+    assert con.execute(duck["q03"]).fetchone() == tuple(q03)
+    assert con.execute(duck["q04"]).fetchone() == tuple(q04)
+
+
+def test_a_failed_generation_leaves_nothing_behind(tmp_path, monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(asof_data, "_write", boom)
+    with pytest.raises(RuntimeError):
+        asof_data.generate(1, tmp_path / "ds", rows=TINY)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_dataset_published_meanwhile_is_not_replaced(tmp_path, monkeypatch):
+    final = tmp_path / "ds"
+    real = asof_data._write
+
+    def racing(sf, rows, tmp):
+        real(sf, rows, tmp)
+        final.mkdir()
+        (final / "other").write_text("x")  # another generator finished first
+
+    monkeypatch.setattr(asof_data, "_write", racing)
+    with pytest.raises(FileExistsError):
+        asof_data.generate(1, final, rows=TINY)
+    assert [p.name for p in tmp_path.iterdir()] == ["ds"]
+    assert [p.name for p in final.iterdir()] == ["other"]
+
+
+def test_run_suite_has_a_default_dataset():
+    from krishiv_bench.cli import ABBA_DATASET
+    from krishiv_bench.runner import SUITE_DATASET
+
+    assert SUITE_DATASET["asof"] == ABBA_DATASET["asof"] == "asof"

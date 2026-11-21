@@ -7,7 +7,7 @@
 //! right rows before the nearest one is taken. Each input computes its as-of value as its last
 //! column, and both are hash-partitioned on the keys and sorted on keys then value. Runtime-filter
 //! sites stay on the left side only: a filter that dropped right rows would change which row is
-//! nearest.
+//! nearest; and none stays where the residual or an evaluated distance may raise.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -106,19 +106,30 @@ impl Planner<'_> {
         };
         let (probe, build) = self.co_partition(probe, &probe_keys, build, &build_keys)?;
         let filter = residual_of(&probe, &build, &residual);
-        // The Connect form picks the row of the smallest distance (Spark's `min_by`). Without
+        // The Connect form picks the row of the smallest distance (Spark's `min_by`); the SQL
+        // scan forward compares the distances of the match and the next passing row. Without
         // ANSI an integral distance wraps and a decimal one that is not exact is NULL on
-        // overflow, so its order need not be the as-of values' order, which the merge walks:
-        // refuse rather than pick another row. Timestamp, date and interval distances raise in
-        // Spark with ANSI off too (the distance below plans that), a floating-point one does not
-        // wrap and an exact decimal cannot overflow, so those run.
-        if as_of.distance_on_every_pair
-            && !self.env.ansi
+        // overflow, so their order need not be the as-of values' order, which the merge walks:
+        // refuse rather than pick another row. Backward, the SQL scan evaluates no distance.
+        // Timestamp, date and interval distances raise in Spark with ANSI off too (the distance
+        // below plans that) and an exact decimal cannot overflow, so those run.
+        if !self.env.ansi
+            && (as_of.distance_on_every_pair || direction == AsOfMergeDirection::Forward)
             && as_of.distance.as_deref().is_some_and(distance_can_wrap)
         {
-            return Err(unsupported(
-                "a Connect as-of join whose distance can overflow without ANSI mode",
-            ));
+            return Err(unsupported(if as_of.distance_on_every_pair {
+                "a Connect as-of join whose distance can overflow without ANSI mode"
+            } else {
+                "a forward as-of join whose distance can overflow without ANSI mode"
+            }));
+        }
+        // A floating-point distance ranks unlike the values at the infinities (`-Infinity -
+        // -Infinity` is NaN, which Spark orders above every number), so `min_by` can pick
+        // another row than the nearest value: refuse the Connect form on floating-point values.
+        if as_of.distance_on_every_pair
+            && as_of.distance.as_deref().is_some_and(distance_is_floating)
+        {
+            return Err(unsupported("a Connect as-of join on floating-point values"));
         }
         // Only a distance that can raise is evaluated: its value is never used.
         let distance = as_of
@@ -129,7 +140,22 @@ impl Planner<'_> {
         let null_safe = keys.iter().map(|k| k.2).collect();
         let mut layout = probe.layout.clone();
         layout.extend(&build.layout);
-        let sites = probe.sites.clone();
+        // A runtime filter a join above pushes into the left scan would drop rows before the
+        // merge evaluates the residual or the distance on them: where either may raise, the
+        // filter must not hide the row that raises (as `no_runtime_filters_before`).
+        let raises = residual
+            .iter()
+            .copied()
+            .chain(as_of.distance.as_deref().filter(|_| {
+                // Spark's SQL scan evaluates no distance backward.
+                as_of.distance_on_every_pair || direction == AsOfMergeDirection::Forward
+            }))
+            .any(|e| krishiv_plan::may_raise(e, self.env.ansi));
+        let sites = if raises {
+            Vec::new()
+        } else {
+            probe.sites.clone()
+        };
         let placement = probe.placement.clone().restrict(&layout);
         let op = as_of
             .direction
@@ -212,4 +238,13 @@ fn distance_can_wrap(d: &Expr) -> bool {
         DataType::Decimal(_) => !krishiv_plan::exact_decimal(d),
         _ => false,
     }
+}
+
+/// Whether an as-of distance is floating-point.
+fn distance_is_floating(d: &Expr) -> bool {
+    matches!(
+        &d.node,
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if matches!(f.data_type, DataType::Float | DataType::Double)
+    )
 }

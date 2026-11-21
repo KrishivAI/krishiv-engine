@@ -446,6 +446,30 @@ async fn as_of_join_distance_that_can_wrap_without_ansi_is_refused() {
     assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE");
 }
 
+/// Spark's `min_by` ranks floating-point distances, which order unlike the values at the
+/// infinities (`-Infinity - -Infinity` is NaN, above every number), so a Connect as-of join on
+/// floating-point values is refused, with ANSI and without.
+#[tokio::test]
+async fn a_connect_as_of_join_on_floating_point_values_is_refused() {
+    let s = start().await;
+    for ansi in [true, false] {
+        if !ansi {
+            ansi_off(&s).await;
+        }
+        for direction in ["backward", "forward"] {
+            let rel = keyless_as_of("(5.5D), (2.0D)", "(1.0D), (4.0D), (9.0D)", direction);
+            let Err(e) = execute(&s.channel, rel).await else {
+                panic!("a floating-point as-of join ran (ansi {ansi}, {direction})");
+            };
+            assert_eq!(
+                error_class(&e),
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "ansi {ansi}, {direction}"
+            );
+        }
+    }
+}
+
 /// A value type, its left and right rows, and Spark's rows backward and forward.
 type Case = (
     &'static str,
@@ -455,9 +479,8 @@ type Case = (
     [&'static str; 2],
 );
 
-/// Timestamp, date, double and exact decimal distances do not wrap without ANSI (a datetime
-/// subtraction raises as with ANSI, a double is monotone, an exact decimal cannot overflow), so
-/// those Connect as-of joins run and give Spark's rows (Spark 4.3.0, `spark.sql.ansi.enabled=false`,
+/// Timestamp, date and exact decimal distances do not wrap without ANSI (a datetime subtraction
+/// raises as with ANSI, an exact decimal cannot overflow), so those Connect as-of joins run and give Spark's rows (Spark 4.3.0, `spark.sql.ansi.enabled=false`,
 /// `spark.sql.session.timeZone=UTC`, `_joinAsOf` over the same rows).
 #[tokio::test]
 async fn as_of_joins_on_non_integral_values_run_without_ansi() {
@@ -465,7 +488,7 @@ async fn as_of_joins_on_non_integral_values_run_without_ansi() {
     ansi_off(&s).await;
     let ts = |sec: u32| format!("TIMESTAMP'2024-01-01 00:00:0{sec}'");
     let date = |day: u32| format!("DATE'2024-01-0{day}'");
-    let cases: [Case; 4] = [
+    let cases: [Case; 3] = [
         (
             "timestamp",
             format!("({}), ({})", ts(5), ts(2)),
@@ -478,13 +501,6 @@ async fn as_of_joins_on_non_integral_values_run_without_ansi() {
                 "2024-01-01 00:00:02|2024-01-01 00:00:04",
                 "2024-01-01 00:00:05|2024-01-01 00:00:09",
             ],
-        ),
-        (
-            "double",
-            "(5.5D), (2.0D)".to_owned(),
-            "(1.0D), (4.0D), (9.0D)".to_owned(),
-            ["2.0|1.0", "5.5|4.0"],
-            ["2.0|4.0", "5.5|9.0"],
         ),
         (
             "date",

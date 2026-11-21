@@ -168,7 +168,24 @@ pub(crate) fn asof_invalid_operator(sql: &str, e: &Expr) -> Option<String> {
         };
         return Some(text.to_owned());
     }
-    Some(e.span.text(sql).trim().to_owned())
+    Some(without_strings(e.span.text(sql).trim()))
+}
+
+/// `text` with each string literal's text as `?`: Spark echoes the condition as written, but an
+/// error never echoes a string literal (this crate's invariant), so that part differs from
+/// Spark's parameter. Everything else stays as written.
+fn without_strings(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for t in crate::lexer::tokenize(text) {
+        if t.kind.is_string_like() {
+            out.push_str(text.get(at..t.span.start).unwrap_or(""));
+            out.push('?');
+            at = t.span.end;
+        }
+    }
+    out.push_str(text.get(at..).unwrap_or(""));
+    out
 }
 
 /// The first comparison operator in `e`, parents before children and left

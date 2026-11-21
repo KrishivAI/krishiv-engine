@@ -1544,6 +1544,24 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             let m = Arc::make_mut(as_of);
             site!(w, m.allow_exact = !m.allow_exact);
             site!(w, m.as_written = !m.as_written);
+            site!(
+                w,
+                flip(
+                    &mut m.direction,
+                    crate::AsOfDirection::Backward,
+                    crate::AsOfDirection::Forward
+                )
+            );
+            site!(w, m.distance_on_every_pair = !m.distance_on_every_pair);
+            let one = || Some(Arc::new(Expr::literal(crate::Literal::Integer(1))));
+            site!(
+                w,
+                m.tolerance = if m.tolerance.is_some() { None } else { one() }
+            );
+            site!(
+                w,
+                m.distance = if m.distance.is_some() { None } else { one() }
+            );
             let inside = match condition {
                 JoinCondition::On(e) => m_expr(e, w),
                 JoinCondition::Using(cols) => m_strings(cols, w),
@@ -1552,6 +1570,8 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             inside
                 || m_expr(&mut m.left, w)
                 || m_expr(&mut m.right, w)
+                || m.tolerance.as_mut().is_some_and(|e| m_expr(e, w))
+                || m.distance.as_mut().is_some_and(|e| m_expr(e, w))
                 || m_plan(left, w)
                 || m_plan(right, w)
         }

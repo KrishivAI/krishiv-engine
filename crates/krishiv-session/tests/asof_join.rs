@@ -226,6 +226,45 @@ fn the_forward_distance_raises_where_spark_raises() {
     );
 }
 
+/// Without ANSI an integral distance wraps, and Spark's forward scan compares the distances of the
+/// match and the next passing row (left `-1`, right `0` and `9223372036854775807`: the second
+/// distance wraps to the smallest `BIGINT`), so the forward join refuses there; backward Spark
+/// evaluates no distance, and a timestamp distance raises with ANSI off too, so those run.
+#[test]
+fn a_forward_distance_that_can_wrap_without_ansi_is_refused() {
+    let s = session();
+    block_on(async {
+        s.sql("SET spark.sql.ansi.enabled=false")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    let sql = |left: &str, rights: &str, op: &str| {
+        format!(
+            "SELECT * FROM VALUES ({left}) AS t(i) ASOF JOIN VALUES {rights} AS r(i) \
+             MATCH_CONDITION (t.i {op} r.i)"
+        )
+    };
+    assert_eq!(
+        error(&s, &sql("-1L", "(0L), (9223372036854775807L)", "<=")),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(rows(&s, &sql("5L", "(1L), (3L), (9L)", ">=")), ["5|3"]);
+    let ts = |sec: u32| format!("TIMESTAMP'2024-01-01 00:00:0{sec}'");
+    let got = rows(
+        &s,
+        &format!(
+            "SELECT count(*) FROM VALUES ({}) AS t(i) ASOF JOIN VALUES ({}), ({}) AS r(i) \
+             MATCH_CONDITION (t.i <= r.i)",
+            ts(2),
+            ts(4),
+            ts(9)
+        ),
+    );
+    assert_eq!(got, ["1"]);
+}
+
 /// The optimizer moves an as-of join's one-sided conjuncts into its inputs (right-only `ON`
 /// conjuncts, left-only ones for an inner join, left-only filters above): the rows are those of
 /// the same filters written below by hand.
@@ -268,7 +307,12 @@ fn one_sided_conditions_filter_the_inputs_with_the_same_rows() {
              MATCH_CONDITION (t.ts >= q.ts) ON t.k = q.k"
         )
     );
-    assert!(rows(&s, &on_left("LEFT")).contains(&"2|NULL".to_owned()));
+    assert_eq!(
+        rows(&s, &on_left("LEFT")),
+        [
+            "1|100", "2|NULL", "3|103", "4|NULL", "5|NULL", "6|NULL", "7|NULL"
+        ]
+    );
 }
 
 /// The class and message parameters of the failure of `sql`.

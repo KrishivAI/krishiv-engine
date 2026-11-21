@@ -92,11 +92,24 @@ fn asof_join_kinds_and_criteria() {
     };
     assert!(c.filter.is_none());
     // A pipe join.
-    parse_query(
+    let q = parse_query(
         "FROM t |> ASOF JOIN q MATCH_CONDITION (t.a >= q.a) ON t.k = q.k",
         &on(),
     )
     .unwrap();
+    let SetExprKind::Pipe(pipe) = &q.body.kind else {
+        panic!("{q:?}")
+    };
+    let [op] = pipe.ops.as_slice() else {
+        panic!("{:?}", pipe.ops)
+    };
+    let ast::PipeOpKind::Join(j) = &op.kind else {
+        panic!("{op:?}")
+    };
+    let JoinConstraint::AsOf(c) = &j.constraint else {
+        panic!("{j:?}")
+    };
+    assert!(matches!(c.filter, Some(AsOfFilter::On(_))), "{c:?}");
 }
 
 #[test]
@@ -143,6 +156,12 @@ fn asof_join_match_operator() {
         ("t.a >= q.a OR t.k = q.k", "OR"),
         ("NOT (t.a >= q.a)", ">="),
         ("t.a BETWEEN q.a AND q.b", "t.a BETWEEN q.a AND q.b"),
+        // Spark echoes the text as written; a string literal's text is never echoed (`?`).
+        ("'canary-secret'", "?"),
+        ("t.s LIKE 'canary%'", "t.s LIKE ?"),
+        ("t.a IN (1, 2)", "t.a IN (1, 2)"),
+        // An operator name inside a string is no operator, and stays hidden.
+        ("t.s LIKE '>='", "t.s LIKE ?"),
     ] {
         let sql =
             format!("SELECT * FROM t ASOF JOIN q\n  MATCH_CONDITION ({cond})\n  ON t.k = q.k");
@@ -182,12 +201,22 @@ fn asof_join_gate() {
     let opts =
         ParserOptions::from_conf(|k| (k == "spark.sql.join.asofJoin.enabled").then_some("true"));
     assert!(opts.asof_join && !ParserOptions::default().asof_join);
-    // Off, `ASOF` is still Spark 4.2's alias.
-    parse_query(
+    // Off, `ASOF` is still Spark 4.2's alias: `t AS ASOF`, then an ordinary join.
+    let q = parse_query(
         "SELECT * FROM t ASOF JOIN q ON true",
         &ParserOptions::default(),
     )
     .unwrap();
+    let SetExprKind::Select(s) = q.body.kind else {
+        panic!()
+    };
+    let rel = s.from.unwrap().relations.into_iter().next().unwrap();
+    let alias = rel.primary.alias.as_ref().and_then(|a| a.name.as_ref());
+    assert_eq!(alias.map(|n| n.value.as_str()), Some("ASOF"), "{rel:?}");
+    let Some(RelationExt::Join(j)) = rel.extensions.first() else {
+        panic!("{rel:?}")
+    };
+    assert!(matches!(j.constraint, JoinConstraint::On(_)), "{j:?}");
     // On, it lowers to the IR's as-of join, the operands as written.
     let q = parse_query(
         "SELECT * FROM t LEFT ASOF JOIN q MATCH_CONDITION (q.a < t.a) USING (k)",

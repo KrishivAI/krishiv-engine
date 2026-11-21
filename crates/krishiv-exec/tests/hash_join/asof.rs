@@ -87,7 +87,9 @@ impl Predicate for Residual {
 #[derive(Debug)]
 struct Poison;
 
-const POISON: i64 = 999;
+/// `1 + POISON` (998) is no multiple of 3 or 5, so a poisoned pair passes the residual of
+/// `the_forward_distance_runs_on_the_match_and_the_next_passing_row` and its raise is tested.
+const POISON: i64 = 997;
 
 /// [`Poison`] as the merge's distance check, over the right payload only.
 fn poison() -> AsOfDistance {
@@ -462,6 +464,7 @@ async fn the_forward_distance_runs_on_the_match_and_the_next_passing_row() {
             .filter(|r| r.t >= Some(10) && (!residual || Residual::eval(1, r.w)))
             .filter_map(|r| r.t)
             .collect();
+        let mut raised = 0;
         for poison_at in 9..=14 {
             let right = at(poison_at);
             // A poisoned row changes the residual's answer for it: recompute what passes.
@@ -471,6 +474,7 @@ async fn the_forward_distance_runs_on_the_match_and_the_next_passing_row() {
                 .filter_map(|r| r.t)
                 .collect();
             let raises = passing_now.iter().take(2).any(|&t| t == poison_at);
+            raised += usize::from(raises);
             for batch_rows in [1, 2, 6] {
                 let got = run_case(
                     case,
@@ -489,6 +493,11 @@ async fn the_forward_distance_runs_on_the_match_and_the_next_passing_row() {
                 );
             }
         }
+        // Both halves see raising and quiet positions (a poison the residual drops never raises).
+        assert!(
+            raised >= 2,
+            "residual {residual}: {raised} raising positions"
+        );
     }
 }
 

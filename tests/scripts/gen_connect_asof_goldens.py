@@ -17,11 +17,12 @@ scan (`SortMergeAsOfJoinExec`), which evaluates none backward and only two rows 
 
 Run from the repository root:
 
-    mkdir -m 777 -p /tmp/asof-out
-    docker run --rm -v "$PWD:/repo:ro" -v /tmp/asof-out:/out apache/spark:4.3.0 \\
+    out=$(mktemp -d) && chmod 777 "$out"
+    docker run --rm -v "$PWD:/repo:ro" -v "$out:/out" apache/spark:4.3.0 \\
         /opt/spark/bin/spark-submit --master 'local[1]' \\
-        /repo/tests/scripts/gen_connect_asof_goldens.py /out/connect-asof.json
-    cp /tmp/asof-out/connect-asof.json tests/fixtures/spark-4.3.0/
+        /repo/tests/scripts/gen_connect_asof_goldens.py /out/connect-asof.json \\
+      && cp "$out/connect-asof.json" tests/fixtures/spark-4.3.0/
+    rm -rf "$out"
 
 (the image's `spark` user cannot write a bind mount owned by another user).
 """
