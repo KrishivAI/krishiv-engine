@@ -23,7 +23,7 @@ use iceberg::spec::{
 use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::planner::{RowLevelOperation, RowLevelTable, RowLevelWrite, TableProvider};
-use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown};
+use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown, Sink};
 use krishiv_types::batch::Batch;
 use krishiv_types::{DataType, StructField, StructType};
 
@@ -236,6 +236,76 @@ impl<'a> Dml<'a> {
             &format!("SELECT {} FROM t", self.select_list(Some((&hit, value)))),
             Vec::new(),
         )
+    }
+
+    /// A merge-on-read statement: the rows `select` gives over the whole snapshot (ending with
+    /// the row id) into the rewriter, which recognizes them by the row id columns.
+    pub(super) fn merge_on_read(&self, select: &str) -> Result<(), KrishivError> {
+        let (sink, schema, batches) = self.mor_parts(select);
+        let input = Arc::new(PerDriver {
+            schema,
+            batches,
+            stall: false,
+        });
+        run(self.env, sink?, input, None).0
+    }
+
+    /// The rewriter of a merge-on-read statement (or its refusal), with the schema and the rows
+    /// `select` gives; the tests of the sink run them their own way.
+    pub(super) fn mor_parts(
+        &self,
+        select: &str,
+    ) -> (
+        Result<Arc<dyn Sink>, KrishivError>,
+        SchemaRef,
+        Vec<RecordBatch>,
+    ) {
+        let mut batches = self.query(self.table.scan().unwrap(), select);
+        let schema = batches.first().map_or_else(
+            || {
+                let mut f: Vec<_> = input_schema().fields().iter().cloned().collect();
+                f.push(Arc::new(arrow_schema::Field::new(
+                    ROW_FILE_COLUMN,
+                    A::BinaryView,
+                    false,
+                )));
+                f.push(Arc::new(arrow_schema::Field::new(
+                    ROW_POSITION_COLUMN,
+                    A::Int64,
+                    false,
+                )));
+                Arc::new(Schema::new(f))
+            },
+            RecordBatch::schema,
+        );
+        if batches.is_empty() {
+            batches.push(RecordBatch::new_empty(Arc::clone(&schema)));
+        }
+        let mut request =
+            RowLevelWrite::new(self.op, "`db`.`t`", Arc::clone(&schema), Vec::new(), None);
+        request.write_id = Some(format!("dml-{}", super::sink::unique_u64()));
+        let sink = self.table.rewriter(&request);
+        (sink, schema, batches)
+    }
+
+    /// Whether the statement's scan is refused (an unknown `write.*.mode`).
+    pub(super) fn scan_is_refused(&self) -> bool {
+        self.table.scan().is_err()
+    }
+
+    /// `DELETE FROM t WHERE condition` in merge-on-read mode.
+    pub(super) fn mor_delete(&self, condition: &str) -> Result<(), KrishivError> {
+        self.merge_on_read(&format!(
+            "SELECT {ROW_FILE_COLUMN}, {ROW_POSITION_COLUMN} FROM t WHERE coalesce(({condition}), false)"
+        ))
+    }
+
+    /// `UPDATE t SET name = value WHERE condition` in merge-on-read mode.
+    pub(super) fn mor_update(&self, condition: &str, value: &str) -> Result<(), KrishivError> {
+        self.merge_on_read(&format!(
+            "SELECT id, x, {value} AS name, {ROW_FILE_COLUMN}, {ROW_POSITION_COLUMN} FROM t \
+             WHERE coalesce(({condition}), false)"
+        ))
     }
 
     /// The rewrite's columns: `name` replaced where `set.0` holds by `set.1`;

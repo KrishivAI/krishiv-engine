@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use axum::Extension;
 use axum::Router;
 use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
@@ -113,6 +114,18 @@ pub trait UiSource: Send + Sync + 'static {
     /// Cancels the query as an operator's kill (the `admin` reason: the query fails with
     /// `KRISHIV_QUERY_KILLED`); `false` when it is not running.
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool>;
+
+    /// Which console this is, as `/api/internal/health` reports it and the page reads it: `server` (every
+    /// session of a server), `embedded` (one session of the host process) or `profiles` (stored profiles, no
+    /// engine).
+    fn mode(&self) -> &'static str {
+        "server"
+    }
+
+    /// The id of the one session an `embedded` console shows.
+    fn session_id(&self) -> Option<String> {
+        None
+    }
 
     /// The objects one level below `path` in the catalog tree, as rows with at least a `name`: no path lists the
     /// catalogs, `[catalog]` its schemas, `[catalog, schema]` its tables, `[catalog, schema, table]` its columns
@@ -247,8 +260,8 @@ pub fn router_with_ui(source: Arc<dyn UiSource>, token: &str) -> Router {
 }
 
 /// [`router_with_ui`] behind `guard`: reading other principals' work needs [`Access::Monitor`], a cancel
-/// [`Access::Operate`] (ADR 0046 §3: both operator). The token is taken from the same places as with a start-up
-/// token, so the page works unchanged with a configured token.
+/// [`Access::Operate`] (ADR 0046 §3: both operator), the settings [`Access::Manage`] (admin). The token is taken
+/// from the same places as with a start-up token, so the page works unchanged with a configured token.
 pub fn router_with_ui_guard(source: Arc<dyn UiSource>, guard: Arc<dyn Guard>) -> Router {
     router_with_ui_policy(source, guard, crate::pages::UiPolicy::loopback())
 }
@@ -355,6 +368,28 @@ fn param<'a>(uri: &'a Uri, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v)
 }
 
+/// A filter's value as the page sent it (`URLSearchParams`): `+` is a space and every `%XX` its byte. A value
+/// that does not decode is no filter.
+fn filter_param(uri: &Uri, name: &str) -> Option<String> {
+    percent_decode(&param(uri, name)?.replace('+', " ")).filter(|v| !v.is_empty())
+}
+
+/// Whether a `system.queries` row carries `tag`: a tag's key, or `key=value`. A request tag (Spark Connect's
+/// `addTag`) is a key with an empty value.
+fn has_tag(row: &Row, tag: &str) -> bool {
+    row.get("tags")
+        .and_then(Value::as_object)
+        .is_some_and(|tags| {
+            tags.iter().any(|(k, v)| {
+                k == tag
+                    || tag
+                        .strip_prefix(k.as_str())
+                        .and_then(|rest| rest.strip_prefix('='))
+                        .is_some_and(|value| v.as_str() == Some(value))
+            })
+        })
+}
+
 /// The presented token. `Authorization: Bearer` is accepted for every method. The cookie and `?token=` (an
 /// `EventSource` cannot set headers) are accepted for `GET` only, so a request that changes something (cancel)
 /// cannot be made by a link or a cross-site form that carries the token in its address or a cookie.
@@ -371,11 +406,15 @@ fn presented(method: &Method, headers: &HeaderMap, uri: &Uri) -> Option<String> 
     if method != Method::GET && !crate::pages::has_csrf_header(headers) {
         return None;
     }
+    // Only the cookie of this address counts: another console on the same host name has its own (see
+    // `session_cookie_name`).
+    let name = crate::pages::session_cookie_name(headers);
     if let Some(c) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())
-        && let Some(t) = c
-            .split(';')
-            .filter_map(|p| p.trim().strip_prefix("krishiv_ui_token="))
-            .next()
+        && let Some(t) = c.split(';').find_map(|p| {
+            p.trim()
+                .strip_prefix(name.as_str())
+                .and_then(|rest| rest.strip_prefix('='))
+        })
     {
         return Some(t.to_owned());
     }
@@ -414,8 +453,12 @@ async fn require_token(
 ) -> Response {
     let token = presented(req.method(), req.headers(), req.uri());
     let malformed = token.is_none() && req.headers().contains_key(header::AUTHORIZATION);
-    // Anything but a read changes something: a cancel acts on another principal's query.
-    let access = if req.method() == Method::GET || req.uri().path() == "/api/internal/session" {
+    // The settings are the administrator's. Anything else but a read changes something: a cancel acts on another
+    // principal's query.
+    let path = req.uri().path();
+    let access = if path == "/api/internal/environment" {
+        Access::Manage
+    } else if req.method() == Method::GET || path == "/api/internal/session" {
         Access::Monitor
     } else {
         Access::Operate
@@ -556,9 +599,16 @@ fn mask_pass(text: &str) -> String {
     out
 }
 
-/// [`pick`] for a `system.queries` row, with the literals of its text masked.
+/// What the tag of a statement run from the console's editor starts with (the editor cancels its run by this
+/// tag). It is the console's own bookkeeping: a query's row is sent without it.
+pub(crate) const EDITOR_TAG_PREFIX: &str = "krishiv-ui-run-";
+
+/// [`pick`] for a `system.queries` row, with the literals of its text masked and without the editor's own tag.
 fn pick_query(row: &Row) -> Row {
     let mut picked = pick(row, QUERY_COLUMNS);
+    if let Some(Value::Object(tags)) = picked.get_mut("tags") {
+        tags.retain(|key, _| !key.starts_with(EDITOR_TAG_PREFIX));
+    }
     if let Some(Value::String(text)) = picked.get("query_text") {
         let masked = mask_literals(text);
         picked.insert("query_text".to_owned(), Value::String(masked));
@@ -578,6 +628,8 @@ const QUERY_COLUMNS: &[&str] = &[
     "query_id",
     "state",
     "principal",
+    "client_type",
+    "tags",
     "statement_class",
     "query_text",
     "query_text_truncated",
@@ -713,7 +765,7 @@ fn memory_total(memory: &[Row]) -> Value {
     })
 }
 
-async fn health(State(s): State<UiState>) -> Response {
+async fn health(State(s): State<UiState>, caller: Option<Extension<Caller>>) -> Response {
     let (memory, caches, queries) = match (
         table(&s, SystemTable::Memory).await,
         table(&s, SystemTable::Caches).await,
@@ -731,6 +783,10 @@ async fn health(State(s): State<UiState>) -> Response {
         StatusCode::OK,
         &json!({
             "version": crate::VERSION,
+            "mode": s.source.mode(),
+            "session_id": s.source.session_id(),
+            // The page hides what the caller's role cannot open; the routes decide by themselves.
+            "role": caller.and_then(|c| c.0.role),
             "uptime_seconds": s.started.elapsed().as_secs(),
             "workers": workers.len().max(1),
             "running_queries": queries.iter().filter(|r| text(r, "state") == "running").count(),
@@ -921,13 +977,27 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(100)
         .clamp(1, 1000);
-    let state = param(&uri, "state");
-    let principal = param(&uri, "principal");
+    let state = filter_param(&uri, "state");
+    let principal = filter_param(&uri, "principal");
+    // A client names itself at length (`_SPARK_CONNECT_PYTHON spark/4.2.0 os/linux python/3.12`): any part
+    // of the name finds it, in either case.
+    let client = filter_param(&uri, "client").map(|c| c.to_lowercase());
+    let tag = filter_param(&uri, "tag");
     let mut done: Vec<&Row> = rows
         .iter()
         .filter(|r| !is_live(r))
-        .filter(|r| state.is_none_or(|s| text(r, "state") == s))
-        .filter(|r| principal.is_none_or(|p| text(r, "principal") == p))
+        .filter(|r| state.as_deref().is_none_or(|s| text(r, "state") == s))
+        .filter(|r| {
+            principal
+                .as_deref()
+                .is_none_or(|p| text(r, "principal") == p)
+        })
+        .filter(|r| {
+            client
+                .as_deref()
+                .is_none_or(|c| text(r, "client_type").to_lowercase().contains(c))
+        })
+        .filter(|r| tag.as_deref().is_none_or(|t| has_tag(r, t)))
         .collect();
     done.sort_by_key(|r| std::cmp::Reverse(int(r, "submitted_at")));
     done.truncate(limit);
@@ -1037,7 +1107,8 @@ async fn shared_snapshot(s: &UiState) -> Value {
 
 /// `GET /api/internal/events`: the live query list as a `queries` event, once a second. At most
 /// [`MAX_EVENT_CLIENTS`] streams at a time (a further one is a `503`); the streams share one snapshot a period.
-async fn events(State(s): State<UiState>) -> Response {
+/// An administrator's stream opens with an `environment` event.
+async fn events(State(s): State<UiState>, caller: Option<Extension<Caller>>) -> Response {
     if s.streams.fetch_add(1, Ordering::SeqCst) >= MAX_EVENT_CLIENTS {
         s.streams.fetch_sub(1, Ordering::SeqCst);
         return error(
@@ -1049,13 +1120,19 @@ async fn events(State(s): State<UiState>) -> Response {
     let slot = StreamSlot(Arc::clone(&s.streams));
     let ticker = tokio::time::interval(EVENT_PERIOD);
     // The stream opens with the environment (secrets masked), so a page can show it without a second request.
-    let first = match crate::pages::environment_json(&s).await {
-        Ok(v) => Event::default().event("environment").data(v.to_string()),
-        Err(e) => Event::default()
-            .event("environment")
-            .data(json!({"error": e.message}).to_string()),
+    // Only for an administrator: the stream itself is open to operators, the settings are not
+    // (`/api/internal/environment` asks for `Access::Manage`).
+    let first = if caller.is_some_and(|c| c.0.is_admin()) {
+        Some(match crate::pages::environment_json(&s).await {
+            Ok(v) => Event::default().event("environment").data(v.to_string()),
+            Err(e) => Event::default()
+                .event("environment")
+                .data(json!({"error": e.message}).to_string()),
+        })
+    } else {
+        None
     };
-    let opening = futures::stream::once(async move { Ok::<_, std::convert::Infallible>(first) });
+    let opening = futures::stream::iter(first.map(Ok::<_, std::convert::Infallible>));
     let ticks = futures::stream::unfold((ticker, s, slot), |(mut ticker, s, slot)| async move {
         ticker.tick().await;
         let body = shared_snapshot(&s).await;

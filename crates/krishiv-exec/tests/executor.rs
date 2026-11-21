@@ -1966,3 +1966,109 @@ async fn rows_held_after_an_operator_that_finishes_early_are_handed_on() {
         assert_released(&root);
     }
 }
+
+/// Its flush step waits once: on a timer (`blocking: false`, as a grace
+/// join's driver waits for another driver or for memory), or on the
+/// blocking pool (`blocking: true`, as it reads and decodes a spilled
+/// partition there).
+struct WaitingFlush {
+    wait: Duration,
+    blocking: bool,
+}
+
+impl Operator for WaitingFlush {
+    fn name(&self) -> &'static str {
+        "WaitingFlush"
+    }
+
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(false))
+    }
+
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+
+    fn needs_flush(&self) -> bool {
+        true
+    }
+
+    fn flush<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<FlushOutput>> {
+        let waited = local.downcast_mut::<bool>().unwrap();
+        let (wait, blocking) = (self.wait, self.blocking);
+        Box::pin(async move {
+            if std::mem::replace(waited, true) {
+                return Ok(FlushOutput::Done);
+            }
+            if blocking {
+                ctx.run_blocking(move || {
+                    std::thread::sleep(wait);
+                    Ok(())
+                })
+                .await?;
+            } else {
+                tokio::time::sleep(wait).await;
+            }
+            Ok(FlushOutput::Continue)
+        })
+    }
+}
+
+fn waiting_flush_metrics(q: &QueryContext) -> krishiv_exec::OperatorMetrics {
+    let m = q.metrics();
+    let op = m
+        .operators
+        .values()
+        .find(|e| e.name.ends_with("WaitingFlush"));
+    op.unwrap().metrics.clone()
+}
+
+/// A flush step that waits off its driver (for another driver, for memory)
+/// is not computing: the wait is reported as blocked, not as compute time,
+/// as a source's pending `get_data` is.
+#[tokio::test(start_paused = true)]
+async fn a_flush_step_waiting_is_not_compute_time() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(8 * MIB);
+    let q = query(&root, 1, ExecConfig::default());
+    let (_, scan) = scan(1_000);
+    let op: Arc<dyn Operator> = Arc::new(WaitingFlush {
+        wait: Duration::from_secs(10),
+        blocking: false,
+    });
+    let out = run(&runner, pipe(scan, op), &q).await.unwrap();
+    assert_eq!(rows(&out), 1_000);
+    let m = waiting_flush_metrics(&q);
+    assert!(m.compute_time < Duration::from_secs(1), "{m:?}");
+    assert!(m.blocked_on_io >= Duration::from_secs(10), "{m:?}");
+    assert_released(&root);
+}
+
+/// Work a flush step runs on the blocking pool is the operator's compute
+/// time, though its driver's future was pending meanwhile.
+#[tokio::test]
+async fn a_flush_step_on_the_blocking_pool_is_compute_time() {
+    let runner = QueryRunner::new(executor(1));
+    let root = root(8 * MIB);
+    let q = query(&root, 1, ExecConfig::default());
+    let (_, scan) = scan(1_000);
+    let op: Arc<dyn Operator> = Arc::new(WaitingFlush {
+        wait: Duration::from_millis(300),
+        blocking: true,
+    });
+    let out = run(&runner, pipe(scan, op), &q).await.unwrap();
+    assert_eq!(rows(&out), 1_000);
+    let m = waiting_flush_metrics(&q);
+    assert!(m.compute_time >= Duration::from_millis(300), "{m:?}");
+    // The pool work is not pending time.
+    assert!(m.blocked_on_io < Duration::from_millis(300), "{m:?}");
+    assert_released(&root);
+}
