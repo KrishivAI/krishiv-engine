@@ -101,6 +101,12 @@ impl Translator<'_> {
                     })
                 })?))
             }
+            RelType::Catalog(c) => {
+                let call = super::catalog::catalog_call(c)?;
+                PlanNode::Read(ReadSource::Local(
+                    self.local_relation(|| Ok(super::LocalRequest::Catalog(call)))?,
+                ))
+            }
             RelType::CachedRemoteRelation(c) => {
                 self.conf.cached_remote.record(&c.relation_id);
                 PlanNode::Read(ReadSource::Table {

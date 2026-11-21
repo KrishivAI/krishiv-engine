@@ -101,6 +101,7 @@ Paths are relative to this crate.
   task unwinds (`INTERNAL_ERROR`, or `OPERATION_CANCELED` after an interrupt), so no stream waits on an orphan;
   `src/execute/hooks.rs` (cfg(test) only) injects an encoder panic or a held preparation per operation id, used by
   `src/execute/fault_tests.rs`;
+  `src/execute/catalog_call.rs` (PR-46) the `Catalog` relation: the `CatalogCall` the translator recorded runs on `Session::catalog()` while the plan is prepared (`build_local_relation`), its rows (Spark's `Database`, `Table`, `Column`, `Function`, `CatalogMetadata`, `TablePartition`, a `value` string or boolean, or the empty relation of a call that returns nothing; names and nullability as Spark's encoders) held as a local relation; `cache_table`, `uncache_table` and `clear_cache` need the operator floor (`Check::SideEffect`); `tests/catalog.rs`;
   `src/execute/arrow.rs` Spark's Arrow shapes, batch limits, IPC streams, codecs and chunks;
   `src/execute/schema.rs` the `schema` response (`DataTypeProtoConverter.toConnectProtoType`)
 - `src/udf.rs` (P3-T014, PR-26d part 1) Python UDFs: `UdfHost` (the server's one pool, `krishiv_udf_pool::Pool` on

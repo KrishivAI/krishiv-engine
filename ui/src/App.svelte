@@ -1,6 +1,8 @@
 <script lang="ts">
   import { QueryClient, QueryClientProvider } from "@tanstack/svelte-query";
-  import { initSession } from "./api";
+  import { api, initSession } from "./api";
+  import { applyTheme, embedLink, listenForTheme, validateTheme } from "./embed";
+  import { parseRoute } from "./routes";
   import Catalog from "./pages/Catalog.svelte";
   import Editor from "./pages/Editor.svelte";
   import Environment from "./pages/Environment.svelte";
@@ -16,23 +18,49 @@
   import markLight from "./brand/mark-light.svg";
   import "./app.css";
 
-  let session = $state<"checking" | "yes" | "no">("checking");
-  initSession().then((ok) => (session = ok ? "yes" : "no"), () => (session = "no"));
+  // The embedded view (`?embed=1` on /queries/{id}/profile) has no session: its signed link is the credential.
+  const embed = embedLink(window.location.search);
+  // The mark shows only once the config says it may (no flash in an embed that hides it).
+  let hideAttribution = $state(true);
+  let session = $state<"checking" | "yes" | "no">(embed ? "yes" : "checking");
+  if (!embed) initSession().then((ok) => (session = ok ? "yes" : "no"), () => (session = "no"));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-  let hash = $state(window.location.hash || "#/health");
+  let hash = $state(window.location.hash);
   let menuOpen = $state(false);
   $effect(() => {
     const on = () => {
-      hash = window.location.hash || "#/health";
+      hash = window.location.hash;
       menuOpen = false;
     };
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   });
+  $effect(() => {
+    if (!embed) return;
+    document.documentElement.dataset.embed = "1";
+    // A theme in the link, then messages from the embedding page (allowed origins only).
+    if (embed.theme) {
+      try {
+        const r = validateTheme(JSON.parse(embed.theme));
+        if (r.ok) applyTheme(r.theme);
+        else console.warn(`krishiv: ignored the theme in the link: ${r.reason}`);
+      } catch {
+        console.warn("krishiv: ignored the theme in the link: not JSON");
+      }
+    }
+    const config = api<{ allowed_origins: string[]; hide_attribution: boolean }>("/api/internal/embed/config");
+    config.then(
+      (c) => {
+        hideAttribution = c.hide_attribution;
+      },
+      () => {},
+    );
+    return listenForTheme(config.then((c) => c.allowed_origins));
+  });
 
-  const parts = $derived(hash.replace(/^#\//, "").split("/"));
-  const page = $derived(parts[0]);
+  const route = $derived(parseRoute(window.location.pathname, hash));
+  const page = $derived(route.page);
   const links = [
     ["health", "Health"],
     ["queries", "Queries"],
@@ -52,6 +80,18 @@
 </script>
 
 <QueryClientProvider {client}>
+  {#if embed}
+    <main class="mx-auto max-w-7xl px-3 py-4 md:px-4">
+      {#if page === "queries" && route.id && route.sub === "profile"}
+        <QueryDetail id={route.id} {embed} />
+      {:else}
+        <h1>This view cannot be embedded</h1>
+      {/if}
+      {#if !hideAttribution}
+        <p class="mt-6 text-right text-xs text-muted-foreground">Powered by Krishiv</p>
+      {/if}
+    </main>
+  {:else}
   <header class="sticky top-0 z-30 flex items-center gap-4 border-b border-border bg-card px-4 py-1.5">
     <picture class="flex shrink-0">
       <source media="(prefers-color-scheme: dark)" srcset={markDark} />
@@ -99,8 +139,8 @@
         The UI needs the token that <code>krishiv server</code> prints at start-up: open the
         <code>http://…/?token=…</code> address it shows.
       </p>
-    {:else if page === "queries" && parts[1]}
-      <QueryDetail id={decodeURIComponent(parts[1])} />
+    {:else if page === "queries" && route.id}
+      <QueryDetail id={route.id} />
     {:else if page === "queries"}
       <Queries />
     {:else if page === "history"}
@@ -117,4 +157,5 @@
       <Health />
     {/if}
   </main>
+  {/if}
 </QueryClientProvider>
