@@ -203,9 +203,11 @@ impl EngineRuntime {
         &self,
         document: &str,
         etag: &str,
-    ) -> Result<(), KrishivError> {
+    ) -> Result<ResourceGroupDocument, KrishivError> {
         match (&self.resource_groups, self.group_file()) {
-            (Some(groups), Some(path)) => groups.replace_file(path, document, etag),
+            (Some(groups), Some(path)) => groups
+                .replace_file(path, document, etag)
+                .map(|installed| Self::installed(path, installed)),
             _ => Err(Self::groups_off()),
         }
     }
@@ -217,10 +219,26 @@ impl EngineRuntime {
     ///
     /// As [`ResourceGroups::reload_file`]; `KRISHIV_RESOURCE_GROUP_CONFIG_READ_ONLY` when no group
     /// file is configured.
-    pub fn reload_resource_group_document(&self) -> Result<(), KrishivError> {
+    pub fn reload_resource_group_document(&self) -> Result<ResourceGroupDocument, KrishivError> {
         match (&self.resource_groups, self.group_file()) {
-            (Some(groups), Some(path)) => groups.reload_file(path),
+            (Some(groups), Some(path)) => groups
+                .reload_file(path)
+                .map(|installed| Self::installed(path, installed)),
             _ => Err(Self::groups_off()),
+        }
+    }
+
+    /// The document a replace or reload installed, as that call saw it (a later swap by another
+    /// request changes none of it).
+    fn installed(
+        path: &str,
+        (document, etag, loaded_at_ms): (String, String, u64),
+    ) -> ResourceGroupDocument {
+        ResourceGroupDocument {
+            document,
+            etag,
+            loaded_at_ms: i64::try_from(loaded_at_ms).unwrap_or(i64::MAX),
+            file_etag: ResourceGroups::file_etag(path),
         }
     }
 }

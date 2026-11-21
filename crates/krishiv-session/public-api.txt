@@ -1198,14 +1198,14 @@ pub fn krishiv_session::resource_groups::ResourceGroups::from_file(&str, usize) 
 pub fn krishiv_session::resource_groups::ResourceGroups::from_json(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::loaded_at_ms(&self) -> u64
 pub fn krishiv_session::resource_groups::ResourceGroups::problems(&str, usize) -> alloc::vec::Vec<krishiv_common::error::KrishivError>
-pub fn krishiv_session::resource_groups::ResourceGroups::reload_file(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::reload_file(&self, &str) -> core::result::Result<(alloc::string::String, alloc::string::String, u64), krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::reload_json(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::rows(&self) -> alloc::vec::Vec<krishiv_session::resource_groups::GroupRow>
 pub fn krishiv_session::resource_groups::ResourceGroups::validate(&str, usize) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::with_clock(&str, usize, alloc::sync::Arc<(dyn core::ops::function::Fn() -> u64 + core::marker::Send + core::marker::Sync)>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::file_etag(&str) -> core::option::Option<alloc::string::String>
-pub fn krishiv_session::resource_groups::ResourceGroups::replace_file(&self, &str, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::replace_file(&self, &str, &str, &str) -> core::result::Result<(alloc::string::String, alloc::string::String, u64), krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_session::AdmissionController for krishiv_session::resource_groups::ResourceGroups
@@ -1687,15 +1687,15 @@ pub fn krishiv_session::EngineRuntime::session_ended(&self, &str) -> bool
 pub fn krishiv_session::EngineRuntime::set_draining(&self, bool)
 impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::config_defaults(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
-pub fn krishiv_session::EngineRuntime::set_config_defaults(&self, &[(alloc::string::String, alloc::string::String)], &[alloc::string::String]) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::EngineRuntime::set_config_defaults(&self, &[(alloc::string::String, alloc::string::String)], &[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>, krishiv_common::error::KrishivError>
 impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::config_listing(&self, core::option::Option<&str>, bool) -> alloc::vec::Vec<krishiv_session::ConfigListing>
 impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::query_infos(&self) -> alloc::vec::Vec<krishiv_session::QueryInfo>
 pub fn krishiv_session::EngineRuntime::session_infos(&self) -> alloc::vec::Vec<krishiv_session::SessionInfo>
 impl krishiv_session::EngineRuntime
-pub fn krishiv_session::EngineRuntime::reload_resource_group_document(&self) -> core::result::Result<(), krishiv_common::error::KrishivError>
-pub fn krishiv_session::EngineRuntime::replace_resource_group_document(&self, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::EngineRuntime::reload_resource_group_document(&self) -> core::result::Result<krishiv_session::ResourceGroupDocument, krishiv_common::error::KrishivError>
+pub fn krishiv_session::EngineRuntime::replace_resource_group_document(&self, &str, &str) -> core::result::Result<krishiv_session::ResourceGroupDocument, krishiv_common::error::KrishivError>
 pub fn krishiv_session::EngineRuntime::resource_group_document(&self) -> krishiv_session::ResourceGroupDocument
 pub fn krishiv_session::EngineRuntime::resource_group_problems(&self, &str) -> alloc::vec::Vec<krishiv_common::error::KrishivError>
 pub fn krishiv_session::EngineRuntime::resource_group_infos(&self, &krishiv_common::principal::Principal, bool) -> alloc::vec::Vec<krishiv_session::ResourceGroupInfo>

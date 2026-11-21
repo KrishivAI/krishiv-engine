@@ -199,23 +199,25 @@ impl SessionAdmin {
             "cluster",
         )?;
         let old = self.runtime().resource_group_document().etag;
-        if let Err(e) = self
+        let d = match self
             .runtime()
             .replace_resource_group_document(&request.document, &request.etag)
         {
-            let e = admin_error(&e);
-            let target = format!("etag {} (current {old})", request.etag);
-            self.log(
-                call,
-                "ReplaceResourceGroupConfig",
-                &target,
-                false,
-                "failed",
-                &e.error_class,
-            );
-            return Err(e);
-        }
-        let d = self.runtime().resource_group_document();
+            Ok(installed) => installed,
+            Err(e) => {
+                let e = admin_error(&e);
+                let target = format!("etag {} (current {old})", request.etag);
+                self.log(
+                    call,
+                    "ReplaceResourceGroupConfig",
+                    &target,
+                    false,
+                    "failed",
+                    &e.error_class,
+                );
+                return Err(e);
+            }
+        };
         let target = format!("etag {old} -> {}", d.etag);
         self.log(call, "ReplaceResourceGroupConfig", &target, false, "ok", "");
         Ok(ReplaceResourceGroupConfigResponse {
@@ -237,20 +239,22 @@ impl SessionAdmin {
             "cluster",
         )?;
         let old = self.runtime().resource_group_document().etag;
-        if let Err(e) = self.runtime().reload_resource_group_document() {
-            let e = admin_error(&e);
-            let target = format!("etag {old}");
-            self.log(
-                call,
-                "ReloadResourceGroupConfig",
-                &target,
-                false,
-                "failed",
-                &e.error_class,
-            );
-            return Err(e);
-        }
-        let d = self.runtime().resource_group_document();
+        let d = match self.runtime().reload_resource_group_document() {
+            Ok(installed) => installed,
+            Err(e) => {
+                let e = admin_error(&e);
+                let target = format!("etag {old}");
+                self.log(
+                    call,
+                    "ReloadResourceGroupConfig",
+                    &target,
+                    false,
+                    "failed",
+                    &e.error_class,
+                );
+                return Err(e);
+            }
+        };
         let target = format!("etag {old} -> {}", d.etag);
         self.log(call, "ReloadResourceGroupConfig", &target, false, "ok", "");
         Ok(ReloadResourceGroupConfigResponse {
@@ -316,57 +320,72 @@ impl SessionAdmin {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let target = self.describe_defaults_change(&set, &request.unset);
-        if let Err(e) = self.runtime().set_config_defaults(&set, &request.unset) {
-            let e = admin_error(&e);
-            self.log(
-                call,
-                "SetConfigDefaults",
-                &target,
-                false,
-                "failed",
-                &e.error_class,
-            );
-            return Err(e);
-        }
+        let before = match self.runtime().set_config_defaults(&set, &request.unset) {
+            Ok(before) => before,
+            Err(e) => {
+                let e = admin_error(&e);
+                // Nothing changed: the record names the keys as asked, with no old values.
+                let target = describe_requested(&set, &request.unset);
+                self.log(
+                    call,
+                    "SetConfigDefaults",
+                    &target,
+                    false,
+                    "failed",
+                    &e.error_class,
+                );
+                return Err(e);
+            }
+        };
+        let target = describe_defaults_change(&before, &set, &request.unset);
         self.log(call, "SetConfigDefaults", &target, false, "ok", "");
         Ok(SetConfigDefaultsResponse {
             set_count: i32::try_from(set.len()).unwrap_or(i32::MAX),
             unset_count: i32::try_from(request.unset.len()).unwrap_or(i32::MAX),
         })
     }
+}
 
-    /// The keys of a defaults change with their old and new values (design §5.6), values of a
-    /// credential-named key withheld.
-    fn describe_defaults_change(&self, set: &[(String, String)], unset: &[String]) -> String {
-        // The record names the canonical key: a Spark alias resolves to its registry entry.
-        let canonical = |key: &str| {
-            krishiv_common::config::lookup(key).map_or_else(|| key.to_owned(), |e| e.key.to_owned())
-        };
-        let current = |key: &str| {
-            self.runtime()
-                .config_listing(Some(key), true)
-                .into_iter()
-                .find(|r| r.key == key)
-                .and_then(|r| r.value)
-        };
-        let mut parts: Vec<String> = set
-            .iter()
-            .map(|(k, v)| {
-                let k = canonical(k);
-                format!(
-                    "set {k}: {} -> {}",
-                    shown(&k, current(&k).as_deref()),
-                    shown(&k, Some(v))
-                )
-            })
-            .collect();
-        parts.extend(unset.iter().map(|k| {
-            let k = canonical(k);
-            format!("unset {k}: {}", shown(&k, current(&k).as_deref()))
-        }));
-        parts.join("; ")
+/// The canonical key of `key`: a Spark alias resolves to its registry entry.
+fn canonical(key: &str) -> String {
+    krishiv_common::config::lookup(key).map_or_else(|| key.to_owned(), |e| e.key.to_owned())
+}
+
+/// The keys of a refused defaults change, as asked.
+fn describe_requested(set: &[(String, String)], unset: &[String]) -> String {
+    let mut parts: Vec<String> = set
+        .iter()
+        .map(|(k, v)| format!("set {}: -> {}", canonical(k), shown(&canonical(k), Some(v))))
+        .collect();
+    parts.extend(unset.iter().map(|k| format!("unset {}", canonical(k))));
+    parts.join("; ")
+}
+
+/// The keys of an applied defaults change with their old and new values (design §5.6), values of
+/// a credential-named key withheld. `before` is what the change replaced, as it read it under the
+/// defaults lock (`set` entries first, then `unset`).
+fn describe_defaults_change(
+    before: &[(String, Option<String>)],
+    set: &[(String, String)],
+    unset: &[String],
+) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(set.len() + unset.len());
+    let mut old = before.iter();
+    for (_, value) in set {
+        if let Some((key, previous)) = old.next() {
+            parts.push(format!(
+                "set {key}: {} -> {}",
+                shown(key, previous.as_deref()),
+                shown(key, Some(value))
+            ));
+        }
     }
+    for _ in unset {
+        if let Some((key, previous)) = old.next() {
+            parts.push(format!("unset {key}: {}", shown(key, previous.as_deref())));
+        }
+    }
+    parts.join("; ")
 }
 
 #[cfg(test)]

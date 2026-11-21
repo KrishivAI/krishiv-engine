@@ -173,27 +173,35 @@ impl ResourceGroups {
             .replacing
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        self.swap(json)
+        self.swap(json).map(drop)
     }
 
-    /// The swap of [`ResourceGroups::reload_json`], for a caller holding `replacing`.
-    fn swap(&self, json: &str) -> Result<(), KrishivError> {
+    /// The swap of [`ResourceGroups::reload_json`], for a caller holding `replacing`. Returns the
+    /// document, etag and load time it installed, read under the same lock as the swap.
+    fn swap(&self, json: &str) -> Result<(String, String, u64), KrishivError> {
         let config = config::parse(json, self.total_memory)?;
         // Held across the swap, so a query that selects a group after the swap sees the new
         // selectors and one that selected before it asks again when its group is gone.
         let mut guard = self.loaded.write().unwrap_or_else(PoisonError::into_inner);
         self.shared.reload(&config.roots);
-        *guard = Arc::new(Loaded::new(json, config, self.shared.now()));
-        Ok(())
+        let loaded = Arc::new(Loaded::new(json, config, self.shared.now()));
+        let installed = (
+            loaded.document.clone(),
+            loaded.etag.clone(),
+            loaded.loaded_at_ms,
+        );
+        *guard = loaded;
+        Ok(installed)
     }
 
-    /// As [`ResourceGroups::reload_json`], from the file at `path`.
+    /// As [`ResourceGroups::reload_json`], from the file at `path`; returns the document, etag and
+    /// load time it installed.
     ///
     /// # Errors
     ///
     /// `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID` when the file cannot be read, and as
     /// [`ResourceGroups::from_json`] otherwise.
-    pub fn reload_file(&self, path: &str) -> Result<(), KrishivError> {
+    pub fn reload_file(&self, path: &str) -> Result<(String, String, u64), KrishivError> {
         let _one = self
             .replacing
             .lock()
@@ -242,14 +250,13 @@ impl ResourceGroups {
     /// `system.resource_groups`).
     #[must_use]
     pub fn rows(&self) -> Vec<GroupRow> {
-        let (etag, loaded_at_ms) = {
-            let doc = self.current();
-            (
-                doc.etag.clone(),
-                i64::try_from(doc.loaded_at_ms).unwrap_or(i64::MAX),
-            )
-        };
+        // The loaded read guard is held through the row collection: `swap` takes the write lock
+        // before it changes the tree, so the rows and the etag come from one document.
+        let loaded = self.loaded.read().unwrap_or_else(PoisonError::into_inner);
+        let etag = loaded.etag.clone();
+        let loaded_at_ms = i64::try_from(loaded.loaded_at_ms).unwrap_or(i64::MAX);
         let mut rows = self.shared.rows();
+        drop(loaded);
         // A removed group came from an earlier document: it carries neither this etag nor this time.
         for row in rows.iter_mut().filter(|r| r.state != "removed") {
             row.config_etag.clone_from(&etag);

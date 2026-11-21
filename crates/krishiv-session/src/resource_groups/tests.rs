@@ -655,6 +655,25 @@ fn a_removed_group_takes_nothing_new_and_goes_with_its_last_query() {
         removed.is_some_and(|r| r.config_etag.is_empty() && r.loaded_at_ms == 0),
         "a removed row carries no etag or load time"
     );
+    let active = rg
+        .rows()
+        .into_iter()
+        .find(|r| r.group_id == "root.a")
+        .unwrap_or_else(|| panic!("root.a is in the tree"));
+    assert_eq!(
+        active.config_etag,
+        rg.etag(),
+        "an active row has the new etag"
+    );
+    assert_ne!(rg.etag(), "");
+    assert_eq!(
+        active.loaded_at_ms,
+        i64::try_from(rg.loaded_at_ms()).unwrap_or(i64::MAX)
+    );
+    assert_ne!(
+        active.loaded_at_ms, 0,
+        "an active row has the new load time"
+    );
     // The selector for bob is gone: his next query goes to the default group.
     assert_eq!(routed(&rg, &request("bob")), "root.a");
     // The running query still counts in the parent, and ends cleanly.
@@ -847,8 +866,21 @@ fn a_waiting_query_reports_the_group_it_queued_in() {
     let mut fut = rg.admit(&waiting);
     assert!(poll(&mut fut).is_none());
     assert_eq!(rg.queued_group(&waiting).as_deref(), Some("root.q"));
+    // A reload routes new requests to another group while this one keeps waiting in root.q.
+    let moved = r#"{
+      "rootGroups": [{"name": "root", "hardConcurrencyLimit": 2, "maxQueued": 3,
+                      "subGroups": [{"name": "q", "hardConcurrencyLimit": 2, "maxQueued": 3},
+                                    {"name": "z", "hardConcurrencyLimit": 2, "maxQueued": 3}]}],
+      "defaultGroup": "root.z"
+    }"#;
+    rg.reload_json(moved).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        rg.queued_group(&waiting).as_deref(),
+        Some("root.q"),
+        "a waiting query reports the group it waits in, not a fresh selection"
+    );
     drop(fut);
     // the entry is gone once the wait ends: the answer is a fresh selection again
-    assert_eq!(rg.queued_group(&waiting).as_deref(), Some("root.q"));
+    assert_eq!(rg.queued_group(&waiting).as_deref(), Some("root.z"));
     assert!(rg.waiting.lock().unwrap().is_empty());
 }

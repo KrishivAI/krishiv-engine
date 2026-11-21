@@ -320,3 +320,42 @@ async fn new_clone_and_reset_see_the_defaults() {
         "clone RESET"
     );
 }
+
+#[tokio::test]
+async fn a_clone_keeps_the_source_snapshot_until_reset() {
+    // Spark's `cloneSession` copies the source's configuration, and its `RESET` goes to the shared
+    // state's: a clone of a session built before a defaults change starts from the source's value
+    // and returns to the new default only on `RESET`.
+    let rt = runtime();
+    let key = "krishiv.sql.ansi.enabled";
+    let base = Session::builder()
+        .runtime(Arc::clone(&rt))
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    rt.set_config_defaults(&[pair(key, "true")], &[])
+        .unwrap_or_else(|e| panic!("{e}"));
+    let clone = base.clone_session().unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(clone.conf().get(key).as_deref(), Some("false"));
+    clone
+        .sql("RESET")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(clone.conf().get(key).as_deref(), Some("true"));
+}
+
+#[test]
+fn a_change_reports_the_values_it_replaced() {
+    let rt = runtime();
+    let key = "krishiv.sql.ansi.enabled";
+    let first = rt
+        .set_config_defaults(&[pair(key, "true")], &[])
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(first, vec![(key.to_owned(), Some("false".to_owned()))]);
+    let second = rt
+        .set_config_defaults(&[], &[key.to_owned()])
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(second, vec![(key.to_owned(), Some("true".to_owned()))]);
+}

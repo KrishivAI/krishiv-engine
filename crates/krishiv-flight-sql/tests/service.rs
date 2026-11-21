@@ -1998,7 +1998,22 @@ async fn a_requests_traceparent_names_the_trace_of_its_query_and_update() {
     );
     *odd.metadata_mut() = tonic::metadata::MetadataMap::from_headers(headers);
     let response = h.client.get_flight_info(odd).await.expect("info");
-    fetch(&mut h, OPS, Some(&cookie), ticket(&response.into_inner()))
+    // The executing DoGet carries the same opaque header: the extraction on the path that runs
+    // the query is what is exercised.
+    let mut get = authed(ticket(&response.into_inner()), OPS, Some(&cookie));
+    let mut headers = std::mem::take(get.metadata_mut()).into_headers();
+    headers.insert(
+        "traceparent",
+        tonic::codegen::http::HeaderValue::from_bytes(b"00-ab\xe9-00f067aa0ba902b7-01")
+            .expect("opaque bytes"),
+    );
+    *get.metadata_mut() = tonic::metadata::MetadataMap::from_headers(headers);
+    let stream = h.client.do_get(get).await.expect("do_get");
+    let data = stream
+        .into_inner()
+        .map_err(|s| FlightError::Tonic(Box::new(s)));
+    let _rows: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(data)
+        .try_collect()
         .await
         .expect("fetch");
     // A query without the header has no trace.

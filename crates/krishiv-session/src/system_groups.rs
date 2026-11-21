@@ -108,7 +108,9 @@ pub(crate) fn columns(sources: &Sources) -> Vec<ArrayRef> {
         })),
         Arc::new(
             TimestampMicrosecondArray::from_iter(
-                rows.iter().map(|r| micros(r.scan_window_resets_at_ms)),
+                rows.iter()
+                    .enumerate()
+                    .map(|(i, r)| micros(r.scan_window_resets_at_ms.filter(|_| shown(i)))),
             )
             .with_timezone("UTC"),
         ),

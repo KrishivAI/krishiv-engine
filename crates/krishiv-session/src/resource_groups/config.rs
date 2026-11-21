@@ -107,18 +107,20 @@ fn build(json: &str, total_memory: usize) -> (Option<Config>, Vec<KrishivError>)
     if let Err(e) = only_keys(obj, &["rootGroups", "selectors", "defaultGroup"], &[], "$") {
         return (None, vec![e]);
     }
-    let Some(roots_json) = obj.get("rootGroups").and_then(Value::as_array) else {
-        return (
-            None,
-            vec![invalid("rootGroups", "required, an array of groups")],
-        );
+    // A bad `rootGroups` is one error among the document's: the default group and the selectors
+    // are still checked, and only the checks that need a usable tree are skipped.
+    let roots_json: &[Value] = match obj.get("rootGroups").and_then(Value::as_array) {
+        None => {
+            errors.push(invalid("rootGroups", "required, an array of groups"));
+            &[]
+        }
+        Some(list) if list.is_empty() => {
+            errors.push(invalid("rootGroups", "at least one group is required"));
+            &[]
+        }
+        Some(list) => list,
     };
-    if roots_json.is_empty() {
-        return (
-            None,
-            vec![invalid("rootGroups", "at least one group is required")],
-        );
-    }
+    let tree_usable = !roots_json.is_empty();
     let mut failed = Vec::new();
     let mut partial = Vec::new();
     let mut roots = Vec::new();
@@ -133,7 +135,9 @@ fn build(json: &str, total_memory: usize) -> (Option<Config>, Vec<KrishivError>)
             roots.push(g);
         }
     }
-    if let Err(e) = unique_names(roots.iter().map(|g| g.name.as_str()), "rootGroups") {
+    // Names are checked as written, so a group that fails on another setting still takes its
+    // name in the duplicate check.
+    if let Err(e) = unique_names(written_names(roots_json), "rootGroups") {
         errors.push(e);
     }
     let default_group = obj.get("defaultGroup").and_then(Value::as_str);
@@ -162,11 +166,18 @@ fn build(json: &str, total_memory: usize) -> (Option<Config>, Vec<KrishivError>)
         default_group: default_group.unwrap_or_default().to_owned(),
     };
     let mut check = |id: &str, at: &str| {
-        if !failed.iter().any(|f| related(f, id))
-            && !partial.iter().any(|p| p == id)
-            && let Err(e) = check_leaf(&cfg, id, at)
-        {
-            errors.push(e);
+        if !tree_usable {
+            return;
+        }
+        match check_leaf(&cfg, id, at) {
+            Ok(()) => {}
+            // A group a valid child proves is not a leaf stays one however the others are fixed.
+            Err(Leaf::HasSubgroups(e)) => errors.push(e),
+            Err(Leaf::Missing(e)) => {
+                if !failed.iter().any(|f| related(f, id)) && !partial.iter().any(|p| p == id) {
+                    errors.push(e);
+                }
+            }
         }
     };
     if default_group.is_some() {
@@ -195,29 +206,44 @@ struct Walk<'a> {
     partial: &'a mut Vec<String>,
 }
 
+/// Why a reference is not a leaf group.
+enum Leaf {
+    /// No such group in the parsed tree (it may be one that failed to parse).
+    Missing(KrishivError),
+    /// The group exists and has subgroups.
+    HasSubgroups(KrishivError),
+}
+
+/// The `name` of each group object as written, whatever else is wrong with the object.
+fn written_names(groups: &[Value]) -> impl Iterator<Item = &str> {
+    groups
+        .iter()
+        .filter_map(|g| g.get("name").and_then(Value::as_str))
+}
+
 /// `path` must name a leaf group (dotted names, `root.etl.nightly`).
-fn check_leaf(cfg: &Config, id: &str, at: &str) -> Result<(), KrishivError> {
+fn check_leaf(cfg: &Config, id: &str, at: &str) -> Result<(), Leaf> {
     let mut parts = id.split('.');
     let first = parts.next().unwrap_or_default();
     let mut cur = cfg
         .roots
         .iter()
         .find(|g| g.name == first)
-        .ok_or_else(|| invalid(at, format!("group {id} does not exist")))?;
+        .ok_or_else(|| Leaf::Missing(invalid(at, format!("group {id} does not exist"))))?;
     for part in parts {
         cur = cur
             .children
             .iter()
             .find(|g| g.name == part)
-            .ok_or_else(|| invalid(at, format!("group {id} does not exist")))?;
+            .ok_or_else(|| Leaf::Missing(invalid(at, format!("group {id} does not exist"))))?;
     }
     if cur.children.is_empty() {
         Ok(())
     } else {
-        Err(invalid(
+        Err(Leaf::HasSubgroups(invalid(
             at,
             format!("group {id} has subgroups; a selector or default must name a leaf"),
-        ))
+        )))
     }
 }
 
@@ -290,10 +316,7 @@ fn group(v: &Value, at: &str, parent: &str, ctx: &mut Walk<'_>) -> Option<GroupC
                     None => child_failed = true,
                 }
             }
-            if let Err(e) = unique_names(
-                children.iter().map(|g| g.name.as_str()),
-                &format!("{at}.subGroups"),
-            ) {
+            if let Err(e) = unique_names(written_names(subs), &format!("{at}.subGroups")) {
                 ctx.errors.push(e);
                 child_failed = true;
             }

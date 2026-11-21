@@ -143,10 +143,13 @@ impl Fixture {
         let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
             .await
             .unwrap();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
+        let body = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes)
+                .unwrap_or_else(|e| panic!("{status}: not JSON ({e}): {bytes:?}"))
+        };
+        (status, body)
     }
 
     async fn replace(&self, who: &str, document: &str, etag: &str) -> (StatusCode, Value) {
@@ -166,10 +169,7 @@ async fn groups_are_listed_to_everyone_but_the_document_needs_monitor() {
     // A viewer holds no query: it sees no group.
     let (status, body) = f.call("v:viewer", "GET", "/resourceGroups", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(
-        body["groups"].as_array().is_none_or(Vec::is_empty),
-        "{body}"
-    );
+    assert_eq!(body["groups"], serde_json::json!([]), "{body}");
     for (method, path) in [
         ("GET", "/resourceGroups/config"),
         ("POST", "/resourceGroups/config:validate"),
@@ -223,6 +223,11 @@ async fn validate_reports_the_loader_error_and_changes_nothing() {
         .call("o:operator", "GET", "/resourceGroups/config", None)
         .await;
     assert_eq!(before["etag"], after["etag"]);
+    assert_eq!(
+        std::fs::read_to_string(&f.path).unwrap(),
+        GROUPS,
+        "validation leaves the file as it was"
+    );
 }
 
 #[tokio::test]
@@ -245,11 +250,9 @@ async fn replace_needs_manage_and_a_fresh_etag_and_writes_the_file() {
     let (status, body) = f.replace("a:admin", GROUPS_V2, &etag).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_ne!(body["etag"].as_str().unwrap(), etag);
-    let on_disk = std::fs::read_to_string(&f.path).unwrap();
-    assert!(
-        on_disk.contains('8'),
-        "the file holds the new document: {on_disk}"
-    );
+    let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(&f.path).unwrap()).unwrap();
+    let expected: Value = serde_json::from_str(GROUPS_V2).unwrap();
+    assert_eq!(on_disk, expected, "the file holds the new document");
     let (_, after) = f.call("o:operator", "GET", "/resourceGroups", None).await;
     assert_eq!(after["groups"][0]["hardConcurrencyLimit"], 8);
 
@@ -306,10 +309,7 @@ async fn without_a_group_file_the_reads_are_empty_and_the_changes_are_read_only(
         .call("o:operator", "GET", "/resourceGroups/config", None)
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(
-        body["document"].as_str().is_none_or(str::is_empty),
-        "{body}"
-    );
+    assert_eq!(body["document"], "", "{body}");
     let (status, body) = f.replace("a:admin", GROUPS, "").await;
     assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{body}");
     assert_eq!(
@@ -373,7 +373,7 @@ async fn get_config_never_shows_an_inline_spark_token_but_shows_a_reference() {
     );
     for prefix in ["spark.", "krishiv.auth."] {
         for who in ["o:operator", "a:admin"] {
-            let (_, body) = f
+            let (status, body) = f
                 .call(
                     who,
                     "GET",
@@ -381,7 +381,18 @@ async fn get_config_never_shows_an_inline_spark_token_but_shows_a_reference() {
                     None,
                 )
                 .await;
+            assert_eq!(status, StatusCode::OK, "{who} {prefix}: {body}");
             assert!(!body.to_string().contains("s3cr3t-inline"), "{who}: {body}");
+            if prefix == "spark." {
+                let row = body["entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|e| e["key"] == "spark.connect.authenticate.token")
+                    .unwrap_or_else(|| panic!("{who}: no token row in {body}"));
+                assert_eq!(row["withheld"], true, "{who}: {row}");
+                assert!(row["value"].is_null(), "{who}: {row}");
+            }
         }
     }
     let (_, body) = f
@@ -480,9 +491,14 @@ async fn validate_reports_every_problem_with_its_path() {
         .iter()
         .map(|p| p["path"].as_str().unwrap())
         .collect();
-    assert_eq!(paths.len(), 2, "{body}");
-    assert!(paths[0].starts_with("rootGroups[0]"), "{paths:?}");
-    assert!(paths[1].starts_with("rootGroups[1]"), "{paths:?}");
+    assert_eq!(
+        paths,
+        [
+            "rootGroups[0].hardConcurrencyLimit",
+            "rootGroups[1].hardConcurrencyLimit"
+        ],
+        "{body}"
+    );
 }
 
 #[tokio::test]
@@ -508,16 +524,15 @@ async fn validate_reports_every_problem_of_one_root_with_its_paths() {
         .iter()
         .map(|p| p["path"].as_str().unwrap())
         .collect();
-    assert_eq!(paths.len(), 3, "{body}");
-    assert!(
-        paths[0].starts_with("rootGroups[0].subGroups[0]"),
-        "{paths:?}"
+    assert_eq!(
+        paths,
+        [
+            "rootGroups[0].subGroups[0].hardConcurrencyLimit",
+            "rootGroups[0].subGroups[1].maxQueued",
+            "defaultGroup"
+        ],
+        "{body}"
     );
-    assert!(
-        paths[1].starts_with("rootGroups[0].subGroups[1]"),
-        "{paths:?}"
-    );
-    assert_eq!(paths[2], "defaultGroup", "{paths:?}");
 }
 
 #[tokio::test]
@@ -554,6 +569,34 @@ async fn a_replayed_request_id_answers_the_stored_response_and_applies_once() {
         .await;
     assert_eq!((s1, s2), (StatusCode::OK, StatusCode::OK), "{x} {y}");
     assert_eq!(x, y);
+
+    // Unset the key under another id, then replay `req-2`: an implementation that ran it again
+    // would set the key back to `true`.
+    let unset = serde_json::json!({
+        "unset": ["krishiv.sql.ansi.enabled"], "requestId": "req-3"
+    })
+    .to_string();
+    let (status, body) = f
+        .call("a:admin", "PATCH", "/config/defaults", Some(&unset))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (s3, z) = f
+        .call("a:admin", "PATCH", "/config/defaults", Some(&set))
+        .await;
+    assert_eq!(s3, StatusCode::OK, "{z}");
+    assert_eq!(x, z, "the replay answers the first response");
+    let (_, entry) = f
+        .call(
+            "a:admin",
+            "GET",
+            "/config?prefix=krishiv.sql.ansi.enabled",
+            None,
+        )
+        .await;
+    assert_ne!(
+        entry["entries"][0]["source"], "admin",
+        "the replay did not set the key again: {entry}"
+    );
 }
 
 #[tokio::test]
@@ -567,26 +610,39 @@ async fn a_request_dropped_mid_flight_still_stores_its_result_for_the_retry() {
         "document": GROUPS_V2, "etag": etag, "requestId": "req-drop"
     })
     .to_string();
-    // The client goes away right after the request starts: the future is dropped unfinished.
     let dropped = tokio::time::timeout(
         std::time::Duration::ZERO,
         f.call("a:admin", "PUT", "/resourceGroups/config", Some(&body)),
     )
     .await;
+    assert!(dropped.is_err(), "the request was dropped unfinished");
     drop(dropped);
-    // Let the detached mutation finish, then retry with the same id: the stored response comes
-    // back; run again it would be a 412 (the etag moved).
-    let mut answer = (StatusCode::PRECONDITION_FAILED, serde_json::Value::Null);
-    for _ in 0..50 {
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        answer = f
-            .call("a:admin", "PUT", "/resourceGroups/config", Some(&body))
-            .await;
-        if answer.0 == StatusCode::OK {
+    // The detached mutation finishes on its own: the file holds the new document before any
+    // retry could have written it.
+    let expected: Value = serde_json::from_str(GROUPS_V2).unwrap();
+    let mut written = false;
+    for _ in 0..250 {
+        let on_disk = std::fs::read_to_string(&f.path).unwrap_or_default();
+        if serde_json::from_str::<Value>(&on_disk).is_ok_and(|d| d == expected) {
+            written = true;
             break;
         }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    assert_eq!(answer.0, StatusCode::OK, "{}", answer.1);
+    assert!(written, "the dropped request's mutation still completed");
+    // The retry with the same id gets the stored response; run again it would be a 412 (the etag
+    // moved).
+    let (status, answer) = f
+        .call("a:admin", "PUT", "/resourceGroups/config", Some(&body))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let (_, now) = f
+        .call("a:admin", "GET", "/resourceGroups/config", None)
+        .await;
+    assert_eq!(
+        answer["etag"], now["etag"],
+        "the stored result is the applied one"
+    );
 }
 
 #[tokio::test]
@@ -618,8 +674,12 @@ async fn set_config_defaults_is_all_or_none_and_shows_as_admin_source() {
     assert_eq!(status, StatusCode::FORBIDDEN, "an operator may not set");
 
     // One bad key refuses the batch: the good key is not applied either.
-    let batch = serde_json::json!({ "set": { key: "true", "krishiv.auth.defaultRole": "admin" } })
-        .to_string();
+    let (_, original) = f
+        .call("a:admin", "GET", &format!("/config?prefix={key}"), None)
+        .await;
+    let batch =
+        serde_json::json!({ "set": { key: "true" }, "unset": ["krishiv.auth.defaultRole"] })
+            .to_string();
     let (status, body) = f
         .call("a:admin", "PATCH", "/config/defaults", Some(&batch))
         .await;
@@ -628,7 +688,10 @@ async fn set_config_defaults_is_all_or_none_and_shows_as_admin_source() {
     let (_, body) = f
         .call("a:admin", "GET", &format!("/config?prefix={key}"), None)
         .await;
-    assert_ne!(body["entries"][0]["source"], "admin", "{body}");
+    assert_eq!(
+        body["entries"][0], original["entries"][0],
+        "the valid change before the bad key was not applied"
+    );
 
     let (status, body) = f
         .call(
@@ -750,20 +813,26 @@ async fn config_changes_write_action_records_with_old_and_new_values() {
     f.call("rec:operator", "PATCH", "/config/defaults", Some(&alias))
         .await;
 
-    let log: Vec<String> = records
-        .0
-        .lock()
-        .unwrap()
+    let everything: Vec<String> = records.0.lock().unwrap().clone();
+    assert!(
+        everything.iter().all(|l| !l.contains("topsecret-value")),
+        "no record of the process carries the credential: {everything:#?}"
+    );
+    let log: Vec<String> = everything
         .iter()
         .filter(|l| l.contains("principal=\"rec\""))
         .cloned()
         .collect();
+    // Each mutation writes exactly one record of its outcome.
     let find = |rpc: &str, result: &str| -> &String {
-        log.iter()
-            .find(|l| {
+        let found: Vec<&String> = log
+            .iter()
+            .filter(|l| {
                 l.contains(&format!("rpc=\"{rpc}\"")) && l.contains(&format!("result=\"{result}\""))
             })
-            .unwrap_or_else(|| panic!("no {rpc} {result} in {log:#?}"))
+            .collect();
+        assert_eq!(found.len(), 1, "{rpc} {result} once in {log:#?}");
+        found[0]
     };
     let replaced = find("ReplaceResourceGroupConfig", "ok");
     assert!(replaced.contains(&format!("{old} -> {new}")), "{replaced}");
@@ -932,6 +1001,8 @@ async fn the_group_and_config_rpcs_answer_over_grpc() {
     .await
     .unwrap();
     assert_ne!(replaced.etag, got.etag);
+    // An edit on disk is what a reload picks up: write the original document back first.
+    std::fs::write(&path, GROUPS).unwrap();
     let reloaded: ReloadResourceGroupConfigResponse = call(
         &mut grpc,
         "a:admin",
@@ -940,7 +1011,20 @@ async fn the_group_and_config_rpcs_answer_over_grpc() {
     )
     .await
     .unwrap();
-    assert_eq!(reloaded.etag, replaced.etag);
+    assert_eq!(
+        reloaded.etag, got.etag,
+        "the reload read the edited file, not the installed document"
+    );
+    assert_ne!(reloaded.etag, replaced.etag);
+    let current: GetResourceGroupConfigResponse = call(
+        &mut grpc,
+        "o:operator",
+        "GetResourceGroupConfig",
+        GetResourceGroupConfigRequest {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(current.document, got.document);
     let config: GetConfigResponse = call(
         &mut grpc,
         "o:operator",
@@ -952,7 +1036,32 @@ async fn the_group_and_config_rpcs_answer_over_grpc() {
     )
     .await
     .unwrap();
-    assert!(!config.entries.is_empty());
+    assert!(
+        config
+            .entries
+            .iter()
+            .any(|e| e.key == "krishiv.sql.ansi.enabled"),
+        "{config:?}"
+    );
+    assert!(
+        config
+            .entries
+            .iter()
+            .all(|e| e.key.starts_with("krishiv.sql.ansi")),
+        "the prefix filters the keys: {config:?}"
+    );
+    let unfiltered: GetConfigResponse = call(
+        &mut grpc,
+        "o:operator",
+        "GetConfig",
+        GetConfigRequest {
+            page_size: 500,
+            ..GetConfigRequest::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(unfiltered.entries.len() > config.entries.len());
     let set: SetConfigDefaultsResponse = call(
         &mut grpc,
         "a:admin",

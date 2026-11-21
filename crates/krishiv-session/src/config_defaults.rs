@@ -3,12 +3,13 @@
 //! design `P3-T066-admin-api.md` §5.5).
 //!
 //! The defaults are an overlay on the runtime's startup pairs: every session built afterwards
-//! starts from them, a session that exists keeps its values, `unset` returns a key to its startup
+//! starts from them (a clone keeps its source's configuration until its `RESET`, as Spark's
+//! `cloneSession` does), a session that exists keeps its values, `unset` returns a key to its startup
 //! value, and nothing is persisted. Only a registered, session-scope key whose `settable_by` is
 //! `Admin` or `User` can be set; the keys that bound what a role can do (`krishiv.auth.*`, the path
 //! allowlists) are startup-only, so even an administrator cannot widen them here.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, PoisonError};
 
 use krishiv_common::config::{Config, REGISTRY, Scope, SettableBy, lookup};
@@ -64,11 +65,15 @@ impl EngineRuntime {
     /// `KRISHIV_UNKNOWN_CONFIG` for a key that is not registered, `CANNOT_MODIFY_STATIC_CONFIG`
     /// for a cluster-scope, startup-only or build-time key, the key's own error for an invalid
     /// value, and `INVALID_CONF_VALUE.REQUIREMENT` when a key is both set and unset.
+    ///
+    /// Returns each key's canonical name and the value it had just before this call changed it
+    /// (`None` when it had none), the `set` keys first, then the `unset` keys: read under the
+    /// same lock as the change, so concurrent calls each report what they replaced.
     pub fn set_config_defaults(
         &self,
         set: &[(String, String)],
         unset: &[String],
-    ) -> Result<(), KrishivError> {
+    ) -> Result<Vec<(String, Option<String>)>, KrishivError> {
         // One write lock for the whole read-modify-write: two concurrent calls never start from the
         // same copy, so neither loses the other's change.
         let mut guard = self
@@ -76,17 +81,28 @@ impl EngineRuntime {
             .write()
             .unwrap_or_else(PoisonError::into_inner);
         let mut next: BTreeMap<String, String> = guard.as_ref().clone();
-        let mut set_keys = Vec::with_capacity(set.len());
+        let explicit: BTreeMap<&str, String> =
+            self.config.explicit_registered().into_iter().collect();
+        let previous = |key: &'static str| {
+            guard.get(key).cloned().or_else(|| {
+                explicit.get(key).cloned().or_else(|| {
+                    lookup(key).and_then(|e| e.default.as_ref().map(ToString::to_string))
+                })
+            })
+        };
+        let mut before = Vec::with_capacity(set.len() + unset.len());
+        let mut set_keys = HashSet::with_capacity(set.len());
         for (key, value) in set {
             let entry = admin_settable(key)?;
             // The session's own `SET` checks (time zone, SET PATH grammar, unsupported switches).
             RuntimeConf::new(Arc::new(ConfStore::new(Config::new()))).set(key, value)?;
+            before.push((entry.to_owned(), previous(entry)));
             next.insert(entry.to_owned(), value.clone());
-            set_keys.push(entry);
+            set_keys.insert(entry);
         }
         for key in unset {
             let entry = admin_settable(key)?;
-            if set_keys.contains(&entry) {
+            if set_keys.contains(entry) {
                 return Err(InvalidConfValueRequirement {
                     conf_name: key.clone(),
                     conf_value: String::new(),
@@ -95,10 +111,11 @@ impl EngineRuntime {
                 }
                 .into());
             }
+            before.push((entry.to_owned(), previous(entry)));
             next.remove(entry);
         }
         *guard = Arc::new(next);
-        Ok(())
+        Ok(before)
     }
 }
 
