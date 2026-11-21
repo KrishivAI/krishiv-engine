@@ -119,9 +119,9 @@ pub(super) async fn run(
                 .get("spark.sql.session.timeZone")
                 .map(Arc::from);
             let tz = tz.as_ref();
-            let schema = df.schema().await?;
+            let schema = df.schema_boxed().await?;
             let mut batches = Vec::new();
-            for batch in df.collect().await? {
+            for batch in df.collect_boxed().await? {
                 batches.push(arrow::spark_batch(&batch, tz)?);
             }
             if batches.is_empty() {

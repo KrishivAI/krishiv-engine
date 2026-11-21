@@ -526,6 +526,34 @@ impl Session {
         self.with_options(options)?.sql(query).await
     }
 
+    /// [`Self::sql`] as a boxed future. An `async fn` is compiled into every crate that awaits it, and this
+    /// one carries every statement the session runs (about a megabyte of code a copy); the boxed future is
+    /// compiled once, here. A crate that ships beside others in one binary (the Python extension links the
+    /// console, Spark Connect and its own calls) awaits this one.
+    ///
+    /// # Errors
+    /// As [`Self::sql`].
+    #[inline(never)]
+    pub fn sql_boxed<'a>(
+        &'a self,
+        query: &'a str,
+    ) -> krishiv_plan::analyzer::BoxFuture<'a, Result<DataFrame, KrishivError>> {
+        Box::pin(self.sql(query))
+    }
+
+    /// [`Self::sql_with`] as a boxed future, compiled once in this crate ([`Self::sql_boxed`]).
+    ///
+    /// # Errors
+    /// As [`Self::sql_with`].
+    #[inline(never)]
+    pub fn sql_with_boxed<'a>(
+        &'a self,
+        query: &'a str,
+        options: crate::QueryOptions,
+    ) -> krishiv_plan::analyzer::BoxFuture<'a, Result<DataFrame, KrishivError>> {
+        Box::pin(self.sql_with(query, options))
+    }
+
     /// Runs `query` as [`Self::sql`] does and says what it was: a lazy query, or a command (any
     /// statement other than a query, which `sql` runs at once, as Spark's eager `Command`s).
     ///

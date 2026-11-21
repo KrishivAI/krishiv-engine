@@ -156,7 +156,7 @@ impl PySession {
     /// Runs the SQL query `query` through analysis; its DataFrame.
     fn sql(&self, py: Python<'_>, query: &str) -> PyResult<PyDataFrame> {
         let (session, owned) = (self.inner.clone(), query.to_owned());
-        let inner = block_on_sql(py, query, async move { session.sql(&owned).await })?;
+        let inner = block_on_sql(py, query, async move { session.sql_boxed(&owned).await })?;
         Ok(PyDataFrame::new(inner))
     }
 
