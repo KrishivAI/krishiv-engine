@@ -66,7 +66,12 @@ jobs:
         # cases per PR).
         env:
           KRISHIV_TIGHT_MEMORY_CASES: "256"
-        run: cargo nextest run --workspace --all-features --locked --no-tests=pass
+        run: cargo nextest run --workspace --all-features --locked --no-tests=pass 2>&1 | tee "$RUNNER_TEMP/nextest.log"
+      # A test that passed only on a retry is flaky: it must be in tests/quarantine.toml (owner, issue,
+      # deadline) or the run fails and prints the stanza to add.
+      - name: flaky tests are quarantined
+        if: always()
+        run: cargo xtask quarantine --flaky "$RUNNER_TEMP/nextest.log"
       # Needs Java 21 or Docker and the network (the driver jar), so it is ignored in the
       # workspace run above (P3-T101 note §17). The Java toolcache is removed above; the
       # script falls back to Docker.
