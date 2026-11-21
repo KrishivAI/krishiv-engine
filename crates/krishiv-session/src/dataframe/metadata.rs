@@ -80,15 +80,22 @@ impl DataFrame {
     }
 
     /// The analysis of this DataFrame's plan, as [`Self::analyzed`], for a caller that never runs it
-    /// (see [`Self::schema_for_metadata`]): reads need `Browse`, and the result is not kept.
+    /// (see [`Self::schema_for_metadata`]): reads need `Browse`, and the result is not kept. A plan
+    /// holding a definer view's inlined query is shown only as [`Self::analyzed`] shows it (review
+    /// r3 X2); a caller that only validates the plan asks [`Self::schema_for_metadata`].
     ///
     /// # Errors
-    /// As [`Self::schema_for_metadata`].
+    /// As [`Self::schema_for_metadata`]; `KRISHIV_INSUFFICIENT_PERMISSIONS`, redacted, as
+    /// [`Self::analyzed`].
     #[cfg(feature = "unstable-ir")]
     pub async fn analyzed_for_metadata(&self) -> Result<Arc<AnalyzedPlan>, KrishivError> {
         let df = self.clone();
         self.session
-            .on_executor(async move { df.metadata_analysis_here().await })
+            .on_executor(async move {
+                let analyzed = df.metadata_analysis_here().await?;
+                df.session.authorize_shown_definer_reads(&analyzed).await?;
+                Ok(analyzed)
+            })
             .await
     }
 
@@ -106,7 +113,8 @@ impl DataFrame {
         let mut env = self.session.query_env();
         env.analysis.mode = AnalysisMode::Metadata;
         let plan = self.plan_with_checkpoints().await?;
-        let analyzed = self.session.analyze_in(&plan, &env, None).await?;
+        // A metadata analysis runs nothing: no observation to complete.
+        let (analyzed, _keeps) = self.session.analyze_in(&plan, &env, None).await?;
         Ok(Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),

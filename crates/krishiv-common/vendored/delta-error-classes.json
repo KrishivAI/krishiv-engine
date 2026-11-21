@@ -5,6 +5,14 @@
     ],
     "sqlState" : "42809"
   },
+  "DELTA_CAST_OVERFLOW_IN_TABLE_WRITE" : {
+    "message" : [
+      "Failed to write a value of <sourceType> type into the <targetType> type column <columnName> due to an overflow.",
+      "Use `try_cast` on the input value to tolerate overflow and return NULL instead.",
+      "If necessary, set <storeAssignmentPolicyFlag> to \"LEGACY\" to bypass this error or set <updateAndMergeCastingFollowsAnsiEnabledFlag> to true to revert to the old behaviour and follow <ansiEnabledFlag> in UPDATE and MERGE."
+    ],
+    "sqlState" : "22003"
+  },
   "DELTA_CONCURRENT_APPEND" : {
     "message" : [
       "Transaction conflict detected. a concurrent <operation> added data to table <tableName> committed at version <version>."
@@ -97,6 +105,12 @@
     ],
     "sqlState" : "42KD7"
   },
+  "DELTA_CREATE_TABLE_WITH_NON_EMPTY_LOCATION" : {
+    "message" : [
+      "Cannot create table ('<tableId>'). The associated location ('<tableLocation>') is not empty and also not a Delta table."
+    ],
+    "sqlState" : "42601"
+  },
   "DELTA_FAILED_TO_MERGE_FIELDS" : {
     "message" : [
       "Failed to merge fields '<currentField>' and '<updateField>'"
@@ -170,11 +184,31 @@
     },
     "sqlState" : "42KDG"
   },
+  "DELTA_NOT_NULL_CONSTRAINT_VIOLATED" : {
+    "message" : [
+      "NOT NULL constraint violated for column: <columnName>.",
+      ""
+    ],
+    "sqlState" : "23502"
+  },
+  "DELTA_PATH_EXISTS" : {
+    "message" : [
+      "Cannot write to already existent path <path> without setting OVERWRITE = 'true'."
+    ],
+    "sqlState" : "42K04"
+  },
   "DELTA_PROTOCOL_CHANGED" : {
     "message" : [
       "ProtocolChangedException: The protocol version of the Delta table has been changed by a concurrent update. <additionalInfo><conflictingCommit>\nRefer to <docLink> for more details."
     ],
     "sqlState" : "2D521"
+  },
+  "DELTA_REPLACE_WHERE_MISMATCH" : {
+    "message" : [
+      "Written data does not conform to partial table overwrite condition or constraint '<replaceWhere>'.",
+      "<message>"
+    ],
+    "sqlState" : "44000"
   },
   "DELTA_TIMESTAMP_EARLIER_THAN_COMMIT_RETENTION" : {
     "message" : [
@@ -206,6 +240,12 @@
       "Unsupported Delta write feature: table \"<tableNameOrPath>\" requires writer table feature(s) that are unsupported by Delta Lake \"<deltaVersion>\": <unsupported>."
     ],
     "sqlState" : "56038"
+  },
+  "DELTA_UNSUPPORTED_SUBQUERY" : {
+    "message" : [
+      "Subqueries are not supported in the <operation> (condition = <cond>)."
+    ],
+    "sqlState" : "0AKDC"
   },
   "DELTA_VERSION_NOT_FOUND" : {
     "message" : [

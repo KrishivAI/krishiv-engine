@@ -2,8 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.legacy_fn_36("a"), F.col("b"))
-df = df.select(F.trim("a"), F.col("b"))
-df = spark.sql("SELECT theta_intersection_agg(a) FROM t17")
-df = df.select(F.theta_union_agg("a"), F.col("b"))
-df = df.select(F.legacy_fn_37("a"), F.col("b"))
+df = spark.sql("SELECT tuple_sketch_agg_double(a) FROM t17")
+df = df.select(F.dense_rank("a"), F.col("b"))
+df = spark.sql("SELECT find_in_set(a) FROM t17")
+df = spark.sql("SELECT arrays_overlap(a) FROM t17")
+df = spark.sql("SELECT to_timestamp_ltz(a) FROM t17")

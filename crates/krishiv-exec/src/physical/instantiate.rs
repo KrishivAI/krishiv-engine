@@ -56,10 +56,7 @@ use super::{
     PhysicalPlan, ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SharedPlan,
     SortMergeJoinPlan, SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
-use crate::aggregate::{
-    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, CollectMetrics,
-    HashAggregate,
-};
+use crate::aggregate::{AggInput, AggregateExpr, AggregateOutput, CollectMetrics, HashAggregate};
 use crate::error::{Result, internal};
 use crate::exchange::{Exchange, ExchangeRead, ExchangeSink, ExchangeWrite, MapOutputId};
 use crate::join::{
@@ -91,7 +88,9 @@ mod order;
 mod python_eval;
 mod python_relation;
 mod table_write;
+pub(crate) use aggregate::{aggregate_node, aggregate_spec};
 pub(crate) use detached::{Detached, LoopRun};
+mod aggregate;
 mod join;
 mod observe;
 use distributed::planned_schema_holds;
@@ -485,6 +484,7 @@ fn instantiate_with_schemas(
             loops: HashMap::new(),
             schemas: BTreeMap::new(),
             unit_weights: HashSet::new(),
+            output_filters: HashMap::new(),
             range_ordered: range_ordered_evals(plan.roots(), Some(plan.root())),
             salts: HashMap::new(),
             stages: HashMap::new(),
@@ -562,6 +562,8 @@ struct Instantiation<'a> {
     /// Aggregate nodes (by address) that refuse weights other than 1: the
     /// partial phase of a written-out `DISTINCT` aggregation.
     unit_weights: HashSet<usize>,
+    /// Output filters handed down by `Filter`s, by aggregate node address.
+    output_filters: HashMap<usize, aggregate::PendingFilter>,
     /// `PythonEval` nodes (by address) keeping a `range`'s order (`order.rs`).
     range_ordered: HashSet<usize>,
     /// The first unseeded-random salt of each shared plan, as the
@@ -1065,9 +1067,12 @@ impl Instantiation<'_> {
                 layout,
                 predicate,
                 subqueries,
-            } => self.with_subqueries(input, subqueries, |input, v| {
-                filter_op(input, layout, predicate, v)
-            }),
+            } => {
+                self.note_output_filter(input, layout, predicate, subqueries);
+                self.with_subqueries(input, subqueries, |input, v| {
+                    filter_op(input, layout, predicate, v)
+                })
+            }
             PhysNode::Project {
                 input,
                 layout,
@@ -1242,7 +1247,7 @@ impl Instantiation<'_> {
                 if self.worker.fuse_aggregates
                     && let Some((partial, below, fused)) = fused_aggregate(aggregate, input)
                 {
-                    return self.fused(partial, below, &fused);
+                    return self.fused(n, partial, below, &fused);
                 }
                 if let Some((partial, below, single)) = fused_distinct(aggregate, input) {
                     if self.worker.fuse_aggregates {
@@ -1269,12 +1274,7 @@ impl Instantiation<'_> {
                     aggregate_spec(&input.schema, aggregate, &self.env, self.spill.clone());
                 spec.require_unit_weights = unit;
                 let schema = spec.output_schema()?;
-                let node = aggregate_node(
-                    input.node,
-                    spec,
-                    &aggregate.distinct,
-                    self.worker.distinct_count_at_merge(),
-                )?;
+                let node = self.aggregate_node_of(n, input.node, spec, &aggregate.distinct)?;
                 Ok(Built { node, schema })
             }
             PhysNode::HashJoin(j) => self.hash_join(j),
@@ -1562,6 +1562,7 @@ impl Instantiation<'_> {
     /// `partial`, its source side under the final one.
     fn fused(
         &mut self,
+        n: &PhysNode,
         partial: &PhysNode,
         below: &PhysNode,
         fused: &AggregatePlan,
@@ -1572,7 +1573,7 @@ impl Instantiation<'_> {
         let node = Arc::new(FusedAggregateNode {
             partial: self.ids.get(&std::ptr::from_ref(partial).addr()).copied(),
             input: input.node,
-            agg: HashAggregate::fused(spec)?,
+            agg: self.with_output_filter(n, &schema, HashAggregate::fused(spec)?)?,
         });
         Ok(Built { node, schema })
     }
@@ -1853,41 +1854,6 @@ pub(crate) fn scan_filter(
         rows: crate::planner::pushdown::row_level(predicate, &scan.output, env.ansi),
         partitions: crate::planner::pushdown::never_raising(predicate, &scan.output, env.ansi),
     })
-}
-
-pub(crate) fn aggregate_spec(
-    input: &SchemaRef,
-    a: &AggregatePlan,
-    env: &EvalEnv,
-    spill: Option<SpillScope>,
-) -> AggregateSpec {
-    AggregateSpec {
-        input: Arc::clone(input),
-        group_by: a.group_by.clone(),
-        aggregates: a.aggregates.clone(),
-        output: a.output,
-        ansi: env.ansi,
-        spill,
-        require_unit_weights: false,
-        legacy_statistical: env.legacy_statistical_aggregate,
-        udafs: crate::aggregate::UdafEnv::of(env.udfs.as_ref(), env.zone),
-    }
-}
-
-/// The aggregate of `spec` over `input` (two for `DISTINCT` aggregates, or
-/// one counting at the merge with `count_at_merge`: see
-/// [`crate::aggregate::distinct_plan_with`]).
-pub(crate) fn aggregate_node(
-    input: Arc<dyn ExecNode>,
-    spec: AggregateSpec,
-    distinct: &[bool],
-    count_at_merge: bool,
-) -> Result<Arc<dyn ExecNode>> {
-    if distinct.iter().any(|d| *d) {
-        crate::aggregate::distinct_plan_with(input, spec, distinct, count_at_merge)
-    } else {
-        Ok(AggregateNode::new(input, HashAggregate::new(spec)?))
-    }
 }
 
 /// The conjunction of a join's residual conjuncts over probe then build

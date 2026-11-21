@@ -8,7 +8,7 @@ description: "Converts a binary Protobuf value into a Catalyst value."
 
 Converts a binary Protobuf value into a Catalyst value.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.0 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.0 and later.
 
 ## Syntax
 
@@ -20,9 +20,9 @@ from_protobuf(data, messageName, descFilePath, options)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `protobuf_funcs` |
-| Kind | unknown (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.0.0 |
 | In Spark profiles | 4.0 and later |
 | Arguments | [2, 3, 4] |
@@ -32,12 +32,13 @@ from_protobuf(data, messageName, descFilePath, options)
 ```sql
 -- from_protobuf, example 1
 > SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id));
-Error: KRISHIV_UNSUPPORTED_FEATURE
+Error: PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND
 ```
 
 ## Version history
 
 - Added in Spark 4.0.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

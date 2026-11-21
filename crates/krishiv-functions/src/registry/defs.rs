@@ -250,7 +250,7 @@ fn time_trunc_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(t, c)
 }
 
-fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Double, c)
 }
 
@@ -1427,8 +1427,25 @@ fn nth_value(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     ))
 }
 
+/// `counter_diff(value[, start_time])` (Spark 4.3, `CounterDiff` / `CounterDiffWithStartTime`): the counter's
+/// type (a decimal is not widened), NULL on a counter's first row, after a reset and on NULL counters. The
+/// counter is `NumericType` and the start time `TIMESTAMP` or `TIMESTAMP_NTZ`, nothing implicit; an untyped
+/// `NULL` counter reads as `DOUBLE`, an untyped `NULL` start time as `TIMESTAMP`.
+fn counter_diff(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        c.data_type(0).cloned().unwrap_or(DataType::Double),
+        true,
+    ))
+}
+
 fn windows() -> Vec<Spec> {
+    let mut counter = window("counter_diff", counter_diff);
+    counter.inputs = Inputs::Expects(vec![
+        InputType::StrictNumeric,
+        InputType::StrictOneOf(vec![DataType::Timestamp, DataType::TimestampNtz]),
+    ]);
     vec![
+        counter,
         window("lag", lag),
         window("lead", lead),
         window("nth_value", nth_value),
@@ -1451,6 +1468,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::generator::specs());
     out.extend(super::json::specs());
     out.extend(super::avro::specs());
+    out.extend(super::protobuf::specs());
     out.extend(super::map::specs());
     out.extend(super::math::specs());
     out.extend(super::hashing::specs());

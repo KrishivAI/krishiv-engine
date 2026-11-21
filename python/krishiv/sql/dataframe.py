@@ -2060,6 +2060,18 @@ class DataFrame:
             raise not_expected_type("name", "str", name)
         self._df.create_or_replace_temp_view(name)
 
+    def createGlobalTempView(self, name: str) -> None:
+        """Registers this DataFrame as ``global_temp.<name>``; fails when that view exists."""
+        if not isinstance(name, str):
+            raise not_expected_type("name", "str", name)
+        self._df.create_global_temp_view(name, False)
+
+    def createOrReplaceGlobalTempView(self, name: str) -> None:
+        """Registers this DataFrame as ``global_temp.<name>``, replacing a view of that name."""
+        if not isinstance(name, str):
+            raise not_expected_type("name", "str", name)
+        self._df.create_global_temp_view(name, True)
+
     @property
     def write(self) -> DataFrameWriter:
         """Writes this :class:`DataFrame`'s rows to files, as ``pyspark.sql.DataFrame.write``."""

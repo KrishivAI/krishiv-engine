@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use arrow_array::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
 use futures::StreamExt as _;
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, OperationCanceled};
 use krishiv_session::RecordBatchStream;
 
 /// Where a reader leaves the engine error that ended it, so the caller can raise
@@ -22,9 +22,20 @@ pub(crate) struct QueryReader {
     schema: SchemaRef,
     /// The batch read to learn the schema, handed out first.
     first: Option<RecordBatch>,
-    stream: RecordBatchStream,
+    /// `None` once an interrupt ended the query (the stream is dropped, which cancels it).
+    stream: Option<RecordBatchStream>,
     error: ErrorSlot,
+    /// Asked every [`SIGNAL_POLL`] while a batch is awaited; `true` ends the query (a Ctrl-C).
+    interrupt: Option<Interrupt>,
 }
+
+/// A check for a pending interrupt; `true` means stop the query. It leaves the Python error it
+/// raised to whoever made it.
+pub(crate) type Interrupt = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// How long a wait goes before it looks at Python's signals again. Each look re-attaches the
+/// thread to Python, so the cost is a GIL re-acquire (contended by UDF threads) ten times a second.
+pub(crate) const SIGNAL_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl Iterator for QueryReader {
     type Item = Result<RecordBatch, ArrowError>;
@@ -32,7 +43,7 @@ impl Iterator for QueryReader {
     fn next(&mut self) -> Option<Self::Item> {
         let batch = match self.first.take() {
             Some(batch) => batch,
-            None => match wait_for(self.stream.next())? {
+            None => match self.pull()? {
                 Ok(batch) => batch,
                 Err(e) => {
                     let arrow = ArrowError::ExternalError(e.to_string().into());
@@ -71,9 +82,37 @@ impl QueryReader {
         Self {
             schema,
             first,
-            stream,
+            stream: Some(stream),
             error: ErrorSlot::default(),
+            interrupt: None,
         }
+    }
+
+    /// This reader, asking `hook` for an interrupt while it waits for each batch.
+    pub(crate) fn with_interrupt(mut self, hook: Interrupt) -> Self {
+        self.interrupt = Some(hook);
+        self
+    }
+
+    /// The next batch of the engine stream. `None` is the end, or a query an interrupt ended; an
+    /// interrupt drops the stream (which cancels the query) and ends with an error.
+    fn pull(&mut self) -> Option<Result<RecordBatch, KrishivError>> {
+        let stream = self.stream.as_mut()?;
+        let Some(hook) = self.interrupt.clone() else {
+            return wait_for(stream.next());
+        };
+        let mut waiter = Waiter::new();
+        let mut work = std::pin::pin!(stream.next());
+        loop {
+            if let Some(out) = waiter.step(work.as_mut(), Some(SIGNAL_POLL)) {
+                return out;
+            }
+            if hook() {
+                break;
+            }
+        }
+        self.stream = None;
+        Some(Err(OperationCanceled {}.into()))
     }
 
     /// The slot the engine error that ends this reader is left in.
@@ -94,42 +133,95 @@ impl QueryReader {
 /// ordinary memory, and each call makes fresh ones, so a child's first query
 /// runs as on Linux.
 pub(crate) fn wait_for<F: std::future::Future>(work: F) -> F::Output {
-    use std::sync::{Arc, Condvar, Mutex, PoisonError};
-    use std::task::{Context, Poll, Wake, Waker};
-
-    /// Set by a wake, cleared by the waiting thread before it polls again.
-    struct Signal {
-        woken: Mutex<bool>,
-        ready: Condvar,
-    }
-    impl Wake for Signal {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-        fn wake_by_ref(self: &Arc<Self>) {
-            *self.woken.lock().unwrap_or_else(PoisonError::into_inner) = true;
-            self.ready.notify_one();
-        }
-    }
-
-    let signal = Arc::new(Signal {
-        woken: Mutex::new(false),
-        ready: Condvar::new(),
-    });
-    let waker = Waker::from(Arc::clone(&signal));
-    let mut cx = Context::from_waker(&waker);
+    let mut waiter = Waiter::new();
     let mut work = std::pin::pin!(work);
     loop {
-        if let Poll::Ready(out) = work.as_mut().poll(&mut cx) {
+        if let Some(out) = waiter.step(work.as_mut(), None) {
             return out;
         }
-        let mut woken = signal.woken.lock().unwrap_or_else(PoisonError::into_inner);
+    }
+}
+
+/// Set by a wake, cleared by the waiting thread before it polls again.
+struct Signal {
+    woken: std::sync::Mutex<bool>,
+    ready: std::sync::Condvar,
+}
+
+impl std::task::Wake for Signal {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+        *self
+            .woken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        self.ready.notify_one();
+    }
+}
+
+/// The waker and wake flag one wait uses.
+pub(crate) struct Waiter {
+    signal: std::sync::Arc<Signal>,
+    waker: std::task::Waker,
+}
+
+impl Waiter {
+    pub(crate) fn new() -> Self {
+        let signal = std::sync::Arc::new(Signal {
+            woken: std::sync::Mutex::new(false),
+            ready: std::sync::Condvar::new(),
+        });
+        let waker = std::task::Waker::from(std::sync::Arc::clone(&signal));
+        Self { signal, waker }
+    }
+
+    /// Polls `work` once; while it is pending, waits for a wake (at most `limit`, if given).
+    /// `Some` is its output. `None` means it is still pending: the wait ran out (`limit`), or a
+    /// wake came and the next call polls again.
+    pub(crate) fn step<F: std::future::Future>(
+        &mut self,
+        work: std::pin::Pin<&mut F>,
+        limit: Option<std::time::Duration>,
+    ) -> Option<F::Output> {
+        use std::sync::PoisonError;
+        use std::task::{Context, Poll};
+
+        let mut cx = Context::from_waker(&self.waker);
+        if let Poll::Ready(out) = work.poll(&mut cx) {
+            return Some(out);
+        }
+        let mut woken = self
+            .signal
+            .woken
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let deadline = limit.map(|l| std::time::Instant::now() + l);
         while !*woken {
-            woken = signal
-                .ready
-                .wait(woken)
-                .unwrap_or_else(PoisonError::into_inner);
+            match deadline {
+                None => {
+                    woken = self
+                        .signal
+                        .ready
+                        .wait(woken)
+                        .unwrap_or_else(PoisonError::into_inner);
+                }
+                Some(deadline) => {
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    if left.is_zero() {
+                        return None;
+                    }
+                    woken = self
+                        .signal
+                        .ready
+                        .wait_timeout(woken, left)
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0;
+                }
+            }
         }
         *woken = false;
+        None
     }
 }

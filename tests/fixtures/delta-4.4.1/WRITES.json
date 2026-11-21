@@ -1,0 +1,1308 @@
+{
+ "append_only": [
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-d3c53503-522d-4a78-84e0-e0e6def36ba4.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 2
+        },
+        "minValues": {
+         "id": 2
+        },
+        "nullCount": {
+         "id": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "691",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 1
+     },
+     "removes": [],
+     "version": 2
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "x"
+    ],
+    [
+     2,
+     "y"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` VALUES (2, 'y')",
+   "step": "append"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_CANNOT_MODIFY_APPEND_ONLY",
+    "message": "[DELTA_CANNOT_MODIFY_APPEND_ONLY] This table is configured to only allow appends. If you would like to permit updates or deletes, use 'ALTER TABLE null SET TBLPROPERTIES (delta.appendOnly=false)'.",
+    "parameters": {
+     "config": "delta.appendOnly",
+     "table_name": "null"
+    },
+    "sqlstate": "42809"
+   },
+   "rows": [
+    [
+     1,
+     "x"
+    ],
+    [
+     2,
+     "y"
+    ]
+   ],
+   "sql": "INSERT OVERWRITE delta.`<path>` VALUES (3, 'x')",
+   "step": "overwrite"
+  }
+ ],
+ "create_new_location": [
+  {
+   "commits": [
+    {
+     "adds": [],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "CREATE TABLE",
+      "operationMetrics": {},
+      "operationParameters": {
+       "clusterBy": "[]",
+       "description": null,
+       "isManaged": "false",
+       "partitionBy": "[\"p\"]",
+       "properties": "{}"
+      }
+     },
+     "partitionColumns": [
+      "p"
+     ],
+     "protocol": {
+      "minReaderVersion": 1,
+      "minWriterVersion": 2
+     },
+     "removes": [],
+     "version": 0
+    }
+   ],
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT, p STRING) USING delta PARTITIONED BY (p)",
+   "step": "create"
+  }
+ ],
+ "ctas_existing_location": [
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_CREATE_TABLE_WITH_NON_EMPTY_LOCATION",
+    "message": "[DELTA_CREATE_TABLE_WITH_NON_EMPTY_LOCATION] Cannot create table ('`default`.`ctas_x`'). The associated location ('file:<path>') is not empty and also not a Delta table.",
+    "parameters": {
+     "tableId": "`default`.`ctas_x`",
+     "tableLocation": "file:<path>"
+    },
+    "sqlstate": "42601"
+   },
+   "rows": [],
+   "sql": "CREATE TABLE ctas_x USING delta LOCATION '<path>' AS SELECT CAST(1 AS BIGINT) AS id, 'x' AS p",
+   "step": "ctas"
+  }
+ ],
+ "delta_spark": "4.4.1",
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py",
+ "save_as_table": [
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-b62cb03d-022d-432d-a16b-a87449ff9688.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 2,
+         "v": "b"
+        },
+        "minValues": {
+         "id": 2,
+         "v": "b"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "CREATE OR REPLACE TABLE AS SELECT",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "900",
+       "numOutputRows": "1",
+       "numRemovedBytes": "900",
+       "numRemovedFiles": "1"
+      },
+      "operationParameters": {
+       "clusterBy": "[]",
+       "description": null,
+       "isManaged": "false",
+       "isV1SaveAsTableOverwrite": true,
+       "partitionBy": "[\"p\"]",
+       "properties": "{}"
+      },
+      "readVersion": 0
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-fe96cd37-d53e-45dd-9281-e265b4a4b1d7.c000.snappy.parquet"
+      }
+     ],
+     "version": 1
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     2,
+     "b",
+     "y"
+    ]
+   ],
+   "step": "save_as_table_overwrite_same_schema"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_METADATA_MISMATCH",
+    "message": "[DELTA_METADATA_MISMATCH] A metadata mismatch was detected when writing to the Delta table.",
+    "parameters": {},
+    "sqlstate": "42KDG"
+   },
+   "rows": [
+    [
+     2,
+     "b",
+     "y"
+    ]
+   ],
+   "step": "save_as_table_overwrite_other_schema"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-35c11f44-87fb-43b5-aef0-5d87b63d6a03.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4,
+         "v": "d"
+        },
+        "minValues": {
+         "id": 4,
+         "v": "d"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "CREATE OR REPLACE TABLE AS SELECT",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "900",
+       "numOutputRows": "1",
+       "numRemovedBytes": "900",
+       "numRemovedFiles": "1"
+      },
+      "operationParameters": {
+       "clusterBy": "[]",
+       "description": null,
+       "isManaged": "false",
+       "isV1SaveAsTableOverwrite": true,
+       "partitionBy": "[\"p\"]",
+       "properties": "{}"
+      },
+      "readVersion": 1
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-b62cb03d-022d-432d-a16b-a87449ff9688.c000.snappy.parquet"
+      }
+     ],
+     "version": 2
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     4,
+     "d",
+     "y"
+    ]
+   ],
+   "step": "save_as_table_overwrite_other_partitioning"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-ff5ca458-e6dc-4ebf-a6c5-39541aae3ee4.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 5,
+         "v": "e"
+        },
+        "minValues": {
+         "id": 5,
+         "v": "e"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "900",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 2
+     },
+     "removes": [],
+     "version": 3
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     4,
+     "d",
+     "y"
+    ],
+    [
+     5,
+     "e",
+     "x"
+    ]
+   ],
+   "step": "save_as_table_append"
+  }
+ ],
+ "spark": "4.2.0",
+ "steps": [
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-b18da858-f763-45b6-90e1-759c506ab58d.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 1,
+         "v": "a"
+        },
+        "minValues": {
+         "id": 1,
+         "v": "a"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-f8024037-2332-49df-ae53-cbb992c9e354.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 2,
+         "v": "b"
+        },
+        "minValues": {
+         "id": 2,
+         "v": "b"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "CREATE TABLE AS SELECT",
+      "operationMetrics": {
+       "numFiles": "2",
+       "numOutputBytes": "1800",
+       "numOutputRows": "2"
+      },
+      "operationParameters": {
+       "clusterBy": "[]",
+       "description": null,
+       "isManaged": "false",
+       "partitionBy": "[\"p\"]",
+       "properties": "{}"
+      }
+     },
+     "partitionColumns": [
+      "p"
+     ],
+     "protocol": {
+      "minReaderVersion": 1,
+      "minWriterVersion": 2
+     },
+     "removes": [],
+     "version": 0
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ]
+   ],
+   "sql": "CREATE TABLE delta.`<path>` USING delta PARTITIONED BY (p) AS SELECT CAST(id AS BIGINT) AS id, v, p FROM VALUES (1, 'a', 'x'), (2, 'b', 'y') AS s(id, v, p)",
+   "step": "ctas"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": null
+       },
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-6127ce10-086d-4bd7-9299-eaedfd53392e.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4,
+         "v": "d"
+        },
+        "minValues": {
+         "id": 4,
+         "v": "d"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-def8f251-aab3-4d24-808b-3922b10ff531.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3,
+         "v": "c"
+        },
+        "minValues": {
+         "id": 3,
+         "v": "c"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "2",
+       "numOutputBytes": "1781",
+       "numOutputRows": "2"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 0
+     },
+     "removes": [],
+     "version": 1
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ],
+    [
+     3,
+     "c",
+     "x"
+    ],
+    [
+     4,
+     "d",
+     null
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` VALUES (3, 'c', 'x'), (4, 'd', NULL)",
+   "step": "append"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-04c00cae-cbad-4e00-a133-370aab3ca968.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 5,
+         "v": "e"
+        },
+        "minValues": {
+         "id": 5,
+         "v": "e"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-eebe6e48-18e1-44cb-98aa-b57bf67f6e19.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 6,
+         "v": "f"
+        },
+        "minValues": {
+         "id": 6,
+         "v": "f"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "2",
+       "numOutputBytes": "1800",
+       "numOutputRows": "2",
+       "numRemovedBytes": "3581",
+       "numRemovedFiles": "4"
+      },
+      "operationParameters": {
+       "mode": "Overwrite",
+       "partitionBy": "[]"
+      },
+      "readVersion": 1
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-b18da858-f763-45b6-90e1-759c506ab58d.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {},
+       "path": "p=__HIVE_DEFAULT_PARTITION__/part-00000-6127ce10-086d-4bd7-9299-eaedfd53392e.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-f8024037-2332-49df-ae53-cbb992c9e354.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-def8f251-aab3-4d24-808b-3922b10ff531.c000.snappy.parquet"
+      }
+     ],
+     "version": 2
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     5,
+     "e",
+     "x"
+    ],
+    [
+     6,
+     "f",
+     "y"
+    ]
+   ],
+   "sql": "INSERT OVERWRITE delta.`<path>` VALUES (5, 'e', 'x'), (6, 'f', 'y')",
+   "step": "overwrite"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-d204f605-fb63-410c-8932-6f1c81b3ce4b.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 7,
+         "v": "g"
+        },
+        "minValues": {
+         "id": 7,
+         "v": "g"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {
+        "p": "z"
+       },
+       "path": "p=z/part-00000-a2d0d54c-b54e-47a3-aeb6-2da5cc62e9ac.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 8,
+         "v": "h"
+        },
+        "minValues": {
+         "id": 8,
+         "v": "h"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "2",
+       "numOutputBytes": "1800",
+       "numOutputRows": "2"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 2
+     },
+     "removes": [],
+     "version": 3
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     5,
+     "e",
+     "x"
+    ],
+    [
+     6,
+     "f",
+     "y"
+    ],
+    [
+     7,
+     "g",
+     "y"
+    ],
+    [
+     8,
+     "h",
+     "z"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` VALUES (7, 'g', 'y'), (8, 'h', 'z')",
+   "step": "append_again"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-291ccc32-297d-443b-8d2e-7688d2998b5e.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 20,
+         "v": "dyn"
+        },
+        "minValues": {
+         "id": 20,
+         "v": "dyn"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {
+        "p": "z"
+       },
+       "path": "p=z/part-00000-c4746f7a-f80b-4c9d-afab-01b907b0368a.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 21,
+         "v": "dyn"
+        },
+        "minValues": {
+         "id": 21,
+         "v": "dyn"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "2",
+       "numOutputBytes": "1828",
+       "numOutputRows": "2",
+       "numRemovedBytes": "1800",
+       "numRemovedFiles": "2"
+      },
+      "operationParameters": {
+       "isDynamicPartitionOverwrite": true,
+       "mode": "Overwrite",
+       "partitionBy": "[]"
+      },
+      "readVersion": 3
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-04c00cae-cbad-4e00-a133-370aab3ca968.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "z"
+       },
+       "path": "p=z/part-00000-a2d0d54c-b54e-47a3-aeb6-2da5cc62e9ac.c000.snappy.parquet"
+      }
+     ],
+     "version": 4
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     6,
+     "f",
+     "y"
+    ],
+    [
+     7,
+     "g",
+     "y"
+    ],
+    [
+     20,
+     "dyn",
+     "x"
+    ],
+    [
+     21,
+     "dyn",
+     "z"
+    ]
+   ],
+   "step": "dynamic_overwrite"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-ccf6bfe9-2201-4d17-8d8d-794317fde23e.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 30,
+         "v": "rw"
+        },
+        "minValues": {
+         "id": 30,
+         "v": "rw"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numAddedChangeFiles": "0",
+       "numCopiedRows": "0",
+       "numDeletedRows": "2",
+       "numFiles": "1",
+       "numOutputBytes": "906",
+       "numOutputRows": "1",
+       "numRemovedBytes": "1800",
+       "numRemovedFiles": "2"
+      },
+      "operationParameters": {
+       "mode": "Overwrite",
+       "partitionBy": "[]",
+       "predicate": "p = 'y'"
+      },
+      "readVersion": 4
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-eebe6e48-18e1-44cb-98aa-b57bf67f6e19.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-d204f605-fb63-410c-8932-6f1c81b3ce4b.c000.snappy.parquet"
+      }
+     ],
+     "version": 5
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     20,
+     "dyn",
+     "x"
+    ],
+    [
+     21,
+     "dyn",
+     "z"
+    ],
+    [
+     30,
+     "rw",
+     "y"
+    ]
+   ],
+   "step": "replace_where"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_REPLACE_WHERE_MISMATCH",
+    "message": "[DELTA_REPLACE_WHERE_MISMATCH] Written data does not conform to partial table overwrite condition or constraint 'p = 'y''.",
+    "parameters": {
+     "message": "[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES] CHECK constraint EXPRESSION(('p = y)) (p = 'y') violated by row with values:\n - p : x",
+     "replaceWhere": "p = 'y'"
+    },
+    "sqlstate": "44000"
+   },
+   "rows": [
+    [
+     20,
+     "dyn",
+     "x"
+    ],
+    [
+     21,
+     "dyn",
+     "z"
+    ],
+    [
+     30,
+     "rw",
+     "y"
+    ]
+   ],
+   "step": "replace_where_mismatch"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "z"
+       },
+       "path": "p=z/part-00000-c86aff69-82fb-4fe2-ab78-9b29aba8ce04.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 40,
+         "v": "st"
+        },
+        "minValues": {
+         "id": 40,
+         "v": "st"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numAddedChangeFiles": "0",
+       "numCopiedRows": "0",
+       "numDeletedRows": "1",
+       "numFiles": "1",
+       "numOutputBytes": "907",
+       "numOutputRows": "1",
+       "numRemovedBytes": "914",
+       "numRemovedFiles": "1"
+      },
+      "operationParameters": {
+       "mode": "Overwrite",
+       "partitionBy": "[]",
+       "predicate": "(p <=> 'z')"
+      },
+      "readVersion": 5
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "z"
+       },
+       "path": "p=z/part-00000-c4746f7a-f80b-4c9d-afab-01b907b0368a.c000.snappy.parquet"
+      }
+     ],
+     "version": 6
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     20,
+     "dyn",
+     "x"
+    ],
+    [
+     30,
+     "rw",
+     "y"
+    ],
+    [
+     40,
+     "st",
+     "z"
+    ]
+   ],
+   "sql": "INSERT OVERWRITE delta.`<path>` PARTITION (p = 'z') VALUES (40, 'st')",
+   "step": "static_partition_overwrite"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-0df9e489-1e2f-4d2c-8c8f-910ae6c9cbb0.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 50,
+         "v": "df"
+        },
+        "minValues": {
+         "id": 50,
+         "v": "df"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "906",
+       "numOutputRows": "1",
+       "numRemovedBytes": "2727",
+       "numRemovedFiles": "3"
+      },
+      "operationParameters": {
+       "mode": "Overwrite",
+       "partitionBy": "[]"
+      },
+      "readVersion": 6
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-ccf6bfe9-2201-4d17-8d8d-794317fde23e.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-291ccc32-297d-443b-8d2e-7688d2998b5e.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "z"
+       },
+       "path": "p=z/part-00000-c86aff69-82fb-4fe2-ab78-9b29aba8ce04.c000.snappy.parquet"
+      }
+     ],
+     "version": 7
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     50,
+     "df",
+     "x"
+    ]
+   ],
+   "step": "insert_overwrite_dataframe_mode"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "w"
+       },
+       "path": "p=w/part-00000-3e2195d3-165c-425b-a29f-4b918f24a19e.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 51,
+         "v": "df"
+        },
+        "minValues": {
+         "id": 51,
+         "v": "df"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "906",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 7
+     },
+     "removes": [],
+     "version": 8
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     50,
+     "df",
+     "x"
+    ],
+    [
+     51,
+     "df",
+     "w"
+    ]
+   ],
+   "step": "append_dataframe"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_PATH_EXISTS",
+    "message": "[DELTA_PATH_EXISTS] Cannot write to already existent path file:<path> without setting OVERWRITE = 'true'.",
+    "parameters": {
+     "path": "file:<path>"
+    },
+    "sqlstate": "42K04"
+   },
+   "rows": [
+    [
+     50,
+     "df",
+     "x"
+    ],
+    [
+     51,
+     "df",
+     "w"
+    ]
+   ],
+   "step": "save_errorifexists"
+  },
+  {
+   "commits": [],
+   "error": null,
+   "rows": [
+    [
+     50,
+     "df",
+     "x"
+    ],
+    [
+     51,
+     "df",
+     "w"
+    ]
+   ],
+   "step": "save_ignore"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "w"
+       },
+       "path": "p=w/part-00000-20a37242-7d07-474e-a778-d7e2ad67ec51.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 151,
+         "v": "df"
+        },
+        "minValues": {
+         "id": 151,
+         "v": "df"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-c43466d2-3b9a-432f-8653-53b7e496fff6.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 150,
+         "v": "df"
+        },
+        "minValues": {
+         "id": 150,
+         "v": "df"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "2",
+       "numOutputBytes": "1812",
+       "numOutputRows": "2"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 8
+     },
+     "removes": [],
+     "version": 9
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     50,
+     "df",
+     "x"
+    ],
+    [
+     51,
+     "df",
+     "w"
+    ],
+    [
+     150,
+     "df",
+     "x"
+    ],
+    [
+     151,
+     "df",
+     "w"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` SELECT id + 100, v, p FROM delta.`<path>`",
+   "step": "insert_reading_itself"
+  }
+ ]
+}

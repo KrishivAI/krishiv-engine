@@ -10,7 +10,7 @@ digraph {
     n4 [label="Exchange hashpartitioning(nation#50, o_year#51)"];
     n5 [label="PartialHashAggregate keys=[nation#50, o_year#51], functions=[sum(amount#52)]"];
     n6 [label="Project [n_name#47 AS nation#50, extract('year', o_orderdate#41) AS o_year#51, ((l_extendedprice#21 * (1 - l_discount#22)) - (ps_supplycost#35 * l_quantity#20)) AS amount#52]"];
-    n7 [label="HashJoin Inner, [l_suppkey#18, l_partkey#17] = [ps_suppkey#33, ps_partkey#32], RuntimeFilter #5: l_suppkey#18 -> spark_catalog.default.lineitem.l_suppkey, RuntimeFilter #6: l_partkey#17 -> spark_catalog.default.lineitem.l_partkey"];
+    n7 [label="HashJoin Inner, [l_suppkey#18, l_partkey#17] = [ps_suppkey#33, ps_partkey#32], RuntimeFilter #5: l_suppkey#18 -> spark_catalog.default.lineitem.l_suppkey, RuntimeFilter #6: l_suppkey#18 -> spark_catalog.default.supplier.s_suppkey, RuntimeFilter #7: l_partkey#17 -> spark_catalog.default.lineitem.l_partkey, RuntimeFilter #8: l_partkey#17 -> spark_catalog.default.part.p_partkey"];
     n8 [label="Project [l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22, o_orderdate#41, n_name#47]"];
     n9 [label="HashJoin Inner, [s_nationkey#12] = [n_nationkey#46], RuntimeFilter #4: s_nationkey#12 -> spark_catalog.default.supplier.s_nationkey"];
     n10 [label="Project [l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22, o_orderdate#41, s_nationkey#12]"];

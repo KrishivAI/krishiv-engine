@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use super::{
     ConfigEntry, ConfigValue, Scope, SettableBy, ValueType,
-    build_projection::EXEC_JOIN_BUILD_PROJECTION, direct_keys::EXEC_AGG_DIRECT_KEYS,
-    distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE, join_cost::JOIN_COST,
-    partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    agg_output_filter::EXEC_AGG_OUTPUT_FILTER, build_projection::EXEC_JOIN_BUILD_PROJECTION,
+    direct_keys::EXEC_AGG_DIRECT_KEYS, distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
+    join_cost::JOIN_COST, partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
     scan_instance::EXEC_SCAN_INSTANCE_PROJECTION,
 };
 
@@ -24,20 +24,31 @@ pub use python::{
     PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT, UDF_SANDBOX,
 };
 mod access;
+mod advisor;
 mod lakehouse;
 mod optimizer;
 mod result_cache;
+mod runtime_filter;
 mod runtime_filter_bloom;
 mod server;
+mod sql_session;
+mod ui_embed;
 pub use access::{
     ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
+};
+pub use advisor::{
+    ADVISOR_ENABLED, ADVISOR_MAX_HINTS, ADVISOR_MEMORY_WAIT_FACTOR, ADVISOR_MEMORY_WAIT_MIN_TIME,
+    ADVISOR_MISSING_STATS_MIN_Q_ERROR, ADVISOR_MISSING_STATS_MIN_ROWS,
+    ADVISOR_RUNTIME_FILTER_MIN_DROP_PERCENT, ADVISOR_RUNTIME_FILTER_MIN_PROBE_ROWS,
+    ADVISOR_SKEW_FACTOR, ADVISOR_SKEW_MIN_ROWS, ADVISOR_SKEW_MIN_TIME, ADVISOR_SPILL_MIN_BYTES,
+    ADVISOR_SPILL_MIN_PERCENT,
 };
 pub use lakehouse::{
     CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
     CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE, CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES,
-    CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS, DELTA_SNAPSHOT_CACHE_MAX_BYTES,
-    ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_MANIFEST_CACHE_BYTES, ICEBERG_WRITE_MAX_OPEN_FILES,
-    ICEBERG_WRITE_STATISTICS_ENABLED,
+    CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS, DELTA_MAX_COMMIT_ATTEMPTS,
+    DELTA_SNAPSHOT_CACHE_MAX_BYTES, ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_MANIFEST_CACHE_BYTES,
+    ICEBERG_WRITE_MAX_OPEN_FILES, ICEBERG_WRITE_STATISTICS_ENABLED, WRITE_COMMIT_RETRY_TIMEOUT,
 };
 pub use optimizer::{
     DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
@@ -45,21 +56,23 @@ pub use optimizer::{
     SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
-pub use runtime_filter_bloom::{RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_MEMORY_TIER};
-pub use server::{
-    CONNECT_ADDRESS, CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES, CONNECT_ARTIFACTS_MAX_BYTES,
-    CONNECT_ARTIFACTS_MAX_TOTAL_BYTES, CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
-    CONNECT_EXECUTE_AHEAD_BYTES, CONNECT_EXECUTE_DETACHED_TIMEOUT,
-    CONNECT_EXECUTE_MAINTENANCE_INTERVAL, CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
-    CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION, CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
-    CONNECT_HANDSHAKE_TIMEOUT, CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
-    CONNECT_HTTP2_MAX_HEADER_LIST_BYTES, CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
-    CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME, CONNECT_KEEPALIVE_TIMEOUT,
-    CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE, CONNECT_MAX_OPERATIONS_PER_SESSION,
-    CONNECT_MAX_RESPONSE_BYTES, CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
-    CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT, CONNECT_SESSION_MAINTENANCE_INTERVAL,
-    CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS, SERVER_ALLOWED_HOSTS,
-    SERVER_METRICS_PUBLIC, SERVER_SHUTDOWN_TIMEOUT,
+pub use runtime_filter::{
+    RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT, RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
+    RUNTIME_FILTER_BLOOM_ENABLED, RUNTIME_FILTER_BLOOM_MAX_BYTES, RUNTIME_FILTER_BLOOM_MAX_ITEMS,
+    RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS, RUNTIME_FILTER_ENABLED,
+    RUNTIME_FILTER_EXACT_SET_MAX_VALUES, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
+};
+pub use runtime_filter_bloom::{
+    RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_MEMORY_TIER, RUNTIME_FILTER_EQUATED_SITES,
+};
+// Every public item of `server` is a config entry (Connect, Flight SQL, server).
+pub use server::*;
+pub use sql_session::{
+    ANSI_ENABLED, CTE_PRECEDENCE_POLICY, MAP_KEY_DEDUP_POLICY, SCHEMA_LEVEL_COLLATIONS_ENABLED,
+    SESSION_TIME_ZONE, SQL_DEFAULT_PATH, SQL_PATH_ENABLED, STORE_ASSIGNMENT_POLICY,
+};
+pub use ui_embed::{
+    UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS, UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -80,6 +93,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_AGG_ROW_LAYOUT,
     &EXEC_AGG_DIRECT_KEYS,
     &EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
+    &EXEC_AGG_OUTPUT_FILTER,
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
@@ -105,10 +119,26 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
     &HISTORY_PATH,
+    &ADVISOR_ENABLED,
+    &ADVISOR_SPILL_MIN_PERCENT,
+    &ADVISOR_SPILL_MIN_BYTES,
+    &ADVISOR_MEMORY_WAIT_FACTOR,
+    &ADVISOR_MEMORY_WAIT_MIN_TIME,
+    &ADVISOR_SKEW_FACTOR,
+    &ADVISOR_SKEW_MIN_TIME,
+    &ADVISOR_SKEW_MIN_ROWS,
+    &ADVISOR_MISSING_STATS_MIN_Q_ERROR,
+    &ADVISOR_MISSING_STATS_MIN_ROWS,
+    &ADVISOR_RUNTIME_FILTER_MIN_PROBE_ROWS,
+    &ADVISOR_RUNTIME_FILTER_MIN_DROP_PERCENT,
+    &ADVISOR_MAX_HINTS,
     &HISTORY_LITERALS,
     &HISTORY_MAX_BYTES,
     &UI_ENABLED,
     &UI_ALLOWED_HOSTS,
+    &UI_ALLOWED_ORIGINS,
+    &UI_EMBED_HIDE_ATTRIBUTION,
+    &UI_EMBED_LINK_TTL,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
     &QUERY_MAX_EXECUTION_TIME,
@@ -140,6 +170,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
     &RUNTIME_FILTER_BLOOM_AT_SCALE,
     &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
+    &RUNTIME_FILTER_EQUATED_SITES,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -152,7 +183,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_MAX_CONCURRENT_REQUESTS,
     &IO_BLOCKING_THREADS,
     &DELTA_LOG_THREADS,
+    &DELTA_MAX_COMMIT_ATTEMPTS,
     &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
+    &WRITE_COMMIT_RETRY_TIMEOUT,
     &CATALOG_MAX_METADATA_BYTES,
     &ICEBERG_MANIFEST_CACHE_BYTES,
     &ICEBERG_WRITE_MAX_OPEN_FILES,
@@ -264,117 +297,26 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CONNECT_HTTP2_MAX_HEADER_LIST_BYTES,
     &CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
     &SERVER_SHUTDOWN_TIMEOUT,
+    &SERVER_READINESS_INTERVAL,
+    &SERVER_READINESS_TIMEOUT,
+    &SERVER_READINESS_FAILURE_THRESHOLD,
+    &SERVER_READINESS_REQUIRED,
     &SERVER_ALLOW_CORE_DUMPS,
     &SERVER_METRICS_PUBLIC,
     &SERVER_ALLOWED_HOSTS,
+    &FLIGHT_SQL_ENABLED,
+    &FLIGHT_SQL_HANDLE_TTL,
+    &FLIGHT_SQL_MAX_HANDLES_PER_SESSION,
+    &FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL,
+    &FLIGHT_SQL_MAX_BATCH_ROWS,
+    &FLIGHT_SQL_MAX_SCHEMA_TABLES,
+    &FLIGHT_SQL_METADATA_TIMEOUT,
+    &FLIGHT_SQL_PROVISIONAL_TTL,
+    &FLIGHT_SQL_FETCH_IDLE_TIMEOUT,
+    &FLIGHT_SQL_MAX_STATEMENT_BYTES,
+    &FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES,
+    &FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
 ];
-
-/// ANSI SQL mode (Spark 4 default: on).
-pub static ANSI_ENABLED: ConfigEntry = ConfigEntry {
-    key: "krishiv.sql.ansi.enabled",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(true)),
-    doc: "When true, follow ANSI SQL semantics: invalid casts and arithmetic overflow raise \
-          errors instead of returning NULL.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: Some("spark.sql.ansi.enabled"),
-};
-
-/// Session time zone.
-pub static SESSION_TIME_ZONE: ConfigEntry = ConfigEntry {
-    key: "krishiv.sql.session.timeZone",
-    value_type: ValueType::TimeZone,
-    default: None,
-    doc: "Session time zone: a region ID such as `America/Los_Angeles` or a zone offset. \
-          When unset, the local system time zone is used, as in Spark.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: Some("spark.sql.session.timeZone"),
-};
-
-/// Whether `SET PATH` is allowed.
-pub static SQL_PATH_ENABLED: ConfigEntry = ConfigEntry {
-    key: "krishiv.sql.path.enabled",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
-    doc: "Whether `SET PATH` (the SQL standard routine and relation search path) is enabled.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: Some("spark.sql.path.enabled"),
-};
-
-/// Whether schema-level default collations (`CREATE|ALTER SCHEMA .. DEFAULT COLLATION`) are allowed.
-pub static SCHEMA_LEVEL_COLLATIONS_ENABLED: ConfigEntry = ConfigEntry {
-    key: "krishiv.sql.collation.schemaLevel.enabled",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
-    doc: "Whether a schema may have a default collation (`CREATE SCHEMA .. DEFAULT COLLATION`, \
-          `ALTER SCHEMA .. DEFAULT COLLATION`). Off, as in Spark 4.2, the clause is \
-          `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`. On, the schema stores it and `DESCRIBE \
-          SCHEMA` shows it; tables, views and functions are not created in such a schema yet \
-          (Spark gives their strings the schema's collation; Krishiv does not apply it).",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.2.0",
-    spark_alias: Some("spark.sql.collation.schemaLevel.enabled"),
-};
-
-/// What `DEFAULT_PATH` expands to.
-pub static SQL_DEFAULT_PATH: ConfigEntry = ConfigEntry {
-    key: "krishiv.sql.defaultPath",
-    value_type: ValueType::String,
-    default: Some(ConfigValue::String(Cow::Borrowed(""))),
-    doc: "What `DEFAULT_PATH` expands to: a comma-separated `SET PATH` element list without `PATH`. \
-          Empty means `system.builtin, system.session, current_schema`.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: Some("spark.sql.defaultPath"),
-};
-
-/// Table-insertion type coercion policy.
-pub static STORE_ASSIGNMENT_POLICY: ConfigEntry = ConfigEntry {
-    key: "krishiv.sql.storeAssignmentPolicy",
-    value_type: ValueType::Enum(&["ANSI", "LEGACY", "STRICT"]),
-    default: Some(ConfigValue::String(Cow::Borrowed("ANSI"))),
-    doc: "Type coercion rules when inserting a value into a column of a different type.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: Some("spark.sql.storeAssignmentPolicy"),
-};
-
-/// How nested `WITH` definitions with the same name resolve.
-pub static CTE_PRECEDENCE_POLICY: ConfigEntry = ConfigEntry {
-    key: "krishiv.sql.legacy.ctePrecedencePolicy",
-    value_type: ValueType::Enum(&["EXCEPTION", "LEGACY", "CORRECTED"]),
-    default: Some(ConfigValue::String(Cow::Borrowed("CORRECTED"))),
-    doc: "How nested WITH definitions with the same name resolve: EXCEPTION fails on a \
-          nested definition shadowing an outer one, LEGACY inlines outer definitions first, \
-          CORRECTED lets inner definitions shadow outer ones.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: Some("spark.sql.legacy.ctePrecedencePolicy"),
-};
-
-/// Map key deduplication policy.
-pub static MAP_KEY_DEDUP_POLICY: ConfigEntry = ConfigEntry {
-    key: "krishiv.sql.mapKeyDedupPolicy",
-    value_type: ValueType::Enum(&["EXCEPTION", "LAST_WIN"]),
-    default: Some(ConfigValue::String(Cow::Borrowed("EXCEPTION"))),
-    doc: "How duplicate map keys are handled by the map functions (`map`, `map_concat`, \
-          `map_from_arrays`, `map_from_entries`, `str_to_map`): `EXCEPTION` fails the query, \
-          `LAST_WIN` keeps the value inserted last.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: Some("spark.sql.mapKeyDedupPolicy"),
-};
 
 /// The largest estimated join build broadcast without a hint (P2-T174
 /// unit 4).
@@ -729,24 +671,6 @@ pub static HISTORY_MAX_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(256 << 20)),
     doc: "Most bytes the profile history under `krishiv.history.path` keeps. When a new file \
           takes the store past this, the oldest files go first, so the newest queries stay.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.3.0",
-    spark_alias: None,
-};
-
-/// The names the web UI answers to (P3-T050, threat model T-W5, DNS rebinding).
-pub static UI_ALLOWED_HOSTS: ConfigEntry = ConfigEntry {
-    key: "krishiv.ui.allowedHosts",
-    value_type: ValueType::String,
-    default: None,
-    doc: "Comma-separated host names (no ports; an IPv6 address in brackets) the web UI's \
-          `/api/internal` routes answer to, by the request's `Host` header, so a page on \
-          another name that resolves to this server cannot read it (DNS rebinding). A server \
-          bound to a loopback address always also answers to `localhost`, `127.0.0.1` and \
-          `[::1]`. A server bound to another address checks the `Host` header only when this is \
-          set (it already requires authentication, and TLS for bearer methods). The \
-          environment variable `KRISHIV_UI_ALLOWED_HOSTS` adds names to the list.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",
@@ -1457,132 +1381,6 @@ pub static IO_CREDENTIALS_REFRESH_SKEW: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// `krishiv.runtimeFilter.enabled`.
-pub static RUNTIME_FILTER_ENABLED: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.enabled",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(true)),
-    doc: "Plan runtime filters: the build side of an inner or left semi hash join \
-          publishes the min/max, a small value set or a Bloom filter of its keys to the scans \
-          feeding the probe side, which skip splits, row groups and rows no build key can match. \
-          Results are the same either way.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.sql.optimizer.runtime.bloomFilter.enabled`.
-pub static RUNTIME_FILTER_BLOOM_ENABLED: ConfigEntry = ConfigEntry {
-    key: "krishiv.sql.optimizer.runtime.bloomFilter.enabled",
-    value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(true)),
-    doc: "Allow Bloom filters among the runtime filters a join build publishes (min/max and value \
-          sets are not affected). Krishiv's cost model decides when one is built; Spark's creation \
-          and application size thresholds are not used.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: Some("spark.sql.optimizer.runtime.bloomFilter.enabled"),
-};
-
-/// `krishiv.runtimeFilter.inList.maxValues`.
-pub static RUNTIME_FILTER_IN_LIST_MAX_VALUES: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.inList.maxValues",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(50)),
-    doc: "Most distinct build keys a runtime filter keeps as a value set; with more, a Bloom \
-          filter (when planned) or only the min/max range is published.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.exactSet.maxValues`.
-pub static RUNTIME_FILTER_EXACT_SET_MAX_VALUES: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.exactSet.maxValues",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(4096)),
-    doc: "Most distinct build keys a runtime filter tests rows against exactly (a small set or \
-          a hash set); with more, a Bloom filter (when planned) or only the min/max range is \
-          used on rows.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.bloom.maxItems`.
-pub static RUNTIME_FILTER_BLOOM_MAX_ITEMS: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.bloom.maxItems",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(4_000_000)),
-    doc: "Most build keys a runtime Bloom filter is built for: a build estimated larger plans \
-          none, and one that turns out larger publishes none. Left at its default, it is raised to \
-          20,000,000 for a scan estimated at least 20 times its build \
-          (`krishiv.runtimeFilter.bloom.atScale`), and for a build past that under a scan 8 times it to the keys \
-          the memory tier holds (`krishiv.runtimeFilter.bloom.memoryTier`).",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.bloom.maxBytes`.
-pub static RUNTIME_FILTER_BLOOM_MAX_BYTES: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.bloom.maxBytes",
-    value_type: ValueType::Size,
-    default: Some(ConfigValue::Size(8 * MIB)),
-    doc: "Largest runtime Bloom filter. A filter capped below its 1% false-positive size is still \
-          built unless its expected false-positive rate exceeds 5%. Left at its default, it is raised to 32 MiB \
-          for a scan estimated at least 20 times its build \
-          (`krishiv.runtimeFilter.bloom.atScale`), and for a build past 20,000,000 keys under a scan 8 times it \
-          to 1/64 of the query memory limit (`krishiv.runtimeFilter.bloom.memoryTier`).",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.bloom.minApplicationRows`.
-pub static RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.bloom.minApplicationRows",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(1_000_000)),
-    doc: "A runtime Bloom filter is planned only for a scan estimated at this many rows or more \
-          (and at least four times the build).",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.adaptive.maxPassPercent`.
-pub static RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.adaptive.maxPassPercent",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(90)),
-    doc: "A scan driver stops evaluating a runtime filter on rows once it passes more than this \
-          percentage of a measurement window (pruning splits and row groups with it continues).",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// `krishiv.runtimeFilter.adaptive.minRows`.
-pub static RUNTIME_FILTER_ADAPTIVE_MIN_ROWS: ConfigEntry = ConfigEntry {
-    key: "krishiv.runtimeFilter.adaptive.minRows",
-    value_type: ValueType::Int,
-    default: Some(ConfigValue::Int(65_536)),
-    doc: "Rows per window over which a scan driver measures a runtime filter's pass rate.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
 /// `spark.sql.optimizer.windowGroupLimitThreshold`.
 pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.optimizer.windowGroupLimitThreshold",
@@ -1982,19 +1780,3 @@ pub static SHARE_CTE_INSTANCES: ConfigEntry = ConfigEntry {
 
 mod index;
 pub use index::INDEX;
-
-/// `krishiv.workload.resourceGroups.file`.
-pub static WORKLOAD_RESOURCE_GROUPS_FILE: ConfigEntry = ConfigEntry {
-    key: "krishiv.workload.resourceGroups.file",
-    value_type: ValueType::String,
-    default: None,
-    doc: "Path of the resource group file (JSON in the shape of Trino's `resource-groups.json`, \
-          restricted to the subset Krishiv supports): the group tree, its concurrency, queue, \
-          per-query memory and scan limits, and the selectors that route a query to a group. Read when \
-          the engine starts; a malformed file stops the start with \
-          `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID`. When unset, every query is admitted at once.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.3.0",
-    spark_alias: None,
-};

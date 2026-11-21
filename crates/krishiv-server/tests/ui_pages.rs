@@ -725,3 +725,72 @@ async fn the_editor_result_is_exact_at_the_row_cap_boundary() {
         assert_eq!(done["truncated"], json!(truncated), "{rows} rows");
     }
 }
+
+/// One planted query, three surfaces (P3-T073): the profile of the run, the `hints` the query page's API
+/// returns, and the `system.queries` row all carry the same hints.
+#[tokio::test]
+async fn the_query_page_the_system_table_and_the_profile_carry_the_same_hints() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let user = krishiv_session::Session::builder()
+        .runtime(Arc::clone(&rt))
+        .build()
+        .unwrap();
+    for ddl in [
+        "CREATE OR REPLACE TEMP VIEW lineitem AS SELECT id % 100000 AS l_partkey FROM range(3000000)",
+        "CREATE OR REPLACE TEMP VIEW part AS SELECT id AS p_partkey, \
+         CASE WHEN id % 100 = 0 THEN 'forest' ELSE 'other' END AS p_name FROM range(100000)",
+    ] {
+        user.sql(ddl).await.unwrap().collect().await.unwrap();
+    }
+    let sql = "SELECT count(*) FROM lineitem JOIN part ON l_partkey + 0 = p_partkey \
+               WHERE p_name LIKE 'forest%'";
+    let (_, profile) = user
+        .sql(sql)
+        .await
+        .unwrap()
+        .collect_with_profile()
+        .await
+        .unwrap();
+    let from_profile: Vec<(String, Option<i64>, Option<i64>)> = profile
+        .hints
+        .iter()
+        .map(|h| {
+            (
+                h.code.as_str().to_owned(),
+                h.node.map(i64::from),
+                h.operator.map(|o| i64::from(o.0)),
+            )
+        })
+        .collect();
+    assert!(!from_profile.is_empty(), "the planted query raised no hint");
+
+    let source = SessionSource::new(rt).unwrap();
+    let addr = serve(router_with_ui(Arc::new(source), TOKEN)).await;
+    let list = get(addr, "/api/internal/history").await;
+    let rows = list["queries"].as_array().unwrap();
+    let row = rows
+        .iter()
+        .find(|r| {
+            r["query_text"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("SELECT count(*) FROM lineitem JOIN part"))
+        })
+        .unwrap_or_else(|| panic!("the planted query is not listed: {list}"));
+    let id = row["query_id"].as_str().unwrap().to_owned();
+    let detail = get(addr, &format!("/api/internal/queries/{id}")).await;
+    let cells = |v: &Value| -> Vec<(String, Option<i64>, Option<i64>)> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|h| {
+                (
+                    h["code"].as_str().unwrap().to_owned(),
+                    h["node_id"].as_i64(),
+                    h["operator_id"].as_i64(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(cells(&detail["query"]["hints"]), from_profile, "{detail}");
+    assert_eq!(cells(&row["hints"]), from_profile, "{row}");
+}

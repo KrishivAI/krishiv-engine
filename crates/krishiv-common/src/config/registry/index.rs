@@ -28,6 +28,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
     ("spark.sql.path.enabled", &SQL_PATH_ENABLED),
     ("krishiv.access.provider", &ACCESS_PROVIDER),
+    ("krishiv.advisor.enabled", &ADVISOR_ENABLED),
     ("krishiv.agent.gateBytes", &AGENT_GATE_BYTES),
     ("krishiv.connect.address", &CONNECT_ADDRESS),
     ("krishiv.io.egress.proxy", &IO_EGRESS_PROXY),
@@ -36,6 +37,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
     ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
     ("krishiv.ui.allowedHosts", &UI_ALLOWED_HOSTS),
+    ("krishiv.advisor.maxHints", &ADVISOR_MAX_HINTS),
     ("krishiv.delta.logThreads", &DELTA_LOG_THREADS),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
     ("krishiv.history.literals", &HISTORY_LITERALS),
@@ -47,8 +49,11 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.zstd.level", &SPILL_ZSTD_LEVEL),
     ("krishiv.sql.ansi.enabled", &ANSI_ENABLED),
     ("krishiv.sql.path.enabled", &SQL_PATH_ENABLED),
+    ("krishiv.ui.embed.linkTtl", &UI_EMBED_LINK_TTL),
+    ("krishiv.flightSql.enabled", &FLIGHT_SQL_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
+    ("krishiv.ui.allowedOrigins", &UI_ALLOWED_ORIGINS),
     ("krishiv.catalog.maxColumns", &CATALOG_MAX_COLUMNS),
     ("krishiv.deterministicOrder", &DETERMINISTIC_ORDER),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
@@ -61,11 +66,13 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.joinCost", &JOIN_COST),
     ("krishiv.python.udf.threads", &PYTHON_UDF_THREADS),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
+    ("krishiv.advisor.skew.factor", &ADVISOR_SKEW_FACTOR),
     ("krishiv.connect.maxSessions", &CONNECT_MAX_SESSIONS),
     ("krishiv.exec.agg.directKeys", &EXEC_AGG_DIRECT_KEYS),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
+    ("krishiv.flightSql.handleTtl", &FLIGHT_SQL_HANDLE_TTL),
     ("krishiv.io.cache.blockBytes", &IO_CACHE_BLOCK_BYTES),
     ("krishiv.query.maxQueuedTime", &QUERY_MAX_QUEUED_TIME),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
@@ -73,12 +80,15 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
+    ("krishiv.advisor.skew.minRows", &ADVISOR_SKEW_MIN_ROWS),
+    ("krishiv.advisor.skew.minTime", &ADVISOR_SKEW_MIN_TIME),
     ("krishiv.connect.maxPlanDepth", &CONNECT_MAX_PLAN_DEPTH),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
     ("krishiv.resultCache.maxBytes", &RESULT_CACHE_MAX_BYTES),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
+    ("krishiv.exec.agg.outputFilter", &EXEC_AGG_OUTPUT_FILTER),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
     ("krishiv.io.coalesceWasteBytes", &IO_COALESCE_WASTE_BYTES),
     ("krishiv.io.local.allowedRoots", &IO_LOCAL_ALLOWED_ROOTS),
@@ -92,10 +102,12 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
+    ("krishiv.advisor.spill.minBytes", &ADVISOR_SPILL_MIN_BYTES),
     ("krishiv.catalog.requestTimeout", &CATALOG_REQUEST_TIMEOUT),
     ("krishiv.connect.keepAlive.time", &CONNECT_KEEPALIVE_TIME),
     ("krishiv.connect.maxConnections", &CONNECT_MAX_CONNECTIONS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
+    ("krishiv.flightSql.maxBatchRows", &FLIGHT_SQL_MAX_BATCH_ROWS),
     ("krishiv.io.egress.allowedCidrs", &IO_EGRESS_ALLOWED_CIDRS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
     ("krishiv.optimizer.discoverKeys", &DISCOVER_KEYS),
@@ -104,6 +116,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.query.maxExecutionTime", &QUERY_MAX_EXECUTION_TIME),
     ("krishiv.server.shutdownTimeout", &SERVER_SHUTDOWN_TIMEOUT),
     ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
+    (
+        "krishiv.delta.maxCommitAttempts",
+        &DELTA_MAX_COMMIT_ATTEMPTS,
+    ),
     (
         "krishiv.io.coalesceWasteDivisor",
         &IO_COALESCE_WASTE_DIVISOR,
@@ -119,6 +135,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.files.minPartitionNum", &FILES_MIN_PARTITION_NUM),
     ("spark.sql.files.openCostInBytes", &FILES_OPEN_COST_IN_BYTES),
     ("spark.sql.storeAssignmentPolicy", &STORE_ASSIGNMENT_POLICY),
+    (
+        "krishiv.advisor.spill.minPercent",
+        &ADVISOR_SPILL_MIN_PERCENT,
+    ),
     (
         "krishiv.catalog.maxMetadataBytes",
         &CATALOG_MAX_METADATA_BYTES,
@@ -140,16 +160,36 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_JOIN_IDLE_SPILL_AFTER,
     ),
     (
+        "krishiv.flightSql.provisionalTtl",
+        &FLIGHT_SQL_PROVISIONAL_TTL,
+    ),
+    (
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
     ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
+    (
+        "krishiv.server.readiness.timeout",
+        &SERVER_READINESS_TIMEOUT,
+    ),
     ("krishiv.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     ("krishiv.sql.files.commitProtocol", &FILES_COMMIT_PROTOCOL),
+    (
+        "krishiv.ui.embed.hideAttribution",
+        &UI_EMBED_HIDE_ATTRIBUTION,
+    ),
+    (
+        "krishiv.write.commitRetryTimeout",
+        &WRITE_COMMIT_RETRY_TIMEOUT,
+    ),
     ("spark.sql.avro.compression.codec", &AVRO_COMPRESSION_CODEC),
     (
         "spark.sql.cteRecursionLevelLimit",
         &CTE_RECURSION_LEVEL_LIMIT,
+    ),
+    (
+        "krishiv.advisor.memoryWait.factor",
+        &ADVISOR_MEMORY_WAIT_FACTOR,
     ),
     (
         "krishiv.cache.defaultStorageLevel",
@@ -177,6 +217,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ),
     ("krishiv.exec.targetPartitionBytes", &TARGET_PARTITION_BYTES),
     (
+        "krishiv.flightSql.maxSchemaTables",
+        &FLIGHT_SQL_MAX_SCHEMA_TABLES,
+    ),
+    (
+        "krishiv.flightSql.metadataTimeout",
+        &FLIGHT_SQL_METADATA_TIMEOUT,
+    ),
+    (
         "krishiv.memory.reservationQuantum",
         &MEMORY_RESERVATION_QUANTUM,
     ),
@@ -192,6 +240,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.python.worker.memoryLimit",
         &PYTHON_WORKER_MEMORY_LIMIT,
+    ),
+    (
+        "krishiv.server.readiness.interval",
+        &SERVER_READINESS_INTERVAL,
+    ),
+    (
+        "krishiv.server.readiness.required",
+        &SERVER_READINESS_REQUIRED,
     ),
     (
         "krishiv.sql.files.maxPartitionNum",
@@ -231,12 +287,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &UNION_OUTPUT_PARTITIONING,
     ),
     (
+        "krishiv.advisor.memoryWait.minTime",
+        &ADVISOR_MEMORY_WAIT_MIN_TIME,
+    ),
+    (
         "krishiv.connect.artifacts.maxBytes",
         &CONNECT_ARTIFACTS_MAX_BYTES,
     ),
     (
         "krishiv.connect.execute.aheadBytes",
         &CONNECT_EXECUTE_AHEAD_BYTES,
+    ),
+    (
+        "krishiv.flightSql.fetchIdleTimeout",
+        &FLIGHT_SQL_FETCH_IDLE_TIMEOUT,
     ),
     (
         "krishiv.iceberg.write.maxOpenFiles",
@@ -263,6 +327,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
     ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
     (
+        "krishiv.runtimeFilter.equatedSites",
+        &RUNTIME_FILTER_EQUATED_SITES,
+    ),
+    (
         "krishiv.sql.avro.compression.codec",
         &AVRO_COMPRESSION_CODEC,
     ),
@@ -288,6 +356,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_SESSION_IDLE_TIMEOUT,
     ),
     (
+        "krishiv.flightSql.maxStatementBytes",
+        &FLIGHT_SQL_MAX_STATEMENT_BYTES,
+    ),
+    (
         "krishiv.iceberg.manifestCache.bytes",
         &ICEBERG_MANIFEST_CACHE_BYTES,
     ),
@@ -311,6 +383,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.unionOutputPartitioning",
         &UNION_OUTPUT_PARTITIONING,
+    ),
+    (
+        "krishiv.advisor.missingStats.minRows",
+        &ADVISOR_MISSING_STATS_MIN_ROWS,
     ),
     (
         "krishiv.delta.snapshotCache.maxBytes",
@@ -385,12 +461,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_STATISTICAL_AGGREGATE,
     ),
     (
+        "krishiv.advisor.missingStats.minQError",
+        &ADVISOR_MISSING_STATS_MIN_Q_ERROR,
+    ),
+    (
         "krishiv.exec.join.sharedBroadcastBytes",
         &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     ),
     (
         "krishiv.experimental.groupKeyCodeForce",
         &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
+    ),
+    (
+        "krishiv.flightSql.maxHandlesPerSession",
+        &FLIGHT_SQL_MAX_HANDLES_PER_SESSION,
     ),
     (
         "krishiv.io.objectStore.allowedPrefixes",
@@ -457,6 +541,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
     ),
     (
+        "krishiv.flightSql.maxCommandResultBytes",
+        &FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES,
+    ),
+    (
         "krishiv.optimizer.payloadAboveAggregate",
         &PAYLOAD_ABOVE_AGGREGATE,
     ),
@@ -497,6 +585,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_SESSION_TOMBSTONES,
     ),
     (
+        "krishiv.flightSql.maxHandlesPerPrincipal",
+        &FLIGHT_SQL_MAX_HANDLES_PER_PRINCIPAL,
+    ),
+    (
         "krishiv.iceberg.write.statistics.enabled",
         &ICEBERG_WRITE_STATISTICS_ENABLED,
     ),
@@ -517,12 +609,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_INBOUND_MESSAGE_SIZE,
     ),
     (
+        "spark.databricks.delta.maxCommitAttempts",
+        &DELTA_MAX_COMMIT_ATTEMPTS,
+    ),
+    (
         "spark.sql.sources.partitionOverwriteMode",
         &PARTITION_OVERWRITE_MODE,
     ),
     (
         "krishiv.experimental.unalignedCheckpoints",
         &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    ),
+    (
+        "krishiv.server.readiness.failureThreshold",
+        &SERVER_READINESS_FAILURE_THRESHOLD,
     ),
     (
         "krishiv.sql.avro.datetimeRebaseModeInRead",
@@ -535,6 +635,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.viewSchemaCompensation",
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
+    ),
+    (
+        "krishiv.advisor.runtimeFilter.minProbeRows",
+        &ADVISOR_RUNTIME_FILTER_MIN_PROBE_ROWS,
     ),
     (
         "krishiv.connect.artifacts.maxArtifactBytes",
@@ -573,8 +677,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PYTHON_UDF_ARROW_ENABLED,
     ),
     (
+        "krishiv.advisor.runtimeFilter.minDropPercent",
+        &ADVISOR_RUNTIME_FILTER_MIN_DROP_PERCENT,
+    ),
+    (
         "krishiv.connect.http2.maxPendingAcceptResets",
         &CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS,
+    ),
+    (
+        "krishiv.flightSql.maxHandleBytesPerPrincipal",
+        &FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
     ),
     (
         "spark.sql.execution.arrow.maxRecordsPerBatch",

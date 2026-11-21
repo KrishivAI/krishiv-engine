@@ -10,3 +10,20 @@
 id = "RUSTSEC-2024-0436"
 ignoreUntil = 2027-05-13
 reason = "unmaintained proc macro; only through iceberg 0.11's parquet 58; no safe upgrade"
+
+# pin-utils is unmaintained (repository archived 2026-10-01) and has no successor release. It
+# comes only from loom 0.7.2, a dev-dependency of krishiv-exec for its `--cfg loom` concurrency
+# models, never in a shipped binary. Drop this with the deny.toml ignore, when loom releases
+# without it.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0441"
+ignoreUntil = 2027-05-19
+reason = "unmaintained; dev-only, through loom 0.7.2; no safe upgrade"
+
+# chrono is unmaintained (chronotope/chrono#1768); every version is affected and Arrow requires
+# it, so there is no safe upgrade. Mirrors the deny.toml ignore. The tests/rust-client lock is a
+# new scan source, which is why the PR scan reports it as new.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+ignoreUntil = 2027-05-19
+reason = "unmaintained; required by every Arrow crate; no safe upgrade"

@@ -86,7 +86,7 @@ ANALYZE TABLE t COMPUTE STATISTICS;
 
 ## Not supported yet
 
-- `CREATE FUNCTION ... AS 'class'` (a function implemented by a JVM class): `KRISHIV_UNSUPPORTED_FEATURE`. Register
+- `CREATE FUNCTION ... AS 'class'` (a function implemented by a JVM class): `KRISHIV_JVM_FUNCTION_UNSUPPORTED`. Register
   Python functions with `@udf` and Rust functions through the [Rust UDF guide](../rust-udfs.md).
 - `ADD JAR | FILE | ARCHIVE` in a session: `KRISHIV_UNSUPPORTED_FEATURE`.
 - `ALTER VIEW ... RENAME TO`, as above.

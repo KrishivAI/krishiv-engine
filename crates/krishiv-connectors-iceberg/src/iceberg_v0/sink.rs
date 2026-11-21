@@ -65,12 +65,13 @@
 //!   processes (workers, or a query retried after a restart) collide only if
 //!   their random keys line up, about 2^-64 per pair.
 //!
-//! [`IcebergTableProvider`](crate::IcebergTableProvider) declares
-//! `BATCH_WRITE` alone, so a truncate or an `INSERT OVERWRITE` is refused
-//! before a sink is built. The other commit is a copy-on-write rewrite's
-//! ([`IcebergWriteSink::try_rewrite`], `row_level.rs`): the same writers
-//! (with the lineage columns on v3), then an `OverwriteFiles` through
-//! [`commit_validated`] with the files it removes and its [`Validation`]. A
+//! The other commits are a copy-on-write rewrite's and an `INSERT
+//! OVERWRITE`'s ([`IcebergWriteSink::try_rewrite`], `row_level.rs`,
+//! `overwrite.rs`): the same writers (with the lineage columns on v3), then
+//! an `OverwriteFiles` or `ReplacePartitions` through [`commit_validated`]
+//! with what it removes and its [`Validation`]; a dynamic overwrite takes
+//! its partitions from the files written and commits nothing when it wrote
+//! none. A
 //! distributed write would need the `WrittenDataFile`s of
 //! every worker's tasks gathered to one place that runs the commit once; the
 //! `Sink` contract commits once per pipeline run of one process, which is what
@@ -99,11 +100,11 @@ use tokio::sync::{mpsc, oneshot};
 use super::append::{WriteIds, write_new_manifests};
 use super::commit::{CommitClock, CommitContext, CommitTable, commit_append, commit_validated};
 use super::data_file::{WrittenDataFile, data_file};
-use super::filter::Removals;
+use super::filter::{Removals, partition_key};
 use super::statistics_file::{SketchColumn, TaskSketches, sketch_columns, union_tasks};
 use super::storage::Registered;
 use super::types::arrow_schema;
-use super::validate::Validation;
+use super::validate::{PartitionSet, Validation};
 use super::write::{DataFileWriter, TaskIds};
 
 /// The branch an append commits to.
@@ -438,6 +439,18 @@ impl IcebergWriteSink {
                 return Err(e);
             }
         };
+        let mut overwrite = self.overwrite.clone();
+        if let Some(o) = overwrite.as_mut().filter(|o| o.removals.replace_partitions) {
+            // Spark skips an empty dynamic overwrite (`SparkWrite.java:341-344`).
+            if entries.is_empty() {
+                written.delete().await;
+                return Ok(());
+            }
+            if let Err(e) = replaced_partitions(o, &t.base, &entries) {
+                written.delete().await;
+                return Err(e);
+            }
+        }
         let snapshot_id = snapshot_id(&t.base);
         let commit_uuid = random_uuid();
         let mut new = match write_new_manifests(
@@ -475,7 +488,7 @@ impl IcebergWriteSink {
             write_id: &self.write_id,
             query_id: Some(&query_id),
         };
-        match &self.overwrite {
+        match &overwrite {
             None => commit_append(t.committer.as_ref(), cx, &t.base, &mut new, ids)
                 .await
                 .map(drop),
@@ -496,22 +509,90 @@ impl IcebergWriteSink {
     }
 }
 
+/// A `ReplacePartitions`' removals and conflict scope from the files it
+/// writes (`BaseReplacePartitions.java:51-56`, `:113-117`): their partitions
+/// (spec id and tuple, compared by value: `filter::partition_key`), or
+/// every row when none of their spec's fields is non-`void` (validated over
+/// `true`, Java's `alwaysTrue`).
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a written partition value that cannot
+/// be read back (never matched, so never dropped: refused instead).
+fn replaced_partitions(
+    o: &mut Overwrite,
+    base: &TableMetadata,
+    entries: &[(i32, iceberg::spec::DataFile)],
+) -> Result<(), KrishivError> {
+    let schema = base.current_schema();
+    // Java's `PartitionSpec.isUnpartitioned`: no field, or only `void` fields.
+    let unpartitioned = entries.iter().all(|(spec_id, _)| {
+        base.partition_spec_by_id(*spec_id).is_some_and(|s| {
+            s.fields()
+                .iter()
+                .all(|f| f.transform == iceberg::spec::Transform::Void)
+        })
+    });
+    if unpartitioned {
+        o.removals.row_filter = Some(krishiv_io::PushdownExpr::Constant(true));
+        o.validation.filter = None;
+        "true".clone_into(&mut o.validation.filter_text);
+        return Ok(());
+    }
+    let specs = super::scan::partition_specs(base, schema);
+    let mut paths = std::collections::BTreeSet::new();
+    for (spec_id, f) in entries {
+        let tuple = super::scan::content_file(f, *spec_id).partition;
+        let key = partition_key(&specs, *spec_id, &tuple).ok_or_else(|| {
+            KrishivError::from(KrishivUnsupportedFeature {
+                feature: format!(
+                    "a dynamic overwrite writing a partition value Krishiv cannot read back ({})",
+                    f.file_path()
+                ),
+            })
+        })?;
+        o.removals.drop_partitions.insert(key);
+        if let Some(spec) = base.partition_spec_by_id(*spec_id) {
+            paths.insert(spec.partition_to_path(f.partition(), Arc::clone(schema)));
+        }
+    }
+    o.validation.partitions = Some(PartitionSet {
+        keys: o.removals.drop_partitions.clone(),
+        text: format!("[{}]", paths.into_iter().collect::<Vec<_>>().join(", ")),
+    });
+    Ok(())
+}
+
 /// The files of a write not yet handed to the commit loop: deleted on
 /// failure, or by `Drop` (in a task on the I/O runtime) when the finalize is
 /// dropped first.
-struct Written {
+pub(crate) struct Written {
     file_io: FileIO,
     /// The I/O runtime.
     runtime: Option<tokio::runtime::Handle>,
-    data: Vec<String>,
-    manifests: Vec<String>,
-    armed: bool,
+    /// Data (and delete) files written.
+    pub(crate) data: Vec<String>,
+    /// Manifests written.
+    pub(crate) manifests: Vec<String>,
+    /// Cleared once the commit loop owns the files.
+    pub(crate) armed: bool,
 }
 
 impl Written {
+    /// An armed guard over nothing yet, deleting through `file_io` (on the
+    /// I/O runtime of `registered` when dropped).
+    pub(crate) fn new(file_io: FileIO, registered: &Registered) -> Self {
+        Self {
+            file_io,
+            runtime: registered.io.scheduler().runtime().cloned(),
+            data: Vec::new(),
+            manifests: Vec::new(),
+            armed: true,
+        }
+    }
+
     /// Cancellation-safe: a path leaves the lists only once its delete is
     /// done, so a dropped delete leaves the rest to `Drop`.
-    async fn delete(&mut self) {
+    pub(crate) async fn delete(&mut self) {
         while let Some(p) = self.manifests.last().or(self.data.last()).cloned() {
             let _ = self.file_io.delete(&p).await;
             if self.manifests.pop().is_none() {
@@ -871,7 +952,7 @@ pub(crate) fn unique_u64() -> u64 {
 }
 
 /// A random version-4 UUID's text.
-fn random_uuid() -> String {
+pub(crate) fn random_uuid() -> String {
     let hi = unique_u64();
     let lo = unique_u64();
     let hi = (hi & !0xF000) | 0x4000;
@@ -888,7 +969,7 @@ fn random_uuid() -> String {
 
 /// A positive snapshot id the table does not have (Java's
 /// `SnapshotIdGenerator`: a random positive long).
-fn snapshot_id(base: &TableMetadata) -> i64 {
+pub(crate) fn snapshot_id(base: &TableMetadata) -> i64 {
     loop {
         let id = i64::try_from(unique_u64() >> 1).unwrap_or(i64::MAX);
         if id != 0 && base.snapshot_by_id(id).is_none() {
@@ -900,6 +981,22 @@ fn snapshot_id(base: &TableMetadata) -> i64 {
 /// The production commit clock: wall time, sleeps on the I/O runtime.
 struct IoClock {
     handle: tokio::runtime::Handle,
+}
+
+/// The production commit clock on `registered`'s I/O runtime.
+///
+/// # Errors
+/// `INTERNAL_ERROR` when the I/O scheduler has no runtime.
+pub(crate) fn io_clock(registered: &Registered) -> Result<Arc<dyn CommitClock>, KrishivError> {
+    let handle = registered
+        .io
+        .scheduler()
+        .runtime()
+        .cloned()
+        .ok_or_else(|| {
+            internal("an Iceberg commit needs the I/O scheduler's runtime".to_owned())
+        })?;
+    Ok(Arc::new(IoClock { handle }))
 }
 
 #[async_trait]

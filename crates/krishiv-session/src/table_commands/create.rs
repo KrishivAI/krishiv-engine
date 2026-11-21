@@ -61,7 +61,7 @@ impl Session {
             stamp: 0,
         };
         #[cfg(feature = "delta")]
-        if is_delta_table(&table) {
+        if is_delta_table(&table) && t.as_query.is_none() {
             // delta-spark compares the whole declared schema, typed partition columns and
             // `NOT NULL` included, with the log's.
             let mut declared = self.declared_columns(t, original, &typed_partitions)?;
@@ -419,13 +419,6 @@ impl Session {
         layout: &LayoutRequest<'_>,
         pre: &mut Option<Admitted>,
     ) -> Result<(), KrishivError> {
-        #[cfg(feature = "delta")]
-        if is_delta_table(&table) {
-            return Err(delta_write_refused(
-                quoted(&table.namespace, &table.name),
-                "CREATE TABLE AS SELECT",
-            ));
-        }
         let env = self.query_env();
         let analysis = df.analyzed_in(self.query_env()).await?;
         crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
@@ -507,6 +500,56 @@ impl Session {
         } else {
             None
         };
+        #[cfg(feature = "delta")]
+        if is_delta_table(&table) {
+            // Version 0 of a new Delta table with the rows (design section 4.1, "CTAS").
+            drop(pre.take());
+            let source =
+                super::delta_source(&self.qualify_path(&table.location.display().to_string())?);
+            // delta-spark refuses a CTAS into a location that holds anything, a Delta table
+            // included (`WRITES.json` `ctas_existing_location`).
+            let location = table.location.clone();
+            let occupied = tokio::task::spawn_blocking(move || {
+                std::fs::read_dir(&location).is_ok_and(|mut d| d.next().is_some())
+            })
+            .await
+            .map_err(|e| internal(format!("reading a Delta location: {e}")))?;
+            if !table.managed && (occupied || env.catalog.delta.exists(&source).await?) {
+                let krishiv_plan::ReadSource::Files { paths, .. } = &source else {
+                    return Err(internal("a Delta location that is not a path".to_owned()));
+                };
+                return Err(
+                    krishiv_common::error::DeltaCreateTableWithNonEmptyLocation {
+                        table_id: quoted(&table.namespace, &table.name),
+                        table_location: paths
+                            .first()
+                            .and_then(|p| p.as_plain())
+                            .unwrap_or_default()
+                            .trim_end_matches('/')
+                            .to_owned(),
+                    }
+                    .into(),
+                );
+            }
+            self.write_delta(
+                &df,
+                super::DeltaTarget::Create {
+                    source,
+                    name: Some(format!("{}.{}", table.namespace, table.name)),
+                    partition_by: table.layout.partition_columns.clone(),
+                    properties: table.properties.clone(),
+                },
+                krishiv_exec::planner::WriteMode::Append,
+                super::delta_writes::writer_options(&table.options),
+                &quoted(&table.namespace, &table.name),
+            )
+            .await?;
+            if let Some(owned) = owned {
+                owned.keep();
+            }
+            self.add_table(table, mode, true).await?;
+            return Ok(());
+        }
         let write_mode = if owned.is_some() {
             "append"
         } else {
@@ -831,7 +874,47 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(table, &env)?;
-        self.table_for_write(&name, operation, &env)?;
+        // `delta.`/path``: a Delta table by path (no catalog entry), read as its scans read it.
+        #[cfg(feature = "delta")]
+        let by_path = match crate::access::ddl_parts(table, &env)?.as_slice() {
+            [format, path]
+                if format.eq_ignore_ascii_case("delta")
+                    && path.contains('/')
+                    && self
+                        .state
+                        .catalog
+                        .store
+                        .table(&name.namespace, &name.name)
+                        .is_none() =>
+            {
+                // The path as written: a table name is case-folded, a path is not.
+                Some(format!("delta.`{}`", path.replace('`', "``")))
+            }
+            _ => None,
+        };
+        #[cfg(not(feature = "delta"))]
+        let by_path: Option<String> = None;
+        // The statement's own check named the target as a table; a table by path changes the
+        // files at that path, so `Modify` on it is asked first, as a Delta save to the path asks.
+        #[cfg(feature = "delta")]
+        if by_path.is_some()
+            && let [_, path] = crate::access::ddl_parts(table, &env)?.as_slice()
+        {
+            let qualified = self.qualify_path(path)?;
+            self.authorize_qualified_root(
+                &qualified,
+                &[Privilege::Modify],
+                krishiv_sql::StatementClass::Write,
+            )
+            .await?;
+        }
+        let quoted = match by_path {
+            Some(q) => q,
+            None => {
+                self.table_for_write(&name, operation, &env)?;
+                name.quoted()
+            }
+        };
         // Spark analyzes the condition and the new values against the table before it finds that the
         // table cannot change: an unknown column is the error then.
         // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own
@@ -844,7 +927,7 @@ impl Session {
                 .map(|p| format!("`{}`", p.value.replace('`', "``")))
                 .collect::<Vec<_>>()
                 .join(".");
-            let sql = format!("SELECT {written} FROM {}", name.quoted());
+            let sql = format!("SELECT {written} FROM {quoted}");
             plain.analyze_variable_query(&sql).await?;
         }
         let slice = |e: &krishiv_sql::ast::Expr| {
@@ -863,7 +946,7 @@ impl Session {
         if select.is_empty() {
             select.push("1".to_owned());
         }
-        let mut sql = format!("SELECT {} FROM {}", select.join(", "), name.quoted());
+        let mut sql = format!("SELECT {} FROM {quoted}", select.join(", "));
         if let Some(alias) = alias {
             sql.push_str(&format!(" AS `{}`", alias.value.replace('`', "``")));
         }
@@ -905,13 +988,7 @@ impl Session {
                 .collect();
             let condition = changes.condition.map(slice);
             if let Some(done) = self
-                .run_row_level(
-                    op,
-                    &name.quoted(),
-                    &alias,
-                    condition.as_deref(),
-                    &assignments,
-                )
+                .run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments)
                 .await?
             {
                 // The table's data changed: what read it is stale (as after an `INSERT`).
@@ -922,7 +999,7 @@ impl Session {
             }
         }
         Err(UnsupportedFeatureTableOperation {
-            table_name: name.quoted(),
+            table_name: quoted,
             operation: operation.to_owned(),
         }
         .into())

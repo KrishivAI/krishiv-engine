@@ -576,6 +576,93 @@ fn a_filter_merged_from_every_build_task_crosses_stages() {
     assert_eq!(root.reserved(), 0);
 }
 
+/// The fixed Bloom sizes (`bloom_spill_bytes`) of the join filters and the
+/// exchange-collected filters under `node`.
+fn fixed_blooms(node: &krishiv_exec::physical::PhysNode, out: &mut Vec<Option<u32>>) {
+    use krishiv_exec::physical::PhysNode;
+    match node {
+        PhysNode::HashJoin(j) => out.extend(
+            j.runtime_filters
+                .iter()
+                .map(|f| f.options.bloom_spill_bytes),
+        ),
+        PhysNode::Exchange(e) => out.extend(e.filters.iter().map(|f| f.options.bloom_spill_bytes)),
+        _ => {}
+    }
+    for c in node.children() {
+        fixed_blooms(c, out);
+    }
+}
+
+/// TPC-H q09's guessed build (`p_name LIKE '%green%'`, past a small
+/// `bloom.maxItems`) plans a fixed Bloom of the memory tier, which only a
+/// plan run on one worker keeps: a fragment runs as tasks, so its join is
+/// one of several builds (a broadcast join's probe tasks each build their
+/// own when the shared build does not fit), and each would reserve the
+/// whole tier. Cut, broadcast or shuffled, no join or exchange filter keeps
+/// it, and the rows equal one worker's.
+#[test]
+fn a_cut_plan_keeps_no_fixed_bloom() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let plain = QueryRunner::new(Arc::clone(&executor) as _);
+    let split = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(dealer(&tpch.files)));
+    let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let worker = WorkerContext::new(Arc::clone(&tpch.tables) as _);
+    let sql = "SELECT l_orderkey, l_extendedprice FROM lineitem JOIN part \
+               ON l_partkey = p_partkey WHERE p_name LIKE '%green%'";
+    let sorted = |mut rows: Vec<String>| {
+        rows.sort();
+        rows
+    };
+    for broadcast in ["10m", "-1"] {
+        let mut config = Config::clone(&tpch.config);
+        for (k, v) in [
+            ("spark.sql.autoBroadcastJoinThreshold", broadcast),
+            ("krishiv.memory.limit", "256m"),
+            ("krishiv.runtimeFilter.bloom.minApplicationRows", "0"),
+            ("krishiv.runtimeFilter.inList.maxValues", "0"),
+            ("krishiv.runtimeFilter.exactSet.maxValues", "0"),
+            ("krishiv.runtimeFilter.bloom.maxItems", "20"),
+            ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
+        ] {
+            config.set(k, v).unwrap();
+        }
+        let plan = tpch.plan_sql(sql, Arc::new(config)).unwrap();
+        let mut planned = Vec::new();
+        for r in plan.roots() {
+            fixed_blooms(r, &mut planned);
+        }
+        assert!(
+            planned.iter().any(Option::is_some),
+            "broadcast {broadcast}: no fixed Bloom planned: {planned:?}\n{plan}"
+        );
+        let schemas = krishiv_exec::physical::exchange_schemas(&plan, &worker).unwrap();
+        let stages = fragment(&plan, &schemas).unwrap();
+        assert!(stages.len() > 1, "broadcast {broadcast}: not cut\n{plan}");
+        let mut cut = Vec::new();
+        for s in &stages {
+            for r in s.plan.roots() {
+                fixed_blooms(r, &mut cut);
+            }
+        }
+        assert!(
+            cut.iter().all(Option::is_none),
+            "broadcast {broadcast}: a cut plan keeps a fixed Bloom: {cut:?}"
+        );
+        let want = sorted(run(&plain, &plan, &worker, &root, 1).unwrap());
+        assert!(!want.is_empty());
+        assert_eq!(sorted(run(&split, &plan, &worker, &root, 2).unwrap()), want);
+        assert_eq!(root.reserved(), 0);
+    }
+}
+
 /// A file its format cannot split (gzip or `multiLine` CSV) is dealt whole,
 /// as a local scan keeps it: one task reads all of its bytes, so its
 /// `_metadata.file_block_length` is the file's length. Other files of the

@@ -26,10 +26,6 @@ fn redaction_matches_the_key_or_the_value() {
     assert!(is_redacted("a.b", Some("jdbc:x?Password=p")));
     assert!(is_redacted("my.Credentials", None));
     assert!(is_redacted("auth.token", None));
-    assert!(
-        !super::matches_redaction("access_key"),
-        "Spark's [.]? is a literal dot"
-    );
     // Krishiv's own classifier (ADR 0038) on top of Spark's pattern.
     assert!(is_redacted("access_key", None));
     assert!(is_redacted(

@@ -988,13 +988,22 @@ impl DataFrame {
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     ///
+    /// The plan holds the inlined queries of the `SQL SECURITY DEFINER` views it reads, so it is
+    /// shown as `EXPLAIN` shows one: only to a principal that may read, as invoker, what those
+    /// views read (ADR 0048 A1 §3; P3-T062 review r3 X2).
+    ///
     /// # Errors
-    /// Spark's analysis errors.
+    /// Spark's analysis errors; `KRISHIV_INSUFFICIENT_PERMISSIONS`, redacted, when a definer
+    /// view's reads are not the principal's.
     #[cfg(feature = "unstable-ir")]
     pub async fn analyzed(&self) -> Result<Arc<AnalyzedPlan>, KrishivError> {
         let df = self.clone();
         self.session
-            .on_executor(async move { Ok(Arc::clone(&df.analysis().await?.analyzed)) })
+            .on_executor(async move {
+                let analyzed = Arc::clone(&df.analysis().await?.analyzed);
+                df.session.authorize_shown_definer_reads(&analyzed).await?;
+                Ok(analyzed)
+            })
             .await
     }
 
@@ -1097,7 +1106,7 @@ impl DataFrame {
             return Err(e.clone());
         }
         let plan = self.plan_with_checkpoints().await?;
-        let analyzed = self.session.analyze_in(&plan, &env, text).await?;
+        let (analyzed, through_views) = self.session.analyze_in(&plan, &env, text).await?;
         let mut env = env;
         // A trial's analysis is kept as an ordinary one: later checks are audited and told to
         // the policy.
@@ -1106,12 +1115,6 @@ impl DataFrame {
         if let Some(t) = text {
             env.set_text(t);
         }
-        let through_views = std::mem::take(
-            &mut *env
-                .view_keeps
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
-        );
         env.observers = Arc::new(self.observers_through(through_views));
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
@@ -1787,18 +1790,70 @@ impl DataFrame {
     /// or the cache prefix `` `__krishiv_cache_` `` (in any letter case),
     /// which [`Session::sql`] cannot spell either.
     pub async fn create_or_replace_temp_view(&self, name: &str) -> Result<(), KrishivError> {
+        self.temp_view(name, false, true).await
+    }
+
+    /// Registers this frame as the global temporary view `global_temp.name`, kept in this
+    /// session's catalog, as `CREATE GLOBAL TEMPORARY VIEW` keeps it (PySpark's `createGlobalTempView`). It
+    /// fails with `TEMP_TABLE_OR_VIEW_ALREADY_EXISTS` when the view exists.
+    ///
+    /// # Errors
+    /// As [`Self::create_or_replace_temp_view`], and `TEMP_TABLE_OR_VIEW_ALREADY_EXISTS`.
+    pub async fn create_global_temp_view(&self, name: &str) -> Result<(), KrishivError> {
+        self.temp_view(name, true, false).await
+    }
+
+    /// Registers this frame as the global temporary view `global_temp.name`, replacing one of that
+    /// name (PySpark's `createOrReplaceGlobalTempView`).
+    ///
+    /// # Errors
+    /// As [`Self::create_or_replace_temp_view`].
+    pub async fn create_or_replace_global_temp_view(&self, name: &str) -> Result<(), KrishivError> {
+        self.temp_view(name, true, true).await
+    }
+
+    async fn temp_view(&self, name: &str, global: bool, replace: bool) -> Result<(), KrishivError> {
         let (df, name) = (self.clone(), name.to_owned());
         self.session
-            .on_executor(async move { df.temp_view_here(&name).await })
+            .on_executor(async move { df.temp_view_here(&name, global, replace).await })
             .await
     }
 
-    async fn temp_view_here(&self, name: &str) -> Result<(), KrishivError> {
-        if crate::catalog::is_reserved_view_name(name) {
-            return Err(crate::catalog::reserved_temp_view_name(name));
+    async fn temp_view_here(
+        &self,
+        view: &str,
+        global: bool,
+        replace: bool,
+    ) -> Result<(), KrishivError> {
+        if crate::catalog::is_reserved_view_name(view) {
+            return Err(crate::catalog::reserved_temp_view_name(view));
         }
+        let key = if global {
+            crate::catalog::global_key(view)
+        } else {
+            view.to_owned()
+        };
+        let name = key.as_str();
         // Spark analyzes the view's plan first: its errors come first.
         let analysis = self.analysis().await?;
+        // After the analysis, as Spark: a bad query is reported before an existing name.
+        if !replace
+            && self
+                .session
+                .state
+                .catalog
+                .exists(name, self.session.query_env().analysis.conf.case_sensitive)
+        {
+            let shown = if global {
+                format!("`{}`.`{view}`", crate::catalog::GLOBAL_NAMESPACE)
+            } else {
+                format!("`{view}`")
+            };
+            return Err(krishiv_common::error::TempTableOrViewAlreadyExists {
+                relation_name: shown,
+            }
+            .into());
+        }
         let columns: Vec<TableColumn> =
             crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?
                 .output
@@ -1818,7 +1873,7 @@ impl DataFrame {
                     partitions: Some(Default::default()),
                 },
             );
-            self.session.state.cache.forget_table(name);
+            self.session.state.cache.forget_table(view);
             return Ok(());
         }
         // Any other view snapshots its input: the analyzed plan is stored,
@@ -1841,7 +1896,7 @@ impl DataFrame {
             // observations. Published with the entry, under the same lock.
             crate::catalog::ViewKeeps(self.observation_handles_with(&analysis.env.observers)),
         );
-        self.session.state.cache.forget_table(name);
+        self.session.state.cache.forget_table(view);
         Ok(())
     }
 }

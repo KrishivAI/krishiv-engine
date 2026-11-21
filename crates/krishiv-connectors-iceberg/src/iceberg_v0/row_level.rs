@@ -94,23 +94,37 @@ impl IcebergRowLevel {
         &self,
         props: &std::collections::HashMap<String, String>,
     ) -> Result<Isolation, KrishivError> {
-        let key = match self.op {
-            RowLevelOperation::Update => UPDATE_ISOLATION_LEVEL,
-            RowLevelOperation::Merge => MERGE_ISOLATION_LEVEL,
-            _ => DELETE_ISOLATION_LEVEL,
-        };
-        match props.get(key) {
-            None => Ok(Isolation::Serializable),
-            Some(v) if v.eq_ignore_ascii_case("serializable") => Ok(Isolation::Serializable),
-            Some(v) if v.eq_ignore_ascii_case("snapshot") => Ok(Isolation::Snapshot),
-            Some(v) => Err(KrishivUnsupportedFeature {
-                feature: format!(
-                    "the Iceberg isolation level {v:?} ({key}); the levels are serializable and \
+        isolation(props, self.op)
+    }
+}
+
+/// The isolation level `op` runs at on a table with `props`
+/// (`write.{delete,update,merge}.isolation-level`, default `serializable`;
+/// copy-on-write and merge-on-read alike, `SparkRowLevelOperationBuilder`).
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a level other than `serializable` or
+/// `snapshot` (any case).
+pub(crate) fn isolation(
+    props: &std::collections::HashMap<String, String>,
+    op: RowLevelOperation,
+) -> Result<Isolation, KrishivError> {
+    let key = match op {
+        RowLevelOperation::Update => UPDATE_ISOLATION_LEVEL,
+        RowLevelOperation::Merge => MERGE_ISOLATION_LEVEL,
+        _ => DELETE_ISOLATION_LEVEL,
+    };
+    match props.get(key) {
+        None => Ok(Isolation::Serializable),
+        Some(v) if v.eq_ignore_ascii_case("serializable") => Ok(Isolation::Serializable),
+        Some(v) if v.eq_ignore_ascii_case("snapshot") => Ok(Isolation::Snapshot),
+        Some(v) => Err(KrishivUnsupportedFeature {
+            feature: format!(
+                "the Iceberg isolation level {v:?} ({key}); the levels are serializable and \
                      snapshot"
-                ),
-            }
-            .into()),
+            ),
         }
+        .into()),
     }
 }
 
@@ -167,6 +181,7 @@ impl RowLevelTable for IcebergRowLevel {
                 path: d.entry.file.path.clone(),
                 referenced_data_file: d.entry.file.referenced_data_file.clone(),
                 content_offset: d.entry.file.content_offset,
+                content_size: d.entry.file.content_size_in_bytes,
             })
             .collect();
         let filter = request.read_filter_pushdown();
@@ -194,6 +209,7 @@ impl RowLevelTable for IcebergRowLevel {
             removals: Removals {
                 data_files,
                 delete_files,
+                ..Removals::default()
             },
             validation,
             lineage: self.lineage,

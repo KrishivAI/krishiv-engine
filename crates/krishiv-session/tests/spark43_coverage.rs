@@ -21,23 +21,8 @@ use serde_json::Value;
 
 /// Cases that differ from Spark today: `(id, how)`. They are the 4.3 work the golden tail (plan row GT) takes, by area:
 /// new functions (`fn_*`), the nanosecond and TIME(p) types, `@` time travel, `WITH` options on DML, `COMMENT ON COLUMN`,
-/// `SHOW ... AS JSON`, and the ANSI overflow of `ceil`/`floor`.
+/// `SHOW ... AS JSON`, and `counter_diff` (the window function of P3-T031, PR #898).
 const PENDING: &[(&str, &str)] = &[
-    ("fn_collect_union", "UNRESOLVED_ROUTINE"),
-    ("fn_collect_union_nulls", "UNRESOLVED_ROUTINE"),
-    ("fn_collect_union_empty", "UNRESOLVED_ROUTINE"),
-    ("fn_to_base32", "UNRESOLVED_ROUTINE"),
-    ("fn_from_base32", "UNRESOLVED_ROUTINE"),
-    ("fn_from_base32_invalid", "UNRESOLVED_ROUTINE"),
-    ("fn_variant_insert", "UNRESOLVED_ROUTINE"),
-    ("fn_variant_insert_nested_missing", "UNRESOLVED_ROUTINE"),
-    ("fn_try_variant_insert", "UNRESOLVED_ROUTINE"),
-    ("fn_variant_array_append", "UNRESOLVED_ROUTINE"),
-    ("fn_variant_array_append_nested", "UNRESOLVED_ROUTINE"),
-    ("fn_try_variant_array_append", "UNRESOLVED_ROUTINE"),
-    ("fn_variant_strip_nulls", "UNRESOLVED_ROUTINE"),
-    ("fn_variant_strip_nulls_scalar", "UNRESOLVED_ROUTINE"),
-    ("fn_try_variant_set", "UNRESOLVED_ROUTINE"),
     ("fn_localtime", "UNRESOLVED_ROUTINE"),
     ("fn_localtime_precision_error", "UNRESOLVED_ROUTINE"),
     ("fn_time_disabled", "UNSUPPORTED_TIME_TYPE"),
@@ -63,8 +48,6 @@ const PENDING: &[(&str, &str)] = &[
         "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
     ),
     ("fn_localtime_9", "UNRESOLVED_ROUTINE"),
-    ("beh_ceil_double_overflow", "no error"),
-    ("beh_floor_double_overflow", "no error"),
     ("fix_pivot_duplicate_values", "INVALID_ARRAY_INDEX"),
     (
         "fix_insert_struct_by_position_legacy",

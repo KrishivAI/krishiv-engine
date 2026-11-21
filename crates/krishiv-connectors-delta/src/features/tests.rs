@@ -279,7 +279,6 @@ fn delta_write_refusals() {
         "catalogManaged",
         "coordinatedCommits-preview",
         "geospatial",
-        "columnMapping",
         "variantType",
         "somethingNew",
     ] {
@@ -350,4 +349,32 @@ fn invariants_are_found_at_any_depth() {
         check_write("t", &writer(0, &[])).unwrap_err().error_class(),
         ErrorClass::DeltaInvalidProtocolVersion
     );
+}
+
+#[test]
+fn variant_columns_are_found_at_any_depth() {
+    use delta_kernel::schema::{ArrayType, DataType, MapType, StructField};
+    let v = DataType::unshredded_variant;
+    let in_struct = StructType::new_unchecked([StructField::nullable(
+        "s",
+        DataType::try_struct_type([StructField::nullable("v", v())]).unwrap(),
+    )]);
+    let in_array =
+        StructType::new_unchecked([StructField::nullable("a", ArrayType::new(v(), true))]);
+    let map_key = StructType::new_unchecked([StructField::nullable(
+        "m",
+        MapType::new(v(), DataType::LONG, true),
+    )]);
+    let map_value = StructType::new_unchecked([StructField::nullable(
+        "m",
+        MapType::new(DataType::STRING, v(), true),
+    )]);
+    let none = StructType::new_unchecked([
+        StructField::nullable("a", ArrayType::new(DataType::LONG, true)),
+        StructField::nullable("m", MapType::new(DataType::STRING, DataType::LONG, true)),
+    ]);
+    for schema in [&in_struct, &in_array, &map_key, &map_value] {
+        assert!(has_variant(schema), "{schema:?}");
+    }
+    assert!(!has_variant(&none));
 }

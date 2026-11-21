@@ -890,6 +890,22 @@ fn open_never_follows_planted_symlinks() {
     assert!(victim.0.join("precious").exists());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn check_spill_root_agrees_with_open_without_touching_the_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TestDir::new();
+    dir.create();
+    for (mode, ok) in [(0o777, false), (0o770, false), (0o700, true)] {
+        fs::set_permissions(&dir.0, fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(super::check_spill_root(&dir.0).is_ok(), ok, "{mode:o}");
+        // No session, lock or probe was left behind.
+        assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 0);
+    }
+    // Missing: created private at start, so it passes.
+    assert!(super::check_spill_root(&dir.0.join("missing")).is_ok());
+}
+
 #[cfg(unix)]
 #[test]
 fn open_checks_who_owns_and_can_write_the_directory() {

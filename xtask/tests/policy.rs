@@ -199,7 +199,7 @@ fn ci_policy_wiring() {
             "{name} must not run in the merge queue"
         );
     }
-    for name in ["miri-kernels", "wheels"] {
+    for name in ["miri-kernels", "miri-bridges", "wheels"] {
         let body = job(&ci, name);
         assert!(
             body.contains("github.event_name != 'merge_group'"),
@@ -996,8 +996,10 @@ fn release_publishing_is_manual_and_gated() {
         .collect();
     // 0.2 published 22; P3-T014 adds krishiv-udf-sandbox and krishiv-udf-pool; P3-T067 adds
     // krishiv-catalogs (the binary's declared catalogs); the Delta connector is published
-    // because krishiv-session depends on it (owner 2026-11-17).
-    assert_eq!(listed.len(), 26, "the release publishes 26 crates");
+    // because krishiv-session depends on it (owner 2026-11-17); P3-T101 adds krishiv-flight-sql
+    // (krishiv-cli depends on it); P3-T067 PR-58b adds krishiv-connectors-iceberg and
+    // krishiv-arrow-bridge (krishiv-catalogs' declared-table reads depend on them).
+    assert_eq!(listed.len(), 29, "the release publishes 29 crates");
     let mut manifests = vec![root().join("xtask/Cargo.toml")];
     for entry in std::fs::read_dir(root().join("crates")).unwrap() {
         manifests.push(entry.unwrap().path().join("Cargo.toml"));

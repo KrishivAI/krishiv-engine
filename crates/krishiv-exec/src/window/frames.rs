@@ -1151,7 +1151,7 @@ pub(super) fn offset_cost(f: &WindowFunctionPlan, rows: usize) -> Result<usize> 
 
 /// Column `c` of each slice, strings and binaries as views (gathering
 /// views shares the input's buffers).
-fn sources(slices: &[Slice<'_>], c: usize) -> Result<Vec<ArrayRef>> {
+pub(super) fn sources(slices: &[Slice<'_>], c: usize) -> Result<Vec<ArrayRef>> {
     slices
         .iter()
         .map(|s| {

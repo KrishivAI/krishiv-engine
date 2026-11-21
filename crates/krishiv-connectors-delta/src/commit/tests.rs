@@ -946,6 +946,7 @@ fn implied_features_of_each_legacy_version() {
     assert_eq!(names(1, 2, None), ["appendOnly", "invariants"]);
     // columnMapping only from reader 2 with writer 5 or 6; writer 7 implies nothing.
     assert!(!names(1, 5, None).contains(&"columnMapping".to_owned()));
+    assert_eq!(names(2, 2, None), ["appendOnly", "invariants"]);
     assert!(names(2, 6, None).contains(&"columnMapping".to_owned()));
     assert_eq!(names(2, 7, Some(&["appendOnly"])), ["appendOnly"]);
     assert_eq!(
@@ -1060,4 +1061,17 @@ fn a_winner_past_the_depth_limit_fails_the_commit() {
         staged("b", vec![add("b.parquet", Some("x"))], ReadSet::default()),
     ));
     assert_eq!(c, ErrorClass::KrishivCatalogLimitExceeded);
+}
+
+#[test]
+fn retry_limits_come_from_the_config() {
+    let mut c = krishiv_common::config::Config::new();
+    assert_eq!(RetryLimits::from_config(&c), RetryLimits::default());
+    c.set("spark.databricks.delta.maxCommitAttempts", "7")
+        .unwrap();
+    c.set("krishiv.write.commitRetryTimeout", "5s").unwrap();
+    let l = RetryLimits::from_config(&c);
+    assert_eq!(l.max_attempts, 7);
+    assert_eq!(l.timeout, std::time::Duration::from_secs(5));
+    assert_eq!(l.backoff_min, RetryLimits::default().backoff_min);
 }

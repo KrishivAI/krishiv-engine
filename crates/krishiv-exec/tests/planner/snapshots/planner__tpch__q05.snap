@@ -10,7 +10,7 @@ Sort [revenue#47 DESC NULLS LAST]
             +- PartialHashAggregate keys=[n_name#41], functions=[sum((l_extendedprice#22 * (1 - l_discount#23)))]
                +- Project [n_name#41, (l_extendedprice#22 * (1 - l_discount#23))]
                   +- Project [l_extendedprice#22, l_discount#23, n_name#41]
-                     +- HashJoin Inner, [l_suppkey#19, c_nationkey#3] = [s_suppkey#33, s_nationkey#36], RuntimeFilter #5: l_suppkey#19 -> spark_catalog.default.lineitem.l_suppkey, RuntimeFilter #6: c_nationkey#3 -> spark_catalog.default.customer.c_nationkey
+                     +- HashJoin Inner, [l_suppkey#19, c_nationkey#3] = [s_suppkey#33, s_nationkey#36], RuntimeFilter #5: l_suppkey#19 -> spark_catalog.default.lineitem.l_suppkey, RuntimeFilter #6: c_nationkey#3 -> spark_catalog.default.customer.c_nationkey, RuntimeFilter #7: c_nationkey#3 -> spark_catalog.default.nation.n_nationkey
                         :- Project [l_suppkey#19, l_extendedprice#22, l_discount#23, c_nationkey#3, n_name#41]
                         :  +- HashJoin Inner, [l_orderkey#17] = [o_orderkey#8], RuntimeFilter #4: l_orderkey#17 -> spark_catalog.default.lineitem.l_orderkey, probe filter: (isnotnull(l_orderkey#17) and isnotnull(l_suppkey#19))
                         :     :- Scan spark_catalog.default.lineitem [l_orderkey#17, l_suppkey#19, l_extendedprice#22, l_discount#23], PushedFilters: [(isnotnull(l_orderkey#17) and isnotnull(l_suppkey#19))]

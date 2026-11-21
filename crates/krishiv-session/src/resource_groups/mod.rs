@@ -80,6 +80,8 @@ impl Loaded {
 }
 
 impl ResourceGroups {
+    /// Builds the controller from the text of a group file.
+    ///
     /// Builds the controller from the text of a group file. `total_memory` is what a
     /// `"NN%"` memory limit in the file is a share of (`krishiv.memory.limit`).
     ///
@@ -127,6 +129,8 @@ impl ResourceGroups {
         config::parse(json, total_memory).map(drop)
     }
 
+    /// Swaps the group tree for the one `json` describes.
+    ///
     /// Swaps the tree for the one `json` describes. A group the new document keeps (by dotted
     /// id) keeps its counters, its queue and its running queries and takes the new limits; a
     /// new group starts empty; a removed group takes no new query and is freed when its last
@@ -198,6 +202,8 @@ impl ResourceGroups {
         Self::from_json(&read_file(path)?, total_memory)
     }
 
+    /// One row per group of the tree, parents first, with the counters now.
+    ///
     /// One row per group of the tree, parents first, with the counters now (the source of
     /// `system.resource_groups`).
     #[must_use]

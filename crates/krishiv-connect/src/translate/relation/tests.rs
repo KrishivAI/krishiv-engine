@@ -895,7 +895,7 @@ fn unsupported_relations_are_named() {
     for (kind, name) in [
         (RelType::ShowString(Box::default()), "SHOW_STRING(20)"),
         (RelType::ToDf(Box::default()), "TO_DF(18)"),
-        (RelType::Deduplicate(Box::default()), "DEDUPLICATE(14)"),
+        (RelType::Transpose(Box::default()), "TRANSPOSE(42)"),
         (RelType::Drop(Box::default()), "DROP(21)"),
         (RelType::WithRelations(Box::default()), "WITH_RELATIONS(41)"),
     ] {
@@ -1029,4 +1029,335 @@ fn collect_metrics_without_an_input_is_refused() {
             "CollectMetrics needs an input relation".to_owned()
         )]
     );
+}
+
+// ---- group 3-5 arms: sample, deduplicate, hint, repartition, unpivot ---------------------------
+
+#[test]
+fn sample_is_bernoulli_without_replacement() {
+    let sample = |with_replacement: Option<bool>, deterministic_order: bool| {
+        relation(RelType::Sample(Box::new(pb::Sample {
+            input: input(),
+            lower_bound: 0.0,
+            upper_bound: 0.5,
+            with_replacement,
+            seed: Some(7),
+            deterministic_order,
+        })))
+    };
+    let PlanNode::Sample { bounds, seed, .. } = node(&sample(None, false)) else {
+        panic!("not a sample")
+    };
+    assert_eq!((bounds.lower, bounds.upper, seed), (0.0, 0.5, Some(7)));
+    assert!(matches!(
+        node(&sample(Some(false), false)),
+        PlanNode::Sample { .. }
+    ));
+    assert_eq!(
+        code(&sample(Some(true), false)),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(
+        code(&sample(None, true)),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+}
+
+#[test]
+fn sample_bounds_must_span_at_most_the_unit_interval() {
+    let sample = |lower: f64, upper: f64| {
+        relation(RelType::Sample(Box::new(pb::Sample {
+            input: input(),
+            lower_bound: lower,
+            upper_bound: upper,
+            with_replacement: None,
+            seed: Some(1),
+            deterministic_order: false,
+        })))
+    };
+    assert!(matches!(node(&sample(0.0, 1.0)), PlanNode::Sample { .. }));
+    assert!(matches!(
+        node(&sample(0.0, 1.0 + 5e-7)),
+        PlanNode::Sample { .. }
+    ));
+    for (lower, upper, shown) in [
+        (0.0, 1.5, "1.5"),
+        (0.0, -0.1, "-0.1"),
+        (0.5, 0.0, "-0.5"),
+        (0.0, f64::NAN, "NaN"),
+    ] {
+        let r = sample(lower, upper);
+        assert_eq!(
+            code(&r),
+            ErrorClass::KrishivSampleFractionOutOfRange,
+            "{lower} {upper}"
+        );
+        assert_eq!(
+            message(&r),
+            format!(
+                "requirement failed: Sampling fraction ({shown}) must be on interval [0, 1] without replacement"
+            )
+        );
+    }
+    // The input is translated first: a bad input is reported before a bad fraction.
+    let bad_input = relation(RelType::Sample(Box::new(pb::Sample {
+        input: None,
+        lower_bound: 0.0,
+        upper_bound: 1.5,
+        with_replacement: None,
+        seed: Some(1),
+        deterministic_order: false,
+    })));
+    assert_eq!(
+        code(&bad_input),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+}
+
+#[test]
+fn deduplicate_over_all_columns_is_distinct() {
+    let dedup = |all: Option<bool>, names: &[&str], watermark: Option<bool>| {
+        relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+            input: input(),
+            column_names: names.iter().map(|n| (*n).to_owned()).collect(),
+            all_columns_as_keys: all,
+            within_watermark: watermark,
+        })))
+    };
+    assert!(matches!(
+        node(&dedup(Some(true), &[], None)),
+        PlanNode::Distinct { .. }
+    ));
+    assert_eq!(
+        code(&dedup(None, &[], None)),
+        ErrorClass::ConnectInvalidPlanDeduplicateRequiresColumnsOrAll
+    );
+    assert_eq!(
+        code(&dedup(Some(true), &["a"], None)),
+        ErrorClass::ConnectInvalidPlanDeduplicateAllColumnsAndSubset
+    );
+    // No input: Spark's first check.
+    let no_input = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+        input: None,
+        column_names: vec![],
+        all_columns_as_keys: Some(true),
+        within_watermark: None,
+    })));
+    assert_eq!(
+        code(&no_input),
+        ErrorClass::ConnectInvalidPlanDeduplicateNeedsInput
+    );
+    // The column-field checks come before the input is translated: an input that cannot be
+    // translated (a sample with replacement) does not hide them.
+    let bad_input = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+        input: boxed(relation(RelType::Sample(Box::new(pb::Sample {
+            input: input(),
+            lower_bound: 0.0,
+            upper_bound: 0.5,
+            with_replacement: Some(true),
+            seed: None,
+            deterministic_order: false,
+        })))),
+        column_names: vec![],
+        all_columns_as_keys: None,
+        within_watermark: None,
+    })));
+    assert_eq!(
+        code(&bad_input),
+        ErrorClass::ConnectInvalidPlanDeduplicateRequiresColumnsOrAll
+    );
+    for unsupported in [
+        dedup(None, &["a"], None),
+        dedup(Some(true), &[], Some(true)),
+    ] {
+        assert_eq!(code(&unsupported), ErrorClass::KrishivUnsupportedFeature);
+    }
+}
+
+#[test]
+fn hint_and_repartition_by_expression() {
+    let hint = relation(RelType::Hint(Box::new(pb::Hint {
+        input: input(),
+        name: "broadcast".into(),
+        parameters: vec![],
+    })));
+    let PlanNode::Hint { name, params, .. } = node(&hint) else {
+        panic!("not a hint")
+    };
+    assert_eq!((name.as_str(), params.len()), ("broadcast", 0));
+    let repartition = |exprs: Vec<Expression>, n: Option<i32>| {
+        relation(RelType::RepartitionByExpression(Box::new(
+            pb::RepartitionByExpression {
+                input: input(),
+                partition_exprs: exprs,
+                num_partitions: n,
+            },
+        )))
+    };
+    let PlanNode::Repartition { exprs, .. } = node(&repartition(vec![attr("a")], None)) else {
+        panic!("not a repartition")
+    };
+    assert_eq!(exprs.len(), 1);
+    assert_eq!(
+        code(&repartition(vec![attr("a")], Some(4))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(
+        code(&repartition(vec![], None)),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+}
+
+#[test]
+fn unpivot_projects_the_ids_and_values_and_keeps_nulls() {
+    let unpivot = |values: Option<Vec<Expression>>| {
+        relation(RelType::Unpivot(Box::new(pb::Unpivot {
+            input: input(),
+            ids: vec![attr("id")],
+            values: values.map(|values| pb::unpivot::Values { values }),
+            variable_column_name: "k".into(),
+            value_column_name: "v".into(),
+        })))
+    };
+    let PlanNode::Unpivot {
+        input,
+        value_columns,
+        name_column,
+        column_sets,
+        include_nulls,
+    } = node(&unpivot(Some(vec![attr("a"), attr("b")])))
+    else {
+        panic!("not an unpivot")
+    };
+    assert_eq!(
+        (value_columns, name_column),
+        (vec!["v".to_owned()], "k".to_owned())
+    );
+    assert_eq!(column_sets.len(), 2);
+    assert!(include_nulls);
+    let PlanNode::Project { exprs, .. } = &input.node else {
+        panic!("ids and values are projected first")
+    };
+    assert_eq!(exprs.len(), 3);
+    assert_eq!(code(&unpivot(None)), ErrorClass::KrishivUnsupportedFeature);
+    // An id that is also a value, or a value twice, is refused rather than projected wrongly.
+    assert_eq!(
+        code(&unpivot(Some(vec![attr("ID"), attr("b")]))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(
+        code(&unpivot(Some(vec![attr("a"), attr("a")]))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // A qualified spelling of the id does not slip past the check.
+    assert_eq!(
+        code(&unpivot(Some(vec![attr("t.id"), attr("b")]))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // An aliased id is keyed by its output name: `x AS a` collides with the value `a`.
+    let aliased = relation(RelType::Unpivot(Box::new(pb::Unpivot {
+        input: boxed(read_table("t")),
+        ids: vec![expr(ExprType::Alias(Box::new(alias_of(&["a"], None))))],
+        values: Some(pb::unpivot::Values {
+            values: vec![attr("a")],
+        }),
+        variable_column_name: "k".into(),
+        value_column_name: "v".into(),
+    })));
+    assert_eq!(code(&aliased), ErrorClass::KrishivUnsupportedFeature);
+    // An empty list is the analyzer's to refuse (UNPIVOT_REQUIRES_VALUE_COLUMNS), as in Spark.
+    assert!(matches!(
+        node(&unpivot(Some(vec![]))),
+        PlanNode::Unpivot { .. }
+    ));
+}
+
+// ---- plan equality with the SQL-parsed plan (T012: `dataframe_equals_sql_plan`) ----------------
+
+/// The translated plan and the plan of `sql`, printed without origins.
+fn plans(rel: &Relation, sql: &str) -> (String, String) {
+    let translated = translate(rel).expect("translates").to_string();
+    let parsed = krishiv_sql::parse_and_lower(
+        sql,
+        &krishiv_sql::ParserOptions::default(),
+        krishiv_plan::SourceId(0),
+    )
+    .expect("parses")
+    .to_string();
+    (translated, parsed)
+}
+
+/// `SELECT * FROM t` as a Connect relation, so both sides share the SQL plan's `Project [*]`.
+fn star_input() -> Option<Box<Relation>> {
+    boxed(project(vec![expr(ExprType::UnresolvedStar(
+        Default::default(),
+    ))]))
+}
+
+#[test]
+fn dedup_over_all_columns_plans_as_select_distinct() {
+    let rel = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+        input: star_input(),
+        column_names: vec![],
+        all_columns_as_keys: Some(true),
+        within_watermark: None,
+    })));
+    let (translated, parsed) = plans(&rel, "SELECT DISTINCT * FROM t");
+    assert_eq!(translated, parsed);
+}
+
+#[test]
+fn a_hint_plans_as_the_sql_hint() {
+    // PySpark sends the name as the caller typed it; SQL keeps its spelling too.
+    let rel = relation(RelType::Hint(Box::new(pb::Hint {
+        input: star_input(),
+        name: "BROADCAST".into(),
+        parameters: vec![],
+    })));
+    let (translated, parsed) = plans(&rel, "SELECT /*+ BROADCAST */ * FROM t");
+    assert_eq!(translated, parsed);
+}
+
+#[test]
+fn repartition_by_expression_plans_as_distribute_by() {
+    let rel = relation(RelType::RepartitionByExpression(Box::new(
+        pb::RepartitionByExpression {
+            input: star_input(),
+            partition_exprs: vec![attr("a")],
+            num_partitions: None,
+        },
+    )));
+    let (translated, parsed) = plans(&rel, "SELECT * FROM t DISTRIBUTE BY a");
+    assert_eq!(translated, parsed);
+}
+
+#[test]
+fn unpivot_plans_as_unpivot_include_nulls() {
+    let rel = relation(RelType::Unpivot(Box::new(pb::Unpivot {
+        input: input(),
+        ids: vec![attr("id")],
+        values: Some(pb::unpivot::Values {
+            values: vec![attr("a"), attr("b")],
+        }),
+        variable_column_name: "k".into(),
+        value_column_name: "v".into(),
+    })));
+    let (translated, parsed) = plans(
+        &rel,
+        "SELECT * FROM (SELECT id, a, b FROM t) UNPIVOT INCLUDE NULLS (v FOR k IN (a, b))",
+    );
+    // The SQL form wraps the node in `Project [*]` and a subquery alias; the node and the
+    // projection under it are the same.
+    let line = |text: &str, prefix: &str| {
+        text.lines()
+            .find(|l| l.trim_start_matches(['+', '-', ' ']).starts_with(prefix))
+            .map(|l| l.trim_start_matches(['+', '-', ' ']).to_owned())
+    };
+    for prefix in ["UnpivotIncludeNulls", "Project [id, a, b]", "Read t"] {
+        assert!(
+            line(&translated, prefix).is_some(),
+            "{prefix}\n{translated}"
+        );
+        assert_eq!(line(&translated, prefix), line(&parsed, prefix), "{prefix}");
+    }
 }

@@ -21,7 +21,7 @@ Paths are relative to this crate.
   each looks the session up and `observe`s the request: `client_type`, user and the Connect transport go to `system.sessions`; `ExecutePlan` also passes the request's tags (`QueryOptions::tags`: they reach `system.queries`, resource-group `clientTags` selectors and cancel by tag) and its `traceparent`/`baggage` metadata (`QueryOptions::inbound_trace`, per request, baggage included via the statement's `Session::baggage`: concurrent requests of one session keep their own trace, a malformed header means no trace and never fails the request, P3-T068; the T068 acceptance, a client span and the engine span sharing one trace id in an OTLP collector, is not tested yet));
   `AddArtifacts` applies its class itself (`caller_checked`, then `auth::enforce` on the session before any artifact is staged);
   `ExecutePlan` (until its encoder starts), `AnalyzePlan` and `Config` hold the session's statement gate shared; a
-  draining server answers `UNAVAILABLE` ("server shutting down"); an error after the
+  draining server refuses new work with `KRISHIV_SERVER_DRAINING` (held work finishes until the drain deadline); an error after the
   session is known goes through `entry.errors().status` (it gets an `errorId`), one before it through `status_of`
 - `src/artifacts.rs` `AddArtifacts` / `ArtifactStatus` (design §3.9): the chunk protocol and CRC-32 (`crc32`), names
   from `krishiv_connect::artifact` checked before any file (who may add any artifact, `cache/` included, is the RPC's
@@ -53,7 +53,8 @@ Paths are relative to this crate.
   `src/auth/layer.rs` `AuthLayer`, the tower layer in front of the router: every RPC (the unimplemented ones too)
   authenticates from its headers before the body is decoded, through the server's one `Authenticator`
   (`ServerAuth`, shared with the admin listener): the `authorization` header (two entries or a non-`Bearer` scheme
-  are malformed) and the peer address; failures `UNAUTHENTICATED` with Spark's messages, throttled or unavailable
+  are malformed; on `Surface::FlightSql` only, `Basic` is decoded by `ConnectAuth::authenticate` in `src/auth.rs`:
+  the password as the bearer, the user name bound to the principal, P3-T101 note §3.1) and the peer address; failures `UNAUTHENTICATED` with Spark's messages, throttled or unavailable
   `UNAVAILABLE`, no peer address refused, a caller with no role `PERMISSION_DENIED` (42501, audited) before any
   session; the result rides in the request extensions (`ConnectAuth::caller` fails closed without it); auth off =
   the local user. The layer takes the request's `Surface` from its path (`surface_of_path`: `/arrow.flight.protocol.FlightService/` is
@@ -100,6 +101,7 @@ Paths are relative to this crate.
   task unwinds (`INTERNAL_ERROR`, or `OPERATION_CANCELED` after an interrupt), so no stream waits on an orphan;
   `src/execute/hooks.rs` (cfg(test) only) injects an encoder panic or a held preparation per operation id, used by
   `src/execute/fault_tests.rs`;
+  `src/execute/catalog_call.rs` (PR-46) the `Catalog` relation: the `CatalogCall` the translator recorded runs on `Session::catalog()` while the plan is prepared (`build_local_relation`), its rows (Spark's `Database`, `Table`, `Column`, `Function`, `CatalogMetadata`, `TablePartition`, a `value` string or boolean, or the empty relation of a call that returns nothing; names and nullability as Spark's encoders) held as a local relation; `cache_table`, `uncache_table` and `clear_cache` need the operator floor (`Check::SideEffect`); `tests/catalog.rs`;
   `src/execute/arrow.rs` Spark's Arrow shapes, batch limits, IPC streams, codecs and chunks;
   `src/execute/schema.rs` the `schema` response (`DataTypeProtoConverter.toConnectProtoType`)
 - `src/udf.rs` (P3-T014, PR-26d part 1) Python UDFs: `UdfHost` (the server's one pool, `krishiv_udf_pool::Pool` on
@@ -178,7 +180,7 @@ Paths are relative to this crate.
   remains: a release that records `SUCCEEDED` between a failed last response and `fail_finished` (the record says
   `SUCCEEDED`, the removed operation `FAILED`; needs a pool refusal on the last response).
 - **Decode only through `wire`** (`#![deny(clippy::disallowed_methods)]`): the codec is the one decode path.
-- Shutdown: draining flag (new RPCs `UNAVAILABLE`, `/readyz` 503), stop accepting, queries get
+- Shutdown: draining flag (new work `KRISHIV_SERVER_DRAINING`, `/readyz` 503), stop accepting, queries get
   `krishiv.server.shutdownTimeout`, then every session is closed (queries cancelled). The engine runtime is dropped
   by the caller after `serve` returns, which removes the spill directory.
 - tonic refuses a message over `spark.connect.grpc.maxInboundMessageSize` with `OUT_OF_RANGE` from its length

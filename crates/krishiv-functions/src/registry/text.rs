@@ -19,7 +19,7 @@ use krishiv_common::error::{
 use krishiv_types::{ArrayType, DataType};
 
 use super::defs::{
-    Spec, exact, first_type, int, is_binary, match_inputs, matches, scalar, string, typed,
+    Spec, double, exact, first_type, int, is_binary, match_inputs, matches, scalar, string, typed,
 };
 use crate::signature::{ArgType, CallTypes, Constant, InputBuilder, InputType, Inputs};
 
@@ -270,8 +270,19 @@ pub(super) fn specs() -> Vec<Spec> {
         string,
     ));
     out.extend(scalar(
-        &["instr", "find_in_set", "__find_in_set_lcase"],
+        &["find_in_set", "__find_in_set_lcase"],
         &Inputs::Expects(vec![text.clone(), text.clone()]),
+        int,
+    ));
+    // `instr(str, substr[, pos[, occurrence]])`: the two optional arguments are Spark 4.3's.
+    out.extend(scalar(
+        &["instr"],
+        &Inputs::Expects(vec![
+            text.clone(),
+            text.clone(),
+            int_arg.clone(),
+            int_arg.clone(),
+        ]),
         int,
     ));
     // `locate` over `UTF8_LCASE` operands: the analyzer rewrites `instr`/`locate`/`position` to it.
@@ -349,6 +360,18 @@ pub(super) fn specs() -> Vec<Spec> {
         string,
     ));
     out.extend(scalar(&["unbase64"], &one_text, binary));
+    // Spark 4.3: `to_base32(binary)`, `from_base32(string)` (NULL only for NULL input, never an error).
+    out.extend(scalar(
+        &["to_base32"],
+        &Inputs::Expects(vec![exact(DataType::Binary)]),
+        string,
+    ));
+    out.extend(scalar(&["from_base32"], &one_text, binary));
+    out.extend(scalar(
+        &["jaro_winkler_similarity"],
+        &Inputs::Expects(vec![text.clone(), text.clone()]),
+        double,
+    ));
     out.extend(scalar(
         &["encode"],
         &Inputs::Expects(vec![text.clone(), text.clone()]),

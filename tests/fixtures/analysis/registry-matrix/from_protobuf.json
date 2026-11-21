@@ -1,0 +1,166 @@
+{
+  "entries": [
+    {
+      "id": "from_protobuf#0634584fa0bc/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#0634584fa0bc/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#08dde74fb29e/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', CAST(X'C328FF' AS STRING), map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#08dde74fb29e/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', CAST(X'C328FF' AS STRING), map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#0a2e2807192d/ansi_on",
+      "reason": "SELECT from_protobuf(s, '1', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#0a2e2807192d/ansi_off",
+      "reason": "SELECT from_protobuf(s, '1', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#0f20b7df8e9b/ansi_on",
+      "reason": "SELECT from_protobuf(s, ' \\t a\\u3000\\n ', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#0f20b7df8e9b/ansi_off",
+      "reason": "SELECT from_protobuf(s, ' \\t a\\u3000\\n ', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#10efc323f652/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Ä€日本語😀é', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#10efc323f652/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Ä€日本語😀é', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#4f864e8a223b/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', X'01', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has PROTOBUF_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_protobuf#4f864e8a223b/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', X'01', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has PROTOBUF_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_protobuf#5ebf1f967738/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', CAST(map() AS map<void,void>)) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#5ebf1f967738/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', CAST(map() AS map<void,void>)) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#64a619bbcb70/ansi_on",
+      "reason": "SELECT from_protobuf(s, CAST(NULL AS string), '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "from_protobuf#64a619bbcb70/ansi_off",
+      "reason": "SELECT from_protobuf(s, CAST(NULL AS string), '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "from_protobuf#7151e2d6523b/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', '1', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#7151e2d6523b/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', '1', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#8dbc600dbe56/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'abc', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#8dbc600dbe56/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'abc', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#9b2e1bc2233b/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', 'abc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#9b2e1bc2233b/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', 'abc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#9ffb1cd39659/ansi_on",
+      "reason": "SELECT from_protobuf(s, '', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#9ffb1cd39659/ansi_off",
+      "reason": "SELECT from_protobuf(s, '', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#a5d5f95fcae9/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', ' \\t a\\u3000\\n ', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#a5d5f95fcae9/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', ' \\t a\\u3000\\n ', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#b0847b6ca9cc/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', 'Ä€日本語😀é', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#b0847b6ca9cc/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', 'Ä€日本語😀é', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#befdd931d9ea/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', '', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has PROTOBUF_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_protobuf#befdd931d9ea/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', '', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has PROTOBUF_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_protobuf#d1bbf56dad47/ansi_on",
+      "reason": "SELECT from_protobuf(s, CAST(X'C328FF' AS STRING), '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#d1bbf56dad47/ansi_off",
+      "reason": "SELECT from_protobuf(s, CAST(X'C328FF' AS STRING), '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#d2cca8c74ffb/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', CAST(NULL AS map<void,void>)) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#d2cca8c74ffb/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', CAST(NULL AS map<void,void>)) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#e034db1bd78d/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', CAST(NULL AS string), map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has PROTOBUF_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_protobuf#e034db1bd78d/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', CAST(NULL AS string), map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has PROTOBUF_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_protobuf#f4d782b6d109/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', NULL) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#f4d782b6d109/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', NULL) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | KRISHIV_UNSUPPORTED_FEATURE: reading a protobuf descriptor file by path where Spark has PROTOBUF_DESCRIPTOR_FILE_NOT_FOUND"
+    },
+    {
+      "id": "from_protobuf#fff4d9e5b674/ansi_on",
+      "reason": "SELECT from_protobuf(s, 'Person', NULL, map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has PROTOBUF_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    },
+    {
+      "id": "from_protobuf#fff4d9e5b674/ansi_off",
+      "reason": "SELECT from_protobuf(s, 'Person', NULL, map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has PROTOBUF_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE"
+    }
+  ],
+  "format_version": 1,
+  "function": "from_protobuf"
+}

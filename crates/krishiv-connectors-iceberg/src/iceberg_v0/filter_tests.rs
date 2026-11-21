@@ -3,7 +3,8 @@
 //! manifests written by iceberg-rust's writers with chosen statuses, snapshot
 //! ids and sequence numbers; a hit rewritten from live entries only, a miss
 //! kept as is, duplicates, missing paths, dangling DVs, delete files older
-//! than every data file, and the overwrite summary.
+//! than every data file, the overwrite summary, and a row filter's whole
+//! and partial matches.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -115,6 +116,7 @@ fn removals(data: &[&str], env: &Env) -> Removals {
     Removals {
         data_files: data.iter().map(|n| env.at(n)).collect::<BTreeSet<_>>(),
         delete_files: BTreeSet::new(),
+        ..Removals::default()
     }
 }
 
@@ -363,7 +365,7 @@ fn a_file_not_live_is_missing() {
             text,
             format!("Missing required files to delete: {}", env.at("a.parquet"))
         ),
-        FilterError::Error(e) => panic!("{e}"),
+        other => panic!("{other:?}"),
     }
     // No manifest at all: still missing.
     assert!(matches!(
@@ -475,6 +477,7 @@ fn dangling_dvs_and_old_deletes_are_removed() {
     let named = |f: &DataFile| Removals {
         data_files: BTreeSet::new(),
         delete_files: BTreeSet::from([DeleteKey::of(f)]),
+        ..Removals::default()
     };
     let deletes2 = manifest(
         &env,
@@ -617,6 +620,7 @@ fn a_shared_puffin_file_keeps_the_dv_of_an_untouched_file() {
     let r = Removals {
         data_files: BTreeSet::from([env.at("a.parquet")]),
         delete_files: BTreeSet::from([DeleteKey::of(&dv_a)]),
+        ..Removals::default()
     };
     let f = run(&env, &m, vec![data_m, deletes], &r, &mut Vec::new()).unwrap();
     let e = entries(&env, &f.manifests[1]);
@@ -681,9 +685,143 @@ fn a_replaced_dv_in_a_shared_puffin_file_is_missing() {
     let r = Removals {
         data_files: BTreeSet::from([env.at("a.parquet")]),
         delete_files: BTreeSet::from([DeleteKey::of(&old_a)]),
+        ..Removals::default()
     };
     match run(&env, &m, vec![data_m, deletes], &r, &mut Vec::new()) {
-        Err(FilterError::Missing(text)) => assert!(text.contains("p.puffin"), "{text}"),
+        Err(FilterError::Missing(text)) => {
+            // The Puffin path and the data file the DV applies to.
+            assert!(text.contains("p.puffin"), "{text}");
+            assert!(
+                text.contains(&format!("the deletion vector of {}", env.at("a.parquet"))),
+                "{text}"
+            );
+        }
         other => panic!("{other:?}"),
     }
+}
+
+/// A row filter (`deleteByRowFilter`, PR-36b part 2b): data files whose
+/// partition the strict projection proves are removed; a data file it
+/// matches only in part fails with Java's text; a delete file it matches
+/// only in part is kept silently (`ManifestFilterManager.java:554`).
+#[test]
+fn a_row_filter_removes_whole_files_and_refuses_partial_data_files() {
+    use iceberg::spec::Literal;
+    use krishiv_io::{CmpOp, ColumnPath, PushdownExpr, ScalarValue};
+    let env = env();
+    let t = create(&env, 2);
+    let m = t.metadata().clone();
+    // `data` writes partition x = 1 and no column metrics.
+    let a = data(&env, &m, "a.parquet", 3);
+    let data_m = manifest(
+        &env,
+        &m,
+        "m1.avro",
+        ManifestContentType::Data,
+        20,
+        1,
+        vec![(ManifestStatus::Added, a, 20, 1)],
+    );
+    let x2 = Struct::from_iter([Some(Literal::int(2))]);
+    let deletes = manifest(
+        &env,
+        &m,
+        "d1.avro",
+        ManifestContentType::Deletes,
+        20,
+        1,
+        vec![(
+            ManifestStatus::Added,
+            delete_file(&env, "pd.parquet", None, x2),
+            20,
+            1,
+        )],
+    );
+    let x_is = |v: i32| PushdownExpr::cmp(ColumnPath::new("x"), CmpOp::Eq, ScalarValue::Int32(v));
+    let id_ge = PushdownExpr::cmp(ColumnPath::new("id"), CmpOp::GtEq, ScalarValue::Int64(0));
+    let with = |f: PushdownExpr| Removals {
+        row_filter: Some(f),
+        ..Removals::default()
+    };
+    let base = vec![data_m, deletes];
+    // x = 1: the data file removed whole.
+    let f = run(&env, &m, base.clone(), &with(x_is(1)), &mut Vec::new()).unwrap();
+    assert_eq!(f.replaced, 1);
+    let summary = overwrite_summary(&HashMap::new(), &HashSet::new(), &f.removed, 0);
+    assert_eq!(
+        summary.get("deleted-data-files").map(String::as_str),
+        Some("1")
+    );
+    // id >= 0: no metrics prove it for the data file.
+    match run(
+        &env,
+        &m,
+        base.clone(),
+        &with(id_ge.clone()),
+        &mut Vec::new(),
+    ) {
+        Err(FilterError::Partial { filter, file }) => assert_eq!(
+            FilterError::partial_text(&filter, &file),
+            format!(
+                "Cannot delete file where some, but not all, rows match filter \
+                 ref(name=\"id\") >= 0: {}",
+                env.at("a.parquet")
+            )
+        ),
+        other => panic!("{other:?}"),
+    }
+    // x = 2 and id >= 0: the data file ruled out by its partition, the
+    // delete file in x = 2 matched in part: kept, nothing rewritten.
+    let both = PushdownExpr::And(vec![x_is(2), id_ge]);
+    let f = run(&env, &m, base, &with(both), &mut Vec::new()).unwrap();
+    assert_eq!(f.replaced, 0);
+}
+
+/// Partition keys compare by value across a promotion (review 36b2b M3,
+/// the scope of both the dropped partitions and the validation): an old
+/// 4-byte `int` tuple equals a new 8-byte `long` one, whichever type the
+/// spec reads them with, `float` and `double` alike; an unreadable value
+/// never makes a key.
+#[test]
+fn partition_keys_compare_by_value_across_promotions() {
+    use crate::plan::PartitionValue as V;
+    use crate::plan::types::{IcebergType, PartitionFieldInfo, PartitionSpecInfo, Transform};
+
+    use super::filter::partition_key;
+    let specs = |ty: IcebergType| {
+        let field = PartitionFieldInfo::new(1000, 1, "v".to_owned(), Transform::Identity, Some(ty));
+        std::collections::BTreeMap::from([(
+            0,
+            PartitionSpecInfo {
+                spec_id: 0,
+                fields: vec![field],
+            },
+        )])
+    };
+    let int = V::Value(5_i32.to_le_bytes().to_vec());
+    let long = V::Value(5_i64.to_le_bytes().to_vec());
+    for ty in [IcebergType::Int, IcebergType::Long] {
+        let s = specs(ty);
+        assert_eq!(
+            partition_key(&s, 0, std::slice::from_ref(&int)),
+            partition_key(&s, 0, std::slice::from_ref(&long))
+        );
+        assert!(partition_key(&s, 0, std::slice::from_ref(&int)).is_some());
+    }
+    let float = V::Value(1.5_f32.to_le_bytes().to_vec());
+    let double = V::Value(1.5_f64.to_le_bytes().to_vec());
+    for ty in [IcebergType::Float, IcebergType::Double] {
+        let s = specs(ty);
+        assert_eq!(
+            partition_key(&s, 0, std::slice::from_ref(&float)),
+            partition_key(&s, 0, std::slice::from_ref(&double))
+        );
+    }
+    let s = specs(IcebergType::Long);
+    assert_ne!(
+        partition_key(&s, 0, std::slice::from_ref(&long)),
+        partition_key(&s, 0, &[V::Value(6_i64.to_le_bytes().to_vec())])
+    );
+    assert_eq!(partition_key(&s, 0, &[V::Null]), Some((0, vec![V::Null])));
+    assert_eq!(partition_key(&s, 0, &[V::Unreadable]), None);
 }

@@ -4,8 +4,54 @@
 use super::*;
 
 impl Session {
+    /// A query that reads something besides `system.*` is refused with `KRISHIV_SERVER_DRAINING`
+    /// while the server drains (design P3-T066 §5.1); its row `log_id` closes as failed.
+    pub(crate) fn refuse_query_while_draining(&self, log_id: &str) -> Result<(), KrishivError> {
+        if self.drain_exempt || !self.state.runtime.is_draining() {
+            return Ok(());
+        }
+        let error: KrishivError = krishiv_common::error::KrishivServerDraining {}.into();
+        self.state.queries.record_failed_row(log_id, &error);
+        Err(error)
+    }
+
+    /// While the server drains, a statement that writes, creates or drops is refused here, before
+    /// its handler changes any catalog or file state (design P3-T066 §5.1): the command handlers
+    /// do their work inside `sql`, so admission at collect would come too late. Queries are
+    /// admitted when they run; `SET`, `USE`, `SHOW`, `DESCRIBE` and session variables change no
+    /// shared state. The refusal leaves a failed `system.queries` row, as a refused query does.
+    pub(crate) fn refuse_changes_while_draining(
+        &self,
+        class: krishiv_sql::StatementClass,
+        redacted: &krishiv_common::redact::RedactedSql,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        use krishiv_sql::StatementClass::{Admin, Ddl, Write};
+        if !self.state.runtime.is_draining() || !matches!(class, Write | Ddl | Admin) {
+            return Ok(());
+        }
+        let error: KrishivError = krishiv_common::error::KrishivServerDraining {}.into();
+        let id = self.record_refused(Some(redacted.as_str()), Some(class.name()), &error);
+        *env.row
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id);
+        Err(error)
+    }
+
     /// [`Self::sql`] and whether the statement was a command (not a query).
     pub(crate) async fn sql_kind(&self, query: &str) -> Result<(DataFrame, bool), KrishivError> {
+        self.sql_ran(query, false)
+            .await
+            .and_then(super::Ran::into_frame)
+    }
+
+    /// [`Self::sql_kind`]; with `queries_only` a statement that is not a query is neither
+    /// authorized nor run ([`super::Ran::NotAQuery`]) and records no `system.queries` row.
+    pub(crate) async fn sql_ran(
+        &self,
+        query: &str,
+        queries_only: bool,
+    ) -> Result<super::Ran, KrishivError> {
         self.check_open()?;
         let (session, text) = (self.clone(), query.to_owned());
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
@@ -17,10 +63,15 @@ impl Session {
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
                 let span = trace.prepare_span(&crate::telemetry::Who::of(&session));
                 session
-                    .sql_here_marked(&text, marker)
+                    .sql_here_marked(&text, marker, queries_only)
                     .instrument(span)
                     .await
-                    .map(|(df, command)| (df.with_trace(trace), command))
+                    .map(|ran| match ran {
+                        super::Ran::Frame(df, command) => {
+                            super::Ran::Frame(df.with_trace(trace), command)
+                        }
+                        refused @ super::Ran::NotAQuery(_) => refused,
+                    })
             })
             .await;
         // A statement refused before it ran (parse, analysis, access) is a
@@ -577,39 +628,6 @@ impl Session {
                 .display,
         )
     }
-
-    /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
-    /// views first. Returns the evolved entries to store once the whole query analyzed, and the renames of reads.
-    ///
-    /// # Errors
-    /// What [`crate::view_schema::check_read`] raises.
-    pub(super) async fn check_stored_views(
-        &self,
-        reads: &[crate::view_schema::StoredRead],
-        env: &QueryEnv,
-    ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
-        let compensation = crate::view_schema::compensation(&env.config);
-        let mut synced = Vec::new();
-        let mut renames = Vec::new();
-        for read in reads {
-            // A view whose query does not analyze alone is left to the outer query.
-            let Ok(plan) = Plan::try_new(crate::view_schema::apply_renames(&read.query, &renames))
-            else {
-                continue;
-            };
-            let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
-                continue;
-            };
-            let case_sensitive = env.analysis.conf.case_sensitive;
-            let check =
-                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)?;
-            if let Some(changed) = check.changed {
-                synced.push((Arc::clone(&read.entry), changed));
-            }
-            renames.extend(check.rename);
-        }
-        Ok((synced, renames))
-    }
 }
 
 /// Aborts a task when dropped.
@@ -618,5 +636,90 @@ pub(super) struct AbortOnDrop(pub(super) krishiv_exec::TaskHandle);
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
+    }
+}
+
+impl Session {
+    /// Asks the admission controller for a permit for the query whose
+    /// `system.queries` row is `log_id`. A controller that answers at once
+    /// leaves the row `running`; one that waits shows it `queued`. A refusal
+    /// closes the row as failed with the controller's error class, and a
+    /// caller that drops the query while it is queued closes it `cancelled`.
+    pub(super) async fn admit(
+        &self,
+        log_id: &str,
+        env: &QueryEnv,
+        exempt: bool,
+    ) -> Result<crate::admission::Permit, KrishivError> {
+        // A query that reads only `system.*` is never queued behind the load it inspects.
+        if exempt {
+            return Ok(self.exempt_permit(log_id));
+        }
+        self.refuse_query_while_draining(log_id)?;
+        let request = QueryRequest {
+            principal: Arc::clone(&self.state.principal),
+            tags: self.effective_tags(),
+            class: WorkloadClass::Interactive,
+            source: None,
+            statement_class: None,
+            estimate: env.catalog.estimate(),
+        };
+        let controller = Arc::clone(&self.state.admission);
+        let mut admit = std::pin::pin!(controller.admit(&request));
+        let mut queued = QueuedRow {
+            state: Arc::clone(&self.state),
+            id: log_id,
+            open: true,
+        };
+        let admitted = match std::future::poll_fn(|cx| Poll::Ready(admit.as_mut().poll(cx))).await {
+            Poll::Ready(done) => done,
+            Poll::Pending => {
+                self.state.queries.set_state(log_id, "queued");
+                let done = admit.await;
+                if done.is_ok() {
+                    self.state.queries.set_state(log_id, "running");
+                }
+                done
+            }
+        };
+        queued.open = false;
+        match admitted {
+            Ok(permit) => {
+                let queued_ns = permit
+                    .slot::<crate::resource_groups::GroupSlot>()
+                    .map_or(0, crate::resource_groups::GroupSlot::queued_ns);
+                self.state
+                    .queries
+                    .mark_started(log_id, permit.group(), queued_ns);
+                Ok(permit)
+            }
+            Err(error) => {
+                self.state.queries.record_failed_row(log_id, &error);
+                Err(error)
+            }
+        }
+    }
+
+    /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
+    /// that is about to change something (a write replacing files) takes the permit first and
+    /// passes it on, so a refused or cancelled query has changed nothing.
+    pub(crate) async fn admit_query(
+        &self,
+        env: &QueryEnv,
+        exempt: bool,
+    ) -> Result<Admitted, KrishivError> {
+        // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
+        let log_id = self.state.queries.begin_as(
+            crate::system::TextPolicy::from_config(&env.config),
+            env.text.as_deref(),
+            env.statement_class,
+            self.operation_id(),
+        )?;
+        crate::action::note_row(&log_id);
+        // The request tags join the row's tags at once, so a queued query shows them too.
+        self.stamp_row(&log_id);
+        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        let permit = self.admit(&log_id, env, exempt).await?;
+        Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 }

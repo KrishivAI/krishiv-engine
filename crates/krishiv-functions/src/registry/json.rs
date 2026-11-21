@@ -42,6 +42,26 @@ pub(super) fn specs() -> Vec<Spec> {
         &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
         string_result,
     ));
+    // `JSON_TABLE`'s lowering: the row texts (path and flag literal), then each column's value or existence.
+    out.extend(scalar(
+        &["__json_table_rows"],
+        &Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::Boolean),
+        ]),
+        table_rows_result,
+    ));
+    out.extend(scalar(
+        &["__json_table_value"],
+        &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
+        string_result,
+    ));
+    out.extend(scalar(
+        &["__json_table_exists"],
+        &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
+        exists_result,
+    ));
     out.extend(scalar(&["schema_of_json"], &Inputs::Any, schema_of_json));
     out.extend(scalar(&["to_json"], &Inputs::Any, to_json));
     out.extend(scalar(&["from_json"], &Inputs::Any, from_json));
@@ -67,6 +87,19 @@ fn array_result(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         DataType::Array(ArrayType::new(DataType::String, false).into()),
         true,
     ))
+}
+
+/// `__json_table_rows`: an `ARRAY<STRING>` of row texts, never NULL.
+fn table_rows_result(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        DataType::Array(ArrayType::new(DataType::String, false).into()),
+        false,
+    ))
+}
+
+/// `__json_table_exists`: a `BOOLEAN`, NULL for a NULL row.
+fn exists_result(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Boolean, true))
 }
 
 /// `get_json_object`: a `STRING`, always nullable.

@@ -133,9 +133,11 @@ pub(crate) struct QueryEnv {
     /// The observations and sinks of the frame the query runs (`Dataset.observe`): every run of
     /// the query, whatever the action, completes them (`run_on_query_logged`).
     pub(crate) observers: Arc<crate::dataframe::Observers>,
-    /// What the temporary view entries the analysis inlined kept (`TempTable::View::keeps`), set by
-    /// `analyze_in`: the handles of the definitions the query runs, whatever replaced them since.
-    pub(crate) view_keeps: Arc<std::sync::Mutex<Vec<crate::catalog::Keep>>>,
+    /// Set by `analyze_in` when the plan inlines a `SQL SECURITY DEFINER` view whose query the
+    /// principal may not see as an invoker (review M2, the rule `EXPLAIN` follows): the query's
+    /// operators (names, text metrics, row counts of the definer's plan) are kept out of
+    /// `system.operators` and its profile out of the persisted history.
+    pub(crate) withhold_profile: Arc<std::sync::atomic::AtomicBool>,
     /// A trial analysis (P3 PR-14d): its read denials are answers, not refusals, so they write no
     /// `krishiv::audit` record ([`crate::access::audit_read`]) and the policy is not told of them.
     /// Built [`QuietDenials::default`] (off); only [`Self::set_quiet_denials`] turns it on, together

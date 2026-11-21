@@ -131,6 +131,48 @@ pub(crate) struct ViewDef {
     /// `WITH SCHEMA ...` as stored; `None` for a view created while `spark.sql.legacy.viewSchemaBindingMode` was
     /// off (Spark then stores no mode, and the view reads as `BINDING` once the feature is on).
     pub(crate) schema_mode: Option<ViewSchemaMode>,
+    /// `SQL SECURITY DEFINER` (P3-T062 §2.4): the principal whose rights read the view's query (its
+    /// creator, or whoever last replaced the query); `None` for `INVOKER`, the default, read with
+    /// the rights of whoever reads the view.
+    pub(crate) definer: Option<String>,
+    /// `spark.sql.legacy.ctePrecedencePolicy` when the view was created or its query last
+    /// replaced (Spark captures the session's SQL configs with a view, `view.sqlConfig.*`, and
+    /// resolves its text under them): the view's own `WITH`s resolve under it, never the reader's
+    /// (review r4 Y1). `None` (a view stored without it) reads as `CORRECTED`, Spark's default.
+    pub(crate) cte_precedence: Option<krishiv_plan::analyzer::CtePrecedencePolicy>,
+    /// For a `SQL SECURITY DEFINER` view (`Some`, `None` for `INVOKER`): its functions, bound
+    /// when its query was created or last replaced (review r8 item 1, ADR 0048 A1). Every name
+    /// its text calls bare (scalar or table) that no built-in answers was resolved then, through
+    /// [`Self::path`] and [`Self::namespace`], and a read calls it by the name stored here, never
+    /// resolving it again: a function created later earlier on the path does not change the view,
+    /// a dropped one fails it. An invoker view's calls resolve at each read, as Spark's do.
+    pub(crate) functions: Option<BoundFunctions>,
+    /// The store's version of the view's text (review r10 M10, ADR 0048 A1): set by the store, from
+    /// its epoch under its lock, when the view is created or replaced and when an entry carrying 0
+    /// (`ALTER VIEW .. AS`) replaces it; any other change keeps it. A definer view whose text reaches
+    /// this view pins it ([`BoundFunctions::views`]).
+    pub(crate) revision: u64,
+    /// The principal who wrote this version of the text (created, replaced or altered it); kept
+    /// with [`Self::revision`].
+    pub(crate) author: String,
+}
+
+/// [`ViewDef::functions`]: what a definer view bound when it was created or last altered.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct BoundFunctions {
+    /// Each bare call's name as written in the view's text, with the catalog and schema of the
+    /// stored function it resolved to (review r8 item 1).
+    pub(crate) names: BTreeMap<String, Vec<String>>,
+    /// Every stored function the view reached then (namespace, name as stored): those its text
+    /// calls, bare or qualified, those its invoker views call and those their bodies call, with
+    /// the [`StoredFunction::revision`] it had (review r9 item 1, ADR 0048 A1). A read may call a
+    /// stored function only at that revision, or one its definer owns and last defined.
+    pub(crate) versions: BTreeMap<(String, String), u64>,
+    /// Every stored view the view's text reached then (namespace, name as stored): those it reads,
+    /// those they read and those the bodies it calls read, with the [`ViewDef::revision`] it had
+    /// (review r10 M10). A read may inline a stored view in its trusted text only at that
+    /// revision, or one its definer owns and last defined.
+    pub(crate) views: BTreeMap<(String, String), u64>,
 }
 
 /// How a permanent view follows the schema of its query (Spark's `ViewSchemaMode`).
@@ -308,6 +350,13 @@ pub(crate) struct NamespaceMeta {
 pub(crate) struct StoredFunction {
     pub(crate) namespace: String,
     pub(crate) entry: Entry,
+    /// This definition's identity: the store's function version that defined it, set by
+    /// [`StoredFunctions::with`], so every `CREATE [OR REPLACE] FUNCTION` gives a new one. A
+    /// definer view pins it ([`BoundFunctions::versions`], review r9 item 1).
+    pub(crate) revision: u64,
+    /// The principal whose statement defined this version (review r9 item 1: a definer view
+    /// follows only its definer's own replacements).
+    pub(crate) author: String,
 }
 
 /// The stored functions at one version: replaced, never edited, so a query
@@ -357,13 +406,14 @@ impl StoredFunctions {
     }
 
     /// This map with `function` defined (replacing any of its name).
-    pub(crate) fn with(&self, function: StoredFunction) -> Self {
+    pub(crate) fn with(&self, mut function: StoredFunction) -> Self {
         let mut next = self.clone();
+        next.version += 1;
+        function.revision = next.version;
         next.entries.insert(
             (function.namespace.clone(), function.entry.def.name.clone()),
             function,
         );
-        next.version += 1;
         next
     }
 }
@@ -706,6 +756,9 @@ impl CatalogStore for InMemoryCatalogStore {
         let mut table = table;
         table.incarnation = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
         table.stamp = table.incarnation;
+        if let Some(view) = &mut table.view {
+            view.revision = table.incarnation;
+        }
         state.tables.insert(key, Arc::new(table));
         // What the result cache holds for this table is stale (it also covers the results
         // computed between a table's data being written and its partitions being registered).
@@ -730,6 +783,17 @@ impl CatalogStore for InMemoryCatalogStore {
         table.incarnation = expected.incarnation;
         table.data_version = table.data_version.max(expected.data_version);
         table.stamp = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        // A new text (`ALTER VIEW .. AS` stores 0) is a new version; any other change keeps the
+        // version and author the entry had (review r10 M10).
+        if let Some(view) = &mut table.view {
+            match &expected.view {
+                Some(old) if view.revision != 0 => {
+                    view.revision = old.revision;
+                    view.author.clone_from(&old.author);
+                }
+                _ => view.revision = table.stamp,
+            }
+        }
         let entry = Arc::new(table);
         state.tables.insert(key, Arc::clone(&entry));
         self.hub.invalidate_table(&changed);
@@ -795,6 +859,10 @@ impl CatalogStore for InMemoryCatalogStore {
         renamed.incarnation = expected.incarnation;
         renamed.data_version = renamed.data_version.max(expected.data_version);
         renamed.stamp = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        if let (Some(view), Some(old)) = (&mut renamed.view, &expected.view) {
+            view.revision = old.revision;
+            view.author.clone_from(&old.author);
+        }
         let entry = Arc::new(renamed);
         state.tables.remove(&old);
         state.tables.insert(new.clone(), Arc::clone(&entry));
@@ -1041,6 +1109,65 @@ mod tests {
         let dropped = s.drop_namespace_matching("db", true, Some(&fresh)).unwrap();
         assert_eq!(dropped.len(), 2);
         assert!(!s.has_namespace("db"));
+    }
+
+    /// Review r10 M10: a view's text version moves on a create, a replace and a new text
+    /// (`ALTER VIEW .. AS` stores 0), never back, and any other change or a rename keeps it and
+    /// its author.
+    #[test]
+    fn a_views_revision_moves_only_with_a_new_text() {
+        let view = |author: &str| {
+            let mut t = table("default", "v");
+            t.view = Some(ViewDef {
+                sql: "SELECT 1".into(),
+                namespace: "default".into(),
+                path: Vec::new(),
+                query_columns: Vec::new(),
+                identifier_spans: Vec::new(),
+                written: "SELECT 1".into(),
+                schema_mode: None,
+                definer: None,
+                cte_precedence: None,
+                functions: None,
+                revision: 0,
+                author: author.into(),
+            });
+            t
+        };
+        let revision = |s: &InMemoryCatalogStore, name: &str| {
+            let t = s.table("default", name).unwrap();
+            let v = t.view.as_ref().unwrap();
+            (v.revision, v.author.clone())
+        };
+        let s = InMemoryCatalogStore::default();
+        s.create_table(view("ana"), CreateMode::ErrorIfExists)
+            .unwrap();
+        let (first, _) = revision(&s, "v");
+        assert!(first > 0);
+        // Another change (a property) keeps the version and author, whatever the copy says.
+        let current = s.table("default", "v").unwrap();
+        let mut changed = (*current).clone();
+        changed.properties.insert("k".into(), "v".into());
+        if let Some(v) = &mut changed.view {
+            v.revision = 1_000;
+            v.author = "bob".into();
+        }
+        assert!(s.replace_table(&current, changed));
+        assert_eq!(revision(&s, "v"), (first, "ana".to_owned()));
+        // A new text is a new version, by its author.
+        let current = s.table("default", "v").unwrap();
+        assert!(s.replace_table(&current, view("bob")));
+        let (second, author) = revision(&s, "v");
+        assert!(second > first && author == "bob");
+        // `CREATE OR REPLACE` is a new version too; a rename keeps it.
+        s.create_table(view("ana"), CreateMode::Replace).unwrap();
+        let (third, _) = revision(&s, "v");
+        assert!(third > second);
+        let current = s.table("default", "v").unwrap();
+        let mut renamed = (*current).clone();
+        renamed.name = "w".into();
+        s.rename_table_entry(&current, renamed).unwrap();
+        assert_eq!(revision(&s, "w"), (third, "ana".to_owned()));
     }
 
     #[test]

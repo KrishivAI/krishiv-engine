@@ -392,3 +392,113 @@ fn advice_matches_a_table_name_in_any_case_unicode_included() {
     assert!(section_of(&ev, &["C.S.Ev".to_owned()]).is_some());
     assert_eq!(section_of(&ev, &["c.s.other".to_owned()]), None);
 }
+
+/// A runtime with a history, and sessions under one `grants` provider (`system` allowed to all, so
+/// every principal holds `MONITOR`): root (admin) owns `ev`, ana may read it and owns the definer
+/// view `dv` over it, bob may read `dv` only.
+struct DefinerWorld {
+    rt: Arc<EngineRuntime>,
+    grants: Arc<crate::grants::Grants>,
+    warehouse: tempfile::TempDir,
+}
+
+impl DefinerWorld {
+    fn new(history: &std::path::Path) -> Self {
+        let rt = EngineRuntime::builder()
+            .config("krishiv.history.path", history.to_str().unwrap())
+            .build()
+            .unwrap();
+        let w = Self {
+            rt,
+            grants: crate::grants::Grants::new(Arc::new(crate::grants::MemoryGrantStore::new())),
+            warehouse: tempfile::tempdir().unwrap(),
+        };
+        let (root, ana) = (w.session("root", true), w.session("ana", false));
+        run(&root, &format!("CREATE TABLE ev USING parquet AS {EVENTS}"));
+        run(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+        run(&root, "GRANT SELECT ON TABLE ev TO user:ana");
+        run(
+            &ana,
+            "CREATE VIEW dv SQL SECURITY DEFINER AS SELECT id, d, c FROM ev",
+        );
+        run(&ana, "GRANT SELECT ON VIEW dv TO user:bob");
+        w
+    }
+
+    fn session(&self, who: &str, admin: bool) -> Session {
+        let policy = Arc::new(crate::grants::GrantsPolicy::new(
+            Arc::clone(&self.grants),
+            Arc::new(crate::AllowAll),
+            admin,
+        ));
+        let s = Session::builder()
+            .runtime(Arc::clone(&self.rt))
+            .principal(crate::Principal::new(who, crate::PrincipalKind::User))
+            .access_policy(Arc::clone(&policy) as Arc<dyn crate::AccessPolicy>)
+            .grants(policy)
+            .build()
+            .unwrap();
+        s.conf()
+            .set(
+                "spark.sql.warehouse.dir",
+                self.warehouse.path().to_str().unwrap(),
+            )
+            .unwrap();
+        s
+    }
+}
+
+/// #868 merge review N1: a query through a definer view whose reads its reader may not see keeps
+/// no persisted profile, so its scans never reach the history, the advisor or
+/// `system.partition_advice`.
+#[test]
+fn a_definer_views_withheld_reads_leave_nothing_in_the_history() {
+    let history = tempfile::tempdir().unwrap();
+    let w = DefinerWorld::new(history.path());
+    let (root, bob) = (w.session("root", true), w.session("bob", false));
+    workload(&bob, "dv");
+    flush(&w.rt);
+    let stored = |needle: &str| {
+        read_history(history.path())
+            .unwrap()
+            .iter()
+            .filter(|r| r.sql.as_deref().is_some_and(|s| s.contains(needle)))
+            .count()
+    };
+    assert_eq!(stored("FROM dv"), 0, "bob's queries were stored");
+    assert!(from_history(history.path()).is_empty());
+    let table = "SELECT CAST(count(*) AS STRING) FROM system.partition_advice";
+    assert_eq!(text(&root, table), "0");
+    // The definer, who may see the reads, has her queries stored.
+    let ana = w.session("ana", false);
+    text(&ana, "SELECT CAST(sum(id) AS STRING) FROM dv WHERE d = 3");
+    flush(&w.rt);
+    assert_eq!(stored("FROM dv"), 1);
+}
+
+/// #868 merge review N2: a `MONITOR` holder's `EXPLAIN` of a definer view whose reads it may not
+/// see shows no `== Partition Advice ==` section, though advice for the view's table exists.
+#[test]
+fn explain_shows_no_advice_when_the_definer_reads_are_withheld() {
+    let history = tempfile::tempdir().unwrap();
+    let w = DefinerWorld::new(history.path());
+    let root = w.session("root", true);
+    workload(&root, "ev");
+    flush(&w.rt);
+    let query = "EXPLAIN SELECT sum(id) FROM dv WHERE d = 7";
+    // Whoever may see the view's reads sees the advice for `ev` through it.
+    assert!(text(&root, query).contains("partition advice: d"));
+    // Bob may read `dv` but not see its definer's reads: EXPLAIN shows him a plan, and no advice
+    // for the table behind the view.
+    let bob = w.session("bob", false);
+    let batches = block_on(async { bob.sql(query).await?.collect().await })
+        .unwrap_or_else(|e| panic!("bob's EXPLAIN is a plan, not a refusal: {e}"));
+    let plan = batches
+        .iter()
+        .flat_map(|b| (0..b.num_rows()).map(|i| cell(b.column(0).as_ref(), i)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!plan.is_empty());
+    assert!(!plan.contains("Partition Advice"), "{plan}");
+    assert!(!plan.contains("partition advice"), "{plan}");
+}

@@ -33,7 +33,9 @@ pub(crate) fn restore(schema: &Schema, kv: Option<&Vec<KeyValue>>) -> Option<Sch
         .find(|k| k.key == ROW_METADATA_KEY)?
         .value
         .as_deref()?;
-    if !json.contains("__COLLATIONS") {
+    // Collations, and user-defined types (P3-T079): Parquet holds a UDT as its storage type.
+    // A cheap prefilter; the JSON may carry whitespace around the colon (`"type": "udt"`), so look for the value.
+    if !json.contains("__COLLATIONS") && !json.contains(r#""udt""#) {
         return None;
     }
     let DataType::Struct(spark) = DataType::from_json(json).ok()? else {
@@ -55,9 +57,32 @@ pub(crate) fn restore(schema: &Schema, kv: Option<&Vec<KeyValue>>) -> Option<Sch
     changed.then(|| Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
-/// `f` with the field tag of every collated string of `t` below it.
+/// `f` with the field tag of every collated string and user-defined type of `t` below it.
 fn tag(f: &Field, t: &DataType) -> Field {
     match (t, f.data_type()) {
+        // A UDT is tagged with its JSON when its storage type is what the file holds; a footer whose storage
+        // type does not fit the column leaves it alone.
+        (DataType::Udt(u), carrier) => {
+            let mut meta = f.metadata().clone();
+            meta.insert(SPARK_TYPE_METADATA_KEY.to_owned(), t.json());
+            let mut tagged = f.clone().with_metadata(meta);
+            // A file without Arrow metadata holds an interval as a plain integer: restore the interval carrier
+            // so the storage check sees the type the footer declares.
+            let integer = matches!(carrier, ArrowType::Int32 | ArrowType::Int64);
+            if integer
+                && matches!(
+                    u.sql_type(),
+                    DataType::YearMonthInterval { .. } | DataType::DayTimeInterval { .. }
+                )
+            {
+                tagged = tagged.with_data_type(u.sql_type().to_arrow());
+            }
+            if DataType::from_arrow_field(&tagged).is_ok() {
+                tagged
+            } else {
+                f.clone()
+            }
+        }
         (
             DataType::CollatedString(_),
             ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View,
@@ -109,7 +134,7 @@ fn tag(f: &Field, t: &DataType) -> Field {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use krishiv_types::Collation;
+    use krishiv_types::{ArrayType, Collation, UdtType};
 
     fn lcase() -> DataType {
         DataType::collated_string(Collation::parse("UTF8_LCASE").unwrap())
@@ -232,5 +257,128 @@ mod tests {
             DataType::from_arrow_field(back.field_with_name("s").unwrap()).unwrap(),
             lcase()
         );
+    }
+
+    /// A Spark footer that names a UDT tags the column, so it reads back as the UDT (P3-T079); a footer whose
+    /// storage type does not fit the column changes nothing.
+    #[test]
+    fn spark_row_metadata_restores_a_udt() {
+        let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+        let udt = DataType::Udt(Arc::new(UdtType::jvm(
+            storage.clone(),
+            "org.example.PointUDT".to_owned(),
+            Some("pkg.PointUDT".to_owned()),
+        )));
+        let footer = DataType::Struct(krishiv_types::StructType::new(vec![
+            krishiv_types::StructField::new("p", udt.clone(), true),
+        ]))
+        .json();
+        let schema = Schema::new(vec![storage.to_arrow_field("p", true)]);
+        let restored = restore(&schema, Some(&kv(&footer))).expect("tagged");
+        assert_eq!(DataType::from_arrow_field(restored.field(0)).unwrap(), udt);
+        // A column of another storage type is left alone.
+        let other = Schema::new(vec![DataType::Integer.to_arrow_field("p", true)]);
+        assert!(restore(&other, Some(&kv(&footer))).is_none());
+    }
+
+    /// Spark writes `"pyClass":null` for a JVM UDT with no Python class, and a Python-only UDT as `pyClass`,
+    /// `serializedClass` (a real 4.2.0 run, `tests/spark-golden/udt`); both footers restore the UDT.
+    #[test]
+    fn spark_row_metadata_restores_a_udt_with_a_null_py_class_and_a_python_only_one() {
+        let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+        let sql = r#"{"type":"array","elementType":"double","containsNull":false}"#;
+        let schema = Schema::new(vec![storage.to_arrow_field("p", true)]);
+        let jvm = DataType::Udt(Arc::new(UdtType::jvm(
+            storage.clone(),
+            "org.example.PointUDT".to_owned(),
+            None,
+        )));
+        let python = DataType::Udt(Arc::new(UdtType::python(
+            storage,
+            "__main__.PyOnlyUDT".to_owned(),
+            "gAWV".to_owned(),
+        )));
+        for (udt, want) in [
+            (
+                format!(
+                    r#"{{"type":"udt","class":"org.example.PointUDT","pyClass":null,"sqlType":{sql}}}"#
+                ),
+                jvm,
+            ),
+            (
+                format!(
+                    r#"{{"type":"udt","pyClass":"__main__.PyOnlyUDT","serializedClass":"gAWV","sqlType":{sql}}}"#
+                ),
+                python,
+            ),
+        ] {
+            let footer = format!(
+                r#"{{"type":"struct","fields":[{{"name":"p","type":{udt},"nullable":true,"metadata":{{}}}}]}}"#
+            );
+            let restored = restore(&schema, Some(&kv(&footer))).expect("tagged");
+            let got = DataType::from_arrow_field(restored.field(0)).unwrap();
+            assert_eq!(got, want, "{footer}");
+            let (DataType::Udt(g), DataType::Udt(w)) = (&got, &want) else {
+                panic!("{footer}")
+            };
+            assert_eq!(g.python_class(), w.python_class(), "{footer}");
+            assert_eq!(
+                g.serialized_python_class(),
+                w.serialized_python_class(),
+                "{footer}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_footer_with_whitespace_in_its_json_still_restores_a_udt() {
+        let storage = DataType::Array(Arc::new(ArrayType::new(DataType::Double, false)));
+        let schema = Schema::new(vec![storage.to_arrow_field("p", true)]);
+        let footer = r#"{"type": "struct", "fields": [{"name": "p", "type": {"type": "udt", "class": "org.example.PointUDT", "pyClass": null, "sqlType": {"type": "array", "elementType": "double", "containsNull": false}}, "nullable": true, "metadata": {}}]}"#;
+        let restored = restore(&schema, Some(&kv(footer))).expect("tagged");
+        assert!(matches!(
+            DataType::from_arrow_field(restored.field(0)).unwrap(),
+            DataType::Udt(_)
+        ));
+    }
+
+    /// A UDT over a collated string: the footer holds the collation inline (Spark 4.2.0), and a read whose Arrow
+    /// schema carries no tag (the restore path alone) brings the collated UDT back.
+    #[test]
+    fn a_udt_over_a_collated_string_restores_from_the_footer_alone() {
+        let udt = DataType::Udt(Arc::new(UdtType::python(
+            lcase(),
+            "__main__.LUDT".to_owned(),
+            "gAWV".to_owned(),
+        )));
+        let schema = Schema::new(vec![udt.to_arrow_field("p", true)]);
+        let json = super::super::intervals::row_metadata(&schema).unwrap();
+        assert!(
+            json.contains(r#""sqlType":"string collate UTF8_LCASE""#),
+            "{json}"
+        );
+        let untagged = Schema::new(vec![Field::new("p", ArrowType::Utf8View, true)]);
+        let back = restore(&untagged, Some(&kv(&json))).expect("restored");
+        assert_eq!(DataType::from_arrow_field(back.field(0)).unwrap(), udt);
+    }
+
+    /// A UDT over an ANSI interval in a file with no Arrow metadata: the column is a plain integer, and the tag
+    /// restores both the UDT and the interval carrier.
+    #[test]
+    fn a_udt_over_an_interval_restores_from_the_footer_alone() {
+        let storage = DataType::YearMonthInterval {
+            start: krishiv_types::YearMonthField::Year,
+            end: krishiv_types::YearMonthField::Month,
+        };
+        let udt = DataType::Udt(Arc::new(UdtType::python(
+            storage,
+            "__main__.IUDT".to_owned(),
+            "gAWV".to_owned(),
+        )));
+        let schema = Schema::new(vec![udt.to_arrow_field("p", true)]);
+        let json = super::super::intervals::row_metadata(&schema).unwrap();
+        let untagged = Schema::new(vec![Field::new("p", ArrowType::Int32, true)]);
+        let back = restore(&untagged, Some(&kv(&json))).expect("restored");
+        assert_eq!(DataType::from_arrow_field(back.field(0)).unwrap(), udt);
     }
 }

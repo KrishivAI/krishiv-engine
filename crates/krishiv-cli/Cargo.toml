@@ -23,7 +23,7 @@ clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-
 futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv = { path = "../krishiv", version = "=0.2.1", default-features = false }
 krishiv-alloc = { path = "../krishiv-alloc", version = "=0.2.1", optional = true }
-krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1", optional = true }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
 krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 krishiv-functions = { path = "../krishiv-functions", version = "=0.2.1" }
 krishiv-sql = { path = "../krishiv-sql", version = "=0.2.1" }
@@ -32,6 +32,7 @@ krishiv-server = { path = "../krishiv-server", version = "=0.2.1", optional = tr
 krishiv-session = { path = "../krishiv-session", version = "=0.2.1", optional = true }
 krishiv-mcp = { path = "../krishiv-mcp", version = "=0.2.1", optional = true }
 krishiv-connect-server = { path = "../krishiv-connect-server", version = "=0.2.1", optional = true }
+krishiv-flight-sql = { path = "../krishiv-flight-sql", version = "=0.2.1", optional = true }
 krishiv-udf-pool = { path = "../krishiv-udf-pool", version = "=0.2.1", optional = true }
 # Declared `iceberg-rest` catalogs in `krishiv server` (feature `catalog-iceberg-rest`, design P3-T067 §2.3).
 krishiv-catalogs = { path = "../krishiv-catalogs", version = "=0.2.1", optional = true }
@@ -41,9 +42,15 @@ serde_json = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 
 [dev-dependencies]
+arrow-array.workspace = true
+arrow-flight = { workspace = true, features = ["flight-sql"] }
+arrow-schema.workspace = true
+futures = { workspace = true, features = ["std"] }
+tonic = { workspace = true, features = ["channel"] }
 rustls = { workspace = true, features = ["aws_lc_rs", "std", "tls12"] }
 tempfile.workspace = true
 libmimalloc-sys = { workspace = true, features = ["extended"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
@@ -58,7 +65,8 @@ delta = ["krishiv/delta"]
 cdc = ["krishiv/cdc"]
 # The Connect server hosts the Python UDF worker pool; the binary runs its sandbox trampoline (P3-T014).
 connect = ["krishiv/connect", "dep:krishiv-udf-pool"]
-flight-sql = ["krishiv/flight-sql"]
+# Arrow Flight SQL on the Spark Connect port of `krishiv server` (P3-T101); implies `server`.
+flight-sql = ["krishiv/flight-sql", "server", "dep:krishiv-flight-sql"]
 mcp = ["krishiv/mcp", "dep:krishiv-mcp", "dep:tokio"]
 python = ["krishiv/python"]
 collations-icu = ["krishiv/collations-icu"]
@@ -89,7 +97,7 @@ ui = ["krishiv/ui", "server"]
 # without it such a declaration fails startup naming the type.
 catalog-iceberg-rest = ["server", "dep:krishiv-catalogs", "krishiv-catalogs/session"]
 celeborn = ["krishiv/celeborn"]
-mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-alloc", "dep:krishiv-memory"]
+mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-alloc"]
 # Live async-task diagnostics over `tokio-console` (P2-T129): off by default;
 # needs `RUSTFLAGS="--cfg tokio_unstable"` for the task names.
 tokio-console = ["krishiv/tokio-console"]
@@ -100,4 +108,4 @@ telemetry-otlp = ["krishiv/telemetry-otlp", "dep:krishiv-session"]
 # Cloud object stores (S3, GCS, Azure). Opt-in so the default build stays
 # inside the dependency and binary-size budgets.
 cloud = ["krishiv/cloud"]
-full = ["krishiv/full"]
+full = ["krishiv/full", "catalog-iceberg-rest"]

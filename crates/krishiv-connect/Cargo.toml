@@ -18,6 +18,7 @@ workspace = true
 arrow-array.workspace = true
 arrow-schema.workspace = true
 krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.1" }
 krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1" }
 krishiv-sql = { path = "../krishiv-sql", version = "=0.2.1" }
 krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }

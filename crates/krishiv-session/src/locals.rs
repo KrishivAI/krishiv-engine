@@ -24,6 +24,7 @@ impl Session {
             operation: self.operation.clone(),
             deadline: self.deadline,
             query_start: self.query_start,
+            drain_exempt: self.drain_exempt,
             request_tags: Arc::clone(&self.request_tags),
             inbound_trace: self.inbound_trace.clone(),
             inbound_baggage: Arc::clone(&self.inbound_baggage),

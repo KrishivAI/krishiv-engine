@@ -46,6 +46,7 @@ mod python_udf;
 mod python_udtf;
 mod row_level;
 mod runtime_filter;
+mod scan_facts;
 pub(crate) mod subquery;
 mod table;
 mod window;
@@ -60,7 +61,7 @@ use krishiv_udf_sdk::UdfLibrary;
 
 pub use build::DefaultPlanner;
 pub(crate) use build::concat_schemas;
-pub use explain::ExplainNode;
+pub use explain::{ExplainNode, FilterGap, FilterGapReason, InputFacts, NodeFacts};
 pub use file_table::FileTable;
 pub use key_count::{KeyOptions, KeyOutcome, KeyResult, KeyUnknown};
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};

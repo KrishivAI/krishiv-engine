@@ -26,6 +26,7 @@
 //! - [`ServerAuth`]: the chain (throttle, client certificate, bearer token), its failure log record (target `krishiv::auth`, never the
 //!   credential) and its failure counters.
 
+mod basic;
 mod config;
 mod credential;
 mod denials;
@@ -77,6 +78,7 @@ use std::net::SocketAddr;
 use futures::future::BoxFuture;
 use krishiv_common::principal::Principal;
 
+pub use basic::{BasicCredentials, BasicHeader, basic_header};
 pub use config::{AuthConfig, RoleLists, ThrottleConfig, TokenSpec, is_auth_key};
 pub use credential::{CredentialKind, ExchangeClaims, InboundCredential};
 pub use denials::{DeniedCount, DeniedCounts};
@@ -144,7 +146,7 @@ pub enum Surface {
     Metrics,
     /// The web UI and its `/api/internal` routes.
     Ui,
-    /// The Arrow Flight SQL service (on the Spark Connect listener, P3-T101).
+    /// The Arrow Flight SQL service (on the Spark Connect listener).
     FlightSql,
 }
 
@@ -158,9 +160,11 @@ impl Surface {
         Self::FlightSql,
     ];
 
+    /// The surface a session of `transport` is served by.
+    ///
     /// The surface whose requests a session of `transport` serves: `Connect`, `FlightSql` and
     /// `Ui` map to themselves; an embedded or MCP session arrives on no listener, so `None`
-    /// (P3-T101 §2 H3: a Flight SQL session counts its denials under `flight-sql`).
+    /// (a Flight SQL session counts its denials under `flight-sql`).
     #[must_use]
     pub fn of(transport: crate::Transport) -> Option<Self> {
         match transport {
@@ -198,19 +202,23 @@ pub enum Method {
     Throttle,
     /// No credential was presented.
     None,
+    /// `Authorization: Basic` on the Flight SQL surface: a bearer token as the password, its
+    /// principal's name as the user name (P3-T101 note §3.1).
+    Basic,
 }
 
 impl Method {
     /// Every method, in counter order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Token,
         Self::Oidc,
         Self::Mtls,
         Self::Throttle,
         Self::None,
+        Self::Basic,
     ];
 
-    /// The label value: `token`, `oidc`, `mtls` or `none`.
+    /// The label value: `token`, `oidc`, `mtls`, `throttle`, `none` or `basic`.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -219,6 +227,7 @@ impl Method {
             Self::Mtls => "mtls",
             Self::Throttle => "throttle",
             Self::None => "none",
+            Self::Basic => "basic",
         }
     }
 }
@@ -236,9 +245,14 @@ pub struct Credentials<'a> {
     pub peer: SocketAddr,
     /// The listener.
     pub surface: Surface,
-    /// An `Authorization` header was present but not a usable `Bearer` token (`Basic ..`,
-    /// `Bearer` with no token): Spark answers "Invalid authentication token", not "missing".
+    /// An `Authorization` header was present but not a usable `Bearer` token (`Basic ..` off the
+    /// Flight SQL surface, `Bearer` with no token): Spark answers "Invalid authentication
+    /// token", not "missing".
     pub malformed: bool,
+    /// The user name of an `Authorization: Basic` credential (its password is `bearer`): the
+    /// token's principal must have this name. Only the Flight SQL surface sets it
+    /// ([`Self::with_basic`]); on any other surface it is refused.
+    pub basic_user: Option<&'a str>,
 }
 
 impl<'a> Credentials<'a> {
@@ -251,6 +265,7 @@ impl<'a> Credentials<'a> {
             peer,
             surface,
             malformed: false,
+            basic_user: None,
         }
     }
 
@@ -261,12 +276,25 @@ impl<'a> Credentials<'a> {
         self
     }
 
+    /// The same credentials with the bearer token of an `Authorization` header value.
+    ///
     /// The same credentials with the token of an `Authorization` header value, if it is a
     /// `Bearer` one (scheme compared ignoring ASCII case, as RFC 9110 §11.1 asks).
     #[must_use]
     pub fn with_authorization_header(mut self, value: &'a str) -> Self {
         self.bearer = bearer_token(value);
         self.malformed = self.bearer.is_none();
+        self
+    }
+
+    /// The same credentials carrying a decoded `Basic` credential: its password as the bearer
+    /// token and its user name to check against the token's principal (P3-T101 note §3.1). The
+    /// transport decodes `Basic` only on `Surface::FlightSql`.
+    #[must_use]
+    pub fn with_basic(mut self, basic: &'a BasicCredentials) -> Self {
+        self.bearer = Some(basic.password());
+        self.basic_user = Some(basic.user());
+        self.malformed = false;
         self
     }
 }
@@ -281,6 +309,7 @@ impl fmt::Debug for Credentials<'_> {
             .field("peer", &self.peer)
             .field("surface", &self.surface)
             .field("malformed", &self.malformed)
+            .field("basic_user", &self.basic_user)
             .finish()
     }
 }
@@ -307,7 +336,7 @@ pub struct Authenticated {
     pub method: Method,
     /// The credential's own id (an OIDC token's `jti`), for the audit record; never enforced.
     pub token_id: Option<String>,
-    /// The user token itself, kept for delegated catalogs (P3-T067 §3.3): an OIDC token or a
+    /// The user token itself, kept for delegated catalogs: an OIDC token or a
     /// signed assertion; `None` for a static token, a certificate or plain act-as metadata.
     pub credential: Option<InboundCredential>,
 }
@@ -325,7 +354,7 @@ impl Authenticated {
         }
     }
 
-    /// This result keeping `credential`, the user token (P3-T067 §3.3).
+    /// This result keeping `credential`, the user token.
     #[must_use]
     pub fn with_credential(mut self, credential: Option<InboundCredential>) -> Self {
         self.credential = credential;
@@ -370,6 +399,8 @@ impl AuthFailure {
         }
     }
 
+    /// The status message of the refusal.
+    ///
     /// The status message: Spark's own two for a missing and a wrong token
     /// (`PreSharedKeyAuthenticationInterceptor`, Spark 4.3.0).
     #[must_use]
@@ -383,6 +414,8 @@ impl AuthFailure {
         }
     }
 
+    /// Whether the refusal means "retry later" rather than "unauthenticated".
+    ///
     /// Whether the transport answers "retry later" (gRPC `UNAVAILABLE`, HTTP 503) rather than
     /// "unauthenticated" (gRPC `UNAUTHENTICATED`, HTTP 401).
     #[must_use]

@@ -10,18 +10,13 @@
 //! `KRISHIV_INSUFFICIENT_PERMISSIONS` and never revealing the policy's
 //! reason or whether the object exists.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 use std::sync::Arc;
 
-use krishiv_common::config::{
-    Config, ConfigValue, IO_LOCAL_ALLOWED_ROOTS, IO_OBJECT_STORE_ALLOWED_PREFIXES,
-};
-use krishiv_common::error::{
-    ErrorClass, KrishivError, KrishivInvalidConfigValue, KrishivUnsupportedFeature, PathNotFound,
-};
+use krishiv_common::error::{ErrorClass, KrishivError, KrishivUnsupportedFeature};
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::files::{LocatedPath, PathLocator};
-use krishiv_io::{StoreId, parse_object_url};
+use krishiv_io::StoreId;
 use krishiv_plan::SourceId;
 use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
@@ -33,6 +28,11 @@ use krishiv_sql::{
     ExplainKind, ParserOptions, StatementClass, Target, TargetObject, parse_multipart_identifier,
     statement_targets,
 };
+
+mod path_prefix;
+
+pub use path_prefix::PathPrefixPolicy;
+pub(crate) use path_prefix::{allowed_roots, resolve_links};
 
 use crate::dataframe::DataFrame;
 use crate::session::{QueryEnv, Session, sql_context};
@@ -354,9 +354,22 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
         crate::grants::DecidedBy::Roles
     }
     .as_str();
+    // A refusal of a principal acting for this one (the definer of a `SQL SECURITY DEFINER` view
+    // the session read, P3-T062 §2.4) names it: the record shows both.
+    let own =
+        krishiv_common::names::quote_parts(std::slice::from_ref(&session.state.principal.name));
+    let acting_as = e
+        .message_parameters()
+        .iter()
+        .find(|(name, _)| *name == "principal")
+        .map(|(_, p)| p.clone())
+        .filter(|p| *p != own);
     tracing::warn!(
         target: "krishiv::audit",
         principal = %session.state.principal.name,
+        acting_as = acting_as.as_deref(),
+        delegated_by = session.state.principal.delegated_by.as_deref(),
+        definer_for = session.state.principal.definer_for.as_deref(),
         client_user_id_unverified = client_user_id.as_deref(),
         statement_class = class.name(),
         error_class = e.error_class().name(),
@@ -558,6 +571,20 @@ impl Session {
         reads: &[crate::catalog::ReadCandidate],
         env: &QueryEnv,
     ) -> Result<Vec<TableIdent>, KrishivError> {
+        let principal = Arc::clone(&self.state.principal);
+        self.authorize_reads_as(reads, env, &principal, true).await
+    }
+
+    /// [`Self::authorize_reads`] for `principal`: the session's own, or the definer of a
+    /// `SQL SECURITY DEFINER` view acting for it (P3-T062 §2.4). `audited`: a refusal is audited
+    /// here (`false` when the caller audits it, as the definer's failure is).
+    pub(crate) async fn authorize_reads_as(
+        &self,
+        reads: &[crate::catalog::ReadCandidate],
+        env: &QueryEnv,
+        principal: &Principal,
+        audited: bool,
+    ) -> Result<Vec<TableIdent>, KrishivError> {
         let catalogs = &*env.analysis.catalogs;
         let fold = !env.analysis.conf.case_sensitive;
         let mut views = Vec::new();
@@ -604,17 +631,236 @@ impl Session {
                 // The analysis' policy: the session's, quiet in a trial (`QuietPolicy`).
                 let r = authorize_reported(
                     &*env.analysis.policy,
-                    &self.state.principal,
+                    principal,
                     &securable,
                     privilege,
                     wanted,
                 )
                 .await;
-                audit_read(self, env, r)?;
+                if !audited {
+                    // A definer's refusal is audited once, by `Session::definer_failure`, which
+                    // redacts it for the reader (one record per refusal, review M4).
+                    r?;
+                } else {
+                    audit_read(self, env, r)?;
+                }
                 checked.push(securable);
             }
         }
         Ok(views)
+    }
+
+    /// The analysis' read privilege (`Select`; `Browse` for a metadata analysis) on every stored
+    /// function the query's analysis resolved a call to (P3-T062 §2.4: calling a function needs
+    /// `Select` on it; there is no `Execute`, Q3). Built-in, temporary and session functions are
+    /// not securables. A call inside a definer view's text is asked of the reader too (fails
+    /// closed). Each refusal is the caller's to audit. Asked through the analysis's policy, so a
+    /// trial analysis's `QuietPolicy` keeps a refusal from the provider (T063 R2-1).
+    pub(crate) async fn authorize_function_calls(
+        &self,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let privilege = env.analysis.mode.read_privilege();
+        for (namespace, name) in env.sql_functions.principal_calls() {
+            let securable =
+                Securable::Function(vec![crate::catalog::CATALOG.to_owned(), namespace, name]);
+            authorize(
+                &*env.analysis.policy,
+                &self.state.principal,
+                &securable,
+                privilege,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Asks the session's principal what the `SQL SECURITY DEFINER` views of `analyzed` read
+    /// (their `owner_reads`: the tables, and the views their texts inline, review M1), as an
+    /// invoker would be asked, before their inlined queries are shown (`EXPLAIN`, estimates,
+    /// warnings; P3-T062 §2.4: an explain checks the privileges of the statement it explains).
+    /// Column-level policies are asked per column read. Audited whole; the reader is told only
+    /// the refusal's class and SQLSTATE, as of a definer failure (review r2 item 6: the reader
+    /// wrote none of these names).
+    ///
+    /// # Errors
+    /// The first refusal (42501), redacted.
+    pub(crate) async fn authorize_shown_definer_reads(
+        &self,
+        analyzed: &krishiv_plan::analyzer::AnalyzedPlan,
+    ) -> Result<(), KrishivError> {
+        for (securable, privilege) in self.shown_definer_reads(&analyzed.views) {
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &securable,
+                privilege,
+            )
+            .await;
+            audit(self, StatementClass::Read, r)
+                .map_err(|e| e.redacted().without_pending_site())?;
+        }
+        Ok(())
+    }
+
+    /// Whether [`Self::authorize_shown_definer_reads`] would pass for the views `views`, asked
+    /// quietly (no audit record): a query's profile shows its plan only then (review M2).
+    pub(crate) async fn may_see_definer_reads(
+        &self,
+        views: &[krishiv_plan::analyzer::views::ViewExpansion],
+    ) -> bool {
+        for (securable, privilege) in self.shown_definer_reads(views) {
+            if !krishiv_plan::analyzer::allowed(
+                &*self.state.policy,
+                &self.state.principal,
+                &securable,
+                privilege,
+            )
+            .await
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// What showing the queries of the definer views among `views` asks the principal.
+    fn shown_definer_reads(
+        &self,
+        views: &[krishiv_plan::analyzer::views::ViewExpansion],
+    ) -> Vec<(Securable, Privilege)> {
+        use krishiv_plan::analyzer::views::ViewSecurity;
+        let column_level = self.state.policy.column_level();
+        let mut out = Vec::new();
+        for view in views.iter().filter(|v| v.security == ViewSecurity::Definer) {
+            for used in &view.owner_reads {
+                let per_column =
+                    used.privilege == Privilege::Select && column_level && !used.columns.is_empty();
+                match &used.securable {
+                    Securable::Table(t) | Securable::View(t) if per_column => {
+                        out.extend(used.columns.iter().map(|c| {
+                            (
+                                Securable::Column {
+                                    table: t.clone(),
+                                    column: c.clone(),
+                                },
+                                used.privilege,
+                            )
+                        }));
+                    }
+                    other => out.push((other.clone(), used.privilege)),
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether this session's principal may see `securable` in a listing (`SHOW TABLES`,
+    /// `SHOW VIEWS`, `SHOW NAMESPACES`, `spark.catalog.list*`; P3-T062 §2.4): under the `grants`
+    /// provider when it may `Select` it or holds any grant on it (`GrantsPolicy::listable`; a
+    /// `CREATE` on the namespace does not show every table in it), otherwise `Browse` on it.
+    /// Asked quietly: leaving an entry out is not a refusal (no audit record, no denial counter).
+    pub(crate) async fn may_list(&self, securable: &Securable) -> bool {
+        if let Some(listed) = self.grants_listable(securable) {
+            return listed;
+        }
+        krishiv_plan::analyzer::allowed(
+            &*self.state.policy,
+            &self.state.principal,
+            securable,
+            Privilege::Browse,
+        )
+        .await
+    }
+
+    /// The grants provider's listing rule for `securable` (`GrantsPolicy::listable`): `None`
+    /// without the provider or for a securable the `system` policy decides.
+    fn grants_listable(&self, securable: &Securable) -> Option<bool> {
+        self.state
+            .grants
+            .as_ref()
+            .and_then(|g| g.listable(&self.state.principal, securable))
+    }
+
+    /// Whether a lookup of the one object `securable` by name answers as for a missing object
+    /// (review B3; ADR 0046 §8: no existence oracle): the grants provider does not list it to this
+    /// principal ([`Self::may_list`]'s rule, the same predicate). Other policies decide such a
+    /// lookup by `Browse`, as they decide what a listing shows, and refuse it with 42501.
+    pub(crate) fn hidden(&self, securable: &Securable) -> bool {
+        self.grants_listable(securable) == Some(false)
+    }
+
+    /// Whether the grants provider hides the session catalog's namespace `namespace` from this
+    /// principal, by the rule of [`Self::may_list_namespace`] (review B3).
+    pub(crate) async fn namespace_hidden(&self, namespace: &str) -> bool {
+        self.state.grants.is_some() && !self.may_list_namespace(namespace).await
+    }
+
+    /// The securable of the stored relation `t` of the session catalog: its view or its table.
+    pub(crate) fn relation_securable(t: &crate::store::CatalogTable) -> Securable {
+        let ident = TableIdent {
+            catalog: crate::catalog::CATALOG.to_owned(),
+            namespace: vec![t.namespace.clone()],
+            name: t.name.clone(),
+        };
+        if t.view.is_some() {
+            Securable::View(ident)
+        } else {
+            Securable::Table(ident)
+        }
+    }
+
+    /// The relations of the session catalog among `tables` that this session's principal may
+    /// see ([`Self::may_list`]).
+    pub(crate) async fn listed_relations(
+        &self,
+        tables: Vec<Arc<crate::store::CatalogTable>>,
+    ) -> Vec<Arc<crate::store::CatalogTable>> {
+        let mut out = Vec::with_capacity(tables.len());
+        for t in tables {
+            if self.may_list(&Self::relation_securable(&t)).await {
+                out.push(t);
+            }
+        }
+        out
+    }
+
+    /// Whether this session's principal may see the session catalog's namespace `namespace` in a
+    /// listing: `Browse` on it, or on any relation or function in it (a table grant shows where the
+    /// table is).
+    pub(crate) async fn may_list_namespace(&self, namespace: &str) -> bool {
+        let securable = Securable::Namespace(vec![
+            crate::catalog::CATALOG.to_owned(),
+            namespace.to_owned(),
+        ]);
+        if self.may_list(&securable).await {
+            return true;
+        }
+        let tables = crate::store::CatalogStore::tables_in(&*self.state.catalog.store, namespace);
+        for t in tables {
+            let ident = TableIdent {
+                catalog: crate::catalog::CATALOG.to_owned(),
+                namespace: vec![namespace.to_owned()],
+                name: t.name.clone(),
+            };
+            if self.may_list(&Securable::Table(ident)).await {
+                return true;
+            }
+        }
+        // Its functions count too (ADR 0048 A1 §3: "anything in it"; review r3 N4).
+        let functions = crate::store::CatalogStore::functions(&*self.state.catalog.store)
+            .in_namespace(namespace);
+        for name in functions {
+            let securable = Securable::Function(vec![
+                crate::catalog::CATALOG.to_owned(),
+                namespace.to_owned(),
+                name,
+            ]);
+            if self.may_list(&securable).await {
+                return true;
+            }
+        }
+        false
     }
 
     /// The error `e` of a metadata analysis (P3 PR-14d review B1), raised after the permanent
@@ -921,6 +1167,15 @@ impl Session {
                     .collect(),
             ),
             TargetObject::CurrentCatalog => namespaces(vec![current_catalog()]),
+            // `SHOW NAMESPACES IN name`: a catalog when `name` is one, else a namespace of the
+            // current catalog.
+            TargetObject::NamedCatalog(name) => {
+                let written = parts(name)?;
+                match written.as_slice() {
+                    [only] if catalogs.catalog(only).is_some() => namespaces(vec![only.clone()]),
+                    _ => namespaces(namespace_parts(catalogs, &written)),
+                }
+            }
             TargetObject::Path(path) => vec![Securable::Path(OptionValue::from_user(
                 "path",
                 self.qualify_path(path)?,
@@ -1143,326 +1398,6 @@ pub(crate) fn still_physical(session: &Session, checked: &Checked) -> Result<(),
     match canonical_parts(Path::new(local)) {
         Some(parts) if format!("file:/{}", parts.join("/")) == checked.at.display => Ok(()),
         _ => Err(deny()),
-    }
-}
-
-/// Allows paths only under the given root directories, and delegates every
-/// other decision to `inner`: the policy behind a server's data-directory
-/// restriction.
-///
-/// A path is compared in the qualified form reads and writes use
-/// (`file:/a/b`, `.` and `..` already resolved), after resolving symbolic
-/// links in the part of it that exists, against the roots with their links
-/// resolved. Object-store paths are allowed only under the prefixes of
-/// [`Self::with_object_prefixes`] (none by default). Anything else is
-/// denied: other schemes, paths with credentials, any path containing `%`
-/// (percent-encoded text would not be decoded the way the comparison reads
-/// it, so even a literal `%` in a file name is refused) and relative or
-/// unresolved paths. A glob or directory read is checked as written; the
-/// runtime's local store refuses a listing that follows a link out of
-/// `krishiv.io.local.allowedRoots` (set it on the runtime too). Session
-/// writes go to the resolved directory, which is opened once and then used
-/// by descriptor (no name is resolved through a link while the write runs),
-/// and fail if a link is swapped into it before the write begins or commits.
-/// Resolving links reads file metadata on the calling thread, once per
-/// path and query.
-///
-/// ```
-/// use std::sync::Arc;
-/// use krishiv_session::{AllowAll, PathPrefixPolicy, Session};
-///
-/// let dir = tempfile::tempdir().unwrap();
-/// let policy = PathPrefixPolicy::new([dir.path()], Arc::new(AllowAll))?;
-/// let s = Session::builder().access_policy(Arc::new(policy)).build()?;
-/// let e = futures::executor::block_on(s.sql("SELECT * FROM parquet.`/etc`")).unwrap_err();
-/// assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
-/// # Ok::<(), krishiv_common::error::KrishivError>(())
-/// ```
-#[derive(Clone)]
-pub struct PathPrefixPolicy {
-    roots: Vec<PathBuf>,
-    prefixes: Vec<ObjectPrefix>,
-    inner: Arc<dyn AccessPolicy>,
-}
-
-/// One allowed object-store prefix: a store and the whole key segments under it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ObjectPrefix {
-    store: StoreId,
-    segments: Vec<String>,
-}
-
-impl std::fmt::Debug for PathPrefixPolicy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PathPrefixPolicy")
-            .field("roots", &self.roots)
-            .field("prefixes", &self.prefixes)
-            .finish_non_exhaustive()
-    }
-}
-
-impl PathPrefixPolicy {
-    /// A policy allowing paths under `roots` (existing directories), with
-    /// `inner` deciding everything else.
-    ///
-    /// # Errors
-    /// `PATH_NOT_FOUND` for a root that does not exist.
-    pub fn new<P: AsRef<Path>>(
-        roots: impl IntoIterator<Item = P>,
-        inner: Arc<dyn AccessPolicy>,
-    ) -> Result<Self, KrishivError> {
-        let roots = roots
-            .into_iter()
-            .map(|r| {
-                std::fs::canonicalize(r.as_ref()).map_err(|_| {
-                    KrishivError::from(PathNotFound {
-                        path: format!("file:{}", r.as_ref().display()),
-                    })
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self {
-            roots,
-            prefixes: Vec::new(),
-            inner,
-        })
-    }
-
-    /// Also allows object-store paths under `prefixes` (`s3://bucket/prefix`, `gs://bucket`,
-    /// `abfss://container@account.dfs.core.windows.net/prefix`): a path is allowed when it
-    /// names the same store (`s3` and `s3a` are one; for Azure the same container in the same
-    /// account) and its key starts with the prefix's whole segments, so `s3://b/data` allows
-    /// `s3://b/data/x` but not `s3://b/data2` (ADR 0046 §3a). An Azure path without an
-    /// account host is never allowed, since its account would come from the client's settings.
-    ///
-    /// # Errors
-    /// `KRISHIV_INVALID_CONFIG_VALUE` for a prefix that is not an object-store URL with a
-    /// bucket, an Azure prefix without an `account.<host>`, or one that holds credentials,
-    /// `%`, a query or fragment, a glob character, or a `.`, `..` or empty segment.
-    pub fn with_object_prefixes<S: AsRef<str>>(
-        mut self,
-        prefixes: impl IntoIterator<Item = S>,
-    ) -> Result<Self, KrishivError> {
-        for prefix in prefixes {
-            let prefix = prefix.as_ref();
-            let parsed = parse_object_prefix(prefix)
-                .filter(|_| !prefix.contains(['*', '?', '[', ']', '{', '}']))
-                // An Azure prefix names its account: without one, the store would take the
-                // account from the client's `fs.azure.account.name`.
-                .filter(|_| {
-                    parse_object_url(prefix).is_ok_and(|u| {
-                        u.scheme != krishiv_io::ObjectScheme::Azure || u.account.is_some()
-                    })
-                })
-                .ok_or_else(|| {
-                    KrishivError::from(KrishivInvalidConfigValue {
-                        value: format!("'{prefix}'"),
-                        key: format!("\"{}\"", IO_OBJECT_STORE_ALLOWED_PREFIXES.key),
-                        reason:
-                            "expected an object-store prefix such as s3://bucket/prefix (Azure: \
-                             abfss://container@account.dfs.core.windows.net/prefix), without \
-                             credentials, `%`, a query or fragment, glob characters, or `.`, `..` \
-                             or empty segments"
-                                .to_owned(),
-                    })
-                })?;
-            self.prefixes.push(parsed);
-        }
-        Ok(self)
-    }
-
-    /// The server-mode confinement of ADR 0046 §3a around `inner`: local paths under
-    /// `krishiv.io.local.allowedRoots`, object-store paths under
-    /// `krishiv.io.objectStore.allowedPrefixes` (both comma separated, default empty, so
-    /// nothing by path), and nothing else, for every role.
-    ///
-    /// # Errors
-    /// `KRISHIV_INVALID_CONFIG_VALUE` for a root that is not an absolute path to an existing
-    /// directory, or a prefix [`Self::with_object_prefixes`] refuses.
-    pub fn from_config(
-        config: &Config,
-        inner: Arc<dyn AccessPolicy>,
-    ) -> Result<Self, KrishivError> {
-        Self {
-            roots: allowed_roots(config)?,
-            prefixes: Vec::new(),
-            inner,
-        }
-        .with_object_prefixes(config_list(config, &IO_OBJECT_STORE_ALLOWED_PREFIXES))
-    }
-
-    /// Whether the qualified path `path` lies under a root or an object-store prefix.
-    fn allows(&self, path: &OptionValue) -> bool {
-        let text = match path {
-            OptionValue::Plain(text) => text.as_str(),
-            // `container@account.host` reads as user info, so an Azure path arrives typed as a
-            // URL with credentials; Azure parsing takes it as container and account and refuses
-            // `user:secret@` forms, so only Azure URLs are compared, and the text never leaves
-            // this check.
-            OptionValue::Url(url) => {
-                let exposed = url.expose_secret();
-                let text = exposed.expose_secret();
-                return parse_object_url(text)
-                    .is_ok_and(|u| u.scheme == krishiv_io::ObjectScheme::Azure)
-                    && self.allows_object(text);
-            }
-            OptionValue::Secret(_) => return false,
-        };
-        let Some(local) = text.strip_prefix("file:") else {
-            return self.allows_object(text);
-        };
-        let local = Path::new(local);
-        let normal = local.is_absolute()
-            && local
-                .components()
-                .all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
-        if !normal || text.contains('%') {
-            return false;
-        }
-        resolve_links(local).is_some_and(|p| self.roots.iter().any(|r| p.starts_with(r)))
-    }
-}
-
-impl PathPrefixPolicy {
-    /// Whether the object-store URL `text` lies under one of the prefixes.
-    fn allows_object(&self, text: &str) -> bool {
-        parse_object_prefix(text).is_some_and(|p| {
-            self.prefixes
-                .iter()
-                .any(|a| a.store == p.store && p.segments.starts_with(&a.segments))
-        })
-    }
-}
-
-/// The comma-separated entries of the string setting `entry` (blank entries dropped).
-fn config_list(config: &Config, entry: &krishiv_common::config::ConfigEntry) -> Vec<String> {
-    match config.get(entry) {
-        Some(ConfigValue::String(raw)) => raw
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// `krishiv.io.local.allowedRoots`, canonical (links resolved); empty when unset. The policy
-/// checks paths against them and the runtime's local store refuses listings that follow a
-/// link out of them (ADR 0046 §3a).
-///
-/// # Errors
-/// `KRISHIV_INVALID_CONFIG_VALUE` naming the key for a root that is not an absolute path to
-/// an existing directory.
-pub(crate) fn allowed_roots(config: &Config) -> Result<Vec<PathBuf>, KrishivError> {
-    config_list(config, &IO_LOCAL_ALLOWED_ROOTS)
-        .into_iter()
-        .map(|root| {
-            let path = Path::new(&root);
-            std::fs::canonicalize(path)
-                .ok()
-                .filter(|c| path.is_absolute() && c.is_dir())
-                .ok_or_else(|| {
-                    KrishivError::from(KrishivInvalidConfigValue {
-                        value: format!("'{root}'"),
-                        key: format!("\"{}\"", IO_LOCAL_ALLOWED_ROOTS.key),
-                        reason: "expected absolute paths of existing directories, comma \
-                                 separated"
-                            .to_owned(),
-                    })
-                })
-        })
-        .collect()
-}
-
-/// `text` as an object-store store and key segments, if it is a plain object-store URL: a
-/// bucket, no credentials, no `%` (percent-encoded text would not be compared the way the
-/// store reads it), no query or fragment, and no `.`, `..` or empty key segment (the URL
-/// parser would fold them, so the text written would not be the key compared). A trailing
-/// `/` is allowed.
-fn parse_object_prefix(text: &str) -> Option<ObjectPrefix> {
-    if text.contains(['%', '?', '#']) {
-        return None;
-    }
-    let (_, rest) = text.split_once("://")?;
-    let key = rest.split_once('/').map_or("", |(_, key)| key);
-    let key = key.strip_suffix('/').unwrap_or(key);
-    if !key.is_empty() && key.split('/').any(|s| matches!(s, "" | "." | "..")) {
-        return None;
-    }
-    let url = parse_object_url(text).ok()?;
-    let segments = url
-        .key
-        .as_ref()
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect();
-    Some(ObjectPrefix {
-        store: url.store_id,
-        segments,
-    })
-}
-
-/// `path` with the symbolic links of its longest existing prefix resolved
-/// (the rest does not exist yet, so it holds no links).
-pub(crate) fn resolve_links(path: &Path) -> Option<PathBuf> {
-    let mut existing = path.to_path_buf();
-    let mut rest = Vec::new();
-    loop {
-        match std::fs::canonicalize(&existing) {
-            Ok(resolved) => return Some(rest.iter().rev().fold(resolved, |p, part| p.join(part))),
-            // Only a name that is not there at all is kept as written (below a file it cannot be there
-            // either; the write then fails as a storage error). A dangling link (its own entry exists), a
-            // link loop or an unreadable directory fails closed.
-            Err(e)
-                if absent(&e)
-                    && std::fs::symlink_metadata(&existing).is_err_and(|m| absent(&m)) => {}
-            Err(_) => return None,
-        }
-        // `None` for a missing part ending in `..`: it is not resolved against a directory that is not there.
-        rest.push(existing.file_name()?.to_owned());
-        if !existing.pop() {
-            return None;
-        }
-    }
-}
-
-/// Whether `e` says the entry is not there: missing, or below a file.
-fn absent(e: &std::io::Error) -> bool {
-    matches!(
-        e.kind(),
-        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-    )
-}
-
-impl AccessPolicy for PathPrefixPolicy {
-    fn version(&self) -> PolicyVersion {
-        self.inner.version()
-    }
-
-    fn check<'a>(
-        &'a self,
-        principal: &'a Principal,
-        securable: &'a Securable,
-        privilege: Privilege,
-    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
-        if let Securable::Path(path) = securable
-            && !self.allows(path)
-        {
-            return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
-                reason: "path outside the allowed roots".to_owned(),
-            })));
-        }
-        self.inner.check(principal, securable, privilege)
-    }
-
-    fn column_level(&self) -> bool {
-        self.inner.column_level()
-    }
-
-    fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
-        self.inner.denied(principal, securable, privilege);
     }
 }
 

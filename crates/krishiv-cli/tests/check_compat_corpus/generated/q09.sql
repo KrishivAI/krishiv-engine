@@ -1,7 +1,6 @@
 -- query 9: nope(1)
-SELECT legacy_fn_12(a, b) AS c1 FROM t9 WHERE x IN (1, 2) AND y = 'x(legacy_fn_12)';
-SELECT variant_explode_outer(a, b) AS c2 FROM t9 WHERE x IN (1, 2) AND y = 'x(variant_explode_outer)';
-SELECT legacy_fn_15(a, b) AS c3 FROM t9 WHERE x IN (1, 2) AND y = 'x(legacy_fn_15)';
-SELECT legacy_fn_14(a, b) AS c4 FROM t9 WHERE x IN (1, 2) AND y = 'x(legacy_fn_14)';
-SELECT legacy_fn_0(a, b) AS c5 FROM t9 WHERE x IN (1, 2) AND y = 'x(legacy_fn_0)';
-SELECT xpath_long(a, b) AS c6 FROM t9 WHERE x IN (1, 2) AND y = 'x(xpath_long)';
+SELECT array_compact(a, b) AS c1 FROM t9 WHERE x IN (1, 2) AND y = 'x(array_compact)';
+SELECT schema_of_variant_agg(a, b) AS c2 FROM t9 WHERE x IN (1, 2) AND y = 'x(schema_of_variant_agg)';
+SELECT ceil(a, b) AS c3 FROM t9 WHERE x IN (1, 2) AND y = 'x(ceil)';
+SELECT tinyint(a, b) AS c4 FROM t9 WHERE x IN (1, 2) AND y = 'x(tinyint)';
+SELECT array_except(a, b) AS c5 FROM t9 WHERE x IN (1, 2) AND y = 'x(array_except)';

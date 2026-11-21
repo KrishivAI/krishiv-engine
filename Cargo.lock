@@ -448,6 +448,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-flight"
+version = "60.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8709a798bd0825cb6207861aad09093133d64314c25569132dbc7f9f083879a5"
+dependencies = [
+ "arrow-arith 60.1.0",
+ "arrow-array 60.1.0",
+ "arrow-buffer 60.1.0",
+ "arrow-cast 60.1.0",
+ "arrow-data 60.1.0",
+ "arrow-ipc 60.1.0",
+ "arrow-ord 60.1.0",
+ "arrow-row",
+ "arrow-schema 60.1.0",
+ "arrow-select 60.1.0",
+ "arrow-string 60.1.0",
+ "base64 0.23.1",
+ "bytes",
+ "futures",
+ "prost",
+ "prost-types",
+ "tonic",
+ "tonic-prost",
+]
+
+[[package]]
 name = "arrow-ipc"
 version = "58.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2997,8 +3023,11 @@ dependencies = [
 name = "krishiv-catalogs"
 version = "0.2.1"
 dependencies = [
+ "arrow-array 60.1.0",
  "futures",
  "krishiv-common",
+ "krishiv-connectors-iceberg",
+ "krishiv-exec",
  "krishiv-plan",
  "krishiv-session",
  "krishiv-store",
@@ -3017,6 +3046,9 @@ dependencies = [
 name = "krishiv-cli"
 version = "0.2.1"
 dependencies = [
+ "arrow-array 60.1.0",
+ "arrow-flight",
+ "arrow-schema 60.1.0",
  "axum",
  "clap",
  "futures",
@@ -3025,6 +3057,7 @@ dependencies = [
  "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect-server",
+ "krishiv-flight-sql",
  "krishiv-functions",
  "krishiv-mcp",
  "krishiv-memory",
@@ -3039,6 +3072,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tonic",
 ]
 
 [[package]]
@@ -3059,6 +3093,7 @@ dependencies = [
  "arrow-schema 60.1.0",
  "insta",
  "krishiv-common",
+ "krishiv-kernels",
  "krishiv-plan",
  "krishiv-sql",
  "krishiv-types",
@@ -3083,6 +3118,7 @@ dependencies = [
  "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect",
+ "krishiv-connectors-iceberg",
  "krishiv-exec",
  "krishiv-memory",
  "krishiv-plan",
@@ -3124,6 +3160,7 @@ dependencies = [
  "arrow-data 60.1.0",
  "arrow-json",
  "arrow-ord 60.1.0",
+ "arrow-row",
  "arrow-schema 60.1.0",
  "arrow-select 60.1.0",
  "async-trait",
@@ -3137,11 +3174,13 @@ dependencies = [
  "krishiv-io",
  "krishiv-memory",
  "krishiv-optimizer",
+ "krishiv-plan",
  "krishiv-types",
  "object_store",
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
  "url",
 ]
 
@@ -3229,6 +3268,25 @@ dependencies = [
 [[package]]
 name = "krishiv-flight-sql"
 version = "0.2.1"
+dependencies = [
+ "arrow-array 60.1.0",
+ "arrow-flight",
+ "arrow-schema 60.1.0",
+ "futures",
+ "getrandom 0.4.3",
+ "krishiv-common",
+ "krishiv-connect-server",
+ "krishiv-exec",
+ "krishiv-memory",
+ "krishiv-session",
+ "krishiv-sql",
+ "krishiv-types",
+ "prost",
+ "tempfile",
+ "tokio",
+ "tonic",
+ "tracing",
+]
 
 [[package]]
 name = "krishiv-functions"
@@ -3479,6 +3537,7 @@ dependencies = [
  "prost-reflect",
  "prost-types",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-rustls",
@@ -3503,6 +3562,7 @@ dependencies = [
  "futures",
  "http",
  "insta",
+ "krishiv-alloc",
  "krishiv-common",
  "krishiv-connectors-delta",
  "krishiv-exec",
@@ -3573,7 +3633,9 @@ dependencies = [
  "krishiv-shuffle",
  "krishiv-sql",
  "krishiv-types",
+ "krishiv-udf-sdk",
  "object_store",
+ "parquet 60.1.0",
  "prost",
  "tempfile",
  "tokio",

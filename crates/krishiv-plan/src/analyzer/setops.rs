@@ -905,6 +905,7 @@ impl Resolver<'_> {
         params: &[Arc<Expr>],
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
+        self.saw_hint = true;
         let upper = name.to_ascii_uppercase();
         let c = self.child(input, env)?;
         if PARTITIONING_HINTS.contains(&upper.as_str()) {

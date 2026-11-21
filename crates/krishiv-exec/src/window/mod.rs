@@ -62,6 +62,7 @@
 //! Window functions are defined for insert-only input: weights other than
 //! 1 are `KRISHIV_UNSUPPORTED_FEATURE` (incremental windows are P4).
 
+mod counter_diff;
 mod disk;
 mod eval;
 mod frames;
@@ -149,6 +150,18 @@ pub enum WindowFunction {
         /// `IGNORE NULLS`.
         ignore_nulls: bool,
         /// The input's (and the result's) type.
+        data_type: DataType,
+    },
+    /// `counter_diff(counter[, start_time])` (Spark 4.3): over the partition's rows in order, the counter's
+    /// increase since the previous row with a counter, NULL on the first such row, on a NULL counter and after
+    /// a reset (the counter fell, or the start time advanced); a negative counter or a start time that fell is
+    /// an error. The frame is always `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
+    CounterDiff {
+        /// The counter column (numeric).
+        counter: usize,
+        /// The start time column (`TIMESTAMP` or `TIMESTAMP_NTZ`).
+        start_time: Option<usize>,
+        /// The counter's (and the result's) type.
         data_type: DataType,
     },
 }
@@ -265,6 +278,7 @@ crate::physical::data::plan_data!(
         Aggregate(aggregate),
         Offset { input, offset, default, ignore_nulls, data_type },
         NthValue { input, n, ignore_nulls, data_type },
+        CounterDiff { counter, start_time, data_type },
     }
 );
 crate::physical::data::plan_data!(
@@ -341,7 +355,8 @@ impl WindowFunctionPlan {
                 (a.result_type()?, a.function != AggregateFunction::Count)
             }
             WindowFunction::Offset { data_type, .. }
-            | WindowFunction::NthValue { data_type, .. } => (data_type.clone(), true),
+            | WindowFunction::NthValue { data_type, .. }
+            | WindowFunction::CounterDiff { data_type, .. } => (data_type.clone(), true),
         })
     }
 

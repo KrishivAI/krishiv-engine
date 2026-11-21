@@ -27,6 +27,7 @@ use arrow_schema::{DataType, Field, FieldRef};
 use krishiv_common::error::{ConflictingDirectoryStructures, ConflictingPartitionColumnNames};
 use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, cast};
 use object_store::path::Path;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::{DEFAULT_PARTITION, unsupported};
@@ -83,47 +84,140 @@ pub fn parse_segment(dir: &str) -> Option<Segment> {
     Some((unescape_partition_value(name), value))
 }
 
+/// One listed file's directories, as Spark 4.2.0's partition discovery sees them: the leaf directory holding
+/// it, the leaf's base path (the leaf without its `name=value` segments), both as Spark's errors print them
+/// (`file:/a/b`), and the segments.
+#[derive(Debug, Clone)]
+pub struct Leaf<'a> {
+    /// The directory holding the file.
+    pub leaf: String,
+    /// The leaf without its segments.
+    pub base: String,
+    /// The `name=value` segments from the base down to the leaf.
+    pub segments: &'a [Segment],
+}
+
+/// Which of the listed `files` (in listing order) Spark 4.2.0's `PartitioningUtils.parsePartitions` reads,
+/// checking the layout as it does per leaf directory. When any leaf is partitioned: the base paths of all
+/// leaves, lower-cased, must be one, else `CONFLICTING_DIRECTORY_STRUCTURES` (two read paths each with
+/// partition directories), a check skipped when `ignore_invalid_partition_paths` (the read's
+/// `ignoreInvalidPartitionPaths`, else `spark.sql.files.ignoreInvalidPartitionPaths`); then the partitioned leaves
+/// must name the same columns (ignoring case, as Java's `String.toLowerCase` folds it, unless `case_sensitive`),
+/// else `CONFLICTING_PARTITION_COLUMN_NAMES` (partition directories of two depths, or other
+/// names); the files of a leaf with no segments (beside the partition directories) are then not read. With no
+/// partitioned leaf every file is read.
+///
+/// Spark lists the leaves in hash order, so its messages order their lines differently between runs; here
+/// they follow the listing's path order, each parameter in Spark's shape.
+///
+/// # Errors
+/// The two errors above.
+pub fn resolve_layout(
+    files: &[Leaf<'_>],
+    case_sensitive: bool,
+    ignore_invalid_partition_paths: bool,
+) -> Result<Vec<bool>> {
+    if files.iter().all(|f| f.segments.is_empty()) {
+        return Ok(vec![true; files.len()]);
+    }
+    // The leaves in listing order, once each.
+    let mut seen: HashSet<&str> = HashSet::new();
+    let leaves: Vec<&Leaf<'_>> = files
+        .iter()
+        .filter(|f| seen.insert(f.leaf.as_str()))
+        .collect();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut bases: Vec<String> = Vec::new();
+    for leaf in &leaves {
+        let base = leaf.base.to_lowercase();
+        if seen.insert(base.clone()) {
+            bases.push(base);
+        }
+    }
+    if !ignore_invalid_partition_paths && bases.len() != 1 {
+        return Err(ConflictingDirectoryStructures {
+            discovered_base_paths: format!("\n\t{}\n", bases.join("\n\t")),
+        }
+        .into());
+    }
+    let names = |segs: &[Segment]| -> Vec<String> {
+        segs.iter()
+            .map(|(n, _)| {
+                if case_sensitive {
+                    n.clone()
+                } else {
+                    n.to_lowercase()
+                }
+            })
+            .collect()
+    };
+    let partitioned: Vec<&Leaf<'_>> = leaves
+        .into_iter()
+        .filter(|l| !l.segments.is_empty())
+        .collect();
+    let first = partitioned
+        .first()
+        .map(|l| names(l.segments))
+        .unwrap_or_default();
+    if partitioned.iter().any(|l| names(l.segments) != first) {
+        // Spark's `conflictingPartitionColumnsError`: the distinct lists as written, then the leaves of each,
+        // the shorter lists first.
+        let written =
+            |l: &Leaf<'_>| -> Vec<String> { l.segments.iter().map(|(n, _)| n.clone()).collect() };
+        let mut lists: Vec<Vec<String>> = Vec::new();
+        for leaf in &partitioned {
+            let list = written(leaf);
+            if !lists.contains(&list) {
+                lists.push(list);
+            }
+        }
+        let shown: Vec<String> = lists
+            .iter()
+            .enumerate()
+            .map(|(i, l)| format!("Partition column name list #{i}: {}", l.join(", ")))
+            .collect();
+        let mut by_length: Vec<&Vec<String>> = lists.iter().collect();
+        by_length.sort_by_key(|l| l.len());
+        let mut paths = String::new();
+        for list in by_length {
+            for leaf in partitioned.iter().filter(|l| written(l) == *list) {
+                paths.push_str("\n\t");
+                paths.push_str(&leaf.leaf);
+            }
+        }
+        return Err(ConflictingPartitionColumnNames {
+            distinct_part_col_lists: format!("\n\t{}\n", shown.join("\n\t")),
+            suspicious_paths: paths,
+        }
+        .into());
+    }
+    Ok(files.iter().map(|f| !f.segments.is_empty()).collect())
+}
+
 /// The partition columns of a read whose files have the segments `files`
 /// (one list per file), typed as Spark infers them when `infer`, else all
 /// strings. No files, or files without segments, have no partition
-/// columns.
+/// columns. The files are those [`resolve_layout`] keeps (all with the same columns); the column names are
+/// the first file's.
 ///
 /// # Errors
-/// `CONFLICTING_DIRECTORY_STRUCTURES` when files differ in depth,
-/// `CONFLICTING_PARTITION_COLUMN_NAMES` when they differ in names, and
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a timestamp-shaped value.
+/// `INTERNAL_ERROR` when files differ in their columns (callers resolve the layout first, [`resolve_layout`]),
+/// and `KRISHIV_UNSUPPORTED_FEATURE` for a timestamp-shaped value.
 pub fn partition_columns(files: &[(String, Vec<Segment>)], infer: bool) -> Result<Vec<FieldRef>> {
-    let Some((first_path, first)) = files.first() else {
+    let Some((_, first)) = files.first() else {
         return Ok(Vec::new());
     };
-    for (path, segs) in files {
-        if segs.len() != first.len() {
-            return Err(ConflictingDirectoryStructures {
-                discovered_base_paths: format!("{first_path}\n{path}"),
-            }
-            .into());
-        }
-        if segs
-            .iter()
-            .zip(first)
-            .any(|(a, b)| !a.0.eq_ignore_ascii_case(&b.0))
-        {
-            let lists = |s: &[Segment]| {
-                s.iter()
-                    .map(|(n, _)| n.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-            return Err(ConflictingPartitionColumnNames {
-                distinct_part_col_lists: format!(
-                    "\tPartition column name list #0: {}\n\tPartition column name list #1: {}",
-                    lists(first),
-                    lists(segs)
-                ),
-                suspicious_paths: format!("\t{first_path}\n\t{path}"),
-            }
-            .into());
-        }
+    if files.iter().any(|(_, segs)| {
+        segs.len() != first.len()
+            || segs
+                .iter()
+                .zip(first)
+                .any(|(a, b)| a.0.to_lowercase() != b.0.to_lowercase())
+    }) {
+        return Err(internal(
+            "partition columns of files with different partition directories (the layout is resolved first)"
+                .to_owned(),
+        ));
     }
     let mut fields = Vec::with_capacity(first.len());
     for (i, (name, _)) in first.iter().enumerate() {
@@ -640,14 +734,158 @@ mod tests {
     }
 
     #[test]
-    fn files_must_agree_on_depth_and_names() {
-        let a = ("a".to_owned(), vec![seg("k=1")]);
-        let b = ("b".to_owned(), vec![seg("k=1"), seg("j=2")]);
-        let e = partition_columns(&[a.clone(), b], true).unwrap_err();
-        assert_eq!(e.error_class().name(), "CONFLICTING_DIRECTORY_STRUCTURES");
-        let c = ("c".to_owned(), vec![seg("j=1")]);
-        let e = partition_columns(&[a, c], true).unwrap_err();
+    fn layouts_are_resolved_per_leaf_directory_as_spark_does() {
+        let leaf = |leaf: &str, base: &str, segs: &'static [Segment]| Leaf {
+            leaf: leaf.to_owned(),
+            base: base.to_owned(),
+            segments: segs,
+        };
+        let params = |e: &krishiv_common::error::KrishivError| -> Vec<(String, String)> {
+            e.message_parameters()
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect()
+        };
+        static K1: std::sync::LazyLock<Vec<Segment>> =
+            std::sync::LazyLock::new(|| vec![seg("k=1")]);
+        static K1J2: std::sync::LazyLock<Vec<Segment>> =
+            std::sync::LazyLock::new(|| vec![seg("k=1"), seg("j=2")]);
+        static J1: std::sync::LazyLock<Vec<Segment>> =
+            std::sync::LazyLock::new(|| vec![seg("j=1")]);
+        static K2: std::sync::LazyLock<Vec<Segment>> =
+            std::sync::LazyLock::new(|| vec![seg("K=2")]);
+        // Two depths under one base: the column lists conflict, shorter lists' leaves first.
+        let e = resolve_layout(
+            &[
+                leaf("file:/p/k=1/j=2", "file:/p", &K1J2),
+                leaf("file:/p/k=1", "file:/p", &K1),
+            ],
+            false,
+            false,
+        )
+        .unwrap_err();
         assert_eq!(e.error_class().name(), "CONFLICTING_PARTITION_COLUMN_NAMES");
+        assert_eq!(
+            params(&e),
+            [
+                (
+                    "distinctPartColLists".to_owned(),
+                    "\n\tPartition column name list #0: k, j\n\tPartition column name list #1: k\n"
+                        .to_owned()
+                ),
+                (
+                    "suspiciousPaths".to_owned(),
+                    "\n\tfile:/p/k=1\n\tfile:/p/k=1/j=2".to_owned()
+                ),
+            ]
+        );
+        // Other names at one depth.
+        let e = resolve_layout(
+            &[
+                leaf("file:/p/j=1", "file:/p", &J1),
+                leaf("file:/p/k=1", "file:/p", &K1),
+            ],
+            false,
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(e.error_class().name(), "CONFLICTING_PARTITION_COLUMN_NAMES");
+        // Two bases: the directory structures conflict, base paths lower-cased.
+        let e = resolve_layout(
+            &[
+                leaf("file:/A/k=1", "file:/A", &K1),
+                leaf("file:/b/k=1", "file:/b", &K1),
+            ],
+            false,
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(e.error_class().name(), "CONFLICTING_DIRECTORY_STRUCTURES");
+        assert_eq!(
+            params(&e),
+            [(
+                "discoveredBasePaths".to_owned(),
+                "\n\tfile:/a\n\tfile:/b\n".to_owned()
+            )]
+        );
+        // Files beside the partition directories are not read; one leaf's files count once.
+        let read = resolve_layout(
+            &[
+                leaf("file:/p", "file:/p", &[]),
+                leaf("file:/p/k=1", "file:/p", &K1),
+                leaf("file:/p/k=1", "file:/p", &K1),
+            ],
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(read, [false, true, true]);
+        // Names compare without case unless case-sensitive.
+        let mixed = [
+            leaf("file:/p/k=1", "file:/p", &K1),
+            leaf("file:/p/K=2", "file:/p", &K2),
+        ];
+        assert_eq!(resolve_layout(&mixed, false, false).unwrap(), [true, true]);
+        assert!(resolve_layout(&mixed, true, false).is_err());
+        // `ignoreInvalidPartitionPaths` skips the base check only: two roots with the same columns are read, the
+        // column lists still have to agree, and files beside the partition directories are still not read.
+        let two_roots = [
+            leaf("file:/a/k=1", "file:/a", &K1),
+            leaf("file:/b/k=1", "file:/b", &K1),
+        ];
+        assert_eq!(
+            resolve_layout(&two_roots, false, true).unwrap(),
+            [true, true]
+        );
+        let e = resolve_layout(
+            &[
+                leaf("file:/a/j=1", "file:/a", &J1),
+                leaf("file:/b/k=1", "file:/b", &K1),
+            ],
+            false,
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(e.error_class().name(), "CONFLICTING_PARTITION_COLUMN_NAMES");
+        assert_eq!(
+            resolve_layout(
+                &[
+                    leaf("file:/p", "file:/p", &[]),
+                    leaf("file:/p/k=1", "file:/p", &K1),
+                ],
+                false,
+                true,
+            )
+            .unwrap(),
+            [false, true]
+        );
+        // Names fold as Java's `toLowerCase` does, beyond ASCII: `É` and `é` are one column.
+        static UPPER: std::sync::LazyLock<Vec<Segment>> =
+            std::sync::LazyLock::new(|| vec![seg("\u{c9}=1")]);
+        static LOWER: std::sync::LazyLock<Vec<Segment>> =
+            std::sync::LazyLock::new(|| vec![seg("\u{e9}=2")]);
+        let accented = [
+            leaf("file:/p/\u{c9}=1", "file:/p", &UPPER),
+            leaf("file:/p/\u{e9}=2", "file:/p", &LOWER),
+        ];
+        assert_eq!(
+            resolve_layout(&accented, false, false).unwrap(),
+            [true, true]
+        );
+        assert!(resolve_layout(&accented, true, false).is_err());
+        // No partitioned leaf: everything is read.
+        assert_eq!(
+            resolve_layout(
+                &[
+                    leaf("file:/a", "file:/a", &[]),
+                    leaf("file:/b", "file:/b", &[])
+                ],
+                false,
+                false
+            )
+            .unwrap(),
+            [true, true]
+        );
     }
 
     #[test]
@@ -656,6 +894,14 @@ mod tests {
         let b = ("b".to_owned(), vec![seg("Year=2")]);
         let cols = partition_columns(&[a, b], true).unwrap();
         assert_eq!(cols[0].name(), "year");
+    }
+
+    #[test]
+    fn names_match_regardless_of_non_ascii_case() {
+        let a = ("a".to_owned(), vec![seg("\u{c9}=1")]);
+        let b = ("b".to_owned(), vec![seg("\u{e9}=2")]);
+        let cols = partition_columns(&[a, b], true).unwrap();
+        assert_eq!(cols[0].name(), "\u{c9}");
     }
 
     #[test]

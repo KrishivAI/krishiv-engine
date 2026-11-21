@@ -120,11 +120,13 @@ pub(crate) enum Kind {
     IntList,
     /// `ARRAY<STRUCT<le: DOUBLE, count: BIGINT>>`.
     Buckets,
+    /// `ARRAY<STRUCT<code: STRING, node_id: INT, operator_id: INT, message: STRING>>`.
+    Hints,
 }
 
 /// A table's columns: `(name, kind, nullable)`.
 fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
-    use Kind::{Buckets, Double, Flag, Int, IntList, Labels, Long, Text, Time};
+    use Kind::{Buckets, Double, Flag, Hints, Int, IntList, Labels, Long, Text, Time};
     Some(match table.to_ascii_lowercase().as_str() {
         "capabilities" => vec![
             ("worker_id", Text, false),
@@ -234,6 +236,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("error_message", Text, true),
             ("partial", Flag, false),
             ("delegated_by", Text, true),
+            ("hints", Hints, true),
         ],
         "partition_advice" => crate::partition_advice::layout(),
         "resource_groups" => crate::system_groups::layout(),
@@ -262,7 +265,8 @@ pub(crate) fn columns(table: &str) -> Option<Vec<TableColumn>> {
                     Kind::IntList => DataType::Array(
                         krishiv_types::ArrayType::new(DataType::Integer, false).into(),
                     ),
-                    Kind::Buckets => buckets_type(),
+                    Kind::Buckets => columns::buckets_type(),
+                    Kind::Hints => columns::hints_type(),
                 },
                 nullable,
                 char_varchar: None,
@@ -274,21 +278,6 @@ pub(crate) fn columns(table: &str) -> Option<Vec<TableColumn>> {
 /// `MAP<STRING, STRING>`.
 fn labels_type() -> DataType {
     DataType::Map(krishiv_types::MapType::new(DataType::String, DataType::String, true).into())
-}
-
-/// `ARRAY<STRUCT<le: DOUBLE, count: BIGINT>>`.
-fn buckets_type() -> DataType {
-    use krishiv_types::{ArrayType, StructField, StructType};
-    DataType::Array(
-        ArrayType::new(
-            DataType::Struct(StructType::new([
-                StructField::new("le", DataType::Double, false),
-                StructField::new("count", DataType::Long, false),
-            ])),
-            false,
-        )
-        .into(),
-    )
 }
 
 /// An `ARRAY<INT>` column.
@@ -324,31 +313,6 @@ pub(crate) fn labels_column(rows: &[&[(String, String)]]) -> ArrayRef {
     let offsets = OffsetBuffer::from_lengths(rows.iter().map(|r| r.len()));
     let struct_array = StructArray::new(fields, vec![Arc::new(keys), Arc::new(vals)], None);
     Arc::new(MapArray::new(entries, offsets, struct_array, None, false))
-}
-
-/// An `ARRAY<STRUCT<le, count>>` column; a row with `None` is NULL.
-fn buckets_column(rows: &[Option<&[(f64, i64)]>]) -> ArrayRef {
-    use arrow_array::{Float64Array, ListArray, StructArray};
-    use arrow_buffer::{NullBuffer, OffsetBuffer};
-    let ArrowType::List(element) = buckets_type().to_arrow() else {
-        unreachable!("an array type maps to a list")
-    };
-    let ArrowType::Struct(fields) = element.data_type().clone() else {
-        unreachable!("the element is a struct")
-    };
-    let les =
-        Float64Array::from_iter_values(rows.iter().flatten().flat_map(|r| r.iter().map(|b| b.0)));
-    let counts =
-        Int64Array::from_iter_values(rows.iter().flatten().flat_map(|r| r.iter().map(|b| b.1)));
-    let offsets = OffsetBuffer::from_lengths(rows.iter().map(|r| r.map_or(0, <[_]>::len)));
-    let values = StructArray::new(fields, vec![Arc::new(les), Arc::new(counts)], None);
-    let valid = NullBuffer::from_iter(rows.iter().map(Option::is_some));
-    Arc::new(ListArray::new(
-        element,
-        offsets,
-        Arc::new(values),
-        Some(valid),
-    ))
 }
 
 /// Rows of text cells, column by column.
@@ -462,7 +426,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             Arc::new(Float64Array::from_iter(rows.iter().map(|r| r.value))),
             long(rows.iter().map(|r| r.count)),
             Arc::new(Float64Array::from_iter(rows.iter().map(|r| r.sum))),
-            buckets_column(&buckets),
+            columns::buckets_column(&buckets),
             Arc::new(TimestampMicrosecondArray::from_value(now, rows.len()).with_timezone("UTC")),
         ];
     }
@@ -579,6 +543,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             // One process, one worker: every row is whole (design §2.7 for the merged rows).
             Arc::new(BooleanArray::from_iter(rows.iter().map(|_| Some(false)))),
             text(rows.iter().map(|r| r.delegated_by.as_deref())),
+            columns::hints_column(&rows.iter().map(|r| r.hints.as_deref()).collect::<Vec<_>>()),
         ];
     }
     let rows = capability_rows();
@@ -729,6 +694,9 @@ pub(crate) struct QueryRow {
     /// Why the query was cancelled ([`crate::CancelReason::as_str`]), for a
     /// query cancelled with a reason; `state` stays `cancelled`.
     pub(crate) cancel_reason: Option<&'static str>,
+    /// The advisor's hints for a finished query; `None` for one that did not finish or ran with
+    /// `krishiv.advisor.enabled=false` (`Some` of none: finished, nothing to say).
+    pub(crate) hints: Option<Arc<[HintRow]>>,
 }
 
 /// One operator of a finished query, as `system.operators` lists it.
@@ -824,6 +792,8 @@ pub(crate) struct Finished<'a> {
     pub(crate) operators: Vec<OperatorRow>,
     /// Counters that need the query's metrics; `None` when it never ran.
     pub(crate) totals: Option<Totals>,
+    /// The advisor's hints; `None` when none was computed.
+    pub(crate) hints: Option<Vec<HintRow>>,
 }
 
 /// The query-wide counters of a finished query.
@@ -832,20 +802,22 @@ pub(crate) struct Totals {
     pub(crate) workload_class: &'static str,
     pub(crate) cpu_ns: i64,
     pub(crate) rows_produced: Option<i64>,
-    /// The query's own I/O since it started (its I/O context; design P2-E1 R3).
-    pub(crate) bytes_read: i64,
+    /// The query's own I/O since it started (its I/O context; design P2-E1 R3). The totals in an
+    /// `Option` are those of the plan's scans and pipelines: `None` for a query whose operators are
+    /// withheld (`QueryEnv::withhold_profile`, review r2 item 5).
+    pub(crate) bytes_read: Option<i64>,
     /// Rows the scans of the plan produced (not a breaker's output side).
-    pub(crate) rows_read: i64,
+    pub(crate) rows_read: Option<i64>,
     /// Rows the file write sinks of the plan took.
     pub(crate) rows_written: i64,
     /// Files its scans opened.
-    pub(crate) files_read: i64,
+    pub(crate) files_read: Option<i64>,
     /// Files the query's writers completed.
     pub(crate) files_written: i64,
     pub(crate) bytes_written: i64,
-    pub(crate) spill_bytes: i64,
-    pub(crate) spill_files: i64,
-    pub(crate) pipelines: i64,
+    pub(crate) spill_bytes: Option<i64>,
+    pub(crate) spill_files: Option<i64>,
+    pub(crate) pipelines: Option<i64>,
     pub(crate) workers: i64,
 }
 
@@ -1017,6 +989,7 @@ impl QueryLog {
             pipelines: None,
             workers: None,
             cancel_reason: None,
+            hints: None,
         }
     }
 
@@ -1111,6 +1084,7 @@ impl QueryLog {
                 error_class,
                 operators: Vec::new(),
                 totals: None,
+                hints: None,
             },
         );
     }
@@ -1168,6 +1142,7 @@ impl QueryLog {
                 error_class: None,
                 operators: Vec::new(),
                 totals: None,
+                hints: None,
             },
         );
         id
@@ -1196,6 +1171,7 @@ impl QueryLog {
                 error_class: (state != "cancelled").then_some(class),
                 operators: Vec::new(),
                 totals: None,
+                hints: None,
             },
         );
         self.note_error(&id, error);
@@ -1281,7 +1257,8 @@ pub(crate) fn provider(
                         krishiv_types::ArrayType::new(DataType::Integer, false).into(),
                     )
                     .to_arrow(),
-                    Kind::Buckets => buckets_type().to_arrow(),
+                    Kind::Buckets => columns::buckets_type().to_arrow(),
+                    Kind::Hints => columns::hints_type().to_arrow(),
                 };
                 Field::new(*name, ty, *nullable)
             })
@@ -1430,6 +1407,11 @@ impl QueryRow {
             + opt(&self.text)
             + opt(&self.error_class)
             + opt(&self.error_message)
+            + self.hints.as_deref().map_or(0, |h| {
+                h.iter()
+                    .map(|h| size_of::<HintRow>() + h.message.len())
+                    .sum::<usize>()
+            })
             + operators
     }
 }
@@ -1503,6 +1485,14 @@ impl Session {
             ),
         }
         .into())
+    }
+
+    /// Whether `name` (any letter case) names a catalog this session sees: the session catalog,
+    /// `system`, or a declared catalog visible to its principal (a hidden one is absent).
+    pub(crate) fn is_catalog_name(&self, name: &str) -> bool {
+        name.eq_ignore_ascii_case(crate::catalog::CATALOG)
+            || is_system(name)
+            || self.declared_catalogs().canonical(name).is_some()
     }
 
     /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none,
@@ -1595,8 +1585,10 @@ impl Session {
     }
 }
 
+mod columns;
 #[cfg(test)]
 mod tests;
+pub(crate) use columns::HintRow;
 
 mod caches;
 mod capabilities;

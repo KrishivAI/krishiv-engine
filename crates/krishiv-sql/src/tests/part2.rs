@@ -253,7 +253,10 @@ fn set_errors_follow_spark() {
     let e = fail("CREATE TEMPORARY FUNCTION a.f AS 'x.Y'");
     assert_eq!(e.error.error_class(), ErrorClass::InvalidTempObjQualifier);
     let e = fail("CREATE TEMPORARY FUNCTION f AS 'x.Y' USING JAR 'a.jar'");
-    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::KrishivJvmFunctionUnsupported
+    );
     // A missing zone, or text that is no zone, is the catch-all alternative.
     let e = fail("SET TIME ZONE");
     assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0045);

@@ -950,3 +950,112 @@ fn v1_tables_merge() {
     assert_eq!(t.m.format_version(), FormatVersion::V1);
     t.check(&["1|1|a", "2|2|b"]);
 }
+
+/// A merge whose bin holds a manifest written before `int -> long` on the
+/// identity partition column (review 36b2b round 2, finding 1): the old
+/// 4-byte tuple is written at the promoted `long` in the merged manifest,
+/// with the same value, rather than refused by the writer.
+#[test]
+fn a_merge_widens_pre_promotion_partition_tuples() {
+    use std::sync::Arc;
+
+    use arrow_array::{Int32Array, Int64Array};
+    use iceberg::spec::{Datum, Literal, PrimitiveType, Struct};
+
+    use super::evolution_tests::{File, evolved_at, opt, schema};
+    use super::table::IcebergTable;
+    let env = env();
+    let location = evolved_at(
+        &env,
+        &[
+            schema(vec![
+                opt(1, "v", PrimitiveType::Int),
+                opt(2, "id", PrimitiveType::Long),
+            ]),
+            schema(vec![
+                opt(1, "v", PrimitiveType::Long),
+                opt(2, "id", PrimitiveType::Long),
+            ]),
+        ],
+        vec![
+            File::new(
+                "old.parquet",
+                vec![id_field("v", A::Int32, 1), id_field("id", A::Int64, 2)],
+                vec![
+                    Arc::new(Int32Array::from(vec![5, 5])),
+                    Arc::new(Int64Array::from(vec![1, 2])),
+                ],
+            )
+            .bounds(1, Datum::int(5), Datum::int(5))
+            .in_partition(Struct::from_iter([Some(Literal::int(5))])),
+        ],
+        Some("v"),
+    );
+    let m = env
+        .rt
+        .block_on(IcebergTable::load(&env.reg, &location, "db", "t"))
+        .unwrap()
+        .table
+        .metadata()
+        .clone();
+    let path = env.at("new.parquet");
+    let size = write_parquet(
+        &path,
+        &batch(
+            vec![id_field("v", A::Int64, 1), id_field("id", A::Int64, 2)],
+            vec![
+                Arc::new(Int64Array::from(vec![6])),
+                Arc::new(Int64Array::from(vec![3])),
+            ],
+        ),
+    );
+    let new_file = DataFileBuilder::default()
+        .content(DataContentType::Data)
+        .file_path(path)
+        .file_format(DataFileFormat::Parquet)
+        .file_size_in_bytes(size)
+        .record_count(1)
+        .partition(Struct::from_iter([Some(Literal::long(6))]))
+        .partition_spec_id(0)
+        .build()
+        .unwrap();
+    let mut t = Table {
+        env,
+        m,
+        loc: location,
+        n: 0,
+    };
+    t.set(&[(MANIFEST_MIN_MERGE_COUNT, "2")]);
+    let mut new = t.write_files(vec![(0, new_file)], 2001);
+    t.commit(&mut new);
+    let listed = t.listed();
+    assert_eq!(listed.len(), 1, "the two manifests merge");
+    assert_eq!(t.counts(), ["1", "0", "1"]);
+    let io = t.env.reg.file_io();
+    let bytes = t
+        .env
+        .rt
+        .block_on(async { io.new_input(&listed[0].manifest_path).unwrap().read().await })
+        .unwrap();
+    let (entries, _) = Manifest::parse_avro(&bytes).unwrap().into_parts();
+    let mut got: Vec<(String, Struct)> = entries
+        .iter()
+        .map(|e| (name(e.file_path()), e.data_file().partition().clone()))
+        .collect();
+    got.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        got,
+        [
+            (
+                "new.parquet".to_owned(),
+                Struct::from_iter([Some(Literal::long(6))])
+            ),
+            (
+                "old.parquet".to_owned(),
+                Struct::from_iter([Some(Literal::long(5))])
+            ),
+        ]
+    );
+    let files = iceberg_rust_files(&t.env, &t.m, &t.loc);
+    assert_eq!(files.len(), 2);
+}

@@ -26,9 +26,9 @@
 //!
 //! | Writer feature | P3 write |
 //! |---|---|
-//! | `appendOnly`, `changeDataFeed`, `deletionVectors`, `domainMetadata`, `inCommitTimestamp`, `timestampNtz`, `typeWidening`, `typeWidening-preview`, `v2Checkpoint`, `vacuumProtocolCheck` | yes |
+//! | `appendOnly`, `changeDataFeed`, `columnMapping`, `deletionVectors`, `domainMetadata`, `inCommitTimestamp`, `timestampNtz`, `typeWidening`, `typeWidening-preview`, `v2Checkpoint`, `vacuumProtocolCheck` | yes (`columnMapping`: the writer writes physical names and Parquet field ids, [`crate::write`]) |
 //! | `invariants` | yes while no column carries `delta.invariants` |
-//! | `columnMapping`, `variantType`, `variantType-preview` | refused until the data-file writer sets field ids and physical names and passes the Variant round trip |
+//! | `variantType`, `variantType-preview` | refused until the writer passes the Variant round trip |
 //! | anything else | refused |
 //!
 //! A refusal is `DELTA_UNSUPPORTED_FEATURES_FOR_WRITE` (56038), naming every refused feature in
@@ -40,7 +40,7 @@
 //! - When the kernel refuses an unsupported reader feature itself (at snapshot load, before this
 //!   list runs) it stops at the first one, so only that one is named; delta-spark names all.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use delta_kernel::schema::{DataType, StructType};
 use delta_kernel::{KernelError, Snapshot};
@@ -232,6 +232,7 @@ fn unsupported_for_read(table: &str, features: &[&str]) -> KrishivError {
 pub const WRITABLE: &[&str] = &[
     "appendOnly",
     "changeDataFeed",
+    "columnMapping",
     "deletionVectors",
     "domainMetadata",
     "inCommitTimestamp",
@@ -330,6 +331,100 @@ pub fn check_write(table: &str, protocol: &WriteProtocol) -> Result<(), KrishivE
         }
         .into()),
     }
+}
+
+/// Checks the protocol a create will write against the writer allow-list, before the create
+/// transaction is built and before any file is written. The kernel's create admits features
+/// Krishiv's writer does not honour (`rowTracking`, `variantType`, `icebergCompatV2`, ...), so
+/// without this check Krishiv would create a table it then refuses to write. The features are
+/// the ones the kernel's create (delta_kernel 0.30) enables from `properties` and `schema`: each
+/// `delta.feature.<name>` signal, the enablement properties `delta.enableRowTracking`,
+/// `delta.enableIcebergCompatV2` and `delta.enableIcebergCompatV3` (with the row tracking
+/// that V3 implies), and `variantType` for a Variant column at any depth.
+///
+/// # Errors
+/// `DELTA_UNSUPPORTED_FEATURES_FOR_WRITE` (56038) naming each such feature outside
+/// [`WRITABLE`].
+pub fn check_create(
+    table: &str,
+    properties: &BTreeMap<String, String>,
+    schema: &StructType,
+) -> Result<(), KrishivError> {
+    let mut features: Vec<&str> = Vec::new();
+    let mut add = |f: &'static str| {
+        if !features.contains(&f) {
+            features.push(f);
+        }
+    };
+    let enabled = |key: &str| properties.get(key).is_some_and(|v| v == "true");
+    for key in properties.keys() {
+        if let Some(name) = key.strip_prefix("delta.feature.")
+            && let Some(known) = CREATE_FEATURES.iter().find(|f| **f == name)
+        {
+            add(known);
+            // The kernel's create adds Variant support beside shredding.
+            if name == "variantShredding" {
+                add("variantType");
+            }
+        }
+    }
+    if enabled("delta.enableRowTracking") {
+        add("rowTracking");
+    }
+    if enabled("delta.enableIcebergCompatV2") {
+        add("icebergCompatV2");
+    }
+    if enabled("delta.enableIcebergCompatV3") {
+        add("icebergCompatV3");
+        add("rowTracking");
+    }
+    if has_variant(schema) {
+        add("variantType");
+    }
+    let unsupported: Vec<&str> = features
+        .into_iter()
+        .filter(|f| !WRITABLE.contains(f))
+        .collect();
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        Err(unsupported_for_write(table, &unsupported))
+    }
+}
+
+/// The features delta_kernel 0.30's create accepts as a `delta.feature.<name>` signal
+/// (`ALLOWED_DELTA_FEATURES`); the kernel refuses any other name itself.
+const CREATE_FEATURES: &[&str] = &[
+    "domainMetadata",
+    "columnMapping",
+    "inCommitTimestamp",
+    "vacuumProtocolCheck",
+    "catalogManaged",
+    "deletionVectors",
+    "v2Checkpoint",
+    "appendOnly",
+    "changeDataFeed",
+    "typeWidening",
+    "rowTracking",
+    "variantType",
+    "variantShredding",
+    "invariants",
+    "materializePartitionColumns",
+    "icebergCompatV2",
+    "icebergCompatV3",
+];
+
+fn has_variant(schema: &StructType) -> bool {
+    fn in_type(t: &DataType) -> bool {
+        match t {
+            DataType::Variant(_) => true,
+            DataType::Struct(s) => has_variant(s),
+            DataType::Array(a) => in_type(a.element_type()),
+            DataType::Map(m) => in_type(m.key_type()) || in_type(m.value_type()),
+            _ => false,
+        }
+    }
+    schema.fields().any(|f| in_type(f.data_type()))
 }
 
 /// The writer protocol versions Krishiv writes (`<supportedWriters>` of a write refusal).

@@ -41,7 +41,10 @@
 //!   and the format and UUID checks, before the next attempt is built; a check
 //!   that fires is `KRISHIV_ICEBERG_COMMIT_CONFLICT` naming the intervening
 //!   snapshot and the check, with §7.4's cleanup. [`commit_append`] passes
-//!   [`Validation::none`] and walks nothing.
+//!   [`Validation::none`] and walks nothing. A validation with an explicit
+//!   [`Validation::start`] (INSERT OVERWRITE) validates from there, before the
+//!   first attempt too. An overwrite whose row filter matches a data file in
+//!   part (`filter.rs`) ends as a conflict (check `rows to delete`).
 //! - **Budget**, Iceberg's table properties and defaults (apache-iceberg
 //!   1.12.0 `TableProperties`): `COMMIT_NUM_RETRIES` (4: five requests, resends
 //!   and new attempts alike), `COMMIT_MIN_RETRY_WAIT_MS` (100),
@@ -101,7 +104,8 @@ use iceberg::spec::{FormatVersion, Snapshot, TableMetadata};
 use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{
     KrishivError, KrishivIcebergCommitConflict, KrishivIcebergCommitFailed,
-    KrishivIcebergCommitStateUnknown, KrishivUnsupportedFeature,
+    KrishivIcebergCommitStateUnknown, KrishivIcebergOverwritePartialFile,
+    KrishivUnsupportedFeature,
 };
 
 use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare};
@@ -294,7 +298,10 @@ pub(crate) async fn commit_validated(
         start_ms: cx.clock.now_ms(),
         s0_version: base.format_version(),
         s0_uuid: base.uuid().to_string(),
-        s0: branch_head(base, ids.branch).flatten(),
+        position_delete_file: new.position_delete_file.clone(),
+        s0: validation
+            .start
+            .unwrap_or_else(|| branch_head(base, ids.branch).flatten()),
         validation,
         requests: 0,
         lists: Vec::new(),
@@ -320,6 +327,17 @@ enum End {
     /// request still unresolved names it without the error's "files removed"
     /// text (review nit 4).
     Conflict(Box<KrishivIcebergCommitConflict>),
+    /// An overwrite's row filter matches a data file in part (Java's
+    /// `ValidationException` at `apply`): deterministic, so not a conflict
+    /// (`KRISHIV_ICEBERG_OVERWRITE_PARTIAL_FILE`, SQLSTATE 22000, a data
+    /// exception no client retries, where the conflict's 40001 is retried;
+    /// review 36b2b M4).
+    Partial {
+        /// The filter as Java prints it.
+        filter: String,
+        /// The data file.
+        file: String,
+    },
     /// An error; its own request's outcome (if any) known.
     Error(KrishivError),
 }
@@ -409,6 +427,9 @@ struct Loop<'a> {
     start_ms: i64,
     s0_version: FormatVersion,
     s0_uuid: String,
+    /// A position delete file (not a DV) the write adds: a rebase onto a v3
+    /// table is refused (a row delta, PR-36c).
+    position_delete_file: Option<String>,
     /// The branch's head when the write started (S0; `None`: no snapshot).
     s0: Option<i64>,
     /// What every rebase validates (`validate.rs`).
@@ -438,6 +459,19 @@ impl Loop<'_> {
         mut current: TableMetadata,
         new: &mut NewManifests,
     ) -> Result<TableMetadata, End> {
+        // A replayed write (the same key) whose first run already landed on this base is final:
+        // sending it again would publish its rows twice. Checked before validation, which has no
+        // exemption for the write's own first run. No request was sent and the found snapshot is
+        // another write's, so nothing this run produced can be in the table: delete it.
+        if self.found(&current)?.is_some() {
+            delete_all(self.cx.io, new, &[]).await;
+            return Ok(current);
+        }
+        // An explicit start validates the first attempt too (Java's
+        // `validate` runs on every `apply`); S0 itself has nothing between.
+        if self.validation.start.is_some() {
+            self.validate(&current).await?;
+        }
         'attempts: loop {
             self.before_request().await?;
             let mut attempt = match prepare(
@@ -455,6 +489,11 @@ impl Loop<'_> {
                 // (`filter.rs`, Java's `failMissingDeletePaths`).
                 Err(FilterError::Missing(message)) => {
                     return Err(self.conflict(&current, CHECK_MISSING, message));
+                }
+                // A data file the row filter matches in part (Java's
+                // `ValidationException` at `apply`).
+                Err(FilterError::Partial { filter, file }) => {
+                    return Err(End::Partial { filter, file });
                 }
                 Err(FilterError::Error(e)) => return Err(End::Error(e)),
             };
@@ -706,6 +745,13 @@ impl Loop<'_> {
                     self.s0_uuid
                 ),
             ))
+        } else if let Some(path) = self.position_delete_file.as_ref().filter(|_| to as u8 >= 3) {
+            // `validateDeleteFileForVersion` re-run at `apply` (notes 36c
+            // §2.1; design note §7.3 step 4a.0).
+            Some((
+                "format version",
+                format!("Must use DVs for position deletes in V{}: {path}", to as u8),
+            ))
         } else if from != to && !(from == FormatVersion::V2 && to == FormatVersion::V3) {
             Some((
                 "format version",
@@ -803,6 +849,7 @@ impl Loop<'_> {
                     "a conflict with the table at snapshot {} ({}): {}",
                     c.conflicting_snapshot_id, c.check, c.message
                 ),
+                End::Partial { filter, file } => FilterError::partial_text(&filter, &file),
                 End::Error(e) => e.to_string(),
             };
             return KrishivIcebergCommitStateUnknown {
@@ -833,6 +880,14 @@ impl Loop<'_> {
                 c.files = files;
                 (*c).into()
             }
+            End::Partial { filter, file } => KrishivIcebergOverwritePartialFile {
+                filter,
+                file,
+                table: self.table.name(),
+                snapshot_id: self.snapshot_id.to_string(),
+                files,
+            }
+            .into(),
             End::Error(e) => e,
         }
     }
@@ -884,6 +939,7 @@ async fn delete_all(io: &FileIO, new: &NewManifests, lists: &[String]) {
     for path in new
         .data_files
         .iter()
+        .chain(&new.delete_files)
         .chain(manifests)
         .chain(&new.merged)
         .chain(&new.statistics_files)

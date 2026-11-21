@@ -69,6 +69,7 @@ parquet = { workspace = true, features = ["arrow"] }
 
 [dev-dependencies]
 bytes.workspace = true
+krishiv-alloc = { path = "../krishiv-alloc", features = ["heap-stats"] }
 krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", features = ["testing"] }
 arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
@@ -130,6 +131,14 @@ workspace = true
 
 [[test]]
 name = "delta_tables"
+required-features = ["delta"]
+
+[[test]]
+name = "delta_writes"
+required-features = ["delta"]
+
+[[test]]
+name = "delta_dml"
 required-features = ["delta"]
 
 # The S3 round trip needs the S3 builder and an emulator (`KRISHIV_TEST_S3_ENDPOINT`).

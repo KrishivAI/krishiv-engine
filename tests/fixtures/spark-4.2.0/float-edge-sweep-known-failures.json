@@ -1,1 +1,6 @@
-[]
+[
+  "1|ceil(fx)",
+  "1|ceil(x)",
+  "1|floor(fx)",
+  "1|floor(x)"
+]

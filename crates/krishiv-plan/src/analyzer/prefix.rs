@@ -52,6 +52,51 @@ pub(super) struct PrefixEntry {
     /// The observation names the root registered (`Dataset.observe`), with the identity key of the
     /// relation that holds each: a warm run must still refuse a second relation using the name.
     observed: Vec<(String, u128)>,
+    /// A `Hint` relation was resolved under the root.
+    saw_hint: bool,
+    /// What the passes over the final plan found fine, for the next analysis that starts from this one.
+    pub(super) verified: Option<Verified>,
+}
+
+/// How many results' nodes one [`Verified`] pins before it starts over.
+const VERIFIED_CHAIN: usize = 32;
+
+/// The nodes of final plans that the post passes (`unexecutable::check`, the depth check) have passed, by
+/// address. Those passes are functions of a node and what is under it, so a later analysis whose result
+/// shares such a node (the resolver hands the prefix's resolved nodes back as the same `Arc`s) does not
+/// walk it again. An address is only trusted while its node is alive, so `keep` holds the roots the
+/// addresses came from; a chain that grows past [`VERIFIED_CHAIN`] results starts over. Those pinned roots
+/// (up to [`VERIFIED_CHAIN`] per session slot) are not counted in any memory budget: chained plans share
+/// their nodes, so a chain costs about one plan plus its steps.
+#[derive(Clone)]
+pub(super) struct Verified {
+    keep: Vec<Arc<LogicalPlan>>,
+    /// The `time_type` conf the checks ran under. The context fingerprint holds the whole conf, so a state
+    /// from another `time_type` is already unreachable; this keeps the check from depending on that.
+    time_type: bool,
+    pub(super) unexecutable: crate::walk::PtrSet<usize>,
+    pub(super) heights: crate::walk::PtrMap<usize, usize>,
+}
+
+impl Verified {
+    /// The state for an analysis that started from `prior` (nothing when it did not, or the checks ran
+    /// under another `time_type`).
+    pub(super) fn start(prior: Option<&Self>, time_type: bool) -> Self {
+        match prior {
+            Some(p) if p.time_type == time_type && p.keep.len() < VERIFIED_CHAIN => p.clone(),
+            _ => Self {
+                keep: Vec::new(),
+                time_type,
+                unexecutable: Default::default(),
+                heights: Default::default(),
+            },
+        }
+    }
+
+    /// Pins the result root whose nodes the sets now hold.
+    pub(super) fn keep(&mut self, root: Arc<LogicalPlan>) {
+        self.keep.push(root);
+    }
 }
 
 impl Resolver<'_> {
@@ -64,6 +109,7 @@ impl Resolver<'_> {
         if self.uncacheable
             || self.b.reads_files
             || !self.ctx.variables.locals.is_empty()
+            || !self.view_nodes.is_empty()
             || self.pending_nondeterministic.is_some()
             || self.sql_calls != 0
         {
@@ -106,6 +152,8 @@ impl Resolver<'_> {
             columns: self.columns.clone(),
             tables,
             sql_calls: self.sql_calls,
+            saw_hint: self.saw_hint,
+            verified: None,
             observed: self
                 .observed
                 .iter()
@@ -138,6 +186,7 @@ impl Resolver<'_> {
             || self.uncacheable
             || b.reads_files
             || !self.ctx.variables.locals.is_empty()
+            || !self.view_nodes.is_empty()
             || !self.loops.is_empty()
             || !self.lambdas.is_empty()
             || self.frame.is_some()
@@ -186,6 +235,7 @@ impl Resolver<'_> {
         self.pass_exprs = entry.pass_exprs.clone();
         self.built_ids = entry.built_ids.clone();
         self.sql_calls += entry.sql_calls;
+        self.saw_hint |= entry.saw_hint;
         for (mine, theirs) in self.columns.iter_mut().zip(&entry.columns) {
             mine.clone_from(theirs);
         }

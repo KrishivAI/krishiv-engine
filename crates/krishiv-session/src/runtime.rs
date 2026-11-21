@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use krishiv_common::config::{Config, SYSTEM_QUERIES_CAPACITY, lookup};
@@ -68,6 +68,9 @@ pub struct EngineRuntime {
     query_index: AtomicU64,
     /// The number of the next session built on the runtime.
     session_seq: AtomicU64,
+    /// Set while the server drains (design P3-T066 §5.1): a query that reads more than
+    /// `system.*` is refused with `KRISHIV_SERVER_DRAINING` before it is admitted.
+    draining: AtomicBool,
     /// The `system.queries` rows of every session.
     pub(crate) history: Arc<QueryHistory>,
     /// The persisted profiles of finished queries (`krishiv.history.path`, P3-T051); `None` when unset.
@@ -174,6 +177,9 @@ impl fmt::Debug for EngineRuntimeBuilder {
             .finish_non_exhaustive()
     }
 }
+
+/// A running query a cancel picked: its context, session number, session id and row id.
+type PickedQuery = (Arc<QueryContext>, u64, Arc<str>, Arc<str>);
 
 impl EngineRuntimeBuilder {
     /// Sets a configuration entry. Runtime-owned keys (cluster scope, and
@@ -418,6 +424,7 @@ impl EngineRuntime {
             formats: Arc::new(FormatRegistry::with_defaults()),
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
+            draining: AtomicBool::new(false),
             history: Arc::new(QueryHistory::new(capacity)),
             profile_history,
             catalog_store: Arc::new(InMemoryCatalogStore::with_hub(Arc::clone(&invalidation))),
@@ -438,6 +445,26 @@ impl EngineRuntime {
         };
         runtime.register_gauges()?;
         Ok(Arc::new(runtime))
+    }
+
+    /// Starts or ends the drain (design P3-T066 §5.1). While draining, a new query is refused
+    /// with `KRISHIV_SERVER_DRAINING` unless it reads only `system.*`; queries already admitted
+    /// are not touched. Every surface that runs statements through a session of this runtime is
+    /// covered by it.
+    pub fn set_draining(&self, draining: bool) {
+        self.draining.store(draining, Ordering::Release);
+    }
+
+    /// Whether the drain is on ([`Self::set_draining`]).
+    #[must_use]
+    pub fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::Acquire)
+    }
+
+    /// Cancels every running query of every session with `reason` (the drain deadline uses
+    /// [`CancelReason::Drain`]); how many ended, counting statements still being planned.
+    pub fn cancel_all(&self, reason: CancelReason) -> usize {
+        self.cancel_counted(reason, &|_, _| true).1
     }
 
     /// The memory root every session's pool and query hangs off.
@@ -620,7 +647,7 @@ impl EngineRuntime {
     fn finish_cancel(
         &self,
         reason: CancelReason,
-        mut ids: Vec<QueryId>,
+        mut ids: Vec<(u64, QueryId)>,
         actions: crate::action::ActionsCancelled,
     ) -> (Vec<QueryId>, usize) {
         if !actions.rows.is_empty() {
@@ -628,15 +655,19 @@ impl EngineRuntime {
                 actions.rows.iter().map(|(s, r)| (*s, &**r)).collect();
             ids.extend(self.cancel_queries(reason, &|s, q| rows.contains(&(s, q))));
         }
+        // Counted by (session, operation id): the same caller id in two sessions is two queries.
         let mut seen = std::collections::HashSet::new();
-        ids.retain(|id| seen.insert(id.as_str().to_owned()));
+        ids.retain(|(s, id)| seen.insert((*s, id.as_str().to_owned())));
         let ended = ids.len() + actions.ended;
+        let mut out: Vec<QueryId> = ids.into_iter().map(|(_, id)| id).collect();
+        let mut listed: std::collections::HashSet<String> =
+            out.iter().map(|id| id.as_str().to_owned()).collect();
         for id in actions.ids {
-            if seen.insert(id.to_string()) {
-                ids.push(QueryId::minted(id.to_string()));
+            if listed.insert(id.to_string()) {
+                out.push(QueryId::minted(id.to_string()));
             }
         }
-        (ids, ended)
+        (out, ended)
     }
 
     /// Cancels, with `reason`, every query and statement of the runtime whose session number and
@@ -699,9 +730,9 @@ impl EngineRuntime {
         &self,
         reason: CancelReason,
         pick: &impl Fn(u64, &str) -> bool,
-    ) -> Vec<QueryId> {
+    ) -> Vec<(u64, QueryId)> {
         let mut pending = Vec::new();
-        let picked: Vec<(Arc<QueryContext>, Arc<str>, Arc<str>)> = {
+        let picked: Vec<PickedQuery> = {
             let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
             let mut out = Vec::new();
             for l in live.queries.values_mut() {
@@ -712,12 +743,12 @@ impl EngineRuntime {
                     None => {
                         if l.pending.is_none() {
                             l.pending = Some(reason);
-                            pending.push(QueryId::minted(l.id.to_string()));
+                            pending.push((l.session, QueryId::minted(l.id.to_string())));
                         }
                     }
                     Some(q) => {
                         if let Some(q) = q.upgrade() {
-                            out.push((q, Arc::clone(&l.session_id), Arc::clone(&l.id)));
+                            out.push((q, l.session, Arc::clone(&l.session_id), Arc::clone(&l.id)));
                         }
                     }
                 }
@@ -726,9 +757,9 @@ impl EngineRuntime {
         };
         // Cancelled outside the lock: a cancel wakes the query's tasks.
         let mut ids = pending;
-        for (query, session_id, id) in picked {
+        for (query, session, session_id, id) in picked {
             if cancel::apply(&query, reason, None, &self.history, &session_id, &id) {
-                ids.push(QueryId::minted(id.to_string()));
+                ids.push((session, QueryId::minted(id.to_string())));
             }
         }
         ids

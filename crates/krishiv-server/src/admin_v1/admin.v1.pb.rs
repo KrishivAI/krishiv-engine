@@ -188,6 +188,83 @@ pub struct CancelQueriesByTagResponse {
     #[prost(string, repeated, tag = "1")]
     pub query_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetReadinessRequest {}
+/// One readiness check.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReadinessCheck {
+    /// `serving`, `auth`, `warehouse`, ...
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    /// `ok`, `failed` or `unknown` (not run yet).
+    #[prost(string, tag = "2")]
+    pub state: ::prost::alloc::string::String,
+    /// Whether a failure of this check fails `/readyz` (`krishiv.server.readiness.required`).
+    #[prost(bool, tag = "3")]
+    pub required: bool,
+    #[prost(int32, tag = "4")]
+    pub consecutive_failures: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetReadinessResponse {
+    /// What `/readyz` answers: true for 200.
+    #[prost(bool, tag = "1")]
+    pub ready: bool,
+    #[prost(message, repeated, tag = "2")]
+    pub checks: ::prost::alloc::vec::Vec<ReadinessCheck>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetDrainStatusRequest {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DrainStatus {
+    /// `serving`, `draining` or `drained`.
+    #[prost(string, tag = "1")]
+    pub state: ::prost::alloc::string::String,
+    /// When held work is cancelled, while draining.
+    #[prost(message, optional, tag = "2")]
+    pub deadline: ::core::option::Option<::prost_types::Timestamp>,
+    /// Whether the process exits once drained.
+    #[prost(bool, tag = "3")]
+    pub exit_when_drained: bool,
+    /// Queries running or queued.
+    #[prost(int64, tag = "4")]
+    pub queries_running: i64,
+    /// Sessions open.
+    #[prost(int64, tag = "5")]
+    pub sessions_open: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetDrainStatusResponse {
+    #[prost(message, optional, tag = "1")]
+    pub status: ::core::option::Option<DrainStatus>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DrainRequest {
+    /// Defaults to `krishiv.server.shutdownTimeout`. A second drain may shorten the deadline, never
+    /// extend it.
+    #[prost(message, optional, tag = "1")]
+    pub grace_period: ::core::option::Option<::prost_types::Duration>,
+    /// Exit the process once drained. A second drain may turn it on, never off.
+    #[prost(bool, tag = "2")]
+    pub exit_when_drained: bool,
+    #[prost(string, tag = "3")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DrainResponse {
+    #[prost(message, optional, tag = "1")]
+    pub status: ::core::option::Option<DrainStatus>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResumeServingRequest {
+    #[prost(string, tag = "1")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResumeServingResponse {
+    #[prost(message, optional, tag = "1")]
+    pub status: ::core::option::Option<DrainStatus>,
+}
 /// Generated server implementations.
 pub mod admin_service_server {
     #![allow(
@@ -256,6 +333,38 @@ pub mod admin_service_server {
             request: tonic::Request<super::CancelQueriesByTagRequest>,
         ) -> std::result::Result<
             tonic::Response<super::CancelQueriesByTagResponse>,
+            tonic::Status,
+        >;
+        /// Per-check readiness detail (what `/readyz` summarizes). Needs `Monitor`.
+        async fn get_readiness(
+            &self,
+            request: tonic::Request<super::GetReadinessRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetReadinessResponse>,
+            tonic::Status,
+        >;
+        /// The drain state, deadline and the work still held. Needs `Monitor`.
+        async fn get_drain_status(
+            &self,
+            request: tonic::Request<super::GetDrainStatusRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetDrainStatusResponse>,
+            tonic::Status,
+        >;
+        /// Starts a drain (or shortens a running one): `/readyz` answers 503, new work is refused with
+        /// `KRISHIV_SERVER_DRAINING`, held work finishes until the deadline and is then cancelled. Needs
+        /// `Manage` on the cluster.
+        async fn drain(
+            &self,
+            request: tonic::Request<super::DrainRequest>,
+        ) -> std::result::Result<tonic::Response<super::DrainResponse>, tonic::Status>;
+        /// Back to serving from `DRAINING` or `DRAINED`; refused with `exiting` once the process is going
+        /// to exit. Needs `Manage` on the cluster.
+        async fn resume_serving(
+            &self,
+            request: tonic::Request<super::ResumeServingRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ResumeServingResponse>,
             tonic::Status,
         >;
     }
@@ -636,6 +745,185 @@ pub mod admin_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = CancelQueriesByTagSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/GetReadiness" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetReadinessSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::GetReadinessRequest>
+                    for GetReadinessSvc<T> {
+                        type Response = super::GetReadinessResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetReadinessRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::get_readiness(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetReadinessSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/GetDrainStatus" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetDrainStatusSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::GetDrainStatusRequest>
+                    for GetDrainStatusSvc<T> {
+                        type Response = super::GetDrainStatusResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetDrainStatusRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::get_drain_status(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetDrainStatusSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/Drain" => {
+                    #[allow(non_camel_case_types)]
+                    struct DrainSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::DrainRequest> for DrainSvc<T> {
+                        type Response = super::DrainResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::DrainRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::drain(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DrainSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/ResumeServing" => {
+                    #[allow(non_camel_case_types)]
+                    struct ResumeServingSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::ResumeServingRequest>
+                    for ResumeServingSvc<T> {
+                        type Response = super::ResumeServingResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ResumeServingRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::resume_serving(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ResumeServingSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

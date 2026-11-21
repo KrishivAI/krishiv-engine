@@ -11,7 +11,7 @@ and the manifest cache since PR-25d; commits T027.
 Iceberg table connector. The only crate that depends on `iceberg` (iceberg-rust, Arrow 58).
 
 ## Layout
-`src/lib.rs` the public items (`StorageRegistration`, `IcebergTable`, `IcebergTableProvider`, module `plan`) · `src/iceberg_v0/` (private; every item
+`src/lib.rs` the public items (`StorageRegistration`, `IcebergTable` (`from_metadata`: a table whose metadata a catalog returned, no metadata file read), `IcebergMetadata`, `IcebergTableProvider`, module `plan`, feature `testing`: `testing::write_table`, a small table for other crates' tests) · `src/iceberg_v0/` (private; every item
 that names `iceberg`): `storage.rs` iceberg's `Storage`/`StorageFactory` (`#[typetag::serde]`, tag `krishiv`)
 over `krishiv-io`'s `IoContext`, the process registry of registration names, `iceberg::Runtime` on the
 scheduler's I/O runtime, error mapping both ways (a Krishiv error keeps its class through iceberg-rust) ·
@@ -25,7 +25,7 @@ column that a file of an identity spec lacks refused (footers of the files a sca
 filters pruning files through `Pruner` when the scan is built (still applied above), deletes assigned (`DeleteIndex::for_data_file`)
 to the files that survive pruning when the scan is built, `statistics` (`stats.rs`), `scan_units` and the scan's
 `EXPLAIN` text (`Snapshot: <id>, DataFiles: <read>/<total>, DeleteFiles: [position=, dv=, equality=]`, through
-`ScanPushdown::explain`, a krishiv-exec hook); with a committer and opened at the current version it declares `BATCH_WRITE` (appends only) and `writer` returns `sink.rs`'s sink over a `WriteTarget` (the committer, the metadata pinned at open, `krishiv.iceberg.write.maxOpenFiles` and `krishiv.iceberg.commit.maxIntervening` read at open), and `row_level` returns `row_level.rs`'s table; the scan `supports_take` (the file scan's, with the table's field mapping; identity-partition constants, lineage columns refused) and is restricted to the touched files for a rewrite; `types.rs` also builds the Arrow table schema carrying every Iceberg id ·
+`ScanPushdown::explain`, a krishiv-exec hook); with a committer and opened at the current version it declares `BATCH_WRITE`, `TRUNCATE`, `OVERWRITE_BY_FILTER` and `OVERWRITE_DYNAMIC`, and `writer` returns `sink.rs`'s sink (an append) or `overwrite.rs`'s over a `WriteTarget` (the committer, the metadata pinned at open, `krishiv.iceberg.write.maxOpenFiles` and `krishiv.iceberg.commit.maxIntervening` read at open), and `row_level` returns `row_level.rs`'s table; the scan `supports_take` (the file scan's, with the table's field mapping; identity-partition constants, lineage columns refused) and is restricted to the touched files for a rewrite; `types.rs` also builds the Arrow table schema carrying every Iceberg id ·
 `lazy.rs` `DeleteState`: the deletes of one built scan, loaded on its first batch (`DeleteSource` wraps the file
 scan's source, takes the query's pool in `global_state`, awaits the load, then applies equality deletes; position
 deletes and DVs reach the file scan as `LazySelections`); charged to a `ConsumerHandle` of the query's pool, so a
@@ -63,7 +63,7 @@ manifests committed and merged; ignored `probe_cost_on_a_10k_group`)
 delete manifests merged apart, by spec id highest first, `pack_end` lookback 1, the bin holding the first manifest
 merged only at `min-count-to-merge`, others at 2; merged entries: older `DELETED` dropped, own `ADDED` kept with
 inherited sequence numbers, the rest `EXISTING` with explicit sequence numbers, inherited snapshot id and (v3) explicit
-`first_row_id`; **first attempt only** (later attempts list the unmerged manifests; Java re-merges every attempt);
+`first_row_id`, partition tuples widened to the current type (`filter.rs` `widen_partition`); **first attempt only** (later attempts list the unmerged manifests; Java re-merges every attempt);
 merged paths in `NewManifests::merged` for §7.4 cleanup; tests `merge_tests.rs` (100 appends into one manifest,
 count/switch/target, packEnd order, two specs, review-1 P2's `DELETED` entry, v3 row ids, empty manifests dropped
 and delete manifests merged apart, v1, first attempt only; every merged manifest read back through
@@ -129,7 +129,7 @@ file (`dropDeleteFilesOlderThan`); a manifest without a hit kept as is, a hit on
 `first_row_id`), duplicates counted once (`deleted-duplicate-files`); "Missing required files to delete" for a file no
 longer live (the loop's conflict); Java's `UpdateMetrics` for the removed files (a DV sized by its blob) merged with the
 added ones by `overwrite_summary` (changed partitions over both, partition summaries in Java's key order); rewritten
-paths kept in `NewManifests::merged` for §7.4 cleanup; tests `filter_tests.rs` · `row_level.rs` (PR-36b part 2a,
+paths kept in `NewManifests::merged` for §7.4 cleanup; since part 2b a row filter (`deleteByRowFilter`: a file, data or delete, removed when every row matches by `plan::strict`; a data file matched in part `FilterError::Partial`, raised as `KRISHIV_ICEBERG_OVERWRITE_PARTIAL_FILE` (SQLSTATE 22000, deterministic, not the retryable conflict), Java's "Cannot delete file where some, but not all, rows match filter"; a delete file so matched kept) and dropped partitions (spec id and tuple, compared by value at the spec's current type through `partition_key`, as Java's `PartitionSet`: a promoted column's old 4-byte tuples equal new 8-byte ones, also in `validate.rs`'s partition scope; a rewritten manifest writes old `int`/`float` tuples at the promoted `long`/`double`, `widen_partition`, which `merge.rs`'s `copy_entries` applies to every entry it copies too (review 36b2b round 2, finding 1; test `merge_tests::a_merge_widens_pre_promotion_partition_tuples`)); tests `filter_tests.rs` · `overwrite.rs` (PR-36b part 2b) INSERT OVERWRITE as Spark's `SparkWrite`: truncate = overwrite by `alwaysTrue` (dynamic under the write option `overwrite-mode=dynamic`), overwrite by filter (`WriteRequest::overwrite_filter_pushdown`, exact or refused), dynamic overwrite = `ReplacePartitions` (the written files' partitions, the whole table when its spec has no field, `replace-partitions=true`, operation `overwrite`, an empty write commits nothing); validation only under the write option `isolation-level`, from `validate-from-snapshot-id` (absent: the whole history, as Java, the message naming the option), on every attempt; tests `overwrite_tests.rs` (truncate, identity/bucket/truncate/day static overwrites, a straddling file refused, metrics-only drops, dynamic partitioned/unpartitioned/empty, DVs of replaced partitions, v3 row ids kept, the rebase re-applying the filter without validation, serializable from a snapshot id, the missing-option message) · `row_level.rs` (PR-36b part 2a,
 design note §8 item 2) `IcebergRowLevel`, copy-on-write DELETE/UPDATE/MERGE as Spark's `SparkWrite` CoW
 (`newOverwrite()`): `RowIdScan`s over the provider's scan (the lineage scan on v3), the rewriter an `IcebergWriteSink`
 whose finalize commits an `OverwriteFiles` (the touched files and their DVs removed, `request.write_id`; an empty
@@ -142,7 +142,7 @@ unpartitioned and partitioned v2, UPDATE, MERGE, v3 lineage kept, an empty DELET
 with their file, a foreign append under both levels, a foreign removal, `rebase_after_foreign_manifest_merge`, a cancelled
 statement, `take` (`_metadata` refused), one Puffin file holding two files' DVs, a foreign row delta under both
 levels, a v3 rewrite merged on the first attempt keeping row ids); `cow_fault_tests.rs` (the overwrite through
-`commit_tests`' scripted catalog: unknown answer then a missing removal, unknown answer then landed, a known failure) · `sink.rs` (PR-36a) `IcebergWriteSink`, an append as `krishiv-exec`'s `FileWriteSink`: one `DataFileWriter` per
+`commit_tests`' scripted catalog: unknown answer then a missing removal, unknown answer then landed, a known failure, a still-unknown answer resending the same attempt, an unknown answer then a rebase re-filtering) · `row_delta.rs` (PR-36c part 1, design note §8 item 4) merge-on-read DELETE/UPDATE/MERGE as Spark's `SparkPositionDeltaWrite` (`RowDelta`, notes 36c): `row_level_mode` (`write.{delete,update,merge}.mode`, default `copy-on-write`, Java's "Unknown row-level operation mode"), `MergeOnReadWrite` (the internal entry PR-37d's merge-on-read contract will adapt to; v1 refused, "Deletes are supported in V2 and above"): per task `MorTask::delete(file reference, position)` and `insert(rows)` (v3: the lineage columns required), `finish` writes the deletes, on v3 one Puffin file of DVs per task absorbing each file's DV or every position delete the scan assigned it, on v2 one position delete file per data file absorbing its file-scoped ones; the file-scoped absorbed files removed through `filter.rs` (a `DELETE` skips one no longer live, `Removals::ignore_missing_deletes`); `commit` merges two tasks' DVs of one file into `merged-dvs-<id>-1.puffin` (Java's `mergeDVs`), operation `delete`/`append`/`overwrite` (`BaseRowDelta.operation`; an empty row delta `overwrite`); `abort(outputs)` deletes finished tasks' files a statement does not commit (Java's `PositionDeltaBatchWrite.abort`), `finish` dropped midway leaves no delete file (an armed `Written`), validation from S0 per notes 36c §1.5 (references removed, added data under serializable, added deletes and missing absorbed files for UPDATE/MERGE, concurrent DVs always); not wired to the session yet · `delete_write.rs` (PR-36c) the delete files: `dv_puffin` (Java's Puffin bytes: blobs from offset 4, compact JSON footer, `created-by` Krishiv's; byte-equal to the `dvs` fixture), `dv_file` (Puffin entry: blob offset/length, whole-file size, `referenced_data_file`), `write_position_deletes` (Parquet `file_path`/`pos`, sorted, `write.delete.parquet.*` over `write.parquet.*`, equal `file_path` bounds, no counts), `partition_struct`; tests `mor_tests.rs` (v2/v3 DELETE, partitioned locations, one Puffin per task, UPDATE/MERGE incl. `append`, empty, old DV and file-scoped position delete absorbed, partition-scoped kept, the v2 → v3 model case, two tasks' DVs merged, concurrent DV at both levels, foreign append/delete file/overwrite rows of the table, rebase onto v3 refusing position deletes, refusals) and `mor_fault_tests.rs` (known failure deletes the delete and data files, unknown then conflict keeps them, lost response landing, an aborted task, a `finish` dropped at many points, an aborted statement) · `sink.rs` (PR-36a) `IcebergWriteSink`, an append as `krishiv-exec`'s `FileWriteSink`: one `DataFileWriter` per
 driver on a task of its own behind a bounded channel (`Blocked` while full; not counted as the query's blocking work,
 whose counter is private to krishiv-exec, so an aborting task may outlive the query briefly), `combine` finishes,
 `finalize` gathers every driver's files, tells each task to keep or delete them, then `write_new_manifests` and
@@ -192,14 +192,26 @@ refused; run by `tests/scripts/object_store_emulators.sh`).
 snapshot ids, v3 `first_row_id`), `DataFileEntry`/`DeleteFileEntry`, `FileScanTask`, `ScanPlan`, `ManifestFilter` ·
 `deletes.rs` `DeleteIndex`/`TaskDeletes`, Java's `DeleteFileIndex` rules (a DV replaces position deletes, FC S1;
 position deletes by path or by spec and partition, never table-wide, M1; equality deletes strictly newer, global for an
-unpartitioned spec); an equality delete is skipped for a data file when their column metrics rule out every key (Java's `canContainEqDeletesForFile`, PR-25d step 2, on through `DeleteIndex::with_fields`: metrics trusted as pruning trusts them under the table's `write.metadata.metrics.*` modes, bounds only for exact types, not floats, strings, binaries or uuids; `eq_narrow_tests.rs`; `delete_tests` writes `id` metrics, so the model tests cover it end to end) · `dv.rs` the `deletion-vector-v1` blob codec on `roaring` (Java's checks, order and texts, FC S2)
+unpartitioned spec); an equality delete is skipped for a data file when their column metrics rule out every key (Java's `canContainEqDeletesForFile`, PR-25d step 2, on through `DeleteIndex::with_fields`: metrics trusted as pruning trusts them under the table's `write.metadata.metrics.*` modes, bounds only for exact types, not floats, strings, binaries or uuids; `eq_narrow_tests.rs`; `delete_tests` writes `id` metrics, so the model tests cover it end to end) · `dv.rs` the `deletion-vector-v1` blob codec on `roaring` (Java's checks, order and texts, FC S2; the encoder writes Java's layout: dense keys, run containers, byte-checked for array containers only, the run/array boundary may differ, PR-36c)
 · `bounds.rs` single-value serialisation decoded by stored width (review-1 S10) · `metrics.rs` `WriterMetrics`, the
 `write.metadata.metrics.*` modes (`none`/`counts`: bounds untrusted, `truncate(n)`, `full`; default `truncate(16)`) · `transform.rs` partition transforms
-of literals (Murmur3 bucket, truncate, year/month/day/hour) · `prune.rs` `Pruner`, the might-match evaluator over
+of literals (Murmur3 bucket, truncate, year/month/day/hour) · `strict.rs` (PR-36b part 2b) the overwrite row filter: `Pred` (Iceberg semantics, from Spark's `PushdownExpr` with `not_null` guards on `<>`/`NOT startswith`), `RowFilter::rows_must_match`/`rows_might_match` on the residual after the partition (strict projections per transform, the pre-1970 time fix) as Java's `StrictMetricsEvaluator`/`ManifestFilterManager`; tests `strict_tests.rs` · `prune.rs` `Pruner`, the might-match evaluator over
 summaries, partition tuples and metrics (`PruneMode::Conservative` for T027 validation, review-1 S11) · `tests.rs`,
 `prop_tests.rs` (`prune_never_skips_a_matching_row`).
-Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
-`research/p3/t022a-iceberg-spark-types.md` in krishiv-internal).
+Type goldens: `tests/fixtures/iceberg-1.12.0/types.json` at the repository root, from a real Spark 4.1.0 +
+iceberg-spark-runtime 1.12.0 run (Iceberg's `SparkSchemaUtil.convert` per schema, `tests/scripts/gen_iceberg_type_goldens.py`),
+checked by `iceberg_v0/type_golden_tests.rs`; column defaults are a documented refusal.
+
+## Write conformance and round trip (PR-53b)
+`write_conformance_tests.rs`: two `#[ignore]`d tests run by `tests/scripts/iceberg_write_conformance.sh` (Docker; nightly job
+`iceberg-write-conformance`): Krishiv's append sink writes `unpart`/`part`/`v3`/`v3part` into a Hadoop-catalog layout,
+Spark 4.1.0 + Iceberg 1.12.0 (`gen_iceberg_write_readback.py`) reads and appends on top, Krishiv compares and reads Spark's
+result. `roundtrip_tests.rs`: two `#[ignore]`d steps of `tests/scripts/iceberg_roundtrip.sh` (nightly `iceberg-roundtrip`):
+Spark makes `mor2`/`mor3`/`evolved` (position deletes, a DV, a promoted and a renamed column, a spec added), Krishiv
+reads them, appends and runs copy-on-write DELETE/UPDATE (`cow_tests`' `Dml`, over `sink_tests`' `Catalog::with_metadata` on
+Spark's metadata), Spark time travels to Krishiv's snapshots and runs merge-on-read DML on top, Krishiv reads the
+result. Pending, not stubbed: Krishiv merge-on-read writes, MERGE through SQL. See
+`tests/scripts/iceberg_write_conformance.README.md`.
 
 ## Invariants
 - Isolated `iceberg` crate (Arrow 58) crossing to Arrow 60 via the C Data Interface; only values iceberg-rust returns
@@ -227,7 +239,9 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   A write that fails after any of its requests had an unknown answer also deletes nothing (its error says the files
   were kept): an attempt settled as "not applied" because the branch left its base lands if the branch is rolled
   back to that base (review-1 pass 2 P1; on v2+ the sequence number usually refuses it, on v1 nothing does); nor does
-  a commit found as a replay under another id (`clean_committed`).
+  a commit found as a replay under another id (`clean_committed`). A replay found on the base before any
+  request (`drive`) is the exception: nothing of it can be in the table, so it deletes the files it wrote and answers
+  with the found metadata.
   A 409 leaves the write unresolved until the own-key search has run on a successful load (a duplicated request lands
   and answers 409). A `commit_append` dropped or cancelled after its first request is an unknown outcome too: the
   caller (`sink.rs`'s finalize, whose guard is disarmed before the loop) must not delete the write's files. Only
@@ -236,6 +250,15 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   a rewritten manifest carries only live entries (an older `DELETED` entry copied as `EXISTING` would bring a removed
   file back), and a base manifest is never deleted. A file to remove that is not live in the base is a conflict, never
   skipped. Rewritten manifests are cleaned up as merged ones are.
+- An overwrite's row filter removes a file only when every row is proven to match (strict projection or strict
+  metrics, `plan::strict`); every unknown keeps the file, which fails the commit for a data file ("some, but not
+  all, rows match"), never removes rows the filter keeps. An overwrite filter that does not translate exactly, or
+  holds a part the strict side cannot evaluate (`Pred::unsupported`: `LIKE '%a%'`, `x < NaN`, a struct under
+  `IS NULL`), is refused; an unknown leaf or a column a rebase's schema lacks may match, never "no row matches".
+  **Deliberate divergence from Java** (review 36b2b B2): a missing null count means "may hold nulls" and a missing
+  NaN count of a `float`/`double` column "may hold NaN" for `<`, `<=`, `=` and `IN` (Java's `canContainNulls` /
+  `canContainNaNs` say no, so Java may delete NaN rows of a file written without NaN counts; Krishiv keeps the file,
+  which then fails with the partial-match error).
 - A row-level rewrite of a v3 table writes `_row_id` and `_last_updated_sequence_number` for every row it moves; a
   rewrite that does not carry them is refused, never new row ids for untouched rows (design note §8 item 3).
 - Manifest merging (`merge.rs`) runs on a write's first attempt only; a merged manifest is derived from that
@@ -269,6 +292,20 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   on every attempt (the scan fetches with a concurrency of 8). An empty change still validates (Spark commits with no
   validation when the optimizer removed the scan, `SparkWrite.java:473-492`), so an empty serializable DELETE fails
   against a concurrent append: a divergence toward refusal.
+- **Merge-on-read memory (PR-36c, review 36c1 m6):** `row_delta.rs` charges neither a task's deleted positions (one
+  `RoaringTreemap` per touched data file) nor the absorbed positions once `positions_of` has dropped its charge, and
+  `delete_write.rs` builds each v2 position delete file and each Puffin file whole in memory and writes it with one
+  `put` (no multipart upload), so a large v2 `DELETE` holds the compressed file on the driver, uncharged (the data
+  writer streams and charges). To charge before the module is wired to the session.
+- **Merge-on-read v2 → v3 first attempt (pre-existing, shared with 36a appends; review 36c1 m5):** the first commit
+  attempt is built on the base pinned at open and `check_rebase` runs only on a rebase, so an upgrade to v3 that does
+  not move the branch lets a v2 position delete file (or, for UPDATE/MERGE, data files without lineage) land on a v3
+  table, a spec "must not" (spec.md:1357). Rows stay correct: v3 readers apply existing position deletes and the next
+  v3 merge-on-read absorbs the file-scoped ones. Java narrows the window by refreshing before every attempt. Follow-up:
+  load and check the format version before the first attempt (the commit-loop backlog).
+- **Merge-on-read drops (review 36c1 M3):** a `MorTask::finish` dropped midway deletes its delete files and finished
+  data files in the background, and a `put` dropped in flight deletes its file once the store is done; a data file
+  whose close is dropped after the store completed it is `write.rs`'s documented limit (an unreferenced file).
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
 - A deletion vector is read at the length its manifest declares (`deletes.rs` `read_dv`) without the
   `krishiv.catalog.maxMetadataBytes` cap the metadata files get; its memory is charged to the query (the decode's transient copy aside; review of the

@@ -21,7 +21,7 @@ use crate::ast::{
     MergeMatched, MergeSource, NamespaceKind, PartitionSpec, PartitionSpecPart,
     PartitionWithLocation, PermanentViewColumn, Query, Refresh, RefreshKind, Relation, RelationExt,
     Repair, RepairAction, ResourceType, SchemaBinding, SchemaBindingClause, SetExprKind, Show,
-    ShowKind, ShowPattern, Span, Statement, Truncate, Update, UpdateAssignment,
+    ShowKind, ShowPattern, Span, SqlSecurity, Statement, Truncate, Update, UpdateAssignment,
 };
 use krishiv_common::error::{LegacyErrorTemp0035, LegacyErrorTemp0064, MergeWithoutWhen};
 
@@ -681,6 +681,7 @@ impl<'s> Parser<'s> {
                 comment: None,
                 tblproperties: Vec::new(),
                 schema_binding: None,
+                security: None,
                 partitioned_on: false,
                 duplicate_clause: None,
                 query: None,
@@ -727,9 +728,11 @@ impl<'s> Parser<'s> {
     }
 
     /// `createView`'s clauses, in any order: `COMMENT`, `WITH SCHEMA`,
-    /// `DEFAULT COLLATION`, `PARTITIONED ON (...)`, `TBLPROPERTIES`. A
-    /// clause written twice is recorded for validation (Spark checks after
-    /// parsing).
+    /// `DEFAULT COLLATION`, `PARTITIONED ON (...)`, `TBLPROPERTIES`, and on a
+    /// permanent view Krishiv's `SQL SECURITY INVOKER | DEFINER` (P3-T062
+    /// §2.4; no Spark statement has `SQL` here, so nothing Spark parses
+    /// changes). A clause written twice is recorded for validation (Spark
+    /// checks after parsing).
     fn view_clauses(&mut self, view: &mut CreatePermanentView) -> PR<()> {
         // In Spark's check order, with how often each was written.
         let mut seen = [
@@ -738,6 +741,7 @@ impl<'s> Parser<'s> {
             ("WITH SCHEMA", 0),
             ("PARTITIONED ON", 0),
             ("TBLPROPERTIES", 0),
+            ("SQL SECURITY", 0),
         ];
         loop {
             let clause = if self.eat_kw("COMMENT") {
@@ -758,6 +762,15 @@ impl<'s> Parser<'s> {
             } else if self.eat_kw("TBLPROPERTIES") {
                 view.tblproperties = self.property_list(false)?;
                 4
+            } else if !view.temporary && self.kw_at(0, "SQL") && self.kw_at(1, "SECURITY") {
+                self.pos += 2;
+                view.security = Some(if self.eat_kw("INVOKER") {
+                    SqlSecurity::Invoker
+                } else {
+                    self.expect_kw("DEFINER")?;
+                    SqlSecurity::Definer
+                });
+                5
             } else {
                 break;
             };
@@ -906,9 +919,11 @@ impl<'s> Parser<'s> {
                 self.expect_kw("NAMESPACES")?;
                 NamespaceKind::Namespace
             };
+            let namespace = self.show_namespace()?;
             let pattern = self.show_pattern_opt()?;
             return Ok(ShowKind::Namespaces {
                 kind,
+                namespace,
                 pattern,
                 span: self.span_from(start),
             });

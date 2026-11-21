@@ -482,6 +482,9 @@ impl Resolver<'_> {
             .collect();
         let mut passed_out: Vec<Attr> = c.out.to_vec();
         let mut value: Vec<BoundColumn> = Vec::with_capacity(n);
+        // Where each key was written: an expansion's entry for a bare-column key carries it, so a
+        // refusal of that column can name it (`written.rs`, P3-T062 review r3 M1).
+        let mut written_at: Vec<Origin> = Vec::with_capacity(n);
         let mut copies: Vec<GroupExpr> = Vec::with_capacity(n);
         let mut computed = false;
         for (j, &i) in distinct.iter().enumerate() {
@@ -496,6 +499,7 @@ impl Resolver<'_> {
                 Some(a) => a.col.name.clone(),
                 None => pretty(&b.shown(), self.ctx.conf.session_zone),
             };
+            let computed_key = column.is_none();
             let v = match &column {
                 Some(a) => a.col.clone(),
                 None => {
@@ -533,6 +537,11 @@ impl Resolver<'_> {
                 },
             });
             value.push(v);
+            written_at.push(if computed_key {
+                Origin::UNKNOWN
+            } else {
+                b.expr.origin
+            });
         }
         let below = if computed {
             let out = passed_out.clone();
@@ -553,9 +562,9 @@ impl Resolver<'_> {
                 .map(|a| col_expr(&a.col, Origin::UNKNOWN))
                 .collect();
             let mut mask: i64 = 0;
-            for (j, v) in value.iter().enumerate() {
+            for (j, (v, at)) in value.iter().zip(&written_at).enumerate() {
                 if set.contains(&j) {
-                    row.push(col_expr(v, Origin::UNKNOWN));
+                    row.push(col_expr(v, *at));
                 } else {
                     row.push(literal(Literal::Null(Some(v.data_type.clone()))));
                     mask |= 1 << (n - 1 - j);

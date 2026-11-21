@@ -46,7 +46,7 @@ pub(crate) struct CtePolicy {
 
 /// Runs `f` on a fresh stack every [`STEP`] levels, so no pass over a plan
 /// needs more than `STEP` frames of the caller's stack.
-fn hop<T: Send>(
+pub(crate) fn hop<T: Send>(
     depth: usize,
     f: impl FnOnce() -> Result<T, KrishivError> + Send,
 ) -> Result<T, KrishivError> {
@@ -601,4 +601,67 @@ fn eliminate_expr_body(
     };
     memo.put_expr(e, &out);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use krishiv_common::error::KrishivError;
+
+    use crate::{Cte, Expr, LogicalPlan, PlanNode, ReadSource};
+
+    /// The table names `plan` reads, and whether a `WITH` is left in it.
+    fn reads(plan: &LogicalPlan, names: &mut Vec<String>, with: &mut bool) {
+        match &plan.node {
+            PlanNode::Read(ReadSource::Table { name, .. }) => names.push(name.join(".")),
+            PlanNode::WithCte { .. } => *with = true,
+            _ => {}
+        }
+        plan.for_each_child(&mut |c| reads(c, names, with));
+    }
+
+    /// `WITH` definitions inlined as the `LEGACY` policy inlines them.
+    fn inline_legacy_ctes(
+        plan: &Arc<LogicalPlan>,
+        case_sensitive: bool,
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        super::eliminate(
+            plan,
+            super::CtePolicy {
+                precedence: crate::analyzer::CtePrecedencePolicy::Legacy,
+                case_sensitive,
+            },
+        )
+    }
+
+    /// Review r3 N3: a plan without definitions comes back as the same node (a definer view's
+    /// query keeps its trust by identity), and a plan with them has them inlined.
+    #[test]
+    fn legacy_inlining_keeps_a_plan_without_definitions_and_inlines_one_with() {
+        let plain = Arc::new(LogicalPlan::table(["t"]).project(vec![Expr::column(["a"])]));
+        let same = inline_legacy_ctes(&plain, false).unwrap();
+        assert!(Arc::ptr_eq(&plain, &same));
+
+        // `WITH c AS (SELECT a FROM t) SELECT a FROM C`, case-insensitively.
+        let with = Arc::new(LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(LogicalPlan::table(["C"]).project(vec![Expr::column(["a"])])),
+            ctes: vec![Cte {
+                name: "c".to_owned(),
+                plan: Arc::clone(&plain),
+            }],
+        }));
+        let inlined = inline_legacy_ctes(&with, false).unwrap();
+        let (mut names, mut left) = (Vec::new(), false);
+        reads(&inlined, &mut names, &mut left);
+        assert!(!left, "{inlined:?}");
+        assert_eq!(names, ["t"], "{inlined:?}");
+
+        // Case-sensitively `C` is not `c`: the definition is dropped, the read stays a table's.
+        let kept = inline_legacy_ctes(&with, true).unwrap();
+        let (mut names, mut left) = (Vec::new(), false);
+        reads(&kept, &mut names, &mut left);
+        assert!(!left, "{kept:?}");
+        assert_eq!(names, ["C"], "{kept:?}");
+    }
 }

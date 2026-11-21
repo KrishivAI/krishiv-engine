@@ -15,10 +15,12 @@ use super::core::Core;
 use super::rest::{MAX_BODY, bearer, fresh_request_id, refusal_error};
 use super::{
     AdminError, AdminService, AdminServiceServer, Call, CancelQueriesByTagRequest,
-    CancelQueriesByTagResponse, CancelQueryRequest, CancelQueryResponse, ErrorKind,
-    GetCapabilitiesRequest, GetCapabilitiesResponse, GetVersionRequest, GetVersionResponse,
-    KillSessionRequest, KillSessionResponse, ListQueriesRequest, ListQueriesResponse,
-    ListSessionsRequest, ListSessionsResponse,
+    CancelQueriesByTagResponse, CancelQueryRequest, CancelQueryResponse, DrainRequest,
+    DrainResponse, ErrorKind, GetCapabilitiesRequest, GetCapabilitiesResponse,
+    GetDrainStatusRequest, GetDrainStatusResponse, GetReadinessRequest, GetReadinessResponse,
+    GetVersionRequest, GetVersionResponse, KillSessionRequest, KillSessionResponse,
+    ListQueriesRequest, ListQueriesResponse, ListSessionsRequest, ListSessionsResponse,
+    ResumeServingRequest, ResumeServingResponse,
 };
 use super::{GRPC_PREFIX, Privilege, routes};
 use crate::guard::{Access, Caller, Guard, GuardRequest, GuardSurface, peer_leaf_of, peer_of};
@@ -111,6 +113,34 @@ impl AdminService for Service {
         request: tonic::Request<CancelQueriesByTagRequest>,
     ) -> Result<tonic::Response<CancelQueriesByTagResponse>, Status> {
         self.run("CancelQueriesByTag", request).await
+    }
+
+    async fn get_readiness(
+        &self,
+        request: tonic::Request<GetReadinessRequest>,
+    ) -> Result<tonic::Response<GetReadinessResponse>, Status> {
+        self.run("GetReadiness", request).await
+    }
+
+    async fn get_drain_status(
+        &self,
+        request: tonic::Request<GetDrainStatusRequest>,
+    ) -> Result<tonic::Response<GetDrainStatusResponse>, Status> {
+        self.run("GetDrainStatus", request).await
+    }
+
+    async fn drain(
+        &self,
+        request: tonic::Request<DrainRequest>,
+    ) -> Result<tonic::Response<DrainResponse>, Status> {
+        self.run("Drain", request).await
+    }
+
+    async fn resume_serving(
+        &self,
+        request: tonic::Request<ResumeServingRequest>,
+    ) -> Result<tonic::Response<ResumeServingResponse>, Status> {
+        self.run("ResumeServing", request).await
     }
 }
 

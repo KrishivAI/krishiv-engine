@@ -156,7 +156,8 @@ fn column_grants_allow_only_their_columns() {
 
 /// `observe()` metrics read the columns they name: a metric over a column without a grant refuses
 /// the action, even when the frame's output (a projection above the observation) needs only
-/// granted columns.
+/// granted columns. A DataFrame column is no reference the statement wrote, so the refusal names
+/// the table, never the column (ADR 0048 A1 §3, `krishiv_plan` `analyzer/written.rs`).
 #[test]
 fn observe_metrics_need_a_grant_on_their_columns() {
     use krishiv_session::Observation;
@@ -182,7 +183,10 @@ fn observe_metrics_need_a_grant_on_their_columns() {
     let rows = count("a").unwrap_or_else(|e| panic!("observe(max(a)): {e}"));
     assert_eq!(rows, 1, "the one row of `t`");
     match count("b") {
-        Err(e) if e.error_class().name() == DENIED => assert!(e.to_string().contains("`b`"), "{e}"),
+        Err(e) if e.error_class().name() == DENIED => {
+            let text = e.to_string();
+            assert!(text.contains("`t`") && !text.contains("`b`"), "{e}");
+        }
         other => panic!("observe(max(b)): expected a denial, got {other:?}"),
     }
 }
@@ -233,6 +237,24 @@ fn column_grants_cover_grouping_sets_over_their_columns() {
         let e = denied(&bob, sql);
         assert!(e.contains("`c`"), "{sql}: {e}");
     }
+}
+
+/// A grouping key written for another relation's column of the same name is no reference to the
+/// refused column: the refusal names the table, never `d` (ADR 0048 A1 §3, merge review N2).
+#[test]
+fn a_grouping_key_of_another_relation_names_only_the_table() {
+    let w = World::new();
+    let root = w.admin();
+    ok(&root, "CREATE TABLE g (a INT, d INT) USING parquet");
+    ok(&root, "CREATE TABLE h (d INT) USING parquet");
+    ok(&root, "INSERT INTO g VALUES (1, 2)");
+    ok(&root, "INSERT INTO h VALUES (1)");
+    let ana = w.user("ana");
+    ok(&root, "GRANT SELECT (a) ON g TO user:ana");
+    ok(&root, "GRANT SELECT ON h TO user:ana");
+    let sql = "SELECT h.d, count(struct(s.*)) FROM (SELECT * FROM g) s JOIN h ON s.a = h.d GROUP BY ROLLUP(h.d)";
+    let e = denied(&ana, sql);
+    assert!(e.contains("`g`") && !e.contains("`d`"), "{sql}: {e}");
 }
 
 #[test]

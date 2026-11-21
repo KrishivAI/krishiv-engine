@@ -224,6 +224,17 @@ class SparkSession
 
 An embedded session. Create one with `SparkSession.builder.getOrCreate()`.
 
+### `addTag`
+
+```python
+def addTag(self, tag: str) -> None
+```
+
+Tags the queries this thread starts from now on, until `removeTag`; `interruptTag` cancels them.
+
+A frame keeps the tags it was made with: tag before the `spark.sql`, `spark.table`, `spark.read`
+or `spark.range` call, not before the action.
+
 ### `catalog`
 
 ```python
@@ -235,6 +246,14 @@ The catalog of temporary views, as `pyspark.sql.catalog.Catalog`.
 
 The embedded engine has no databases: every view is temporary and
 listed under the `default` database.
+
+### `clearTags`
+
+```python
+def clearTags(self) -> None
+```
+
+Removes every tag of this thread.
 
 ### `conf`
 
@@ -293,6 +312,16 @@ which the embedded session does not take).
 +-----+---+
 ```
 
+### `dataSource`
+
+```python
+@property
+def dataSource(self) -> DataSourceRegistration
+```
+
+`spark.dataSource.register(cls)`: registers a Python data source class (see
+`krishiv.sql.datasource`).
+
 ### `emptyDataFrame`
 
 ```python
@@ -314,6 +343,38 @@ root
 0
 ```
 
+### `getTags`
+
+```python
+def getTags(self) -> set[str]
+```
+
+This thread's tags.
+
+### `interruptAll`
+
+```python
+def interruptAll(self) -> list[str]
+```
+
+Cancels every running query of this session; the operation ids it cancelled.
+
+### `interruptOperation`
+
+```python
+def interruptOperation(self, op_id: str) -> list[str]
+```
+
+Cancels the running query with operation id `op_id`; its id in a list, or an empty list.
+
+### `interruptTag`
+
+```python
+def interruptTag(self, tag: str) -> list[str]
+```
+
+Cancels the running queries that carry `tag` (see `addTag`); their operation ids.
+
 ### `newSession`
 
 ```python
@@ -323,6 +384,16 @@ def newSession(self) -> SparkSession
 A new session with separate SQL configuration and temporary views,
 as `pyspark.sql.SparkSession.newSession`: it starts from the options
 this session was built with, not from later `conf.set` changes.
+
+### `profile`
+
+```python
+@property
+def profile(self) -> Profile
+```
+
+The UDF profiles of this session (`spark.sql.pyspark.udf.profiler` = `perf` or `memory`):
+`show`, `dump` and `clear`, as `pyspark.sql.profiler.Profile`.
 
 ### `range`
 
@@ -366,6 +437,14 @@ accepted and ignored (one node has nothing to partition).
 @property
 def read(self) -> DataFrameReader
 ```
+
+### `removeTag`
+
+```python
+def removeTag(self, tag: str) -> None
+```
+
+Stops tagging with `tag` (no error when this thread has not added it).
 
 ### `sparkContext`
 

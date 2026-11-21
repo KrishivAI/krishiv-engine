@@ -658,3 +658,29 @@ fn a_last_response_that_fails_after_the_finish_is_failed() {
     assert_eq!(op.state(), OperationState::Failed);
     assert!(!op.cancel());
 }
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] runs the test with Runtime::block_on"
+)]
+#[tokio::test]
+async fn reserve_holds_budget_bytes_until_the_permit_drops() {
+    let budget = super::ResponseBudget::new(100);
+    let a = budget.reserve(60).await;
+    assert!(a.is_some());
+    assert_eq!(budget.available(), 40);
+    // Over the whole budget clamps to it: waits for everything.
+    let waiting = budget.reserve(1_000);
+    tokio::pin!(waiting);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), &mut waiting)
+            .await
+            .is_err()
+    );
+    drop(a);
+    let all = waiting.await;
+    assert!(all.is_some());
+    assert_eq!(budget.available(), 0);
+    drop(all);
+    assert_eq!(budget.available(), 100);
+}

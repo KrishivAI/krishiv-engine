@@ -28,18 +28,23 @@ use crate::{Expr, ExprNode, JoinStrategy, Literal, LogicalPlan, PlanNode, ReadSo
 
 type R<T> = Result<T, AnalysisError>;
 
+/// Whether a `Hint` relation is anywhere in `root` (a walk of the whole plan).
+pub(super) fn has_hint(root: &Arc<LogicalPlan>) -> bool {
+    visit_distinct(Node::Plan(root), |n| match n {
+        Node::Plan(p) if matches!(p.node, PlanNode::Hint { .. }) => {
+            std::ops::ControlFlow::Break(())
+        }
+        _ => std::ops::ControlFlow::Continue(()),
+    })
+    .is_break()
+}
+
 /// `root` with its hints resolved, and the warnings they raised.
 pub(super) fn resolve(
     root: &Arc<LogicalPlan>,
     case_sensitive: bool,
 ) -> R<(Arc<LogicalPlan>, Vec<String>)> {
-    let found = visit_distinct(Node::Plan(root), |n| match n {
-        Node::Plan(p) if matches!(p.node, PlanNode::Hint { .. }) => {
-            std::ops::ControlFlow::Break(())
-        }
-        _ => std::ops::ControlFlow::Continue(()),
-    });
-    if found.is_continue() {
+    if !has_hint(root) {
         return Ok((Arc::clone(root), Vec::new()));
     }
     let mut h = Hints {

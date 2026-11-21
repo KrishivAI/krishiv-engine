@@ -30,12 +30,27 @@ fn sha2(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::String, true))
 }
 
+fn hmac(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Binary, true))
+}
+
 pub(super) fn specs() -> Vec<Spec> {
     let binary = Inputs::Expects(vec![exact(DataType::Binary)]);
     let mut out = scalar(&["hash"], &Inputs::Any, hash);
     out.extend(scalar(&["xxhash64"], &Inputs::Any, xxhash64));
     out.extend(scalar(&["md5", "sha", "sha1"], &binary, digest));
     out.extend(scalar(&["crc32"], &binary, crc32));
+    // `hmac(key, message[, algorithm])` (Spark 4.3): binary keys and messages, a string algorithm; NULL on a
+    // NULL argument.
+    out.extend(scalar(
+        &["hmac"],
+        &Inputs::Expects(vec![
+            exact(DataType::Binary),
+            exact(DataType::Binary),
+            exact(DataType::String),
+        ]),
+        hmac,
+    ));
     out.extend(scalar(
         &["sha2"],
         &Inputs::Expects(vec![exact(DataType::Binary), exact(DataType::Integer)]),

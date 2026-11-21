@@ -45,12 +45,24 @@
 //!   count as changed; [`overwrite_summary`] merges them with the added
 //!   files' values.
 //!
+//! - **Row filter and dropped partitions** (PR-36b part 2b, INSERT
+//!   OVERWRITE): [`Removals::row_filter`] (`deleteByRowFilter`) removes a
+//!   live file, data or delete, when every row matches (`plan::strict`'s
+//!   residual and strict metrics evaluator, bound to the attempt's schema);
+//!   a data file some, but not all, of whose rows may match is
+//!   [`FilterError::Partial`] with Java's "Cannot delete file where some, but
+//!   not all, rows match filter %s: %s" (`:478-480`; the commit loop raises
+//!   it as `KRISHIV_ICEBERG_OVERWRITE_PARTIAL_FILE`), a delete file so
+//!   matched is kept (`:554`). [`Removals::drop_partitions`]
+//!   (`dropPartition`) removes every live file of a spec id and tuple.
+//!
 //! Divergences: every manifest with live files is read (Java first prunes by
-//! the partitions of the files to delete, `canContainDroppedFiles`; the
-//! result is the same, only the reads differ); a row filter
-//! (`deleteByRowFilter`) and dropped partitions are not supported yet (static
-//! INSERT OVERWRITE, `ReplacePartitions`: later slices); the separator of the
-//! missing-files list (`, `) is unverified.
+//! the partitions of the files to delete, `canContainDroppedFiles`, and by
+//! the filter's manifest evaluator; the result is the same, only the reads
+//! differ); the separator of the missing-files list (`, `) is unverified, and
+//! a missing DV is named with the data file it applies to (Krishiv's text:
+//! one Puffin file holds many DVs); Java prints its `Expression`, Krishiv
+//! `plan::strict::Pred`'s recalled rendering of it.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -60,20 +72,107 @@ use iceberg::spec::{
     ManifestFile, ManifestStatus, TableMetadata, UNASSIGNED_SEQUENCE_NUMBER,
 };
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
+use krishiv_io::PushdownExpr;
 
-use super::merge::{manifest_writer, with_first_row_id};
-use super::scan::read_capped;
+use super::merge::{manifest_writer, rebuild, with_first_row_id};
+use super::scan::{content_file, partition_specs, read_capped, schema_fields};
 use super::storage::from_iceberg;
+use crate::plan::PartitionValue;
+use crate::plan::bounds::decode;
+use crate::plan::metrics::WriterMetrics;
+use crate::plan::strict::{Pred, RowFilter};
+use crate::plan::types::{IcebergType, PartitionSpecs};
 
-/// The files an `OverwriteFiles` removes: data files by location, delete
-/// files per entry ([`DeleteKey`]).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// The files an `OverwriteFiles` or `ReplacePartitions` removes: data files
+/// by location, delete files per entry ([`DeleteKey`]), every file whose
+/// rows all match a row filter, every file of a dropped partition.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Removals {
     /// Data files (Java's `deleteFile(DataFile)`).
     pub(crate) data_files: BTreeSet<String>,
     /// Delete files (Java's `deleteFiles(_, DeleteFileSet)`: CoW's DVs of
     /// the files it rewrites).
     pub(crate) delete_files: BTreeSet<DeleteKey>,
+    /// Java's `deleteByRowFilter` (an `overwriteByRowFilter`), in Spark's
+    /// semantics (`plan::strict::Pred::from_spark` turns it into Iceberg's):
+    /// a file is removed when every row matches; a data file where some, but
+    /// not all, rows may match fails the commit. `Constant(false)` is none.
+    pub(crate) row_filter: Option<PushdownExpr>,
+    /// Java's `dropPartition`: every live file (data or delete) whose spec id
+    /// and partition tuple are one of these (`ReplacePartitions`).
+    pub(crate) drop_partitions: HashSet<PartitionKey>,
+    /// A `ReplacePartitions` (operation `overwrite` always, summary
+    /// `replace-partitions=true`).
+    pub(crate) replace_partitions: bool,
+    /// A delete file of [`Self::delete_files`] no longer live is skipped, not
+    /// "Missing required files to delete": a merge-on-read `DELETE`'s
+    /// `RowDelta` without `validateDeletedFiles` (Java checks
+    /// `failMissingDeletePaths` only when it is set, `BaseRowDelta.java:151-153`).
+    pub(crate) ignore_missing_deletes: bool,
+}
+
+/// A partition of a spec: its id and the tuple, each value as
+/// [`partition_key`] normalises it.
+pub(crate) type PartitionKey = (i32, Vec<PartitionValue>);
+
+/// The key of the partition `partition` of the spec `spec_id`, its values
+/// compared by value as Java's `PartitionSet` (`StructLikeWrapper` at the
+/// spec's current partition type) does, not by stored bytes (review 36b2b
+/// M3): after `int -> long` or `float -> double` an old manifest holds a
+/// 4-byte tuple and a new file an 8-byte one for the same partition. Each
+/// value is decoded with the field's result type in `specs` (by stored
+/// width) and written at the widest width of its family (ints and longs as
+/// 8-byte longs, floats and doubles as 8-byte doubles); a value the type
+/// does not decode keeps its bytes (an 8-byte long under a type still
+/// `int` is already in that form). `None` when a value is unreadable: such
+/// a key never matches.
+pub(crate) fn partition_key(
+    specs: &PartitionSpecs,
+    spec_id: i32,
+    partition: &[PartitionValue],
+) -> Option<PartitionKey> {
+    use krishiv_io::ScalarValue as S;
+    let fields = specs.get(&spec_id).map(|s| s.fields.as_slice());
+    let values = partition
+        .iter()
+        .enumerate()
+        .map(|(i, v)| match v {
+            PartitionValue::Null => Some(PartitionValue::Null),
+            PartitionValue::Unreadable => None,
+            PartitionValue::Value(b) => {
+                let ty = fields
+                    .and_then(|f| f.get(i))
+                    .and_then(|f| f.result_type.as_ref());
+                let wide = match ty.and_then(|t| decode(b, t)) {
+                    Some(S::Int32(x)) if ty == Some(&IcebergType::Int) => {
+                        i64::from(x).to_le_bytes().to_vec()
+                    }
+                    Some(S::Int64(x) | S::TimestampMicros(x)) => x.to_le_bytes().to_vec(),
+                    Some(S::Float32(x)) => f64::from(x).to_le_bytes().to_vec(),
+                    Some(S::Float64(x)) => x.to_le_bytes().to_vec(),
+                    _ => b.clone(),
+                };
+                Some(PartitionValue::Value(wide))
+            }
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((spec_id, values))
+}
+
+impl Removals {
+    /// Whether any data file is removed (Java's `deletesDataFiles`,
+    /// `ManifestFilterManager.containsDeletes`: paths, a row filter other
+    /// than `alwaysFalse`, or dropped partitions).
+    pub(crate) fn deletes_data_files(&self) -> bool {
+        !self.data_files.is_empty() || self.filter().is_some() || !self.drop_partitions.is_empty()
+    }
+
+    /// The row filter, `None` for none or `alwaysFalse`.
+    fn filter(&self) -> Option<&PushdownExpr> {
+        self.row_filter
+            .as_ref()
+            .filter(|f| **f != PushdownExpr::Constant(false))
+    }
 }
 
 /// One delete file to remove, as Java's `DeleteFileSet` tells them apart:
@@ -88,6 +187,9 @@ pub(crate) struct DeleteKey {
     pub(crate) referenced_data_file: Option<String>,
     /// A DV's blob offset in its Puffin file.
     pub(crate) content_offset: Option<i64>,
+    /// A DV's blob length (Java's `DeleteFileSet` tells DVs apart by location,
+    /// offset and length; recalled, unverified).
+    pub(crate) content_size: Option<i64>,
 }
 
 impl DeleteKey {
@@ -97,6 +199,16 @@ impl DeleteKey {
             path: f.file_path().to_owned(),
             referenced_data_file: f.referenced_data_file(),
             content_offset: f.content_offset(),
+            content_size: f.content_size_in_bytes(),
+        }
+    }
+
+    /// The key as the missing-files message names it: a DV with the data
+    /// file it applies to (one Puffin file holds many).
+    fn describe(&self) -> String {
+        match (&self.referenced_data_file, self.content_offset) {
+            (Some(r), Some(_)) => format!("{} (the deletion vector of {r})", self.path),
+            _ => self.path.clone(),
         }
     }
 }
@@ -121,13 +233,77 @@ pub(crate) struct FilterContext<'a> {
     pub(crate) max_metadata_bytes: u64,
 }
 
+/// `f` with its partition tuple at the spec's current partition type
+/// (review 36b2b M3): a manifest written before `int -> long` or `float ->
+/// double` holds the old literal, which iceberg-rust refuses to write under
+/// the promoted type when the manifest is rewritten or merged.
+pub(super) fn widen_partition(
+    f: DataFile,
+    metadata: &TableMetadata,
+    spec_id: i32,
+) -> Result<DataFile, KrishivError> {
+    use iceberg::spec::{Literal, PrimitiveLiteral, PrimitiveType, Type};
+    let Some(spec) = metadata.partition_spec_by_id(spec_id) else {
+        return Ok(f);
+    };
+    let Ok(ty) = spec.partition_type(metadata.current_schema()) else {
+        return Ok(f);
+    };
+    if ty.fields().len() != f.partition().fields().len() {
+        return Ok(f);
+    }
+    let mut changed = false;
+    let values: Vec<Option<Literal>> = f
+        .partition()
+        .iter()
+        .zip(ty.fields())
+        .map(|(v, field)| match (v, field.field_type.as_ref()) {
+            (
+                Some(Literal::Primitive(PrimitiveLiteral::Int(x))),
+                Type::Primitive(PrimitiveType::Long),
+            ) => {
+                changed = true;
+                Some(Literal::long(i64::from(*x)))
+            }
+            (
+                Some(Literal::Primitive(PrimitiveLiteral::Float(x))),
+                Type::Primitive(PrimitiveType::Double),
+            ) => {
+                changed = true;
+                Some(Literal::double(f64::from(x.0)))
+            }
+            (v, _) => v.cloned(),
+        })
+        .collect();
+    if !changed {
+        return Ok(f);
+    }
+    rebuild(&f, f.first_row_id(), values.into_iter().collect(), spec_id)
+}
+
 /// Why a filter failed.
 #[derive(Debug)]
 pub(crate) enum FilterError {
     /// Files to remove that no manifest holds live: Java's message.
     Missing(String),
+    /// A data file some, but not all, of whose rows match the row filter
+    /// (Java's `ValidationException`): the filter's text and the file.
+    Partial {
+        /// The filter as Java prints it.
+        filter: String,
+        /// The file's location.
+        file: String,
+    },
     /// Anything else.
     Error(KrishivError),
+}
+
+impl FilterError {
+    /// Java's text of a [`FilterError::Partial`]
+    /// (`ManifestFilterManager.java:478-480`).
+    pub(crate) fn partial_text(filter: &str, file: &str) -> String {
+        format!("Cannot delete file where some, but not all, rows match filter {filter}: {file}")
+    }
 }
 
 impl From<KrishivError> for FilterError {
@@ -172,6 +348,40 @@ pub(crate) struct Metrics {
 }
 
 impl Metrics {
+    /// Java's `addedFile` for a delete file (`SnapshotSummary.java:290-310`:
+    /// a DV is `added-dvs`, sized by its blob, `ScanTaskUtil
+    /// .contentSizeInBytes`).
+    fn add_delete(&mut self, f: &DataFile) {
+        let dv = is_dv(f);
+        self.added_size += if dv {
+            f.content_size_in_bytes()
+                .and_then(|n| u64::try_from(n).ok())
+                .unwrap_or(0)
+        } else {
+            f.file_size_in_bytes()
+        };
+        match f.content_type() {
+            DataContentType::Data => {
+                self.added_files += 1;
+                self.added_records += f.record_count();
+            }
+            DataContentType::PositionDeletes => {
+                if dv {
+                    self.added_dvs += 1;
+                } else {
+                    self.added_pos_delete_files += 1;
+                }
+                self.added_delete_files += 1;
+                self.added_pos_deletes += f.record_count();
+            }
+            DataContentType::EqualityDeletes => {
+                self.added_delete_files += 1;
+                self.added_eq_delete_files += 1;
+                self.added_eq_deletes += f.record_count();
+            }
+        }
+    }
+
     /// Java's `removedFile`.
     fn remove(&mut self, f: &DataFile) {
         let dv = is_dv(f);
@@ -358,13 +568,64 @@ pub(crate) async fn filter_manifests(
         }
         removed.duplicates += hit.duplicates;
     };
+    // The row filter, bound to this attempt's schema and specs (Java binds
+    // it on every `apply`).
+    let fields = schema_fields(&schema);
+    let specs = partition_specs(cx.metadata, &schema);
+    let metrics = WriterMetrics::from_properties(
+        cx.metadata
+            .properties()
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str())),
+        &fields,
+    );
+    let pred = removals.filter().map(Pred::from_spark);
+    let text = pred.as_ref().map(ToString::to_string).unwrap_or_default();
+    let row_filter = pred.map(|p| RowFilter::new(p, &fields, &specs).with_metrics(&metrics));
+    // Java's per-file decision (`ManifestFilterManager.java:461-490`): marked
+    // by path or partition, or every row matching the filter; some rows
+    // matching is an error in a data manifest and a keep in a delete one.
+    let by_filter = |f: &DataFile, spec_id: i32, data: bool| -> Result<bool, FilterError> {
+        if removals.drop_partitions.is_empty() && row_filter.is_none() {
+            return Ok(false);
+        }
+        // One file's metrics, built once for both decisions.
+        let file = content_file(f, spec_id);
+        let marked = !removals.drop_partitions.is_empty()
+            && partition_key(&specs, spec_id, &file.partition)
+                .is_some_and(|k| removals.drop_partitions.contains(&k));
+        if marked {
+            return Ok(true);
+        }
+        let Some(filter) = &row_filter else {
+            return Ok(false);
+        };
+        if !filter.rows_might_match(&file) {
+            return Ok(false);
+        }
+        if filter.rows_must_match(&file) {
+            return Ok(true);
+        }
+        if data {
+            return Err(FilterError::Partial {
+                filter: text.clone(),
+                file: f.file_path().to_owned(),
+            });
+        }
+        Ok(false)
+    };
+    let by_rows = row_filter.is_some() || !removals.drop_partitions.is_empty();
     // Data manifests first: the data files removed decide the dangling DVs.
     let mut removed_data: HashSet<String> = HashSet::new();
     for m in &mut manifests {
-        if m.content != ManifestContentType::Data || removals.data_files.is_empty() {
+        if m.content != ManifestContentType::Data || !(by_rows || !removals.data_files.is_empty()) {
             continue;
         }
-        let hit = rewrite(cx, m, |f, _| removals.data_files.contains(f.file_path())).await?;
+        let spec_id = m.partition_spec_id;
+        let hit = rewrite(cx, m, |f, _| {
+            Ok(removals.data_files.contains(f.file_path()) || by_filter(f, spec_id, true)?)
+        })
+        .await?;
         if let Some(hit) = hit {
             for f in &hit.removed {
                 found.insert(f.file_path().to_owned());
@@ -388,12 +649,14 @@ pub(crate) async fn filter_manifests(
             if m.content != ManifestContentType::Deletes {
                 continue;
             }
+            let spec_id = m.partition_spec_id;
             let hit = rewrite(cx, m, |f, data_sequence| {
-                removals.delete_files.contains(&DeleteKey::of(f))
+                Ok(removals.delete_files.contains(&DeleteKey::of(f))
                     || (data_sequence > 0 && data_sequence < min_sequence)
                     || (is_dv(f)
                         && f.referenced_data_file()
                             .is_some_and(|r| removed_data.contains(&r)))
+                    || (by_rows && by_filter(f, spec_id, false)?))
             })
             .await?;
             if let Some(hit) = hit {
@@ -406,17 +669,17 @@ pub(crate) async fn filter_manifests(
             }
         }
     }
-    let missing: Vec<&str> = removals
+    let missing: Vec<String> = removals
         .data_files
         .iter()
         .filter(|p| !found.contains(p.as_str()))
-        .map(String::as_str)
+        .cloned()
         .chain(
             removals
                 .delete_files
                 .iter()
-                .filter(|k| !found_deletes.contains(*k))
-                .map(|k| k.path.as_str()),
+                .filter(|k| !removals.ignore_missing_deletes && !found_deletes.contains(*k))
+                .map(DeleteKey::describe),
         )
         .collect();
     if !missing.is_empty() {
@@ -437,15 +700,15 @@ pub(crate) async fn filter_manifests(
 async fn rewrite(
     cx: &mut FilterContext<'_>,
     m: &ManifestFile,
-    hit: impl Fn(&DataFile, i64) -> bool,
-) -> Result<Option<Hit>, KrishivError> {
+    hit: impl Fn(&DataFile, i64) -> Result<bool, FilterError>,
+) -> Result<Option<Hit>, FilterError> {
     if !m.has_added_files() && !m.has_existing_files() {
         return Ok(None);
     }
     if m.key_metadata.is_some() {
-        return Err(KrishivUnsupportedFeature {
+        return Err(KrishivError::from(KrishivUnsupportedFeature {
             feature: "removing files from encrypted Iceberg manifests".to_owned(),
-        }
+        })
         .into());
     }
     let declared = u64::try_from(m.manifest_length).ok().filter(|n| *n > 0);
@@ -512,7 +775,7 @@ async fn rewrite(
             data_seq,
             file_seq: seq(e.file_sequence_number),
             row_id,
-            marked: hit(file, data_seq.unwrap_or(-1)),
+            marked: hit(file, data_seq.unwrap_or(-1))?,
         });
     }
     if !live.iter().any(|l| l.marked) {
@@ -530,7 +793,9 @@ async fn rewrite(
         m.content,
     )?;
     let mut removed: Vec<DataFile> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    // A DV's identity is its blob (one Puffin file holds many), as `DeleteKey`; a data file's is
+    // its path (its other fields are `None`).
+    let mut seen: HashSet<DeleteKey> = HashSet::new();
     let mut duplicates = 0;
     for l in &live {
         let Some(e) = entries.get(l.index) else {
@@ -552,10 +817,11 @@ async fn rewrite(
         } else {
             file.clone()
         };
+        let file = widen_partition(file, cx.metadata, m.partition_spec_id)?;
         let data_seq = explicit(l.data_seq, "data")?;
         let file_seq = explicit(l.file_seq, "file")?;
         if l.marked {
-            if seen.insert(file.file_path().to_owned()) {
+            if seen.insert(DeleteKey::of(&file)) {
                 removed.push(file.clone());
             } else {
                 duplicates += 1;
@@ -625,6 +891,51 @@ pub(crate) fn overwrite_summary(
         }
     }
     props
+}
+
+/// The summary values of added delete files (`files`, each with its
+/// partition path, `""` unpartitioned): the totals and each partition's
+/// `partitions.<path>` text, as Java's `SnapshotSummary.addedFile` counts
+/// them (a row delta's, PR-36c).
+pub(crate) fn add_delete_files(out: &mut HashMap<String, String>, files: &[(String, &DataFile)]) {
+    let mut total = Metrics::default();
+    let mut parts: HashMap<&str, Metrics> = HashMap::new();
+    for (path, f) in files {
+        total.add_delete(f);
+        if !path.is_empty() {
+            parts.entry(path.as_str()).or_default().add_delete(f);
+        }
+    }
+    for (k, v) in total.pairs() {
+        if v > 0 {
+            out.insert(k.to_owned(), v.to_string());
+        }
+    }
+    for (path, m) in parts {
+        out.insert(format!("partitions.{path}"), m.text());
+    }
+}
+
+/// `extra`'s values added into `added`: counters summed, partition texts
+/// merged (their keys in Java's order).
+pub(crate) fn merge_summary(added: &mut HashMap<String, String>, extra: &HashMap<String, String>) {
+    for (k, v) in extra {
+        if k.starts_with("partitions.") {
+            let mut m = Metrics::default();
+            if let Some(old) = added.get(k) {
+                m.add_text(old);
+            }
+            m.add_text(v);
+            added.insert(k.clone(), m.text());
+            continue;
+        }
+        let sum = added
+            .get(k)
+            .and_then(|a| a.parse::<u64>().ok())
+            .unwrap_or(0)
+            .saturating_add(v.parse::<u64>().unwrap_or(0));
+        added.insert(k.clone(), sum.to_string());
+    }
 }
 
 fn internal(message: String) -> KrishivError {

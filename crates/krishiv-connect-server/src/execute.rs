@@ -46,6 +46,7 @@
 
 pub mod arrow;
 mod cache_command;
+mod catalog_call;
 #[cfg(test)]
 pub(crate) mod hooks;
 pub mod observed;
@@ -167,6 +168,19 @@ impl ResponseBudget {
     #[must_use]
     pub fn cap(&self) -> usize {
         self.cap
+    }
+
+    /// Waits until `bytes` (clamped to the whole budget, at least 1) are free and holds them
+    /// until the returned permit is dropped: another service on the Connect listener (an Arrow
+    /// Flight SQL `DoGet`, P3-T101 note §16 M1) shares `krishiv.connect.maxResponseBytes` with
+    /// Connect's operations. Cancel-safe: dropping the future gives nothing back because it took
+    /// nothing. `None` once the budget is closed (never, today).
+    pub async fn reserve(&self, bytes: usize) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let want = u32::try_from(bytes.clamp(1, self.cap)).unwrap_or(u32::MAX);
+        Arc::clone(&self.permits)
+            .acquire_many_owned(want)
+            .await
+            .ok()
     }
 }
 
@@ -871,6 +885,7 @@ async fn build_local_relation(
                 .local_relation(data.as_deref(), schema)
                 .await
         }
+        LocalRequest::Catalog(call) => catalog_call::run(entry.session(), call).await,
         LocalRequest::Cached { hash } => Err(ConnectInvalidPlanNotFoundCachedLocalRelation {
             hash,
             session_u_u_i_d: entry.server_side_id().to_owned(),

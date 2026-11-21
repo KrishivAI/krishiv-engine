@@ -204,16 +204,41 @@ fn python_udf(eval_type: crate::PythonEvalType) -> crate::PythonUdfRef {
 
 #[test]
 fn python_udf_relations_are_opaque_over_every_input_column() {
-    use crate::analyzer::lineage::{FilterKind, LineageWarning};
-    use crate::{BoundColumn, GeneratorKind, PythonEvalType, TableArg};
+    use crate::analyzer::lineage::{FilterKind, Leaf, LineageWarning};
+    use crate::{BoundColumn, GeneratorKind, PythonEvalType, SortOrder, TableArg};
 
     let a = analyze(LogicalPlan::table(["t"]));
+    // `t` and `u` from one analysis, so their ids are distinct: the cogroup's sides.
+    let tu = analyze(LogicalPlan::table(["t"]).join(
+        LogicalPlan::table(["u"]),
+        crate::JoinKind::Cross,
+        crate::JoinCondition::None,
+    ));
+    let PlanNode::Join {
+        left: t_side,
+        right: u_side,
+        ..
+    } = &tu.plan.root().node
+    else {
+        panic!("{:?}", tu.plan)
+    };
+    let leaf = |table: &str, column: &str| Leaf::Table {
+        name: vec![
+            "spark_catalog".to_owned(),
+            "default".to_owned(),
+            table.to_owned(),
+        ],
+        column: column.to_owned(),
+    };
     let column = |b: &BoundColumn| {
         Arc::new(Expr::new(ExprNode::Resolved(crate::ResolvedExpr::Column(
             b.clone(),
         ))))
     };
     let x = column(&a.output[0]);
+    let y = column(&a.output[1]);
+    let t_x = column(&tu.output[0]);
+    let u_z = column(&tu.output[2]);
     let out = |id: u64| BoundColumn {
         id: crate::AttrId(id),
         name: format!("o{id}"),
@@ -222,7 +247,9 @@ fn python_udf_relations_are_opaque_over_every_input_column() {
     };
     let outputs = vec![out(100), out(101)];
     type Build<'a> = Box<dyn Fn(Arc<LogicalPlan>) -> LogicalPlan + 'a>;
-    let nodes: Vec<(&str, Build<'_>, bool)> = vec![
+    /// What a case is called, its node over `t`, its grouping keys, its window keys, its source count.
+    type Case<'a> = (&'a str, Build<'a>, Vec<Leaf>, Vec<Leaf>, usize);
+    let nodes: Vec<Case<'_>> = vec![
         (
             "map",
             Box::new(|input| {
@@ -233,7 +260,9 @@ fn python_udf_relations_are_opaque_over_every_input_column() {
                     barrier: false,
                 })
             }),
-            false,
+            vec![],
+            vec![],
+            2,
         ),
         (
             "group map",
@@ -245,21 +274,26 @@ fn python_udf_relations_are_opaque_over_every_input_column() {
                     output: outputs.clone(),
                 })
             }),
-            true,
+            vec![leaf("t", "x")],
+            vec![],
+            2,
         ),
         (
             "cogroup map",
-            Box::new(|input| {
+            // `t` cogrouped with `u`: both sides are sources, and both sides' keys.
+            Box::new(|_| {
                 LogicalPlan::new(PlanNode::CoGroupMap {
-                    left: Arc::clone(&input),
-                    right: input,
-                    left_keys: vec![Arc::clone(&x)],
-                    right_keys: vec![Arc::clone(&x)],
+                    left: Arc::clone(t_side),
+                    right: Arc::clone(u_side),
+                    left_keys: vec![Arc::clone(&t_x)],
+                    right_keys: vec![Arc::clone(&u_z)],
                     udf: python_udf(PythonEvalType::CogroupedMapArrow),
                     output: outputs.clone(),
                 })
             }),
-            true,
+            vec![leaf("t", "x"), leaf("u", "z")],
+            vec![],
+            3,
         ),
         (
             "table function",
@@ -269,7 +303,7 @@ fn python_udf_relations_are_opaque_over_every_input_column() {
                     table_arg: Some(TableArg {
                         input,
                         partition_by: vec![Arc::clone(&x)],
-                        order_by: Vec::new(),
+                        order_by: vec![SortOrder::asc(Arc::clone(&y))],
                         single_partition: false,
                         select: Vec::new(),
                         position: 0,
@@ -281,10 +315,12 @@ fn python_udf_relations_are_opaque_over_every_input_column() {
                     analyzed: None,
                 })
             }),
-            false,
+            vec![],
+            vec![leaf("t", "x"), leaf("t", "y")],
+            2,
         ),
     ];
-    for (what, build, grouped) in &nodes {
+    for (what, build, group_by, window, sources) in &nodes {
         let p = AnalyzedPlan {
             output: outputs.clone(),
             ..with_root(&a, build)
@@ -293,15 +329,65 @@ fn python_udf_relations_are_opaque_over_every_input_column() {
         assert_eq!(l.columns.len(), 2, "{what}");
         for col in &l.columns {
             assert_eq!(col.transform, Transform::Opaque, "{what}");
-            assert_eq!(col.sources.len(), 2, "{what}: both of t's columns");
+            assert_eq!(col.sources.len(), *sources, "{what}: every input column");
         }
         assert!(
             l.warnings.contains(&LineageWarning::LineageOpaqueUdf),
             "{what}"
         );
-        let kinds: Vec<FilterKind> = l.filters.iter().map(|(k, _)| *k).collect();
-        assert_eq!(kinds.contains(&FilterKind::GroupBy), *grouped, "{what}");
+        let of = |kind: FilterKind| -> Vec<Leaf> {
+            l.filters
+                .iter()
+                .filter(|(k, _)| *k == kind)
+                .map(|(_, leaf)| leaf.clone())
+                .collect()
+        };
+        assert_eq!(&of(FilterKind::GroupBy), group_by, "{what}");
+        assert_eq!(&of(FilterKind::Window), window, "{what}");
     }
+
+    drop(nodes);
+
+    // A Python relation under a `Shift` (a self-join of a shared subtree): the instance's outputs read
+    // `id + offset` (ids 1100 and 1101 resolve). Its input and keys reach the same leaves, so only the outputs are pinned.
+    let group_map = Arc::new(LogicalPlan::new(PlanNode::GroupMap {
+        input: Arc::clone(a.plan.root()),
+        keys: vec![Arc::clone(&x)],
+        udf: python_udf(PythonEvalType::GroupedMapArrow),
+        output: outputs.clone(),
+    }));
+    let self_join = with_root(&a, |_| {
+        LogicalPlan::new(PlanNode::Join {
+            left: Arc::clone(&group_map),
+            right: Arc::new(LogicalPlan::new(PlanNode::Shift {
+                input: Arc::clone(&group_map),
+                offset: 1000,
+            })),
+            kind: crate::JoinKind::Cross,
+            condition: crate::JoinCondition::None,
+        })
+    });
+    let p = AnalyzedPlan {
+        output: [outputs, vec![out(1100), out(1101)]].concat(),
+        ..self_join
+    };
+    let l = lineage(&p).unwrap();
+    assert_eq!(l.columns.len(), 4);
+    for col in &l.columns {
+        assert_eq!(col.transform, Transform::Opaque, "{}", col.name);
+        assert_eq!(col.sources.len(), 2, "{}: both of t's columns", col.name);
+    }
+    assert_eq!(l.columns[2].sources, l.columns[0].sources);
+    let group_by: Vec<_> = l
+        .filters
+        .iter()
+        .filter(|(k, _)| *k == FilterKind::GroupBy)
+        .collect();
+    assert_eq!(
+        group_by.len(),
+        1,
+        "both instances group by t.x, deduplicated"
+    );
 
     // A Python UDTF under LATERAL: the call over `x` is the generator's argument.
     let call = Arc::new(Expr::new(ExprNode::Resolved(

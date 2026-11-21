@@ -135,8 +135,10 @@ mod unexecutable;
 mod unpivot;
 mod variables;
 mod variant;
+mod view_ctes;
 pub mod views;
 mod windows;
+mod written;
 
 use krishiv_kernels::datetime::{TimeZoneRules, ZoneRef, resolve_zone};
 use std::collections::{BTreeMap, BTreeSet};
@@ -149,7 +151,7 @@ use krishiv_common::redact::RedactedSql;
 use twox_hash::XxHash3_128;
 
 pub use access::{
-    authorize, authorize_quietly, authorize_reported, authorize_secret_refs,
+    allowed, authorize, authorize_quietly, authorize_reported, authorize_secret_refs,
     insufficient_permissions, namespace_parts, secret_scopes, table_ident,
 };
 pub use builtins::BuiltinFunctions;
@@ -171,6 +173,7 @@ pub use table_change::{
     TableChange, TypeWidening, apply_changes,
 };
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, VariableValue, variable_name};
+pub use view_ctes::{inline_view_ctes, unscoped_read};
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
 
@@ -672,6 +675,25 @@ pub struct AnalysisContext {
     pub variables: Arc<VariableSnapshot>,
     /// What the analysis is for: the privilege its reads ask.
     pub mode: AnalysisMode,
+    /// The inlined queries of the `SQL SECURITY DEFINER` views of the plan whose reads were
+    /// authorized for the view's owner (P3-T062 §2.4), trusted by node identity: under one of
+    /// these subtrees, Bind asks the policy nothing about catalog tables and views for
+    /// [`Self::principal`], the column pass skips those reads, and they are not among
+    /// [`AnalyzedPlan::securables`]. Paths, secret scopes and server-scoped store options under
+    /// them are still asked of the principal. Only the session that inlined the views holds these
+    /// nodes, so no plan a caller writes (whatever its origins or SQL source numbers) is ever
+    /// trusted (review B1). Empty for every other analysis.
+    pub definer_texts: views::DefinerTexts,
+    /// The inlined queries of every permanent view of the plan, `INVOKER` and `DEFINER` (review
+    /// r5 Z1, Z2), by node identity as [`Self::definer_texts`]: a stored view's text resolves
+    /// nothing of the reading session. Under one of these subtrees no session variable or script
+    /// local resolves (a name no column has stays unresolved), and a call left bare that no
+    /// built-in answers, a session-qualified call (`session.f`, `system.session.f`) and such a
+    /// table function are unresolved routines: the session qualified every call a stored function
+    /// answers when it inlined the view. Spark v4.2.0: while a permanent view resolves, no
+    /// temporary function or variable answers (`SessionCatalog.scala` lines 2427-2441,
+    /// `Analyzer.scala` lines 252-254). Empty for an analysis that inlined none.
+    pub stored_view_texts: views::DefinerTexts,
 }
 
 /// The context inputs of a resolution: with the input key and the pins,
@@ -1129,10 +1151,36 @@ async fn analyze_with(
     for (used, read) in securables.iter_mut().zip(&reads) {
         used.columns.clone_from(&read.columns);
     }
-    access::authorize_columns(ctx, &securables, &reads, plan.root().origin).await?;
-    unexecutable::check(&root, ctx.conf.time_type)?;
+    access::authorize_columns(
+        ctx,
+        &securables,
+        &reads,
+        &bindings.definer_only,
+        |securable, column| written::wrote_column(&root, plan.root(), &bindings, securable, column),
+        plan.root().origin,
+    )
+    .await?;
+    // What only a definer view's text reads is its owner's, not the principal's (P3-T062 §2.4).
+    if !bindings.definer_only.is_empty() {
+        securables = securables
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !bindings.definer_only.contains(i))
+            .map(|(_, u)| u)
+            .collect();
+    }
+    // What the analysis of the prefix this one started from already checked is not checked again.
+    let mut verified = prefix::Verified::start(
+        warm.as_deref()
+            .filter(|_| warm_started)
+            .and_then(|e| e.verified.as_ref()),
+        ctx.conf.time_type,
+    );
+    unexecutable::check_known(&root, ctx.conf.time_type, &mut verified.unexecutable)?;
     input_file::check(plan.root(), &bindings, ctx)?;
-    let resolved = Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+    let resolved = Plan::try_new_known(Arc::clone(&root), &mut verified.heights)
+        .map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+    verified.keep(root);
     if let Some((slot, starts)) = slot {
         if warm_started {
             starts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1141,6 +1189,7 @@ async fn analyze_with(
         if let Ok(mut g) = slot.lock() {
             *g = entry.map(|mut e| {
                 e.fingerprint = Some(context.clone());
+                e.verified = Some(verified);
                 Arc::new(e)
             });
         }

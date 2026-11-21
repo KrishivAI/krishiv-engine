@@ -71,6 +71,12 @@
     "sqlState" : "58030",
     "audience" : "operator"
   },
+  "KRISHIV_CATALOG_TABLE_UNSUPPORTED" : {
+    "message" : [
+      "The catalog <catalog> serves <relationName> with <feature>, which Krishiv does not support yet, so the table was not read."
+    ],
+    "sqlState" : "0A000"
+  },
   "KRISHIV_COMMIT_LOG_CORRUPT" : {
     "message" : [
       "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."
@@ -97,6 +103,72 @@
     ],
     "sqlState" : "KD001",
     "audience" : "operator"
+  },
+  "KRISHIV_FLIGHT_SQL_FETCH_IDLE" : {
+    "message" : [
+      "The client did not read this Arrow Flight SQL result for <timeout>; the query was cancelled. Read results without pausing, or raise \"krishiv.flightSql.fetchIdleTimeout\"."
+    ],
+    "sqlState" : "HY008"
+  },
+  "KRISHIV_FLIGHT_SQL_HANDLE_LIMIT" : {
+    "message" : [
+      "Cannot create a new Arrow Flight SQL handle: <limitName> allows at most <limit>. Close prepared statements and fetch or cancel statement tickets you no longer need, or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
+  },
+  "KRISHIV_FLIGHT_SQL_INVALID_PARAMETERS" : {
+    "message" : [
+      "The parameter rows bound to an Arrow Flight SQL prepared statement cannot be used: <reason>. Nothing was run."
+    ],
+    "sqlState" : "07001"
+  },
+  "KRISHIV_FLIGHT_SQL_METADATA_TIMEOUT" : {
+    "message" : [
+      "The Arrow Flight SQL <command> listing ran longer than its limit of <limit> and was stopped. Narrow its patterns, or raise \"krishiv.flightSql.metadataTimeout\"."
+    ],
+    "sqlState" : "HY008"
+  },
+  "KRISHIV_FLIGHT_SQL_NOT_A_QUERY" : {
+    "message" : [
+      "This Arrow Flight SQL call needs a query, but the statement is not a query (its class is <statementClass>; it may have become a command through a changed ${...} variable). Nothing was run. Send it as a statement update (DoPut) or with GetFlightInfo of a new statement."
+    ],
+    "sqlState" : "55000"
+  },
+  "KRISHIV_FLIGHT_SQL_QUERY_AS_UPDATE" : {
+    "message" : [
+      "An Arrow Flight SQL update (DoPut) needs a statement that returns no rows, but this statement is a query. Nothing was run. Send it with GetFlightInfo and fetch its rows with DoGet."
+    ],
+    "sqlState" : "42000"
+  },
+  "KRISHIV_FLIGHT_SQL_RESULT_NOT_STORED" : {
+    "message" : [
+      "The statement ran; its result (<size>) was not stored: <reason>. Do not run it again to see its effect; send a query to read the state it changed."
+    ],
+    "sqlState" : "55000"
+  },
+  "KRISHIV_FLIGHT_SQL_ROW_TOO_LARGE" : {
+    "message" : [
+      "A result row of <columns> columns is larger than the <limit>-byte Arrow Flight SQL message limit and cannot be sent. Select fewer or smaller columns."
+    ],
+    "sqlState" : "54000"
+  },
+  "KRISHIV_FLIGHT_SQL_SCHEMA_CHANGED" : {
+    "message" : [
+      "The result schema of this Arrow Flight SQL ticket changed since GetFlightInfo (a table it reads was altered). Call GetFlightInfo again for a new ticket."
+    ],
+    "sqlState" : "55000"
+  },
+  "KRISHIV_FLIGHT_SQL_SCHEMA_TABLES_LIMIT" : {
+    "message" : [
+      "The Arrow Flight SQL GetTables listing with table schemas matches <count> tables, over the limit of <limit>. Narrow the catalog, schema or table name pattern, or raise \"krishiv.flightSql.maxSchemaTables\"."
+    ],
+    "sqlState" : "54000"
+  },
+  "KRISHIV_FLIGHT_SQL_STATEMENT_TOO_LARGE" : {
+    "message" : [
+      "The Arrow Flight SQL statement is <bytes> bytes long, over the limit of <limit> bytes. Shorten it, or raise \"krishiv.flightSql.maxStatementBytes\"."
+    ],
+    "sqlState" : "54000"
   },
   "KRISHIV_GRANTS_STORE_FAILURE" : {
     "message" : [
@@ -132,6 +204,12 @@
     ],
     "sqlState" : "KD001",
     "audience" : "operator"
+  },
+  "KRISHIV_ICEBERG_OVERWRITE_PARTIAL_FILE" : {
+    "message" : [
+      "Cannot delete file where some, but not all, rows match filter <filter>: <file>. The overwrite of the Iceberg table <table> (snapshot <snapshotId>) is not committed; <files>. An overwrite by filter removes whole files only, so running it again fails the same way: overwrite by a filter on the table's partition columns, or one every file matches wholly or not at all."
+    ],
+    "sqlState" : "22000"
   },
   "KRISHIV_IDEMPOTENCY_KEY_REUSED" : {
     "message" : [
@@ -206,6 +284,12 @@
     ],
     "sqlState" : "53200"
   },
+  "KRISHIV_JVM_FUNCTION_UNSUPPORTED" : {
+    "message" : [
+      "The function <function> is implemented by a JVM class, which Krishiv cannot load: it runs no JVM. <hint>"
+    ],
+    "sqlState" : "0A000"
+  },
   "KRISHIV_MALFORMED_JSON" : {
     "message" : [
       "The JSON string <json> is malformed. Provide valid JSON."
@@ -248,6 +332,12 @@
       "The Python artifact <name> cannot be used by UDF workers: <reason>. Add a smaller or a well-formed artifact (zip, jar, tar, tar.gz or tgz archives), or raise the server's artifact limit."
     ],
     "sqlState" : "22023"
+  },
+  "KRISHIV_PYTHON_DATA_SOURCE_LIMIT" : {
+    "message" : [
+      "The Python data source <source> returned <bytes> bytes, over the <limit> byte limit of this embedded read path, which holds a source's rows in memory when a scan runs. Read less of it per query (narrow the source's options or split it into smaller sources)."
+    ],
+    "sqlState" : "53400"
   },
   "KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH" : {
     "message" : [
@@ -352,6 +442,18 @@
       "The role <role> does not exist. Create it with CREATE ROLE first."
     ],
     "sqlState" : "42704"
+  },
+  "KRISHIV_SAMPLE_FRACTION_OUT_OF_RANGE" : {
+    "message" : [
+      "requirement failed: Sampling fraction (<fraction>) must be on interval [0, 1] without replacement"
+    ],
+    "sqlState" : "22023"
+  },
+  "KRISHIV_SERVER_DRAINING" : {
+    "message" : [
+      "The server is shutting down and takes no new work. Reconnect once it is back, or to another server."
+    ],
+    "sqlState" : "08004"
   },
   "KRISHIV_SESSION_LIMIT" : {
     "message" : [

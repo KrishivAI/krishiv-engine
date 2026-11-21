@@ -133,6 +133,24 @@ impl Session {
         let cs = env.analysis.conf.case_sensitive;
         match securable {
             Securable::Table(t) | Securable::View(t) => {
+                // A permanent view of the session catalog: the query catalog never loads one
+                // (views are inlined before analysis), so ask the store, or its creator would
+                // never own it (P3-T062 G3).
+                if let ([namespace], true) = (
+                    t.namespace.as_slice(),
+                    t.catalog.eq_ignore_ascii_case(crate::catalog::CATALOG),
+                ) {
+                    use crate::store::CatalogStore as _;
+                    let store = &self.state.catalog.store;
+                    let found = store.table(namespace, &t.name).or_else(|| {
+                        (!cs)
+                            .then(|| store.table(&namespace.to_lowercase(), &t.name.to_lowercase()))
+                            .flatten()
+                    });
+                    if found.as_ref().is_some_and(|e| e.view.is_some()) {
+                        return Some(true);
+                    }
+                }
                 let catalog = env.analysis.catalogs.catalog(&t.catalog)?;
                 let form = krishiv_plan::analyzer::NameForm {
                     case_sensitive: cs,
@@ -152,6 +170,27 @@ impl Session {
                     Some(
                         store.has_namespace(namespace)
                             || (!cs && store.has_namespace(&namespace.to_lowercase())),
+                    )
+                }
+                _ => None,
+            },
+            // A stored function of the session catalog (P3-T062 G3: its creator owns it, so it
+            // can call it, which needs `Select` on it).
+            Securable::Function(n) => match n.as_slice() {
+                [catalog, namespace, name] if catalog == crate::catalog::CATALOG => {
+                    use crate::store::CatalogStore as _;
+                    let namespace = if cs {
+                        namespace.clone()
+                    } else {
+                        namespace.to_lowercase()
+                    };
+                    Some(
+                        self.state
+                            .catalog
+                            .store
+                            .functions()
+                            .get(&namespace, name)
+                            .is_some(),
                     )
                 }
                 _ => None,

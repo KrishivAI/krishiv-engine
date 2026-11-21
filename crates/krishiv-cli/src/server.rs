@@ -34,7 +34,10 @@ use std::time::Duration;
 
 use krishiv_common::config::{
     CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
-    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, UI_ALLOWED_HOSTS, UI_ENABLED,
+    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
+    SERVER_READINESS_FAILURE_THRESHOLD, SERVER_READINESS_INTERVAL, SERVER_READINESS_REQUIRED,
+    SERVER_READINESS_TIMEOUT, SERVER_SHUTDOWN_TIMEOUT, UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS,
+    UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -73,6 +76,52 @@ pub(crate) struct ServerArgs {
     conf: Vec<(String, String)>,
 }
 
+impl ServerArgs {
+    /// `--host`.
+    pub(crate) fn host(&self) -> Option<IpAddr> {
+        self.host
+    }
+    /// `--connect-port`.
+    pub(crate) fn connect_port(&self) -> Option<u16> {
+        self.connect_port
+    }
+    /// `--port`.
+    pub(crate) fn port(&self) -> u16 {
+        self.port
+    }
+    /// The `--conf` settings.
+    pub(crate) fn conf(&self) -> &[(String, String)] {
+        &self.conf
+    }
+    /// `--allow-root`.
+    pub(crate) fn allow_root(&self) -> bool {
+        self.allow_root
+    }
+    /// The settings of a test: default ports, no host, no `--allow-root`.
+    #[cfg(test)]
+    pub(crate) fn for_test(conf: &[(&str, &str)]) -> Self {
+        Self {
+            port: 0,
+            connect_port: Some(0),
+            host: None,
+            allow_root: false,
+            conf: conf
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn set_host(&mut self, host: &str) {
+        self.host = host.parse().ok();
+    }
+    #[cfg(test)]
+    pub(crate) fn set_ports(&mut self, connect: u16, admin: u16) {
+        self.connect_port = Some(connect);
+        self.port = admin;
+    }
+}
+
 /// Runs the server; the process exit code.
 #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
 pub(crate) fn run(args: &ServerArgs) -> i32 {
@@ -85,21 +134,37 @@ pub(crate) fn run(args: &ServerArgs) -> i32 {
     }
 }
 
-fn serve(args: &ServerArgs) -> Result<(), String> {
+/// The settings of `krishiv server`, parsed and checked. `krishiv doctor` runs the same code, so
+/// the two cannot disagree about what a configuration means.
+pub(crate) struct Settings {
+    pub(crate) config: Config,
+    pub(crate) auth: AuthConfig,
+    pub(crate) tls: TlsConfig,
+    /// The declared catalogs' setup (declarations are the registry's, not configuration).
+    pub(crate) catalogs: CatalogSetup,
+    /// The settings the engine runtime receives: everything but the listener's own and the
+    /// catalog declarations, the default-catalog key under its one spelling.
+    pub(crate) engine: Vec<(String, String)>,
+}
+
+/// Parses every `--conf` setting: the listener's own (authentication, TLS) into their typed
+/// forms, the rest into the engine configuration.
+///
+/// `krishiv.auth.*` and `krishiv.server.tls.*` settings (secret references and key files
+/// included) are read once here and never become engine configuration: a session could otherwise
+/// list them with `SET`.
+pub(crate) fn load_settings(conf: &[(String, String)]) -> Result<Settings, String> {
     let mut config = Config::new();
-    let mut builder = EngineRuntime::builder();
-    // Authentication and TLS settings (secret references and key files included) are read once
-    // here and never become engine configuration: a session could otherwise list them with `SET`.
     let listener_settings = || {
-        args.conf
-            .iter()
+        conf.iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .filter(|(k, _)| is_listener_key(k))
     };
-    let auth_config = AuthConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
-    let tls_config = TlsConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
+    let auth = AuthConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
+    let tls = TlsConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
     let mut catalogs = catalog_setup();
-    for (k, v) in &args.conf {
+    let mut engine = Vec::new();
+    for (k, v) in conf {
         if is_listener_key(k) {
             continue;
         }
@@ -128,6 +193,54 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
             };
             return Err(format!("{k} is not supported by krishiv server{hint}"));
         }
+        engine.push((k.to_owned(), v.clone()));
+    }
+    Ok(Settings {
+        config,
+        auth,
+        tls,
+        catalogs,
+        engine,
+    })
+}
+
+/// The address both listeners bind: `--host`, else `krishiv.connect.address`.
+pub(crate) fn resolve_host(host: Option<IpAddr>, config: &Config) -> Result<IpAddr, String> {
+    match host {
+        Some(h) => Ok(h),
+        None => config
+            .get(&CONNECT_ADDRESS)
+            .and_then(ConfigValue::as_str)
+            .unwrap_or("127.0.0.1")
+            .parse()
+            .map_err(|_| "krishiv.connect.address is not an IP address".to_owned()),
+    }
+}
+
+/// ADR 0046 §6, design §3.5: the check before either listener binds (both bind `host`).
+pub(crate) fn check_host(host: IpAddr, settings: &Settings) -> Result<(), String> {
+    check_listener(SocketAddr::new(host, 0), &settings.auth, &settings.tls).map_err(|e| {
+        format!(
+            "refusing to serve on {host}: {e}. Bind a loopback address (--host 127.0.0.1), or \
+             configure authentication (krishiv.auth.*) and, for tokens or OIDC, TLS \
+             (krishiv.server.tls.certFile and keyFile)."
+        )
+    })
+}
+
+fn serve(args: &ServerArgs) -> Result<(), String> {
+    let settings = load_settings(&args.conf)?;
+    let mut builder = EngineRuntime::builder();
+    let host = resolve_host(args.host, &settings.config)?;
+    check_host(host, &settings)?;
+    let Settings {
+        config,
+        auth: auth_config,
+        tls: tls_config,
+        catalogs,
+        engine,
+    } = settings;
+    for (k, v) in &engine {
         builder = builder.config(k, v);
     }
     builder = builder.catalogs(catalogs);
@@ -140,23 +253,6 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     {
         builder = builder.config(IO_EGRESS_PRIVATE_ADDRESSES.key, "deny");
     }
-    let host = match args.host {
-        Some(h) => h,
-        None => config
-            .get(&CONNECT_ADDRESS)
-            .and_then(ConfigValue::as_str)
-            .unwrap_or("127.0.0.1")
-            .parse()
-            .map_err(|_| "krishiv.connect.address is not an IP address".to_owned())?,
-    };
-    // ADR 0046 §6, design §3.5: before either listener binds (both bind `host`).
-    check_listener(SocketAddr::new(host, 0), &auth_config, &tls_config).map_err(|e| {
-        format!(
-            "refusing to serve on {host}: {e}. Bind a loopback address (--host 127.0.0.1), or \
-             configure authentication (krishiv.auth.*) and, for tokens or OIDC, TLS \
-             (krishiv.server.tls.certFile and keyFile)."
-        )
-    })?;
     let tls = ServerTls::new(&tls_config, &auth_config.mtls).map_err(|e| e.to_string())?;
     let auth = ServerAuth::new(&auth_config).map_err(|e| e.to_string())?;
     if host::is_root() && !args.allow_root {
@@ -207,14 +303,88 @@ fn catalog_setup() -> CatalogSetup {
 
 /// A setting `krishiv server` reads itself: authentication (`krishiv.auth.*`, Spark's token key)
 /// and the listeners' TLS (`krishiv.server.tls.*`).
-fn is_listener_key(key: &str) -> bool {
+pub(crate) fn is_listener_key(key: &str) -> bool {
     is_auth_key(key) || key.starts_with("krishiv.server.tls.")
+}
+
+/// `GetSqlInfo`'s server facts (design P3-T101 §5): the version, the parser's keywords and the
+/// functions Krishiv implements of Spark's math (numeric), string, datetime and misc (system)
+/// documentation groups.
+#[cfg(feature = "flight-sql")]
+fn flight_server_info() -> krishiv_flight_sql::ServerInfo {
+    use krishiv_functions::registry::{FunctionGroup, builtins, spark_function_groups};
+    let implemented: std::collections::HashSet<&str> =
+        builtins().functions().iter().map(|d| d.name).collect();
+    let mut info = krishiv_flight_sql::ServerInfo {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        keywords: krishiv_sql::SQL_KEYWORDS
+            .iter()
+            .map(|(k, _)| (*k).to_owned())
+            .collect(),
+        ..krishiv_flight_sql::ServerInfo::default()
+    };
+    for (name, group) in spark_function_groups().filter(|(n, _)| implemented.contains(n)) {
+        let list = match group {
+            FunctionGroup::Math => &mut info.numeric_functions,
+            FunctionGroup::String => &mut info.string_functions,
+            FunctionGroup::Datetime => &mut info.datetime_functions,
+            FunctionGroup::Misc => &mut info.system_functions,
+            _ => continue,
+        };
+        list.push(name.to_owned());
+    }
+    info
+}
+
+/// The Flight SQL service for `connect`'s listener and its sweep task, unless
+/// `krishiv.flightSql.enabled` is off (design P3-T101 §2, owner item 6: on by default when
+/// compiled in).
+#[cfg(feature = "flight-sql")]
+fn flight_sql(
+    config: &Config,
+    manager: &Arc<SessionManager>,
+    connect: &ConnectServer,
+    auth: ConnectAuth,
+) -> Result<
+    Option<(
+        krishiv_flight_sql::FlightSqlServer,
+        krishiv_flight_sql::SweepGuard,
+    )>,
+    String,
+> {
+    if !flag(config, &krishiv_common::config::FLIGHT_SQL_ENABLED, true) {
+        return Ok(None);
+    }
+    let info = flight_server_info();
+    let flight = krishiv_flight_sql::FlightSqlServer::new(
+        Arc::clone(manager),
+        Arc::new(auth),
+        connect.draining(),
+        connect.response_budget().clone(),
+        &info,
+        krishiv_flight_sql::FlightSqlConfig::from_config(config),
+    )
+    .map_err(|e| e.to_string())?;
+    let interval = ConnectServerConfig::from_config(config).maintenance_interval;
+    let sweeper = flight.spawn_sweeper(interval);
+    Ok(Some((flight, sweeper)))
 }
 
 fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: bool) -> bool {
     config
         .get(entry)
         .and_then(ConfigValue::as_bool)
+        .unwrap_or(default)
+}
+
+fn duration(
+    config: &Config,
+    entry: &krishiv_common::config::ConfigEntry,
+    default: Duration,
+) -> Duration {
+    config
+        .get(entry)
+        .and_then(ConfigValue::as_duration)
         .unwrap_or(default)
 }
 
@@ -278,36 +448,111 @@ async fn run_listeners(
         Arc::new(TokenGuard::new(&token))
     };
     let ready = Arc::new(AtomicBool::new(false));
+    // `/readyz` answers from the cached checks (design P3-T066 §5.2); the serving flag is
+    // read on every probe, so a drain flips it at once.
+    // `auth` always fails readiness; `krishiv.server.readiness.required` adds shared dependencies.
+    let mut required = vec!["auth".to_owned()];
+    required.extend(
+        config
+            .get(&SERVER_READINESS_REQUIRED)
+            .and_then(ConfigValue::as_str)
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned),
+    );
+    // Only the checks that are wired can be required; a name with no check would never fail.
+    if let Some(unknown) = required.iter().find(|n| n.as_str() != "auth") {
+        return Err(format!(
+            "krishiv.server.readiness.required names `{unknown}`, which has no readiness check yet"
+        ));
+    }
+    let interval = duration(config, &SERVER_READINESS_INTERVAL, Duration::from_secs(10));
+    if interval < Duration::from_secs(1) {
+        return Err("krishiv.server.readiness.interval must be at least 1s".to_owned());
+    }
+    let threshold = config
+        .get(&SERVER_READINESS_FAILURE_THRESHOLD)
+        .and_then(ConfigValue::as_int)
+        .map_or(Ok(3), u32::try_from)
+        .map_err(|_| "krishiv.server.readiness.failureThreshold is too large".to_owned())?;
+    let readiness = krishiv_server::readiness::Readiness::with_policy(
+        Arc::clone(&ready),
+        vec![Arc::new(krishiv_server::readiness::AuthReady(Arc::clone(&auth))) as Arc<_>],
+        interval,
+        duration(config, &SERVER_READINESS_TIMEOUT, Duration::from_secs(2)),
+        threshold,
+        required,
+    );
+    let checker = readiness.spawn();
+    // The drain controller (design P3-T066 §5.1) decides when the listeners stop: once held work
+    // is done or the grace period and the stop bound passed. The Connect server then has nothing
+    // left to wait for, so its own grace is zero.
+    let grace = duration(config, &SERVER_SHUTDOWN_TIMEOUT, Duration::from_secs(30));
+    let drain = Arc::new(krishiv_server::drain::DrainController::new(Arc::clone(
+        &ready,
+    )));
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let drainer = Arc::new(Drainer {
+        drain: Arc::clone(&drain),
+        runtime: Arc::clone(&runtime),
+        manager: Arc::clone(&manager),
+        stop: stop_tx,
+        driving: AtomicBool::new(false),
+        extra_held: std::sync::OnceLock::new(),
+        change: std::sync::Mutex::new(()),
+    });
+    let ops = Arc::new(drainer.ops(Arc::clone(&readiness), grace));
+    let late_metrics = LateMetrics::default();
     let app = admin_router(
         &runtime,
         config,
         guard,
         authenticated.then(|| Arc::clone(&auth)),
-        Arc::clone(&ready),
+        &ops,
         admin_bound,
         tls.is_some(),
+        Arc::clone(&late_metrics),
     )?;
-    let mut connect = ConnectServer::new(
-        Arc::clone(&manager),
-        ConnectServerConfig::from_config(config),
-    );
-    if authenticated {
-        connect = connect.with_auth(
+    let mut connect_config = ConnectServerConfig::from_config(config);
+    connect_config.shutdown_timeout = Duration::ZERO;
+    let mut connect = ConnectServer::new(Arc::clone(&manager), connect_config)
+        .with_draining(drain.refusing_flag());
+    // One `ConnectAuth` per service on the listener, over the one `ServerAuth` (P3-T101 §2).
+    let connect_auth = || {
+        if authenticated {
             ConnectAuth::new(Arc::clone(&auth) as Arc<_>)
-                .with_denials(denials)
-                .with_impersonation(auth),
-        );
+                .with_denials(Arc::clone(&denials))
+                .with_impersonation(Arc::clone(&auth))
+        } else {
+            ConnectAuth::off()
+        }
+    };
+    if authenticated {
+        connect = connect.with_auth(connect_auth());
     }
     if let Some(tls) = &tls {
         connect = connect.with_tls(&tls.server_config());
     }
+    #[cfg(feature = "flight-sql")]
+    let flight = flight_sql(config, &manager, &connect, connect_auth())?;
+    #[cfg(feature = "flight-sql")]
+    if let Some((flight, _)) = &flight {
+        connect = connect.with_routes(flight.routes());
+        // `krishiv.flight_sql.requests` in the scrape (design §7, review m6).
+        let counted = flight.clone();
+        let _ = late_metrics.set(Box::new(move || counted.metrics()));
+        // The drain waits for unfetched tickets and running fetches too (design P3-T066 §5.1).
+        let held = flight.clone();
+        let _ = drainer.extra_held.set(Box::new(move || held.held()));
+    }
 
-    let (stop_tx, stop_rx) = watch::channel(false);
     // Installed before the addresses are printed: a SIGTERM right after
     // readiness must start the drain, not kill the process.
     let handlers = Signals::install()
         .map_err(|e| format!("cannot install the SIGTERM/SIGINT handlers: {e}"))?;
-    let signals = tokio::spawn(watch_signals(handlers, Arc::clone(&ready), stop_tx));
+    let signals = tokio::spawn(watch_signals(handlers, Arc::clone(&drainer), grace));
     let stopped = |mut rx: watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;
     };
@@ -345,6 +590,10 @@ async fn run_listeners(
         ("", "http")
     };
     println!("krishiv server: Spark Connect on sc://{connect_bound}{sc_suffix}");
+    #[cfg(feature = "flight-sql")]
+    if flight.is_some() {
+        println!("krishiv server: Arrow Flight SQL on the same port");
+    }
     println!("krishiv server: admin on {http}://{admin_bound}");
     let ui = flag(config, &UI_ENABLED, true) && cfg!(feature = "ui");
     if authenticated {
@@ -358,13 +607,24 @@ async fn run_listeners(
         // `/metrics` is behind the admin token: print it once.
         println!("krishiv server: admin token {token}");
     }
-    ready.store(true, Ordering::Release);
+    // A SIGTERM during start-up may already have started a drain: do not undo its readiness.
+    drainer.mark_serving_unless_draining(&ready);
     let served = connect
         .serve(connect_listener, stopped(stop_rx))
         .await
         .map_err(|e| e.to_string());
     ready.store(false, Ordering::Release);
+    // `serve` closed every session: Flight's table and handles go too (design §16 m7); the sweep
+    // task ends with its guard.
+    #[cfg(feature = "flight-sql")]
+    if let Some((flight, sweeper)) = flight {
+        flight.close_all();
+        drop(sweeper);
+    }
     signals.abort();
+    if let Some(checker) = checker {
+        checker.abort();
+    }
     if let Some(reloads) = reloads {
         reloads.abort();
     }
@@ -381,14 +641,24 @@ async fn run_listeners(
     served
 }
 
+/// Samples another service adds to `/metrics` once it exists (the Flight SQL service is built
+/// after the admin router).
+type LateMetrics =
+    Arc<std::sync::OnceLock<Box<dyn Fn() -> krishiv_session::MetricsSnapshot + Send + Sync>>>;
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the admin listener's parts, each built by `run`"
+)]
 fn admin_router(
     runtime: &Arc<EngineRuntime>,
     config: &Config,
     guard: Arc<dyn Guard>,
     auth: Option<Arc<ServerAuth>>,
-    ready: Arc<AtomicBool>,
+    ops: &Arc<krishiv_server::admin_v1::DrainOps>,
     bound: SocketAddr,
     tls: bool,
+    late: LateMetrics,
 ) -> Result<axum::Router, String> {
     let authenticated = auth.is_some();
     let denials = auth.as_ref().map(|a| a.denials());
@@ -409,6 +679,9 @@ fn admin_router(
             let mut snapshot = snapshot_runtime.metrics();
             if let Some(auth) = &auth {
                 snapshot.merge(&auth.metrics());
+            }
+            if let Some(more) = late.get() {
+                snapshot.merge(&more());
             }
             snapshot
         }),
@@ -431,7 +704,8 @@ fn admin_router(
     let admin_v1 = krishiv_server::admin_v1::router(
         Arc::new(
             krishiv_server::admin_v1::SessionAdmin::new(Arc::clone(runtime))
-                .with_denials(admin_denials),
+                .with_denials(admin_denials)
+                .with_ops(Arc::clone(ops)),
         ),
         Arc::clone(&guard),
         krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
@@ -465,18 +739,42 @@ fn admin_router(
             .unwrap_or("")
             .to_owned();
         let from_env = std::env::var("KRISHIV_UI_ALLOWED_HOSTS").unwrap_or_default();
+        // Who may frame the embeddable views (T071): invalid origins stop the start, as a bad host would not.
+        let origins = krishiv_server::embed::parse_origins(
+            config
+                .get(&UI_ALLOWED_ORIGINS)
+                .and_then(ConfigValue::as_str)
+                .unwrap_or(""),
+        )?;
+        let embed = krishiv_server::embed::EmbedPolicy::new(
+            origins,
+            config
+                .get(&UI_EMBED_HIDE_ATTRIBUTION)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(false),
+            match config.get(&UI_EMBED_LINK_TTL) {
+                Some(ConfigValue::Duration(d)) => *d,
+                _ => match UI_EMBED_LINK_TTL.default {
+                    Some(ConfigValue::Duration(d)) => d,
+                    _ => std::time::Duration::from_secs(300),
+                },
+            },
+        );
         let policy = krishiv_server::pages::UiPolicy::for_listener(
             bound.ip().is_loopback(),
             configured.split(',').chain(from_env.split(',')),
         )
         // The session cookie holds the bearer token: over TLS it never travels in the clear.
-        .secure_cookie(tls);
+        .secure_cookie(tls)
+        .with_embed(embed);
         krishiv_server::internal::router_with_ui_policy(Arc::new(source), guard, policy)
     } else {
         krishiv_server::api_router()
     };
     let app = base
-        .merge(krishiv_server::admin::health_routes(ready))
+        .merge(krishiv_server::admin::health_routes_cached(Arc::clone(
+            &ops.readiness,
+        )))
         .merge(admin_v1)
         .merge(metrics);
     // With authentication configured the deprecated version alias needs a credential like
@@ -560,16 +858,145 @@ async fn reload_on_hangup(tls: ServerTls, hangups: Hangups) {
     }
 }
 
-/// The first SIGTERM or SIGINT starts the drain; a second exits at once.
+/// The first SIGTERM or SIGINT starts the drain (`Drain { grace_period = shutdownTimeout,
+/// exit_when_drained = true }`, design P3-T066 §5.1a); a second exits at once.
 #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
-async fn watch_signals(mut signals: Signals, ready: Arc<AtomicBool>, stop: watch::Sender<bool>) {
+async fn watch_signals(mut signals: Signals, drainer: Arc<Drainer>, grace: Duration) {
     signals.next().await;
-    ready.store(false, Ordering::Release);
-    eprintln!("krishiv server: shutting down (a second signal exits at once)");
-    let _ = stop.send(true);
+    eprintln!("krishiv server: draining (a second signal exits at once)");
+    drainer.start(grace, true);
     signals.next().await;
     eprintln!("krishiv server: second signal, exiting");
     std::process::exit(130);
+}
+
+/// What starts, drives and undoes a drain: the signal handler and the admin API's `Drain` /
+/// `ResumeServing` share it, so there is one driver.
+pub(crate) struct Drainer {
+    drain: Arc<krishiv_server::drain::DrainController>,
+    runtime: Arc<EngineRuntime>,
+    manager: Arc<SessionManager>,
+    stop: watch::Sender<bool>,
+    driving: AtomicBool,
+    /// Held work beyond the manager's (Flight SQL's unfetched tickets and running fetches),
+    /// set once the Flight service exists (design P3-T066 §5.1).
+    extra_held: std::sync::OnceLock<Box<dyn Fn() -> usize + Send + Sync>>,
+    /// Serialises `start` and `resume`: the controller and the engine flag change together.
+    change: std::sync::Mutex<()>,
+}
+
+impl Drainer {
+    /// Starts a drain, or shortens a running one, and makes sure one task drives it: new work is
+    /// refused at once, held work gets `grace`, what is left is cancelled with
+    /// `CancelReason::Drain`, and the listeners stop (with `exit`) when the controller says so.
+    pub(crate) fn start(self: &Arc<Self>, grace: Duration, exit: bool) {
+        {
+            let _changing = self
+                .change
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.runtime.set_draining(true);
+            self.drain.start(std::time::Instant::now(), grace, exit);
+            // Under the lock the driver retires with, so a driver that is just finishing and
+            // this call cannot both assume the other one handles the request.
+            if !self.driving.swap(true, Ordering::AcqRel) {
+                tokio::spawn(Arc::clone(self).drive());
+            }
+        }
+    }
+
+    /// Back to serving; refused once the process is exiting.
+    fn resume(&self) -> Result<(), krishiv_server::drain::Exiting> {
+        let _changing = self
+            .change
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.drain.resume()?;
+        self.runtime.set_draining(false);
+        Ok(())
+    }
+
+    /// Sets the readiness flag unless a drain has started, serialized with `start`/`resume`.
+    fn mark_serving_unless_draining(&self, ready: &AtomicBool) {
+        let _changing = self
+            .change
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.drain.status().state == krishiv_server::drain::DrainState::Serving {
+            ready.store(true, Ordering::Release);
+        }
+    }
+
+    fn load(&self) -> (i64, i64) {
+        let queries = i64::try_from(self.manager.running_queries()).unwrap_or(i64::MAX);
+        let sessions = i64::try_from(self.manager.counts().live).unwrap_or(i64::MAX);
+        (queries, sessions)
+    }
+
+    /// What the admin API's `Drain`, `ResumeServing`, `GetDrainStatus` and `GetReadiness` act on.
+    pub(crate) fn ops(
+        self: &Arc<Self>,
+        readiness: Arc<krishiv_server::readiness::Readiness>,
+        default_grace: Duration,
+    ) -> krishiv_server::admin_v1::DrainOps {
+        let (start, resume, load) = (Arc::clone(self), Arc::clone(self), Arc::clone(self));
+        krishiv_server::admin_v1::DrainOps {
+            drain: Arc::clone(&self.drain),
+            readiness,
+            start: Box::new(move |grace, exit| start.start(grace, exit)),
+            resume: Box::new(move || resume.resume()),
+            load: Box::new(move || load.load()),
+            default_grace,
+        }
+    }
+
+    /// One decision of the drain: the load sample, the controller's step and its effect (the
+    /// cancellation, the retirement of the driver) happen under `change`, so a `resume` or a
+    /// new `start` cannot slip between the sample and what it decides.
+    fn drive_once(&self) -> Option<krishiv_server::drain::DrainStep> {
+        use krishiv_server::drain::{DrainState, DrainStep};
+        let _changing = self
+            .change
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let held = self.manager.busy() + self.extra_held.get().map_or(0, |f| f());
+        let step = self.drain.step(std::time::Instant::now(), held);
+        match step {
+            DrainStep::Wait => {
+                if self.drain.status().state == DrainState::Serving {
+                    // Resumed: retire. A later `start` sees the flag cleared and spawns the
+                    // next driver itself.
+                    self.driving.store(false, Ordering::Release);
+                    return None;
+                }
+            }
+            DrainStep::CancelRemaining => {
+                let n = self
+                    .runtime
+                    .cancel_all(krishiv_session::CancelReason::Drain);
+                Self::report_cancelled(n);
+            }
+            DrainStep::Drained { exit } => {
+                self.driving.store(false, Ordering::Release);
+                if exit {
+                    let _ = self.stop.send(true);
+                }
+                return None;
+            }
+        }
+        Some(step)
+    }
+
+    #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
+    fn report_cancelled(n: usize) {
+        eprintln!("krishiv server: drain deadline, cancelled {n} queries");
+    }
+
+    async fn drive(self: Arc<Self>) {
+        while self.drive_once().is_some() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
 }
 
 /// SIGTERM and SIGINT, registered when installed (tokio registers a
@@ -621,6 +1048,22 @@ mod tests {
         c
     }
 
+    /// `GetSqlInfo` lists the parser's keywords and the implemented functions by group (review m9).
+    #[cfg(feature = "flight-sql")]
+    #[test]
+    fn flight_server_info_lists_keywords_and_functions() {
+        let info = flight_server_info();
+        assert!(info.keywords.iter().any(|k| k == "SELECT"));
+        for (list, name) in [
+            (&info.numeric_functions, "abs"),
+            (&info.string_functions, "upper"),
+            (&info.datetime_functions, "date_add"),
+            (&info.system_functions, "current_user"),
+        ] {
+            assert!(list.iter().any(|f| f == name), "{name} in {list:?}");
+        }
+    }
+
     #[test]
     fn core_dumps_stay_off_unless_allowed() {
         assert!(!flag(&config(&[]), &SERVER_ALLOW_CORE_DUMPS, false));
@@ -641,5 +1084,82 @@ mod tests {
         assert!(!metrics_need_token(&public, lo));
         assert!(metrics_need_token(&public, any));
         assert!(!metrics_need_token(&config(&[]), lo));
+    }
+
+    /// Design P3-T066 §5.1: a drain refuses new queries at once, gives a stuck one the grace
+    /// period, cancels it with the drain reason (`KRISHIV_QUERY_KILLED`) and then stops.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_drain_cancels_a_stuck_query_at_the_deadline_and_then_stops() {
+        let runtime = EngineRuntime::builder().build().unwrap();
+        let base = Session::builder()
+            .runtime(Arc::clone(&runtime))
+            .build()
+            .unwrap();
+        let manager = Arc::new(SessionManager::from_base(
+            base,
+            krishiv_connect_server::SessionLimits::default(),
+        ));
+        // The query runs in a session the manager holds, as every Connect query does.
+        let caller = krishiv_session::auth::Authenticated::new(
+            krishiv_common::principal::Principal::local_user(),
+            None,
+            krishiv_session::auth::Method::None,
+        );
+        let entry = manager
+            .get_or_create(&caller, "00112233-4455-6677-8899-aabbccddeeff", None, "u")
+            .unwrap();
+        let session = entry.session().clone();
+        let df = session
+            .sql("SELECT count(*) FROM range(0, 100000000000, 1, 4)")
+            .await
+            .unwrap();
+        let query = tokio::spawn(async move { df.collect().await });
+        let registered = tokio::time::timeout(Duration::from_secs(20), async {
+            while session.running_queries() == 0 {
+                if query.is_finished() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(registered.is_ok(), "the query never registered");
+        assert!(
+            !query.is_finished(),
+            "the query ended early: {:?}",
+            query.await
+        );
+        let ready = Arc::new(AtomicBool::new(true));
+        let drain = Arc::new(krishiv_server::drain::DrainController::new(Arc::clone(
+            &ready,
+        )));
+        let (stop_tx, mut stop_rx) = watch::channel(false);
+        let drainer = Arc::new(Drainer {
+            drain: Arc::clone(&drain),
+            runtime: Arc::clone(&runtime),
+            manager: Arc::clone(&manager),
+            stop: stop_tx,
+            driving: AtomicBool::new(false),
+            extra_held: std::sync::OnceLock::new(),
+            change: std::sync::Mutex::new(()),
+        });
+        drainer.start(Duration::from_millis(300), true);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!ready.load(Ordering::SeqCst), "readiness flips first");
+        let refused = session.sql("SELECT 1").await.unwrap().collect().await;
+        assert_eq!(
+            refused.unwrap_err().error_class().name(),
+            "KRISHIV_SERVER_DRAINING"
+        );
+        tokio::time::timeout(Duration::from_secs(20), stop_rx.wait_for(|stop| *stop))
+            .await
+            .expect("the drain finishes")
+            .unwrap();
+        let e = tokio::time::timeout(Duration::from_secs(20), query)
+            .await
+            .expect("the cancelled query ends")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(e.error_class().name(), "KRISHIV_QUERY_KILLED");
     }
 }

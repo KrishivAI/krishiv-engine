@@ -1470,6 +1470,16 @@ impl Checker<'_> {
                 }
                 args.iter().try_for_each(|a| self.expr(&a.expr))
             }
+            TableFactorKind::JsonTable(t) => {
+                self.expr(&t.input)?;
+                t.columns.iter().try_for_each(|c| match &c.kind {
+                    crate::ast::JsonTableColumnKind::Ordinality => Ok(()),
+                    crate::ast::JsonTableColumnKind::Value { data_type: ty, .. }
+                    | crate::ast::JsonTableColumnKind::Exists { data_type: ty, .. } => {
+                        data_type(ty)
+                    }
+                })
+            }
         }
     }
 

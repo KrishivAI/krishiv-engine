@@ -37,8 +37,17 @@ impl Session {
             && !self.temp_entry_of(name, env)
         {
             if table.view.is_none() {
+                // INSERT writes through the Delta writer (`delta_writes.rs`), DELETE and UPDATE
+                // through its row-level table (`row_level.rs`); the other writes are refused by
+                // name (a read command never reaches here as a write).
                 #[cfg(feature = "delta")]
-                if access == Access::Write && is_delta_table(&table) {
+                if access == Access::Write
+                    && is_delta_table(&table)
+                    && !matches!(
+                        operation,
+                        "INSERT" | "INSERT OVERWRITE" | "DELETE" | "UPDATE TABLE"
+                    )
+                {
                     return Err(delta_write_refused(name.quoted(), operation));
                 }
                 #[cfg(not(feature = "delta"))]
@@ -122,7 +131,12 @@ impl Session {
         let statics = match &c.partition {
             None => Vec::new(),
             Some(spec) => {
-                if c.overwrite || c.if_not_exists {
+                #[cfg(feature = "delta")]
+                let delta = is_delta_table(&table);
+                #[cfg(not(feature = "delta"))]
+                let delta = false;
+                // A Delta table overwrites a static partition by filter.
+                if (c.overwrite && !delta) || c.if_not_exists {
                     return Err(unsupported("INSERT OVERWRITE ... PARTITION"));
                 }
                 self.insert_partition_values(&table, spec, original).await?
@@ -182,6 +196,7 @@ impl Session {
                 overwrite: c.overwrite,
                 statics: &statics,
                 dry,
+                options: None,
             },
         )
         .await
@@ -203,10 +218,23 @@ impl Session {
             overwrite,
             statics,
             dry,
+            ..
         } = *target;
         let env = self.query_env();
         let analysis = source.analyzed_in(self.query_env()).await?;
+        #[cfg(feature = "delta")]
+        let delta = is_delta_table(table);
+        #[cfg(not(feature = "delta"))]
+        let delta = false;
+        let reads_target = crate::catalog::reads_stored_table(
+            analysis.analyzed.plan.root(),
+            &name.namespace,
+            &name.name,
+            crate::catalog::NAMESPACE,
+        );
+        // delta-spark overwrites a table the query reads (it reads the snapshot it commits on).
         if overwrite
+            && !delta
             && crate::catalog::reads_stored_table(
                 analysis.analyzed.plan.root(),
                 &name.namespace,
@@ -297,17 +325,35 @@ impl Session {
         );
         let mut select = Vec::with_capacity(values.len());
         // `TableOutputResolver.requiresNullChecks`: no NOT NULL check under `storeAssignmentPolicy=LEGACY`.
-        let null_checks = !env
-            .config
-            .get(&krishiv_common::config::STORE_ASSIGNMENT_POLICY)
-            .and_then(krishiv_common::config::ConfigValue::as_str)
-            .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY"));
+        // A Delta table's writer checks NOT NULL itself, as delta-spark does
+        // (`DELTA_NOT_NULL_CONSTRAINT_VIOLATED`, `WRITE-EDGES.json` `not_null`).
+        let null_checks = !delta
+            && !env
+                .config
+                .get(&krishiv_common::config::STORE_ASSIGNMENT_POLICY)
+                .and_then(krishiv_common::config::ConfigValue::as_str)
+                .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY"));
         for ((_, column), name) in values.iter().zip(&staged) {
             let checked =
                 crate::char_write::checked(col(name), column, &env.analysis.conf, null_checks)?;
             select.push(checked.alias(&column.name));
         }
         let df = computed.select(select);
+        #[cfg(feature = "delta")]
+        if delta {
+            if dry {
+                return Ok(());
+            }
+            let written = self
+                .insert_delta(name, table, &df, target, reads_target)
+                .await;
+            self.state.catalog.store.bump();
+            self.forget_column_stats(name);
+            self.forget_cached(name);
+            return written
+                .map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment));
+        }
+        let _ = reads_target;
         if dry {
             // Every check of the write, without writing.
             return self.check_table_write(table, &df, overwrite).await;
@@ -496,6 +542,25 @@ impl Session {
                 self.exec_write_v2(&by_name, spec, V2Mode::Append, &mut None)
                     .await
             }
+            #[cfg(feature = "delta")]
+            (SaveMode::Overwrite, true)
+                if self
+                    .state
+                    .catalog
+                    .store
+                    .table(&name.namespace, &name.name)
+                    .is_some_and(|t| is_delta_table(&t))
+                    && !self.temp_entry_of(&name, &env) =>
+            {
+                // delta-spark's v1 overwrite of a Delta table is a data overwrite (design 4.1).
+                self.authorize_table_write(&name, false, &env).await?;
+                let table = self.table_for_write(&name, "INSERT OVERWRITE", &env)?;
+                self.delta_save_as_table_overwrite(df, &table, &spec.options)
+                    .await?;
+                self.forget_column_stats(&name);
+                self.forget_cached(&name);
+                Ok(())
+            }
             (SaveMode::Overwrite, true) => {
                 // Spark drops the table and creates it again. Everything that can
                 // refuse the new table is checked before the old one goes.
@@ -589,12 +654,14 @@ impl Session {
     /// `DataFrameWriter.insertInto`: `errorifexists`, `ignore` and `append`
     /// are all `INSERT INTO` by position (Spark's `insertInto` ignores the
     /// first two); `overwrite` is `INSERT OVERWRITE` by position, as the SQL
-    /// statement runs it.
+    /// statement runs it. The writer's `options` reach a Delta table's writer, as Spark's v2
+    /// `insertInto` passes them (`maxRecordsPerFile`).
     pub(crate) async fn exec_insert_into(
         &self,
         df: &DataFrame,
         table: &str,
         mode: krishiv_io::SaveMode,
+        options: &BTreeMap<String, OptionValue>,
     ) -> Result<(), KrishivError> {
         let overwrite = mode == krishiv_io::SaveMode::Overwrite;
         let env = self.query_env();
@@ -624,6 +691,7 @@ impl Session {
             overwrite,
             statics: &[],
             dry: false,
+            options: Some(options),
         };
         self.insert_rows(&name, &found, df, &target).await
     }
@@ -656,6 +724,7 @@ impl Session {
                     overwrite: false,
                     statics: &[],
                     dry: false,
+                    options: Some(&spec.options),
                 };
                 return self.insert_rows(&name, &table, df, &target).await;
             }
@@ -668,7 +737,11 @@ impl Session {
             }
             V2Mode::Create => {}
         }
-        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
+        #[cfg(feature = "delta")]
+        let delta = spec.provider.as_deref().is_some_and(crate::delta::handles);
+        #[cfg(not(feature = "delta"))]
+        let delta = false;
+        if (!spec.partitioned_by.is_empty() && !delta) || !spec.cluster_by.is_empty() {
             return Err(unsupported("partitioned tables"));
         }
         let warehouse = self.warehouse_dir()?;
@@ -717,8 +790,13 @@ impl Session {
             data_version: 0,
             stamp: 0,
         };
+        let partition_by = if delta {
+            spec.partitioned_by.clone()
+        } else {
+            Vec::new()
+        };
         let layout = LayoutRequest {
-            partition_by: &[],
+            partition_by: &partition_by,
             bucket: None,
         };
         self.create_table_from(table, df, CreateMode::ErrorIfExists, &layout, pre)

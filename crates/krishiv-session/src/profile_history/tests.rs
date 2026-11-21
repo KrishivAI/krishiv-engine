@@ -7,7 +7,7 @@ use std::sync::Arc;
 use futures::executor::block_on;
 use krishiv_exec::profile::QueryProfile;
 
-use super::{StoredProfile, read_history, trim, write_segment};
+use super::{StoredProfile, kept_hints, read_history, trim, write_segment};
 use crate::{EngineRuntime, Session};
 
 fn row(i: i64, profile: String) -> StoredProfile {
@@ -60,7 +60,7 @@ fn a_finished_query_leaves_a_profile_that_reads_back() {
     let q = &stored[0];
     assert_eq!(q.state, "finished");
     assert!(q.sql.as_deref().unwrap().contains("range"));
-    assert_eq!((q.profile_version, q.profile_minor), (1, 6));
+    assert_eq!((q.profile_version, q.profile_minor), (1, 7));
     let profile = QueryProfile::from_json(&q.profile).unwrap();
     assert!(!profile.metrics.operators.is_empty());
     assert_eq!(profile.identity.unwrap().principal, q.principal);
@@ -724,4 +724,124 @@ fn the_stored_profile_holds_the_tags_of_the_queries_own_row() {
         stored.iter().any(|q| q.profile.contains("job-42")),
         "a request tag was not stored"
     );
+}
+
+/// The stored profile's hints are the ones `EXPLAIN ANALYZE` shows, under the default `mask`: the numbers in
+/// a message are engine metrics, not data, so masking must not touch them.
+#[test]
+fn stored_hints_equal_the_explain_analyze_hints_under_masking() {
+    let dir = tempfile::tempdir().unwrap();
+    let executor = krishiv_exec::TokioExecutor::new(&krishiv_exec::ExecutorConfig {
+        compute_threads: 4,
+        io_threads: 1,
+        blocking_threads: 4,
+        io_blocking_threads: 2,
+    })
+    .unwrap();
+    let rt = EngineRuntime::builder()
+        .executor(executor)
+        .config("krishiv.history.path", dir.path().to_str().unwrap())
+        .config("krishiv.advisor.skew.minTime", "1ms")
+        .config("krishiv.advisor.skew.minRows", "1")
+        .build()
+        .unwrap();
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let df = block_on(session.sql(
+        "SELECT id, sum(id) OVER (PARTITION BY CASE WHEN id % 10 = 0 THEN id ELSE 0 END ORDER BY id) \
+         FROM range(0, 3000000)",
+    ))
+    .unwrap();
+    let (_, profile) = block_on(df.collect_with_profile()).unwrap();
+    assert!(!profile.hints.is_empty(), "the planted skew raised no hint");
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = nonempty_history(dir.path());
+    let back = QueryProfile::from_json(&stored[0].profile).unwrap();
+    // The JSON object keeps its evidence sorted by name; the code, node, operator and message are the contract.
+    let key = |hints: &[krishiv_exec::profile::Hint]| {
+        hints
+            .iter()
+            .map(|h| (h.code, h.node, h.operator, h.message.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(key(&back.hints), key(&profile.hints));
+    assert!(
+        back.hints
+            .iter()
+            .any(|h| h.message.chars().any(|c| c.is_ascii_digit())),
+        "a hint with numbers is what masking could have broken"
+    );
+}
+
+#[test]
+fn only_a_finished_query_keeps_its_hints() {
+    use krishiv_exec::profile::{Hint, HintCode};
+    let hint = || Hint {
+        code: HintCode::Skew,
+        node: Some(1),
+        operator: None,
+        message: "skew".to_owned(),
+        evidence: Vec::new(),
+    };
+    assert_eq!(kept_hints("finished", vec![hint()]).len(), 1);
+    for state in ["failed", "cancelled", "denied"] {
+        assert!(kept_hints(state, vec![hint()]).is_empty(), "{state}");
+    }
+}
+
+#[test]
+fn stored_keeps_hints_only_for_a_finished_entry() {
+    use krishiv_exec::physical::{ExprEnv, PhysNode, PhysicalPlan};
+    use krishiv_exec::planner::ExplainNode;
+    use krishiv_exec::profile::{Hint, HintCode, ProfileIdentity};
+
+    let entry = |state: &'static str| super::HistoryEntry {
+        query_id: "q".to_owned(),
+        finished_at_ms: 1,
+        state,
+        error_class: None,
+        sql: None,
+        detailed: false,
+        duration_ns: 1,
+        plan: PhysicalPlan::new(
+            PhysNode::OneRow,
+            Arc::new(arrow_schema::Schema::empty()),
+            ExplainNode::leaf("OneRowRelation", ""),
+            ExprEnv {
+                ansi: true,
+                legacy_statistical_aggregate: false,
+                zone: None,
+                zone_name: None,
+                query_start_micros: 0,
+                user: Arc::from("u"),
+                map_key_dedup_last_win: false,
+                legacy_java_charsets: false,
+                legacy_coding_error_action: false,
+                legacy_time_parser: false,
+                binary_output_style: None,
+            },
+        ),
+        metrics: krishiv_exec::QueryMetrics::default(),
+        identity: ProfileIdentity::default(),
+        trace: None,
+        scans: Vec::new(),
+        hints: vec![Hint {
+            code: HintCode::Skew,
+            node: Some(1),
+            operator: None,
+            message: "skew".to_owned(),
+            evidence: Vec::new(),
+        }],
+    };
+    for (state, kept) in [
+        ("finished", 1),
+        ("failed", 0),
+        ("cancelled", 0),
+        ("denied", 0),
+    ] {
+        for mask in [false, true] {
+            let row = super::stored(entry(state), mask).unwrap();
+            let back = QueryProfile::from_json(&row.profile).unwrap();
+            assert_eq!(back.hints.len(), kept, "{state}, mask {mask}");
+        }
+    }
 }

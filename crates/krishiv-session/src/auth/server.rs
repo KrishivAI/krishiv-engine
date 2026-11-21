@@ -88,6 +88,21 @@ pub struct ImpersonationCount {
 }
 
 impl ServerAuth {
+    /// Readiness check 2 of the admin API (design P3-T066 §5.2): `None` when OIDC is not
+    /// configured, else `Err(reason)` while the JWK set was never fetched or is older than
+    /// three refresh periods.
+    #[must_use]
+    pub fn jwks_ready(&self) -> Option<Result<(), String>> {
+        #[cfg(feature = "oidc")]
+        {
+            self.oidc.as_ref().map(Oidc::jwks_ready)
+        }
+        #[cfg(not(feature = "oidc"))]
+        {
+            None
+        }
+    }
+
     /// Builds the authenticator: resolves and hashes every token, and starts the OIDC key
     /// fetch thread when OIDC is configured. Logs a warning when Spark's all-powerful
     /// `spark.connect.authenticate.token` is in use.
@@ -218,6 +233,19 @@ impl ServerAuth {
         credentials: &Credentials<'_>,
         now: Instant,
     ) -> Result<Authenticated, AuthFailure> {
+        if let Some(refused) = self.basic_off_flight(credentials) {
+            return Err(refused);
+        }
+        let verdict = self.authenticate_credential(credentials, now);
+        self.basic_user_agrees(credentials, verdict, now)
+    }
+
+    /// [`Self::authenticate_at`] before the `Basic` user name check.
+    fn authenticate_credential(
+        &self,
+        credentials: &Credentials<'_>,
+        now: Instant,
+    ) -> Result<Authenticated, AuthFailure> {
         let ip = credentials.peer.ip();
         if self.throttle.is_blocked(ip, now) {
             return Err(self.fail(credentials, Method::Throttle, AuthFailure::Throttled));
@@ -269,6 +297,42 @@ impl ServerAuth {
                 self.record_failure(credentials, now);
                 Err(self.fail(credentials, Method::Token, AuthFailure::Invalid))
             }
+        }
+    }
+
+    /// A `Basic` credential anywhere but the Flight SQL surface: refused as malformed (a transport
+    /// that decoded it there is wrong; P3-T101 note §3.1).
+    fn basic_off_flight(&self, credentials: &Credentials<'_>) -> Option<AuthFailure> {
+        (credentials.basic_user.is_some() && credentials.surface != Surface::FlightSql)
+            .then(|| self.fail(credentials, Method::Basic, AuthFailure::Invalid))
+    }
+
+    /// With a `Basic` credential, the authenticated principal must have its user name (P3-T101
+    /// note §3.1): a mismatch is a failed credential, counted toward the throttle; a match
+    /// authenticated by `basic` (by `mtls` when a client certificate named the principal).
+    fn basic_user_agrees(
+        &self,
+        credentials: &Credentials<'_>,
+        verdict: Result<Authenticated, AuthFailure>,
+        now: Instant,
+    ) -> Result<Authenticated, AuthFailure> {
+        let Some(user) = credentials.basic_user else {
+            return verdict;
+        };
+        match verdict {
+            Ok(mut caller) if caller.principal.name == user => {
+                // A client certificate named the principal: it stays an `mtls` caller (its
+                // session key does not change with the header it sends).
+                if caller.method != Method::Mtls {
+                    caller.method = Method::Basic;
+                }
+                Ok(caller)
+            }
+            Ok(_) => {
+                self.record_failure(credentials, now);
+                Err(self.fail(credentials, Method::Basic, AuthFailure::Invalid))
+            }
+            Err(failure) => Err(failure),
         }
     }
 
@@ -648,8 +712,14 @@ impl ServerAuth {
         }
     }
 
-    /// Logs and counts `failure`, and returns it.
+    /// Logs and counts `failure`, and returns it. A `Basic` credential's failures are counted
+    /// under `basic` (a throttled peer's under `throttle`).
     fn fail(&self, c: &Credentials<'_>, method: Method, failure: AuthFailure) -> AuthFailure {
+        let method = if c.basic_user.is_some() && method != Method::Throttle {
+            Method::Basic
+        } else {
+            method
+        };
         self.failures[index(c.surface, method)].fetch_add(1, Ordering::Relaxed);
         tracing::warn!(
             target: "krishiv::auth",
@@ -670,6 +740,10 @@ impl Authenticator for ServerAuth {
     ) -> BoxFuture<'a, Result<Authenticated, AuthFailure>> {
         Box::pin(async move {
             #[cfg(feature = "oidc")]
+            if let Some(refused) = self.basic_off_flight(credentials) {
+                return Err(refused);
+            }
+            #[cfg(feature = "oidc")]
             if let Some(oidc) = &self.oidc
                 && let Some(token) = self.waiting_oidc_token(credentials)
             {
@@ -685,7 +759,9 @@ impl Authenticator for ServerAuth {
                     }
                     v => v,
                 };
-                return self.finish_oidc(credentials, token, verdict, Instant::now());
+                let now = Instant::now();
+                let verdict = self.finish_oidc(credentials, token, verdict, now);
+                return self.basic_user_agrees(credentials, verdict, now);
             }
             self.authenticate_at(credentials, Instant::now())
         })

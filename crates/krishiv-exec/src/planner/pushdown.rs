@@ -14,6 +14,17 @@ pub(crate) fn translate(e: &Expr, scan: &[BoundColumn]) -> Option<PushdownExpr> 
     tr(e, scan, false)
 }
 
+/// The typed form of `e` keeping exactly the rows `e` keeps (TRUE where `e`
+/// is TRUE, FALSE elsewhere), or `None` when any part of it does not
+/// translate: for a filter that decides what a write removes, where a
+/// superset would remove rows the filter keeps.
+pub(crate) fn translate_exact(e: &Expr, scan: &[BoundColumn]) -> Option<PushdownExpr> {
+    if let ExprNode::Literal(Literal::Boolean(b)) = &e.node {
+        return Some(PushdownExpr::Constant(*b));
+    }
+    tr(e, scan, true)
+}
+
 /// What a scan may drop rows by before the filter `e` sees them, under
 /// `spark.sql.ansi.enabled = ansi`.
 ///
@@ -125,6 +136,22 @@ fn tr(e: &Expr, scan: &[BoundColumn], exact: bool) -> Option<PushdownExpr> {
                 let (c, v) = (column(r, scan)?, value(l)?);
                 Some(PushdownExpr::cmp(c, flip(op), v))
             }
+        }
+        // `x <=> v` is `x IS NOT NULL AND x = v` for a non-null `v` (FALSE,
+        // never NULL, on a null `x`, so exact under a negation too), and
+        // `x IS NULL` for a NULL `v`.
+        (Builtin::EqNullSafe, [l, r]) => {
+            let (c, v) = match (column(l, scan), value_or_null(r)) {
+                (Some(c), Some(v)) => (c, v),
+                _ => (column(r, scan)?, value_or_null(l)?),
+            };
+            Some(match v {
+                Some(v) => PushdownExpr::And(vec![
+                    PushdownExpr::IsNotNull(c.clone()),
+                    PushdownExpr::cmp(c, CmpOp::Eq, v),
+                ]),
+                None => PushdownExpr::IsNull(c),
+            })
         }
         (Builtin::In, [x, list @ ..]) => {
             let c = column(x, scan)?;

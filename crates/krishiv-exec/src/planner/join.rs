@@ -35,7 +35,7 @@ use krishiv_plan::{
 use super::build::{Planned, Planner, internal, unsupported};
 use super::build_project::Request;
 use super::eval::canonical_carrier;
-use super::explain::ExplainNode;
+use super::explain::{ExplainNode, InputFacts, NodeFacts};
 use super::orient::{InputStats, StatsSource, builds_left, orient};
 use super::properties::{Distribution, Placement};
 use crate::error::Result;
@@ -317,6 +317,7 @@ impl Planner<'_> {
         // runtime filters to the probe side's scans.
         let mut published = Vec::new();
         let mut runtime_filters = Vec::new();
+        let mut gaps = Vec::new();
         // `GroupKeyCode`'s encoding join (design P2b D2 section 2.3): a
         // dimension joined by `<=>` on its keys with their numbered
         // dictionary, which holds every key tuple the dimension has, so a
@@ -339,6 +340,7 @@ impl Planner<'_> {
             );
             published = rf.explain;
             runtime_filters = rf.filters;
+            gaps = rf.gaps;
         }
         let mut layout = probe.layout.clone();
         let mut sites = probe.sites.clone();
@@ -356,6 +358,20 @@ impl Planner<'_> {
         }
         if join_type == JoinType::Inner {
             sites.extend(build.sites.iter().cloned());
+            if self.rf.equated_sites {
+                for s in
+                    super::runtime_filter::equated_sites(&probe, &probe_exprs, &build, &build_exprs)
+                {
+                    // One site per (column, scan column): a key equated
+                    // twice targets its scan once (review NIT-3).
+                    if !sites
+                        .iter()
+                        .any(|t| t.attr == s.attr && t.scan == s.scan && t.column == s.column)
+                    {
+                        sites.push(s);
+                    }
+                }
+            }
         }
         if join_type.builds_preserved() {
             // The rows the join returns are build rows (a right outer
@@ -406,6 +422,21 @@ impl Planner<'_> {
             ));
         }
         let (probe_schema, build_schema) = (Arc::clone(&probe.schema), Arc::clone(&build.schema));
+        let facts = {
+            let (p_plan, b_plan) = if preferred.is_some() {
+                (build_plan, probe_plan)
+            } else {
+                (probe_plan, build_plan)
+            };
+            NodeFacts {
+                inputs: vec![
+                    self.input_facts(p_plan, &probe.explain),
+                    self.input_facts(b_plan, &build.explain),
+                ],
+                filter_gaps: gaps,
+                ..NodeFacts::default()
+            }
+        };
         if merge {
             let plan = SortMergeJoinPlan {
                 probe: Box::new(probe.node),
@@ -433,7 +464,7 @@ impl Planner<'_> {
                 schema,
                 node: PhysNode::SortMergeJoin(plan),
                 layout,
-                explain: ExplainNode::new("SortMergeJoin", detail, inputs),
+                explain: ExplainNode::new("SortMergeJoin", detail, inputs).with_facts(facts),
                 sites,
                 placement,
             });
@@ -477,7 +508,8 @@ impl Planner<'_> {
             schema,
             node: PhysNode::HashJoin(plan),
             layout,
-            explain: ExplainNode::new("HashJoin", detail, vec![probe.explain, build.explain]),
+            explain: ExplainNode::new("HashJoin", detail, vec![probe.explain, build.explain])
+                .with_facts(facts),
             sites,
             placement,
         })
@@ -495,7 +527,32 @@ fn residual_of(probe: &Planned, build: &Planned, residual: &[&Expr]) -> Option<R
     })
 }
 
+/// The tables without statistics that the scans under `node` read.
+fn tables_without_stats(node: &ExplainNode, out: &mut Vec<String>) {
+    if let Some(f) = &node.facts {
+        for t in &f.tables_without_stats {
+            if !out.contains(t) {
+                out.push(t.clone());
+            }
+        }
+    }
+    for c in &node.children {
+        tables_without_stats(c, out);
+    }
+}
+
 impl Planner<'_> {
+    /// What the advisor keeps of one join input planned from `plan` and printed as `explain`.
+    fn input_facts(&self, plan: &Arc<LogicalPlan>, explain: &ExplainNode) -> InputFacts {
+        let mut tables = Vec::new();
+        tables_without_stats(explain, &mut tables);
+        InputFacts {
+            estimated_rows: self.estimated_rows(plan),
+            statistics: self.has_statistics(plan),
+            tables_without_stats: tables,
+        }
+    }
+
     /// The statistics of a join input planned as `schema` from `plan`.
     fn input_stats(&self, plan: &Arc<LogicalPlan>, schema: &arrow_schema::Schema) -> InputStats {
         let rows = self.estimated_rows(plan);

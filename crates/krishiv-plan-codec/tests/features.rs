@@ -65,6 +65,10 @@ fn the_header_lists_exactly_the_features_in_use() {
         ["window", "window_frame_offsets", "window_offset_functions"]
     );
     assert_eq!(
+        message("window_counter_diff").features,
+        ["window", "window_counter_diff"]
+    );
+    assert_eq!(
         message("window_range_values").features,
         ["window", "window_range_bounds"]
     );
@@ -541,6 +545,16 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         Some(Feature::WindowOffsetFunctions)
     );
+    assert_eq!(
+        feature_of(Construct::Window(
+            &krishiv_exec::window::WindowFunction::CounterDiff {
+                counter: 0,
+                start_time: None,
+                data_type: arrow_schema::DataType::Int64,
+            }
+        )),
+        Some(Feature::WindowCounterDiff)
+    );
     for bound in [
         FrameBound::RangeInt(3),
         FrameBound::RangeFloat(1.0_f64.to_bits()),
@@ -579,6 +593,7 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     assert_eq!(Feature::Window.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowFrameOffsets.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowOffsetFunctions.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::WindowCounterDiff.kind(), FeatureKind::Semantic);
     // A plain write plan is the `write_plan` feature; a layout (partition
     // columns) is the `partitioned_writes` feature.
     use krishiv_exec::physical::WritePlan;
@@ -1173,6 +1188,30 @@ fn nested_types_need_their_feature() {
         &hidden,
         "the feature header does not match the plan's constructs",
     );
+}
+
+#[test]
+fn a_user_defined_type_needs_its_feature() {
+    use krishiv_types::{DataType, UdtType};
+    // The storage type (an array) is a construct of its own: the UDT's `nested_types` comes with it.
+    let plan = message("udt_scan");
+    assert!(
+        plan.features.contains(&"udt_type".to_owned()),
+        "{:?}",
+        plan.features
+    );
+    assert!(
+        plan.features.contains(&"nested_types".to_owned()),
+        "{:?}",
+        plan.features
+    );
+    let udt = DataType::Udt(std::sync::Arc::new(UdtType::jvm(
+        DataType::Integer,
+        "pkg.PointUDT".to_owned(),
+        None,
+    )));
+    assert_eq!(feature_of(Construct::Type(&udt)), Some(Feature::UdtType));
+    assert_eq!(Feature::UdtType.kind(), FeatureKind::Semantic);
 }
 
 #[test]
@@ -2692,4 +2731,40 @@ fn a_python_udtf_table_of_uneven_shape_is_corrupt() {
         edit(udtf(&mut m));
         corrupt(&m, "a Python UDTF TABLE argument of uneven shape");
     }
+}
+
+/// The decoder reads a UDT object as one depth level, so a UDT whose storage nests as deep as the cap does not
+/// encode (it would not decode: "invalid user-defined type").
+#[test]
+fn a_udt_whose_storage_is_too_deep_for_the_decoder_does_not_encode() {
+    use krishiv_types::{ArrayType, DataType, UdtType};
+    let udt_over = |arrays: usize| {
+        let mut storage = DataType::Integer;
+        for _ in 0..arrays {
+            storage = ArrayType::new(storage, true).into();
+        }
+        DataType::Udt(std::sync::Arc::new(UdtType::jvm(
+            storage,
+            "pkg.PointUDT".to_owned(),
+            None,
+        )))
+    };
+    let plan_with = |t: DataType| {
+        plan_of(PhysNode::Project {
+            input: Box::new(PhysNode::OneRow),
+            layout: Vec::new(),
+            items: vec![krishiv_exec::physical::ProjectItemPlan::Expr {
+                name: "x".to_owned(),
+                expr: inventory::lit(krishiv_plan::Literal::Null(Some(t))),
+            }],
+            nullable: None,
+            subqueries: Vec::new(),
+        })
+    };
+    let deepest = DataType::MAX_NESTING_DEPTH - 1;
+    assert!(encode(&plan_with(udt_over(deepest))).is_ok());
+    assert!(matches!(
+        encode(&plan_with(udt_over(deepest + 1))),
+        Err(CodecError::Unsupported(_))
+    ));
 }

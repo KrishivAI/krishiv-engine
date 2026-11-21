@@ -143,6 +143,17 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             let out = string::locate(sub.operand(), s.operand(), one)?;
             Ok(Arc::new(out) as ArrayRef)
         }),
+        // `instr(str, substr, pos[, occurrence])` (Spark 4.3).
+        ("instr", "SSI" | "SSII") => {
+            let with_occurrence = shape.len() == 4;
+            Binding::new(int, move |x| {
+                let (s, sub, pos) = (x.str(0)?, x.str(1)?, x.int(2)?);
+                let occurrence = with_occurrence.then(|| x.int(3)).transpose()?;
+                let occurrence = occurrence.as_ref().map_or(one, Prim::operand);
+                let out = string::instr_nth(s.operand(), sub.operand(), pos.operand(), occurrence)?;
+                Ok(Arc::new(out) as ArrayRef)
+            })
+        }
         ("__find_in_set_lcase", "SS") => Binding::new(int, |x| {
             let (w, s) = (x.str(0)?, x.str(1)?);
             Ok(Arc::new(string::find_in_set_lcase(w.operand(), s.operand())?) as ArrayRef)

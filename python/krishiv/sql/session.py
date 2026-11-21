@@ -26,7 +26,12 @@ from krishiv.sql.readwriter import DataFrameReader
 from krishiv.sql.types import DataType, StructType
 from krishiv.storagelevel import StorageLevel
 
+# The class's `_native` property hides the module in annotations written inside it.
+_NativeSession = _native.Session
+
 if TYPE_CHECKING:
+    from krishiv._udf.profiler import Profile
+    from krishiv.sql.datasource import DataSourceRegistration
     from krishiv.sql.udf import UDFRegistration
 
 #: The Spark version this engine is compatible with.
@@ -113,15 +118,93 @@ class SparkSession:
     # Typed as Builder (what attribute access gives); the descriptor below provides it.
     builder: Builder = _BuilderProperty()  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
-    def __init__(self, native: _native.Session, config: list[tuple[str, str]] | None = None) -> None:
-        self._native = native
+    def __init__(self, native: _NativeSession, config: list[tuple[str, str]] | None = None) -> None:
+        self._base_native = native
+        # `addTag`'s tags are per thread, as in Spark: each thread's frames carry its own.
+        self._tag_state = threading.local()
         self._conf = RuntimeConfig(native)
+        from krishiv._udf.profiler import Registry
+
+        self._profile_registry = Registry()
         # The options the session was built with: `newSession` starts from them.
         self._config = list(config or [])
 
     @property
+    def _native(self) -> _NativeSession:
+        """The engine session: a handle carrying this thread's tags (``addTag``) when it has any."""
+        tags = self.getTags()
+        if not tags:
+            return self._base_native
+        key = tuple(sorted(tags))
+        cached = getattr(self._tag_state, "handle", None)
+        if cached is None or cached[0] != key:
+            cached = (key, self._base_native.tagged(list(key)))
+            self._tag_state.handle = cached
+        return cached[1]
+
+    @property
     def version(self) -> str:
         return SPARK_VERSION
+
+    def interruptAll(self) -> list[str]:
+        """Cancels every running query of this session; the operation ids it cancelled."""
+        return self._base_native.interrupt_all()
+
+    def interruptTag(self, tag: str) -> list[str]:
+        """Cancels the running queries that carry ``tag`` (see :meth:`addTag`); their operation ids."""
+        # As Spark Connect: a tag no query carries (an invalid one included) cancels nothing.
+        return self._base_native.interrupt_tag(tag) if isinstance(tag, str) else []
+
+    def interruptOperation(self, op_id: str) -> list[str]:
+        """Cancels the running query with operation id ``op_id``; its id in a list, or an empty list."""
+        if not isinstance(op_id, str):
+            raise not_expected_type("op_id", "str", op_id)
+        return self._base_native.interrupt_operation(op_id)
+
+    def addTag(self, tag: str) -> None:
+        """Tags the queries this thread starts from now on, until :meth:`removeTag`; :meth:`interruptTag` cancels them.
+
+        A frame keeps the tags it was made with: tag before the ``spark.sql``, ``spark.table``, ``spark.read``
+        or ``spark.range`` call, not before the action.
+        """
+        self._check_tag(tag)
+        self._tags().add(tag)
+
+    def removeTag(self, tag: str) -> None:
+        """Stops tagging with ``tag`` (no error when this thread has not added it)."""
+        self._check_tag(tag)
+        self._tags().discard(tag)
+
+    def getTags(self) -> set[str]:
+        """This thread's tags."""
+        return self._tags()
+
+    def clearTags(self) -> None:
+        """Removes every tag of this thread."""
+        self._tags().clear()
+
+    def _tags(self) -> set[str]:
+        tags = getattr(self._tag_state, "tags", None)
+        if tags is None:
+            tags = self._tag_state.tags = set()
+        return tags
+
+    @staticmethod
+    def _check_tag(tag: str) -> None:
+        if tag is None:
+            raise PySparkValueError(errorClass="CANNOT_BE_NONE", messageParameters={"arg_name": "Spark Connect tag"})
+        if not isinstance(tag, str):
+            raise not_expected_type("tag", "str", tag)
+        if "," in tag:
+            raise PySparkValueError(
+                errorClass="VALUE_ALLOWED",
+                messageParameters={"arg_name": "Spark Connect tag", "disallowed_value": ","},
+            )
+        if not tag:
+            raise PySparkValueError(
+                errorClass="VALUE_NOT_NON_EMPTY_STR",
+                messageParameters={"arg_name": "Spark Connect tag", "arg_value": tag},
+            )
 
     @property
     def sparkContext(self) -> Any:
@@ -133,8 +216,24 @@ class SparkSession:
         return self._conf
 
     @property
+    def profile(self) -> Profile:
+        """The UDF profiles of this session (``spark.sql.pyspark.udf.profiler`` = ``perf`` or ``memory``):
+        ``show``, ``dump`` and ``clear``, as ``pyspark.sql.profiler.Profile``."""
+        from krishiv._udf.profiler import Profile
+
+        return Profile(self._profile_registry)
+
+    @property
     def read(self) -> DataFrameReader:
         return DataFrameReader(self)
+
+    @property
+    def dataSource(self) -> DataSourceRegistration:
+        """``spark.dataSource.register(cls)``: registers a Python data source class (see
+        :mod:`krishiv.sql.datasource`)."""
+        from krishiv.sql.datasource import DataSourceRegistration
+
+        return DataSourceRegistration(self)
 
     @property
     def udf(self) -> UDFRegistration:

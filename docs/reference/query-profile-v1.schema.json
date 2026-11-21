@@ -9,7 +9,7 @@
   "properties": {
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
-    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`, 5 adds `usage.principal` and `usage.tags`, 6 adds `scans`. A reader ignores members it does not know." },
+    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`, 5 adds `usage.principal` and `usage.tags`, 6 adds `scans`, 7 adds `hints` and each plan node's `facts`. A reader ignores members it does not know." },
     "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
     "trace": {
       "type": "object",
@@ -129,6 +129,11 @@
         }
       }
     },
+    "hints": {
+      "type": "array",
+      "description": "The advisor's findings for the finished query (added in minor 7), in the order (code, node, operator). The codes are stable; messages may change. Absent when the advisor was off.",
+      "items": { "$ref": "#/$defs/hint" }
+    },
     "plan": {
       "type": "array",
       "minItems": 1,
@@ -144,7 +149,8 @@
           },
           "name": { "type": "string" },
           "detail": { "type": "string" },
-          "children": { "type": "array", "items": { "$ref": "#/$defs/u64" }, "description": "Positions in `plan`, each greater than this element's." }
+          "children": { "type": "array", "items": { "$ref": "#/$defs/u64" }, "description": "Positions in `plan`, each greater than this element's." },
+          "facts": { "$ref": "#/$defs/facts", "description": "What the planner knew of the node (added in minor 7): estimates, statistics, runtime-filter gaps. Absent for a node without any. Not part of plan equality." }
         }
       }
     },
@@ -237,6 +243,51 @@
     }
   },
   "$defs": {
+    "hint": {
+      "type": "object",
+      "required": ["code", "node", "operator", "message", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "enum": ["SPILL", "MISSING_STATISTICS", "SKEW", "RUNTIME_FILTER_OPPORTUNITY", "MEMORY_WAIT"] },
+        "node": { "oneOf": [{ "$ref": "#/$defs/u32" }, { "type": "null" }], "description": "The plan node id the hint is about." },
+        "operator": { "oneOf": [{ "$ref": "#/$defs/u32" }, { "type": "null" }], "description": "The operator id the hint is about." },
+        "message": { "type": "string" },
+        "evidence": { "type": "object", "additionalProperties": { "$ref": "#/$defs/u64" }, "description": "The numbers the rule compared." }
+      }
+    },
+    "facts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "estimated_rows": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+        "inputs": {
+          "type": "array",
+          "description": "A join's inputs, probe first.",
+          "items": {
+            "type": "object",
+            "required": ["estimated_rows", "statistics", "tables_without_stats"],
+            "properties": {
+              "estimated_rows": { "type": "number" },
+              "statistics": { "type": "boolean" },
+              "tables_without_stats": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "filter_gaps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "probe_key", "reason"],
+            "properties": {
+              "key": { "$ref": "#/$defs/u64" },
+              "probe_key": { "type": "string" },
+              "reason": { "enum": ["disabled", "no_scan_column", "blocked"] }
+            }
+          }
+        },
+        "tables_without_stats": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "u64": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
     "u32": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
     "planning": {

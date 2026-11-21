@@ -618,10 +618,15 @@ impl Resolver<'_> {
         match &e.node {
             ExprNode::Function(f) => {
                 // A session-qualified call (`session.f`) resolves through
-                // its full qualifier (UDFs only), as resolution does; any
-                // other call resolves by its bare name.
+                // its full qualifier (UDFs only), as resolution does, and so
+                // does a call of a stored function (`ns.f`): its bare name
+                // could reach another function of the path, which would count
+                // as called (review r7 n7). Any other call resolves by its
+                // bare name.
                 let name;
-                let lookup: &[String] = if super::bind::is_session_qualifier(&f.qualifier) {
+                let lookup: &[String] = if super::bind::is_session_qualifier(&f.qualifier)
+                    || (!f.qualifier.is_empty() && !super::bind::is_builtin_qualifier(&f.qualifier))
+                {
                     let mut parts = f.qualifier.clone();
                     parts.push(f.name.clone());
                     name = parts;

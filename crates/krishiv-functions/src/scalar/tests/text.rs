@@ -499,3 +499,90 @@ fn levenshtein_threshold_nulls() {
     let out = f.invoke(&[col(&a), col(&b), lit(&null)], 2).unwrap();
     assert_eq!(int_values(&out), [None, None]);
 }
+
+/// `instr(str, substr, pos[, occurrence])`: the 36 literal rows of Spark 4.3.0's `string-functions.sql` golden
+/// (statements 253-294), plus the NULL rows and the `occurrence` errors of a run of the same build.
+#[test]
+fn instr_with_a_position_and_an_occurrence_matches_spark() {
+    #[rustfmt::skip]
+    let rows: [(&str, &str, i32, Option<i32>, i32); 36] = [
+        ("abcabc", "b", 1, None, 2),
+        ("abcabc", "b", 3, None, 5),
+        ("abcabc", "a", 3, None, 4),
+        ("abcabc", "b", -1, None, 5),
+        ("abcabc", "b", -2, None, 5),
+        ("abcabc", "b", -3, None, 2),
+        ("abcabc", "a", -2, None, 4),
+        ("abcabc", "b", 1, Some(2), 5),
+        ("abcabc", "b", 3, Some(1), 5),
+        ("abcabc", "b", 1, Some(3), 0),
+        ("abcabc", "b", -1, Some(1), 5),
+        ("abcabc", "b", -1, Some(2), 2),
+        ("abcabc", "b", -2, Some(2), 2),
+        ("abcabc", "a", -1, Some(2), 1),
+        ("abcabc", "b", 0, Some(1), 0),
+        ("abcabc", "b", 0, Some(2), 0),
+        ("hello", "", 1, None, 1),
+        ("hello", "", 3, None, 1),
+        ("hello", "", -1, None, 1),
+        ("hello", "", -2, None, 1),
+        ("", "", 1, None, 1),
+        ("", "", -1, None, 1),
+        ("你好世界你好", "你好", 1, Some(2), 5),
+        ("你好世界你好", "你好", -1, Some(2), 1),
+        ("你好世界你好", "你好", -2, Some(2), 1),
+        ("你好世界你好", "你好", -1, None, 5),
+        ("你好世界你好", "你好", -2, None, 5),
+        ("你好世界你好", "世界", -1, None, 3),
+        ("aaaa", "aa", 1, Some(2), 2),
+        ("aaaa", "aa", 1, Some(3), 3),
+        ("aaaa", "aa", -1, Some(2), 2),
+        ("aaaa", "aa", -2, Some(2), 2),
+        ("abc", "d", 1, Some(1), 0),
+        ("abc", "b", 1, Some(3), 0),
+        ("abc", "b", 10, Some(1), 0),
+        ("abc", "b", -10, Some(1), 0),
+    ];
+    for (s, sub, pos, occ, want) in rows {
+        let (s, sub, pos) = (strs(&[Some(s)]), strs(&[Some(sub)]), ints(&[Some(pos)]));
+        let got = match occ {
+            Some(o) => int_values(&run("instr", &[&s, &sub, &pos, &ints(&[Some(o)])])),
+            None => int_values(&run("instr", &[&s, &sub, &pos])),
+        };
+        assert_eq!(got, [Some(want)], "instr({s:?}, {sub:?}, {pos:?}, {occ:?})");
+    }
+}
+
+#[test]
+fn instr_with_a_position_is_null_on_any_null_and_refuses_a_bad_occurrence() {
+    let (s, sub) = (
+        strs(&[Some("a"), None, Some("a"), Some("a")]),
+        strs(&[Some("b"), Some("b"), None, Some("b")]),
+    );
+    let pos = ints(&[None, Some(1), Some(1), Some(1)]);
+    let occ = ints(&[Some(2), Some(1), Some(1), None]);
+    assert_eq!(
+        int_values(&run("instr", &[&s, &sub, &pos, &occ])),
+        [None, None, None, None]
+    );
+    // A NULL row with a bad occurrence is still NULL; a non-NULL one is an error.
+    let (s, sub, pos) = (strs(&[None]), strs(&[Some("x")]), ints(&[Some(1)]));
+    assert_eq!(
+        int_values(&run("instr", &[&s, &sub, &pos, &ints(&[Some(0)])])),
+        [None]
+    );
+    for bad in [0, -1] {
+        let (s, sub, pos, occ) = (
+            strs(&[Some("abc")]),
+            strs(&[Some("")]),
+            ints(&[Some(1)]),
+            ints(&[Some(bad)]),
+        );
+        let f = bind("instr", &[&s, &sub, &pos, &occ]);
+        let e = f
+            .invoke(&[col(&s), col(&sub), col(&pos), col(&occ)], 1)
+            .unwrap_err();
+        assert_eq!(e.error_class().name(), "INVALID_PARAMETER_VALUE.OCCURRENCE");
+        assert!(e.to_string().contains(&format!("got {bad}")), "{e}");
+    }
+}

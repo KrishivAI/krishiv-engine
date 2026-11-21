@@ -1,0 +1,4 @@
+{"commitInfo":{"timestamp":1794782688005,"operation":"CREATE TABLE","operationParameters":{"partitionBy":"[]","clusterBy":"[\"id\"]","description":null,"isManaged":"false","properties":"{}"},"isolationLevel":"Serializable","isBlindAppend":true,"operationMetrics":{},"engineInfo":"Apache-Spark/4.2.0 Delta-Lake/4.4.1","txnId":"a54ad78c-f482-41a2-a050-5308a02cd0a7"}}
+{"metaData":{"id":"b9de792e-9e3a-44af-b152-2b2b600c60ba","format":{"provider":"parquet","options":{}},"schemaString":"{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}","partitionColumns":[],"configuration":{},"createdTime":1794782687979}}
+{"protocol":{"minReaderVersion":1,"minWriterVersion":7,"writerFeatures":["domainMetadata","clustering","invariants","appendOnly"]}}
+{"domainMetadata":{"domain":"delta.clustering","configuration":"{\"clusteringColumns\":[[\"id\"]],\"domainName\":\"delta.clustering\"}","removed":false}}

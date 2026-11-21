@@ -67,6 +67,18 @@ fn databases_list_get_exists() {
     assert!(!block_on(c.database_exists("zzz")).unwrap());
     assert_eq!(block_on(c.list_databases(Some("d*"))).unwrap().len(), 2);
     assert_eq!(block_on(c.list_databases(Some("db*"))).unwrap().len(), 1);
+    let embedded: Vec<_> = block_on(c.list_embedded_databases())
+        .unwrap()
+        .into_iter()
+        .map(|d| (d.catalog, d.name))
+        .collect();
+    assert_eq!(
+        embedded,
+        [
+            ("spark_catalog".to_owned(), "db1".to_owned()),
+            ("spark_catalog".to_owned(), "default".to_owned())
+        ]
+    );
 }
 
 #[test]
@@ -296,8 +308,8 @@ fn drop_views_and_refresh() {
     let c = s.catalog();
     assert!(c.drop_temp_view("tab1"));
     assert!(!c.drop_temp_view("tab1"));
-    assert!(c.drop_global_temp_view("gv"));
-    assert!(!c.drop_global_temp_view("gv"));
+    assert!(block_on(c.drop_global_temp_view("gv")).unwrap());
+    assert!(!block_on(c.drop_global_temp_view("gv")).unwrap());
     assert!(!block_on(c.is_cached("t")).unwrap());
     block_on(c.cache_table("t")).unwrap();
     assert!(block_on(c.is_cached("t")).unwrap(), "cacheTable caches it");
@@ -314,7 +326,7 @@ fn drop_views_and_refresh() {
             .name(),
         "TABLE_OR_VIEW_NOT_FOUND"
     );
-    c.clear_cache();
+    block_on(c.clear_cache()).unwrap();
     assert_eq!(
         block_on(c.refresh_table("missing"))
             .unwrap_err()
@@ -380,6 +392,66 @@ impl AccessPolicy for NoBrowse {
     }
 }
 
+/// Denies `Drop` and `Manage`, allows the rest.
+struct NoDrop;
+
+impl AccessPolicy for NoDrop {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _principal: &'a Principal,
+        _securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let decision = if matches!(privilege, Privilege::Drop | Privilege::Manage) {
+            AccessDecision::Deny {
+                reason: "drop".to_owned(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+#[test]
+fn dropping_a_global_temporary_view_asks_for_drop_as_the_sql_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = EngineRuntime::builder().build().unwrap();
+    let s = Session::builder()
+        .runtime(rt)
+        .principal(Principal::new("pat", PrincipalKind::User))
+        .access_policy(Arc::new(NoDrop))
+        .build()
+        .unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    run(&s, "CREATE GLOBAL TEMPORARY VIEW gv AS SELECT 1 AS x");
+    let c = s.catalog();
+    let e = block_on(c.drop_global_temp_view("gv")).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    run(&s, "SELECT * FROM global_temp.gv");
+    // a view that does not exist is no secret to keep
+    assert!(!block_on(c.drop_global_temp_view("nope")).unwrap());
+}
+
+#[test]
+fn clearing_the_cache_asks_for_manage_as_the_sql_does() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let s = Session::builder()
+        .runtime(rt)
+        .principal(Principal::new("pat", PrincipalKind::User))
+        .access_policy(Arc::new(NoDrop))
+        .build()
+        .unwrap();
+    let e = block_on(s.catalog().clear_cache()).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+}
+
 #[test]
 fn the_catalog_api_shows_a_principal_no_more_than_the_sql_statements_do() {
     let dir = tempfile::tempdir().unwrap();
@@ -418,10 +490,62 @@ fn the_catalog_api_shows_a_principal_no_more_than_the_sql_statements_do() {
     assert!(denied(block_on(c.table_exists("missing")).unwrap_err()));
     assert!(denied(block_on(c.list_columns("secret")).unwrap_err()));
     assert!(denied(block_on(c.list_databases(None)).unwrap_err()));
+    assert!(denied(block_on(c.list_embedded_databases()).unwrap_err()));
     assert!(denied(block_on(c.get_database("default")).unwrap_err()));
     assert!(denied(block_on(c.database_exists("default")).unwrap_err()));
     assert!(denied(block_on(c.list_functions(None)).unwrap_err()));
     assert!(denied(block_on(c.function_exists("abs")).unwrap_err()));
+    assert!(denied(
+        block_on(c.list_functions_in(Some("default"), None)).unwrap_err()
+    ));
+    // a table that cannot be browsed cannot be cached at a storage level either
+    assert!(denied(
+        block_on(c.check_cache_target("secret")).unwrap_err()
+    ));
+}
+
+#[test]
+fn list_functions_in_lists_the_stored_functions_of_the_named_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE DATABASE other_db");
+    run(
+        &s,
+        "CREATE FUNCTION other_db.only_there(x INT) RETURNS INT RETURN x",
+    );
+    run(
+        &s,
+        "CREATE FUNCTION default.only_here(x INT) RETURNS INT RETURN x",
+    );
+    let c = s.catalog();
+    let names = |db: Option<&str>| -> Vec<String> {
+        block_on(c.list_functions_in(db, None))
+            .unwrap()
+            .into_iter()
+            .map(|f| f.name)
+            .collect()
+    };
+    assert!(names(Some("other_db")).contains(&"only_there".to_owned()));
+    assert!(!names(Some("other_db")).contains(&"only_here".to_owned()));
+    assert!(names(None).contains(&"only_here".to_owned()));
+    assert_eq!(c.current_database(), "default", "the session is unchanged");
+    assert!(block_on(c.list_functions_in(Some("no_such_db"), None)).is_err());
+}
+
+#[test]
+fn check_cache_target_refuses_a_missing_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT) USING parquet");
+    let c = s.catalog();
+    block_on(c.check_cache_target("t")).unwrap();
+    assert_eq!(
+        block_on(c.check_cache_target("missing"))
+            .unwrap_err()
+            .error_class()
+            .name(),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
 }
 
 #[test]

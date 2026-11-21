@@ -667,6 +667,8 @@ pub(super) struct Emit {
     /// Per function: its fold (aggregates over a `ROWS` frame up to the
     /// current row only).
     running: Vec<Option<Fold>>,
+    /// Per function: the state of `counter_diff` across the partition's batches.
+    diffs: Vec<super::counter_diff::CounterState>,
     /// Per function: how it reads the file (frames and offset functions).
     framed: Vec<Option<Framed>>,
     consumer: Arc<ConsumerHandle>,
@@ -752,6 +754,7 @@ impl Emit {
             peers: 0,
             prev_order: None,
             running,
+            diffs: vec![super::counter_diff::CounterState::default(); env.plan.functions.len()],
             framed,
             consumer: Arc::clone(consumer),
             counters,
@@ -890,6 +893,20 @@ impl Emit {
                         })
                         .collect::<Result<Vec<_>>>()?,
                 )),
+                WindowFunction::CounterDiff {
+                    counter,
+                    start_time,
+                    ..
+                } => {
+                    let col = |c: usize| {
+                        b.columns()
+                            .get(c)
+                            .cloned()
+                            .ok_or_else(|| internal(format!("window column {c} out of range")))
+                    };
+                    let starts = start_time.map(col).transpose()?;
+                    self.diffs[j].run(&col(*counter)?, starts.as_ref(), &env.zone)?
+                }
                 WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
                     let (own, mut shed) = Shed::around(&mut self.framed, j).ok_or_else(|| {
                         internal("an offset function's reader missing".to_owned())

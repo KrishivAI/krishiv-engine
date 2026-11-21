@@ -435,7 +435,9 @@ fn concurrent_transaction(winner: &WinningCommit) -> KrishivError {
 /// (delta-spark's `implicitlyAndExplicitlySupportedFeatures`, `TableFeature.scala:470-497`): a
 /// table-features protocol (writer 7) implies none and lists its writer features (and, at
 /// reader 3, its reader features); a legacy one implies the features of its writer version, and
-/// `columnMapping` only at reader 2 or above with writer 5 or 6.
+/// `columnMapping` only at reader 2 or above with writer 5 or 6. Reader 3 with a legacy writer
+/// (below 7) is not a valid protocol; for it this function returns the legacy writer's features
+/// where delta-spark implies none, which never matters because no table can be read at it.
 #[must_use]
 pub fn supported_features(
     min_reader: i64,

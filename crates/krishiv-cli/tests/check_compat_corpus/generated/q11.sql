@@ -1,4 +1,6 @@
 -- query 11: nope(1)
-SELECT least(a, b) AS c1 FROM t11 WHERE x IN (1, 2) AND y = 'x(least)';
-SELECT try_aes_decrypt(a, b) AS c2 FROM t11 WHERE x IN (1, 2) AND y = 'x(try_aes_decrypt)';
-SELECT legacy_fn_20(a, b) AS c3 FROM t11 WHERE x IN (1, 2) AND y = 'x(legacy_fn_20)';
+SELECT startswith(a, b) AS c1 FROM t11 WHERE x IN (1, 2) AND y = 'x(startswith)';
+SELECT array_sort(a, b) AS c2 FROM t11 WHERE x IN (1, 2) AND y = 'x(array_sort)';
+SELECT legacy_fn_26(a, b) AS c3 FROM t11 WHERE x IN (1, 2) AND y = 'x(legacy_fn_26)';
+SELECT vector_normalize(a, b) AS c4 FROM t11 WHERE x IN (1, 2) AND y = 'x(vector_normalize)';
+SELECT lpad(a, b) AS c5 FROM t11 WHERE x IN (1, 2) AND y = 'x(lpad)';

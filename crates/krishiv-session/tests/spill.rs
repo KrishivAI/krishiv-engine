@@ -445,7 +445,19 @@ fn a_spill_directory_that_became_unwritable_after_it_opened_is_named() {
             to
         })
         .collect();
-    let err = block_on(async { s.sql(QUERY).await.unwrap().collect().await });
+    // Under a loaded runner the tight budget can abort the query before it spills: retry then.
+    let mut err = block_on(async { s.sql(QUERY).await.unwrap().collect().await });
+    for _ in 0..10 {
+        let oom = matches!(
+            &err,
+            Err(e) if e.error_class()
+                == krishiv_common::error::ErrorClass::KrishivQueryAbortedOutOfMemory
+        );
+        if !oom {
+            break;
+        }
+        err = block_on(async { s.sql(QUERY).await.unwrap().collect().await });
+    }
     for (d, to) in dirs.iter().zip(&moved) {
         std::fs::remove_file(d).unwrap();
         std::fs::rename(to, d).unwrap();

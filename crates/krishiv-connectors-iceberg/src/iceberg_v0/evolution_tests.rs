@@ -23,7 +23,7 @@ use crate::plan::VersionSpec;
 
 /// A data file `name` of `columns` (fields with ids), with bounds by field
 /// id, written under the schema `schema` (an index into the table's schemas).
-struct File {
+pub(super) struct File {
     name: &'static str,
     schema: usize,
     fields: Vec<Field>,
@@ -31,13 +31,17 @@ struct File {
     lower: HashMap<i32, Datum>,
     upper: HashMap<i32, Datum>,
     nans: HashMap<i32, u64>,
+    /// The partition tuple (empty for the unpartitioned spec).
+    partition: Struct,
+    /// Value and null counts by field id.
+    counts: HashMap<i32, (u64, u64)>,
     /// An equality delete file on these field ids (data sequence number 2;
     /// data files have 1).
     equality: Option<Vec<i32>>,
 }
 
 impl File {
-    fn new(name: &'static str, fields: Vec<Field>, columns: Vec<ArrayRef>) -> Self {
+    pub(super) fn new(name: &'static str, fields: Vec<Field>, columns: Vec<ArrayRef>) -> Self {
         Self {
             name,
             schema: 0,
@@ -46,6 +50,8 @@ impl File {
             lower: HashMap::new(),
             upper: HashMap::new(),
             nans: HashMap::new(),
+            partition: Struct::empty(),
+            counts: HashMap::new(),
             equality: None,
         }
     }
@@ -56,20 +62,32 @@ impl File {
         self
     }
 
-    fn bounds(mut self, id: i32, lower: Datum, upper: Datum) -> Self {
+    pub(super) fn bounds(mut self, id: i32, lower: Datum, upper: Datum) -> Self {
         self.lower.insert(id, lower);
         self.upper.insert(id, upper);
         self
     }
 
     /// Written under the schema with index `schema`.
-    fn under(mut self, schema: usize) -> Self {
+    pub(super) fn under(mut self, schema: usize) -> Self {
         self.schema = schema;
         self
     }
 
     fn nans(mut self, id: i32, n: u64) -> Self {
         self.nans.insert(id, n);
+        self
+    }
+
+    /// `values` values, `nulls` of them null, in the column `id`.
+    pub(super) fn counts(mut self, id: i32, values: u64, nulls: u64) -> Self {
+        self.counts.insert(id, (values, nulls));
+        self
+    }
+
+    /// In the partition `tuple` of the identity spec ([`evolved_at`]).
+    pub(super) fn in_partition(mut self, tuple: Struct) -> Self {
+        self.partition = tuple;
         self
     }
 }
@@ -80,7 +98,36 @@ impl File {
 /// as a writer of the time wrote it (a manifest's bounds are decoded with
 /// its own schema, so an `int` bound stays 4 bytes).
 fn evolved(env: &Env, schemas: &[Schema], files: Vec<File>) -> IcebergTable {
-    let t = env.create("t", schemas[0].clone(), None);
+    let edited = evolved_at(env, schemas, files, None);
+    env.rt
+        .block_on(IcebergTable::load(&env.reg, &edited, "db", "t"))
+        .unwrap()
+}
+
+/// [`evolved`]'s metadata location, the table partitioned by
+/// `identity(<identity>)` (spec 0) when set, each manifest written with that
+/// spec bound to its own schema (a promoted column's old tuples in the old
+/// width, as a writer of the time wrote them).
+pub(super) fn evolved_at(
+    env: &Env,
+    schemas: &[Schema],
+    files: Vec<File>,
+    identity: Option<&str>,
+) -> String {
+    let spec_of = |schema: &Schema| match identity {
+        Some(c) => PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field(c, c, iceberg::spec::Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap(),
+        None => PartitionSpec::unpartition_spec(),
+    };
+    let t = env.create(
+        "t",
+        schemas[0].clone(),
+        identity.map(|_| spec_of(&schemas[0])),
+    );
     let io: FileIO = env.reg.file_io();
     let data: Vec<(usize, bool, DataFile)> = files
         .into_iter()
@@ -101,11 +148,13 @@ fn evolved(env: &Env, schemas: &[Schema], files: Vec<File>) -> IcebergTable {
                 .file_format(DataFileFormat::Parquet)
                 .file_size_in_bytes(size)
                 .record_count(u64::try_from(rows).unwrap())
-                .partition(Struct::empty())
+                .partition(f.partition)
                 .partition_spec_id(0)
                 .lower_bounds(f.lower)
                 .upper_bounds(f.upper)
                 .nan_value_counts(f.nans)
+                .value_counts(f.counts.iter().map(|(k, (v, _))| (*k, *v)).collect())
+                .null_value_counts(f.counts.iter().map(|(k, (_, n))| (*k, *n)).collect())
                 .build()
                 .unwrap();
             (f.schema, f.equality.is_some(), file)
@@ -129,7 +178,7 @@ fn evolved(env: &Env, schemas: &[Schema], files: Vec<File>) -> IcebergTable {
                         .unwrap(),
                     Some(snapshot_id),
                     Arc::new(schema.clone()),
-                    PartitionSpec::unpartition_spec(),
+                    spec_of(schema),
                 );
                 let mut w = if deletes {
                     b.build_v2_deletes()
@@ -192,19 +241,17 @@ fn evolved(env: &Env, schemas: &[Schema], files: Vec<File>) -> IcebergTable {
             .await
             .unwrap();
     });
-    env.rt
-        .block_on(IcebergTable::load(&env.reg, &edited, "db", "t"))
-        .unwrap()
+    edited
 }
 
-fn schema(fields: Vec<NestedField>) -> Schema {
+pub(super) fn schema(fields: Vec<NestedField>) -> Schema {
     Schema::builder()
         .with_fields(fields.into_iter().map(Arc::new))
         .build()
         .unwrap()
 }
 
-fn opt(id: i32, name: &str, ty: PrimitiveType) -> NestedField {
+pub(super) fn opt(id: i32, name: &str, ty: PrimitiveType) -> NestedField {
     NestedField::optional(id, name, Type::Primitive(ty))
 }
 

@@ -44,6 +44,8 @@ zstd.workspace = true
 [dev-dependencies]
 # The declared Iceberg REST catalog of `tests/delegated_catalog.rs` (P3-T067 §3.3).
 krishiv-catalogs = { path = "../krishiv-catalogs", features = ["session"] }
+# The local Iceberg table `tests/delegated_catalog.rs` reads rows of (`testing::write_table`).
+krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", features = ["testing"] }
 # Signs act-as assertions in `tests/impersonation.rs` (feature `oidc`).
 aws-lc-rs.workspace = true
 hyper-util = { workspace = true, features = ["tokio"] }

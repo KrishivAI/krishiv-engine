@@ -39,7 +39,7 @@ use krishiv_common::config::{
 };
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::planner::{
-    RowLevelOperation, RowLevelTable, TableCapabilities, TableProvider, WriteRequest,
+    RowLevelOperation, RowLevelTable, TableCapabilities, TableProvider, WriteMode, WriteRequest,
 };
 use krishiv_exec::{
     FileScan, FilterPushdown, PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown,
@@ -300,6 +300,12 @@ impl IcebergTableProvider {
         Ok(out)
     }
 
+    /// The I/O and file lookup the scan's deletes are read with (a
+    /// merge-on-read write reads the deletes it absorbs through them).
+    pub(super) fn delete_io(&self) -> (krishiv_io::IoContext, super::lazy::Locate) {
+        (self.scan.env.io.clone(), Arc::clone(&self.scan.env.locate))
+    }
+
     /// The write target (a committer and the current version).
     pub(super) fn write_target(&self) -> Option<&Arc<WriteTarget>> {
         self.write.as_ref()
@@ -410,11 +416,16 @@ impl TableProvider for IcebergTableProvider {
         Some(super::stats::scan_units(&self.scan.entries))
     }
 
-    /// `BATCH_WRITE` (appends only: overwrites are PR-36b) when the table
-    /// has a committer and the provider reads its current state; else none.
+    /// `BATCH_WRITE`, `TRUNCATE`, `OVERWRITE_BY_FILTER` and
+    /// `OVERWRITE_DYNAMIC` (as Iceberg's `SparkTable`) when the table has a
+    /// committer and the provider reads its current state; else none.
     fn capabilities(&self) -> TableCapabilities {
         let mut caps = TableCapabilities::default();
-        caps.batch_write = self.write.is_some();
+        let writes = self.write.is_some();
+        caps.batch_write = writes;
+        caps.truncate = writes;
+        caps.overwrite_by_filter = writes;
+        caps.overwrite_dynamic = writes;
         caps
     }
 
@@ -428,7 +439,8 @@ impl TableProvider for IcebergTableProvider {
         )))
     }
 
-    /// The append sink, committing when it finalizes (`sink.rs`).
+    /// The append sink (`sink.rs`) or an overwrite's (`overwrite.rs`),
+    /// committing when it finalizes.
     fn writer(&self, request: &WriteRequest) -> krishiv_exec::Result<Arc<dyn Sink>> {
         self.capabilities()
             .check(&request.mode, &request.table_name)?;
@@ -436,7 +448,13 @@ impl TableProvider for IcebergTableProvider {
             .write
             .as_ref()
             .ok_or_else(|| internal("a write capability without a target".to_owned()))?;
-        Ok(Arc::new(IcebergWriteSink::try_new(
+        if request.mode == WriteMode::Append {
+            return Ok(Arc::new(IcebergWriteSink::try_new(
+                Arc::clone(target),
+                request,
+            )?));
+        }
+        Ok(Arc::new(super::overwrite::sink(
             Arc::clone(target),
             request,
         )?))

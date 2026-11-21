@@ -18,21 +18,32 @@ use crate::iceberg_rest::test_server::{Reply, Seen, Server, serve};
 const NO_TABLE: &str =
     r#"{"error": {"message": "no", "type": "NoSuchTableException", "code": 404}}"#;
 
-fn path(seen: &Seen) -> &str {
+pub(super) fn path(seen: &Seen) -> &str {
     seen.target.split('?').next().unwrap_or("")
+}
+
+/// A valid table metadata document of `s3://b/t (x INT)` without snapshots.
+pub(super) const META: &str = r#"{"format-version": 2, "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+    "location": "s3://b/t", "last-sequence-number": 0, "last-updated-ms": 1, "last-column-id": 1,
+    "current-schema-id": 0,
+    "schemas": [{"type": "struct", "schema-id": 0,
+                 "fields": [{"id": 1, "name": "x", "required": false, "type": "int"}]}],
+    "default-spec-id": 0, "partition-specs": [{"spec-id": 0, "fields": []}], "last-partition-id": 999,
+    "default-sort-order-id": 0, "sort-orders": [{"order-id": 0, "fields": []}], "properties": {},
+    "current-snapshot-id": -1, "snapshots": [], "snapshot-log": [], "metadata-log": []}"#;
+
+/// The `loadTable` answer of `db.t` (`META`).
+pub(super) fn table_body() -> String {
+    format!(
+        r#"{{"metadata-location": "s3://b/t/metadata/v1.metadata.json", "metadata": {META}, "config": {{}}}}"#
+    )
 }
 
 /// A catalog with `db.t` and nothing else.
 fn catalog_server() -> Server {
     serve(|r| match path(r) {
         "/v1/config" => Reply::Json(200, r#"{"defaults": {}, "overrides": {}}"#.into()),
-        "/v1/namespaces/db/tables/t" => Reply::Json(
-            200,
-            r#"{"metadata-location": "s3://b/t/metadata/v1.metadata.json",
-                "metadata": {"format-version": 2, "table-uuid": "u", "location": "s3://b/t"},
-                "config": {}}"#
-                .into(),
-        ),
+        "/v1/namespaces/db/tables/t" => Reply::Json(200, table_body()),
         "/token" => Reply::Json(
             200,
             r#"{"access_token": "cc-token", "token_type": "bearer"}"#.into(),
@@ -41,7 +52,7 @@ fn catalog_server() -> Server {
     })
 }
 
-fn decl(pairs: &[(&str, &str)], mode: DeclMode) -> CatalogDecl {
+pub(super) fn decl(pairs: &[(&str, &str)], mode: DeclMode) -> CatalogDecl {
     let mut d = CatalogDeclarations::parse(
         pairs.iter().copied(),
         mode,
@@ -52,14 +63,14 @@ fn decl(pairs: &[(&str, &str)], mode: DeclMode) -> CatalogDecl {
     d.catalogs.remove(0)
 }
 
-fn deps(mode: DeclMode, private: PrivateAddresses) -> CatalogDeps {
+pub(super) fn deps(mode: DeclMode, private: PrivateAddresses) -> CatalogDeps {
     CatalogDeps::new(
         mode,
         EgressPolicy::new(private, Vec::new(), ProviderEndpoints::default()),
     )
 }
 
-fn ident(ns: &[&str], name: &str) -> TableIdent {
+pub(super) fn ident(ns: &[&str], name: &str) -> TableIdent {
     TableIdent {
         catalog: "lake".to_owned(),
         namespace: ns.iter().map(|s| (*s).to_owned()).collect(),
@@ -67,7 +78,7 @@ fn ident(ns: &[&str], name: &str) -> TableIdent {
     }
 }
 
-const FORM: NameForm = NameForm {
+pub(super) const FORM: NameForm = NameForm {
     case_sensitive: false,
     qualified: true,
     temporary_only: false,
@@ -124,10 +135,12 @@ fn declared_rest_catalog_resolves_names_with_a_static_token() {
     let sent = server.seen().len();
     assert!(load(&catalog, &ident(&[], "t")).unwrap().is_none());
     assert_eq!(server.seen().len(), sent);
-    // A table the catalog has is refused until the provider exists, naming it.
-    let e = load(&catalog, &ident(&["db"], "t")).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.to_string().contains("`lake`.`db`.`t`"), "{e}");
+    // A table the catalog has: its metadata, under the catalog's own name.
+    let meta = load(&catalog, &ident(&["db"], "t")).unwrap().unwrap();
+    assert_eq!(meta.ident.parts(), ["lake", "db", "t"]);
+    assert_eq!(meta.columns.len(), 1);
+    assert_eq!(meta.columns[0].name, "x");
+    assert_eq!(meta.version, None);
     for s in server.seen() {
         assert_eq!(s.header("authorization"), Some("Bearer static-token"));
     }
@@ -198,9 +211,11 @@ fn an_undeclared_private_address_is_refused_before_sending() {
         Arc::new(crate::location::RemoteLocationPolicy::default()),
     )
     .unwrap();
-    let catalog: Arc<dyn CallerCatalog> = Arc::new(super::RestCatalog {
-        client: Arc::new(client),
-    });
+    let catalog: Arc<dyn CallerCatalog> = Arc::new(super::RestCatalog::new(
+        &d,
+        Arc::new(client),
+        super::table::METADATA_TTL,
+    ));
     let e = load(&catalog, &ident(&["db"], "t")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivCatalogFailure);
     assert!(!e.to_string().contains("127.0.0.1"), "{e}");
@@ -275,10 +290,9 @@ fn load_table_outside_a_tokio_runtime() {
         FORM,
     ));
     assert!(found.unwrap().is_none());
-    let e =
-        poll_without_runtime(catalog.load_table(&server_caller, &ident(&["db"], "t"), None, FORM))
-            .unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    let found =
+        poll_without_runtime(catalog.load_table(&server_caller, &ident(&["db"], "t"), None, FORM));
+    assert!(found.unwrap().is_some());
 }
 
 /// A delegated catalog whose IdP exchanges `<subject>` for `x-<subject>` and whose catalog has
@@ -297,13 +311,7 @@ fn delegated_server() -> Server {
         }
         "/v1/config" => Reply::Json(200, r#"{"defaults": {}, "overrides": {}}"#.into()),
         "/v1/namespaces/db/tables/t" if r.header("authorization") == Some("Bearer x-alice-jwt") => {
-            Reply::Json(
-                200,
-                r#"{"metadata-location": "s3://b/t/metadata/v1.metadata.json",
-                    "metadata": {"format-version": 2, "table-uuid": "u", "location": "s3://b/t"},
-                    "config": {}}"#
-                    .into(),
-            )
+            Reply::Json(200, table_body())
         }
         _ => Reply::Json(404, NO_TABLE.into()),
     })
@@ -356,12 +364,13 @@ fn delegated_metadata_cache_keyed_by_identity() {
     let alice = oidc_caller("alice", "alice-jwt");
     let bob = oidc_caller("bob", "bob-jwt");
     let t = ident(&["db"], "t");
-    // Alice is granted `db.t` in the catalog: found (refused until the provider exists).
-    let e = load_as(&catalog, &alice, &t).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    // Bob is not: absent for him, whatever Alice loaded.
+    // Alice is granted `db.t` in the catalog: found.
+    assert!(load_as(&catalog, &alice, &t).unwrap().is_some());
+    // Bob is not: absent for him, whatever Alice loaded (and cached).
     assert!(load_as(&catalog, &bob, &t).unwrap().is_none());
-    assert!(load_as(&catalog, &alice, &t).is_err());
+    // Alice's answer is cached for her (one load), and still never Bob's.
+    assert!(load_as(&catalog, &alice, &t).unwrap().is_some());
+    assert!(load_as(&catalog, &bob, &t).unwrap().is_none());
     let loads: Vec<_> = server
         .seen()
         .iter()
@@ -370,11 +379,7 @@ fn delegated_metadata_cache_keyed_by_identity() {
         .collect();
     assert_eq!(
         loads,
-        [
-            "Bearer x-alice-jwt",
-            "Bearer x-bob-jwt",
-            "Bearer x-alice-jwt"
-        ]
+        ["Bearer x-alice-jwt", "Bearer x-bob-jwt", "Bearer x-bob-jwt"]
     );
     // A session without a user token gets the delegation class, never the server's identity.
     let e = load_as(&catalog, &CatalogCaller::server("lake"), &t).unwrap_err();
@@ -382,6 +387,93 @@ fn delegated_metadata_cache_keyed_by_identity() {
         e.error_class(),
         ErrorClass::KrishivCatalogDelegationUnavailable
     );
+}
+
+/// Review 58b2 F3 (§3.5): with both users granted, each gets an answer of their own (two loads,
+/// each with its own exchanged token, then one cache entry each); once Bob's grant is revoked in
+/// the catalog, Alice's cached entry never answers him. A catalog that is not delegated keeps one
+/// entry for every caller.
+#[test]
+fn delegated_metadata_cache_one_entry_per_identity() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let revoked = Arc::new(AtomicBool::new(false));
+    let bob_revoked = Arc::clone(&revoked);
+    let server = serve(move |r| match path(r) {
+        "/token" => {
+            let subject = url::form_urlencoded::parse(r.body.as_bytes())
+                .find(|(k, _)| k == "subject_token")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
+            Reply::Json(
+                200,
+                format!(r#"{{"access_token": "x-{subject}", "token_type": "bearer"}}"#),
+            )
+        }
+        "/v1/config" => Reply::Json(200, r#"{"defaults": {}, "overrides": {}}"#.into()),
+        "/v1/namespaces/db/tables/t"
+            if r.header("authorization") == Some("Bearer x-bob-jwt")
+                && bob_revoked.load(Ordering::SeqCst) =>
+        {
+            Reply::Json(
+                403,
+                r#"{"error": {"message": "no", "type": "ForbiddenException", "code": 403}}"#.into(),
+            )
+        }
+        "/v1/namespaces/db/tables/t" => Reply::Json(200, table_body()),
+        _ => Reply::Json(404, NO_TABLE.into()),
+    });
+    let table_loads = |server: &Server| -> Vec<String> {
+        server
+            .seen()
+            .iter()
+            .filter(|s| path(s) == "/v1/namespaces/db/tables/t")
+            .map(|s| s.header("authorization").unwrap_or("").to_owned())
+            .collect()
+    };
+    let catalog = delegated_catalog(&server);
+    let alice = oidc_caller("alice", "alice-jwt");
+    let bob = oidc_caller("bob", "bob-jwt");
+    let t = ident(&["db"], "t");
+    for _ in 0..2 {
+        assert!(load_as(&catalog, &alice, &t).unwrap().is_some());
+        assert!(load_as(&catalog, &bob, &t).unwrap().is_some());
+    }
+    assert_eq!(
+        table_loads(&server),
+        ["Bearer x-alice-jwt", "Bearer x-bob-jwt"]
+    );
+    // Bob's grant is revoked; a new catalog (no entry of his) asks the catalog for him, and
+    // Alice's entry, loaded first, does not answer him.
+    revoked.store(true, Ordering::SeqCst);
+    let catalog = delegated_catalog(&server);
+    assert!(load_as(&catalog, &alice, &t).unwrap().is_some());
+    let r = load_as(&catalog, &bob, &t);
+    assert!(!matches!(r, Ok(Some(_))), "{r:?}");
+    assert_eq!(
+        table_loads(&server)[2..],
+        ["Bearer x-alice-jwt", "Bearer x-bob-jwt"]
+    );
+
+    // Not delegated: one entry for the catalog, whoever calls.
+    let server = catalog_server();
+    let catalog = IcebergRestFactory
+        .build(
+            &decl(
+                &[
+                    ("krishiv.catalog.lake.type", "iceberg-rest"),
+                    ("krishiv.catalog.lake.uri", server.base.as_str()),
+                ],
+                DeclMode::Embedded,
+            ),
+            &deps(DeclMode::Embedded, PrivateAddresses::Allow),
+        )
+        .unwrap();
+    load_as(&catalog, &alice, &t).unwrap().unwrap();
+    load_as(&catalog, &bob, &t).unwrap().unwrap();
+    load_as(&catalog, &CatalogCaller::server("lake"), &t)
+        .unwrap()
+        .unwrap();
+    assert_eq!(table_loads(&server).len(), 1);
 }
 
 fn caller_with(groups: &[&str], scope: &str, expires_in: i64) -> CatalogCaller {
@@ -428,7 +520,8 @@ fn limited_catalog(server: &Server, distinct: usize) -> Arc<dyn CallerCatalog> {
     let d = decl(&pairs, DeclMode::Server);
     let mut deps = deps(DeclMode::Server, PrivateAddresses::Deny);
     deps.max_distinct_exchanges_per_minute = distinct;
-    IcebergRestFactory.build(&d, &deps).unwrap()
+    // No `loadTable` cache: every call reaches the exchange and the catalog.
+    IcebergRestFactory::build_with_ttl(&d, &deps, std::time::Duration::ZERO).unwrap()
 }
 
 /// Review 58b1-r1 M1: the exchange limits count a principal by kind, tenant, name and

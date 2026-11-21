@@ -68,6 +68,7 @@ impl QueryProfile {
                 "stalls": p.stalls,
             })).collect::<Vec<_>>(),
             "plan": plan_json(&self.plan),
+            "hints": super::facts_json::hints_json(&self.hints),
             "operators": m.operators.iter().map(|(id, e)| operator_json(*id, e)).collect::<Vec<_>>(),
             "usage": usage_json(&QueryUsage::of(m), self.identity.as_ref()),
             "environment": {
@@ -197,6 +198,11 @@ impl QueryProfile {
             trace,
             identity,
             scans,
+            // Minor 7; a document without it has none.
+            hints: o
+                .get("hints")
+                .map(super::facts_json::hints_of)
+                .unwrap_or_default(),
         })
     }
 }
@@ -271,12 +277,16 @@ fn plan_json(root: &ProfileNode) -> Value {
         out.iter()
             .zip(children)
             .map(|(n, c)| {
-                json!({
+                let mut node = json!({
                     "id": n.id,
                     "name": n.name,
                     "detail": n.detail,
                     "children": c,
-                })
+                });
+                if let (Some(f), Some(o)) = (&n.facts, node.as_object_mut()) {
+                    o.insert("facts".to_owned(), super::facts_json::facts_json(f));
+                }
+                node
             })
             .collect(),
     )
@@ -383,6 +393,10 @@ fn plan_of(v: &Value) -> R<ProfileNode> {
             name: str_of(o, "name")?.to_owned(),
             detail: str_of(o, "detail")?.to_owned(),
             children: Vec::new(),
+            facts: o
+                .get("facts")
+                .and_then(super::facts_json::facts_of)
+                .map(std::sync::Arc::new),
         }));
         inputs.push(mine);
     }

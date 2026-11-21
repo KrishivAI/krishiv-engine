@@ -10,7 +10,7 @@ use super::*;
 /// # Errors
 /// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` for an option value other than
 /// `STATIC` or `DYNAMIC`.
-pub(super) fn partition_overwrite_is_dynamic(
+pub(crate) fn partition_overwrite_is_dynamic(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
 ) -> Result<bool, KrishivError> {

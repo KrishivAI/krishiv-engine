@@ -108,6 +108,7 @@ impl Detached {
                 loops,
                 schemas: BTreeMap::new(),
                 unit_weights: HashSet::new(),
+                output_filters: HashMap::new(),
                 salts: self.salts.clone(),
                 stages: HashMap::new(),
                 partition_ordered: std::collections::HashSet::new(),

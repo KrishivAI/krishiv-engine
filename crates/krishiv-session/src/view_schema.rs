@@ -113,7 +113,7 @@ pub(crate) const fn projection(mode: Option<ViewSchemaMode>) -> ReadProjection {
 /// The names a view read finds its stored columns by in `input`, the inlined view query: the query's output names
 /// (`query`). A query that repeats a name (ignoring case) is renamed by position to names of its own
 /// ([`repeats_names`]), so the stored types and comments still apply; once the query is analyzed, [`check_read`]
-/// finds each stored column by name and ordinal (Spark's `GetViewColumnByNameAndOrdinal`) and [`apply_renames`]
+/// finds each stored column by name and ordinal (Spark's `GetViewColumnByNameAndOrdinal`) and [`apply_renames_keeping`]
 /// replaces that rename by one of the query's current width, so a base table whose columns changed order or count
 /// reads as Spark reads it. Not yet for the views a SQL function's body reads (`sql_functions.rs` inlines them
 /// without the checks): those are still read by position (open item in `ops/queue-opus-b2.md`).
@@ -170,8 +170,64 @@ fn read_rename(read: &StoredRead, positions: &[usize], width: usize) -> ReadRena
 }
 
 /// `plan` with the renames of `renames` in place: each `SubqueryAlias` whose input is a rename's query (the same
-/// `Arc`, as inlined) takes the rename's columns; subquery plans included.
-pub(crate) fn apply_renames(plan: &Arc<LogicalPlan>, renames: &[ReadRename]) -> Arc<LogicalPlan> {
+/// `Arc`, as inlined) takes the rename's columns; subquery plans included. Also each set of `texts` (queries kept by
+/// node identity: the trusted definer view queries, P3-T062 review B1, and the stored views' texts, review r5 Z1)
+/// mapped to the nodes that replace them in the renamed plan, one set out per set in.
+pub(crate) fn apply_renames_keeping(
+    plan: &Arc<LogicalPlan>,
+    renames: &[ReadRename],
+    texts: &[&krishiv_plan::analyzer::views::DefinerTexts],
+) -> (
+    Arc<LogicalPlan>,
+    Vec<krishiv_plan::analyzer::views::DefinerTexts>,
+) {
+    if renames.is_empty() {
+        return (
+            Arc::clone(plan),
+            texts.iter().map(|t| (*t).clone()).collect(),
+        );
+    }
+    let mut kept = Kept {
+        texts: texts.to_vec(),
+        found: vec![Vec::new(); texts.len()],
+    };
+    let out = renamed(plan, renames, &mut kept);
+    (
+        out,
+        kept.found
+            .into_iter()
+            .map(krishiv_plan::analyzer::views::DefinerTexts::new)
+            .collect(),
+    )
+}
+
+/// The rebuilt nodes of the queries kept by identity a rename walk passes, per set (see
+/// [`apply_renames_keeping`]).
+#[derive(Default)]
+struct Kept<'a> {
+    texts: Vec<&'a krishiv_plan::analyzer::views::DefinerTexts>,
+    found: Vec<Vec<Arc<LogicalPlan>>>,
+}
+
+fn renamed(
+    plan: &Arc<LogicalPlan>,
+    renames: &[ReadRename],
+    kept: &mut Kept<'_>,
+) -> Arc<LogicalPlan> {
+    let out = rename_node(plan, renames, kept);
+    for (texts, found) in kept.texts.iter().zip(kept.found.iter_mut()) {
+        if texts.contains(plan) {
+            found.push(Arc::clone(&out));
+        }
+    }
+    out
+}
+
+fn rename_node(
+    plan: &Arc<LogicalPlan>,
+    renames: &[ReadRename],
+    kept: &mut Kept<'_>,
+) -> Arc<LogicalPlan> {
     if renames.is_empty() {
         return Arc::clone(plan);
     }
@@ -182,8 +238,9 @@ pub(crate) fn apply_renames(plan: &Arc<LogicalPlan>, renames: &[ReadRename]) -> 
         _ => None,
     };
     let rebuilt: Result<_, std::convert::Infallible> =
-        Arc::clone(plan).map_children(|child| Ok(apply_renames(&child, renames)));
-    let Ok(rebuilt) = rebuilt.and_then(|p| p.map_expressions(|e| Ok(rename_expr(&e, renames))));
+        Arc::clone(plan).map_children(|child| Ok(renamed(&child, renames, kept)));
+    let Ok(rebuilt) =
+        rebuilt.and_then(|p| p.map_expressions(|e| Ok(rename_expr(&e, renames, kept))));
     match (found, &rebuilt.node) {
         (Some(rename), PlanNode::SubqueryAlias { input, alias, .. }) => Arc::new(
             LogicalPlan::new(PlanNode::SubqueryAlias {
@@ -197,13 +254,13 @@ pub(crate) fn apply_renames(plan: &Arc<LogicalPlan>, renames: &[ReadRename]) -> 
     }
 }
 
-/// `expr` with [`apply_renames`] applied to the subquery plans inside it.
-fn rename_expr(expr: &Arc<Expr>, renames: &[ReadRename]) -> Arc<Expr> {
+/// `expr` with the renames applied to the subquery plans inside it.
+fn rename_expr(expr: &Arc<Expr>, renames: &[ReadRename], kept: &mut Kept<'_>) -> Arc<Expr> {
     let mapped: Result<_, std::convert::Infallible> =
-        Arc::clone(expr).map_children(|child| Ok(rename_expr(&child, renames)));
+        Arc::clone(expr).map_children(|child| Ok(rename_expr(&child, renames, kept)));
     let Ok(expr) = mapped;
     if let ExprNode::Subquery { kind, plan } = &expr.node {
-        let renamed = apply_renames(plan, renames);
+        let renamed = renamed(plan, renames, kept);
         if !Arc::ptr_eq(&renamed, plan) {
             return Arc::new(Expr {
                 node: ExprNode::Subquery {
@@ -275,6 +332,9 @@ pub(crate) struct StoredRead {
     /// Whether the read renamed its query's columns by position ([`read_names`]), to be replaced by a rename by
     /// name and ordinal once the query is analyzed.
     pub(crate) renamed: bool,
+    /// Whether the view is a definer view or lies inside one's text (review r2 R1): a failure of its check is
+    /// the definer's, told to the reader redacted (`Session::definer_failure`).
+    pub(crate) in_definer: bool,
 }
 
 /// What `Session::check_stored_views` returns: the evolved view entries to store (as found, as changed) and the

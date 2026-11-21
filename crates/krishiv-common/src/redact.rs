@@ -45,6 +45,45 @@ fn tick(n: usize) {
 #[inline(always)]
 fn tick(_: usize) {}
 
+/// The default of `spark.redaction.regex`
+/// (`core/.../internal/config/package.scala:1325-1333`),
+/// `(?i)secret|password|token|access[.]?key|credential`, as plain
+/// substrings: Java's `(?i)` folds ASCII only, and `[.]` is a literal dot.
+const REDACTION_WORDS: [&str; 6] = [
+    "secret",
+    "password",
+    "token",
+    "accesskey",
+    "access.key",
+    "credential",
+];
+
+fn matches_redaction(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    REDACTION_WORDS.iter().any(|w| lower.contains(w))
+}
+
+/// Whether a configuration pair is hidden: Spark Connect's
+/// `SparkConnectConfigHandler.isRedacted` (the key or the value matches
+/// `spark.redaction.regex`'s default). Krishiv also hides what its own
+/// classifier calls a secret (ADR 0038, threat model T-C8), a difference
+/// toward safety: a key [`is_sensitive_key`] names (`*.account.key.*`,
+/// `sasl.jaas.config`, `*.apiKey`, ...) and a value [`redact`] finds a
+/// credential in (`postgres://user:password@host`, `jdbc:...;password=`).
+///
+/// ```
+/// use krishiv_common::redact::is_redacted_setting;
+/// assert!(is_redacted_setting("spark.my.token", Some("x")));
+/// assert!(is_redacted_setting("spark.sql.session.timeZone", Some("postgres://u:pw@h/db")));
+/// assert!(!is_redacted_setting("spark.sql.ansi.enabled", Some("true")));
+/// ```
+#[must_use]
+pub fn is_redacted_setting(key: &str, value: Option<&str>) -> bool {
+    matches_redaction(key)
+        || is_sensitive_key(key)
+        || value.is_some_and(|v| matches_redaction(v) || matches!(redact(v), Cow::Owned(_)))
+}
+
 /// `text` with the secrets it can find replaced by [`REDACTED`]; borrowed
 /// when there are none.
 #[must_use]
@@ -429,7 +468,25 @@ fn schemes(text: &str, out: &mut Vec<Range<usize>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Mark, RedactedSql, redact};
+    use super::{Mark, RedactedSql, is_redacted_setting, matches_redaction, redact};
+
+    #[test]
+    fn setting_pairs_follow_sparks_pattern_and_the_classifier() {
+        assert!(
+            !matches_redaction("access_key"),
+            "Spark's [.]? is a literal dot"
+        );
+        assert!(matches_redaction("fs.s3a.ACCESS.KEY"));
+        assert!(matches_redaction("fs.s3a.accessKey"));
+        // Krishiv's classifier on top: an `access_key` key, a credential inside a value.
+        assert!(is_redacted_setting("access_key", None));
+        assert!(is_redacted_setting("x", Some("jdbc:pg://h;password=p")));
+        assert!(!is_redacted_setting("spark.sql.ansi.enabled", None));
+        assert!(!is_redacted_setting(
+            "spark.sql.ansi.enabled",
+            Some("maybe")
+        ));
+    }
 
     #[test]
     fn marks_replace_secrets_and_fragments_follow() {

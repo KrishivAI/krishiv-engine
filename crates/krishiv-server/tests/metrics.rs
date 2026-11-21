@@ -352,6 +352,17 @@ async fn metrics_serves_every_sourced_catalogue_metric() {
             counters: vec![
                 sample("krishiv.auth.failed", ("method", "none")),
                 sample("krishiv.auth.denied", ("privilege", "MONITOR")),
+                // `krishiv server` merges the Flight SQL request counter
+                // (`FlightSqlServer::metrics`) the same way.
+                krishiv_exec::CounterSample {
+                    name: "krishiv.flight_sql.requests",
+                    unit: "{request}",
+                    labels: vec![
+                        ("command".to_owned(), "statement_query".to_owned()),
+                        ("outcome".to_owned(), "ok".to_owned()),
+                    ],
+                    value: 1.0,
+                },
             ],
             ..krishiv_exec::MetricsSnapshot::default()
         });

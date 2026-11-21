@@ -131,29 +131,54 @@ pub(crate) fn visit_distinct<'a>(
     ControlFlow::Continue(())
 }
 
+/// [`visit_distinct`] over a `seen` set the caller keeps: addresses already in it are skipped (a subtree
+/// the caller has already visited is not entered), and every node this walk visits is added.
+pub(crate) fn visit_distinct_known<'a>(
+    root: Node<'a>,
+    seen: &mut PtrSet<usize>,
+    mut f: impl FnMut(Node<'a>) -> ControlFlow<()>,
+) -> ControlFlow<()> {
+    let mut stack = vec![root];
+    let mut next = Vec::new();
+    while let Some(node) = stack.pop() {
+        if !seen.insert(node.key() as usize) {
+            continue;
+        }
+        f(node)?;
+        children(node, &mut next);
+        stack.extend(next.drain(..).rev());
+    }
+    ControlFlow::Continue(())
+}
+
 /// Whether `root` nests deeper than [`MAX_DEPTH`]: its height (the longest
 /// path from it down, in nodes) exceeds the cap. Heights are memoised per
 /// distinct node, so a shared subtree is measured once however many paths
 /// reach it, and at the depth of the deepest one.
 pub(crate) fn too_deep(root: Node<'_>) -> bool {
-    let mut height: PtrMap<*const (), usize> = PtrMap::default();
+    too_deep_known(root, &mut PtrMap::default())
+}
+
+/// [`too_deep`] with the heights of nodes already measured (`height`, kept by the caller, keyed by
+/// address); every node this walk measures is added.
+pub(crate) fn too_deep_known(root: Node<'_>, height: &mut PtrMap<usize, usize>) -> bool {
     let mut stack = vec![(root, false)];
     let mut next = Vec::new();
     while let Some((node, expanded)) = stack.pop() {
-        if height.contains_key(&node.key()) {
+        if height.contains_key(&(node.key() as usize)) {
             continue;
         }
         children(node, &mut next);
         if expanded {
             let below = next
                 .drain(..)
-                .map(|c| height.get(&c.key()).copied().unwrap_or(0))
+                .map(|c| height.get(&(c.key() as usize)).copied().unwrap_or(0))
                 .max()
                 .unwrap_or(0);
             if below + 1 > MAX_DEPTH {
                 return true;
             }
-            height.insert(node.key(), below + 1);
+            height.insert(node.key() as usize, below + 1);
         } else {
             stack.push((node, true));
             stack.extend(next.drain(..).map(|c| (c, false)));

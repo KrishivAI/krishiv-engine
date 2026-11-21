@@ -10,7 +10,8 @@
 //! that raises on rows of a branch not taken still raises, as in Spark.
 //!
 //! The calls of one eval type whose arguments hold no other Python UDF call
-//! share a node (equal calls are evaluated once); a call over another
+//! share a node (equal calls of a deterministic UDF are evaluated once, those of a nondeterministic
+//! one are not); a call over another
 //! call's result, or calls of another eval type, go in a node above.
 
 use std::collections::HashSet;
@@ -39,6 +40,23 @@ fn python_call(e: &Expr) -> Option<PythonEvalType> {
         },
         _ => None,
     }
+}
+
+/// Whether the Python UDF calls `a` and `b` are one evaluation: the same node, or equal calls of a
+/// deterministic UDF. Two equal calls of a nondeterministic UDF are two evaluations, as Spark's
+/// `ExpressionSet` keeps them apart (`ExtractPythonUDFs`): `rnd(x)` written twice gives two values.
+/// The identity check relies on `transform_up` keeping the `Arc` of unchanged nodes (`Expr::up` /
+/// `map_children` do): a refactor that rebuilds them would make the extraction's `replaced` miss the call
+/// and the extraction loop never end.
+fn same_call(a: &Arc<Expr>, b: &Arc<Expr>) -> bool {
+    if Arc::ptr_eq(a, b) {
+        return true;
+    }
+    let deterministic = matches!(
+        &a.node,
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.deterministic
+    );
+    deterministic && a == b
 }
 
 /// The address of `e`, the key a walk marks a visited node by.
@@ -99,7 +117,7 @@ fn innermost(e: &Arc<Expr>, out: &mut Vec<Arc<Expr>>, seen: &mut HashSet<usize>)
         let mut nested = false;
         e.for_each_child(&mut |c| nested = nested || has_python_udf(c));
         if !nested {
-            if !out.iter().any(|o| o == e) {
+            if !out.iter().any(|o| same_call(o, e)) {
                 out.push(Arc::clone(e));
             }
             return;
@@ -116,7 +134,7 @@ fn replaced(e: &Arc<Expr>, columns: &[(Arc<Expr>, BoundColumn)]) -> Result<Arc<E
         }
         Ok(columns
             .iter()
-            .find(|(call, _)| *call == n)
+            .find(|(call, _)| same_call(call, &n))
             .map_or(n, |(_, column)| {
                 Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
                     column.clone(),

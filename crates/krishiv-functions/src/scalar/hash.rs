@@ -17,7 +17,9 @@ use super::args::{Inputs, is_binary, is_string};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
-pub(super) const NAMES: &[&str] = &["hash", "xxhash64", "md5", "sha", "sha1", "sha2", "crc32"];
+pub(super) const NAMES: &[&str] = &[
+    "hash", "xxhash64", "md5", "sha", "sha1", "sha2", "crc32", "hmac",
+];
 
 /// Binds the hash function `name`.
 pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyResult {
@@ -63,6 +65,19 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             Binding::new(DataType::Utf8, |x: &Inputs<'_>| {
                 let bits = x.prim::<Int32Type>(1)?;
                 Ok(Arc::new(kh::sha2(x.plain_column(0)?.as_ref(), bits.operand())?) as ArrayRef)
+            })
+        }
+        // `hmac(key, message[, algorithm])`: binary in, binary out (a string is cast to binary before).
+        ("hmac", [k, m, ..])
+            if is_binary(k) && is_binary(m) && (n == 2 || is_string(&types[2])) =>
+        {
+            Binding::new(DataType::Binary, move |x: &Inputs<'_>| {
+                let algorithm = (n == 3).then(|| x.strings(2)).transpose()?;
+                Ok(Arc::new(kh::hmac(
+                    &x.binaries(0)?,
+                    &x.binaries(1)?,
+                    algorithm.as_ref(),
+                )?) as ArrayRef)
             })
         }
         _ => return Some((listed, Err(bad_types(listed, args)))),

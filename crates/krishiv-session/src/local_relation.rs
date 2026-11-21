@@ -138,7 +138,8 @@ impl Session {
         let mut exprs = Vec::with_capacity(target.fields().len());
         for (have, want) in renamed.fields().iter().zip(target.fields()) {
             let column = Expr::column([have.name().clone()]);
-            let to = DataType::from_arrow_field(want)?;
+            // A UDT column is its storage type inside the engine: cast to that; `conform` puts the UDT's tag back.
+            let to = DataType::from_arrow_field(want)?.without_udts();
             exprs.push(
                 if same_shape(have.data_type(), want.data_type()) {
                     column

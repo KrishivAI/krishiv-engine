@@ -54,12 +54,14 @@ mod mersenne;
 mod misc;
 mod number;
 mod predicate;
+mod protobuf;
 mod random;
 mod regex;
 mod session;
 mod shuffle;
 mod string;
 mod r#struct;
+mod text43;
 mod time_window;
 mod udf;
 mod url;
@@ -513,6 +515,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (hll::NAMES, hll::bind),
     (interval::NAMES, interval::bind),
     (avro::NAMES, avro::bind),
+    (protobuf::NAMES, protobuf::bind),
     (json::NAMES, json::bind),
     (map::NAMES, map::bind),
     (json_tuple::NAMES, json_tuple::bind),
@@ -525,6 +528,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (shuffle::NAMES, shuffle::bind),
     (chars::NAMES, chars::bind),
     (codec::NAMES, codec::bind),
+    (text43::NAMES, text43::bind),
     (r#struct::NAMES, r#struct::bind),
     (url::NAMES, url::bind),
     (geo::NAMES, geo::bind),
@@ -582,6 +586,7 @@ pub fn is_argument_pure(name: &str) -> bool {
         string::NAMES,
         chars::NAMES,
         codec::NAMES,
+        text43::NAMES,
         math::NAMES,
         arith::NAMES,
         interval::NAMES,

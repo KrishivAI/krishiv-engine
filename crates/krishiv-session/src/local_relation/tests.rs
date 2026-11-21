@@ -403,3 +403,140 @@ fn utf8_and_binary_columns_meet_a_string_and_binary_schema() {
     let bins = out[0].column(1).as_binary_view();
     assert_eq!(bins.value(2), b"yz");
 }
+
+/// MLlib's `VectorUDT` storage: `struct<type: tinyint, size: int, indices: array<int>, values: array<double>>`.
+fn vector_storage() -> DataType {
+    use krishiv_types::ArrayType;
+    DataType::Struct(StructType::new(vec![
+        StructField::new("type", DataType::Byte, false),
+        StructField::new("size", DataType::Integer, true),
+        StructField::new(
+            "indices",
+            DataType::Array(Arc::new(ArrayType::new(DataType::Integer, false))),
+            true,
+        ),
+        StructField::new(
+            "values",
+            DataType::Array(Arc::new(ArrayType::new(DataType::Double, false))),
+            true,
+        ),
+    ]))
+}
+
+fn vector_udt() -> DataType {
+    DataType::Udt(Arc::new(krishiv_types::UdtType::jvm(
+        vector_storage(),
+        "org.apache.spark.ml.linalg.VectorUDT".to_owned(),
+        Some("pyspark.ml.linalg.VectorUDT".to_owned()),
+    )))
+}
+
+/// P3-T079: a LocalRelation whose user schema names a UDT. The result keeps the UDT in its schema whether the data
+/// already has the storage type (no cast) or needs a cast to it.
+#[test]
+fn a_udt_column_in_the_user_schema_is_kept_with_and_without_a_cast() {
+    let s = Session::new().unwrap();
+    // (a) a UDT over int, data of another width: the cast goes to the storage type.
+    let long_schema = Arc::new(Schema::new(vec![Field::new("p", A::Int64, true)]));
+    let data = batch(
+        &long_schema,
+        vec![Arc::new(arrow_array::Int64Array::from(vec![Some(7), None]))],
+    );
+    let point = DataType::Udt(Arc::new(krishiv_types::UdtType::jvm(
+        DataType::Integer,
+        "org.example.PointUDT".to_owned(),
+        None,
+    )));
+    let l = block_on(s.local_relation(
+        Some(&ipc(&long_schema, vec![data])),
+        Some(user(&[("p", point.clone(), true)])),
+    ))
+    .unwrap();
+    assert_eq!(
+        DataType::from_arrow_field(l.schema().field(0)).unwrap(),
+        point
+    );
+    let out = block_on(dataframe(&s, &l).collect()).unwrap();
+    assert_eq!(out[0].column(0).as_primitive::<Int32Type>().value(0), 7);
+    assert!(out[0].column(0).is_null(1));
+    assert_eq!(
+        DataType::from_arrow_field(out[0].schema().field_with_name("p").unwrap()).unwrap(),
+        point
+    );
+
+    // (b) a VectorUDT over a struct of arrays: data that needs a cast (`size` arrives as bigint)...
+    let storage = vector_storage();
+    let arrow_storage = storage.to_arrow();
+    let A::Struct(fields) = &arrow_storage else {
+        panic!("storage is a struct")
+    };
+    let mut wide: Vec<Field> = fields.iter().map(|f| f.as_ref().clone()).collect();
+    wide[1] = Field::new("size", A::Int64, true);
+    let wide_schema = Arc::new(Schema::new(vec![Field::new(
+        "v",
+        A::Struct(wide.clone().into()),
+        true,
+    )]));
+    let v = StructArray::try_new(
+        wide.into(),
+        vec![
+            Arc::new(arrow_array::Int8Array::from(vec![1])) as ArrayRef,
+            Arc::new(arrow_array::Int64Array::from(vec![3])),
+            Arc::new(list_of(arrow_array::Int32Array::from(vec![0, 2]))),
+            Arc::new(list_of(arrow_array::Float64Array::from(vec![1.5, 2.5]))),
+        ],
+        None,
+    )
+    .unwrap();
+    let data = batch(&wide_schema, vec![Arc::new(v)]);
+    let vector = vector_udt();
+    let l = block_on(s.local_relation(
+        Some(&ipc(&wide_schema, vec![data])),
+        Some(user(&[("v", vector.clone(), true)])),
+    ))
+    .unwrap();
+    assert_eq!(
+        DataType::from_arrow_field(l.schema().field(0)).unwrap(),
+        vector
+    );
+    let out = block_on(dataframe(&s, &l).collect()).unwrap();
+    assert_eq!(rows(&out), 1);
+    let got = out[0].column(0).as_struct();
+    assert_eq!(got.column(1).as_primitive::<Int32Type>().value(0), 3);
+
+    // ... and data that already has the storage type needs none.
+    let exact_schema = Arc::new(Schema::new(vec![storage.to_arrow_field("v", true)]));
+    let exact = StructArray::try_new(
+        fields.clone(),
+        vec![
+            Arc::new(arrow_array::Int8Array::from(vec![0])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![4])),
+            Arc::new(list_of(Int32Array::from(vec![1]))),
+            Arc::new(list_of(arrow_array::Float64Array::from(vec![9.0]))),
+        ],
+        None,
+    )
+    .unwrap();
+    let data = batch(&exact_schema, vec![Arc::new(exact)]);
+    let l = block_on(s.local_relation(
+        Some(&ipc(&exact_schema, vec![data])),
+        Some(user(&[("v", vector.clone(), true)])),
+    ))
+    .unwrap();
+    assert_eq!(
+        DataType::from_arrow_field(l.schema().field(0)).unwrap(),
+        vector
+    );
+}
+
+/// A one-row `list<element>` array holding `values`.
+fn list_of<T: arrow_array::Array + 'static>(values: T) -> arrow_array::ListArray {
+    let field = Arc::new(Field::new("element", values.data_type().clone(), false));
+    let n = i32::try_from(values.len()).unwrap();
+    arrow_array::ListArray::new(
+        field,
+        arrow_buffer::OffsetBuffer::new(vec![0, n].into()),
+        Arc::new(values),
+        None,
+    )
+}

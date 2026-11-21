@@ -693,7 +693,14 @@ fn schema_matches_the_writer() {
     );
     let schema: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_default())
         .unwrap_or_default();
-    let mut profile = QueryProfile::new(&plan(matching()), metrics(), true);
+    let mut profile = QueryProfile::new(&plan(with_facts()), metrics(), true);
+    profile.hints = vec![Hint {
+        code: HintCode::Spill,
+        node: Some(0),
+        operator: Some(OperatorId(1)),
+        message: "m".to_owned(),
+        evidence: vec![("n".to_owned(), 1)],
+    }];
     profile.planning = Some(
         serde_json::json!({"parsed": "p", "analyzed": "a", "steps": [],
         "optimized": "o", "physical": "x"}),
@@ -760,6 +767,8 @@ fn schema_matches_the_writer() {
     );
     check(&schema["$defs"]["planning"], &doc["planning"]);
     check(&props["trace"], &doc["trace"]);
+    check(&schema["$defs"]["facts"], &doc["plan"][0]["facts"]);
+    check(&schema["$defs"]["hint"], &doc["hints"][0]);
     check(&props["environment"], &doc["environment"]);
     check(&props["usage"], &doc["usage"]);
     check(
@@ -1138,4 +1147,93 @@ fn a_scanned_table_keeps_the_boundaries_of_its_name() {
         named(&["spark_catalog", "default", "Ev_1"]),
         ["spark_catalog.default.Ev_1"]
     );
+}
+
+fn with_facts() -> ExplainNode {
+    use crate::planner::{FilterGap, FilterGapReason, InputFacts, NodeFacts};
+    let mut e = matching();
+    e.facts = Some(Arc::new(NodeFacts {
+        estimated_rows: Some(12.5),
+        inputs: vec![InputFacts {
+            estimated_rows: 1.0e6,
+            statistics: false,
+            tables_without_stats: vec!["t".to_owned()],
+        }],
+        filter_gaps: vec![FilterGap {
+            key: 0,
+            probe_key: "(a#1 + 0)".to_owned(),
+            reason: FilterGapReason::NoScanColumn,
+        }],
+        tables_without_stats: vec!["t".to_owned()],
+    }));
+    e
+}
+
+/// Facts and hints round trip; equality and `merge` ignore facts, so a worker's profile from the plan codec
+/// (no facts) merges with the coordinator's; a minor-5 document (neither member) still loads.
+#[test]
+fn facts_and_hints_round_trip_and_do_not_affect_equality() {
+    let mut p = QueryProfile::new(&plan(with_facts()), metrics(), true);
+    assert!(p.plan.facts.is_some());
+    p.hints = vec![Hint {
+        code: HintCode::Skew,
+        node: Some(0),
+        operator: Some(OperatorId(2)),
+        message: "m".to_owned(),
+        evidence: vec![("drivers".to_owned(), 4)],
+    }];
+    let text = p.to_json();
+    let back = QueryProfile::from_json(&text).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(back.plan.facts, p.plan.facts);
+    assert_eq!(back.hints, p.hints);
+    assert_eq!(back.to_json(), text);
+    // Equality ignores facts.
+    let bare = QueryProfile::new(&plan(matching()), metrics(), true);
+    assert_eq!(bare.plan, p.plan);
+    let mut merged = QueryProfile::new(&plan(with_facts()), metrics(), true);
+    merged.merge(&bare).unwrap_or_else(|e| panic!("{e}"));
+    // A minor-5 document has neither member.
+    let mut v = p.to_json_value();
+    v["minor"] = 5.into();
+    v.as_object_mut().expect("object").remove("hints");
+    v["plan"][0]
+        .as_object_mut()
+        .expect("object")
+        .remove("facts");
+    let old = QueryProfile::from_json(&v.to_string()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(old.hints.is_empty());
+    assert!(old.plan.facts.is_none());
+}
+
+#[test]
+fn text_lists_hints_only_when_there_are_some() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), true);
+    assert!(!p.to_text(TextOptions::masked()).contains("== Hints =="));
+    p.hints = vec![Hint {
+        code: HintCode::Spill,
+        node: Some(0),
+        operator: None,
+        message: "Limit spilled".to_owned(),
+        evidence: Vec::new(),
+    }];
+    let text = p.to_text(TextOptions::masked());
+    assert!(
+        text.contains("== Hints ==\n[SPILL] node 0 Limit: Limit spilled\n"),
+        "{text}"
+    );
+}
+
+/// Join inputs are positional (probe, build): one malformed element drops them all instead of shifting the rest,
+/// which would attribute the build input's facts to the probe.
+#[test]
+fn a_malformed_join_input_drops_all_inputs_rather_than_shifting_them() {
+    let good = serde_json::json!({"estimated_rows": 10, "statistics": false, "tables_without_stats": ["t"]});
+    let bad = serde_json::json!({"estimated_rows": "x", "statistics": true});
+    let both = serde_json::json!({"inputs": [good, good]});
+    let facts = super::facts_json::facts_of(&both).expect("facts");
+    assert_eq!(facts.inputs.len(), 2);
+    assert_eq!(facts.inputs[1].tables_without_stats, vec!["t".to_owned()]);
+    let mixed = serde_json::json!({"inputs": [bad, good]});
+    let facts = super::facts_json::facts_of(&mixed).expect("facts");
+    assert!(facts.inputs.is_empty());
 }

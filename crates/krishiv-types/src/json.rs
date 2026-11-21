@@ -6,6 +6,7 @@
 //! (`{"type":"array","elementType":"integer","containsNull":true}`).
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use krishiv_common::error::{
     CollationInvalidProvider, ErrorClass, InvalidJsonDataTypeForCollations, KrishivError,
@@ -14,7 +15,7 @@ use serde_json::{Map, Value};
 
 use crate::collation::{Collation, CollationFamily};
 use crate::error::{self, Result};
-use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
+use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType, UdtType};
 use crate::{DataType, DecimalType, Srid};
 
 impl DataType {
@@ -82,6 +83,29 @@ impl DataType {
                     &format!("geography({}, SPHERICAL)", json_srid(*srid, true)),
                     out,
                 );
+            }
+            Self::Udt(u) => {
+                // Spark's `UserDefinedType.jsonValue` and `PythonUserDefinedType.jsonValue`, in their key order and with
+                // their exact key sets (a real 4.2.0 `DataType.fromJson` refuses any other): a JVM UDT is `class`,
+                // `pyClass` (null when it has no Python class); a Python-only one is `pyClass`, `serializedClass`.
+                out.push_str(r#"{"type":"udt""#);
+                let key = |name: &str, value: Option<&str>, out: &mut String| {
+                    let _ = write!(out, r#","{name}":"#);
+                    match value {
+                        Some(v) => write_string(v, out),
+                        None => out.push_str("null"),
+                    }
+                };
+                if u.jvm_class().is_some() {
+                    key("class", u.jvm_class(), out);
+                    key("pyClass", u.python_class(), out);
+                } else {
+                    key("pyClass", u.python_class(), out);
+                    key("serializedClass", u.serialized_python_class(), out);
+                }
+                out.push_str(r#","sqlType":"#);
+                u.sql_type().write_json_in(out, false);
+                out.push('}');
             }
             atomic => write_string(&atomic.type_name(), out),
         }
@@ -158,6 +182,34 @@ impl DataType {
                     .map(|f| struct_field(f, depth, indeterminate))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(StructType::new(fields).into())
+            }
+            // Spark's `fromJson` takes exactly `{type, class, pyClass, sqlType}` (a JVM UDT; `pyClass` may be null) or
+            // `{type, pyClass, serializedClass, sqlType}` (a Python-only one).
+            Some("udt") if obj.contains_key("sqlType") => {
+                let text = |key: &str| -> Result<String> {
+                    match obj.get(key) {
+                        Some(Value::String(t)) => Ok(t.clone()),
+                        _ => Err(invalid()),
+                    }
+                };
+                let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+                keys.sort_unstable();
+                let udt = if keys == ["class", "pyClass", "sqlType", "type"] {
+                    let py = match obj.get("pyClass") {
+                        Some(Value::Null) => None,
+                        _ => Some(text("pyClass")?),
+                    };
+                    UdtType::jvm(child("sqlType")?, text("class")?, py)
+                } else if keys == ["pyClass", "serializedClass", "sqlType", "type"] {
+                    UdtType::python(
+                        child("sqlType")?,
+                        text("pyClass")?,
+                        text("serializedClass")?,
+                    )
+                } else {
+                    return Err(invalid());
+                };
+                Ok(Self::Udt(Arc::new(udt)))
             }
             _ => Err(invalid()),
         }

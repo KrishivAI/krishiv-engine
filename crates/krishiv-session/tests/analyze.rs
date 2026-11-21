@@ -1490,6 +1490,33 @@ fn writes_and_drops_list_the_directory_a_run_asks() {
     assert_eq!(dirs("INSERT INTO e SELECT a FROM s").len(), 2);
 }
 
+/// A Delta table (PR-37a, review n4 of #782): each statement finds it as its run does. `DROP TABLE` of a
+/// managed one deletes its directory, so lists it; `TRUNCATE TABLE` is refused by name, so lists
+/// nothing; `INSERT` commits to the log and asks about no directory, so its clause lists nothing while
+/// the other clauses of a multi-table insert still list theirs.
+#[cfg(feature = "delta")]
+#[test]
+fn a_delta_table_lists_what_its_run_asks() {
+    let s = corpus_ready();
+    block_on(s.sql("CREATE TABLE d USING delta AS SELECT * FROM s")).unwrap();
+    let dirs = |sql: &str| directories(&block_on(s.analyze(sql)).unwrap());
+    assert_eq!(dirs("DROP TABLE d"), ["MODIFY path 'file:<warehouse>/d'"]);
+    assert!(dirs("TRUNCATE TABLE d").is_empty());
+    assert!(dirs("INSERT INTO d SELECT * FROM s").is_empty());
+    assert!(dirs("INSERT OVERWRITE TABLE d SELECT * FROM s").is_empty());
+    assert_eq!(
+        dirs("FROM s INSERT INTO d SELECT * INSERT INTO t SELECT *"),
+        [
+            "MODIFY path 'file:<warehouse>/t'",
+            "CREATE path 'file:<warehouse>/t'"
+        ]
+    );
+    // The runs agree: the insert writes, the truncate is refused, the drop deletes the directory.
+    block_on(s.sql("INSERT INTO d SELECT * FROM s")).unwrap();
+    assert!(block_on(s.sql("TRUNCATE TABLE d")).is_err());
+    block_on(s.sql("DROP TABLE d")).unwrap();
+}
+
 /// The directories of DDL (T063 N1b review M1): `CREATE TABLE` (managed and with a location), CTAS,
 /// `ALTER TABLE ... RENAME TO` and `DROP NAMESPACE ... CASCADE` list the directories their run asks about,
 /// after their targets, in the run's order and in the form its denial names; nothing where the run fails

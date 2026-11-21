@@ -34,6 +34,7 @@
 //!   `KRISHIV_INVALID_BASE64_INPUT`; Spark raises an unclassified
 //!   `IllegalArgumentException`.
 
+mod base32;
 mod case_table;
 mod chars;
 mod charsets;
@@ -42,6 +43,7 @@ mod collation_key;
 mod lcase;
 mod like;
 mod mask_table;
+mod similarity;
 mod split;
 
 use arrow_array::builder::{BooleanBufferBuilder, GenericByteBuilder};
@@ -52,9 +54,10 @@ use arrow_array::{
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 
+pub use base32::{from_base32, to_base32};
 pub use chars::{
     LcaseSearch, ascii, bit_length, chr, concat_ws, elt, elt_binary, find_in_set,
-    find_in_set_lcase, initcap, levenshtein, locate, locate_lcase, luhn_check, overlay,
+    find_in_set_lcase, initcap, instr_nth, levenshtein, locate, locate_lcase, luhn_check, overlay,
     overlay_binary, quote, repeat, reverse, reverse_binary, right, search_lcase, soundex, space,
     split_part, substring_index, translate,
 };
@@ -70,6 +73,7 @@ pub use lcase::{
     trim_collated, trim_mode,
 };
 pub use like::{LikePattern, like};
+pub use similarity::jaro_winkler_similarity;
 pub use split::{literal_delimiter, split_literal};
 
 use crate::dispatch::KernelCtx;

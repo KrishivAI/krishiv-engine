@@ -314,7 +314,11 @@ impl GrantState {
 
     /// Whether `principal` holds `privilege` on `key` (note §2.1): an owner holds everything; a
     /// grant on the key or a parent counts; `Browse` is held through any grant that covers the
-    /// key, or any column grant of a relation. No `DENY` (Q2).
+    /// key, or any column grant of a relation. No `DENY` (Q2). `Browse` on a table or view is
+    /// the listing rule ([`Self::lists`], review r4 Y2): Bind asks it of a policy that decides
+    /// columns before any column resolves, so a relation the principal may not list is refused at
+    /// table level and no resolution error (an unresolved column's suggestions, a type error)
+    /// shows its schema; a parent's `USAGE` lets the principal see the namespace, not its tables.
     pub(crate) fn allows(
         &self,
         principal: &Principal,
@@ -324,6 +328,9 @@ impl GrantState {
     ) -> bool {
         if self.owns(principal, key, cs) {
             return true;
+        }
+        if privilege == Privilege::Browse && key.kind == KeyKind::Relation {
+            return self.lists(principal, key, cs);
         }
         let grantees = self.effective(principal);
         if privilege == Privilege::Browse {
@@ -335,6 +342,50 @@ impl GrantState {
         }
         self.covering(&grantees, key, cs)
             .any(|g| g.privilege == privilege)
+    }
+
+    /// Whether a listing shows `key` to `principal` (P3-T062 §2.4): it owns the key (or a
+    /// parent), may `Select` it (a grant there or on a parent), or holds any grant on the key
+    /// itself or one of its columns. A grant of another privilege on a parent (`CREATE` on the
+    /// namespace) lets the principal list the namespace, not see every object in it.
+    pub(crate) fn lists(&self, principal: &Principal, key: &ObjectKey, cs: bool) -> bool {
+        if self.owns(principal, key, cs) {
+            return true;
+        }
+        let grantees = self.effective(principal);
+        self.covering(&grantees, key, cs)
+            .any(|g| g.privilege == Privilege::Select)
+            || self.grants.iter().any(|g| {
+                grantees.contains(&g.grantee)
+                    && (g.object.same(key, cs) || g.object.is_column_of(key, cs))
+            })
+    }
+
+    /// Whether `principal` owns, or holds any grant on, some key strictly under the namespace
+    /// `namespace` (a nested namespace, a relation, a column or a function in it at any depth).
+    /// Every such key is one a listing shows ([`Self::lists`]), so a namespace holding one is
+    /// listed too, however deep it sits (P3-T067 PR-58b: Iceberg REST namespaces nest).
+    pub(crate) fn holds_under(
+        &self,
+        principal: &Principal,
+        namespace: &ObjectKey,
+        cs: bool,
+    ) -> bool {
+        let under = |k: &ObjectKey| k.covered_by(namespace, cs) && !k.same(namespace, cs);
+        if namespace.kind != KeyKind::Namespace {
+            return false;
+        }
+        if self
+            .owners
+            .iter()
+            .any(|(k, owner)| *owner == principal.name && under(k))
+        {
+            return true;
+        }
+        let grantees = self.effective(principal);
+        self.grants
+            .iter()
+            .any(|g| grantees.contains(&g.grantee) && under(&g.object))
     }
 
     /// Whether `principal` may grant `privilege` on `key` to others: it owns the key (or a

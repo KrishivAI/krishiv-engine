@@ -6,7 +6,30 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+publish = true
 
 [lints]
 workspace = true
+
+[dependencies]
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-connect-server = { path = "../krishiv-connect-server", version = "=0.2.1" }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
+krishiv-session = { path = "../krishiv-session", version = "=0.2.1", features = ["unstable-ir"] }
+krishiv-sql = { path = "../krishiv-sql", version = "=0.2.1" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
+arrow-array.workspace = true
+arrow-flight = { workspace = true, features = ["flight-sql"] }
+arrow-schema.workspace = true
+futures = { workspace = true, features = ["std"] }
+getrandom.workspace = true
+prost = { workspace = true, features = ["std", "derive"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tonic = { workspace = true, features = ["router"] }
+tracing.workspace = true
+
+[dev-dependencies]
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "time"] }
+tonic = { workspace = true, features = ["channel", "server", "router", "codegen"] }

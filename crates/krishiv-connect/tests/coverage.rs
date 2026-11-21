@@ -3,7 +3,7 @@
 //! `Relation`, `Expression`, `Command`, `Expression.Literal` and `DataType`, an empty message of that
 //! arm answers `INVALID_ONE_OF_FIELD_NOT_SUPPORTED` exactly when its row says the arm is not translated;
 //! every field name and number matches the vendored descriptor; the table holds one row per arm.
-//! (`Catalog.cat_type` is reached only through `Relation.catalog`, a missing arm.)
+//! (`Catalog.cat_type` is reached only through `Relation.catalog`, which the host answers: see `translate/catalog` and the server's `tests/catalog.rs`.)
 #![forbid(unsafe_code)]
 
 use krishiv_common::error::ErrorClass;
@@ -229,4 +229,31 @@ fn status_words() {
     .map(Status::word)
     .collect();
     assert_eq!(words, ["done", "partial", "missing", "out of scope"]);
+}
+
+/// T089: the inventory has no unowned row: every arm that is not translated names the task that
+/// will translate it, or is out of scope with a reason, and a task is a plan id (`P3-T…`, `P2-T…`).
+#[test]
+fn the_inventory_has_no_unowned_row() {
+    for row in all() {
+        match row.status {
+            Status::Done | Status::Partial | Status::Missing => {
+                assert!(
+                    row.task.starts_with("P2-T") || row.task.starts_with("P3-T"),
+                    "{} {} ({}) is `{}` with owner {:?}",
+                    row.oneof,
+                    row.field,
+                    row.number,
+                    row.status.word(),
+                    row.task
+                );
+            }
+            Status::OutOfScope => assert!(
+                !row.target.is_empty(),
+                "{} {} is out of scope without a reason",
+                row.oneof,
+                row.field
+            ),
+        }
+    }
 }

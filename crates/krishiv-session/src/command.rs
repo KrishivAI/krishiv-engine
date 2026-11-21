@@ -51,7 +51,7 @@ use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_na
 use crate::column::Column;
 use crate::dataframe::DataFrame;
 use crate::session::{QueryEnv, Session};
-use crate::sql_functions::{Entry, one_row_project};
+use crate::sql_functions::Entry;
 use crate::store::{CatalogStore, StoredFunction};
 use crate::variables::{
     DECLARE_SEARCH_PATH, RESOLVE_SEARCH_PATH, StoredVariable, quote_name, quote_normalized,
@@ -443,6 +443,12 @@ impl Session {
                     .table(&fold(namespace), &fold(name))
                     .map(|_| format!("{}.{}", fold(namespace), fold(name))))
             }
+            // `spark_catalog.ns.t`: the embedded table, whatever catalog is current.
+            [catalog, namespace, name] if catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                Ok(store
+                    .table(&fold(namespace), &fold(name))
+                    .map(|_| format!("{}.{}", fold(namespace), fold(name))))
+            }
             _ => Ok(None),
         }
     }
@@ -560,6 +566,22 @@ impl Session {
                     }
                     .into());
                 };
+                // A declared catalog's table (design P3-T067 §3.5): its metadata cache entry goes
+                // and the catalog's epoch moves, so frames and plans reading it analyze again.
+                if let [catalog, _, _, ..] = parts.as_slice()
+                    && let Some(built) = self.declared_catalogs().built(catalog)
+                {
+                    let (built, caller) = built?;
+                    let id = krishiv_plan::analyzer::TableIdent {
+                        catalog: catalog.clone(),
+                        namespace: parts[1..parts.len() - 1].to_vec(),
+                        name: parts[parts.len() - 1].clone(),
+                    };
+                    if !built.refresh(&caller, &id).await? {
+                        return Err(table_not_found(&parts));
+                    }
+                    return self.empty_frame().await;
+                }
                 let Some(key) = self.cache_key(&parts)? else {
                     return Err(table_not_found(&parts));
                 };
@@ -1205,41 +1227,23 @@ impl Session {
     /// Resolves `SELECT name(NULL, ...)` in `env`, calling `def` with a
     /// typed `NULL` for each parameter it needs (defaults fill the rest):
     /// the type of the result.
-    async fn probe(
+    pub(crate) async fn probe(
         &self,
         def: &SqlFunction,
         qualifier: &[String],
         env: QueryEnv,
         redacted: &RedactedSql,
     ) -> Result<DataType, KrishivError> {
-        let args: Vec<PlanExpr> = def.params[..def.required()]
-            .iter()
-            .map(|p| PlanExpr::literal(Literal::Null(Some(p.data_type.clone()))))
-            .collect();
-        // A table function is probed by reading its rows; only the check
-        // matters, its columns are declared.
-        if def.returns_table.is_some() {
-            let name: Vec<&str> = qualifier
-                .iter()
-                .map(String::as_str)
-                .chain(std::iter::once(def.name.as_str()))
-                .collect();
-            let plan = Arc::new(LogicalPlan::new(PlanNode::TableFunction {
-                name: name.join(&krishiv_plan::TABLE_FUNCTION_NAME_SEP.to_string()),
-                args: args.into_iter().map(Arc::new).collect(),
-            }));
-            DataFrame::new(self.clone(), plan)
-                .analyzed_in_with_text(env, Some(redacted))
-                .await?;
+        let plan = crate::sql_functions::null_call(def, qualifier);
+        let table = def.returns_table.is_some();
+        let analysis = DataFrame::new(self.clone(), plan)
+            .analyzed_in_with_text(env, Some(redacted))
+            .await?;
+        // A table function is probed by reading its rows; only the check matters, its columns
+        // are declared.
+        if table {
             return Ok(DataType::Null);
         }
-        let mut call = PlanExpr::function(def.name.clone(), args);
-        if let ExprNode::Function(function) = &mut call.node {
-            function.qualifier = qualifier.to_vec();
-        }
-        let plan = one_row_project(vec![Arc::new(call)]);
-        let df = DataFrame::new(self.clone(), plan);
-        let analysis = df.analyzed_in_with_text(env, Some(redacted)).await?;
         analysis
             .analyzed
             .output
@@ -1285,8 +1289,8 @@ impl Session {
         Ok((namespace, part))
     }
 
-    /// The first temporary SQL function the body or a default of `def`
-    /// calls by a bare or session-qualified name (built-ins rank first).
+    /// The first temporary SQL function or session UDF (Spark: a temporary function too) the body
+    /// or a default of `def` calls by a bare or session-qualified name (built-ins rank first).
     fn reads_temporary_function(&self, def: &SqlFunction) -> Option<String> {
         let temporary = self.state.sql_functions.snapshot();
         let mut stack: Vec<&PlanExpr> = std::iter::once(&*def.body)
@@ -1298,14 +1302,27 @@ impl Session {
                 let session = matches!(call.qualifier.as_slice(), [q] if q.eq_ignore_ascii_case("session"))
                     || matches!(call.qualifier.as_slice(), [s, q]
                         if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session"));
+                // A built-in by its own name (a bare lookup would find a session UDF too).
                 let builtin = bare
-                    && !matches!(
-                        self.state
-                            .functions
-                            .lookup(std::slice::from_ref(&call.name), self.state.profile),
+                    && (krishiv_plan::function::Builtin::from_name(&call.name).is_some()
+                        || !matches!(
+                            self.state.functions.lookup(
+                                &["system".to_owned(), "builtin".to_owned(), call.name.clone()],
+                                self.state.profile
+                            ),
+                            FunctionLookup::NotFound
+                        ));
+                // A session UDF (review r8 item 2), as Spark's `isTemporaryFunction` counts one.
+                let udf = || {
+                    !matches!(
+                        self.state.functions.lookup(
+                            &["session".to_owned(), call.name.clone()],
+                            self.state.profile
+                        ),
                         FunctionLookup::NotFound
-                    );
-                if (bare || session) && !builtin && temporary.get(&call.name).is_some() {
+                    )
+                };
+                if (bare || session) && !builtin && (temporary.get(&call.name).is_some() || udf()) {
                     return Some(call.name.to_lowercase());
                 }
             }
@@ -1462,17 +1479,23 @@ impl Session {
             let stored = StoredFunction {
                 namespace: namespace.to_owned(),
                 entry: entry.clone(),
+                revision: 0,
+                author: self.state.principal.name.clone(),
             };
             let mut env = self.query_env();
             let candidate = Arc::new(
                 env.sql_functions
-                    .over_stored(Arc::new(current.with(stored))),
+                    .over_stored(Arc::new(current.with(stored)))
+                    .defining(namespace, &entry.def.name),
             );
             env.analysis.functions = Arc::clone(&candidate) as _;
             env.sql_functions = Arc::clone(&candidate);
             env.functions_version = krishiv_plan::analyzer::FunctionRegistry::version(&*candidate);
+            let unvaried = env.clone();
             let output = self
                 .probe(&entry.def, &entry.def.qualifier, env, redacted)
+                .await?;
+            self.refuse_session_variables(&object, &entry.def, unvaried, redacted)
                 .await?;
             let mut entry = entry.clone();
             if entry.def.returns.is_none() {
@@ -1484,6 +1507,8 @@ impl Session {
             let stored = StoredFunction {
                 namespace: namespace.to_owned(),
                 entry,
+                revision: 0,
+                author: self.state.principal.name.clone(),
             };
             if store.define_function(stored, current.version()) {
                 return self.empty_frame().await;

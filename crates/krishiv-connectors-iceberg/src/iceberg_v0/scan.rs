@@ -469,66 +469,70 @@ pub(crate) fn parse_manifest(bytes: &[u8], spec_id: i32) -> Result<Vec<ParsedEnt
     let (entries, _) = manifest.into_parts();
     Ok(entries
         .iter()
-        .map(|e| {
-            let f = e.data_file();
-            let bounds = |m: &HashMap<i32, iceberg::spec::Datum>| {
-                m.iter()
-                    .filter_map(|(id, d)| d.to_bytes().ok().map(|b| (*id, b.into_vec())))
-                    .collect()
-            };
-            let counts = |m: &HashMap<i32, u64>| m.iter().map(|(k, v)| (*k, *v)).collect();
-            ParsedEntry {
-                status: match e.status() {
-                    ManifestStatus::Existing => EntryStatus::Existing,
-                    ManifestStatus::Added => EntryStatus::Added,
-                    ManifestStatus::Deleted => EntryStatus::Deleted,
-                },
-                snapshot_id: e.snapshot_id(),
-                sequence_number: e.sequence_number(),
-                file_sequence_number: e.file_sequence_number,
-                file: ContentFile {
-                    content: match f.content_type() {
-                        DataContentType::Data => ContentKind::Data,
-                        DataContentType::PositionDeletes => ContentKind::PositionDeletes,
-                        DataContentType::EqualityDeletes => ContentKind::EqualityDeletes,
-                    },
-                    path: f.file_path().to_owned(),
-                    format: match f.file_format() {
-                        DataFileFormat::Parquet => FileFormatKind::Parquet,
-                        DataFileFormat::Orc => FileFormatKind::Orc,
-                        DataFileFormat::Avro => FileFormatKind::Avro,
-                        DataFileFormat::Puffin => FileFormatKind::Puffin,
-                    },
-                    spec_id,
-                    partition: f
-                        .partition()
-                        .iter()
-                        .map(|v| match v {
-                            None => PartitionValue::Null,
-                            Some(Literal::Primitive(p)) => primitive_bytes(p)
-                                .map_or(PartitionValue::Unreadable, PartitionValue::Value),
-                            Some(_) => PartitionValue::Unreadable,
-                        })
-                        .collect(),
-                    record_count: f.record_count(),
-                    size: f.file_size_in_bytes(),
-                    column_sizes: counts(f.column_sizes()),
-                    value_counts: counts(f.value_counts()),
-                    null_counts: counts(f.null_value_counts()),
-                    nan_counts: counts(f.nan_value_counts()),
-                    lower_bounds: bounds(f.lower_bounds()),
-                    upper_bounds: bounds(f.upper_bounds()),
-                    split_offsets: f.split_offsets().map(<[i64]>::to_vec),
-                    sort_order_id: f.sort_order_id(),
-                    first_row_id: f.first_row_id(),
-                    equality_ids: f.equality_ids(),
-                    referenced_data_file: f.referenced_data_file(),
-                    content_offset: f.content_offset(),
-                    content_size_in_bytes: f.content_size_in_bytes(),
-                },
-            }
+        .map(|e| ParsedEntry {
+            status: match e.status() {
+                ManifestStatus::Existing => EntryStatus::Existing,
+                ManifestStatus::Added => EntryStatus::Added,
+                ManifestStatus::Deleted => EntryStatus::Deleted,
+            },
+            snapshot_id: e.snapshot_id(),
+            sequence_number: e.sequence_number(),
+            file_sequence_number: e.file_sequence_number,
+            file: content_file(e.data_file(), spec_id),
         })
         .collect())
+}
+
+/// `f` (a manifest entry's file of the spec `spec_id`) as Krishiv's
+/// [`ContentFile`].
+pub(crate) fn content_file(f: &iceberg::spec::DataFile, spec_id: i32) -> ContentFile {
+    let bounds = |m: &HashMap<i32, iceberg::spec::Datum>| {
+        m.iter()
+            .filter_map(|(id, d)| d.to_bytes().ok().map(|b| (*id, b.into_vec())))
+            .collect()
+    };
+    let counts = |m: &HashMap<i32, u64>| m.iter().map(|(k, v)| (*k, *v)).collect();
+    ContentFile {
+        content: match f.content_type() {
+            DataContentType::Data => ContentKind::Data,
+            DataContentType::PositionDeletes => ContentKind::PositionDeletes,
+            DataContentType::EqualityDeletes => ContentKind::EqualityDeletes,
+        },
+        path: f.file_path().to_owned(),
+        format: match f.file_format() {
+            DataFileFormat::Parquet => FileFormatKind::Parquet,
+            DataFileFormat::Orc => FileFormatKind::Orc,
+            DataFileFormat::Avro => FileFormatKind::Avro,
+            DataFileFormat::Puffin => FileFormatKind::Puffin,
+        },
+        spec_id,
+        partition: f
+            .partition()
+            .iter()
+            .map(|v| match v {
+                None => PartitionValue::Null,
+                Some(Literal::Primitive(p)) => {
+                    primitive_bytes(p).map_or(PartitionValue::Unreadable, PartitionValue::Value)
+                }
+                Some(_) => PartitionValue::Unreadable,
+            })
+            .collect(),
+        record_count: f.record_count(),
+        size: f.file_size_in_bytes(),
+        column_sizes: counts(f.column_sizes()),
+        value_counts: counts(f.value_counts()),
+        null_counts: counts(f.null_value_counts()),
+        nan_counts: counts(f.nan_value_counts()),
+        lower_bounds: bounds(f.lower_bounds()),
+        upper_bounds: bounds(f.upper_bounds()),
+        split_offsets: f.split_offsets().map(<[i64]>::to_vec),
+        sort_order_id: f.sort_order_id(),
+        first_row_id: f.first_row_id(),
+        equality_ids: f.equality_ids(),
+        referenced_data_file: f.referenced_data_file(),
+        content_offset: f.content_offset(),
+        content_size_in_bytes: f.content_size_in_bytes(),
+    }
 }
 
 /// The live entries of one manifest, read, parsed and inherited, or from the

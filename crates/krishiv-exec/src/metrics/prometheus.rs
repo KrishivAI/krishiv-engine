@@ -516,8 +516,8 @@ mod tests {
     #[test]
     fn output_round_trips_and_covers_every_sourced_metric() {
         let mut snapshot = full_registry().unwrap().snapshot();
-        // The authentication counters are the server's (`ServerAuth::metrics`), merged into
-        // the engine's snapshot by `krishiv server`.
+        // The authentication and Flight SQL counters are the server's (`ServerAuth::metrics`,
+        // the Flight SQL service), merged into the engine's snapshot by `krishiv server`.
         let server = |name: &'static str, second: (&str, &str)| CounterSample {
             name,
             unit: "{request}",
@@ -531,6 +531,16 @@ mod tests {
             counters: vec![
                 server("krishiv.auth.failed", ("method", "token")),
                 server("krishiv.auth.denied", ("privilege", "MODIFY")),
+                // The Flight SQL service's (`krishiv-flight-sql`), merged the same way.
+                CounterSample {
+                    name: "krishiv.flight_sql.requests",
+                    unit: "{request}",
+                    labels: vec![
+                        ("command".to_owned(), "statement_query".to_owned()),
+                        ("outcome".to_owned(), "ok".to_owned()),
+                    ],
+                    value: 1.0,
+                },
             ],
             ..MetricsSnapshot::default()
         });

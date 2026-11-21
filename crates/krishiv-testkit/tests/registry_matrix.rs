@@ -196,13 +196,19 @@ fn registered_functions_analyze_as_spark_does() {
             }
         }
     }
-    // Every registered function has matrix cases.
+    // Every registered function has matrix cases: in the 4.2 matrix, or, for a function Spark added
+    // in 4.3 (no `SparkProfile::V4_3` yet, T090), in the 4.3.0 matrix, which the 4.3 ratchet owns.
+    let since_4_3 =
+        FnMatrix::load(krishiv_testkit::tests_dir().join("fixtures/spark-4.3.0/function-matrix"))
+            .unwrap();
     let missing: Vec<&str> = registry
         .functions()
         .iter()
         .map(|d| d.name)
         .filter(|n| {
-            !per_function.contains_key(n) && !krishiv_functions::registry::is_grammar_only(n)
+            !per_function.contains_key(n)
+                && !since_4_3.cases.iter().any(|c| c.function == *n)
+                && !krishiv_functions::registry::is_grammar_only(n)
         })
         .collect();
     assert!(missing.is_empty(), "no matrix cases for {missing:?}");

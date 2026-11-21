@@ -2,6 +2,7 @@
 //! Parsing queries: set operations, pipes, SELECT, FROM, joins, PIVOT and the clauses around them.
 
 use super::*;
+use crate::ast::{JsonTable, JsonTableColumn, JsonTableColumnKind};
 
 impl Parser<'_> {
     /// A query; a failure at a position is remembered, so the subquery
@@ -1156,6 +1157,73 @@ impl Parser<'_> {
         }))
     }
 
+    /// `JSON_TABLE(input, 'path' COLUMNS (column, ...) [NULL | ERROR ON ERROR])`.
+    fn json_table(&mut self) -> PR<TableFactorKind> {
+        self.bump();
+        self.expect_sym(Sym::LParen)?;
+        let input = self.expr()?;
+        self.expect_sym(Sym::Comma)?;
+        let path_start = self.start();
+        let Some(path) = self.string_lit() else {
+            return self.fail();
+        };
+        let path_span = self.span_from(path_start);
+        self.expect_kw("COLUMNS")?;
+        self.expect_sym(Sym::LParen)?;
+        let mut columns = vec![self.json_table_column()?];
+        while self.eat_sym(Sym::Comma) {
+            columns.push(self.json_table_column()?);
+        }
+        self.expect_sym(Sym::RParen)?;
+        let mut error_on_error = false;
+        if self.any_kw_at(0, &["NULL", "ERROR"]) {
+            error_on_error = self.kw_at(0, "ERROR");
+            self.bump();
+            self.expect_kw("ON")?;
+            self.expect_kw("ERROR")?;
+        }
+        self.expect_sym(Sym::RParen)?;
+        Ok(TableFactorKind::JsonTable(Box::new(JsonTable {
+            input,
+            path,
+            path_span,
+            columns,
+            error_on_error,
+        })))
+    }
+
+    /// One `JSON_TABLE` column: `name FOR ORDINALITY` or `name type [EXISTS] [PATH 'path']`.
+    fn json_table_column(&mut self) -> PR<JsonTableColumn> {
+        let start = self.start();
+        let name = self.any_ident()?;
+        let kind = if self.eat_kw("FOR") {
+            self.expect_kw("ORDINALITY")?;
+            JsonTableColumnKind::Ordinality
+        } else {
+            let data_type = self.data_type()?;
+            let exists = self.eat_kw("EXISTS");
+            let path = if self.eat_kw("PATH") {
+                let at = self.start();
+                let Some(p) = self.string_lit() else {
+                    return self.fail();
+                };
+                Some((p, self.span_from(at)))
+            } else {
+                None
+            };
+            if exists {
+                JsonTableColumnKind::Exists { data_type, path }
+            } else {
+                JsonTableColumnKind::Value { data_type, path }
+            }
+        };
+        Ok(JsonTableColumn {
+            name,
+            kind,
+            span: self.span_from(start),
+        })
+    }
+
     pub(super) fn table_factor(&mut self) -> PR<TableFactor> {
         let start = self.start();
         let kind = if self.kw_at(0, "VALUES") && !self.item_end_at(1) {
@@ -1191,6 +1259,8 @@ impl Parser<'_> {
                     TableFactorKind::Nested(Box::new(r))
                 }
             }
+        } else if self.kw_at(0, "JSON_TABLE") && self.sym_at(1, Sym::LParen) {
+            self.json_table()?
         } else {
             let name = self.ddl_name()?;
             if self.sym_at(0, Sym::LParen) {

@@ -89,7 +89,7 @@ mod writer;
 #[cfg(not(loom))]
 mod tests;
 
-pub use dir::{SpillConfig, SpillManager, SpillScope};
+pub use dir::{SpillConfig, SpillManager, SpillScope, check_spill_root};
 pub use error::SpillError;
 pub use reader::{SpillFile, SpillReader};
 pub use writer::SpillWriter;

@@ -12,6 +12,7 @@ syntax = "proto3";
 
 package krishiv.admin.v1;
 
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
 service AdminService {
@@ -36,6 +37,21 @@ service AdminService {
   // Cancels the queries carrying a tag selector (`k` or `k=v`). Without `Operate` it matches only
   // the caller's own queries; what comes back never depends on other principals' queries.
   rpc CancelQueriesByTag(CancelQueriesByTagRequest) returns (CancelQueriesByTagResponse);
+
+  // Per-check readiness detail (what `/readyz` summarizes). Needs `Monitor`.
+  rpc GetReadiness(GetReadinessRequest) returns (GetReadinessResponse);
+
+  // The drain state, deadline and the work still held. Needs `Monitor`.
+  rpc GetDrainStatus(GetDrainStatusRequest) returns (GetDrainStatusResponse);
+
+  // Starts a drain (or shortens a running one): `/readyz` answers 503, new work is refused with
+  // `KRISHIV_SERVER_DRAINING`, held work finishes until the deadline and is then cancelled. Needs
+  // `Manage` on the cluster.
+  rpc Drain(DrainRequest) returns (DrainResponse);
+
+  // Back to serving from `DRAINING` or `DRAINED`; refused with `exiting` once the process is going
+  // to exit. Needs `Manage` on the cluster.
+  rpc ResumeServing(ResumeServingRequest) returns (ResumeServingResponse);
 }
 
 message GetVersionRequest {}
@@ -164,4 +180,63 @@ message CancelQueriesByTagRequest {
 message CancelQueriesByTagResponse {
   // The queries cancelled.
   repeated string query_ids = 1;
+}
+
+message GetReadinessRequest {}
+
+// One readiness check.
+message ReadinessCheck {
+  // `serving`, `auth`, `warehouse`, ...
+  string name = 1;
+  // `ok`, `failed` or `unknown` (not run yet).
+  string state = 2;
+  // Whether a failure of this check fails `/readyz` (`krishiv.server.readiness.required`).
+  bool required = 3;
+  int32 consecutive_failures = 4;
+}
+
+message GetReadinessResponse {
+  // What `/readyz` answers: true for 200.
+  bool ready = 1;
+  repeated ReadinessCheck checks = 2;
+}
+
+message GetDrainStatusRequest {}
+
+message DrainStatus {
+  // `serving`, `draining` or `drained`.
+  string state = 1;
+  // When held work is cancelled, while draining.
+  google.protobuf.Timestamp deadline = 2;
+  // Whether the process exits once drained.
+  bool exit_when_drained = 3;
+  // Queries running or queued.
+  int64 queries_running = 4;
+  // Sessions open.
+  int64 sessions_open = 5;
+}
+
+message GetDrainStatusResponse {
+  DrainStatus status = 1;
+}
+
+message DrainRequest {
+  // Defaults to `krishiv.server.shutdownTimeout`. A second drain may shorten the deadline, never
+  // extend it.
+  google.protobuf.Duration grace_period = 1;
+  // Exit the process once drained. A second drain may turn it on, never off.
+  bool exit_when_drained = 2;
+  string request_id = 3;
+}
+
+message DrainResponse {
+  DrainStatus status = 1;
+}
+
+message ResumeServingRequest {
+  string request_id = 1;
+}
+
+message ResumeServingResponse {
+  DrainStatus status = 1;
 }

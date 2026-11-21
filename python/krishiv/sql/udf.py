@@ -270,6 +270,8 @@ class UserDefinedFunction:
         self.deterministic = deterministic
         #: Krishiv: whether calls may overlap on the UDF pool (free-threaded Python); not in Spark.
         self._thread_safe = True
+        #: The profiler's id of this UDF and its handles by mode (P3-T080); empty while no profiler is on.
+        self._profile_id: int | None = None
 
     # --- pyspark/sql/udf.py:210-248 (the scalar kinds the engine runs) ---
     @staticmethod
@@ -334,7 +336,35 @@ class UserDefinedFunction:
                 errorClass="NOT_IMPLEMENTED",
                 messageParameters={"feature": "keyword arguments of Python UDFs"},
             )
-        return Column(self._handle.call([_named(arg, "col") for arg in args]))
+        return Column(self._handle_for_call().call([_named(arg, "col") for arg in args]))
+
+    def _handle_for_call(self) -> Any:
+        """The handle a call uses: the plain one, or, when ``spark.sql.pyspark.udf.profiler`` is ``perf`` or
+        ``memory`` on the active session, one whose function reports to that session's profile (P3-T080).
+        Off, which is the default, this reads one setting and builds nothing."""
+        from krishiv.sql import session as _session
+
+        active = _session._active
+        if active is None:
+            return self._handle
+        from krishiv._udf.profiler import CONF_KEY, MODES
+
+        mode = active.conf.get(CONF_KEY, "")
+        if mode not in MODES:
+            return self._handle
+        from krishiv._udf.profiler import ensure_udf_id
+
+        udf_id = ensure_udf_id(self)
+        registry = active._profile_registry
+        # The cache lives on the session's registry (keyed by this object), so it goes with the session and
+        # an `id()` reused after a session is freed cannot return another session's handle.
+        by_mode = registry.handles.setdefault(self, {})
+        # `asNondeterministic` changes the handle's flag, so the flag is part of the key.
+        key = f"{mode}/{self.deterministic}"
+        handle = by_mode.get(key)
+        if handle is None:
+            handle = by_mode[key] = self._create_handle(registry.wrap(self.func, udf_id, self._name, mode))
+        return handle
 
     # --- pyspark/sql/udf.py:515-548 ---
     def _wrapped(self) -> Any:

@@ -44,14 +44,21 @@ use krishiv_plan::{
 
 use crate::cache::{RelationCache, is_cache_name};
 
+mod declared;
+#[cfg(test)]
+mod declared_tests;
 mod file_tables;
 mod key_facts;
 mod ndv_sampling;
 mod scans;
 mod script_results;
+mod session_catalog;
 
 use self::file_tables::{FileScanOf, reference_key};
+pub(crate) use self::scans::reads_source;
 pub(crate) use self::scans::reads_stored_table;
+#[cfg(feature = "delta")]
+pub(crate) use self::scans::{reads_delta_root, reads_files_at};
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -201,287 +208,6 @@ pub(crate) struct SessionCatalog {
     position: RwLock<(String, String)>,
     /// The entries `SET PATH` stored; `None` is the default path.
     path: RwLock<Option<Vec<crate::sql_path::Entry>>>,
-}
-
-impl SessionCatalog {
-    /// A session's catalog over the runtime's permanent `store` and
-    /// `warehouse`.
-    pub(crate) fn over(store: Arc<InMemoryCatalogStore>, warehouse: Arc<Warehouse>) -> Self {
-        Self {
-            tables: RwLock::default(),
-            epoch: AtomicU64::new(0),
-            hidden: AtomicU64::new(0),
-            store,
-            warehouse,
-            position: RwLock::default(),
-            path: RwLock::default(),
-        }
-    }
-
-    /// A catalog over the same permanent store and warehouse holding this
-    /// one's temporary tables and views, current catalog, namespace and
-    /// path; later changes to either do not reach the other. Script
-    /// results no copied view pins are left out: their frames belong to
-    /// this catalog's session.
-    pub(crate) fn copy(&self) -> Self {
-        let mut tables = self
-            .tables
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        script_results::leave_out(&mut tables);
-        let position = self
-            .position
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let path = self
-            .path
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        Self {
-            tables: RwLock::new(tables),
-            epoch: AtomicU64::new(0),
-            hidden: AtomicU64::new(self.hidden.load(Ordering::Acquire)),
-            store: Arc::clone(&self.store),
-            warehouse: Arc::clone(&self.warehouse),
-            position: RwLock::new(position),
-            path: RwLock::new(path),
-        }
-    }
-
-    /// Adds or replaces `name`, removing the snapshot pins the old entry
-    /// owned that no other live view still owns.
-    pub(crate) fn put(&self, name: &str, table: TempTable) {
-        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
-        tables.insert(name.to_lowercase(), (name.to_owned(), Arc::new(table)));
-        Self::collect_garbage(&mut tables);
-        self.epoch.fetch_add(1, Ordering::AcqRel);
-    }
-
-    /// Adds or replaces `name` with a view over `plan` and `columns` that
-    /// owns `pins`, inserting `new_pins` (the hidden entries the view pins)
-    /// in the same critical section: no concurrent `put` or `drop_table`
-    /// can collect a new pin between its insert and the view's, which would
-    /// leave the view reading a missing entry.
-    pub(crate) fn put_view(
-        &self,
-        name: &str,
-        plan: Arc<LogicalPlan>,
-        columns: Vec<TableColumn>,
-        pins: Vec<String>,
-        new_pins: Vec<(String, Arc<TempTable>)>,
-        keeps: ViewKeeps,
-    ) {
-        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
-        for (hidden, table) in new_pins {
-            tables.insert(hidden.clone(), (hidden, table));
-        }
-        tables.insert(
-            name.to_lowercase(),
-            (
-                name.to_owned(),
-                Arc::new(TempTable::View {
-                    plan,
-                    columns,
-                    pins,
-                    text: None,
-                    keeps,
-                }),
-            ),
-        );
-        Self::collect_garbage(&mut tables);
-        self.epoch.fetch_add(1, Ordering::AcqRel);
-    }
-
-    /// Removes the hidden entries nothing needs; the caller holds the write lock and bumps the epoch.
-    fn collect_garbage(tables: &mut BTreeMap<String, (String, Arc<TempTable>)>) {
-        let mut live = BTreeSet::new();
-        for (_, table) in tables.values() {
-            if let TempTable::View { pins, .. } = &**table {
-                live.extend(pins.iter().cloned());
-            }
-        }
-        script_results::retain(tables, &live);
-    }
-
-    /// Hands out the next hidden name snapshot pins use: no SQL text
-    /// spells it, so snapshot views read it however the session's names
-    /// change afterwards. The caller inserts the entry with
-    /// [`SessionCatalog::put_view`], which stores the pins and the owning
-    /// view atomically.
-    fn next_hidden_name(&self) -> String {
-        format!(
-            "{HIDDEN_PREFIX}{}",
-            self.hidden.fetch_add(1, Ordering::AcqRel)
-        )
-    }
-
-    /// Removes `name` (and the snapshot pins it owned that no other live
-    /// view still owns); whether it existed. Hidden names are never
-    /// removed this way: dropping one behaves as if it did not exist.
-    pub(crate) fn drop_table(&self, name: &str) -> bool {
-        if is_hidden_name(name) {
-            return false;
-        }
-        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
-        let removed = tables.remove(&name.to_lowercase()).is_some();
-        if removed {
-            Self::collect_garbage(&mut tables);
-            self.epoch.fetch_add(1, Ordering::AcqRel);
-        }
-        removed
-    }
-
-    /// The names, as registered, in order, without snapshot pins.
-    pub(crate) fn names(&self) -> Vec<String> {
-        self.tables
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
-            .map(|(n, _)| n.clone())
-            .filter(|n| !n.starts_with(HIDDEN_PREFIX) && !n.starts_with(GLOBAL_PREFIX))
-            .collect()
-    }
-
-    /// The names of the global temporary views, as registered, in order.
-    pub(crate) fn global_names(&self) -> Vec<String> {
-        self.tables
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
-            .filter_map(|(n, _)| n.strip_prefix(GLOBAL_PREFIX).map(str::to_owned))
-            .collect()
-    }
-
-    /// The namespace bare table names resolve in.
-    pub(crate) fn current_namespace(&self) -> String {
-        self.position_pair().1
-    }
-
-    /// The current catalog's canonical name and namespace, read together.
-    pub(crate) fn position_pair(&self) -> (String, String) {
-        let p = self.position.read().unwrap_or_else(PoisonError::into_inner);
-        let catalog = if p.0.is_empty() { CATALOG } else { &p.0 };
-        let namespace = if p.1.is_empty() { NAMESPACE } else { &p.1 };
-        (catalog.to_owned(), namespace.to_owned())
-    }
-
-    /// The stored path entries, `None` for the default.
-    pub(crate) fn stored_path(&self) -> Option<Vec<crate::sql_path::Entry>> {
-        self.path
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    /// `SET PATH`: stores the expanded entries.
-    pub(crate) fn set_path(&self, entries: Vec<crate::sql_path::Entry>) {
-        *self.path.write().unwrap_or_else(PoisonError::into_inner) = Some(entries);
-        self.epoch.fetch_add(1, Ordering::AcqRel);
-    }
-
-    /// The SQL path as parts, `CURRENT_SCHEMA` resolved; `default_conf` is
-    /// `krishiv.sql.defaultPath`, read when no `SET PATH` ran.
-    pub(crate) fn sql_path(&self, default_conf: &str) -> Vec<Vec<String>> {
-        let entries = self
-            .stored_path()
-            .unwrap_or_else(|| crate::sql_path::default_entries(default_conf));
-        let current = self.current_position();
-        entries.iter().map(|e| e.parts(&current)).collect()
-    }
-
-    /// The current catalog and namespace as path parts: `[spark_catalog,
-    /// db]`, or `[system]`.
-    pub(crate) fn current_position(&self) -> Vec<String> {
-        let (catalog, namespace) = self.position_pair();
-        if crate::system::is_system(&catalog) {
-            vec![catalog]
-        } else {
-            vec![catalog, namespace]
-        }
-    }
-
-    /// The current catalog's canonical name.
-    pub(crate) fn current_catalog(&self) -> String {
-        self.position_pair().0
-    }
-
-    /// `USE <catalog>`: a no-op when `catalog` is current, else its default
-    /// namespace (the default database for `spark_catalog`, none for `system`).
-    pub(crate) fn use_catalog(&self, catalog: &str) {
-        {
-            let mut p = self
-                .position
-                .write()
-                .unwrap_or_else(PoisonError::into_inner);
-            let current = if p.0.is_empty() {
-                CATALOG
-            } else {
-                p.0.as_str()
-            };
-            if current == catalog {
-                return;
-            }
-            *p = (catalog.to_owned(), String::new());
-        }
-        self.epoch.fetch_add(1, Ordering::AcqRel);
-    }
-
-    /// `USE namespace`.
-    pub(crate) fn use_namespace(&self, namespace: &str) {
-        namespace.clone_into(
-            &mut self
-                .position
-                .write()
-                .unwrap_or_else(PoisonError::into_inner)
-                .1,
-        );
-        self.epoch.fetch_add(1, Ordering::AcqRel);
-    }
-
-    /// What a cached analysis depends on: temporary views and permanent
-    /// tables both bump it.
-    pub(crate) fn epoch(&self) -> u64 {
-        self.epoch.load(Ordering::Acquire) + self.store.epoch()
-    }
-
-    /// The entry `name`: case-insensitively unless `case_sensitive`, when
-    /// the name must be as registered. Unlike [`exists`](Self::exists),
-    /// hidden names resolve here: snapshot views read their pins through
-    /// this. User input never reaches a pin: [`expand_temp_views`]
-    /// reports a read of one as a missing table before analysis loads
-    /// anything, and creating or dropping one behaves as missing too.
-    pub(crate) fn get(&self, name: &str, case_sensitive: bool) -> Option<Arc<TempTable>> {
-        let tables = self.tables.read().unwrap_or_else(PoisonError::into_inner);
-        let (registered, table) = tables.get(&name.to_lowercase())?;
-        (!case_sensitive || registered == name).then(|| Arc::clone(table))
-    }
-
-    /// Whether an entry `name` exists: case-insensitively unless
-    /// `case_sensitive`, when the name must be as registered. Hidden
-    /// names never exist for user input, however they are spelled.
-    pub(crate) fn exists(&self, name: &str, case_sensitive: bool) -> bool {
-        if is_hidden_name(name) {
-            return false;
-        }
-        let tables = self.tables.read().unwrap_or_else(PoisonError::into_inner);
-        match tables.get(&name.to_lowercase()) {
-            Some((registered, _)) => !case_sensitive || registered == name,
-            None => false,
-        }
-    }
-
-    /// The number of catalog entries, snapshot pins included: tests only.
-    /// [`names`](Self::names) stays the user-visible count.
-    #[cfg(test)]
-    pub(crate) fn entry_count(&self) -> usize {
-        self.tables
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .len()
-    }
 }
 
 /// What a query reads files for: a view (by lower-case name) or a read by
@@ -719,6 +445,24 @@ impl QueryCatalog {
         file_metadata(&format)
     }
 
+    /// The root of the Delta table `scan` reads, as [`crate::delta::DeltaReads::hadoop_root`] names it
+    /// (`file:/..`): a read by path (`` delta.`p` ``, `format("delta")`) or a catalog table whose entry
+    /// this query opened as a Delta read. `None`: not a Delta read (the hidden target of a row-level
+    /// statement is a provider entry, so it is none). `Some(Err)`: a Delta read whose root cannot be
+    /// resolved.
+    #[cfg(feature = "delta")]
+    pub(crate) fn delta_root(&self, scan: &Scan) -> Option<Result<String, KrishivError>> {
+        let source = match &scan.source {
+            source @ ReadSource::Files { .. } => source.clone(),
+            ReadSource::Table { name, .. } => match self.loaded_for(name).as_deref() {
+                Some(TempTable::Files { source, .. }) => source.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        crate::delta::is_delta(&source).then(|| self.delta.hadoop_root(&source))
+    }
+
     /// The entry a scan of `name` (as the analyzer kept it) reads: a
     /// temporary view or table by its single part, a permanent table by
     /// `namespace.table`.
@@ -880,15 +624,17 @@ impl QueryCatalog {
             match &scan.scan.source {
                 ReadSource::Table { name, options } => {
                     let last = name.last().map_or("", String::as_str);
+                    // A declared catalog's table is opened on the driver with the session's
+                    // stores; a worker cannot open it yet (design P3-T067 PR-58b).
+                    if self.is_declared_scan(name, scan.scan.version) {
+                        return Err(self.declared_refusal(name, " in a distributed stage"));
+                    }
                     let Some(table) = self.loaded(last) else {
                         // A relation cache snapshot lives on the driver (design P3-T083
                         // §3.8): a memory snapshot is dealt as a memory table without a
                         // lease is (no assignment: a stage of one task reads it whole);
                         // a disk snapshot is a driver-local file no worker can open, so
                         // such a plan is refused, not failed as an internal error.
-                        if let Some(e) = self.declared_read(name) {
-                            return Err(e);
-                        }
                         if crate::cache::is_cache_name(last) {
                             if self.cache.is_on_disk(last) {
                                 return Err(unsupported(
@@ -896,6 +642,9 @@ impl QueryCatalog {
                                 ));
                             }
                             continue;
+                        }
+                        if let Some(e) = self.declared_read(name) {
+                            return Err(e);
                         }
                         return Err(InternalError {
                             message: format!("the scanned table {last} was not loaded"),
@@ -1278,33 +1027,11 @@ pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
     )
 }
 
-fn unsupported(feature: &str) -> KrishivError {
+pub(super) fn unsupported(feature: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: feature.to_owned(),
     }
     .into()
-}
-
-impl QueryCatalog {
-    /// The refusal of a scan of `name` in a declared catalog: such a catalog resolves names only for
-    /// now (design P3-T067 PR-58a), so its table is never loaded and its read is refused, not failed
-    /// as an internal error. `None` when `name` is no declared catalog's.
-    fn declared_read(&self, name: &[String]) -> Option<KrishivError> {
-        let catalog = match name {
-            [c, _, _, ..] if self.system.catalogs.catalog(c).is_some() => c.clone(),
-            [_] | [_, _]
-                if !self.catalog.eq_ignore_ascii_case(CATALOG)
-                    && !crate::system::is_system(&self.catalog) =>
-            {
-                self.catalog.clone()
-            }
-            _ => return None,
-        };
-        Some(unsupported(&format!(
-            "reading the tables of the declared catalog `{}`",
-            catalog.replace('`', "``")
-        )))
-    }
 }
 
 impl Catalog for QueryCatalog {
@@ -1416,6 +1143,12 @@ impl TableProviderResolver for QueryCatalog {
             _ => &self.scanned.other,
         };
         kind.store(true, std::sync::atomic::Ordering::SeqCst);
+        // A declared catalog's table, opened before planning (`open_declared`).
+        if let ReadSource::Table { name, .. } = &scan.source
+            && let Some(provider) = self.declared_provider(name, scan.version)
+        {
+            return Ok(provider);
+        }
         match &scan.source {
             ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
                 let table = name.last().map_or("", String::as_str);
@@ -1544,15 +1277,35 @@ pub(crate) struct StoredViews<'a> {
     /// Whether the current catalog was another than `spark_catalog` (`system` or a declared one) as
     /// the query snapshot saw it.
     pub(crate) outside_session: bool,
+    /// `spark.sql.legacy.ctePrecedencePolicy` in the query's snapshot. A stored view's text resolves its own
+    /// `WITH`s under the policy captured with the view, never this one (review r4 Y1): unless both are
+    /// `CORRECTED` they are inlined in the text alone before it is expanded
+    /// (`krishiv_plan::analyzer::inline_view_ctes`), so the reader's pass over the whole plan finds none of
+    /// them (review r3 M2) and a definer view's query is trusted by identity as built (review r2 R2).
+    pub(crate) cte_precedence: krishiv_plan::analyzer::CtePrecedencePolicy,
     /// Qualifies the bare routine calls of an expression written in a namespace under a frozen path
     /// (`None` when nothing changed): the calls of a stored view's query resolve where the view was
     /// created, not where it is read.
     pub(crate) qualify: Option<&'a QualifyCalls<'a>>,
+    /// As [`Self::qualify`], for the name of a table function a stored view's query calls (review
+    /// r6 R6-1): the qualified name, its parts joined by `TABLE_FUNCTION_NAME_SEP`.
+    pub(crate) qualify_table: Option<&'a QualifyTableCall<'a>>,
+    /// The plan expanded is the body of a stored function (its namespace is the expansion's
+    /// `namespace`): its own calls, scalar and table ones at every level, resolve through the
+    /// function's frozen path or namespace as [`Self::qualify`] qualifies them for a body, never
+    /// through the reader's session (review r7 R7-1; Spark v4.2.0 `Analyzer.scala` lines 260-270).
+    pub(crate) stored_body: bool,
 }
 
-/// See [`StoredViews::qualify`]: the expression, the namespace it was written in and the path frozen with it.
-pub(crate) type QualifyCalls<'a> =
-    dyn Fn(&Arc<Expr>, &str, &[Vec<String>]) -> Option<Arc<Expr>> + 'a;
+/// See [`StoredViews::qualify`]: the expression, the namespace it was written in, the path frozen with it and
+/// the rule of the text it is in (a stored function's body, an invoker or a definer view's text).
+pub(crate) type QualifyCalls<'a> = dyn Fn(&Arc<Expr>, &str, &[Vec<String>], crate::sql_functions::CallRule<'_>) -> Option<Arc<Expr>>
+    + 'a;
+
+/// See [`StoredViews::qualify_table`]: the table function's name as written, the namespace it was
+/// written in, the path frozen with it and the rule of the text it is in.
+pub(crate) type QualifyTableCall<'a> =
+    dyn Fn(&str, &str, &[Vec<String>], crate::sql_functions::CallRule<'_>) -> Option<String> + 'a;
 
 /// [`expand_temp_views`], and with `stored` also the permanent views of the catalog store: a read of one becomes
 /// its query as a subquery, with its bare table names resolved in the namespace the view was created in.
@@ -1578,28 +1331,38 @@ pub(crate) fn expand_views_in(
     namespace: Option<String>,
     view_path: Option<Vec<Vec<String>>>,
 ) -> Result<Expansion, KrishivError> {
-    let mut expander = Expander {
-        catalog,
-        case_sensitive,
-        path: Vec::new(),
-        stored,
-        view_namespace: namespace,
-        view_path,
-        reads: Vec::new(),
-        deferred: None,
-        stored_reads: Vec::new(),
-        views: Vec::new(),
-        keeps: Vec::new(),
-    };
+    let mut expander = Expander::new(catalog, case_sensitive, stored, namespace, view_path);
     let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
-    Ok(Expansion {
-        plan,
-        reads: expander.reads,
-        deferred: expander.deferred,
-        stored_reads: expander.stored_reads,
-        views: expander.views,
-        keeps: expander.keeps,
-    })
+    Ok(expander.finish(plan))
+}
+
+/// A `SQL SECURITY DEFINER` view the expansion inlined (P3-T062 §2.4): its query reads with its
+/// definer's rights. The reader is asked only about the view itself (among
+/// [`Expansion::reads`]); the session asks [`Self::reads`] and analyzes [`Self::query`] as the
+/// definer, then has the reader's analysis skip what that very node reads
+/// (`AnalysisContext::definer_texts`: trusted by node identity, review B1).
+#[derive(Debug, Clone)]
+pub(crate) struct DefinerRead {
+    /// The view's name parts (`spark_catalog`, namespace, name).
+    pub(crate) name: Vec<String>,
+    /// Whose rights read its query.
+    pub(crate) definer: String,
+    /// Its query, the views it reads inlined; `None` until inlined.
+    pub(crate) query: Option<Arc<LogicalPlan>>,
+    /// The catalog-store lookups of its text (not those of a definer view inside it), in order.
+    pub(crate) reads: Vec<ReadCandidate>,
+    /// Its entry among [`Expansion::views`].
+    pub(crate) view: usize,
+    /// The namespace current when it was created (`ViewDef::namespace`): its text is analyzed there.
+    pub(crate) namespace: String,
+    /// The SQL path frozen with it (`ViewDef::path`).
+    pub(crate) path: Vec<Vec<String>>,
+    /// The functions it bound when created or last altered (`ViewDef::functions`; empty for one
+    /// stored without, so every stored call it reaches must be its definer's).
+    pub(crate) bound: crate::store::BoundFunctions,
+    /// The stored views its text inlines (not those inside a definer view in it), each checked
+    /// against [`Self::bound`] and asked about its own reads as its owner (review r10 M10).
+    pub(crate) views: Vec<ReachedView>,
 }
 
 /// A table-like name the expansion looked up in the catalog store, in plan order. The analyzer never
@@ -1622,13 +1385,19 @@ pub(crate) struct Expansion {
     /// A failure inside a stored view's text (it no longer parses, reads itself, ...). It is raised only
     /// after the reads are authorized, so a principal who may not read the view never sees its text's errors.
     pub(crate) deferred: Option<KrishivError>,
+    /// Whether [`Self::deferred`] arose inside a `SQL SECURITY DEFINER` view's text.
+    pub(crate) deferred_in_definer: bool,
     /// The stored views inlined, inner views before the views that read them: their schema binding is checked
     /// against their analyzed queries (`view_schema::check_read`).
     pub(crate) stored_reads: Vec<crate::view_schema::StoredRead>,
     /// The views inlined, for the lineage side table (`AnalyzedPlan::views`, located once analyzed).
     pub(crate) views: Vec<krishiv_plan::analyzer::views::ViewExpansion>,
+    /// The `SQL SECURITY DEFINER` views inlined, outer views first.
+    pub(crate) definers: Vec<DefinerRead>,
     /// What the temporary views inlined kept ([`TempTable::View::keeps`]), from the entries expanded.
     pub(crate) keeps: Vec<Keep>,
+    /// Every stored view inlined, at any depth (review r10 M10).
+    pub(crate) reached: Vec<ReachedView>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a
@@ -1904,7 +1673,9 @@ impl Pinner<'_> {
                     Some(table)
                         if matches!(
                             &*table,
-                            TempTable::Memory { .. } | TempTable::Files { .. }
+                            TempTable::Memory { .. }
+                                | TempTable::Files { .. }
+                                | TempTable::Provider { .. }
                         ) =>
                     {
                         let hidden = self.catalog.next_hidden_name();
@@ -1988,4 +1759,5 @@ pub(crate) fn reserved_temp_view_name(name: &str) -> KrishivError {
 mod tests;
 
 mod expand;
+pub(crate) use expand::ReachedView;
 use expand::*;

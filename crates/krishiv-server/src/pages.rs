@@ -12,6 +12,8 @@
 //! `HttpOnly; SameSite=Strict` so no script and no link can read or replay it (T-W5), the token leaves the address
 //! bar at once and is never sent in a URL by the page (T-D7).
 
+use std::sync::Arc;
+
 use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
@@ -41,6 +43,7 @@ pub struct UiPolicy {
     /// Whether the `Host` header is checked at all (see [`UiPolicy::for_listener`]).
     enforce: bool,
     secure_cookie: bool,
+    embed: Arc<crate::embed::EmbedPolicy>,
 }
 
 impl Default for UiPolicy {
@@ -60,7 +63,21 @@ impl UiPolicy {
                 .collect(),
             enforce: true,
             secure_cookie: false,
+            embed: Arc::new(crate::embed::EmbedPolicy::default()),
         }
+    }
+
+    /// Lets the embeddable views be framed by `embed`'s origins and signs their links (P3-T071).
+    #[must_use]
+    pub fn with_embed(mut self, embed: crate::embed::EmbedPolicy) -> Self {
+        self.embed = Arc::new(embed);
+        self
+    }
+
+    /// The embedding settings.
+    #[must_use]
+    pub fn embed(&self) -> &crate::embed::EmbedPolicy {
+        &self.embed
     }
 
     /// The policy of a listener: on a loopback address the loopback names and `names` (DNS rebinding, T-W5: a

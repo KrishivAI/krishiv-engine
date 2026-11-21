@@ -6,6 +6,7 @@
 #![cfg(test)]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use arrow_array::cast::AsArray;
@@ -522,6 +523,130 @@ fn a_cte_read_under_limit_zero_first_still_observes_the_live_read() {
     );
 }
 
+/// A nondeterministic echo of a string column that counts the rows it is evaluated over.
+#[derive(Debug)]
+struct Tick(Arc<AtomicUsize>);
+
+impl krishiv_session::ScalarUdf for Tick {
+    fn name(&self) -> &str {
+        "tick"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &krishiv_session::Signature {
+        static SIG: std::sync::OnceLock<krishiv_session::Signature> = std::sync::OnceLock::new();
+        SIG.get_or_init(|| {
+            krishiv_session::Signature::Exact(vec![krishiv_session::UdfInputType::Exact(
+                krishiv_types::DataType::String,
+            )])
+        })
+    }
+
+    fn return_field(
+        &self,
+        _: &[krishiv_session::ArgField],
+    ) -> Result<krishiv_session::ReturnField, krishiv_session::UdfError> {
+        Ok(krishiv_session::ReturnField {
+            data_type: krishiv_types::DataType::String,
+            nullable: true,
+        })
+    }
+
+    fn properties(&self) -> krishiv_session::UdfProperties {
+        krishiv_session::UdfProperties {
+            deterministic: false,
+            null_handling: krishiv_session::NullHandling::Strict,
+        }
+    }
+
+    fn invoke(
+        &self,
+        args: &[krishiv_session::UdfArg<'_>],
+        rows: usize,
+        _: &krishiv_session::InvokeContext,
+    ) -> Result<arrow_array::ArrayRef, krishiv_session::UdfError> {
+        self.0.fetch_add(rows, Ordering::Relaxed);
+        let column = args[0].array();
+        let strings = arrow_cast::cast(&column, &DataType::Utf8)
+            .map_err(|e| krishiv_session::UdfError::new(e.to_string()))?;
+        Ok(strings)
+    }
+}
+
+/// A shared (nondeterministic) CTE read under `LIMIT 0` and live runs its body once: the
+/// zero-row reference reads the one shared result, not a second copy of the body.
+#[test]
+fn a_shared_cte_under_limit_zero_runs_its_body_once() {
+    let s = Session::new().unwrap();
+    let evaluated = Arc::new(AtomicUsize::new(0));
+    s.register_udf(Tick(Arc::clone(&evaluated))).unwrap();
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    block_on(df.create_or_replace_temp_view("ov")).unwrap();
+    let q = "WITH c AS (SELECT tick(k) AS k FROM ov) \
+             SELECT k FROM (SELECT * FROM c LIMIT 0) UNION ALL SELECT k FROM c";
+    let rows: usize = block_on(async { s.sql(q).await.unwrap().collect().await })
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 3);
+    assert_eq!(evaluated.load(Ordering::Relaxed), 3, "the body ran once");
+    let got = obs.get_timeout(Duration::from_secs(10)).unwrap().unwrap();
+    assert_eq!(
+        metrics(&got),
+        serde_json::Map::from_iter([("n".to_owned(), Value::from(3))])
+    );
+}
+
+/// Runs `q` over an observed view `ov` and returns the rows and what the observation reported.
+fn observed_rows(q: &str) -> (usize, serde_json::Map<String, Value>) {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    block_on(df.create_or_replace_temp_view("ov")).unwrap();
+    let rows: usize = block_on(async { s.sql(q).await.unwrap().collect().await })
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum();
+    let got = obs.get_timeout(Duration::from_secs(10)).unwrap().unwrap();
+    (rows, metrics(&got))
+}
+
+/// A shared CTE read only under `LIMIT 0` (twice, so the CTE is one shared plan) reports nothing:
+/// Spark replaces each zero-row read with an empty relation and drops the definition with its
+/// observed node. Without the liveness strip the shared plan reports the view's rows.
+#[test]
+fn a_shared_cte_read_only_under_limit_zero_reports_nothing() {
+    let (rows, got) = observed_rows(
+        "WITH c AS (SELECT k, rand() AS r FROM ov) \
+         SELECT k FROM (SELECT * FROM c LIMIT 0) \
+         UNION ALL SELECT k FROM (SELECT * FROM c LIMIT 0) \
+         UNION ALL SELECT 'x'",
+    );
+    assert_eq!(rows, 1);
+    assert!(got.is_empty(), "{got:?}");
+}
+
+/// The liveness is transitive: `a` is read live only by `b`, which only `LIMIT 0` reads, so `a`'s
+/// observed node is dropped with `b`.
+#[test]
+fn a_shared_cte_read_live_only_by_a_dead_one_reports_nothing() {
+    let (rows, got) = observed_rows(
+        "WITH a AS (SELECT k, rand() AS r FROM ov), \
+              b AS (SELECT x.k, rand() AS r FROM a x CROSS JOIN a y) \
+         SELECT k FROM (SELECT * FROM b LIMIT 0) \
+         UNION ALL SELECT k FROM (SELECT * FROM b LIMIT 0) \
+         UNION ALL SELECT 'x'",
+    );
+    assert_eq!(rows, 1);
+    assert!(got.is_empty(), "{got:?}");
+}
+
 /// `spark_partition_id()` in a metric under the second `UNION ALL` branch (its partitions
 /// numbered from the first branch's count) is what the same expression gives in a projection at
 /// the same position (the engine's `Project`, the stated oracle; no Spark golden covers it):
@@ -670,4 +795,84 @@ async fn an_action_dropped_while_it_waits_for_admission_completes_the_observatio
     assert!(gave_up.is_err(), "admitted past a full slot: {gave_up:?}");
     assert_eq!(failed_with(&obs), "OPERATION_CANCELED");
     drop(held);
+}
+
+/// An action an operator kills while it waits for admission completes its observation with the
+/// kill (`KRISHIV_QUERY_KILLED`, as the action fails), not with a client's `OPERATION_CANCELED`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_action_killed_during_its_setup_completes_with_the_kill() {
+    cancel_during_setup(krishiv_session::CancelReason::Admin, "KRISHIV_QUERY_KILLED").await;
+}
+
+/// The same for a time limit: the observation completes with `KRISHIV_QUERY_TIMEOUT`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_action_timed_out_during_its_setup_completes_with_the_timeout() {
+    cancel_during_setup(
+        krishiv_session::CancelReason::Timeout,
+        "KRISHIV_QUERY_TIMEOUT",
+    )
+    .await;
+}
+
+/// Ends the session of an action queued for admission with `reason`: the action and its
+/// observation both complete with `class`.
+async fn cancel_during_setup(reason: krishiv_session::CancelReason, class: &str) {
+    let s = one_slot_session(1);
+    let rows = s
+        .sql("SELECT session_id FROM system.sessions WHERE state = 'active'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let id = rows[0].column(0).as_string::<i32>().value(0).to_owned();
+    let held = s.range(0, 1, 1, None).execute_stream().await.unwrap();
+    let obs = Observation::new();
+    let df = s
+        .range(0, 10, 1, None)
+        .observe(&obs, [count(lit(1)).alias("n")])
+        .unwrap();
+    let action = tokio::spawn(async move { df.count().await });
+    // Queued behind `held`, so the kill finds the action in its setup.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!action.is_finished(), "admitted past a full slot");
+    let rt = Arc::clone(s.runtime());
+    rt.kill_session(&id, reason).unwrap();
+    let err = action.await.unwrap().unwrap_err();
+    assert_eq!(err.error_class().name(), class, "{err}");
+    assert_eq!(failed_with(&obs), class);
+    drop(held);
+}
+
+/// A query whose only read of an observed temporary view is inside a SQL function's body
+/// completes the observation: the body's view keeps reach the query's observers.
+#[test]
+fn a_view_read_only_inside_a_function_body_completes_the_observation() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    block_on(df.create_or_replace_temp_view("fv")).unwrap();
+    block_on(async {
+        s.sql(
+            "CREATE TEMPORARY FUNCTION from_fv() RETURNS TABLE (k STRING) RETURN SELECT k FROM fv",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+    })
+    .unwrap();
+    let n = block_on(async {
+        s.sql("SELECT * FROM from_fv()")
+            .await
+            .unwrap()
+            .count()
+            .await
+    })
+    .unwrap();
+    assert_eq!(n, 3);
+    assert_eq!(
+        metrics(&obs.get_timeout(Duration::from_secs(10)).unwrap().unwrap())["n"],
+        3
+    );
 }

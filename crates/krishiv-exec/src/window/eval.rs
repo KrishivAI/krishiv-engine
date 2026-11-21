@@ -204,7 +204,7 @@ pub(super) fn evaluate_with(
                     }
                 }
             }
-            _ => function(f, &unit, ansi, legacy)?,
+            _ => function(f, &unit, ansi, legacy, zone)?,
         });
     }
     Ok(Ok(columns))
@@ -219,7 +219,13 @@ pub(super) fn has_range_offsets(plan: &WindowPlan) -> bool {
     })
 }
 
-fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool, legacy: bool) -> Result<ArrayRef> {
+fn function(
+    f: &WindowFunctionPlan,
+    u: &Unit<'_>,
+    ansi: bool,
+    legacy: bool,
+    zone: &krishiv_kernels::datetime::ZoneRef,
+) -> Result<ArrayRef> {
     let n = u.rows;
     let int = |v: i64| i32::try_from(v).map_err(|_| too_large());
     Ok(match &f.function {
@@ -280,6 +286,31 @@ fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool, legacy: bool) -> R
             Arc::new(Int32Array::from(v))
         }
         WindowFunction::Aggregate(a) => aggregate(a, f, u, ansi, legacy)?,
+        WindowFunction::CounterDiff {
+            counter,
+            start_time,
+            ..
+        } => {
+            let column = |c: usize| -> Result<ArrayRef> {
+                let parts = super::frames::sources(u.slices, c)?;
+                let refs: Vec<&dyn Array> = parts.iter().map(AsRef::as_ref).collect();
+                arrow_select::concat::concat(&refs).map_err(|e| internal(e.to_string()))
+            };
+            let counters = column(*counter)?;
+            let starts = start_time.map(column).transpose()?;
+            let mut out: Vec<ArrayRef> = Vec::with_capacity(u.parts.len());
+            for &(start, end) in &u.parts {
+                let mut state = super::counter_diff::CounterState::default();
+                let len = end - start;
+                out.push(state.run(
+                    &counters.slice(start, len),
+                    starts.as_ref().map(|s| s.slice(start, len)).as_ref(),
+                    zone,
+                )?);
+            }
+            let refs: Vec<&dyn Array> = out.iter().map(AsRef::as_ref).collect();
+            arrow_select::concat::concat(&refs).map_err(|e| internal(e.to_string()))?
+        }
         WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
             let part = |i: usize| u.parts[u.part_of[i] as usize];
             let peers = |i: usize| u.peers[u.peer_of[i] as usize];
@@ -919,6 +950,9 @@ pub(super) fn cost(
             WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
                 super::frames::offset_cost(f, rows)?
             }
+            // The counter and start time concatenated (8 bytes each), their cells (24), the results (24), the
+            // output in pieces and joined.
+            WindowFunction::CounterDiff { .. } => rows * 64 + 2 * width(&out, rows),
             WindowFunction::Aggregate(a) if super::udaf::is_udf(a) => {
                 super::udaf::cost(f, rows, parts, &out)?
             }

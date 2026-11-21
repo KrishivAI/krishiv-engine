@@ -48,6 +48,7 @@ mod union;
 
 pub use expand::{Expand, NullOf};
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
+pub(crate) use file_scan::spark_dir_text;
 pub use file_scan::{
     FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN, PathRoots, ROW_FILE_COLUMN,
     ROW_POSITION_COLUMN,

@@ -232,12 +232,12 @@ pub fn edge_arrow_type(arrow: &ArrowType) -> ArrowType {
     map_calendar(&client_arrow_type(&map_fixed_lists(arrow, false)), true)
 }
 
-/// The longest vector the engine carries as a `FixedSizeList` (design P3-T075): the bound keeps `N` times a batch's rows
+/// The longest vector the engine carries as a `FixedSizeList`: the bound keeps `N` times a batch's rows
 /// far from the `i32` offsets of the plain list it becomes at an expression input.
 pub const MAX_VECTOR_LENGTH: i32 = 65_536;
 
 /// Whether `arrow` is a vector carrier: a top-level `FixedSizeList` of `Float32` or `Float64` of length `1..=`
-/// [`MAX_VECTOR_LENGTH`] (design P3-T075 §3).
+/// [`MAX_VECTOR_LENGTH`].
 #[must_use]
 pub fn is_vector_carrier(arrow: &ArrowType) -> bool {
     matches!(arrow, ArrowType::FixedSizeList(f, n)
@@ -318,6 +318,8 @@ impl DataType {
             Self::CalendarInterval => calendar_struct(),
             Self::Geometry { .. } | Self::Geography { .. } => spatial_struct(),
             Self::Variant => variant_struct(),
+            // Computed on as its storage type (P3-T079); the class names ride the field metadata.
+            Self::Udt(u) => u.sql_type().to_arrow(),
             Self::Array(a) => ArrowType::List(Arc::new(
                 a.element_type()
                     .to_arrow_field("element", a.contains_null()),
@@ -418,6 +420,8 @@ impl DataType {
     /// (the canonical type or one of the alternatives in the module docs).
     pub(crate) fn is_valid_storage(&self, arrow: &ArrowType) -> bool {
         match (self, arrow) {
+            // A UDT is stored as its SQL type (P3-T079).
+            (Self::Udt(u), _) => u.sql_type().is_valid_storage(arrow),
             (Self::String, ArrowType::BinaryView | ArrowType::Binary | ArrowType::LargeBinary)
             | (
                 Self::CollatedString(_),
@@ -505,7 +509,14 @@ impl DataType {
         let field = Field::new(name, storage, nullable);
         let mut metadata = HashMap::new();
         if needs_tag {
-            metadata.insert(SPARK_TYPE_METADATA_KEY.to_owned(), self.catalog_string());
+            // A type that is or holds a UDT is tagged with its JSON, at any depth: the class names are not in a
+            // DDL string (`catalog_string` shows a UDT as its storage type).
+            let tag = if self.any_type(&|t| matches!(t, Self::Udt(_))) {
+                self.json()
+            } else {
+                self.catalog_string()
+            };
+            metadata.insert(SPARK_TYPE_METADATA_KEY.to_owned(), tag);
         }
         if *self == Self::Variant {
             metadata.insert(
@@ -544,7 +555,12 @@ impl DataType {
             }
             None => Self::from_arrow_at(field.data_type(), depth),
             Some(tag) => {
-                let t = crate::parse_data_type(tag)?;
+                let t = if tag.starts_with('{') {
+                    // The tag is the engine's own `json()`, which writes INDETERMINATE as `string collate null`.
+                    Self::from_canonical_json(tag)?
+                } else {
+                    crate::parse_data_type(tag)?
+                };
                 if depth + t.nesting_depth() > Self::MAX_NESTING_DEPTH {
                     return Err(error::too_deep());
                 }

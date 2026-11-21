@@ -468,6 +468,9 @@ pub enum TargetObject<'a> {
     CurrentNamespace,
     /// The current catalog.
     CurrentCatalog,
+    /// The catalog a `SHOW NAMESPACES IN name` names, or the namespace of the current catalog when
+    /// `name` is no catalog (resolved by the session).
+    NamedCatalog(&'a DdlName),
     /// A path, as written.
     Path(&'a str),
     /// The cluster: what the `ADMIN` class acts on.
@@ -728,7 +731,12 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
                     .map_or(O::Table(table), |namespace| O::TableIn { table, namespace }),
                 Browse,
             )],
-            ShowKind::Namespaces { .. } => vec![t(O::CurrentCatalog, Browse)],
+            ShowKind::Namespaces { namespace, .. } => vec![t(
+                namespace
+                    .as_ref()
+                    .map_or(O::CurrentCatalog, O::NamedCatalog),
+                Browse,
+            )],
             ShowKind::CreateTable { name, .. } | ShowKind::TblProperties { name, .. } => {
                 vec![t(O::Table(name), Browse)]
             }

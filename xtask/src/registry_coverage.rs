@@ -119,7 +119,7 @@ pub fn test_text<'a>(rel_path: &str, text: &'a str) -> Option<&'a str> {
     let p = rel_path.replace('\\', "/");
     let in_tests_dir = p.split('/').any(|c| c == "tests");
     let file = p.rsplit('/').next().unwrap_or(&p);
-    if in_tests_dir || file == "tests.rs" {
+    if in_tests_dir || file == "tests.rs" || file.ends_with("_tests.rs") {
         return Some(text);
     }
     text.find("#[cfg(test)]").map(|i| &text[i..])
@@ -135,7 +135,7 @@ pub fn engine_text(rel_path: &str, text: &str) -> Option<String> {
     let parts: Vec<&str> = p.split('/').collect();
     let in_src = parts.first() == Some(&"crates") && parts.get(2) == Some(&"src");
     let file = parts.last().copied().unwrap_or_default();
-    if !in_src || parts.contains(&"tests") || file == "tests.rs" {
+    if !in_src || parts.contains(&"tests") || file == "tests.rs" || file.ends_with("_tests.rs") {
         return None;
     }
     let code = text.find("#[cfg(test)]").map_or(text, |i| &text[..i]);

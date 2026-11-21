@@ -1,0 +1,1 @@
+Spark Connect now translates the `Sample`, `Hint`, `RepartitionByExpression` and `Unpivot` relations and `dropDuplicates()` over all columns; the rest of those forms still return a clear unsupported error.

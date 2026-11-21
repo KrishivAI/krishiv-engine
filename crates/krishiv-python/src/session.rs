@@ -72,13 +72,19 @@ fn function_row(f: krishiv_session::spark_catalog::Function) -> FunctionRow {
     )
 }
 
+fn ids(ids: &[krishiv_session::QueryId]) -> Vec<String> {
+    ids.iter().map(ToString::to_string).collect()
+}
+
 /// A Krishiv session.
 #[pyclass(name = "Session", module = "krishiv._native", frozen)]
 #[derive(Debug)]
 pub struct PySession {
     inner: Session,
+    /// The session's state as `errors::LIVE_SESSIONS` holds it weakly, for a Ctrl-C to cancel through.
+    live: std::sync::Arc<Session>,
     /// The session's Python UDF runtime, made by the first registration.
-    udfs: std::sync::OnceLock<std::sync::Arc<crate::udf::runtime::PyUdfRuntime>>,
+    udfs: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::udf::runtime::PyUdfRuntime>>>,
 }
 
 #[pymethods]
@@ -92,9 +98,12 @@ impl PySession {
             builder = builder.config(key, value);
         }
         let inner = builder.build().map_err(|e| to_py(py, &e))?;
+        let live = std::sync::Arc::new(inner.clone());
+        crate::errors::register_session(&live);
         let session = Self {
             inner,
-            udfs: std::sync::OnceLock::new(),
+            live,
+            udfs: std::sync::Arc::default(),
         };
         // Every session runs unregistered UDFs (a DataFrame-side `udf(...)`
         // registers in no session), so it holds its runtime from the start;
@@ -102,6 +111,39 @@ impl PySession {
         // there is none (registration then raises, as before).
         let _ = session.udf_runtime(py);
         Ok(session)
+    }
+
+    /// A handle of this session whose frames carry the request tags `tags`
+    /// (`SparkSession.addTag`): it shares the session's state and UDF runtime.
+    fn tagged(&self, py: Python<'_>, tags: Vec<String>) -> PyResult<Self> {
+        let inner = self
+            .inner
+            .with_request_tags(tags)
+            .map_err(|e| to_py(py, &e))?;
+        Ok(Self {
+            inner,
+            live: std::sync::Arc::clone(&self.live),
+            udfs: std::sync::Arc::clone(&self.udfs),
+        })
+    }
+
+    /// Cancels every running query of the session; their operation ids.
+    fn interrupt_all(&self) -> Vec<String> {
+        ids(&self.inner.interrupt_all())
+    }
+
+    /// Cancels the running queries that carry the request tag `tag`; their operation ids.
+    fn interrupt_tag(&self, tag: &str) -> Vec<String> {
+        ids(&self.inner.interrupt_tag(tag))
+    }
+
+    /// Cancels the query with operation id `id`; its id in a list, or an empty list.
+    fn interrupt_operation(&self, id: &str) -> Vec<String> {
+        // As Spark Connect: an id that is no operation's (malformed included) cancels nothing.
+        match krishiv_session::QueryId::parse(id) {
+            Ok(query) if self.inner.cancel(&query) => vec![query.to_string()],
+            _ => Vec::new(),
+        }
     }
 
     /// Runs the SQL query `query` through analysis; its DataFrame.
@@ -210,6 +252,91 @@ impl PySession {
         );
         self.inner
             .register_batches(&name, schema, batches)
+            .map_err(|e| to_py(py, &e))?;
+        Ok(PyDataFrame {
+            inner: self.inner.table(&name),
+            owned: vec![OwnedTable::new(self.inner.clone(), name)],
+        })
+    }
+
+    /// A DataFrame over a Python data source (design P3-T040): `schema` is any Arrow
+    /// object carrying the source's schema (read now, from an empty table), `read` a
+    /// callable returning an Arrow object of that schema. The engine calls it once for
+    /// every scan of the table in a query, so a source that lists its
+    /// partitions in `read` sees new ones on the next action. A failure of `read` is `PYTHON_EXCEPTION`; a planning failure the
+    /// Python side classed as `PYTHON_DATA_SOURCE_ERROR` keeps its action and type.
+    fn register_python_source(
+        &self,
+        py: Python<'_>,
+        label: &str,
+        schema: &Bound<'_, PyAny>,
+        read: Py<PyAny>,
+    ) -> PyResult<PyDataFrame> {
+        let (schema, _) = ArrowStream::from_arrow(schema)?.read_all()?;
+        let name = format!(
+            "{ARROW_TABLE_PREFIX}{}",
+            ARROW_TABLES.fetch_add(1, Ordering::Relaxed)
+        );
+        let source: krishiv_session::BatchSource = std::sync::Arc::new(move || {
+            Python::attach(|py| {
+                // One wrap: a planning failure the reader's Python side already classed as
+                // `PYTHON_DATA_SOURCE_ERROR` keeps its action and type (Spark's
+                // `pythonDataSourceError` pairs); every other exception of user code is
+                // Spark's `PYTHON_EXCEPTION`, as a task of the read raises it.
+                let fail = |err: &PyErr| {
+                    let value = err.value(py);
+                    let class = value
+                        .call_method0("getCondition")
+                        .and_then(|c| c.extract::<String>())
+                        .ok();
+                    if matches!(
+                        class.as_deref(),
+                        Some("PYTHON_DATA_SOURCE_ERROR" | "KRISHIV_PYTHON_DATA_SOURCE_LIMIT")
+                    ) {
+                        let parameter = |key: &str| {
+                            value
+                                .call_method0("getMessageParameters")
+                                .and_then(|p| p.get_item(key))
+                                .and_then(|v| v.extract::<String>())
+                                .unwrap_or_default()
+                        };
+                        if class.as_deref() == Some("KRISHIV_PYTHON_DATA_SOURCE_LIMIT") {
+                            return krishiv_common::error::KrishivError::from(
+                                krishiv_common::error::KrishivPythonDataSourceLimit {
+                                    source: parameter("source"),
+                                    bytes: parameter("bytes"),
+                                    limit: parameter("limit"),
+                                },
+                            );
+                        }
+                        return krishiv_common::error::KrishivError::from(
+                            krishiv_common::error::PythonDataSourceError {
+                                action: parameter("action"),
+                                r#type: parameter("type"),
+                                msg: parameter("msg"),
+                            },
+                        );
+                    }
+                    let traceback = err
+                        .traceback(py)
+                        .and_then(|t| t.format().ok())
+                        .unwrap_or_default();
+                    krishiv_common::error::KrishivError::from(
+                        krishiv_common::error::PythonException {
+                            msg: "An exception was thrown from the Python worker".to_owned(),
+                            traceback: format!("{traceback}{err}"),
+                        },
+                    )
+                };
+                let table = read.call0(py).map_err(|e| fail(&e))?;
+                let (_, batches) = ArrowStream::from_arrow(table.bind(py))
+                    .and_then(|s| s.read_all())
+                    .map_err(|e| fail(&e))?;
+                Ok(batches)
+            })
+        });
+        self.inner
+            .register_batch_source(&name, label, schema, source)
             .map_err(|e| to_py(py, &e))?;
         Ok(PyDataFrame {
             inner: self.inner.table(&name),

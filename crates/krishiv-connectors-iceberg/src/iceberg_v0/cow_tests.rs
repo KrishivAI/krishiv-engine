@@ -39,7 +39,7 @@ use super::sink_tests::{
 use crate::plan::{DELETE_FILE_PATH_ID, DELETE_FILE_POS_ID, encode_dv};
 
 /// A provider whose scan is `0`.
-struct Over(Arc<dyn ScanPushdown>);
+pub(super) struct Over(pub(super) Arc<dyn ScanPushdown>);
 
 impl std::fmt::Debug for Over {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -55,7 +55,7 @@ impl TableProvider for Over {
 
 /// A table `t` of [`ixn_schema`] at format `version`, partitioned by
 /// `identity(x)` when `partitioned`, with `props`.
-fn create(
+pub(super) fn create(
     env: &Env,
     version: u8,
     partitioned: bool,
@@ -95,7 +95,7 @@ fn create(
 }
 
 /// Appends `batch` through Krishiv's append sink.
-fn append(env: &Env, catalog: &Arc<Catalog>, batch: RecordBatch) {
+pub(super) fn append(env: &Env, catalog: &Arc<Catalog>, batch: RecordBatch) {
     let p = provider(env, &catalog.location(), catalog);
     let mut r = krishiv_exec::planner::WriteRequest::new(
         krishiv_exec::planner::WriteMode::Append,
@@ -109,7 +109,7 @@ fn append(env: &Env, catalog: &Arc<Catalog>, batch: RecordBatch) {
 }
 
 /// One row-level statement against the table as the provider pinned it.
-struct Dml<'a> {
+pub(super) struct Dml<'a> {
     env: &'a Env,
     table: Arc<dyn RowLevelTable>,
     op: RowLevelOperation,
@@ -117,7 +117,7 @@ struct Dml<'a> {
 }
 
 impl<'a> Dml<'a> {
-    fn open(env: &'a Env, catalog: &Arc<Catalog>, op: RowLevelOperation) -> Self {
+    pub(super) fn open(env: &'a Env, catalog: &Arc<Catalog>, op: RowLevelOperation) -> Self {
         let p = provider(env, &catalog.location(), catalog);
         let lineage = p.snapshot().format_version >= 3;
         Self {
@@ -215,7 +215,7 @@ impl<'a> Dml<'a> {
     }
 
     /// `DELETE FROM t WHERE condition`.
-    fn delete(&self, condition: &str) -> Result<(), KrishivError> {
+    pub(super) fn delete(&self, condition: &str) -> Result<(), KrishivError> {
         let touched = self.find(condition);
         self.rewrite(
             touched,
@@ -228,7 +228,7 @@ impl<'a> Dml<'a> {
     }
 
     /// `UPDATE t SET name = value WHERE condition`.
-    fn update(&self, condition: &str, value: &str) -> Result<(), KrishivError> {
+    pub(super) fn update(&self, condition: &str, value: &str) -> Result<(), KrishivError> {
         let touched = self.find(condition);
         let hit = format!("coalesce(({condition}), false)");
         self.rewrite(
@@ -262,7 +262,7 @@ impl<'a> Dml<'a> {
 /// The current snapshot's live entries of each content, by path, and the
 /// table's invariants: every live file listed once, no DV of a data file
 /// that is not live.
-fn live(env: &Env, m: &TableMetadata) -> (Vec<String>, Vec<String>) {
+pub(super) fn live(env: &Env, m: &TableMetadata) -> (Vec<String>, Vec<String>) {
     let Some(s) = m.current_snapshot() else {
         return (Vec::new(), Vec::new());
     };
@@ -326,16 +326,16 @@ fn live(env: &Env, m: &TableMetadata) -> (Vec<String>, Vec<String>) {
     (data, deletes)
 }
 
-fn summary(m: &TableMetadata) -> (Operation, HashMap<String, String>) {
+pub(super) fn summary(m: &TableMetadata) -> (Operation, HashMap<String, String>) {
     let s = m.current_snapshot().unwrap().summary();
     (s.operation.clone(), s.additional_properties.clone())
 }
 
-fn get<'m>(props: &'m HashMap<String, String>, key: &str) -> Option<&'m str> {
+pub(super) fn get<'m>(props: &'m HashMap<String, String>, key: &str) -> Option<&'m str> {
     props.get(key).map(String::as_str)
 }
 
-fn names(m: &TableMetadata, env: &Env, location: &str) -> usize {
+pub(super) fn names(m: &TableMetadata, env: &Env, location: &str) -> usize {
     iceberg_rust_files(env, m, location).len()
 }
 
@@ -541,10 +541,26 @@ fn an_empty_delete_commits_an_overwrite_snapshot() {
 /// Commits a snapshot adding `deletes` (built by `make` from the data file
 /// paths of the current snapshot) on top of the current one, as a foreign
 /// `RowDelta` would.
-fn add_deletes(
+pub(super) fn add_deletes(
     env: &Env,
     catalog: &Arc<Catalog>,
     make: impl FnOnce(&[String]) -> Vec<iceberg::spec::DataFile>,
+) {
+    foreign_deletes(env, catalog, make, false);
+}
+
+/// A foreign `delete` snapshot that removes every live delete file and adds
+/// none (as a compaction or `removeDeletes` would).
+pub(super) fn remove_all_deletes(env: &Env, catalog: &Arc<Catalog>) {
+    foreign_deletes(env, catalog, |_| Vec::new(), true);
+}
+
+/// [`add_deletes`], also removing every live delete file when `remove`.
+fn foreign_deletes(
+    env: &Env,
+    catalog: &Arc<Catalog>,
+    make: impl FnOnce(&[String]) -> Vec<iceberg::spec::DataFile>,
+    remove: bool,
 ) {
     let m = catalog.metadata();
     let io = env.reg.file_io();
@@ -569,6 +585,32 @@ fn add_deletes(
         .unwrap();
         for d in deletes {
             w.add_file(d, UNASSIGNED_SEQUENCE_NUMBER).unwrap();
+        }
+        if remove {
+            let mut kept = Vec::new();
+            for mf in base {
+                if mf.content != ManifestContentType::Deletes {
+                    kept.push(mf);
+                    continue;
+                }
+                let bytes = io
+                    .new_input(&mf.manifest_path)
+                    .unwrap()
+                    .read()
+                    .await
+                    .unwrap();
+                for e in iceberg::spec::Manifest::parse_avro(&bytes)
+                    .unwrap()
+                    .entries()
+                {
+                    if e.is_alive() {
+                        let seq = e.sequence_number().unwrap_or(mf.sequence_number);
+                        w.add_delete_file(e.data_file().clone(), seq, Some(seq))
+                            .unwrap();
+                    }
+                }
+            }
+            base = kept;
         }
         base.push(w.write_manifest_file().await.unwrap());
         let list = env.at("snap-rowdelta.avro");
@@ -964,7 +1006,7 @@ fn the_iceberg_scan_takes_rows_by_position() {
 
 /// The DVs of `files` (each deleting positions `positions`), one blob per
 /// file in the one Puffin file `name`.
-fn dvs_in_one_puffin(
+pub(super) fn dvs_in_one_puffin(
     env: &Env,
     name: &str,
     files: &[String],
@@ -999,7 +1041,23 @@ fn dvs_in_one_puffin(
 }
 
 /// A position delete file `name` deleting position `pos` of `of`.
-fn position_delete(env: &Env, name: &str, of: &str, pos: i64) -> iceberg::spec::DataFile {
+pub(super) fn position_delete(
+    env: &Env,
+    name: &str,
+    of: &str,
+    pos: i64,
+) -> iceberg::spec::DataFile {
+    position_delete_scoped(env, name, of, pos, false)
+}
+
+/// [`position_delete`], with `referenced_data_file` set to `of` when `scoped` (a file-scoped delete).
+pub(super) fn position_delete_scoped(
+    env: &Env,
+    name: &str,
+    of: &str,
+    pos: i64,
+    scoped: bool,
+) -> iceberg::spec::DataFile {
     let path = env.at(name);
     let b = super::provider_tests::batch(
         vec![
@@ -1020,6 +1078,9 @@ fn position_delete(env: &Env, name: &str, of: &str, pos: i64) -> iceberg::spec::
         .record_count(1)
         .partition(Struct::empty())
         .partition_spec_id(0);
+    if scoped {
+        d.referenced_data_file(Some(of.to_owned()));
+    }
     d.build().unwrap()
 }
 
@@ -1109,7 +1170,7 @@ fn a_foreign_row_delta_on_a_touched_file_fails_under_both_levels() {
 
 /// `id|_row_id|_last_updated_sequence_number` of every row, by id, read
 /// through the lineage scan.
-fn lineage_rows(env: &Env, catalog: &Arc<Catalog>) -> Vec<String> {
+pub(super) fn lineage_rows(env: &Env, catalog: &Arc<Catalog>) -> Vec<String> {
     let p = provider(env, &catalog.location(), catalog);
     let scan = p.lineage_scan().unwrap();
     let mut schema: Vec<StructField> = p.snapshot().schema.fields().to_vec();

@@ -1,0 +1,290 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Spark and Krishiv on the same Iceberg tables (P3-T028b, PR-53b, round trip): Spark 4.1.0 +
+//! iceberg-spark-runtime 1.12.0 makes the tables, Krishiv appends and runs copy-on-write `DELETE` and `UPDATE` on
+//! them, Spark reads that and runs merge-on-read DML on top, Krishiv reads Spark's result.
+//!
+//! Four steps, run in order by `tests/scripts/iceberg_roundtrip.sh` (Docker, so both Rust steps are `#[ignore]`d):
+//!
+//! 1. `gen_iceberg_roundtrip.py create` (Spark) writes `mor2` (v2, position deletes), `mor3` (v3, a deletion
+//!    vector) and `evolved` (`int` id promoted to `bigint`, a renamed column, unpartitioned then `identity(x)`)
+//!    into `$KRISHIV_ICEBERG_RT_OUT/wh` and records its reads in `SPARK-CREATE.json`;
+//! 2. [`krishiv_meets_spark_tables`] reads each table (it must read what Spark read), appends, deletes a row of a
+//!    Spark file that carries Spark's deletes, and updates one row of Spark's and one of its own; after each commit
+//!    it records the snapshot and its own read in `KRISHIV-RT.json`, and leaves its last metadata as the Hadoop
+//!    catalog's next version;
+//! 3. `gen_iceberg_roundtrip.py readback` (Spark) reads Krishiv's result, time travels to each Krishiv snapshot,
+//!    then runs merge-on-read `DELETE`, `UPDATE` and `MERGE` on top and appends (`SPARK-READBACK.json`);
+//! 4. [`krishiv_reads_spark_on_top`] compares: Spark read what Krishiv read at every snapshot, Krishiv's snapshots
+//!    are Spark's history, v3 row ids survived Krishiv's rewrite, and Krishiv reads Spark's last metadata (its
+//!    deletes against Krishiv's files included) and time travels back to its own snapshots.
+//!
+//! Every expected value is the other engine's record, never a literal here.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use iceberg::spec::TableMetadata;
+use krishiv_exec::planner::{RowLevelOperation, TableProvider as _};
+use krishiv_exec::testing::Batches;
+use krishiv_types::batch::Batch;
+use serde_json::{Value, json};
+
+use super::cow_tests::Dml;
+use super::provider_tests::{Env, env_in};
+use super::sink_tests::{Catalog, input_schema, local_path, provider, range, request, rows, run};
+use super::write_conformance_tests::{krishiv_rows, snapshot_json, spark_rows, text};
+use crate::plan::VersionSpec;
+
+const OUT_VAR: &str = "KRISHIV_ICEBERG_RT_OUT";
+
+/// The tables `gen_iceberg_roundtrip.py` makes.
+const TABLES: [&str; 3] = ["mor2", "mor3", "evolved"];
+
+fn out_dir() -> PathBuf {
+    PathBuf::from(
+        std::env::var(OUT_VAR).unwrap_or_else(|_| panic!("{OUT_VAR} names the output directory")),
+    )
+}
+
+fn read_json(name: &str) -> Value {
+    let text = std::fs::read_to_string(out_dir().join(name))
+        .unwrap_or_else(|e| panic!("{name}: {e} (run the earlier steps first)"));
+    serde_json::from_str(&text).unwrap()
+}
+
+fn local_env() -> Env {
+    let store = Arc::new(object_store::local::LocalFileSystem::new());
+    env_in(
+        tempfile::tempdir().unwrap(),
+        store,
+        krishiv_io::IoConfig::default(),
+    )
+}
+
+fn sorted(mut v: Vec<String>) -> Vec<String> {
+    v.sort();
+    v
+}
+
+/// The current metadata of the table at `location` (a `file:` path, as Spark records it).
+fn metadata_at(location: &str) -> TableMetadata {
+    serde_json::from_slice(&std::fs::read(local_path(location)).unwrap()).unwrap()
+}
+
+/// The Hadoop catalog's next version of table `name`: `metadata` written as `v<N+1>.metadata.json`, the hint moved.
+fn publish_to_hadoop_catalog(name: &str, location: &str) -> String {
+    let meta = out_dir().join("wh/db").join(name).join("metadata");
+    let hint: u64 = std::fs::read_to_string(meta.join("version-hint.text"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let next = meta.join(format!("v{}.metadata.json", hint + 1));
+    std::fs::copy(local_path(location), &next).unwrap();
+    std::fs::write(meta.join("version-hint.text"), (hint + 1).to_string()).unwrap();
+    format!("file:{}", next.display())
+}
+
+/// One Krishiv step's record: the snapshot it committed and Krishiv's read after it.
+fn step(env: &Env, catalog: &Catalog, name: &str, what: &str) -> Value {
+    let m = catalog.metadata();
+    json!({
+        "what": what,
+        "snapshot_id": m.current_snapshot().unwrap().snapshot_id(),
+        "rows": krishiv_rows(env, &catalog.location(), name, &VersionSpec::Current),
+    })
+}
+
+/// Step 2: Krishiv reads Spark's tables, appends, and runs copy-on-write `DELETE` and `UPDATE` on them.
+#[test]
+#[ignore = "step 2 of tests/scripts/iceberg_roundtrip.sh (needs SPARK-CREATE.json from Spark)"]
+fn krishiv_meets_spark_tables() {
+    let spark = read_json("SPARK-CREATE.json");
+    assert_eq!(spark["_oracle"]["iceberg"], "1.12.0");
+    let env = local_env();
+    let mut record = serde_json::Map::new();
+    for name in TABLES {
+        let created = &spark[name]["spark"];
+        let location = created["metadata"].as_str().unwrap();
+        // Krishiv reads Spark's table as Spark does (deletes applied, evolved columns by field id).
+        let read = krishiv_rows(&env, location, name, &VersionSpec::Current);
+        assert_eq!(
+            sorted(read.clone()),
+            sorted(spark_rows(&created["rows"])),
+            "{name}: Krishiv reads Spark's table"
+        );
+        let catalog = Catalog::with_metadata(metadata_at(location), location.to_owned());
+        let mut steps = Vec::new();
+
+        // An append: two drivers, one row with a NULL id.
+        let p = provider(&env, &catalog.location(), &catalog);
+        let sink = p.writer(&request(Some("rt-append"))).unwrap();
+        let input = Arc::new(super::sink_tests::PerDriver {
+            schema: input_schema(),
+            batches: vec![range(100, 104), rows(&[None, Some(104), Some(105)])],
+            stall: false,
+        });
+        run(&env, sink, input, None).0.unwrap();
+        steps.push(step(&env, &catalog, name, "append"));
+
+        // DELETE of a row in a Spark file that has Spark's deletes (ids 1 and 5 went in step 1): the rewrite
+        // replaces the file and drops its deletes.
+        Dml::open(&env, &catalog, RowLevelOperation::Delete)
+            .delete("id = 4")
+            .unwrap();
+        steps.push(step(&env, &catalog, name, "delete"));
+
+        // UPDATE of one row of Spark's and one of Krishiv's. Id 8 sits in Spark's x = 2 file, the one with Spark's
+        // delete of id 5, so the rewrite replaces a second Spark file that has deletes.
+        Dml::open(&env, &catalog, RowLevelOperation::Update)
+            .update("id IN (8, 101)", "'k'")
+            .unwrap();
+        steps.push(step(&env, &catalog, name, "update"));
+
+        // A second plain append on top of the rewrites.
+        let p = provider(&env, &catalog.location(), &catalog);
+        let sink = p.writer(&request(None)).unwrap();
+        let input = Batches::new(input_schema(), vec![Batch::new(range(110, 112))]);
+        run(&env, sink, input, None).0.unwrap();
+        steps.push(step(&env, &catalog, name, "append"));
+
+        let published = publish_to_hadoop_catalog(name, &catalog.location());
+        record.insert(
+            name.to_owned(),
+            json!({
+                "read": read,
+                "steps": steps,
+                "snapshots": snapshot_json(&catalog.metadata()),
+                "metadata": published,
+            }),
+        );
+    }
+    std::fs::write(
+        out_dir().join("KRISHIV-RT.json"),
+        serde_json::to_vec_pretty(&Value::Object(record)).unwrap(),
+    )
+    .unwrap();
+}
+
+fn ids_of(rows: &Value) -> Vec<(String, i64)> {
+    rows.as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (text(&r["id"]), r["_row_id"].as_i64().unwrap()))
+        .collect()
+}
+
+fn strings(v: &Value) -> Vec<String> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Step 4: both engines agree on every snapshot, and Krishiv reads Spark's DML on top of its own.
+#[test]
+#[ignore = "step 4 of tests/scripts/iceberg_roundtrip.sh (needs SPARK-READBACK.json from Spark)"]
+fn krishiv_reads_spark_on_top() {
+    let created = read_json("SPARK-CREATE.json");
+    let krishiv = read_json("KRISHIV-RT.json");
+    let spark = read_json("SPARK-READBACK.json");
+    let env = local_env();
+    for name in TABLES {
+        let k = &krishiv[name];
+        let s = &spark[name];
+        let steps = k["steps"].as_array().unwrap();
+        let last = steps.last().unwrap();
+
+        // Spark reads Krishiv's last snapshot as Krishiv does.
+        assert_eq!(
+            sorted(spark_rows(&s["before"]["rows"])),
+            sorted(strings(&last["rows"])),
+            "{name}: Spark reads Krishiv's result"
+        );
+        // Spark's time travel to every Krishiv snapshot answers Krishiv's read of it.
+        for st in steps {
+            let id = text(&st["snapshot_id"]);
+            assert_eq!(
+                sorted(spark_rows(&s["at"][&id])),
+                sorted(strings(&st["rows"])),
+                "{name}: Spark at Krishiv's {} snapshot {id}",
+                st["what"]
+            );
+        }
+        // History: Spark's snapshots are Krishiv's, with the same parents and counts. Both sides are keyed by
+        // snapshot id, since Spark orders by commit time (two commits can share a millisecond) and Krishiv by
+        // sequence number; the parent ids carry the order.
+        let by_id = |v: &Value| -> Vec<Value> {
+            let mut v = v.as_array().unwrap().clone();
+            v.sort_by_key(|r| text(&r["snapshot_id"]));
+            v
+        };
+        let (ks, ss) = (by_id(&k["snapshots"]), by_id(&s["before"]["snapshots"]));
+        assert_eq!(ks.len(), ss.len(), "{name}: snapshot count");
+        for (a, b) in ks.iter().zip(&ss) {
+            for f in [
+                "snapshot_id",
+                "parent_id",
+                "operation",
+                "added_records",
+                "total_records",
+                "total_data_files",
+            ] {
+                assert_eq!(text(&a[f]), text(&b[f]), "{name}: snapshot {f}");
+            }
+        }
+        let spark_created = created[name]["spark"]["snapshots"].as_array().unwrap();
+        assert_eq!(
+            ks.len(),
+            spark_created.len() + steps.len(),
+            "{name}: one snapshot per Krishiv step on top of Spark's"
+        );
+        // Krishiv's DELETE and UPDATE each replaced a Spark file that had deletes: on v3 each file's DV goes with it
+        // (`removeDanglingDeletesFor`); on v2 the partitions' position delete files stay live, as Java keeps them.
+        if name != "evolved" {
+            let deletes = |v: &Value| v["delete_files"].as_array().unwrap().len();
+            let (now, was) = (deletes(&s["before"]), deletes(&created[name]["spark"]));
+            if name == "mor3" {
+                assert_eq!(now, was - 2, "{name}: the rewritten files' DVs are gone");
+            } else {
+                assert_eq!(now, was, "{name}: position delete files stay");
+            }
+            assert!(
+                deletes(&s["after"]) > deletes(&s["before"]),
+                "{name}: Spark's merge-on-read DML wrote deletes on top"
+            );
+        }
+        // v3: a row Krishiv only moved keeps the `_row_id` Spark gave it; all ids stay distinct.
+        if name == "mor3" {
+            let before = ids_of(&created[name]["spark"]["row_ids"]);
+            let after = ids_of(&s["before"]["row_ids"]);
+            let mut uniq: Vec<i64> = after.iter().map(|(_, r)| *r).collect();
+            uniq.sort_unstable();
+            uniq.dedup();
+            assert_eq!(uniq.len(), after.len(), "{name}: row ids distinct");
+            for (id, row_id) in &before {
+                if let Some((_, now)) = after.iter().find(|(i, _)| i == id) {
+                    assert_eq!(now, row_id, "{name}: id {id} keeps its _row_id");
+                }
+            }
+        }
+
+        // Krishiv reads Spark's last metadata: merge-on-read deletes on Krishiv's files, the MERGE, the append.
+        let location = s["after"]["metadata"].as_str().unwrap();
+        assert_eq!(
+            sorted(krishiv_rows(&env, location, name, &VersionSpec::Current)),
+            sorted(spark_rows(&s["after"]["rows"])),
+            "{name}: Krishiv reads Spark's DML on top of its own"
+        );
+        // And time travels back to each of its own snapshots through Spark's metadata.
+        for st in steps {
+            let id = st["snapshot_id"].as_i64().unwrap();
+            assert_eq!(
+                sorted(krishiv_rows(&env, location, name, &VersionSpec::Id(id))),
+                sorted(strings(&st["rows"])),
+                "{name}: Krishiv at its own snapshot {id} through Spark's metadata"
+            );
+        }
+    }
+}

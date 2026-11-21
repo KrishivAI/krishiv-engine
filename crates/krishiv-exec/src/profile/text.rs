@@ -131,6 +131,13 @@ impl QueryProfile {
                 names.join(" -> ")
             );
         }
+        // The advisor's findings, one line each; no section when it found nothing.
+        if !self.hints.is_empty() {
+            out.push_str("== Hints ==\n");
+            for h in &self.hints {
+                let _ = writeln!(out, "{}", h.line(&self.plan));
+            }
+        }
         out
     }
 }

@@ -4,7 +4,7 @@
 //! applies each request as `append_tests` does and read back through SQL; a
 //! second append on top; the write id in the snapshot summary; a failing
 //! driver and a cancelled write leaving no file, no commit and no memory; the
-//! capability check without a committer; a schema mismatch refused before
+//! capability check with and without a committer; a schema mismatch refused before
 //! anything is written.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,10 +49,28 @@ pub(super) struct Catalog {
 
 impl Catalog {
     pub(super) fn new(table: &iceberg::table::Table) -> Arc<Self> {
+        Self::with_metadata(
+            table.metadata().clone(),
+            table.metadata_location().unwrap().to_owned(),
+        )
+    }
+
+    /// The table whose current metadata is `metadata`, read from `location`.
+    pub(super) fn with_metadata(metadata: TableMetadata, location: String) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new((metadata, location, 0)),
+            hang: AtomicBool::new(false),
+            sent: AtomicBool::new(false),
+        })
+    }
+
+    /// A catalog over the metadata file at `location`.
+    pub(super) fn at(location: &str) -> Arc<Self> {
+        let bytes = std::fs::read(location.strip_prefix("file://").unwrap()).unwrap();
         Arc::new(Self {
             state: Mutex::new((
-                table.metadata().clone(),
-                table.metadata_location().unwrap().to_owned(),
+                serde_json::from_slice(&bytes).unwrap(),
+                location.to_owned(),
                 0,
             )),
             hang: AtomicBool::new(false),
@@ -66,6 +84,20 @@ impl Catalog {
 
     pub(super) fn metadata(&self) -> TableMetadata {
         self.state.lock().unwrap().0.clone()
+    }
+
+    /// The table's metadata and its location, to put back with [`Self::restore`].
+    pub(super) fn state(&self) -> (TableMetadata, String) {
+        let s = self.state.lock().unwrap();
+        (s.0.clone(), s.1.clone())
+    }
+
+    /// Puts back a state [`Self::state`] returned (a test staging another
+    /// writer's commit for later).
+    pub(super) fn restore(&self, state: (TableMetadata, String)) {
+        let mut s = self.state.lock().unwrap();
+        s.0 = state.0;
+        s.1 = state.1;
     }
 }
 
@@ -95,11 +127,7 @@ impl CommitTable for Catalog {
         let next = b.build().unwrap().metadata;
         s.2 += 1;
         let path = format!("{}/metadata/v{}-sink.metadata.json", next.location(), s.2);
-        std::fs::write(
-            path.strip_prefix("file://").unwrap(),
-            serde_json::to_vec(&next).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(local_path(&path), serde_json::to_vec(&next).unwrap()).unwrap();
         s.0 = next.clone();
         s.1 = path;
         CommitOutcome::Committed(Box::new(next))
@@ -108,6 +136,16 @@ impl CommitTable for Catalog {
     async fn load(&self, _all_snapshots: bool) -> Result<TableMetadata, KrishivError> {
         Ok(self.metadata())
     }
+}
+
+/// The local path of a `file://`, `file:` or bare absolute location (Spark's Hadoop catalog records a bare path
+/// as the table location).
+pub(super) fn local_path(location: &str) -> &str {
+    location
+        .strip_prefix("file://")
+        .or_else(|| location.strip_prefix("file:"))
+        .or_else(|| location.starts_with('/').then_some(location))
+        .unwrap_or_else(|| panic!("not a local location: {location}"))
 }
 
 /// The source side of the test's write node: no rows.
@@ -600,9 +638,10 @@ fn a_write_cancelled_during_its_commit_deletes_nothing() {
 }
 
 /// Without a committer the table declares no write mode, so the session's
-/// check (and `writer` itself) refuses an append; with one, only appends.
+/// check (and `writer` itself) refuses an append; with one, every batch
+/// mode (PR-36b part 2b added the overwrites).
 #[test]
-fn only_a_table_with_a_committer_takes_appends() {
+fn only_a_table_with_a_committer_takes_writes() {
     let env = env();
     let t = create(&env, ixn_schema(), false, &[]);
     let table = env.load(&t);
@@ -615,11 +654,6 @@ fn only_a_table_with_a_committer_takes_appends() {
         "{e}"
     );
     assert!(e.to_string().contains("append in batch mode"), "{e}");
-
-    let catalog = Catalog::new(&t);
-    let p = provider(&env, &catalog.location(), &catalog);
-    let caps = p.capabilities();
-    assert!(caps.batch_write && !caps.truncate && !caps.overwrite_by_filter);
     let mut truncate = request(None);
     truncate.mode = WriteMode::Truncate;
     let e = p.writer(&truncate).err().unwrap();
@@ -628,6 +662,13 @@ fn only_a_table_with_a_committer_takes_appends() {
         ErrorClass::UnsupportedFeatureTableOperation,
         "{e}"
     );
+
+    let catalog = Catalog::new(&t);
+    let p = provider(&env, &catalog.location(), &catalog);
+    let caps = p.capabilities();
+    assert!(caps.batch_write && caps.truncate && caps.overwrite_by_filter);
+    assert!(caps.overwrite_dynamic);
+    assert!(p.writer(&truncate).is_ok());
 }
 
 /// Rows that are not the table's columns are refused when the sink is

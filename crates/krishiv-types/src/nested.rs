@@ -18,6 +18,115 @@ use serde_json::{Map, Value};
 
 use crate::DataType;
 
+/// Spark's `UserDefinedType` (P3-T079): a value stored as its underlying SQL type, with the names of the classes
+/// that turn it into and out of that storage. The engine never runs the hooks itself: a Python client
+/// serializes before and deserializes after, so a UDT column is, inside the engine, its `sql_type`.
+///
+/// Spark compares UDTs by class (`UserDefinedType.equals`), so two UDTs are equal when their classes are. Only the two
+/// shapes Spark's JSON has can be built: [`UdtType::jvm`] and [`UdtType::python`].
+#[derive(Debug, Clone)]
+pub struct UdtType {
+    sql_type: DataType,
+    python_class: Option<String>,
+    jvm_class: Option<String>,
+    serialized_python_class: Option<String>,
+}
+
+impl UdtType {
+    /// A JVM UDT (Spark's `UserDefinedType`): named by its JVM class, with the Python class a PySpark client
+    /// pairs with it, if any (`"pyClass":null` in Spark's JSON when there is none).
+    pub fn jvm(sql_type: DataType, jvm_class: String, python_class: Option<String>) -> Self {
+        Self {
+            sql_type,
+            python_class,
+            jvm_class: Some(jvm_class),
+            serialized_python_class: None,
+        }
+    }
+
+    /// A Python-only UDT (Spark's `PythonUserDefinedType`): its Python class and the pickled class a PySpark
+    /// client sends. Spark's JSON has no form for one without both.
+    pub fn python(
+        sql_type: DataType,
+        python_class: String,
+        serialized_python_class: String,
+    ) -> Self {
+        Self {
+            sql_type,
+            python_class: Some(python_class),
+            jvm_class: None,
+            serialized_python_class: Some(serialized_python_class),
+        }
+    }
+
+    /// The type the values are stored as.
+    pub fn sql_type(&self) -> &DataType {
+        &self.sql_type
+    }
+
+    /// The Python class (`module.Class`), if the type has one.
+    pub fn python_class(&self) -> Option<&str> {
+        self.python_class.as_deref()
+    }
+
+    /// The JVM class, if the type has one.
+    pub fn jvm_class(&self) -> Option<&str> {
+        self.jvm_class.as_deref()
+    }
+
+    /// The pickled Python class a PySpark client sent, if any.
+    pub fn serialized_python_class(&self) -> Option<&str> {
+        self.serialized_python_class.as_deref()
+    }
+
+    /// Spark's `UserDefinedType.typeName`: the class's simple name without a trailing `$`, `Type` and `UDT`, lower
+    /// case (`ExamplePointUDT` is `examplepoint`). From the JVM class; `pythonuserdefined` for a Python-only one; `udt` for none.
+    pub fn type_name(&self) -> String {
+        // A Python-only UDT is Spark's `PythonUserDefinedType`, whose type name is `pythonuserdefined` (4.2.0 run).
+        if self.jvm_class().is_none() && self.python_class().is_some() {
+            return "pythonuserdefined".to_owned();
+        }
+        let class = self.jvm_class().unwrap_or("");
+        let simple = class
+            .rsplit(['.', '$'])
+            .find(|s| !s.is_empty())
+            .unwrap_or("");
+        let name = simple.strip_suffix("Type").unwrap_or(simple);
+        let name = name.strip_suffix("UDT").unwrap_or(name).to_lowercase();
+        if name.is_empty() {
+            "udt".to_owned()
+        } else {
+            name
+        }
+    }
+
+    /// The class that names this type for equality: the JVM class (Spark's `UserDefinedType.equals` compares
+    /// classes), else the Python class of a Python-only type.
+    /// A Python-only type is kept apart from a JVM one that happens to share the class name
+    /// (`PythonUserDefinedType` is its own Spark class).
+    fn identity(&self) -> (bool, Option<&str>) {
+        (
+            self.jvm_class.is_some(),
+            self.jvm_class().or_else(|| self.python_class()),
+        )
+    }
+}
+
+impl PartialEq for UdtType {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity() == other.identity() && self.sql_type == other.sql_type
+    }
+}
+
+impl Eq for UdtType {}
+
+impl std::hash::Hash for UdtType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.identity().hash(state);
+        self.sql_type.hash(state);
+    }
+}
+
 /// Spark's `ArrayType(elementType, containsNull)`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArrayType {
@@ -259,6 +368,7 @@ impl DataType {
                     stack.push((&m.value_type, depth + 1));
                 }
                 Self::Struct(s) => stack.extend(s.fields.iter().map(|f| (&f.data_type, depth + 1))),
+                Self::Udt(u) => stack.push((u.sql_type(), depth + 1)),
                 _ => {}
             }
         }
@@ -274,6 +384,7 @@ impl DataType {
                 Self::Array(a) => a.element_type().any_type(pred),
                 Self::Map(m) => m.key_type().any_type(pred) || m.value_type().any_type(pred),
                 Self::Struct(s) => s.fields().iter().any(|f| f.data_type().any_type(pred)),
+                Self::Udt(u) => u.sql_type().any_type(pred),
                 _ => false,
             }
     }
@@ -292,6 +403,30 @@ impl DataType {
             .into(),
             Self::Struct(s) => StructType::new(s.fields().iter().map(|f| {
                 StructField::new(f.name(), f.data_type().as_nullable(), true)
+                    .with_metadata(f.metadata().clone())
+            }))
+            .into(),
+            other => other.clone(),
+        }
+    }
+
+    /// This type with every user-defined type, at any depth, replaced by its storage type: what the engine
+    /// computes with (a cast to a UDT is a cast to its storage type).
+    #[must_use]
+    pub fn without_udts(&self) -> Self {
+        match self {
+            Self::Udt(u) => u.sql_type().without_udts(),
+            Self::Array(a) => {
+                ArrayType::new(a.element_type().without_udts(), a.contains_null()).into()
+            }
+            Self::Map(m) => MapType::new(
+                m.key_type().without_udts(),
+                m.value_type().without_udts(),
+                m.value_contains_null(),
+            )
+            .into(),
+            Self::Struct(s) => StructType::new(s.fields().iter().map(|f| {
+                StructField::new(f.name(), f.data_type().without_udts(), f.nullable())
                     .with_metadata(f.metadata().clone())
             }))
             .into(),

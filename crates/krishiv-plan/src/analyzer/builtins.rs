@@ -140,8 +140,20 @@ pub(super) fn named_signature(name: &str) -> Option<&'static [NamedParam]> {
             default: Required,
         },
     ];
+    // Spark 4.3's `CounterDiffExpressionBuilder`: `value`, then an optional `start_time`.
+    const COUNTER_DIFF: &[NamedParam] = &[
+        NamedParam {
+            name: "value",
+            default: Required,
+        },
+        NamedParam {
+            name: "start_time",
+            default: Null,
+        },
+    ];
     match name.to_ascii_lowercase().as_str() {
         "mask" => Some(MASK),
+        "counter_diff" => Some(COUNTER_DIFF),
         "count_min_sketch" => Some(COUNT_MIN_SKETCH),
         _ => None,
     }

@@ -5,6 +5,14 @@
 pub(crate) mod append;
 pub(crate) mod commit;
 pub(crate) mod data_file;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "PR-36c's merge-on-read writer; the session wires it through PR-37d's contract"
+    )
+)]
+pub(crate) mod delete_write;
 pub(crate) mod deletes;
 pub(crate) mod eq_deletes;
 pub(crate) mod filter;
@@ -12,9 +20,18 @@ pub(crate) mod lazy;
 pub(crate) mod lineage;
 pub(crate) mod manifest_cache;
 pub(crate) mod merge;
+pub(crate) mod overwrite;
 pub(crate) mod provider;
 pub(crate) mod puffin_stats;
 pub(crate) mod rolling;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "PR-36c's merge-on-read writer; the session wires it through PR-37d's contract"
+    )
+)]
+pub(crate) mod row_delta;
 pub(crate) mod row_level;
 pub(crate) mod scan;
 pub(crate) mod sink;
@@ -22,6 +39,8 @@ pub(crate) mod statistics_file;
 pub(crate) mod stats;
 pub(crate) mod storage;
 pub(crate) mod table;
+#[cfg(feature = "testing")]
+pub(crate) mod testing;
 pub(crate) mod types;
 pub(crate) mod validate;
 pub(crate) mod write;
@@ -55,13 +74,21 @@ mod lineage_tests;
 #[cfg(test)]
 mod merge_tests;
 #[cfg(test)]
+mod mor_fault_tests;
+#[cfg(test)]
+mod mor_tests;
+#[cfg(test)]
 mod oracle_tests;
+#[cfg(test)]
+mod overwrite_tests;
 #[cfg(test)]
 mod provider_tests;
 #[cfg(test)]
 mod puffin_stats_tests;
 #[cfg(test)]
 mod rolling_tests;
+#[cfg(test)]
+mod roundtrip_tests;
 #[cfg(test)]
 mod scan_tests;
 #[cfg(test)]
@@ -73,6 +100,10 @@ mod table_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod type_golden_tests;
+#[cfg(test)]
 mod validate_tests;
+#[cfg(test)]
+mod write_conformance_tests;
 #[cfg(test)]
 mod write_tests;

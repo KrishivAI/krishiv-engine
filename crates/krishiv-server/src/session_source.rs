@@ -152,7 +152,13 @@ fn result_cell(column: &dyn Array, row: usize) -> Value {
         arrow_cast::display::array_value_to_string(c, row).map_or(Value::Null, Value::String)
     };
     match column.data_type() {
-        DataType::Timestamp(..) | DataType::Date32 | DataType::Date64 => text(column),
+        // Nested values keep the display text an editor always showed; only the system tables render them as JSON.
+        DataType::Timestamp(..)
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::Struct(_) => text(column),
         DataType::Int64
             if column
                 .as_primitive::<arrow_array::types::Int64Type>()
@@ -353,8 +359,26 @@ fn cell(column: &dyn Array, row: usize) -> Value {
                 .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
                 .value(row),
         ),
+        // `system.queries.hints` is a list of structs: the advisor's hints reach the query page through this.
+        DataType::List(_) => list_cells(&column.as_list::<i32>().value(row)),
+        DataType::LargeList(_) => list_cells(&column.as_list::<i64>().value(row)),
+        DataType::Struct(fields) => {
+            let st = column.as_struct();
+            Value::Object(
+                fields
+                    .iter()
+                    .zip(st.columns())
+                    .map(|(f, c)| (f.name().clone(), cell(c.as_ref(), row)))
+                    .collect(),
+            )
+        }
         _ => Value::Null,
     }
+}
+
+/// The elements of one list value as a JSON array.
+fn list_cells(values: &dyn Array) -> Value {
+    Value::Array((0..values.len()).map(|i| cell(values, i)).collect())
 }
 
 /// The rows of `batches` as JSON objects.
@@ -921,21 +945,28 @@ mod tests {
         assert!(rows[1].values().all(Value::is_null), "{:?}", rows[1]);
     }
 
-    /// A column of a type the pages never show (a map, a list) becomes null instead of failing the table.
+    /// A list cell renders as a JSON array (so `system.queries.hints` reaches the query page); a type the pages
+    /// never show (a map) becomes null instead of failing the table.
     #[test]
-    fn a_type_the_pages_do_not_show_is_null() {
-        use arrow_array::builder::{Int32Builder, ListBuilder};
+    fn a_list_renders_and_a_type_the_pages_do_not_show_is_null() {
+        use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StringBuilder};
         let mut b = ListBuilder::new(Int32Builder::new());
         b.values().append_value(1);
         b.append(true);
         let list: ArrayRef = Arc::new(b.finish());
-        let schema = Schema::new(vec![Field::new(
-            "pipelines",
-            list.data_type().clone(),
-            true,
-        )]);
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![list]).unwrap();
-        assert_eq!(batches_to_rows(&[batch])[0]["pipelines"], Value::Null);
+        let mut m = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        m.keys().append_value("k");
+        m.values().append_value(1);
+        m.append(true).unwrap();
+        let map: ArrayRef = Arc::new(m.finish());
+        let schema = Schema::new(vec![
+            Field::new("pipelines", list.data_type().clone(), true),
+            Field::new("attrs", map.data_type().clone(), true),
+        ]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![list, map]).unwrap();
+        let row = &batches_to_rows(&[batch])[0];
+        assert_eq!(row["pipelines"], json!([1]));
+        assert_eq!(row["attrs"], Value::Null);
     }
 
     fn new_run() -> Arc<Mutex<Run>> {
@@ -980,5 +1011,18 @@ mod tests {
         assert_eq!(result_cell(&big, 0), json!("9223372036854775807"));
         assert_eq!(result_cell(&big, 1), json!(42));
         assert_eq!(result_cell(&big, 2), json!("-9007199254740993"));
+    }
+
+    /// A list in an editor result keeps its display text (the system tables render it as an array instead).
+    #[test]
+    fn an_editor_list_cell_is_its_display_text() {
+        use arrow_array::builder::{Int32Builder, ListBuilder};
+        let mut b = ListBuilder::new(Int32Builder::new());
+        b.values().append_value(1);
+        b.values().append_value(2);
+        b.append(true);
+        let list = b.finish();
+        assert_eq!(result_cell(&list, 0), json!("[1, 2]"));
+        assert_eq!(cell(&list, 0), json!([1, 2]));
     }
 }

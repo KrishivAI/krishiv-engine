@@ -401,7 +401,7 @@ fn cross_stage_filters(root: &mut PhysNode) -> BTreeSet<FilterId> {
                     id: f.id,
                     column,
                     key_type: key_type.clone(),
-                    options: f.options,
+                    options: without_fixed_bloom(f.options),
                     null_safe: null_safe.get(f.key).copied().unwrap_or(false),
                 });
                 moved.insert(f.id);
@@ -418,6 +418,13 @@ fn cross_stage_filters(root: &mut PhysNode) -> BTreeSet<FilterId> {
 /// filters in `crossing` (collected by an exchange of an earlier stage,
 /// whose value the task brings): any other filter crossing stages is
 /// dropped on both sides. Dropping one never changes rows.
+///
+/// A join filter kept here loses its fixed Bloom (`bloom_spill_bytes`): a
+/// fragment runs as tasks, so its join is one of several builds (a
+/// broadcast join's probe tasks each build their own when the shared build
+/// does not fit), and each would reserve the whole memory tier for a Bloom
+/// sized for the whole scan. Only a plan run on one worker, never cut,
+/// keeps it.
 fn local_filters(roots: &mut [&mut PhysNode], crossing: &BTreeSet<FilterId>) {
     let mut scanned = BTreeSet::new();
     let mut produced = BTreeSet::new();
@@ -440,7 +447,12 @@ fn local_filters(roots: &mut [&mut PhysNode], crossing: &BTreeSet<FilterId>) {
         while let Some(n) = stack.pop() {
             match n {
                 PhysNode::Scan(s) => s.runtime_filters.retain(|f| keep.contains(&f.id)),
-                PhysNode::HashJoin(j) => j.runtime_filters.retain(|f| keep.contains(&f.id)),
+                PhysNode::HashJoin(j) => {
+                    j.runtime_filters.retain(|f| keep.contains(&f.id));
+                    for f in &mut j.runtime_filters {
+                        f.options = without_fixed_bloom(f.options);
+                    }
+                }
                 PhysNode::TopN { bound, .. } if bound.is_some_and(|b| !keep.contains(&b)) => {
                     *bound = None;
                 }
@@ -495,4 +507,15 @@ fn unsupported(feature: &str) -> KrishivError {
         feature: feature.to_owned(),
     }
     .into()
+}
+
+/// `options` without the fixed Bloom: a join filter in a fragment
+/// ([`local_filters`]) or a filter moved to a build exchange
+/// ([`cross_stage_filters`]; an exchange writer has no place to keep one)
+/// stops its hashes at the cap.
+fn without_fixed_bloom(options: krishiv_io::KeyFilterOptions) -> krishiv_io::KeyFilterOptions {
+    krishiv_io::KeyFilterOptions {
+        bloom_spill_bytes: None,
+        ..options
+    }
 }

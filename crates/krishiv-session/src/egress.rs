@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The server's egress policy from its startup configuration (design P3-T067 §5; threat model
-//! T-C2): `krishiv.io.egress.privateAddresses`, `allowedCidrs`, `proxy`, the credential-provider
+//! The server's egress policy from its startup configuration:
+//! `krishiv.io.egress.privateAddresses`, `allowedCidrs`, `proxy`, the credential-provider
 //! endpoints of the server's environment, and the admin-set store endpoints that object-store
 //! clients may reach at private addresses by name.
 //!

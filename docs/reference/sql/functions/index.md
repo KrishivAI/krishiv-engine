@@ -189,7 +189,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`from_avro`](from_avro.md) | - | yes | Converts a binary Avro value into a Catalyst value. |
 | [`from_csv`](from_csv.md) | scalar | yes | Returns a struct value with the given `csvStr` and `schema`. |
 | [`from_json`](from_json.md) | scalar | yes | Returns a struct value with the given `jsonStr` and `schema`. |
-| [`from_protobuf`](from_protobuf.md) | - | not yet | Converts a binary Protobuf value into a Catalyst value. |
+| [`from_protobuf`](from_protobuf.md) | - | yes | Converts a binary Protobuf value into a Catalyst value. |
 | [`from_unixtime`](from_unixtime.md) | scalar | yes | Returns `unix_time` in the specified `fmt`. |
 | [`from_utc_timestamp`](from_utc_timestamp.md) | scalar | yes | Given a timestamp like '2017-07-14 02:40:00.0', interprets it as a time in UTC, and renders that time as a timestamp in the given time zone. For example, 'GMT+1' would yield '2017-07-14 03:40:00.0'. |
 | [`from_xml`](from_xml.md) | scalar | yes | Returns a struct value with the given `xmlStr` and `schema`. |
@@ -468,7 +468,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`to_date`](to_date.md) | scalar | yes | Parses the `date_str` expression with the `fmt` expression to |
 | [`to_json`](to_json.md) | scalar | yes | Returns a JSON string with a given struct value |
 | [`to_number`](to_number.md) | scalar | yes | Convert string 'expr' to a number based on the string format 'fmt'. |
-| [`to_protobuf`](to_protobuf.md) | - | not yet | Converts a Catalyst binary input value into its corresponding |
+| [`to_protobuf`](to_protobuf.md) | - | yes | Converts a Catalyst binary input value into its corresponding |
 | [`to_time`](to_time.md) | scalar | yes | Parses the `str` expression with the `format` expression to a time. |
 | [`to_timestamp`](to_timestamp.md) | scalar | yes | Parses the `timestamp_str` expression with the `fmt` expression |
 | [`to_timestamp_ltz`](to_timestamp_ltz.md) | scalar | yes | Parses the `timestamp_str` expression with the `fmt` expression |
@@ -585,4 +585,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-497 of 574 functions are implemented. The 77 that are not are listed in [functions not implemented yet](not-implemented.md).
+499 of 574 functions are implemented. The 75 that are not are listed in [functions not implemented yet](not-implemented.md).

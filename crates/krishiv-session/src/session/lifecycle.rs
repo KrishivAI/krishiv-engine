@@ -44,6 +44,39 @@ pub enum SqlOutcome {
     Command(DataFrame),
 }
 
+/// What [`Session::sql_query_with`] found: a query, analyzed and not run, or the class of a
+/// statement that is not one, which was neither authorized nor run.
+#[cfg(feature = "unstable-ir")]
+#[expect(
+    missing_debug_implementations,
+    reason = "a `DataFrame` has no `Debug`; neither has what holds one"
+)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a return value matched at once, as `SqlOutcome`; boxing the frame buys nothing"
+)]
+#[non_exhaustive]
+pub enum SqlQuery {
+    /// A query: analyzed (the policy asked), not run.
+    Query(DataFrame),
+    /// A statement that is not a query (a command, `SHOW`, `EXPLAIN`, ...), with its class.
+    NotAQuery(crate::StatementClass),
+}
+
+#[cfg(feature = "unstable-ir")]
+impl SqlQuery {
+    /// The query's frame.
+    ///
+    /// # Errors
+    /// `KRISHIV_FLIGHT_SQL_NOT_A_QUERY` (55000) for a statement that is not a query.
+    pub fn into_query(self) -> Result<DataFrame, KrishivError> {
+        match self {
+            Self::Query(df) => Ok(df),
+            Self::NotAQuery(class) => Err(super::ran::not_a_query(class)),
+        }
+    }
+}
+
 impl Session {
     /// A session on `runtime` with configuration `config`.
     pub(super) fn on_runtime(
@@ -139,6 +172,7 @@ impl Session {
             operation: None,
             deadline: None,
             query_start: None,
+            drain_exempt: false,
             request_tags: Arc::from([]),
             inbound_trace: None,
             inbound_baggage: Arc::from([]),
@@ -531,6 +565,61 @@ impl Session {
         self.with_options(options)?.sql_command(query).await
     }
 
+    /// A handle of this session whose queries carry the request tags `tags` (Spark Connect's
+    /// `addTag`: [`crate::QueryOptions::tags`], cancelled together by [`Session::interrupt_tag`]).
+    /// Every frame made through the handle keeps them for its actions.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let tagged = s.with_request_tags(["etl"])?;
+    /// assert!(s.interrupt_tag("etl").is_empty());
+    /// # let _ = tagged;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `INVALID_HANDLE.SESSION_CLOSED` when the session is closed.
+    pub fn with_request_tags<I, T>(&self, tags: I) -> Result<Session, KrishivError>
+    where
+        I: IntoIterator<Item = T>,
+        T: AsRef<str>,
+    {
+        self.with_options(crate::QueryOptions::new().tags(tags))
+    }
+
+    /// `query` if it is a query, analyzed under `options` (as [`Self::sql_command_with`]) and not
+    /// run; a statement that is not a query is neither authorized nor run and gives its class
+    /// ([`SqlQuery::NotAQuery`]). One call, so `${...}` substitution, which reads the session's
+    /// conf, is applied once: the text cannot change kind between a check and a run (Arrow Flight
+    /// SQL, P3-T101 note §2, v4 review M1). A refused statement records no `system.queries` row:
+    /// nothing ran.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// use krishiv_session::{QueryOptions, SqlQuery, StatementClass};
+    /// let q = futures::executor::block_on(session.sql_query_with("SELECT 1", QueryOptions::default()))?;
+    /// assert!(matches!(q, SqlQuery::Query(_)));
+    /// let c = futures::executor::block_on(session.sql_query_with("SET a.b = 1", QueryOptions::default()))?;
+    /// assert!(matches!(c, SqlQuery::NotAQuery(StatementClass::Session)));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As [`Self::sql_with`] (parse, analysis, access errors of a query).
+    #[cfg(feature = "unstable-ir")]
+    pub async fn sql_query_with(
+        &self,
+        query: &str,
+        options: crate::QueryOptions,
+    ) -> Result<SqlQuery, KrishivError> {
+        Ok(
+            match self.with_options(options)?.sql_ran(query, true).await? {
+                super::Ran::Frame(df, _) => SqlQuery::Query(df),
+                super::Ran::NotAQuery(class) => SqlQuery::NotAQuery(class),
+            },
+        )
+    }
+
     /// A handle of this session that runs its queries under `options` (the
     /// operation id taken now, held while the handle or a clone lives).
     pub(crate) fn with_options(
@@ -572,6 +661,7 @@ impl Session {
             operation,
             deadline: options.deadline.or(self.deadline),
             query_start: options.query_start_micros.or(self.query_start),
+            drain_exempt: options.drain_exempt || self.drain_exempt,
             request_tags: options.request_tags.into(),
             inbound_trace,
             inbound_baggage,

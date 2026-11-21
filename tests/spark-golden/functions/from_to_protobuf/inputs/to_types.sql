@@ -1,0 +1,35 @@
+-- to_protobuf to Timestamp / Duration / wrappers / Empty / Any fields
+select hex(to_protobuf(named_struct('ts', timestamp'2024-01-02 03:04:05.678901'), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('ts', timestamp'1969-12-31 23:59:59.999999'), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('ts', timestamp'1969-12-31 23:59:59.0005'), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('ts', timestamp'1970-01-01 00:00:00'), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('ts', timestamp'0001-01-01 00:00:00'), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('ts', timestamp_ntz'2024-01-02 03:04:05'), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('ts', date'2024-01-02'), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('ts', 1L), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('ts', named_struct('seconds', 5L, 'nanos', 7)), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('ts', named_struct('seconds', 5L)), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('tss', array(timestamp'1970-01-01 00:00:01', timestamp'1970-01-01 00:00:02.5')), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('tsmap', map('k', timestamp'1970-01-01 00:00:01')), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('dur', interval '1 02:03:04.567891' day to second), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('dur', interval '-1 02:03:04.567891' day to second), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('dur', interval '0 00:00:00.0005' day to second), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('dur', interval '-0 00:00:00.5' day to second), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('dur', interval '1' day), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('dur', interval '3' hour), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('dur', interval '90' second), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('dur', interval '1-2' year to month), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('dur', interval '1' day + interval '1' month), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('dur', cast(null as interval day to second)), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+-- wrapper types accept the primitive; a struct{value} also works; mismatched widths do not
+select hex(to_protobuf(named_struct('i32v', 5, 'u32v', -1, 'i64v', -7L, 'u64v', -1L, 'strv', 'hi', 'binv', X'6162', 'boolv', true, 'fltv', 1.5f, 'dblv', 2.5d), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('i32v', 0, 'strv', '', 'boolv', false, 'dblv', 0.0d), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('i32v', named_struct('value', 5)), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('i32v', 5L), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('i64v', 5), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('u32v', cast(5 as bigint)), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('u64v', cast(5 as decimal(20,0))), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('i32v', cast(null as int)), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('i32vs', array(1, 2)), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('empty', named_struct()), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc'));
+select hex(to_protobuf(named_struct('empty', named_struct()), 'krishiv.golden.types.Wkt', '/golden/from_to_protobuf/fixtures/krishiv_golden_types.desc', map('retain.empty.message.types', 'true')));

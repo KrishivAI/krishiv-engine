@@ -437,11 +437,36 @@ impl PyDataFrame {
             let schema = first.as_ref().map_or(analyzed, RecordBatch::schema);
             Ok((schema, first, stream))
         })?;
-        let reader = QueryReader::new(schema, first, stream);
+        // Each later batch is awaited with the same signal check as the first: a Ctrl-C ends the
+        // query and `check_error` raises its `KeyboardInterrupt` (NB-1).
+        let raised = crate::stream::InterruptSlot::default();
+        let hook = {
+            let raised = std::sync::Arc::clone(&raised);
+            let hook: crate::stream::Interrupt = std::sync::Arc::new(move || {
+                Python::attach(|py| match py.check_signals() {
+                    Ok(()) => false,
+                    Err(e) => {
+                        if let Ok(mut slot) = raised.lock() {
+                            *slot = Some(e);
+                        }
+                        // `check_signals` consumed the signal. A consumer that never calls `check_error`
+                        // (`pa.table(df)`, Polars, DuckDB over `__arrow_c_stream__`) would turn the cancelled
+                        // stream into its own `Exception` and swallow the Ctrl-C, so the signal is re-armed:
+                        // Python raises `KeyboardInterrupt` at its next check. `check_error` consumes it again.
+                        crate::stream::rearm_interrupt();
+                        true
+                    }
+                })
+            });
+            hook
+        };
+        let reader = QueryReader::new(schema, first, stream).with_interrupt(hook);
         let slot = reader.error_slot();
         // A consumer reading with the GIL held must not block the Python
         // UDF calls the query waits on (design P2-T059 §2.5).
-        Ok(ArrowStream::new(Box::new(crate::stream::Detaching(reader))).with_error_slot(slot))
+        Ok(ArrowStream::new(Box::new(crate::stream::Detaching(reader)))
+            .with_error_slot(slot)
+            .with_interrupt_slot(raised))
     }
 
     /// The number of result rows (executes the query, the GIL released).
@@ -616,6 +641,19 @@ impl PyDataFrame {
             py,
             async move { df.create_or_replace_temp_view(&name).await },
         )
+    }
+
+    /// Registers this DataFrame as the global temporary view `global_temp.name`; `replace` says whether
+    /// one of that name may be replaced.
+    fn create_global_temp_view(&self, py: Python<'_>, name: &str, replace: bool) -> PyResult<()> {
+        let (df, name) = (self.inner.clone(), name.to_owned());
+        block_on(py, async move {
+            if replace {
+                df.create_or_replace_global_temp_view(&name).await
+            } else {
+                df.create_global_temp_view(&name).await
+            }
+        })
     }
 
     /// `(name, Spark simple type string, nullable)` per column, by analysis.

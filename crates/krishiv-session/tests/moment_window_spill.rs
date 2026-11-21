@@ -198,3 +198,18 @@ fn the_legacy_statistical_flag_reaches_a_window_evaluated_from_disk() {
     assert_eq!(nan(&plain[0]), "0", "{plain:?}");
     assert_eq!(nan(&legacy[0]), "2", "{legacy:?}");
 }
+
+#[test]
+fn counter_diff_from_disk_equals_the_in_memory_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let limited = session(false, Some(&dir.path().join("spill")));
+    let memory = session(false, None);
+    for function in ["counter_diff(v)", "counter_diff(v, NULL)"] {
+        let q = all_rows(function, "");
+        let (got, spilled) = run_sorted(&limited, &q);
+        assert!(spilled > 0, "{function}: the Window operator did not spill");
+        let (want, _) = run_sorted(&memory, &q);
+        assert_eq!(got.len(), usize::try_from(ROWS).unwrap(), "{function}");
+        assert!(got == want, "{function}: rows differ from memory");
+    }
+}

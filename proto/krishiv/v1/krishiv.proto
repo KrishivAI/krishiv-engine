@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Krishiv's extensions of Spark Connect (ADR 0003 item 3, ADR 0023 namespacing rule 4). Each message
+// travels in a `google.protobuf.Any` slot of a Spark Connect message (`Relation.extension`,
+// `Expression.extension`, `Command.extension`); a stock client never sends or receives one.
+// Additive only within v1: a field or message is added, never renumbered, retyped or removed
+// (`crates/krishiv-connect/src/extension/tests.rs` compares this file with the messages).
+// The capability set a server offers is listed in `system.capabilities` and by a `Config` read of
+// `krishiv.v1.capabilities` (comma separated).
+syntax = "proto3";
+
+package krishiv.v1;
+
+// The worked example of the extension mechanism, used by the tests: as a relation it is one row with
+// one string column `message`; as an expression it is the string literal. Capability `echo`.
+message Echo {
+  string message = 1;
+}

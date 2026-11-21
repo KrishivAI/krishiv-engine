@@ -15,6 +15,7 @@
 pub mod arrow;
 pub mod artifact;
 pub mod coverage;
+pub mod extension;
 pub mod proto;
 mod stack;
 pub mod translate;

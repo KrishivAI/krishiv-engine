@@ -206,9 +206,11 @@ pub(super) fn fail_observations(observers: &Observers, error: &KrishivError) {
 }
 
 /// The observations of a run that has no [`deliver`]ed stream yet: [`Self::settle`] fails them
-/// with the run's error (or leaves them to the stream), and a run dropped before it settles (its
-/// caller gave up during the setup) fails them with `OPERATION_CANCELED`, so no run leaves an
-/// [`Observation::get`] waiting.
+/// with the run's error (or leaves them to the stream), and a run dropped before it settles fails
+/// them with the reason it was dropped for: the action's cancellation (`OPERATION_CANCELED`,
+/// `KRISHIV_QUERY_TIMEOUT`, `KRISHIV_QUERY_KILLED`, as the action itself fails), a panic during
+/// the setup as an internal error, else (its caller gave up) `OPERATION_CANCELED`. So no run
+/// leaves an [`Observation::get`] waiting.
 pub(crate) struct PendingObservations<'a>(Option<&'a Observers>);
 
 impl<'a> PendingObservations<'a> {
@@ -228,8 +230,15 @@ impl<'a> PendingObservations<'a> {
 impl Drop for PendingObservations<'_> {
     fn drop(&mut self) {
         if let Some(observers) = self.0.take() {
-            let cancelled = crate::cancel::CancelReason::ClientGone.error("", None);
-            fail_observations(observers, &cancelled);
+            let error = if std::thread::panicking() {
+                crate::partitions::internal("the action panicked during its setup".to_owned())
+            } else {
+                // Read while the dropped action is still current (a task-local future drops its
+                // work inside its scope).
+                crate::action::current_error()
+                    .unwrap_or_else(|| crate::cancel::CancelReason::ClientGone.error("", None))
+            };
+            fail_observations(observers, &error);
         }
     }
 }
@@ -293,5 +302,32 @@ impl Stream for Delivering {
 impl Drop for Delivering {
     fn drop(&mut self) {
         self.complete();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+    use std::time::Duration;
+
+    use super::*;
+
+    /// A setup that panics leaves its observations completed with an internal error, not
+    /// pending (and not the caller-gave-up `OPERATION_CANCELED`).
+    #[test]
+    fn a_panic_in_the_setup_completes_the_observation_with_an_internal_error() {
+        let obs = Observation::new();
+        obs.shared.bind().unwrap();
+        let mut observers = Observers::default();
+        observers.observations.push(Arc::clone(&obs.shared));
+        let unwound = catch_unwind(AssertUnwindSafe(|| {
+            let _pending = PendingObservations::new(&observers);
+            resume_unwind(Box::new("the setup panicked"));
+        }));
+        assert!(unwound.is_err());
+        let err = obs
+            .get_timeout(Duration::from_secs(5))
+            .expect_err("completed with an error");
+        assert_eq!(err.error_class().name(), "INTERNAL_ERROR", "{err}");
     }
 }

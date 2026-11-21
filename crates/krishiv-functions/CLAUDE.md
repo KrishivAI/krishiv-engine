@@ -27,6 +27,8 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
   version), session zone, the query start instant (`current_date`, `current_timestamp`, `localtimestamp`), the session user (`current_user`, `user`, `session_user`; family `session`), `decimalOperations.allowPrecisionLoss` and `spark.sql.mapKeyDedupPolicy` (the map family). `round`/`ceil`/`floor` bind
   their scale from a `BindArg::Literal`. Operators, `CAST` and aggregates are not bound here.
 
+- `from_protobuf` / `to_protobuf` (P3-T087): `registry/protobuf.rs` (Spark's argument rules and result types: the descriptor and options are constants, read through `Constant::Binary`/`StringMap`; a string path's `Constant::Binary` is the file the analyzer read under the access policy, `DescriptorArg::File`, and its `Constant::Error` the read failure, raised after the argument checks) and `scalar/protobuf.rs` (the binding), both on `krishiv_io::protobuf::Call`. A call with no descriptor is Spark's Java-class form (`CANNOT_LOAD_PROTOBUF_CLASS`); a first argument that is not binary is a type mismatch where Spark raises `INTERNAL_ERROR`. Goldens: `krishiv-session/tests/protobuf_goldens.rs`.
+
 - `python_wrappers`: generates `python/krishiv/sql/_generated_functions.py` and `.pyi` (PySpark names and parameters) from the
   registry. Test-only code (not in the library): `the_checked_in_wrappers_match_the_registry` fails when they are stale and
   `KRISHIV_REGENERATE_PYTHON=1 cargo test -p krishiv-functions python_wrappers` rewrites them. `python_wrappers/table.rs` is the PySpark
@@ -40,8 +42,16 @@ Paths are relative to this crate.
 - `src/registry/defs.rs` string, datetime and aggregate signatures; `src/registry/math.rs` math and `try_*` signatures
 - `src/registry/conditional.rs` conditional evaluators; `src/registry/hashing.rs` hash signatures
 - `src/registry/catalog.rs` catalog rows loaded from `vendored/spark-functions.tsv`
+- `src/registry/groups.rs` `spark_function_groups()`: Spark's math/string/datetime/misc doc groups from
+  `vendored/spark-function-groups.tsv` (derived from `vendored/spark-function-docs.jsonl`; a test keeps them equal), for
+  Flight SQL's `GetSqlInfo` function lists
 - `src/scalar/mod.rs` `bind_scalar`; `src/scalar/args.rs` argument handling shared by bindings
 - `src/scalar/{string,chars,codec,datetime,math,arith,hash,map,session,regex}.rs` family bindings (`NAMES` and `bind`); `src/scalar/regex/java.rs` Java-to-`fancy_regex` translation
+- Spark 4.3 (registered "since 4.2", the newest profile): `scalar/text43.rs` (`to_base32`, `from_base32`, `jaro_winkler_similarity`), the VARIANT
+  edit functions in `scalar/variant.rs` (`variant_insert`/`variant_set`/`variant_delete`/`variant_array_append`/`variant_strip_nulls` and the
+  `try_` forms; `registry/variant.rs` checks the value is castable to variant and the flags are foldable booleans), and `collect_union`,
+  an aggregate definition the analyzer rewrites to `array_distinct(array_compact(flatten(collect_list(x))))` (no executor, no codec
+  change). `JSON_TABLE` lowers to the internal `__json_table_rows` / `__json_table_value` / `__json_table_exists` (`scalar/json.rs`).
 - `vendored/spark-functions.tsv` generated from Spark runs; never edit by hand
 
 ## Extension points

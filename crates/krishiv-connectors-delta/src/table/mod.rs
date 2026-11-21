@@ -155,6 +155,7 @@ pub(crate) struct Inner {
     pub(crate) mapping: FieldMapping,
     pub(crate) units: Arc<[ScanUnit]>,
     pub(crate) scan_options: ScanOptions,
+    pub(crate) limits: crate::commit::RetryLimits,
 }
 
 /// A Delta table at one version for one query (see the module docs).
@@ -308,6 +309,7 @@ impl DeltaTable {
                 mapping,
                 units,
                 scan_options: ScanOptions::from_config(config),
+                limits: crate::commit::RetryLimits::from_config(config),
             }),
         })
     }
@@ -346,10 +348,70 @@ impl DeltaTable {
         &self.inner.units
     }
 
+    /// The table as errors name it.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    /// The engine the table was opened with (bound to the planning cancellation).
+    #[must_use]
+    pub fn engine(&self) -> &DeltaEngine {
+        &self.inner.engine
+    }
+
+    /// The writer of this table with the commit loop bounded by `limits` (design section 4.1;
+    /// [`TableProvider::writer`] uses the default limits).
+    ///
+    /// # Errors
+    /// See [`crate::write`]'s refusals.
+    pub fn writer_with(
+        &self,
+        request: &krishiv_exec::planner::WriteRequest,
+        limits: crate::commit::RetryLimits,
+    ) -> Result<Arc<dyn krishiv_exec::Sink>, KrishivError> {
+        crate::write::sink::writer(self, request, limits)
+    }
+
     /// The scan, typed.
     #[must_use]
     pub fn delta_scan(&self) -> DeltaScan {
         DeltaScan::new(Arc::clone(&self.inner))
+    }
+
+    /// The scan of a row-level statement (it reads row ids), of every live file or of the
+    /// files at `paths` (as the log names them), in the listing's order.
+    pub(crate) fn row_level_scan(
+        &self,
+        paths: Option<&std::collections::HashSet<String>>,
+    ) -> Result<DeltaScan, KrishivError> {
+        let Some(paths) = paths else {
+            return Ok(DeltaScan::with_row_ids(Arc::clone(&self.inner)));
+        };
+        let units: Arc<[ScanUnit]> = self
+            .inner
+            .units
+            .iter()
+            .filter(|u| paths.contains(u.path.as_str()))
+            .cloned()
+            .collect();
+        let i = &self.inner;
+        Ok(DeltaScan::with_row_ids(Arc::new(Inner {
+            engine: i.engine.clone(),
+            name: i.name.clone(),
+            snapshot: Arc::clone(&i.snapshot),
+            schema: Arc::clone(&i.schema),
+            partitions: i.partitions.clone(),
+            mapping: i.mapping.clone(),
+            units,
+            scan_options: i.scan_options,
+            limits: i.limits,
+        })))
+    }
+
+    /// The commit loop's bounds from the table's configuration.
+    pub(crate) fn retry_limits(&self) -> crate::commit::RetryLimits {
+        self.inner.limits
     }
 }
 
@@ -375,6 +437,29 @@ impl TableProvider for DeltaTable {
     /// One unit per live file.
     fn scan_units(&self) -> Option<u64> {
         u64::try_from(self.inner.units.len()).ok()
+    }
+
+    /// Append, truncate, overwrite by filter and dynamic overwrite (design section 4.1).
+    fn capabilities(&self) -> krishiv_exec::planner::TableCapabilities {
+        crate::write::sink::capabilities()
+    }
+
+    /// The Delta write sink ([`crate::write`]); its commit loop is bounded by
+    /// [`crate::commit::RetryLimits::from_config`] of the table's configuration.
+    fn writer(
+        &self,
+        request: &krishiv_exec::planner::WriteRequest,
+    ) -> krishiv_exec::Result<Arc<dyn krishiv_exec::Sink>> {
+        self.writer_with(request, self.inner.limits)
+    }
+
+    /// Copy-on-write `DELETE` and `UPDATE` ([`crate::write::dml`]); `MERGE` is not offered yet.
+    fn row_level(
+        &self,
+        op: krishiv_exec::planner::RowLevelOperation,
+    ) -> Option<Arc<dyn krishiv_exec::planner::RowLevelTable>> {
+        crate::write::dml::DeltaRowLevel::new(self.clone(), op)
+            .map(|t| Arc::new(t) as Arc<dyn krishiv_exec::planner::RowLevelTable>)
     }
 }
 
@@ -580,5 +665,7 @@ fn internal(message: String) -> KrishivError {
 mod cache_tests;
 #[cfg(test)]
 mod oracle_tests;
+#[cfg(test)]
+mod roundtrip_tests;
 #[cfg(test)]
 mod tests;

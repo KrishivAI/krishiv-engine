@@ -1245,6 +1245,11 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
                 data_type: type_from(&o.data_type)?,
             }
         }
+        Function::CounterDiff(o) => WindowFunction::CounterDiff {
+            counter: usize_of(o.counter)?,
+            start_time: o.start_time.map(usize_of).transpose()?,
+            data_type: type_from(&o.data_type)?,
+        },
     };
     let frame = required(&f.frame, "a window frame")?;
     let bound = |b: i32, offset: i64, range: &[u8]| {
@@ -1607,6 +1612,7 @@ fn join_filter(f: &pb::JoinFilter) -> Result<JoinFilterPlan> {
             bloom_fpp: o.bloom_fpp,
             bloom_max_fpp: o.bloom_max_fpp,
             bloom_bytes: o.bloom_bytes,
+            bloom_spill_bytes: o.bloom_spill_bytes,
         },
     })
 }
@@ -1738,6 +1744,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         CalendarInterval => DataType::CalendarInterval,
         CollatedString => collated_string(t)?,
         Variant => DataType::Variant,
+        Udt => crate::decode_udt::udt(t)?,
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),
@@ -1758,7 +1765,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
     {
         return Err(corrupt("a type parameter on a type that has none"));
     }
-    if !data_type.is_nested() && !t.json.is_empty() {
+    if !data_type.is_nested() && !matches!(data_type, DataType::Udt(_)) && !t.json.is_empty() {
         return Err(corrupt("a JSON form on a type that is not nested"));
     }
     if !matches!(data_type, DataType::CollatedString(_)) && !t.collation.is_empty() {

@@ -154,6 +154,22 @@ The sample covariance of two columns as a double value.
 .. note:: The engine has no covariance aggregate yet: after checking its arguments this
     fails with `KRISHIV_UNSUPPORTED_FEATURE`.
 
+### `createGlobalTempView`
+
+```python
+def createGlobalTempView(self, name: str) -> None
+```
+
+Registers this DataFrame as `global_temp.<name>`; fails when that view exists.
+
+### `createOrReplaceGlobalTempView`
+
+```python
+def createOrReplaceGlobalTempView(self, name: str) -> None
+```
+
+Registers this DataFrame as `global_temp.<name>`, replacing a view of that name.
+
 ### `createOrReplaceTempView`
 
 ```python

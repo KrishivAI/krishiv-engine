@@ -46,6 +46,7 @@ use arrow_array::RecordBatch;
 use delta_kernel::expressions::PredicateRef;
 
 pub use self::run::commit;
+pub(crate) use self::run::{map_row, write_id_row, write_id_schema};
 use self::winner::FileAction;
 
 /// The commitInfo tag holding a write's id.
@@ -153,6 +154,29 @@ impl Default for RetryLimits {
             timeout: Duration::from_secs(30 * 60),
             backoff_min: Duration::from_millis(100),
             backoff_max: Duration::from_secs(60),
+        }
+    }
+}
+
+impl RetryLimits {
+    /// The limits `config` sets: `krishiv.delta.maxCommitAttempts` (Spark's
+    /// `spark.databricks.delta.maxCommitAttempts`) and `krishiv.write.commitRetryTimeout`; the
+    /// backoff keeps its defaults.
+    #[must_use]
+    pub fn from_config(config: &krishiv_common::config::Config) -> Self {
+        use krishiv_common::config::{DELTA_MAX_COMMIT_ATTEMPTS, WRITE_COMMIT_RETRY_TIMEOUT};
+        let d = Self::default();
+        Self {
+            max_attempts: config
+                .get(&DELTA_MAX_COMMIT_ATTEMPTS)
+                .and_then(krishiv_common::config::ConfigValue::as_int)
+                .and_then(|n| u64::try_from(n).ok())
+                .unwrap_or(d.max_attempts),
+            timeout: config
+                .get(&WRITE_COMMIT_RETRY_TIMEOUT)
+                .and_then(krishiv_common::config::ConfigValue::as_duration)
+                .unwrap_or(d.timeout),
+            ..d
         }
     }
 }

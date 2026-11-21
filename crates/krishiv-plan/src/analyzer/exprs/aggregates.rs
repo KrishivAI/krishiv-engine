@@ -3,7 +3,123 @@
 
 use super::*;
 
+/// Whether `t` is or contains a map at any depth.
+fn has_map(t: &DataType) -> bool {
+    match t {
+        DataType::Map(_) => true,
+        DataType::Array(a) => has_map(a.element_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| has_map(f.data_type())),
+        _ => false,
+    }
+}
+
 impl Resolver<'_> {
+    /// `collect_union(x)` (Spark 4.3): the distinct non-NULL elements of the arrays of `x`, an aggregate over
+    /// `collect_list` shown under its own name: `array_distinct(array_compact(flatten(collect_list(x))))`.
+    /// `DISTINCT` and `FILTER` apply to the collected rows. `IGNORE NULLS` is the default; `RESPECT NULLS` (the lowering
+    /// appends the flag `false` as a second argument) leaves out `array_compact`, as Spark's own doc says:
+    /// `array_distinct(flatten(collect_list(x)))`. Spark refuses an element type that holds a map or a collated string.
+    /// `None` when the call is not that form: another function, a session-qualified call (the caller skips it), or not one array
+    /// argument (the registry then reports its type error). The window form is refused with a named error: no executor
+    /// maps the aggregate. Kept out of line so the recursive binder's frame stays small.
+    #[inline(never)]
+    pub(super) fn collect_union_call(
+        &mut self,
+        window_fn: bool,
+        name: &str,
+        e: &Arc<Expr>,
+        f: &FunctionCall,
+        kids: &[Bound],
+        cx: &Cx<'_>,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        // The bound arguments, then the filter when there is one.
+        let (n, filter) = (
+            f.args.len(),
+            kids.get(f.args.len()).filter(|_| f.filter.is_some()),
+        );
+        // `RESPECT NULLS` / `IGNORE NULLS` arrive as a literal flag after the array.
+        let respect_nulls = matches!(
+            f.args.get(1).map(|a| &a.node),
+            Some(ExprNode::Literal(Literal::Boolean(false)))
+        );
+        let flag_ok =
+            n == 1 || (n == 2 && matches!(f.args[1].node, ExprNode::Literal(Literal::Boolean(_))));
+        // Only where the registry lists it for the session's Spark profile.
+        let listed = || {
+            matches!(
+                self.ctx
+                    .functions
+                    .lookup(&["collect_union".to_owned()], self.ctx.profile),
+                FunctionLookup::Found(_)
+            )
+        };
+        if !name.eq_ignore_ascii_case("collect_union")
+            || !flag_ok
+            || !listed()
+            || !f.within_group.is_empty()
+            || !matches!(kids[0].ty.data_type, Some(DataType::Array(_)))
+        {
+            return Ok(None);
+        }
+        if window_fn {
+            return Err(AnalysisError::new(
+                krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: "collect_union as a window function".to_owned(),
+                },
+                e.origin,
+            ));
+        }
+        if let Some(t) = &kids[0].ty.data_type
+            && (t.contains_collation() || has_map(t))
+        {
+            return Err(AnalysisError::new(
+                krishiv_common::error::DatatypeMismatchUnsupportedInputType {
+                    sql_expr: format!(
+                        "\"collect_union({})\"",
+                        pretty(&kids[0].shown(), self.ctx.conf.session_zone)
+                    ),
+                    function_name: "`collect_union`".to_owned(),
+                    data_type: "\"MAP\" or \"COLLATED STRING\"".to_owned(),
+                },
+                e.origin,
+            ));
+        }
+        let collected = Expr::new(ExprNode::Function(FunctionCall {
+            name: "collect_list".to_owned(),
+            qualifier: Vec::new(),
+            args: vec![Arc::clone(&kids[0].expr)],
+            arg_names: Vec::new(),
+            distinct: f.distinct,
+            filter: filter.map(|k| Arc::clone(&k.expr)),
+            within_group: Vec::new(),
+        }));
+        let flat = Expr::function("flatten", vec![collected]);
+        let call = Expr::function(
+            "array_distinct",
+            vec![if respect_nulls {
+                flat
+            } else {
+                Expr::function("array_compact", vec![flat])
+            }],
+        )
+        .with_origin(e.origin);
+        let mut b = self.expr(&Arc::new(call), cx)?;
+        b.carry_markers(&kids[..1]);
+        b.shown = Some(Arc::new(
+            Expr::new(ExprNode::Function(FunctionCall {
+                name: "collect_union".to_owned(),
+                qualifier: Vec::new(),
+                args: vec![kids[0].shown()],
+                arg_names: Vec::new(),
+                distinct: f.distinct,
+                filter: None,
+                within_group: Vec::new(),
+            }))
+            .with_origin(e.origin),
+        ));
+        Ok(Some(b))
+    }
+
     /// `b` implicitly cast to `to`, if given (named and shown as `b`).
     /// `mode` with its `WITHIN GROUP` ordering and deterministic flag
     /// (Spark's `ModeBuilder` and `SupportsOrderingWithinGroup` checks):

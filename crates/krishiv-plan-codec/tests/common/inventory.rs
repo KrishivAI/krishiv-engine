@@ -662,6 +662,39 @@ pub(crate) fn window_offset_values() -> WindowPlan {
     }
 }
 
+/// `counter_diff` with and without a start time, over its running frame.
+pub(crate) fn window_counter_diff() -> WindowPlan {
+    let running = WindowFrame {
+        units: FrameUnits::Rows,
+        lower: FrameBound::UnboundedPreceding,
+        upper: FrameBound::CurrentRow,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
+            window_function(
+                WindowFunction::CounterDiff {
+                    counter: 2,
+                    start_time: None,
+                    data_type: arrow_schema::DataType::Int64,
+                },
+                running,
+                "diff",
+            ),
+            window_function(
+                WindowFunction::CounterDiff {
+                    counter: 2,
+                    start_time: Some(3),
+                    data_type: arrow_schema::DataType::Decimal128(10, 2),
+                },
+                running,
+                "diff_started",
+            ),
+        ],
+    }
+}
+
 /// `RANGE` frames over a date or timestamp key with year-month interval bounds (calendar months).
 pub(crate) fn window_range_months() -> WindowPlan {
     let aggs = aggregate_exprs();
@@ -787,6 +820,7 @@ pub(crate) fn join_plan(join_type: JoinType) -> HashJoinPlan {
                 bloom_fpp: 0.01,
                 bloom_max_fpp: 0.05,
                 bloom_bytes: None,
+                bloom_spill_bytes: None,
             },
         }],
         distribution: JoinDistribution::Broadcast,
@@ -1115,6 +1149,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "window_counter_diff",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_counter_diff(),
+            },
+        ),
+        (
             "window_range_values",
             PhysNode::Window {
                 input: boxed(scan()),
@@ -1396,6 +1437,17 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         ("hash_join", PhysNode::HashJoin(join_plan(JoinType::Inner))),
+        (
+            // A guessed build's fixed Bloom (field 10, ignorable).
+            "hash_join_spill_bloom",
+            PhysNode::HashJoin({
+                let mut j = join_plan(JoinType::Inner);
+                for f in &mut j.runtime_filters {
+                    f.options.bloom_spill_bytes = Some(320 << 20);
+                }
+                j
+            }),
+        ),
         (
             "sort_merge_join",
             PhysNode::SortMergeJoin({
@@ -2557,6 +2609,38 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
     ];
     let mut variants = file_scan();
     variants.scan.output = vec![column(3, "v", DataType::Variant, true)];
+    let mut udts = file_scan();
+    let point_storage = DataType::Array(std::sync::Arc::new(krishiv_types::ArrayType::new(
+        DataType::Double,
+        false,
+    )));
+    udts.scan.output = vec![column(
+        3,
+        "p",
+        DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::jvm(
+            point_storage,
+            "org.apache.spark.sql.test.ExamplePointUDT".to_owned(),
+            Some("pyspark.testing.objects.ExamplePointUDT".to_owned()),
+        ))),
+        true,
+    )];
+    // A UDT over a collated string, inside a struct: the collation is written inline in the UDT's storage type
+    // (Spark 4.2.0), so it has to survive the codec.
+    let mut udt_collated = file_scan();
+    let lcase = DataType::collated_string(krishiv_types::Collation::parse("UTF8_LCASE").unwrap());
+    let text_udt = DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::python(
+        lcase,
+        "__main__.TextUDT".to_owned(),
+        "gAWV".to_owned(),
+    )));
+    udt_collated.scan.output = vec![column(
+        3,
+        "s",
+        DataType::Struct(krishiv_types::StructType::new(vec![
+            krishiv_types::StructField::new("p", text_udt, true),
+        ])),
+        true,
+    )];
     let geometry = col(
         5,
         "g3857",
@@ -2827,6 +2911,8 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
+        ("udt_scan", PhysNode::Scan(udts)),
+        ("udt_collated_scan", PhysNode::Scan(udt_collated)),
         ("variant_scan", PhysNode::Scan(variants)),
         ("collated_scan", PhysNode::Scan(collated_columns)),
         ("collated_nested", collated_nested),

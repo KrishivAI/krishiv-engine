@@ -72,6 +72,8 @@ pub(crate) struct HistoryEntry {
     pub(crate) trace: Option<serde_json::Value>,
     /// The tables it scanned, with the statistics known when it was planned (the advisor's input, T025).
     pub(crate) scans: Vec<krishiv_exec::profile::ProfileScan>,
+    /// The advisor's hints (minor 7 of the profile).
+    pub(crate) hints: Vec<krishiv_exec::profile::Hint>,
 }
 
 /// Where a file write's entry waits for its commit: the query ends before the commit does, and a commit that
@@ -392,11 +394,25 @@ fn internal(message: String) -> KrishivError {
     InternalError { message }.into()
 }
 
+/// The hints a stored profile keeps: those of a finished query only.
+fn kept_hints(
+    state: &str,
+    hints: Vec<krishiv_exec::profile::Hint>,
+) -> Vec<krishiv_exec::profile::Hint> {
+    if state == "finished" {
+        hints
+    } else {
+        Vec::new()
+    }
+}
+
 fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
     let mut profile = QueryProfile::new(&e.plan, e.metrics, e.detailed);
     profile.trace = e.trace;
     profile.identity = Some(e.identity.clone());
     profile.scans = e.scans;
+    // `system.queries.hints` shows succeeded queries only; a failed, cancelled or denied one keeps none.
+    profile.hints = kept_hints(e.state, e.hints);
     let mut sql = e.sql;
     if mask {
         // A literal's text reaches the plan through any name: a generated output name (`SELECT 'x'` is named
@@ -404,6 +420,8 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
         // alias marker. No scan finds every such name, so the arguments of every node are dropped: the operator
         // tree and the metrics remain.
         blank_details(&mut profile.plan);
+        // A join key's text can carry a literal (`l_partkey + 7`): the facts keep the key's position, not its
+        // text, and a hint names a key by its position, so the hints are stored as `EXPLAIN ANALYZE` shows them.
         sql = sql.map(|t| krishiv_sql::mask_literals(&t));
     }
     let sql = sql.map(|t| cut(t, SQL_MAX));
@@ -424,6 +442,11 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
 /// Replaces the argument text of every node with `?`.
 fn blank_details(node: &mut krishiv_exec::profile::ProfileNode) {
     node.detail = "?".to_owned();
+    if let Some(facts) = &mut node.facts {
+        for gap in &mut Arc::make_mut(facts).filter_gaps {
+            gap.probe_key = "?".to_owned();
+        }
+    }
     for child in &mut node.children {
         blank_details(child);
     }

@@ -11,7 +11,7 @@ use krishiv_types::DataType;
 
 use super::AnalysisError;
 use super::bind::unsupported;
-use crate::walk::{Node, visit_distinct};
+use crate::walk::{Node, visit_distinct_known};
 use crate::{ExprNode, Literal, LogicalPlan, PlanNode, ResolvedExpr};
 
 /// The feature name of the `TIME` type.
@@ -293,9 +293,13 @@ fn key_use(
 
 /// Fails on the first node of `root` (in pre-order) that holds a type the
 /// engine cannot evaluate.
-pub(super) fn check(root: &LogicalPlan, time_type: bool) -> Result<(), AnalysisError> {
+pub(super) fn check_known(
+    root: &LogicalPlan,
+    time_type: bool,
+    seen: &mut crate::walk::PtrSet<usize>,
+) -> Result<(), AnalysisError> {
     let mut error = None;
-    let _ = visit_distinct(Node::Plan(root), |node| {
+    let _ = visit_distinct_known(Node::Plan(root), seen, |node| {
         // A generator the select-list rewrite did not take (in a filter, a
         // sort key, a grouping, an aggregate argument, ...) is outside the
         // SELECT clause, which Spark rejects at analysis.

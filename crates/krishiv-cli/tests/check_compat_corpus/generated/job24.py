@@ -2,8 +2,7 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.log1p("a"), F.col("b"))
-df = spark.sql("SELECT nvl2(a) FROM t24")
-df = df.select(F.legacy_fn_16("a"), F.col("b"))
-df = df.select(F.day("a"), F.col("b"))
-df = df.select(F.tuple_sketch_agg_integer("a"), F.col("b"))
+df = df.select(F.shiftleft("a"), F.col("b"))
+df = spark.sql("SELECT kll_sketch_to_string_bigint(a) FROM t24")
+df = spark.sql("SELECT exp(a) FROM t24")
+df = spark.sql("SELECT tuple_difference_integer(a) FROM t24")

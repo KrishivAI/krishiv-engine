@@ -11,7 +11,9 @@ Paths are relative to this crate.
 - `src/config/registry.rs` typed registry of the `krishiv.*` keys (the source for the generated config docs)
 - `src/config/registry/python.rs` the Python UDF entries (`maxRecordsPerBatch`, `pythonUDF.arrow.enabled`, `krishiv.python.udf.threads`), re-exported by `registry.rs`
 - `src/config/registry/result_cache.rs` the `krishiv.resultCache.*` entries, re-exported by `registry.rs` (moved out to keep `registry.rs` under 2,000 lines)
+- `src/config/registry/runtime_filter.rs` the core `krishiv.runtimeFilter.*` entries (enabled, IN-list and exact-set sizes, Bloom caps, adaptive pass rate), re-exported by `registry.rs` (same reason)
 - `src/config/registry/runtime_filter_bloom.rs` the at-scale runtime Bloom entries (`krishiv.runtimeFilter.bloom.atScale`, `memoryTier`), re-exported by `registry.rs` (same reason)
+- `src/config/registry/server.rs` the `krishiv.server.*` and Connect listener entries, and `krishiv.workload.resourceGroups.file` (moved here to keep `registry.rs` under 2,000 lines)
 - `src/config/mod.rs` configuration types and lookup
 - `src/experimental.rs` `krishiv.experimental.*` gating
 - `src/error/mod.rs` error type carrying a Spark error class and SQLSTATE; `src/error/template.rs` message templates; `src/error/render.rs` `render_with_context` (message plus the SQL span: the summary text is engine-defined, the offsets follow the Spark 4.2.0 goldens)

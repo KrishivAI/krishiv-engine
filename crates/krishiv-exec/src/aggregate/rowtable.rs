@@ -245,6 +245,13 @@ impl Mode {
     }
 }
 
+/// Rows of `hashes` whose hash differs from the one before (`last` before
+/// the first): the run starts an input clustered by the key looks up.
+fn run_starts(hashes: &[u64], last: Option<u64>) -> usize {
+    let first = hashes.first().map_or(0, |&h| usize::from(last != Some(h)));
+    first + hashes.windows(2).filter(|w| w[0] != w[1]).count()
+}
+
 /// `g = fin(h ^ seed)` (P2-T157 Appendix C), shared with the join.
 #[inline]
 fn fin(h: u64, seed: u64) -> u64 {
@@ -291,6 +298,11 @@ const ADAPT_HLL_BITS: u32 = 12;
 struct Adapt {
     sketch: Hll,
     rows: usize,
+    /// Rows whose hash differs from the row before (run starts): the
+    /// lookups an input clustered by the key takes (the probe reuses a run's
+    /// row). Equals `rows` for an input without runs, and for batches on the
+    /// direct path (one key per batch-local id; its append pushes every row).
+    runs: usize,
     /// Rows pushed (groups created) so far.
     pushed: usize,
     next: usize,
@@ -302,6 +314,8 @@ struct Adapt {
     early: bool,
     /// The index was cleared since the last apply decided its mode.
     filled: bool,
+    /// The last hash of the previous batch (a run may cross batches).
+    last: Option<u64>,
 }
 
 /// Share of input rows that must make new rows, once a fixed index has
@@ -473,11 +487,13 @@ impl RowTable {
             adapt: (local && matches!(mode, Mode::Fixed { .. })).then(|| Adapt {
                 sketch: Hll::new(ADAPT_HLL_BITS),
                 rows: 0,
+                runs: 0,
                 pushed: 0,
                 next: FIRST_ADAPT_ROWS,
                 window: (0, 0),
                 early: false,
                 filled: false,
+                last: None,
             }),
             groups: 0,
             rows_in: 0,
@@ -824,8 +840,11 @@ impl RowTable {
             return self.mode;
         };
         if a.rows >= a.next {
+            // Over the run starts: an input clustered by the key whose
+            // runs are nearly all new keys (TPC-H q18's `l_orderkey`, four
+            // rows a key) is appended a row per run, without an index.
             #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
-            let rows = a.rows as f64;
+            let rows = a.runs.max(1) as f64;
             if Self::distinct(a) / rows > 0.95 {
                 return Mode::Append;
             }
@@ -1139,6 +1158,16 @@ impl RowTable {
         self.start_sketches(n);
         if let Some(a) = self.adapt.as_mut() {
             a.rows += n;
+            // The direct path's keys are one per batch-local id, not per
+            // row (and its append pushes every row): every row counts.
+            let hashes = p.keys.hashes();
+            if hashes.len() == n {
+                a.runs += run_starts(hashes, a.last);
+                a.last = hashes.last().copied();
+            } else {
+                a.runs += n;
+                a.last = None;
+            }
             for &h in p.keys.hashes().iter().filter(|&&h| h & 7 == 0) {
                 a.sketch.add(h);
             }
@@ -1472,11 +1501,10 @@ impl RowTable {
         if self.core.spec.output == AggregateOutput::Partial {
             return self.state_batch(refs);
         }
-        let mut cols = self.key_columns(refs)?;
-        cols.extend(self.per_part(refs, |accs, ids| {
+        let values = self.per_part(refs, |accs, ids| {
             accs.iter().map(|a| a.evaluate(ids)).collect()
-        })?);
-        batch(&self.core.output_schema, cols, refs.len())
+        })?;
+        super::output_filter::output_rows(&self.core, refs, values, |refs| self.key_columns(refs))
     }
 
     /// Moves partitions `ranges` out into tables of their own (in order):
@@ -1616,7 +1644,8 @@ fn row_at(parts: &[Part], stride: usize, refs: Refs, r: u32) -> &[u8] {
 /// Whether `row` holds the key of key row `key`: the same hash and key
 /// bytes. Fixed-width rows hold the whole key, NULLs and padding as zero
 /// bytes and floats normalized, so equal keys have equal bytes (the
-/// layout's word compare without views).
+/// layout's word compare without views). Strides are multiples of 8
+/// (`round8` in `rows/layout.rs`), so the words cover the whole row.
 #[inline(always)]
 fn same_key(row: &[u8], key: &[u8], stride: usize) -> bool {
     match (row.get(..stride), key.get(..stride)) {

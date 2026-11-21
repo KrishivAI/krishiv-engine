@@ -435,6 +435,108 @@ mod unit {
         );
     }
 
+    /// A producer that can no longer hold its hashes drains them into a
+    /// fixed Bloom (`bloom_spill_bytes`, q09 SF1000): past `bloom_max_items`
+    /// the drained builder keeps collecting, partials merge past the cap,
+    /// and the published Bloom passes every key added; drained hashes with
+    /// no filter, or a partial that lost its hashes, publish no Bloom.
+    #[test]
+    fn drained_hashes_publish_a_fixed_bloom_past_the_cap() {
+        let opts = KeyFilterOptions {
+            max_values: 0,
+            exact_max_values: 0,
+            bloom_max_items: 1000,
+            bloom_spill_bytes: Some(64 << 10),
+            ..KeyFilterOptions::default()
+        };
+        let keys = |from: i64| Int64Array::from_iter_values((from..from + 4000).map(|i| i * 7919));
+        let new = || KeyFilterBuilder::new(DataType::Int64, opts).unwrap_or_else(|| panic!());
+        let mut fixed = RuntimeBloom::with_bytes(64 << 10);
+        let drain = |b: &mut KeyFilterBuilder, fixed: &mut RuntimeBloom| {
+            for h in b.drain_hashes().unwrap_or_else(|| panic!("no hashes")) {
+                fixed.insert_hash(h);
+            }
+        };
+        // Without a fixed filter, past the cap the hashes go; with one,
+        // they stay for the owner to drain or drop.
+        let mut plain = KeyFilterBuilder::new(
+            DataType::Int64,
+            KeyFilterOptions {
+                bloom_spill_bytes: None,
+                ..opts
+            },
+        )
+        .unwrap_or_else(|| panic!());
+        plain.add(&keys(0), None).unwrap_or_else(|e| panic!("{e}"));
+        assert!(plain.past_bloom_cap() && !plain.has_hashes());
+        // With the option but no owner keeping the filter (an exchange's
+        // collected filter), the hashes still go past the cap, and in a
+        // merge past it.
+        let mut unowned = new();
+        unowned
+            .add(&keys(0), None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!unowned.has_hashes(), "an unowned builder kept its hashes");
+        let (mut m1, mut m2) = (new(), new());
+        m1.add(&keys(0).slice(0, 600), None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        m2.add(&keys(0).slice(600, 600), None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        m1.merge(m2);
+        assert!(!m1.has_hashes(), "an unowned merge kept its hashes");
+        let mut owned = new();
+        owned.keep_hashes_past_cap();
+        owned.add(&keys(0), None).unwrap_or_else(|e| panic!("{e}"));
+        assert!(owned.past_bloom_cap() && owned.has_hashes() && !owned.is_drained());
+        assert_eq!(owned.rows(), 4000);
+        // Drained before the cap: hashes are kept past it.
+        let (mut a, mut b) = (new(), new());
+        a.add(&keys(0).slice(0, 500), None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        drain(&mut a, &mut fixed);
+        a.add(&keys(0).slice(500, 3500), None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(a.is_drained() && a.has_hashes() && a.past_bloom_cap());
+        drain(&mut a, &mut fixed);
+        b.add(&keys(4000).slice(0, 800), None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let lost = b.clone();
+        a.merge(b);
+        assert!(
+            a.has_hashes(),
+            "a merge past the cap dropped drained hashes"
+        );
+        let all = keys(0);
+        let more = keys(4000).slice(0, 800);
+        // Without the fixed filter: no Bloom (its hashes alone miss keys).
+        assert_eq!(a.clone().finish().bloom_bytes(), None);
+        let f = a.finish_with(Some(fixed.clone()));
+        assert_eq!(f.bloom_bytes(), Some(64 << 10));
+        assert!(pass(&f, &all).iter().all(|&p| p), "a drained key fails");
+        assert!(pass(&f, &more).iter().all(|&p| p), "a merged key fails");
+        let outside = Int64Array::from_iter_values((0..4000).map(|i| i * 7919 + 1));
+        let fp = pass(&f, &outside).iter().filter(|&&p| p).count();
+        assert!(fp < 400, "{fp} false positives of 4000");
+        // A partial that lost its hashes: the merged filter has none.
+        let mut c = new();
+        c.add(&keys(0).slice(0, 10), None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        drain(&mut c, &mut fixed);
+        let mut dropped = lost;
+        dropped.drop_hashes();
+        c.merge(dropped);
+        assert_eq!(c.finish_with(Some(fixed)).bloom_bytes(), None);
+        // Too small a fixed filter for the rows: no Bloom.
+        let mut d = new();
+        drain(&mut d, &mut RuntimeBloom::with_bytes(32));
+        d.add(&keys(0), None).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            d.finish_with(Some(RuntimeBloom::with_bytes(32)))
+                .bloom_bytes(),
+            None
+        );
+    }
+
     #[test]
     fn empty_builds_drop_everything_but_null_safe_nulls() {
         let mut b = KeyFilterBuilder::new(DataType::Int32, options(50)).unwrap_or_else(|| panic!());

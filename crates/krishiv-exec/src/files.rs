@@ -59,6 +59,7 @@ use object_store::path::Path;
 
 use crate::error::Result;
 use crate::operators::PathRoots;
+use crate::operators::spark_dir_text;
 
 mod user_schema;
 use user_schema::{UserPartitions, check_user_schema, user_schema_columns};
@@ -557,7 +558,65 @@ impl FileReads {
             }
         };
         let merge = self.merges_schemas(format.name(), options);
+        let ignore_invalid_partition_paths = self.ignores_invalid_partition_paths(options);
         let (options, _) = format.options().parse(options, &self.session)?;
+        // A read's layout is checked per leaf directory as Spark's partition discovery checks it; files
+        // beside its partition directories are not read. A catalog table's listing kept its own files.
+        // The data schema is still inferred from every listed file, as Spark's `allFiles()` keeps the
+        // files beside partition directories (`PartitioningAwareFileIndex`, `DataSource`).
+        let mut all_files: Option<Vec<FileRef>> = None;
+        if known.is_none() {
+            // The listing is sorted by store, then path, so the files of one directory are neighbours: its two
+            // texts are computed once per directory, not per file (views re-list per query, ADR 0023).
+            let mut last: Option<(&FileRef, usize, String, String)> = None;
+            let mut leaves: Vec<krishiv_io::partition::discover::Leaf<'_>> =
+                Vec::with_capacity(listed.len());
+            for (f, segs) in &listed {
+                // From the key's segments, never from its text: a decoded value may hold a `/`.
+                let parts: Vec<_> = f.path.parts().collect();
+                let leaf = parts.len().saturating_sub(1);
+                let same_dir = last.as_ref().is_some_and(|(prev, n, _, _)| {
+                    *n == segs.len()
+                        && prev.store == f.store
+                        && prev.path.parts().count() == parts.len()
+                        && prev
+                            .path
+                            .parts()
+                            .zip(&parts)
+                            .take(leaf)
+                            .all(|(a, b)| a == *b)
+                });
+                if !same_dir {
+                    let base = leaf.saturating_sub(segs.len());
+                    let dir = |n: usize| Path::from_iter(parts[..n].iter().cloned());
+                    last = Some((
+                        f,
+                        segs.len(),
+                        spark_dir_text(&f.store, &dir(leaf), &path_roots),
+                        spark_dir_text(&f.store, &dir(base), &path_roots),
+                    ));
+                }
+                let (leaf_text, base_text) = last
+                    .as_ref()
+                    .map(|(_, _, l, b)| (l.clone(), b.clone()))
+                    .unwrap_or_default();
+                leaves.push(krishiv_io::partition::discover::Leaf {
+                    leaf: leaf_text,
+                    base: base_text,
+                    segments: segs,
+                });
+            }
+            let read = krishiv_io::partition::discover::resolve_layout(
+                &leaves,
+                self.case_sensitive(),
+                ignore_invalid_partition_paths,
+            )?;
+            if read.iter().any(|kept| !kept) {
+                all_files = Some(listed.iter().map(|(f, _)| f.clone()).collect());
+            }
+            let mut read = read.into_iter();
+            listed.retain(|_| read.next().unwrap_or(true));
+        }
         let discovered: Vec<(String, Vec<Segment>)> = listed
             .iter()
             .map(|(f, segs)| (f.display_path(), segs.clone()))
@@ -596,7 +655,8 @@ impl FileReads {
                 path_roots,
             });
         }
-        if files.is_empty() {
+        let inferred_from: &[FileRef] = all_files.as_deref().unwrap_or(&files);
+        if inferred_from.is_empty() {
             return Err(UnableToInferSchema {
                 format: display_name(format.name()),
             }
@@ -608,7 +668,7 @@ impl FileReads {
             // under `spark.sql.caseSensitive` (default false), so `id` and `ID` are one column.
             let case_sensitive = self.case_sensitive();
             let mut merged: Option<SchemaRef> = None;
-            for file in &files {
+            for file in inferred_from {
                 let one = match krishiv_io::infer_schema_cached(
                     format.as_ref(),
                     &self.io,
@@ -640,7 +700,13 @@ impl FileReads {
                 })
             })?
         } else {
-            match krishiv_io::infer_schema_cached(format.as_ref(), &self.io, &files, &options).await
+            match krishiv_io::infer_schema_cached(
+                format.as_ref(),
+                &self.io,
+                inferred_from,
+                &options,
+            )
+            .await
             {
                 Ok(schema) => schema,
                 Err(e) => {
@@ -649,11 +715,11 @@ impl FileReads {
                     // error, nothing is left to infer from. Other formats
                     // read every file (CSV, JSON) or keep their own rule,
                     // so their errors stand.
-                    let e = e.into_error(&files[0].display_path());
+                    let e = e.into_error(&inferred_from[0].display_path());
                     if format.name() != "parquet" || !scan_options.skips(&e) {
                         return Err(e);
                     }
-                    tracing::warn!(path = files[0].display_path(), error = %e, "skipped a file whose schema cannot be read");
+                    tracing::warn!(path = inferred_from[0].display_path(), error = %e, "skipped a file whose schema cannot be read");
                     return Err(UnableToInferSchema {
                         format: display_name(format.name()),
                     }
@@ -693,6 +759,21 @@ impl FileReads {
         self.session
             .get_unregistered("spark.sql.sources.partitionColumnTypeInference.enabled")
             .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
+    }
+
+    /// Whether the read skips partition discovery's base-path check: the `ignoreInvalidPartitionPaths` option,
+    /// else `spark.sql.files.ignoreInvalidPartitionPaths` (default false).
+    fn ignores_invalid_partition_paths(&self, options: &BTreeMap<String, OptionValue>) -> bool {
+        let on = |v: &str| v.trim().eq_ignore_ascii_case("true");
+        let option = options
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("ignoreInvalidPartitionPaths"))
+            .map(|(_, v)| v.as_plain().is_some_and(on));
+        option.unwrap_or_else(|| {
+            self.session
+                .get_unregistered("spark.sql.files.ignoreInvalidPartitionPaths")
+                .is_some_and(on)
+        })
     }
 
     /// Whether the read asks to merge the files' schemas: the

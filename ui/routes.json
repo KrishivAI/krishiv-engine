@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "routes": [
+    { "path": "/health", "embeddable": false },
+    { "path": "/queries", "embeddable": false },
+    { "path": "/queries/{id}", "embeddable": false },
+    { "path": "/queries/{id}/profile", "embeddable": true },
+    { "path": "/history", "embeddable": false },
+    { "path": "/resources", "embeddable": false },
+    { "path": "/catalog", "embeddable": false },
+    { "path": "/sql", "embeddable": false },
+    { "path": "/environment", "embeddable": false }
+  ]
+}

@@ -2,6 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.approx_top_k("a"), F.col("b"))
-df = df.select(F.approx_top_k_accumulate("a"), F.col("b"))
-df = df.select(F.day("a"), F.col("b"))
+df = df.select(F.legacy_fn_36("a"), F.col("b"))
+df = df.select(F.transform_values("a"), F.col("b"))
+df = spark.sql("SELECT theta_sketch_agg(a) FROM t18")
+df = df.select(F.try_reflect("a"), F.col("b"))
+df = df.select(F.legacy_fn_37("a"), F.col("b"))
