@@ -32,9 +32,7 @@
 //! q81, q64 and q74 ran 1.12–1.30x slower waiting). Estimates cannot tell
 //! that case apart alone: q95 and q30 have the same ratio of scan to build
 //! rows, and only q95's filter pays. Even then a build far smaller than the
-//! scan is selective enough (q58's seven dates of `date_dim`), and a build
-//! that is a bare scan of a small table costs too little to overlap (q59's
-//! 365 dates of `date_dim`, [`waits_for_build`]).
+//! scan is selective enough (q58's seven dates of `date_dim`).
 //!
 //! # Cost model
 //! min/max and the distinct keys (up to the larger of
@@ -120,9 +118,6 @@ pub(crate) struct Site {
     pub(crate) scan: ScanId,
     /// The scan's estimated rows.
     pub(crate) scan_rows: f64,
-    /// The estimated rows of the scan's table before the scan's pushed
-    /// filter: what a bare scan of the same table reads.
-    pub(crate) table_rows: f64,
     /// The scan's source, for `EXPLAIN`.
     pub(crate) scan_name: String,
     /// What the scan reads.
@@ -466,13 +461,7 @@ impl Planner<'_> {
                     max_values: s.max_values,
                     exact_max_values: s.exact_max_values,
                     bloom,
-                    scan_waits: waits_for_build(
-                        site.scan_rows,
-                        site.table_rows,
-                        build_rows,
-                        reads_scan_table,
-                        build,
-                    ),
+                    scan_waits: scan_waits(site.scan_rows, build_rows, reads_scan_table),
                     bloom_max_items: s.bloom_max_items,
                     bloom_max_bytes: s.bloom_max_bytes,
                     ..KeyFilterOptions::default()
@@ -566,48 +555,6 @@ fn scan_waits(scan_rows: f64, build_rows: f64, build_reads_scan_table: bool) -> 
     !build_reads_scan_table || scan_rows >= SELECTIVE_BUILD * build_rows.max(1.0)
 }
 
-/// The most estimated rows a scan may have for a bare scan of its own table
-/// to be worth its wait whatever the ratio: reading such a table first costs
-/// a few milliseconds.
-const SMALL_TABLE_ROWS: f64 = 1_000_000.0;
-
-/// Whether a scan of `scan_rows` estimated rows starts after the pipeline
-/// of `build`, a build of `build_rows` estimated rows ([`scan_waits`]). A
-/// build that reads the scan's own table also waits when it is a bare scan
-/// ([`bare_scan`]) and the table is small (TPC-DS q59: 365 dates of
-/// `date_dim` filter another `date_dim` scan, which otherwise starts with
-/// the filter pending and, under load, passes 9 or more batches of dates
-/// before it, so the `store_sales` join takes 20-27M rows instead of 5.5M;
-/// study 43 §1). The table's size is `table_rows`, the scan's estimate
-/// before its pushed filter: a bare scan of that table reads all of it
-/// whatever its own filter (a filtered self-join of a fact table must not
-/// wait for a full scan of the fact table).
-fn waits_for_build(
-    scan_rows: f64,
-    table_rows: f64,
-    build_rows: f64,
-    build_reads_scan_table: bool,
-    build: &PhysNode,
-) -> bool {
-    scan_waits(scan_rows, build_rows, build_reads_scan_table)
-        || (table_rows <= SMALL_TABLE_ROWS && bare_scan(build))
-}
-
-/// Whether `node` is a scan under filters, projections and exchanges only
-/// (q59's build is a broadcast of a filtered `date_dim` scan): a pipeline
-/// waiting for it waits for one scan, not for a breaker's input. An
-/// exchange adds no work of its own to wait for: on one worker it is
-/// lowered into the operators around it, and in a cluster its map side is
-/// that scan.
-fn bare_scan(node: &PhysNode) -> bool {
-    match node {
-        PhysNode::Scan(_) => true,
-        PhysNode::Filter { input, .. } | PhysNode::Project { input, .. } => bare_scan(input),
-        PhysNode::Exchange(e) => bare_scan(&e.input),
-        _ => false,
-    }
-}
-
 /// Whether `node`'s plan scans `source`.
 fn reads_source(node: &PhysNode, source: &ReadSource) -> bool {
     matches!(node, PhysNode::Scan(s) if s.scan.source == *source)
@@ -648,8 +595,8 @@ mod tests {
     use krishiv_common::config::Config;
 
     use super::{
-        BLOOM_AT_SCALE_MAX_BYTES, BLOOM_AT_SCALE_MAX_ITEMS, PhysNode, Settings, bare_scan,
-        keys_for, memory_tier, query_memory_limit, reads_source, scan_waits, waits_for_build,
+        BLOOM_AT_SCALE_MAX_BYTES, BLOOM_AT_SCALE_MAX_ITEMS, PhysNode, Settings, keys_for,
+        memory_tier, query_memory_limit, reads_source, scan_waits,
     };
     use crate::physical::{ScanId, ScanNode};
 
@@ -694,44 +641,6 @@ mod tests {
         assert!(!scan_waits(999.0, 1.0, true));
         // An estimate of less than one row counts as one.
         assert!(!scan_waits(500.0, 0.0, true));
-    }
-
-    /// TPC-DS q59 (study 43 §1): a 365-row build from a filtered scan of
-    /// `date_dim` filters another `date_dim` scan. The ratio (200) is under
-    /// `SELECTIVE_BUILD`, but the build is a bare scan of a small table, so
-    /// the wait costs one small scan, never a breaker's pipeline.
-    #[test]
-    fn a_scan_waits_for_a_small_bare_scan_of_its_own_table() {
-        let dates = PhysNode::Scan(ScanNode {
-            id: ScanId(1),
-            scan: Scan {
-                source: files("date_dim.parquet"),
-                output: Vec::new(),
-                version: None,
-            },
-            projection: Vec::new(),
-            filter: None,
-            runtime_filters: Vec::new(),
-            row_stage: crate::operators::RowStageSettings::default(),
-            row_id: false,
-        });
-        assert!(bare_scan(&dates));
-        assert!(waits_for_build(73_049.0, 73_049.0, 365.0, true, &dates));
-        // Another table waits as before.
-        assert!(waits_for_build(15e6, 15e6, 20e6, false, &dates));
-        // A large table read twice: the wait would lose the overlap.
-        assert!(!waits_for_build(2e6, 2e6, 20_000.0, true, &dates));
-        // A filtered scan of a large table: its own estimate is small, but
-        // the build reads the whole table (a filtered fact self-join).
-        assert!(!waits_for_build(5_000.0, 288e6, 1_000.0, true, &dates));
-        // A breaker below the build (an inlined CTE's aggregate, q30, q81,
-        // q64, q74): the wait would queue behind the breaker's pipeline.
-        let sorted = PhysNode::Sort {
-            input: Box::new(dates),
-            keys: Vec::new(),
-        };
-        assert!(!bare_scan(&sorted));
-        assert!(!waits_for_build(73_049.0, 73_049.0, 365.0, true, &sorted));
     }
 
     /// The L3 tier (study 36 §4.4): 1/64 of the limit, and the keys a

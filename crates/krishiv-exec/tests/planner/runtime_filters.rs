@@ -943,13 +943,10 @@ fn scan_waits(node: &krishiv_exec::physical::PhysNode, out: &mut Vec<bool>) {
     }
 }
 
-/// A scan waits for a filter built from another table. For one built from
-/// its own table it waits only when the build is a bare scan of a small
-/// table (TPC-DS q59's `date_dim`: the wait costs one small scan); a build
-/// over an aggregate of the same table (an inlined CTE, q30/q81/q64/q74)
-/// starts with the scan.
+/// A scan waits for a filter built from another table, and not for one built
+/// from its own: both sides of the self-join start together.
 #[test]
-fn a_scan_waits_for_a_filter_from_another_table_or_a_small_bare_scan() {
+fn a_scan_waits_only_for_a_filter_from_another_table() {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -972,20 +969,8 @@ fn a_scan_waits_for_a_filter_from_another_table_or_a_small_bare_scan() {
         waits("SELECT b.v FROM big b JOIN small s ON b.k64 = s.k64"),
         [true]
     );
-    // q59's shape: a filtered bare scan of a small table filters another
-    // scan of it.
     assert_eq!(
-        waits("SELECT a.v FROM big a JOIN big b ON a.k64 = b.k64 WHERE b.v < 10"),
-        [true]
-    );
-    // The build is an aggregate of the same table (filtered, so it is the
-    // smaller side and builds): no wait.
-    assert_eq!(
-        waits(
-            "SELECT a.v FROM big a JOIN \
-             (SELECT k64, count(*) AS n FROM big WHERE v < 10 GROUP BY k64) b \
-             ON a.k64 = b.k64"
-        ),
+        waits("SELECT a.v FROM big a JOIN big b ON a.k64 = b.k64"),
         [false]
     );
 }
