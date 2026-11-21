@@ -96,6 +96,10 @@ and spills as bars, and the pipelines on a timeline. In a notebook it renders it
 `krishiv.ui(profile_json_or_dict)` views a document saved earlier. `df.explain(analyze=True)` prints the
 text form; the viewer reads the JSON of `df.explainString(analyze=True, json=True)`.
 
+`tests/notebooks/profile_view.ipynb` shows both in a notebook, and `tests/test_notebooks.py` runs it with nbval
+(`uv pip install "nbval==0.11.0" "ipykernel==7.4.0"`; skipped when either is not installed): each cell's output
+must equal the one stored in the notebook, so after a change to the viewer run the notebook again and save it.
+
 ## Free-threaded build (cp314t)
 
 abi3 does not support free-threaded CPython, so that wheel is a separate,
@@ -105,7 +109,7 @@ non-abi3 build (disable the default `abi3-py311` crate feature but keep `mimallo
 cd python
 uv venv --python 3.14t .venv-314t && uv pip install --python .venv-314t/bin/python maturin pytest
 . .venv-314t/bin/activate
-maturin develop --no-default-features --features mimalloc,cloud   # or: maturin build ...
+maturin develop --no-default-features --features mimalloc,cloud,ui   # or: maturin build ...
 # (mimalloc is a default feature; keep it when turning the defaults off)
 ```
 

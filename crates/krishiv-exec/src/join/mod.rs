@@ -418,6 +418,12 @@ pub(crate) enum Counter {
     FixedBloomKeys,
     /// Probe rows looked up through a direct index (`direct`, perf lever J1).
     DirectProbeRows,
+    /// Grace partition loads given up because the pool lacked free memory
+    /// (`grace::Loaded::TooLarge`, before or after arbitration): the rows
+    /// read so far go back and the partition is read again.
+    GraceLoadsRefused,
+    /// The build bytes those loads had read when they gave up.
+    GraceRefusedBytes,
 }
 
 /// The build sink's counters, by name.
@@ -461,7 +467,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 36]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 38]);
 
 impl Default for Counters {
     fn default() -> Self {
@@ -539,6 +545,13 @@ impl Counters {
         // Only a probe that read a direct index (`direct.rs`) reports it.
         if self.get(Counter::DirectProbeRows) > 0 {
             out.extend(self.report(&[(Counter::DirectProbeRows, "direct_probe_rows")]));
+        }
+        // Only a grace join that had a partition load refused reports it.
+        if self.get(Counter::GraceLoadsRefused) > 0 {
+            out.extend(self.report(&[
+                (Counter::GraceLoadsRefused, "grace_loads_refused"),
+                (Counter::GraceRefusedBytes, "grace_refused_bytes"),
+            ]));
         }
         // Only a join that fell back to sort-merge reports it.
         if self.get(Counter::MergeFallbacks) > 0 {

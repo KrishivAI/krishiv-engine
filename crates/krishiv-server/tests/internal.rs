@@ -56,12 +56,14 @@ impl UiSource for Fake {
                      "query_text": "SELECT 1 FROM t WHERE pw = 's3cr3t-canary'", "secret_option": "hunter2", "workers": 1},
                     {"query_id": "q-wait", "state": "queued", "principal": "bob", "submitted_at": 1_000},
                     {"query_id": "q-a", "state": "finished", "principal": "ann", "submitted_at": 100,
+                     "client_type": "_SPARK_CONNECT_PYTHON spark/4.2.0", "tags": {"team": "risk", "nightly": ""},
                      "wall_ns": 1_000, "peak_memory_bytes": 10, "rows_produced": 5, "spill_bytes": 0},
                     {"query_id": "q-b", "state": "finished", "principal": "ann", "submitted_at": 200,
+                     "client_type": "krishiv-cli", "tags": {"team": "ads", "krishiv-ui-run-7": ""},
                      "wall_ns": 1_500, "peak_memory_bytes": 30, "rows_produced": 5, "spill_bytes": 7,
                      "hints": [{"code": "SPILL", "node_id": 2, "operator_id": 2, "message": "HashJoin spilled 4.0 KiB"}]},
-                    {"query_id": "q-bad", "state": "failed", "principal": "bob", "submitted_at": 300,
-                     "error_class": "DIVIDE_BY_ZERO"},
+                    {"query_id": "q-bad", "state": "failed", "principal": "bob@example.com", "submitted_at": 300,
+                     "client_type": null, "tags": {}, "error_class": "DIVIDE_BY_ZERO"},
                     {"query_id": "q-min", "state": "finished", "principal": "cy", "submitted_at": 50, "wall_ns": -9_223_372_036_854_775_807_i64},
                     {"query_id": "q-max", "state": "finished", "principal": "cy", "submitted_at": 60, "wall_ns": 9_223_372_036_854_775_807_i64}
                 ])),
@@ -275,6 +277,60 @@ async fn history_lists_finished_queries_newest_first_with_filters_and_a_limit() 
     let ann = get(addr, "/api/internal/history?principal=ann&limit=1").await;
     assert_eq!(ann["queries"][0]["query_id"], "q-b");
     assert_eq!(ann["queries"].as_array().unwrap().len(), 1);
+}
+
+/// The server console's filters (ADR 0024): by user, by client type and by tag, as the page sends them.
+#[tokio::test]
+async fn history_filters_by_user_client_type_and_tag() {
+    let (addr, _) = start(false).await;
+    let ids = |path: &'static str| async move {
+        let body = get(addr, path).await;
+        body["queries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|q| q["query_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    // A name with a character the page escapes.
+    assert_eq!(
+        ids("/api/internal/history?principal=bob%40example.com").await,
+        ["q-bad"]
+    );
+    // Any part of the client's name, in either case; a query with no client type matches no client.
+    assert_eq!(ids("/api/internal/history?client=python").await, ["q-a"]);
+    assert_eq!(
+        ids("/api/internal/history?client=krishiv-CLI").await,
+        ["q-b"]
+    );
+    assert_eq!(
+        ids("/api/internal/history?client=spark+connect").await,
+        Vec::<String>::new(),
+        "a space is a space, not an underscore"
+    );
+    // A tag by its key, or by key and value; a request tag is a key with no value.
+    assert_eq!(ids("/api/internal/history?tag=team").await, ["q-b", "q-a"]);
+    assert_eq!(ids("/api/internal/history?tag=team%3Drisk").await, ["q-a"]);
+    assert_eq!(ids("/api/internal/history?tag=nightly").await, ["q-a"]);
+    assert_eq!(
+        ids("/api/internal/history?tag=team%3D").await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        ids("/api/internal/history?tag=team&client=cli&state=finished").await,
+        ["q-b"],
+        "filters combine"
+    );
+    // An empty filter is no filter, and a value that does not decode is none either.
+    assert_eq!(ids("/api/internal/history?tag=&client=").await.len(), 5);
+    assert_eq!(ids("/api/internal/history?tag=%zz").await.len(), 5);
+    // The row carries what was filtered on.
+    let row = &get(addr, "/api/internal/history?tag=nightly").await["queries"][0];
+    assert_eq!(row["client_type"], "_SPARK_CONNECT_PYTHON spark/4.2.0");
+    assert_eq!(row["tags"]["team"], "risk");
+    // The tag the editor gives its own run is not sent.
+    let from_editor = &get(addr, "/api/internal/history?client=cli").await["queries"][0];
+    assert_eq!(from_editor["tags"], json!({"team": "ads"}));
 }
 
 #[tokio::test]

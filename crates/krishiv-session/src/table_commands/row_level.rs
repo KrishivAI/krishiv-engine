@@ -253,6 +253,21 @@ impl Session {
             )
             .await?;
 
+        if table.capabilities().merge_on_read {
+            return self
+                .run_merge_on_read(
+                    &table,
+                    op,
+                    quoted,
+                    alias,
+                    &hit,
+                    &columns,
+                    &with_row_id,
+                    assignments,
+                )
+                .await;
+        }
+
         // 1. The touched files and the hit count, over the whole snapshot.
         let (whole, whole_entry) = self.state.catalog.put_hidden_provider(
             with_row_id.clone(),
@@ -378,6 +393,80 @@ impl Session {
 
         // 3. The statement's result.
         match table.output(&RowLevelCounts::affected(affected)) {
+            Some(batch) => self
+                .script_result(batch.schema(), vec![batch])
+                .await
+                .map(Some),
+            None => self.empty_frame().await.map(Some),
+        }
+    }
+}
+
+impl Session {
+    /// A merge-on-read `DELETE` or `UPDATE`: one query over the snapshot, the rows the condition
+    /// hits as `(_krishiv_row_file, _krishiv_row_index)` (`UPDATE`: after the new row, whose
+    /// columns are the table's), into the table's rewriter, which records the deletes and writes
+    /// the new rows in one commit. No file is read twice and none is rewritten. The result is the
+    /// table's [`output`](RowLevelTable::output); the hit count is not known before the commit
+    /// (Spark's Iceberg tables return no rows), so it is `0` for a table that wants one.
+    #[expect(clippy::too_many_arguments, reason = "the statement's parts")]
+    async fn run_merge_on_read(
+        &self,
+        table: &Arc<dyn RowLevelTable>,
+        op: RowLevelOperation,
+        quoted: &str,
+        alias: &str,
+        hit: &str,
+        columns: &[TableColumn],
+        with_row_id: &[TableColumn],
+        assignments: &[Assignment],
+    ) -> Result<Option<DataFrame>, KrishivError> {
+        let (whole, whole_entry) = self.state.catalog.put_hidden_provider(
+            with_row_id.to_vec(),
+            Arc::new(Target {
+                table: Arc::clone(table),
+                op,
+                files: None,
+            }),
+        );
+        let column_of =
+            |name: &str| crate::functions::expr(&format!("{}.{}", ident(alias), ident(name)));
+        let mut select = Vec::new();
+        if op == RowLevelOperation::Update {
+            for c in columns {
+                let value = match assignments
+                    .iter()
+                    .find(|a| a.column.eq_ignore_ascii_case(&c.name))
+                {
+                    Some(a) => crate::functions::expr(a.value.as_deref().unwrap_or("NULL"))?
+                        .cast_ansi(c.data_type.clone()),
+                    None => column_of(&c.name)?,
+                };
+                select.push(value.alias(&c.name));
+            }
+        }
+        select.push(column_of(ROW_FILE_COLUMN)?.alias(ROW_FILE_COLUMN));
+        select.push(column_of(ROW_POSITION_COLUMN)?.alias(ROW_POSITION_COLUMN));
+        let frame = self
+            .hidden_frame(&whole, whole_entry, with_row_id)
+            .alias(alias)
+            .filter(crate::functions::expr(hit)?)
+            .select(select);
+        let analysis = frame.action_analysis().await?;
+        let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
+        let target = first_scan(physical.root())
+            .ok_or_else(|| internal("a row-level change that reads no table".to_owned()))?;
+        let mut request =
+            RowLevelWrite::new(op, quoted, Arc::clone(physical.schema()), Vec::new(), None);
+        request.write_id = Some(crate::session::job_uuid());
+        let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
+        let mut stream = self.run(&plan, &analysis.env).await?;
+        while let Some(batch) = stream.next().await {
+            batch?;
+        }
+        drop(stream);
+        self.refresh_files();
+        match table.output(&RowLevelCounts::affected(0)) {
             Some(batch) => self
                 .script_result(batch.schema(), vec![batch])
                 .await

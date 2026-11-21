@@ -61,6 +61,19 @@ fn text(column: &dyn Array, i: usize) -> Option<String> {
 }
 
 /// `(id, name)` pairs of the table `table`, ordered by `id`.
+fn rows_of_columns(s: &Session, table: &str) -> Vec<(i32, Option<String>)> {
+    let df = s.table(table).select_expr(["id", "name"]).unwrap();
+    let mut out = Vec::new();
+    for batch in block_on(df.collect()).unwrap() {
+        let ids = batch.column(0).as_primitive::<Int32Type>();
+        for i in 0..batch.num_rows() {
+            out.push((ids.value(i), text(batch.column(1), i)));
+        }
+    }
+    out.sort();
+    out
+}
+
 fn rows(s: &Session, table: &str) -> Vec<(i32, Option<String>)> {
     let batches = block_on(s.table(table).collect()).unwrap();
     let mut rows = Vec::new();
@@ -193,7 +206,7 @@ fn invalid_frame_reports_analysis_error() {
 }
 
 #[test]
-fn overwrites_partitioned_and_clustered_tables_are_unsupported() {
+fn overwrites_and_clustered_creates_are_unsupported() {
     let s = session();
     block_on(s.table("people").write_to_table("t").create()).unwrap();
     assert_eq!(
@@ -208,16 +221,33 @@ fn overwrites_partitioned_and_clustered_tables_are_unsupported() {
         )),
         ErrorClass::KrishivUnsupportedFeature
     );
-    for w in [
+    // A partitioned create is supported; clustering is still refused.
+    block_on(
         s.table("people")
             .write_to_table("p")
-            .partitioned_by(["name"]),
-        s.table("people").write_to_table("p").cluster_by(["name"]),
-    ] {
-        let err = block_on(w.create()).unwrap_err();
-        assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
-        assert!(err.to_string().contains("partitioned tables"), "{err}");
-    }
+            .partitioned_by(["name"])
+            .create(),
+    )
+    .unwrap();
+    // The rows are all there, and `name` is the partition column (Spark lists it last).
+    assert_eq!(
+        rows_of_columns(&s, "p"),
+        vec![
+            (1, None),
+            (2, Some("b".to_owned())),
+            (3, Some("c".to_owned()))
+        ]
+    );
+    let described = block_on(async { s.sql("SHOW PARTITIONS p").await?.collect().await }).unwrap();
+    assert!(!described.is_empty());
+    let err = block_on(
+        s.table("people")
+            .write_to_table("c")
+            .cluster_by(["name"])
+            .create(),
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
 
 #[test]

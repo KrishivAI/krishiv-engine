@@ -36,8 +36,8 @@ curl -s http://127.0.0.1:8080/readyz      # 200
 
 `/metrics` answers `401` without the admin token. For local use on a loopback address,
 `--conf krishiv.server.metrics.public=true` lets it answer without one (aggregate counters only), and
-`krishiv.metrics.enabled=true` folds each query's metrics into it. The web console needs a binary built with the `ui`
-feature and `krishiv.ui.enabled` (default `true`); a `server`-only build has no console page.
+`krishiv.metrics.enabled=true` folds each query's metrics into it. The [web console](#the-web-console) is served on
+the admin port.
 
 ### Authentication, roles and TLS
 
@@ -69,6 +69,55 @@ Every refused request is counted on `/metrics`: `krishiv_auth_failed_total` (una
 method) and `krishiv_auth_denied_total` (permission denied, by port and privilege). The `krishiv::auth` and
 `krishiv::audit` log records describe each refusal, but logs are rate limited (`KRISHIV_LOG_RATE`) and best effort:
 they are not an audit trail. Use the counters to see how many refusals happened.
+
+## The web console
+
+One console, the same pages, runs in three places. It comes with builds after 0.2.0: the released `krishiv` binary
+and the Python wheel both carry it (a build from source needs the `ui` feature, and `server` for `krishiv server`).
+
+| | In your process | On a server | Saved profiles |
+|---|---|---|---|
+| Start it with | `krishiv.ui()` (Python), `krishiv::ui(&session)` (Rust) | `krishiv server` | `krishiv ui --profiles <dir>` |
+| Shows | the one session that started it | every session of every client | the queries a history folder holds |
+| Listens on | `127.0.0.1`, a free port | the admin port (`--port`, default `8080`) | `127.0.0.1`, a free port (`--port`) |
+| Who may open it | whoever has the URL with its token | a token, by role | whoever has the URL with its token |
+| Pages | all | all; Environment for an administrator only | History and a query's page |
+
+**In your process.** `krishiv.ui()` starts the console of the active session, prints its URL and returns a handle
+(`url`, `port`, `token`, `stop()`); `krishiv::ui(&session)` returns the same handle in Rust and prints nothing, so
+show `console.url()` yourself. The token in the URL is generated at each start: treat the URL as a password for the
+session. The SQL page runs statements in your session, so it sees your temporary views; you can cancel your own
+queries; Environment lists the session's settings and Resources the memory and caches of the process. The console
+stops when the session stops.
+
+```python
+import krishiv
+
+spark = krishiv.session()
+console = krishiv.ui()   # prints: Krishiv console: http://127.0.0.1:<port>/?token=<token>
+spark.stop()             # the console stops with the session
+```
+
+**On a server.** `krishiv server` serves the console at the admin port's address unless `krishiv.ui.enabled` is
+`false`. Without authentication settings it prints a URL with a start-up token; with them, a token's role decides
+what its holder sees (the table in [single-node server security](single-node-server-security.md)): an operator
+sees and cancels every query and runs SQL as the signed-in user in a session of its own, and only an administrator
+opens Environment, where secrets show as `***`. The History page filters by state, principal, client (any part of
+the name a client reports, such as `python`) and tag (`team` or `team=risk`).
+
+A server's history is kept in memory unless `krishiv.history.path` names a folder. With it, each finished query's
+profile is stored there, and a restarted server lists the newest 1,000 stored queries again. A query from before
+the restart has no tags and no client, so the tag and client filters leave it out.
+
+```bash
+krishiv server --port 8080 --conf krishiv.history.path=/var/lib/krishiv/history
+```
+
+**Saved profiles.** `krishiv ui --profiles /var/lib/krishiv/history` opens the same folder with no engine running:
+the History page and each query's page, nothing live and nothing to cancel. Use it to read the profiles of a
+server that is stopped, or a folder copied from another machine.
+
+Not in the console yet: Resources does not list UDF worker pools or client connections.
 
 ## Distributed
 

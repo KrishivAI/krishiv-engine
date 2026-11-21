@@ -4,6 +4,7 @@
 //! by the inventory, the generator and the mutation sites.
 
 mod analyzer;
+mod column_names;
 mod dag;
 mod definer_sources;
 mod depth;

@@ -876,3 +876,83 @@ fn cache_keys_separate_principals_policies_and_pins() {
     assert_ne!(CacheKey::of(&pinned), base, "pins");
     assert_eq!(CacheKey::of(&analyzed("a", 7)), base, "same inputs");
 }
+
+/// Every `ColumnNamesOp` is part of the plan's normalized hash (a change of any field changes
+/// it) and prints as one line naming its fields.
+#[test]
+fn column_names_operations_hash_apart_and_display_their_fields() {
+    use crate::ColumnNamesOp as Op;
+    let names = |n: &[&str]| n.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    let lit = |v: i32| Arc::new(Expr::literal(Literal::Integer(v)));
+    let ops = [
+        (Op::ToDf(names(&["x", "y"])), "ToDF x, y"),
+        (Op::ToDf(names(&["x", "z"])), "ToDF x, z"),
+        (
+            Op::Rename(vec![("a".to_owned(), "b".to_owned())]),
+            "RenameColumns a -> b",
+        ),
+        (
+            Op::Drop {
+                names: names(&["a"]),
+                columns: names(&["b"]),
+            },
+            "DropColumns a (resolved: b)",
+        ),
+        (
+            Op::Drop {
+                names: names(&["a"]),
+                columns: Vec::new(),
+            },
+            "DropColumns a",
+        ),
+        (
+            Op::DropNa {
+                subset: names(&["a"]),
+                min_non_nulls: Some(2),
+            },
+            "DropNa min 2 a",
+        ),
+        (
+            Op::DropNa {
+                subset: Vec::new(),
+                min_non_nulls: None,
+            },
+            "DropNa",
+        ),
+        (
+            Op::Replace {
+                cols: names(&["a"]),
+                pairs: vec![lit(1), lit(2)],
+            },
+            "Replace (1, 2) a",
+        ),
+        (
+            Op::FillNa {
+                cols: names(&["a"]),
+                values: vec![lit(7)],
+            },
+            "FillNa (7) a",
+        ),
+        (
+            Op::FillNa {
+                cols: Vec::new(),
+                values: vec![lit(8)],
+            },
+            "FillNa (8)",
+        ),
+    ];
+    let mut hashes = Vec::new();
+    for (op, want) in ops {
+        let plan = LogicalPlan::new(PlanNode::ColumnNames {
+            input: Arc::new(scan(&[1, 2], &["a", "b"])),
+            op,
+        });
+        let text = plan.to_string();
+        assert_eq!(text.lines().next(), Some(want), "{text}");
+        hashes.push(normalized_subtree_hash(&plan));
+    }
+    let mut distinct = hashes.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(distinct.len(), hashes.len(), "{hashes:?}");
+}

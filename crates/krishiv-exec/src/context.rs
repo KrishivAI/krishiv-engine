@@ -883,6 +883,10 @@ pub struct TaskContext {
     /// `numbering.rs` from `Pipeline::origins`. The member's own base for a
     /// source; the group's top numbering for the sink.
     numbering_base: u32,
+    /// Nanoseconds this context's [`run_blocking`](Self::run_blocking)
+    /// closures have run on the blocking pool (the driver counts them as the
+    /// operator's compute time while its step was pending).
+    blocking_ns: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl fmt::Debug for TaskContext {
@@ -916,6 +920,7 @@ impl TaskContext {
             lane: None,
             partition_base: 0,
             numbering_base: 0,
+            blocking_ns: Arc::default(),
         }
     }
 
@@ -1038,13 +1043,30 @@ impl TaskContext {
         F: FnOnce() -> Result<T> + Send + 'static,
     {
         let guard = self.query.blocking_started();
+        let (executor, ran) = (Arc::clone(&self.executor), Arc::clone(&self.blocking_ns));
         // The guard travels with the result, so a result that holds memory
         // (a reservation) and is dropped because the caller went away (a
         // cancelled query) is dropped before the query can count the
         // closure as done (a tuple drops its fields in order).
-        let (out, guard) = run_blocking(&*self.executor, move || f().map(|v| (v, guard))).await?;
+        let (out, guard) = run_blocking(&*self.executor, move || {
+            let start = executor.now();
+            let out = f();
+            let ns = executor.now().saturating_duration_since(start).as_nanos();
+            ran.fetch_add(
+                u64::try_from(ns).unwrap_or(u64::MAX),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            out.map(|v| (v, guard))
+        })
+        .await?;
         drop(guard);
         Ok(out)
+    }
+
+    /// How long this context's [`run_blocking`](Self::run_blocking)
+    /// closures have run so far (a closure counts once it returns).
+    pub(crate) fn blocking_time(&self) -> Duration {
+        Duration::from_nanos(self.blocking_ns.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// The operator this context belongs to.
