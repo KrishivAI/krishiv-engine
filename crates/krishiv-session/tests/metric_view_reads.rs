@@ -242,12 +242,20 @@ $$",
 #[test]
 fn an_operator_keeps_the_creators_mode_and_its_operand_the_readers() {
     let (s, _dir) = session();
-    run(&s, "CREATE TABLE t (k STRING, i INT) USING parquet").unwrap();
-    run(&s, "INSERT INTO t VALUES ('a', -2147483648), ('b', 1)").unwrap();
+    run(
+        &s,
+        "CREATE TABLE t (k STRING, i INT, l BIGINT) USING parquet",
+    )
+    .unwrap();
+    run(
+        &s,
+        "INSERT INTO t VALUES ('a', -2147483648, -9223372036854775808), ('b', 1, 1)",
+    )
+    .unwrap();
     s.conf().set("spark.sql.ansi.enabled", "true").unwrap();
     run(
         &s,
-        "CREATE VIEW mvo WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsource: t\ndimensions:\n  - name: a\n    expr: abs(i) + 0\n  - name: n\n    expr: -i\nmeasures:\n  - name: c\n    expr: count(1)\n$$",
+        "CREATE VIEW mvo WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsource: t\ndimensions:\n  - name: a\n    expr: abs(i) + 0\n  - name: n\n    expr: -i\n  - name: k\n    expr: k\nmeasures:\n  - name: c\n    expr: count(1)\n  - name: neg\n    expr: -min(i)\n  - name: negl\n    expr: -min(l)\n$$",
     )
     .unwrap();
     s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
@@ -257,8 +265,18 @@ fn an_operator_keeps_the_creators_mode_and_its_operand_the_readers() {
     )
     .unwrap();
     assert_eq!(longs(&got, 0), vec![-2_147_483_648, 1]);
-    let e = run(&s, "SELECT n, measure(c) FROM mvo GROUP BY n").unwrap_err();
-    assert_eq!(class(&e), "ARITHMETIC_OVERFLOW");
+    // The creator's mode also where Spark's rule order adds the measure from the clause
+    // (review 60b9e05fb finding 1; each one `ARITHMETIC_OVERFLOW` on Spark 4.2.1).
+    for q in [
+        "SELECT n, measure(c) FROM mvo GROUP BY n",
+        "SELECT n FROM mvo GROUP BY n ORDER BY measure(c)",
+        "SELECT k, measure(neg) FROM mvo GROUP BY k",
+        "SELECT k FROM mvo GROUP BY k ORDER BY measure(neg)",
+        "SELECT k FROM mvo GROUP BY k HAVING measure(negl) > 0L",
+    ] {
+        let e = run(&s, q).unwrap_err();
+        assert_eq!(class(&e), "ARITHMETIC_OVERFLOW", "{q}");
+    }
 }
 
 /// A dimension or measure ending in a `--` comment (each parses alone, as Spark parses it) ends
@@ -489,6 +507,15 @@ fn order_by_and_having_over_an_aggregate_with_no_measure_follow_sparks_rule_orde
     assert_eq!(
         regions("SELECT region FROM mv GROUP BY region HAVING measure(total) > 3L ORDER BY region"),
         ["b", "c"]
+    );
+    // A subquery's own casts are not the clause's: Spark 4.2.1 reads it (review 60b9e05fb nit 1).
+    assert_eq!(
+        regions(
+            "SELECT region FROM mv GROUP BY region \
+             HAVING measure(total) > (SELECT max(CAST(n AS BIGINT)) FROM src WHERE n < 5L) \
+             ORDER BY region"
+        ),
+        ["b"]
     );
     // An implicit cast anywhere in the clause: the measure is missing from the rewritten input.
     for (sql, missing) in [

@@ -1759,7 +1759,12 @@ impl Resolver<'_> {
                 super::super::python_udtf::refuse_table_argument(kind, e.origin)?;
                 let env = self.sub_env(cx);
                 let saved = std::mem::take(&mut self.lambdas);
+                // A subquery is analyzed whole within one pass, its own coercions included: they are
+                // not the clause's (`Resolver::implicit_casts`, metric-view clauses; Spark 4.2.1 reads
+                // `HAVING measure(m) > (SELECT max(CAST(..)) ..)`, review 60b9e05fb nit 1).
+                let casts = self.implicit_casts.get();
                 let rel = self.rel(plan, &env);
+                self.implicit_casts.set(casts);
                 let stale = std::mem::replace(&mut self.lambdas, saved);
                 debug_assert!(stale.is_empty(), "a subquery leaks lambda scopes");
                 let rel = rel?;

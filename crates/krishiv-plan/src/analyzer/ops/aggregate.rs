@@ -27,9 +27,11 @@ impl Resolver<'_> {
         // Spark rewrites a metric-view aggregate only once it holds an aggregate: until then an
         // `ORDER BY` or `HAVING` reads the view's measures (`metric_view.rs`).
         let deferred;
+        let mut pin = None;
         let exprs = match &info.metric {
             Some(m) if matches!(op, "Sort" | "Filter") && !info.has_windows() => {
                 deferred = self.deferred_measures(m, exprs, env, op)?;
+                pin = m.pin.as_ref().map(|_| Arc::clone(m));
                 deferred.as_slice()
             }
             _ => exprs,
@@ -143,6 +145,17 @@ impl Resolver<'_> {
                 }
                 _ => Ok(x),
             })?;
+        }
+        // A deferred clause's measures are the view's text: their operators keep the creator's
+        // mode, in the clause and in the aggregates it adds (review 60b9e05fb finding 1).
+        if let Some(p) = pin.as_ref().and_then(|m| m.pin.as_ref()) {
+            for b in &mut bounds {
+                b.expr = p.expr(&b.expr);
+            }
+            let added = info.aggregates.len();
+            for e in st.grown.aggregates.iter_mut().skip(added) {
+                *e = p.expr(e);
+            }
         }
         self.having_subqueries(&mut bounds, &mut st, agg.plan.origin)?;
         // An aggregate call over a merged-away `USING` column

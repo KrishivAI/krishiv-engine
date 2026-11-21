@@ -28,6 +28,7 @@ use krishiv_common::error::{
 };
 
 use super::AnalysisError;
+use super::exprs::Bound;
 use super::resolve::{Attr, Env, Rel, Resolver};
 use crate::function::Builtin;
 use crate::origin::SourceId;
@@ -276,25 +277,9 @@ impl Resolver<'_> {
             .with_origin(p.origin),
         );
         let mut rel = self.rel(&agg, env)?;
-        if holds_no_aggregate(grouping, aggregates)
-            && let Some(info) = &rel.agg
-        {
-            let input: Vec<String> = source_names
-                .iter()
-                .filter(|n| !dimensions.iter().any(|d| self.same_name(&d.name, n)))
-                .chain(dimensions.iter().map(|d| &d.name))
-                .map(|n| format!("\"{n}\""))
-                .collect();
-            let mut info = (**info).clone();
-            info.metric = Some(Arc::new(Deferred {
-                first,
-                measures: measures.clone(),
-                input: input.join(", "),
-                origin: p.origin,
-            }));
-            rel.agg = Some(Arc::new(info));
-        }
-        if let Some(creator) = ansi.filter(|a| *a != self.ctx.conf.ansi) {
+        // The view's operators keep the creator's mode (review b047d8901 F5): in the plan, and in
+        // the `AggInfo` a later clause rebuilds the aggregate from (review 60b9e05fb finding 1).
+        let pin = ansi.filter(|a| *a != self.ctx.conf.ansi).map(|creator| {
             // The operators the view's text wrote: its expressions' and its source's sources.
             let sources: HashSet<SourceId> = dimensions
                 .iter()
@@ -303,8 +288,49 @@ impl Resolver<'_> {
                 .chain(std::iter::once(source.origin))
                 .filter_map(|o| o.sql.map(|(s, _)| s))
                 .collect();
-            rel.plan = pin_written_operators(&rel.plan, &sources, creator, self.ctx.conf.ansi);
+            Pin {
+                sources,
+                creator,
+                reader: self.ctx.conf.ansi,
+            }
+        });
+        let mut info = rel.agg.as_deref().cloned();
+        if let Some(pin) = &pin {
+            rel.plan = pin.plan(&rel.plan);
+            if let Some(info) = &mut info {
+                info.input.plan = pin.plan(&info.input.plan);
+                info.grouping = info.grouping.iter().map(|e| pin.expr(e)).collect();
+                info.aggregates = info.aggregates.iter().map(|e| pin.expr(e)).collect();
+                if let Some(top) = &info.top {
+                    info.top = Some(
+                        top.iter()
+                            .map(|b| Bound {
+                                expr: pin.expr(&b.expr),
+                                ..b.clone()
+                            })
+                            .collect(),
+                    );
+                }
+            }
         }
+        if let Some(info) = &mut info
+            && holds_no_aggregate(grouping, aggregates)
+        {
+            let input: Vec<String> = source_names
+                .iter()
+                .filter(|n| !dimensions.iter().any(|d| self.same_name(&d.name, n)))
+                .chain(dimensions.iter().map(|d| &d.name))
+                .map(|n| format!("\"{n}\""))
+                .collect();
+            info.metric = Some(Arc::new(Deferred {
+                first,
+                measures: measures.clone(),
+                input: input.join(", "),
+                origin: p.origin,
+                pin,
+            }));
+        }
+        rel.agg = info.map(Arc::new);
         Ok(rel)
     }
 
@@ -345,6 +371,9 @@ impl Resolver<'_> {
             return Ok(exprs.to_vec());
         }
         let before = self.implicit_casts.get();
+        // Typing over pass 1 only tells whether Spark would coerce. An error there (a clause that
+        // does not type even over the read) is the rewrite's to report: resolving the rewritten
+        // clause raises the same class, at the same expression.
         let typed = self.over_agg(&m.first, exprs, env, op);
         if typed.is_ok() && self.implicit_casts.get() != before {
             let names: Vec<String> = used.iter().map(|n| format!("\"{n}\"")).collect();
@@ -786,6 +815,31 @@ pub(super) struct Deferred {
     pub(super) input: String,
     /// The aggregate's origin.
     pub(super) origin: crate::Origin,
+    /// The creator's ANSI mode for the view's operators, when it differs from the reader's: the
+    /// clause's rewritten expressions and the aggregates it adds are pinned with it.
+    pub(super) pin: Option<Pin>,
+}
+
+/// The view's own operators (`sources`) evaluate in the creator's ANSI mode, their operands in
+/// the reader's ([`pin_written_operators`]).
+pub(super) struct Pin {
+    sources: HashSet<SourceId>,
+    creator: bool,
+    reader: bool,
+}
+
+impl Pin {
+    /// `plan` (resolved) pinned.
+    fn plan(&self, plan: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+        pin_written_operators(plan, &self.sources, self.creator, self.reader)
+    }
+
+    /// `e` (resolved) pinned.
+    pub(super) fn expr(&self, e: &Arc<Expr>) -> Arc<Expr> {
+        let done: Result<Arc<Expr>, std::convert::Infallible> = Arc::clone(e)
+            .transform_up(&mut |x| Ok(pin(x, &self.sources, self.creator, self.reader)));
+        done.unwrap_or_else(|never| match never {})
+    }
 }
 
 /// Whether Spark's rule leaves an aggregate over a metric-view read for a later pass: its select
