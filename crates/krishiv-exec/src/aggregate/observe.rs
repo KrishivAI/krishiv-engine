@@ -215,10 +215,6 @@ struct Local {
     seed: Option<u64>,
     /// The split (or, untagged, the driver's partition) the open `table` folds.
     open: Option<u32>,
-    /// The states of the splits this driver finished, each under its own source key: Spark folds a
-    /// partition on its own, so which driver the morsels of two splits reached must not decide
-    /// whether a fold overflows (it would fail the action instead of the merge dropping a buffer).
-    sealed: Vec<((u32, usize), RecordBatch)>,
     query: Arc<crate::context::QueryContext>,
     finalizer: Arc<Finalizer>,
     partition: u32,
@@ -245,21 +241,23 @@ impl Local {
         let key = (self.open.unwrap_or(self.partition), self.lane);
         // The states move to the query's own charge: release the driver's first.
         self.reservation.shrink(self.reservation.size());
-        for (source, states) in std::mem::take(&mut self.sealed) {
-            self.query
-                .observe_partial(&self.finalizer, source, states)?;
-        }
         self.query.observe_partial(&self.finalizer, key, last)
     }
 
-    /// Ends the open split's table when a batch of another split arrives.
+    /// Ends the open split's table when a batch of another split arrives: Spark folds a partition
+    /// on its own, so which driver the morsels of two splits reached must not decide whether a
+    /// fold overflows (it would fail the action instead of the merge dropping a buffer). The
+    /// finished split's states go to the query at once, under its own source key, so they are
+    /// charged to the query's pool and kept if the driver later fails.
     fn switch_to(&mut self, split: u32) -> Result<()> {
         match self.open {
             Some(open) if open != split => {
                 let fresh = AggTable::new(&self.core, &HashSeed::new(self.seed))?;
                 let done = std::mem::replace(&mut self.table, fresh);
-                self.sealed
-                    .push(((open, self.lane), done.state_batch(&[0])?));
+                let states = done.state_batch(&[0])?;
+                drop(done);
+                self.query
+                    .observe_partial(&self.finalizer, (open, self.lane), states)?;
                 let keep = self.table.memory_size();
                 self.reservation
                     .shrink(self.reservation.size().saturating_sub(keep));
@@ -320,7 +318,6 @@ impl Operator for CollectMetrics {
             core: Arc::clone(&self.core),
             seed: ctx.query().config().seed,
             open: None,
-            sealed: Vec::new(),
             query: Arc::clone(ctx.query()),
             finalizer: Arc::clone(&self.finalizer),
             partition: ctx.partition(),
