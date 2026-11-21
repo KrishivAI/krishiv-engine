@@ -36,6 +36,26 @@ pub static SEMI_ANTI_JOIN_ORDER: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Whether the preserved side of an outer join is semi-joined to a filtered input an inner join
+/// above joins it to.
+pub static PRESERVED_SIDE_SEMI_JOIN: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.preservedSideSemiJoin",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Reduce the preserved side of a `LEFT` or `RIGHT OUTER JOIN` by a key-only semi join \
+          with a filtered input that an inner join above joins to that side only (TPC-DS q40, \
+          q80: sales joined to a filtered item or date range above `sales LEFT JOIN returns`), \
+          so the hash join can build the reduced side instead of the whole outer side. Only \
+          when statistics say the semi join keeps at most a quarter of the side. Results are \
+          the same either way, except that an ANSI error Spark raises on a row the join above \
+          drops (in the outer join's condition or a projection above it) is not raised; \
+          `false` turns it off.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 /// Whether a subtree the main block and a subquery both read is computed once.
 pub static SHARE_REPEATED_SUBTREES: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.shareRepeatedSubtrees",

@@ -89,6 +89,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.exec.agg.outputFilter", &EXEC_AGG_OUTPUT_FILTER),
+    ("krishiv.exec.join.directIndex", &EXEC_JOIN_DIRECT_INDEX),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
     ("krishiv.io.coalesceWasteBytes", &IO_COALESCE_WASTE_BYTES),
     ("krishiv.io.local.allowedRoots", &IO_LOCAL_ALLOWED_ROOTS),
@@ -547,6 +548,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.optimizer.payloadAboveAggregate",
         &PAYLOAD_ABOVE_AGGREGATE,
+    ),
+    (
+        "krishiv.optimizer.preservedSideSemiJoin",
+        &PRESERVED_SIDE_SEMI_JOIN,
     ),
     (
         "krishiv.optimizer.shareRepeatedSubtrees",
