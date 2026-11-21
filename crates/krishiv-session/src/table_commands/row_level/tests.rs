@@ -24,11 +24,11 @@ use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::batch::Batch;
 
 use super::Assignment;
+use crate::session::Session;
 
 /// Each rewrite's target and whether its request kept a `read_filter` (the partitions read), in
 /// order: the end-to-end side of the re-read rule (review 681c2e038 nit 1).
 pub(super) static READ_FILTERS: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
-use crate::session::Session;
 
 /// The table's files: name and rows (`id BIGINT, s STRING`).
 #[derive(Debug)]
