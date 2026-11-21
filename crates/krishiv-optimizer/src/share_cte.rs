@@ -238,8 +238,11 @@ fn shifts(root: &Arc<LogicalPlan>, direct: bool) -> Vec<Member> {
             continue;
         }
         let mut children = Vec::new();
-        p.for_each_expr(&mut |e| children.extend(subquery_plans(e)));
-        p.for_each_child(&mut |c| children.push(Arc::clone(c)));
+        // No candidate inside a security barrier (G2): a whole barrier may be shared, nothing in it.
+        if !matches!(p.node, PlanNode::SecurityBarrier { .. }) {
+            p.for_each_expr(&mut |e| children.extend(subquery_plans(e)));
+            p.for_each_child(&mut |c| children.push(Arc::clone(c)));
+        }
         stack.push((Arc::clone(&p), true));
         for c in &children {
             stack.push((Arc::clone(c), false));
@@ -402,6 +405,9 @@ fn walk(plan: &Arc<LogicalPlan>, f: &mut impl FnMut(&Arc<LogicalPlan>)) {
             continue;
         }
         f(&p);
+        if matches!(p.node, PlanNode::SecurityBarrier { .. }) {
+            continue;
+        }
         p.for_each_expr(&mut |e| stack.extend(subquery_plans(e)));
         p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
     }

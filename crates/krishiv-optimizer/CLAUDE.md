@@ -75,6 +75,7 @@ Paths are relative to this crate.
   unoptimised plans through the reference interpreter in `tests/it/support/eval.rs`.
 - Never changes a user's explicit `repartition(n)`.
 - Rules are plan-snapshot tested; IVM pass satisfies Σ incremental == query(Σ inputs).
+- Security barriers (E14, design `P3-E14-security-barrier.md`): a pass says which kind it is. An optimization (`dag::rewrite_up`, `rewrite_up_traced`, `Rewriter::new`, and walks of its own: `join_order`, `share_cte`) does not run inside a barrier unless it opts in (`rewrite_up_inside`, the `REWRITE_INSIDE` list, guarded where it moves predicates); a lowering (`rewrite_up_lowering`: `collation_keys` alone) runs inside with the same step. Predicate pushdown takes a conjunct into a barrier only when it is leakproof and a guarded trial brings it to rest in a `Filter` directly over a scan; guarded, every hand-off (`through`, `push_join`, `push_union`, `push_join_condition`, the `Filter` arm) checks `Guard::admit` on the rewritten form, and a new arm that moves a conjunct must too. `held`, eager/payload/late-payload rules and restriction treat a barrier as an opaque leaf; pruning and estimates pass through. A new rule passes the planted-leak tests in `tests/it/barrier.rs`.
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 

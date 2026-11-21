@@ -420,6 +420,7 @@ impl<'a> Estimator<'a> {
             }
             PlanNode::Sort { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Repartition { input, .. }
             // Rows pass through unchanged.

@@ -145,6 +145,20 @@ const REWRITE: [(&str, Rule); 8] = [
     ("PushDownLimit", limit::push_limit),
 ];
 
+/// What each [`REWRITE`] rule runs on the relations under a security barrier (design
+/// `P3-E14-security-barrier.md` G3'): every rule of the batch opted in, the two that move
+/// predicates in their guarded form; a rule added to the batch states its own here.
+const REWRITE_INSIDE: [Rule; 8] = [
+    project::remove_alias,
+    repartition::collapse,
+    fold_node,
+    empty::prune,
+    pushdown::push_filter_guarded,
+    pushdown::push_join_condition_guarded,
+    project::collapse,
+    limit::push_limit,
+];
+
 /// A rule application that changed the plan (`EXPLAIN VERBOSE`).
 #[derive(Debug, Clone)]
 pub struct RuleStep {
@@ -1075,9 +1089,9 @@ fn batch(
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     for round in 1..=MAX_ITERATIONS {
         let before = Arc::clone(&root);
-        for (rule_name, rule) in REWRITE {
+        for ((rule_name, rule), inside) in REWRITE.into_iter().zip(REWRITE_INSIDE) {
             let prev = Arc::clone(&root);
-            root = dag::rewrite_up(root, &mut |p| Ok(rule(p)))?;
+            root = dag::rewrite_up_inside(root, &mut |p| Ok(rule(p)), &mut |p| Ok(inside(p)))?;
             t.step(name, round, rule_name, &prev, &root);
         }
         if Arc::ptr_eq(&before, &root) {

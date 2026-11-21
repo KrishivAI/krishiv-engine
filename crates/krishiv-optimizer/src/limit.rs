@@ -71,6 +71,7 @@ pub(crate) fn max_rows(plan: &LogicalPlan) -> Option<u64> {
         | PlanNode::WithCte { input, .. }
         | PlanNode::Shift { input, .. }
         | PlanNode::Window { input, .. }
+        | PlanNode::SecurityBarrier { input, .. }
         | PlanNode::JoinHint { input, .. }
         | PlanNode::Sample { input, .. }
         | PlanNode::CollectMetrics { input, .. }
