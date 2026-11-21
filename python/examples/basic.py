@@ -6,6 +6,7 @@ from krishiv.sql import DataFrame, SparkSession
 
 def main() -> None:
     spark: SparkSession = SparkSession.builder.create()
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", "true")  # the notebook preview is off by default
     df: DataFrame = spark.sql("SELECT 1 AS a, 'x' AS b")
     print(repr(df))
     html: str | None = df._repr_html_()

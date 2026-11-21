@@ -123,6 +123,16 @@ class DataFrameReader:
     def json(self, path: str | list[str], **options: object) -> DataFrame:
         return self.load(path, format="json", **options)
 
+    def text(
+        self, paths: str | list[str], wholetext: bool = False, lineSep: str | None = None, **options: object
+    ) -> DataFrame:
+        """Reads text files into a ``value`` string column, a row per line (``wholetext=True``: a row
+        per file), as ``pyspark.sql.DataFrameReader.text``."""
+        options["wholetext"] = wholetext  # always set, as PySpark: it overrides an earlier option
+        if lineSep is not None:
+            options["lineSep"] = lineSep
+        return self.load(paths, format="text", **options)
+
 
 class DataFrameWriter:
     """Writes a :class:`DataFrame`'s rows to files (a subset of
