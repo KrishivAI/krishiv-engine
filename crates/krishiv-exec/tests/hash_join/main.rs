@@ -7,6 +7,7 @@
 #![cfg(not(loom))]
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
+mod asof;
 mod existence;
 mod fused_probe;
 mod idle;

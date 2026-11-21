@@ -480,6 +480,13 @@ impl<'a> Planner<'a> {
                 kind,
                 condition,
             } => self.join(left, right, *kind, condition, demand),
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => self.as_of_join(left, right, *kind, condition, as_of, demand),
             PlanNode::SubqueryAlias { input, .. } => {
                 self.demand = demand;
                 self.plan(input)

@@ -80,7 +80,8 @@ class KrishivEngine(Engine):
         self.checksum_in_run = checksum_in_run
         self._run_checksum: dict | None = None
         self.binary = runner_binary(binary)
-        self.conf = list(conf or [])
+        self._explicit_conf = list(conf or [])  # `--conf` as given; `setup` adds the dataset's defaults to a copy
+        self.conf = list(self._explicit_conf)  # the effective settings of the current (or last) dataset
         # Tables read from URLs (``--table NAME=URL``: s3://, https://, hf://); when given, the dataset
         # directory is not read (the runner is started without ``--data``).
         self.tables = {name: list(urls) for name, urls in (tables or {}).items()}
@@ -265,6 +266,17 @@ class KrishivEngine(Engine):
     def setup(self, dataset: Dataset) -> None:
         self._tmp.mkdir(parents=True, exist_ok=True)  # `teardown()` removes it; setup may run again
         self._dataset = dataset
+        # Settings the dataset's queries need (the asof suite's `spark.sql.join.asofJoin.enabled`); an explicit
+        # `--conf` of the same key wins.
+        # Rebuilt per setup, so one dataset's defaults never carry over to the next.
+        self.conf = list(self._explicit_conf)
+        conf_file = Path(dataset.root) / "session.conf"
+        if conf_file.is_file():
+            given = {k for k, _ in self._explicit_conf}
+            for line in conf_file.read_text().splitlines():
+                k, sep, v = line.strip().partition("=")
+                if sep and k not in given:
+                    self.conf.append((k, v))
         self._start()
 
     def timed_run(self, query: Query) -> tuple[int, float]:

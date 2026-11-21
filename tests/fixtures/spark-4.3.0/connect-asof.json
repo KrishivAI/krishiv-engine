@@ -1,0 +1,434 @@
+{
+ "spark": "4.3.0",
+ "generator": "tests/scripts/gen_connect_asof_goldens.py",
+ "left": {
+  "columns": [
+   "lk",
+   "lt",
+   "a"
+  ],
+  "rows": [
+   [
+    "x",
+    1,
+    1
+   ],
+   [
+    "x",
+    5,
+    2
+   ],
+   [
+    "x",
+    10,
+    3
+   ],
+   [
+    "y",
+    4,
+    4
+   ],
+   [
+    "x",
+    null,
+    5
+   ],
+   [
+    null,
+    3,
+    6
+   ],
+   [
+    "z",
+    7,
+    7
+   ]
+  ]
+ },
+ "right": {
+  "columns": [
+   "rk",
+   "rt",
+   "b"
+  ],
+  "rows": [
+   [
+    "x",
+    1,
+    101
+   ],
+   [
+    "x",
+    4,
+    102
+   ],
+   [
+    "x",
+    5,
+    103
+   ],
+   [
+    "x",
+    9,
+    104
+   ],
+   [
+    "y",
+    6,
+    105
+   ],
+   [
+    "x",
+    null,
+    106
+   ],
+   [
+    null,
+    3,
+    107
+   ]
+  ]
+ },
+ "cases": [
+  {
+   "name": "inner_backward_exact",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "swapped": false,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103"
+   ]
+  },
+  {
+   "name": "inner_backward_strict",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": false,
+   "keyed": true,
+   "swapped": false,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|5|2|x|4|102"
+   ]
+  },
+  {
+   "name": "inner_forward_exact",
+   "how": "inner",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "swapped": false,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "y|4|4|y|6|105"
+   ]
+  },
+  {
+   "name": "inner_forward_strict",
+   "how": "inner",
+   "direction": "forward",
+   "allow_exact": false,
+   "keyed": true,
+   "swapped": false,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "x|1|1|x|4|102",
+    "x|5|2|x|9|104",
+    "y|4|4|y|6|105"
+   ]
+  },
+  {
+   "name": "left_backward_exact",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "swapped": false,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ]
+  },
+  {
+   "name": "left_backward_strict",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": false,
+   "keyed": true,
+   "swapped": false,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|x|4|102",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ]
+  },
+  {
+   "name": "left_forward_exact",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "swapped": false,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|y|6|105",
+    "z|7|7|NULL|NULL|NULL"
+   ]
+  },
+  {
+   "name": "left_forward_strict",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": false,
+   "keyed": true,
+   "swapped": false,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|x|4|102",
+    "x|5|2|x|9|104",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|y|6|105",
+    "z|7|7|NULL|NULL|NULL"
+   ]
+  },
+  {
+   "name": "no_key_backward",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": false,
+   "swapped": false,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "NULL|3|6|NULL|3|107",
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "y|4|4|x|4|102",
+    "z|7|7|y|6|105"
+   ]
+  },
+  {
+   "name": "no_key_forward_left",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": false,
+   "swapped": false,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "NULL|3|6|NULL|3|107",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|x|4|102",
+    "z|7|7|x|9|104"
+   ]
+  },
+  {
+   "name": "swapped_operands",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "swapped": true,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|y|6|105",
+    "z|7|7|NULL|NULL|NULL"
+   ]
+  },
+  {
+   "name": "swapped_operands_forward",
+   "how": "inner",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "swapped": true,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "rows",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103"
+   ]
+  },
+  {
+   "name": "nearest",
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "swapped": false,
+   "tolerance": null,
+   "using": null,
+   "krishiv": "refused",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "y|4|4|y|6|105"
+   ]
+  },
+  {
+   "name": "tolerance",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "swapped": false,
+   "tolerance": 2,
+   "using": null,
+   "krishiv": "refused",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103"
+   ]
+  },
+  {
+   "name": "using_columns",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "swapped": false,
+   "tolerance": null,
+   "using": [
+    "k"
+   ],
+   "krishiv": "refused",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103"
+   ]
+  }
+ ],
+ "overflow": [
+  {
+   "name": "backward_overflow",
+   "direction": "backward",
+   "left": [
+    2147483647
+   ],
+   "right": [
+    -2
+   ],
+   "rows": null,
+   "error": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "name": "backward_overflow_farthest_row",
+   "direction": "backward",
+   "left": [
+    2147483647
+   ],
+   "right": [
+    -2,
+    2147483646
+   ],
+   "rows": null,
+   "error": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "name": "forward_overflow_later_row",
+   "direction": "forward",
+   "left": [
+    -2
+   ],
+   "right": [
+    0,
+    1,
+    2147483647
+   ],
+   "rows": null,
+   "error": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "name": "backward_no_overflow",
+   "direction": "backward",
+   "left": [
+    5
+   ],
+   "right": [
+    1,
+    3
+   ],
+   "rows": [
+    "5|3"
+   ],
+   "error": null
+  },
+  {
+   "name": "forward_no_overflow",
+   "direction": "forward",
+   "left": [
+    -2
+   ],
+   "right": [
+    0,
+    1
+   ],
+   "rows": [
+    "-2|0"
+   ],
+   "error": null
+  }
+ ]
+}

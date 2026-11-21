@@ -399,6 +399,7 @@ impl Lowerer {
                 JoinConstraint::NearestBy(n) => {
                     return Err(unsupported("NEAREST BY joins", n.span));
                 }
+                JoinConstraint::AsOf(c) => return self.as_of_join(plan, right, kind, c, j.span),
             }
         };
         Ok(self.node(
@@ -409,6 +410,52 @@ impl Lowerer {
                 condition,
             },
             j.span,
+        ))
+    }
+
+    /// `kind ASOF JOIN right MATCH_CONDITION (l op r) [ON | USING]` onto `plan` (Spark 4.3's
+    /// `AsOfJoin.fromMatchCondition`): the operands as written, put per side by the analyzer.
+    fn as_of_join(
+        &mut self,
+        plan: LogicalPlan,
+        right: LogicalPlan,
+        kind: IrJoin,
+        c: &AsOfCriteria,
+        span: Span,
+    ) -> R<LogicalPlan> {
+        let mut m = &c.match_condition;
+        while let ExprKind::Nested(inner) = &m.kind {
+            m = inner;
+        }
+        let ExprKind::Binary(l, op, r) = &m.kind else {
+            return Err(unsupported("this ASOF JOIN match condition", c.span));
+        };
+        let op = match op {
+            BinaryOp::GtEq => ">=",
+            BinaryOp::Gt => ">",
+            BinaryOp::LtEq => "<=",
+            BinaryOp::Lt => "<",
+            _ => return Err(unsupported("this ASOF JOIN match condition", c.span)),
+        };
+        let (l, r) = (arc(self.expr(l)?), arc(self.expr(r)?));
+        let as_of = krishiv_plan::AsOfMatch::sql(l, op, r)
+            .ok_or_else(|| unsupported("this ASOF JOIN match condition", c.span))?;
+        let condition = match &c.filter {
+            None => JoinCondition::None,
+            Some(AsOfFilter::On(e)) => JoinCondition::On(arc(self.expr(e)?)),
+            Some(AsOfFilter::Using(cols)) => {
+                JoinCondition::Using(cols.iter().map(|c| c.value.clone()).collect())
+            }
+        };
+        Ok(self.node(
+            PlanNode::AsOfJoin {
+                left: arc(plan),
+                right: arc(right),
+                kind,
+                condition,
+                as_of: Arc::new(as_of),
+            },
+            span,
         ))
     }
 

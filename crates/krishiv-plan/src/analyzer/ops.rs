@@ -33,7 +33,7 @@ use super::exprs::{
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, FileMetadata, TableKind};
 use crate::{
-    AttrId, BoundColumn, CteRef, Expr, ExprNode, FunctionCall, FunctionKind, Grouping,
+    AsOfMatch, AttrId, BoundColumn, CteRef, Expr, ExprNode, FunctionCall, FunctionKind, Grouping,
     JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanNode, ReadSource, ResolvedExpr,
     ResolvedFunction, Scan, SortOrder,
 };
@@ -1626,6 +1626,8 @@ pub(in crate::analyzer) use lift::*;
 mod sortlimit;
 
 mod join;
+
+mod asof;
 
 mod na;
 

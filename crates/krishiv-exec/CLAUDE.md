@@ -54,7 +54,18 @@ task; owner decision 2026-11-06); each task's build reports `broadcast_shared` o
 `join/merge.rs` sort-merge join (P2-T056): `SortMergeJoin` is the source over two `Sort`s in hash buckets of the keys
 (`Sort::bucket_reader`, `PipelineBuilder::set_merge_source`), `Merge` the merge of one bucket pair; a key's right rows
 are the group, spilled past `krishiv.exec.join.smj.bufferBytes`; `join/fallback.rs` runs a grace partition that will not
-split through the same `Merge`.
+split through the same `Merge`. `join/merge/asof.rs` the as-of merge (Spark 4.3's `ASOF JOIN`, `SortMergeJoinPlan::as_of`, codec feature
+`as_of_join`): both sorts also order by the as-of column (NULLs first, skipped), groups are the keys alone, and each
+left row takes the nearest right row of its group: without a residual two pointers whose place (and backward's candidate)
+carries across the left batches of a key, so a group is read once (`AsOfCursor`, metric `as_of_right_rows`); with one,
+pairs are evaluated per left batch, forward emits a row at its first passing pair and backward at the first right row past
+its value, the open rows' best rows copied out of each read chunk, reserved (`as_of_compact`; gauge `as_of_held_chunks`);
+Spark's distance (`AsOfMergeSpec::distance`, planned only when `may_raise`; `AsOfDistance` compiled at instantiation over
+a narrow batch of the columns it reads, `isnotnull` so no rule folds it) is evaluated where Spark evaluates it: SQL,
+forward only, on a row's match and its next passing row (one row per run matched at one right row); Connect
+(`distance_on_every_pair`, Spark's `RewriteAsOfJoin`), every passing pair in both directions, by the key's farthest pair
+without a residual (`as_of_finish` reads to the group's end forward); so an ANSI overflow raises where Spark's does; without ANSI a Connect distance, or a SQL forward one, of an integral type, or a decimal one `krishiv_plan::exact_decimal` does not prove exact, is `KRISHIV_UNSUPPORTED_FEATURE` (it would wrap or turn NULL, and Spark's `min_by` or forward comparison then picks by that order); a Connect join, or a SQL forward one, on floating-point values is refused too, ANSI or not (its distances rank unlike the values at the infinities); timestamp, date, interval and exact decimal distances run; `planner/join/asof.rs` plans `PlanNode::AsOfJoin` onto it (no key: one constant key; runtime-filter
+sites on the left only, and none where the residual or an evaluated distance may raise; nearest and tolerance are `KRISHIV_UNSUPPORTED_FEATURE`).
 `values/` (P2-T177) `ValueService` + `LocalValues`: runtime filters, subquery results and broadcast builds as
 versioned values (`ValueId`, `Version` are plan data), published as one partial per producer partition and visible
 once every producer partition published (count 1 unless the task says otherwise; a retried partition's partial is

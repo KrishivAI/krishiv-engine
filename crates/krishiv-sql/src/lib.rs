@@ -143,6 +143,10 @@ pub struct ParserOptions {
     /// `DEFAULT COLLATION`; off, `ALTER SCHEMA .. DEFAULT COLLATION` is
     /// `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`.
     pub schema_level_collations: bool,
+    /// `spark.sql.join.asofJoin.enabled` (Spark 4.3, off by default):
+    /// `ASOF JOIN` after a relation starts an as-of join; off, an as-of join
+    /// is `UNSUPPORTED_FEATURE.ASOF_JOIN` and `ASOF` stays a name.
+    pub asof_join: bool,
 }
 
 impl Default for ParserOptions {
@@ -190,6 +194,7 @@ impl ParserOptions {
                 false,
             ),
             schema_level_collations: on("spark.sql.collation.schemaLevel.enabled", false),
+            asof_join: on("spark.sql.join.asofJoin.enabled", false),
         }
     }
 }

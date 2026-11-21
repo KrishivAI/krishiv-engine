@@ -13,6 +13,26 @@ impl Resolver<'_> {
         condition: &JoinCondition,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
+        self.join_with(p, left, right, kind, condition, None, env)
+    }
+
+    /// A join, or with `as_of` an as-of join: the same inputs, condition, `USING` expansion and
+    /// output (Spark's `ResolveAsOfJoin` reuses the join's `USING` resolution), the match bound
+    /// over the two inputs.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the join's parts, as the plan node holds them"
+    )]
+    pub(in crate::analyzer) fn join_with(
+        &mut self,
+        p: &LogicalPlan,
+        left: &Arc<LogicalPlan>,
+        right: &Arc<LogicalPlan>,
+        kind: JoinKind,
+        condition: &JoinCondition,
+        as_of: Option<&AsOfMatch>,
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
         let lateral = matches!(kind, JoinKind::LateralInner | JoinKind::LateralLeft);
         let l = if lateral {
             self.rel(left, env)?
@@ -107,6 +127,11 @@ impl Resolver<'_> {
             out.extend(r.out.iter().map(|a| nullable(a, rn)));
         }
         let rels = [&l, &r];
+        // Spark binds the match before its `CheckAnalysis` checks the condition.
+        let as_of = match as_of {
+            Some(m) => Some(Arc::new(self.as_of_match(p.origin, m, &l, &r, env)?)),
+            None => None,
+        };
         let mut keys = None;
         let mut kind = kind;
         let condition = match condition {
@@ -197,14 +222,23 @@ impl Resolver<'_> {
         // Columns an earlier `USING` join merged away stay reachable above this join, and its
         // condition may read them (`a NATURAL JOIN b JOIN c ON b.k = c.k`): the inputs are
         // revealed, the join runs over the wide inputs and a projection restores the output.
-        // The `_metadata` of a file table an `ON` condition reads is widened into its input first.
+        // The `_metadata` of a file table an `ON` condition or an as-of operand reads is widened
+        // into its input first (Spark's `AddMetadataColumns` adds it to the side's output).
         let (l0, r0) = (l.clone(), r.clone());
-        let (l, r) = match (&condition, &kind) {
-            (JoinCondition::On(c), k) if !matches!(k, JoinKind::Existence(_)) => (
-                self.reveal_exprs(&l0, std::iter::once(c))?,
-                self.reveal_exprs(&r0, std::iter::once(c))?,
-            ),
-            _ => (l0.clone(), r0.clone()),
+        let read: Vec<&Arc<Expr>> = match &condition {
+            JoinCondition::On(c) => Some(c),
+            _ => None,
+        }
+        .into_iter()
+        .chain(as_of.iter().flat_map(|m| [&m.left, &m.right]))
+        .collect();
+        let (l, r) = if read.is_empty() || matches!(kind, JoinKind::Existence(_)) {
+            (l0.clone(), r0.clone())
+        } else {
+            (
+                self.reveal_exprs(&l0, read.iter().copied())?,
+                self.reveal_exprs(&r0, read.iter().copied())?,
+            )
         };
         let wide = if !matches!(kind, JoinKind::Existence(_)) {
             let (wl, wr) = (self.reveal_hidden(&l)?, self.reveal_hidden(&r)?);
@@ -213,11 +247,20 @@ impl Resolver<'_> {
             None
         };
         let (jl, jr) = wide.as_ref().map_or((&l, &r), |(a, b)| (a, b));
-        let node = PlanNode::Join {
-            left: Arc::clone(&jl.plan),
-            right: Arc::clone(&jr.plan),
-            kind,
-            condition,
+        let node = match as_of {
+            Some(as_of) => PlanNode::AsOfJoin {
+                left: Arc::clone(&jl.plan),
+                right: Arc::clone(&jr.plan),
+                kind,
+                condition,
+                as_of,
+            },
+            None => PlanNode::Join {
+                left: Arc::clone(&jl.plan),
+                right: Arc::clone(&jr.plan),
+                kind,
+                condition,
+            },
         };
         let Some(keys) = keys else {
             let Some((wl, wr)) = &wide else {

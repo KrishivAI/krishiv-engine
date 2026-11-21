@@ -66,6 +66,10 @@ use crate::operators::{Sort, SortKey, global_ref, local_mut};
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::sync::{Event, Mutex, lock};
 
+mod asof;
+use asof::{AsOfCursor, AsOfMerge, AsOfSlice};
+pub use asof::{AsOfDistance, AsOfMergeDirection, AsOfMergeSpec};
+
 /// Candidate pairs whose residual condition is evaluated at once.
 const PAIR_BATCH: usize = 1024;
 /// A spill writer's scratch ([`super::SPILL_SCRATCH`]).
@@ -418,6 +422,9 @@ enum Phase {
     /// Left rows of the key are done: the right rows the join returns by
     /// their marks.
     Drain,
+    /// An as-of join's left rows `start..end` of the current batch, each with its
+    /// nearest right row of the group.
+    AsOf(AsOfSlice),
 }
 
 /// Left rows being joined with the group.
@@ -451,6 +458,10 @@ pub(crate) struct Merge {
     group_limit: usize,
     partition: u32,
     counters: Arc<MergeCounters>,
+    /// An as-of join's match (`None`: every matching pair).
+    as_of: Option<Arc<AsOfMerge>>,
+    /// An as-of join's place in the current group.
+    as_of_cursor: AsOfCursor,
 }
 
 /// What a merge joins and under which limits.
@@ -467,6 +478,8 @@ pub(crate) struct MergeSpec {
     pub(crate) right_columns: usize,
     pub(crate) group_limit: usize,
     pub(crate) counters: Arc<MergeCounters>,
+    /// An as-of join's match.
+    pub(crate) as_of: Option<Arc<AsOfMerge>>,
 }
 
 /// A merge's counters.
@@ -476,6 +489,11 @@ pub(crate) struct MergeCounters {
     /// Keys joined in place ([`Merge::join_run`]), not through the phases.
     pub(crate) keys_in_place: AtomicU64,
     pub(crate) spill_bytes: AtomicU64,
+    /// Right rows an as-of merge moved past (a group read once counts each row once).
+    pub(crate) as_of_right_rows: AtomicU64,
+    /// The most right chunks the open rows' best rows kept alive at once (backward with a
+    /// residual, after each read chunk is compacted): at most one copy and the chunk being read.
+    pub(crate) as_of_held_chunks: AtomicU64,
 }
 
 /// A batch of one row of NULLs, in `schema`'s first `columns` columns.
@@ -518,6 +536,8 @@ impl Merge {
             group_limit: spec.group_limit,
             partition: env.partition,
             counters: spec.counters,
+            as_of: spec.as_of,
+            as_of_cursor: AsOfCursor::default(),
         })
     }
 
@@ -546,6 +566,7 @@ impl Merge {
                 Phase::NextSlice => self.next_slice().await?,
                 Phase::Pairs(slice) => self.pairs(slice).await?,
                 Phase::Drain => self.drain().await?,
+                Phase::AsOf(slice) => self.as_of_step(slice).await?,
             }
         }
     }
@@ -596,7 +617,7 @@ impl Merge {
     /// its rows alone (every pair, or each row of one side once, or none),
     /// and the other rows are those of keys with no match.
     fn joins_whole_keys(&self) -> bool {
-        self.shared.filter.is_none() && !self.shared.single_match
+        self.shared.filter.is_none() && !self.shared.single_match && self.as_of.is_none()
     }
 
     /// Joins the streams' current batches key by key, in place: what the
@@ -923,6 +944,11 @@ impl Merge {
                 _ => {}
             }
         }
+        if let Some(as_of) = self.as_of.clone() {
+            // Without a residual the walk goes on where the key's last slice left the group.
+            self.phase = Phase::AsOf(self.as_of_slice(&as_of, start, end)?);
+            return Ok(());
+        }
         self.chunks = Chunks::default();
         let matched = if self.shared.filter.is_some() {
             vec![false; end - start]
@@ -1143,6 +1169,9 @@ impl Merge {
     /// The right rows the join returns by their marks; then the group goes.
     async fn drain(&mut self) -> Result<()> {
         let t = self.shared.join_type;
+        if self.as_of.is_some() {
+            self.as_of_finish().await?;
+        }
         if !t.builds_preserved() || !self.next_chunk().await? {
             self.end_group();
             return Ok(());
@@ -1183,8 +1212,18 @@ impl Merge {
         g.file = None;
         g.rows = 0;
         g.any_left = false;
-        self.chunks = Chunks::default();
+        self.end_chunks();
+        self.as_of_cursor = AsOfCursor::default();
         self.phase = Phase::Compare;
+    }
+
+    /// Stops reading the group's chunks; a spill file read part way gives back its reader's memory.
+    fn end_chunks(&mut self) {
+        let reading = self.chunks.reader.is_some();
+        self.chunks = Chunks::default();
+        if reading {
+            self.handle.release_credit();
+        }
     }
 
     /// Up to a batch of the gathered output rows.
@@ -1289,6 +1328,7 @@ pub struct SortMergeJoin {
     left_schema: SchemaRef,
     right_schema: SchemaRef,
     counters: Arc<MergeCounters>,
+    as_of: Option<Arc<AsOfMerge>>,
 }
 
 impl fmt::Debug for SortMergeJoin {
@@ -1326,6 +1366,30 @@ impl SortMergeJoin {
     /// As the hash join's; `KRISHIV_UNSUPPORTED_FEATURE` for a null-aware anti
     /// join or a key type the sort cannot order.
     pub fn try_new(spec: JoinSpec) -> Result<Self> {
+        Self::try_new_as_of(spec, None)
+    }
+
+    /// A sort-merge join, or with `as_of` an as-of join (Spark 4.3's `SortMergeAsOfJoinExec`):
+    /// each input is also sorted on its as-of column within the keys, and each left row
+    /// takes the nearest right row of its key.
+    ///
+    /// # Errors
+    /// As [`SortMergeJoin::try_new`]'s; `KRISHIV_UNSUPPORTED_FEATURE` for an as-of join
+    /// other than inner or left outer, or an as-of column the sort cannot order.
+    pub fn try_new_as_of(spec: JoinSpec, as_of: Option<AsOfMergeSpec>) -> Result<Self> {
+        Self::try_new_with_distance(spec, as_of, None)
+    }
+
+    /// [`SortMergeJoin::try_new_as_of`] with the compiled distance check of
+    /// [`AsOfMergeSpec::distance`].
+    ///
+    /// # Errors
+    /// As [`SortMergeJoin::try_new_as_of`]'s.
+    pub fn try_new_with_distance(
+        spec: JoinSpec,
+        as_of: Option<AsOfMergeSpec>,
+        distance: Option<AsOfDistance>,
+    ) -> Result<Self> {
         if spec.join_type == JoinType::NullAwareAnti {
             return Err(super::unsupported("a null-aware anti sort-merge join"));
         }
@@ -1334,7 +1398,21 @@ impl SortMergeJoin {
             Arc::clone(&spec.build_schema),
         );
         let sort_keys = |keys: &[usize]| keys.iter().map(|&k| SortKey::asc(k)).collect::<Vec<_>>();
-        let (lk, rk) = (sort_keys(&spec.probe_keys), sort_keys(&spec.build_keys));
+        let (mut lk, mut rk) = (sort_keys(&spec.probe_keys), sort_keys(&spec.build_keys));
+        let as_of = match as_of {
+            None => None,
+            Some(a) => {
+                if !matches!(spec.join_type, JoinType::Inner | JoinType::LeftOuter)
+                    || spec.single_match
+                {
+                    return Err(super::unsupported("an as-of join other than inner or left"));
+                }
+                let merge = AsOfMerge::new(&spec.probe_schema, &spec.build_schema, &a, distance)?;
+                lk.push(SortKey::asc(merge.left_column));
+                rk.push(SortKey::asc(merge.right_column));
+                Some(Arc::new(merge))
+            }
+        };
         let strict = |keys: &[usize], null_safe: &[bool]| -> Arc<[usize]> {
             keys.iter()
                 .zip(null_safe)
@@ -1351,8 +1429,9 @@ impl SortMergeJoin {
         let right_sort = Sort::new(Arc::clone(&right_schema), &rk, scope)?
             .with_hash_buckets(&spec.build_keys)?
             .read_by_bucket();
-        let left_keys = KeyEncoder::new(&left_schema, &lk)?;
-        let right_keys = KeyEncoder::new(&right_schema, &rk)?;
+        // An as-of join's groups are its keys alone; the as-of column only orders them.
+        let left_keys = KeyEncoder::new(&left_schema, &sort_keys(&spec.probe_keys))?;
+        let right_keys = KeyEncoder::new(&right_schema, &sort_keys(&spec.build_keys))?;
         let dictionary = |s: &SchemaRef| {
             s.fields()
                 .iter()
@@ -1375,6 +1454,7 @@ impl SortMergeJoin {
             left_schema,
             right_schema,
             counters: Arc::default(),
+            as_of,
         })
     }
 
@@ -1387,7 +1467,11 @@ impl SortMergeJoin {
 
 impl Source for SortMergeJoin {
     fn name(&self) -> &'static str {
-        "SortMergeJoin"
+        if self.as_of.is_some() {
+            "SortMergeAsOfJoin"
+        } else {
+            "SortMergeJoin"
+        }
     }
 
     fn schema(&self) -> SchemaRef {
@@ -1470,6 +1554,7 @@ impl Source for SortMergeJoin {
                     right_columns: self.right_schema.fields().len(),
                     group_limit: l.group_limit,
                     counters: Arc::clone(&self.counters),
+                    as_of: self.as_of.clone(),
                 };
                 let merge = Merge::new(Arc::clone(&self.shared), spec, &l.env)?;
                 l.merge = Some((merge, slot));
@@ -1478,7 +1563,7 @@ impl Source for SortMergeJoin {
     }
 
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
-        vec![
+        let mut metrics = vec![
             (
                 std::borrow::Cow::Borrowed("groups_spilled"),
                 Metric::Count(self.counters.groups_spilled.load(Ordering::Relaxed)),
@@ -1491,7 +1576,18 @@ impl Source for SortMergeJoin {
                 std::borrow::Cow::Borrowed("spill_file_bytes"),
                 Metric::Count(self.counters.spill_bytes.load(Ordering::Relaxed)),
             ),
-        ]
+        ];
+        if self.as_of.is_some() {
+            metrics.push((
+                std::borrow::Cow::Borrowed("as_of_right_rows"),
+                Metric::Count(self.counters.as_of_right_rows.load(Ordering::Relaxed)),
+            ));
+            metrics.push((
+                std::borrow::Cow::Borrowed("as_of_held_chunks"),
+                Metric::Count(self.counters.as_of_held_chunks.load(Ordering::Relaxed)),
+            ));
+        }
+        metrics
     }
 }
 

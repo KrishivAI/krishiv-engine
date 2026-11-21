@@ -932,6 +932,12 @@ fn runs_anywhere(f: &ResolvedFunction, i: usize, ansi: bool) -> bool {
         .is_some_and(|a| !krishiv_plan::may_raise(a, ansi) && krishiv_plan::is_deterministic(a))
 }
 
+/// `e IS NOT NULL`, built after optimization (the optimizer folds it over a non-nullable `e`,
+/// which would drop `e`'s evaluation and so what it raises).
+pub(crate) fn is_not_null(e: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
+    logic::is_null(false, e)
+}
+
 /// Kleene `l AND r`.
 pub(crate) fn and(l: Arc<dyn PhysExpr>, r: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
     logic::and_or(true, l, r, false)

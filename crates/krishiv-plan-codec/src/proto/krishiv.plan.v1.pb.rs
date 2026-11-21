@@ -1178,6 +1178,34 @@ pub struct SortMergeJoinNode {
     pub residual: ::core::option::Option<Residual>,
     #[prost(bool, tag = "8")]
     pub single_match: bool,
+    /// feature: as_of_join
+    #[prost(message, optional, tag = "9")]
+    pub as_of: ::core::option::Option<AsOfMerge>,
+}
+/// feature: as_of_join
+/// An as-of join's match: the as-of column of each input, the direction and whether an equal
+/// value matches.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AsOfMerge {
+    /// feature: as_of_join
+    #[prost(uint64, tag = "1")]
+    pub left_column: u64,
+    /// feature: as_of_join
+    #[prost(uint64, tag = "2")]
+    pub right_column: u64,
+    /// feature: as_of_join
+    #[prost(enumeration = "AsOfMergeDirection", tag = "3")]
+    pub direction: i32,
+    /// feature: as_of_join
+    #[prost(bool, tag = "4")]
+    pub allow_exact: bool,
+    /// feature: as_of_join
+    #[prost(message, optional, tag = "5")]
+    pub distance: ::core::option::Option<Residual>,
+    /// feature: as_of_join
+    /// The distance counts on every passing pair, in both directions (Spark's Connect form).
+    #[prost(bool, tag = "6")]
+    pub distance_on_every_pair: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {
@@ -2627,6 +2655,36 @@ impl JoinType {
             "JOIN_TYPE_RIGHT_OUTER" => Some(Self::RightOuter),
             "JOIN_TYPE_EXISTENCE" => Some(Self::Existence),
             "JOIN_TYPE_FULL_OUTER" => Some(Self::FullOuter),
+            _ => None,
+        }
+    }
+}
+/// feature: as_of_join
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AsOfMergeDirection {
+    Unspecified = 0,
+    Backward = 1,
+    Forward = 2,
+}
+impl AsOfMergeDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "AS_OF_MERGE_DIRECTION_UNSPECIFIED",
+            Self::Backward => "AS_OF_MERGE_DIRECTION_BACKWARD",
+            Self::Forward => "AS_OF_MERGE_DIRECTION_FORWARD",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "AS_OF_MERGE_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "AS_OF_MERGE_DIRECTION_BACKWARD" => Some(Self::Backward),
+            "AS_OF_MERGE_DIRECTION_FORWARD" => Some(Self::Forward),
             _ => None,
         }
     }
