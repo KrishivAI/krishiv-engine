@@ -98,6 +98,8 @@ def run_file(version: str, tests_dir: Path, rel: str, out_dir: Path, server_cmd:
     env = {k: v for k, v in os.environ.items() if k != "SPARK_HOME"}
     env.pop("PYTHONPATH", None)  # the installed pyspark is the only one (see `stage_tests`)
     env["SPARK_CONNECT_TESTING_REMOTE"] = f"sc://127.0.0.1:{port}"
+    # Remote-only mode, as with pyspark-client: no JVM session behind the tests (from p3/p31-pb01-nightly).
+    env["SPARK_SKIP_CONNECT_COMPAT_TESTS"] = "1"
     cmd = [
         sys.executable,
         "-m",
