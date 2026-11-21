@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Serves the built UI and a fixture `/api/internal/*`, for the page snapshot check and for looking at the pages.
 
-    python ui/tests/fixture_server.py [--port 0]    # prints the port; the token is `fixture`
+    python ui/tests/fixture_server.py [--port 0] [--mode server|embedded|profiles] [--role operator|admin]
+    # prints the address; the token is `fixture`
 
 The routes and JSON shapes are those of `krishiv_server::internal`; the data is `fixtures.json`. The event stream
-sends the live list once a second, as the real one does.
+sends the live list once a second, as the real one does. `--mode` chooses which console the fixture is: `embedded`
+reports one session and lists only its queries; `profiles` has the history and a query's page and refuses the rest,
+as the real sources do. One more query has a page, in every mode: the stored profile of TPC-H Q9 (`Q9_ID`).
 """
 
 from __future__ import annotations
@@ -85,7 +88,13 @@ ENVIRONMENT = {
 CATALOG = {
     "catalogs": [{"name": "spark_catalog"}, {"name": XSS}],
     "spark_catalog": {"schemas": [{"name": "default"}]},
-    "default": {"tables": [{"name": "orders"}, {"name": "lineitem"}]},
+    "default": {
+        "tables": [
+            {"name": "orders", "is_temporary": False},
+            {"name": "lineitem", "is_temporary": False},
+            {"name": "recent_orders", "is_temporary": True},
+        ]
+    },
     "orders": {
         "columns": [
             {"name": "o_orderkey", "data_type": "bigint"},
@@ -95,13 +104,120 @@ CATALOG = {
 }
 # Editor runs: a statement containing `sleep` stays running until it is cancelled.
 RUNS: dict[str, dict] = {}
+MODES = ("server", "embedded", "profiles")
+SESSION_ID = "01932a40-1a00-7a01-8001-5e5510000001"
+# What a console over stored profiles answers: the history, a query's page and the health the page reads its mode from.
+# TPC-H Q9 as a stored profile: the document the Python viewer's tests read, at SF 0.01.
+Q9_ID = "01932a40-1a00-7a01-8001-000000000009"
+# A query whose plan arrives with the third answer; the count of answers so far.
+LATE_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000b"
+LATE_PLAN_ASKED = [0]
+# A query the fixture answers with no plan tree.
+NO_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000a"
+NO_PLAN_ASKED = [0]
+Q9_PROFILE = json.loads(
+    (
+        HERE.parent.parent / "python" / "tests" / "fixtures" / "q09-profile.json"
+    ).read_text()
+)
+# A profile's metric -> the operator column the page reads, as `ProfilesSource::from_profiles` names them.
+OPERATOR_METRICS = {
+    "drivers": "drivers",
+    "rows_in": "rows_in",
+    "rows_out": "rows_out",
+    "compute_ns": "compute_time_ns",
+    "blocked_io_ns": "blocked_on_io_ns",
+    "blocked_memory_ns": "blocked_on_memory_ns",
+    "blocked_sink_ns": "blocked_on_sink_ns",
+    "peak_reserved_bytes": "peak_reserved_bytes",
+    "spilled_bytes": "spilled_bytes",
+}
+PROFILES_ROUTES = (
+    "/api/internal/health",
+    "/api/internal/history",
+    "/api/internal/queries/",
+    "/api/internal/compare",
+)
 
 
-def route(path: str) -> object | None:
+def history(query: str) -> list[dict]:
+    """The history under the page's filters, as `krishiv_server::internal` applies them: any part of the client's
+    name, a tag by its key or as `key=value`."""
+    asked = {k: v[0] for k, v in parse_qs(query).items()}
+    client, tag = asked.get("client", "").lower(), asked.get("tag", "")
+    return [
+        q
+        for q in DATA["history"]
+        if client in (q.get("client_type") or "").lower()
+        and (
+            not tag
+            or any(tag in (k, f"{k}={v}") for k, v in (q.get("tags") or {}).items())
+        )
+    ]
+
+
+def stored_detail(query_id: str, profile: dict, sql: str) -> dict:
+    """A query's page from its stored profile, as the console over stored profiles answers it: the profile's
+    operators in id order (each with its plan node and role), the one with the most compute time and the
+    profile's plan tree. A stored profile without a `usage` member has
+    no CPU time, peak memory or row count, and the page says so. This run has no warning: nothing spilled, no
+    driver did most of an operator's work and nothing waited for memory."""
+    operators = [
+        {
+            "operator_id": o["id"],
+            "node_id": o["node"],
+            "name": o["name"],
+            "role": o["role"],
+        }
+        | {column: o["metrics"][metric] for column, metric in OPERATOR_METRICS.items()}
+        for o in sorted(profile["operators"], key=lambda o: o["id"])
+    ]
+    hot = max(operators, key=lambda o: o["compute_ns"])
+    return {
+        "query": {
+            "query_id": query_id,
+            "state": "finished",
+            "principal": "ann",
+            "query_text": sql,
+            "submitted_at": 1793988000000000,
+            "wall_ns": profile["query"]["wall_time_ns"],
+            "cpu_ns": None,
+            "peak_memory_bytes": None,
+            "rows_produced": None,
+            "spill_bytes": None,
+            "bytes_read": None,
+        },
+        "operators": operators,
+        "hot_operator": {
+            "operator_id": hot["operator_id"],
+            "operator": hot["name"],
+            "compute_ns": hot["compute_ns"],
+        },
+        # The server sends a node's id, name and children, never its detail text.
+        "plan": [
+            {"id": n["id"], "name": n["name"], "children": n["children"]}
+            for n in profile["plan"]
+        ],
+        "warnings": [],
+    }
+
+
+Q9_DETAIL = stored_detail(
+    Q9_ID,
+    Q9_PROFILE,
+    (HERE.parent.parent / "bench" / "queries" / "tpch" / "q09.sql").read_text().strip(),
+)
+
+
+def route(
+    path: str, mode: str = "server", role: str = "admin", query: str = ""
+) -> object | None:
     d = DATA
     parts = path.split("/")
+    if mode == "profiles" and not path.startswith(PROFILES_ROUTES):
+        return None
     if path == "/api/internal/environment":
-        return ENVIRONMENT
+        return ENVIRONMENT if role == "admin" else None
     if path == "/api/internal/catalog/catalogs":
         return {"catalogs": CATALOG["catalogs"]}
     if len(parts) == 6 and parts[5] == "schemas":
@@ -113,13 +229,31 @@ def route(path: str) -> object | None:
     if path.startswith("/api/internal/sql/") and parts[-1] in RUNS:
         return RUNS[parts[-1]]
     if path == "/api/internal/health":
-        return d["health"]
+        return d["health"] | {
+            "mode": mode,
+            "session_id": SESSION_ID if mode == "embedded" else None,
+            "role": role,
+        }
     if path == "/api/internal/queries":
         return {"queries": d["live"]}
     if path == "/api/internal/history":
-        return {"queries": d["history"]}
+        return {"queries": history(query)}
     if path == "/api/internal/resources":
         return {"memory": d["resources"]["memory"], "caches": d["health"]["caches"]}
+    if path == f"/api/internal/queries/{Q9_ID}":
+        return Q9_DETAIL
+    if path == f"/api/internal/queries/{NO_PLAN_ID}":
+        # An ended query whose plan the source will never have (a server with no history store, a query
+        # trimmed out of it): the page is told not to wait.
+        NO_PLAN_ASKED[0] += 1
+        return d["detail"] | {"plan": None, "plan_pending": False}
+    if path == f"/api/internal/queries/{LATE_PLAN_ID}":
+        # A query that has just ended: its profile is written a moment later, so the first answers carry no
+        # plan and a later one does.
+        LATE_PLAN_ASKED[0] += 1
+        return d["detail"] | (
+            {} if LATE_PLAN_ASKED[0] > 2 else {"plan": None, "plan_pending": True}
+        )
     if path.startswith("/api/internal/queries/"):
         return d["detail"]
     return None
@@ -130,6 +264,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *_: object) -> None:
         pass
+
+    @property
+    def mode(self) -> str:
+        return self.server.mode  # type: ignore[attr-defined]
+
+    @property
+    def role(self) -> str:
+        return self.server.role  # type: ignore[attr-defined]
 
     def end_headers(self) -> None:
         self.send_header("Content-Security-Policy", self.csp)
@@ -142,6 +284,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
+
+    def cookie_name(self) -> str:
+        """The session cookie's name carries the port, as the server's does: cookies are not kept per port.
+
+        The port is the listener's own, never text from the request (the real server takes it from a `Host`
+        header it has already checked against its allowlist).
+        """
+        return f"krishiv_ui_token_{int(self.server.server_address[1])}"
 
     def do_GET(self) -> None:
         url = urlparse(self.path)
@@ -159,7 +309,7 @@ class Handler(BaseHTTPRequestHandler):
             authorised = (
                 self.headers.get("Authorization") == f"Bearer {TOKEN}"
                 or f"token={TOKEN}" in url.query
-                or f"krishiv_ui_token={TOKEN}" in self.headers.get("Cookie", "")
+                or f"{self.cookie_name()}={TOKEN}" in self.headers.get("Cookie", "")
             )
             if not authorised:
                 return self.send_json(
@@ -169,16 +319,24 @@ class Handler(BaseHTTPRequestHandler):
                         "message": "a valid UI token is required",
                     },
                 )
-            if url.path == "/api/internal/events":
+            self.server.asked.append(url.path)  # type: ignore[attr-defined]
+            if url.path == "/api/internal/health" and self.server.health_failures > 0:  # type: ignore[attr-defined]
+                self.server.health_failures -= 1  # type: ignore[attr-defined]
+                return self.send_json(
+                    503,
+                    {"error": "unavailable", "message": "the console is starting"},
+                )
+            if url.path == "/api/internal/events" and self.mode != "profiles":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 try:
                     while True:
-                        self.wfile.write(
-                            f"event: environment\ndata: {json.dumps(ENVIRONMENT)}\n\n".encode()
-                        )
+                        if self.role == "admin":
+                            self.wfile.write(
+                                f"event: environment\ndata: {json.dumps(ENVIRONMENT)}\n\n".encode()
+                            )
                         self.wfile.write(
                             f"event: queries\ndata: {json.dumps({'queries': DATA['live']})}\n\n".encode()
                         )
@@ -186,7 +344,15 @@ class Handler(BaseHTTPRequestHandler):
                         time.sleep(1)
                 except (BrokenPipeError, ConnectionResetError):
                     return None
-            body = route(url.path)
+            if url.path == "/api/internal/environment" and self.role != "admin":
+                return self.send_json(
+                    403,
+                    {
+                        "error": "forbidden",
+                        "message": "the principal's role does not allow this",
+                    },
+                )
+            body = route(url.path, self.mode, self.role, url.query)
             return (
                 self.send_json(200, body)
                 if body is not None
@@ -235,7 +401,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204)
             self.send_header(
                 "Set-Cookie",
-                f"krishiv_ui_token={TOKEN}; HttpOnly; SameSite=Strict; Path=/api/internal",
+                f"{self.cookie_name()}={TOKEN}; HttpOnly; SameSite=Strict; Path=/api/internal",
             )
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -254,6 +420,20 @@ class Handler(BaseHTTPRequestHandler):
                     "error": f"cannot parse {XSS}",
                     "error_class": "PARSE_SYNTAX_ERROR",
                 }
+            elif "wide" in sql:
+                # A result wider and longer than a phone's screen, with one value far longer than a line.
+                RUNS[run_id] = {
+                    "state": "finished",
+                    "columns": [f"a_long_column_name_{i}" for i in range(12)],
+                    "rows": [
+                        [
+                            "lorem ipsum " * 50 if (r, c) == (0, 1) else r * 1000 + c
+                            for c in range(12)
+                        ]
+                        for r in range(40)
+                    ],
+                    "truncated": False,
+                }
             else:
                 RUNS[run_id] = {
                     "state": "finished",
@@ -271,13 +451,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"cancelled": True})
 
 
-def serve(port: int = 0) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+def serve(
+    port: int = 0, mode: str = "server", role: str = "admin", health_failures: int = 0
+) -> ThreadingHTTPServer:
+    """The fixture server as a console of `mode` for a caller of `role` (the settings are the administrator's);
+    `asked` collects the `/api/internal/*` paths pages requested. The first `health_failures` requests for the
+    health answer 503, as a console that is let in before its server can answer."""
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server.mode = mode  # type: ignore[attr-defined]
+    server.role = role  # type: ignore[attr-defined]
+    server.asked = []  # type: ignore[attr-defined]
+    server.health_failures = health_failures  # type: ignore[attr-defined]
+    return server
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=0)
-    server = serve(ap.parse_args().port)
+    ap.add_argument("--mode", choices=MODES, default="server")
+    ap.add_argument("--role", choices=("operator", "admin"), default="admin")
+    args = ap.parse_args()
+    server = serve(args.port, args.mode, args.role)
     print(f"http://127.0.0.1:{server.server_address[1]}/?token={TOKEN}", flush=True)
     server.serve_forever()

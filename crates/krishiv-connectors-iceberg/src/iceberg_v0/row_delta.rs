@@ -63,18 +63,20 @@
 //! replaced the scan with an empty relation, `scan == null`); the checks run
 //! in `validate.rs`'s fixed order; Puffin blob order and file counters follow
 //! data file paths, not Java's hash order; a position delete file's
-//! `split_offsets` are not written; the positions a task collects and the
-//! delete files it encodes are not charged to the query's memory.
+//! `split_offsets` are not written; the memory charge is an estimate: 8 bytes per position a
+//! task collects (and per absorbed one), held (v3) until the statement's commit returns,
+//! and each delete file's bytes while it is built and uploaded.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
+use super::types::arrow_schema;
 use arrow_array::RecordBatch;
 use iceberg::spec::{DataFile, FormatVersion, TableMetadata};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::planner::RowLevelOperation;
 use krishiv_io::PushdownExpr;
-use krishiv_memory::ConsumerHandle;
+use krishiv_memory::{ConsumerHandle, Reservation};
 use roaring::RoaringTreemap;
 
 use super::append::{WriteIds, write_new_manifests};
@@ -101,6 +103,9 @@ pub(crate) const MERGE_MODE: &str = "write.merge.mode";
 
 /// The branch a row delta commits to.
 const BRANCH: &str = "main";
+
+/// Bytes charged per deleted position (uncompressed).
+const POSITION_BYTES: usize = 8;
 
 /// How a row-level statement changes a table (Java's `RowLevelOperationMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,6 +215,12 @@ impl MergeOnReadWrite {
         }))
     }
 
+    /// Fails on a NULL in a required column of the replacement rows of an `UPDATE`.
+    pub(crate) fn check_nulls(&self, rows: &RecordBatch) -> Result<(), KrishivError> {
+        let table = arrow_schema(self.target.base.current_schema())?;
+        super::sink::check_required(&table, rows)
+    }
+
     /// The writer of one task (`partition_id`, Java's partition id in file
     /// names), its data files' and loaded deletes' memory drawn from `mem`.
     #[must_use]
@@ -218,6 +229,8 @@ impl MergeOnReadWrite {
             write: Arc::clone(self),
             partition_id,
             attempt_id: unique_u64(),
+            charge: mem.reservation(),
+            pending: 0,
             mem,
             by_ref: HashMap::new(),
             by_path: HashMap::new(),
@@ -256,12 +269,13 @@ impl MergeOnReadWrite {
     /// cancelled; Java's `PositionDeltaBatchWrite.abort`). Cancellation-safe:
     /// dropped midway, the files not deleted yet are deleted in the
     /// background.
+    #[cfg(test)]
     pub(crate) async fn abort(&self, tasks: Vec<TaskOutput>) {
         self.written_by(&tasks).delete().await;
     }
 
     /// An armed guard over every data and delete file of `tasks`.
-    fn written_by(&self, tasks: &[TaskOutput]) -> Written {
+    pub(crate) fn written_by(&self, tasks: &[TaskOutput]) -> Written {
         let t = &self.target;
         let mut written = Written::new(t.file_io.clone(), &t.registered);
         for task in tasks {
@@ -286,7 +300,10 @@ impl MergeOnReadWrite {
         let mut deletes = Vec::new();
         let mut rewritten: BTreeSet<DeleteKey> = BTreeSet::new();
         let mut task_files = Vec::new();
+        // The positions' charge lives until the commit returns, as the positions do.
+        let mut held = Vec::new();
         for task in tasks {
+            held.extend(task.held);
             data.extend(task.data);
             deletes.extend(task.deletes);
             task_files.extend(task.files);
@@ -355,7 +372,10 @@ impl MergeOnReadWrite {
             write_id: &self.write_id,
             query_id,
         };
-        commit_validated(t.committer.as_ref(), cx, base, &mut new, ids, &validation).await
+        let outcome =
+            commit_validated(t.committer.as_ref(), cx, base, &mut new, ids, &validation).await;
+        drop(held);
+        outcome
     }
 
     /// The deletes with the DVs of a data file written by more than one task
@@ -462,6 +482,9 @@ pub(crate) struct WrittenDelete {
 /// What one task wrote.
 #[derive(Debug, Default)]
 pub(crate) struct TaskOutput {
+    /// The charge of the positions the output holds (`deletes`' bitmaps on v3), kept until the
+    /// statement's commit returns (it moves into `commit_inner`) or the output is dropped.
+    pub(crate) held: Option<Reservation>,
     /// The data files (`UPDATE`/`MERGE` rows).
     pub(crate) data: Vec<WrittenDataFile>,
     /// The delete file entries.
@@ -485,6 +508,10 @@ pub(crate) struct MorTask {
     partition_id: u32,
     attempt_id: u64,
     mem: Arc<ConsumerHandle>,
+    /// What the positions and the delete files held in memory are charged to.
+    charge: Reservation,
+    /// Bytes of positions added since the last [`settle`](Self::settle).
+    pending: usize,
     /// Each file reference seen, by its index in `files`.
     by_ref: HashMap<Vec<u8>, usize>,
     /// The same slots by the data file's path (two encodings of one file share a slot).
@@ -539,9 +566,22 @@ impl MorTask {
                 i
             }
         };
-        if let Some(t) = self.files.get_mut(i) {
-            t.positions.insert(p);
+        if let Some(t) = self.files.get_mut(i)
+            && t.positions.insert(p)
+        {
+            self.pending = self.pending.saturating_add(POSITION_BYTES);
         }
+        Ok(())
+    }
+
+    /// Charges the positions added by [`delete`](Self::delete) since the last call to the task's
+    /// consumer (an uncompressed 8 bytes each, an upper bound of the bitmaps').
+    ///
+    /// # Errors
+    /// The memory error class when the pool cannot grant it.
+    pub(crate) async fn settle(&mut self) -> Result<(), KrishivError> {
+        let n = std::mem::take(&mut self.pending);
+        self.charge.grow(n).await?;
         Ok(())
     }
 
@@ -620,6 +660,11 @@ impl MorTask {
             return Err(e);
         }
         guard.armed = false;
+        // Only a v3 output holds its positions (the DVs' bitmaps); v2's die with the task.
+        if self.write.dvs {
+            let held = self.charge.size();
+            out.held = Some(self.charge.split(held));
+        }
         Ok(out)
     }
 
@@ -660,7 +705,16 @@ impl MorTask {
             let path = &touched.entry.file.path;
             let old =
                 super::deletes::positions_of(&io, &*locate, &self.mem, path, &previous).await?;
+            let before = touched.positions.len();
             touched.positions |= old;
+            let added = touched.positions.len().saturating_sub(before);
+            self.charge
+                .grow(
+                    usize::try_from(added)
+                        .unwrap_or(usize::MAX)
+                        .saturating_mul(POSITION_BYTES),
+                )
+                .await?;
             out.rewritten
                 .extend(previous.into_iter().filter(|d| file_scoped(d)));
         }
@@ -683,6 +737,8 @@ impl MorTask {
                 .map(|t| (t.entry.file.path.as_str(), &t.positions))
                 .collect();
             let (bytes, blobs) = dv_puffin(&list, &w.created_by)?;
+            let file_bytes = bytes.len();
+            self.charge.grow(file_bytes).await?;
             out.files.push(location.clone());
             guard.data.push(location.clone());
             let size = put(
@@ -692,6 +748,8 @@ impl MorTask {
                 bytes,
             )
             .await?;
+            // The bytes are gone; the positions stay charged while the output holds them.
+            self.charge.shrink(file_bytes);
             for (d, blob) in touched.iter().zip(blobs) {
                 let f = &d.entry.file;
                 let partition = partition_struct(base, f.spec_id, &f.partition)?;
@@ -726,6 +784,11 @@ impl MorTask {
                 "parquet",
             );
             let location = locations.location(spec, schema, &partition, &name)?;
+            // The file is built whole in memory: its positions, sorted, are the bound.
+            let built = usize::try_from(d.positions.len())
+                .unwrap_or(usize::MAX)
+                .saturating_mul(POSITION_BYTES);
+            self.charge.grow(built).await?;
             out.files.push(location.clone());
             guard.data.push(location.clone());
             let file = write_position_deletes(
@@ -737,6 +800,7 @@ impl MorTask {
                 &d.positions,
             )
             .await?;
+            self.charge.shrink(built);
             out.deletes.push(WrittenDelete {
                 file,
                 spec_id: f.spec_id,
