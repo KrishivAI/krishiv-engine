@@ -100,6 +100,8 @@ mod table_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod type_golden_tests;
+#[cfg(test)]
 mod validate_tests;
 #[cfg(test)]
 mod write_conformance_tests;
