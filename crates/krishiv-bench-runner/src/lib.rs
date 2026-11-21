@@ -156,8 +156,10 @@ pub const RSS_FLOOR_PER_THREAD: u64 = 16 << 20;
 /// It holds for a process whose global allocator is configured for it: mimalloc with
 /// `krishiv_alloc` (this runner and the CLI, when the limit is known at process start: an argument or
 /// `KRISHIV_MEMORY_LIMIT`), for a limit below `krishiv_alloc::GENEROUS_MIN` (4 GiB). A generous
-/// limit keeps mimalloc's faster defaults instead, and a process that fills it can hold up to about
-/// twice the limit (`krishiv_alloc::is_generous`). On the bounded path the runner also installs
+/// limit keeps mimalloc's faster defaults instead, with a 30 s purge delay
+/// (`krishiv_alloc::GENEROUS_OPTIONS`), and a process that fills it can hold up to about twice the
+/// limit (`krishiv_alloc::is_generous`) until the pressure hook returns it; freed memory stays
+/// resident up to 30 s after the peak. On the bounded path the runner also installs
 /// the resident-set guard's probe (`krishiv_memory::set_resident_probe`): what the process holds
 /// beyond the pools' reservations plus `krishiv_memory::allowance(limit)` is cut from the limit
 /// for ordinary reservations, so operators spill it, and the peak usually stays near
