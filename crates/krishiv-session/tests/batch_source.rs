@@ -210,3 +210,95 @@ fn a_narrow_decimal_source_and_a_self_join_read() {
         2
     );
 }
+
+mod planned {
+    use std::sync::Mutex;
+
+    use krishiv_exec::SourceFilter;
+    use krishiv_session::{PlannedRead, SourcePlanner};
+
+    use super::*;
+
+    /// Claims every filter it is offered and returns all three rows regardless.
+    struct Claims {
+        seen: Arc<Mutex<Vec<Vec<SourceFilter>>>>,
+        schema: Arc<Schema>,
+    }
+
+    impl SourcePlanner for Claims {
+        #[expect(
+            clippy::unwrap_in_result,
+            reason = "a test fake; a poisoned lock is a test failure"
+        )]
+        fn plan(&self, filters: &[SourceFilter]) -> Result<PlannedRead, KrishivError> {
+            self.seen.lock().unwrap().push(filters.to_vec());
+            let schema = Arc::clone(&self.schema);
+            Ok(PlannedRead {
+                pushed: vec![true; filters.len()],
+                read: Arc::new(move || {
+                    Ok(vec![
+                        RecordBatch::try_new(
+                            Arc::clone(&schema),
+                            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+                        )
+                        .unwrap(),
+                    ])
+                }),
+            })
+        }
+    }
+
+    fn register(session: &Session) -> Arc<Mutex<Vec<Vec<SourceFilter>>>> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, true)]));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let plain_schema = Arc::clone(&schema);
+        let plain: BatchSource = Arc::new(move || {
+            Ok(vec![
+                RecordBatch::try_new(
+                    Arc::clone(&plain_schema),
+                    vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+                )
+                .unwrap(),
+            ])
+        });
+        session
+            .register_planned_source(
+                "p",
+                "p",
+                Arc::clone(&schema),
+                plain,
+                Some(Arc::new(Claims {
+                    seen: Arc::clone(&seen),
+                    schema,
+                })),
+            )
+            .unwrap();
+        seen
+    }
+
+    #[test]
+    fn a_claimed_filter_is_trusted_and_planned_once() {
+        let session = Session::new().unwrap();
+        let seen = register(&session);
+        // The source claims k > 1 and returns every row: the engine does not apply it again.
+        assert_eq!(count(&session, "SELECT count(*) FROM p WHERE k > 1"), 3);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(
+            seen[0]
+                .iter()
+                .any(|f| matches!(f, SourceFilter::GreaterThan(..))),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_scan_with_no_filter_does_not_plan() {
+        let session = Session::new().unwrap();
+        let seen = register(&session);
+        assert_eq!(count(&session, "SELECT count(*) FROM p"), 3);
+        // Nothing serializable (`k + 1 > 2`): the plain read, filtered by the engine.
+        assert_eq!(count(&session, "SELECT count(*) FROM p WHERE k + 1 > 2"), 2);
+        assert!(seen.lock().unwrap().is_empty());
+    }
+}

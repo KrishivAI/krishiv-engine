@@ -9,7 +9,10 @@ use std::sync::Arc;
 use krishiv_common::error::KrishivError;
 use krishiv_exec::ScanPushdown;
 use krishiv_exec::planner::TableProvider;
-use krishiv_exec::{FilterPushdown, MemoryScan, PushedFilter, ScanPushdowns, Source};
+use krishiv_exec::{
+    BoundScan, FilterPushdown, MemoryScan, OfferedConjunct, PushedFilter, ScanDecision,
+    ScanPushdowns, Source, SourceConjunct, SourceFilter,
+};
 use krishiv_memory::{MemoryPool, Reservation};
 use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::DataType;
@@ -60,6 +63,32 @@ impl Session {
 /// What a `SourceTable` calls each time a scan reads it: the table's rows as batches of its schema.
 pub type BatchSource = Arc<dyn Fn() -> Result<Vec<RecordBatch>, KrishivError> + Send + Sync>;
 
+/// What a source's planning call answered for the filters it was offered.
+pub struct PlannedRead {
+    /// Per offered filter: the source honours it, so the engine does not evaluate it again.
+    pub pushed: Vec<bool>,
+    /// The read of the planned source: the batches of one execution.
+    pub read: BatchSource,
+}
+
+impl std::fmt::Debug for PlannedRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlannedRead")
+            .field("pushed", &self.pushed)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A source that plans its read once per physical plan, seeing the filters over it (the Python Data
+/// Source's `reader()`, `pushFilters` and `partitions()`). It runs user code and never reads rows.
+pub trait SourcePlanner: Send + Sync {
+    /// Plans a read with `filters` (the serializable conjuncts, in written order).
+    ///
+    /// # Errors
+    /// Whatever the source's planning raises.
+    fn plan(&self, filters: &[SourceFilter]) -> Result<PlannedRead, KrishivError>;
+}
+
 /// A table whose rows come from a callback, asked afresh for every scan of a query (not
 /// once per registration): the Python Data Source API's reader lists its partitions and reads
 /// them when the scan runs (planning and `EXPLAIN` read nothing), as Spark's `PythonScanBuilder` does (design P3-T040 §3.3).
@@ -76,6 +105,8 @@ struct SourceTable {
     /// The schema `source`'s batches have (before the carrier's canonical form), which they are
     /// checked against.
     declared: SchemaRef,
+    /// Plans the read once per physical plan, when the source takes filters.
+    planner: Option<Arc<dyn SourcePlanner>>,
 }
 
 /// A scan's bytes in the session's pool, released when the scan and every scan derived from it
@@ -168,9 +199,77 @@ impl LazySourceScan {
     }
 }
 
+/// The read a decided scan planned: it holds no rows until [`BoundScan::read`].
+struct BoundSource {
+    table: SourceTable,
+}
+
+impl BoundScan for BoundSource {
+    fn table_schema(&self) -> SchemaRef {
+        Arc::clone(&self.table.schema)
+    }
+
+    fn output_schema(&self, pushdowns: &ScanPushdowns) -> krishiv_exec::Result<SchemaRef> {
+        // From the schema alone: an empty in-memory scan gives its answer and its refusals.
+        MemoryScan::try_new(Arc::clone(&self.table.schema), Vec::new())?.output_schema(pushdowns)
+    }
+
+    fn explain(&self, _pushdowns: &ScanPushdowns) -> Option<String> {
+        None
+    }
+
+    fn read(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+        Ok(Arc::new(self.table.materialize()?))
+    }
+}
+
 impl ScanPushdown for LazySourceScan {
     fn table_schema(&self) -> SchemaRef {
         Arc::clone(&self.table.schema)
+    }
+
+    fn decides_once(&self) -> bool {
+        self.table.planner.is_some()
+    }
+
+    fn decide(
+        &self,
+        conjuncts: &[OfferedConjunct],
+        _projection: &[krishiv_io::ColumnPath],
+    ) -> krishiv_exec::Result<ScanDecision> {
+        let Some(planner) = &self.table.planner else {
+            return Err(internal("this scan does not decide once".to_owned()));
+        };
+        let offered: Vec<(usize, &SourceFilter)> = conjuncts
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| match &c.source {
+                SourceConjunct::Serializable(f) => Some((i, f)),
+                _ => None,
+            })
+            .collect();
+        let mut pushed = vec![false; conjuncts.len()];
+        let mut table = self.table.clone();
+        // Spark calls Python for pushdown only when something serializes.
+        if !offered.is_empty() {
+            let filters: Vec<SourceFilter> = offered.iter().map(|(_, f)| (*f).clone()).collect();
+            let planned = planner.plan(&filters)?;
+            if planned.pushed.len() != filters.len() {
+                return Err(internal(format!(
+                    "a source planned {} answers for {} filters",
+                    planned.pushed.len(),
+                    filters.len()
+                )));
+            }
+            for ((i, _), taken) in offered.iter().zip(planned.pushed) {
+                pushed[*i] = taken;
+            }
+            table.source = planned.read;
+        }
+        Ok(ScanDecision {
+            pushed,
+            bound: Arc::new(BoundSource { table }),
+        })
     }
 
     fn filter_pushdown(&self, _filter: &PushedFilter) -> FilterPushdown {
@@ -223,6 +322,23 @@ impl Session {
         schema: SchemaRef,
         source: BatchSource,
     ) -> Result<(), KrishivError> {
+        self.register_planned_source(name, label, schema, source, None)
+    }
+
+    /// As [`Self::register_batch_source`] for a source that plans its read once per physical plan with
+    /// the filters over it: `planner` runs when the scan has a filter one of its conjuncts serializes
+    /// to; `source` is the read without filters.
+    ///
+    /// # Errors
+    /// As [`Self::register_batch_source`].
+    pub fn register_planned_source(
+        &self,
+        name: &str,
+        label: &str,
+        schema: SchemaRef,
+        source: BatchSource,
+        planner: Option<Arc<dyn SourcePlanner>>,
+    ) -> Result<(), KrishivError> {
         if crate::catalog::is_reserved_view_name(name) {
             return Err(crate::catalog::reserved_temp_view_name(name));
         }
@@ -250,6 +366,7 @@ impl Session {
                     max_bytes: MAX_SOURCE_BYTES,
                     memory: Arc::clone(&self.state.memory),
                     declared,
+                    planner,
                 }),
             },
         );
@@ -286,6 +403,7 @@ mod tests {
             max_bytes: MAX_SOURCE_BYTES,
             memory: Arc::clone(&session.state.memory),
             declared: Arc::clone(&schema),
+            planner: None,
         };
         let planning = table.scan().unwrap();
         planning.table_schema();
@@ -317,6 +435,7 @@ mod tests {
             max_bytes: 1,
             memory: Arc::clone(&session.state.memory),
             declared: Arc::clone(&schema),
+            planner: None,
         };
         let error = table
             .scan()
