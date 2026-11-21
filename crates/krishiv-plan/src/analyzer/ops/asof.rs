@@ -31,8 +31,17 @@ impl Resolver<'_> {
         let first = operand(self, &m.left)?;
         let second = operand(self, &m.right)?;
         let shown = |b: &Bound| format!("\"{}\"", pretty(&b.shown(), zone));
-        let left_ids: HashSet<AttrId> = l.out.iter().map(|a| a.col.id).collect();
-        let right_ids: HashSet<AttrId> = r.out.iter().map(|a| a.col.id).collect();
+        // A side's columns include what an earlier `USING` or `NATURAL` join merged away (its
+        // hidden output, reachable by qualified name): Spark's `AddMetadataColumns` adds those to
+        // the side's output before `validateMatchConditionTableReferences` reads `outputSet`.
+        let ids = |rel: &Rel| -> HashSet<AttrId> {
+            rel.out
+                .iter()
+                .chain(rel.hidden.iter())
+                .map(|a| a.col.id)
+                .collect()
+        };
+        let (left_ids, right_ids) = (ids(l), ids(r));
         let (refs1, refs2) = (column_ids(&first.expr), column_ids(&second.expr));
         let both = |refs: &HashSet<AttrId>| {
             refs.iter().any(|i| left_ids.contains(i)) && refs.iter().any(|i| right_ids.contains(i))

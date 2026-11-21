@@ -438,3 +438,17 @@ fn a_forward_as_of_join_on_floating_point_values_is_refused() {
         assert_eq!(rows(&s, &backward), ["5.0|3.0"]);
     }
 }
+
+/// A key an earlier `USING` join merged away stays reachable by qualified name, and it is the left
+/// input's column (Spark's `AddMetadataColumns` puts it in the left side's output before the match
+/// operands are checked): `b.k` is a left value, not a reference to both sides.
+#[test]
+fn a_hidden_using_key_is_a_left_as_of_value() {
+    let s = session();
+    let got = rows(
+        &s,
+        "SELECT k, v FROM VALUES (1), (5) AS a(k) JOIN VALUES (1), (5) AS b(k) USING (k) \
+         ASOF JOIN VALUES (0), (3), (9) AS c(v) MATCH_CONDITION (b.k >= c.v) ORDER BY k",
+    );
+    assert_eq!(got, ["1|0", "5|3"]);
+}
