@@ -897,12 +897,15 @@ fn time_literals_and_casts_with_the_type_enabled() {
     let analyzed = run(one_row().project(vec![literal.clone()]), &ctx_on).unwrap();
     assert_eq!(analyzed.output[0].data_type, DataType::time(6).unwrap());
     assert_eq!(analyzed.output[0].name, "TIME '13:02:03'");
-    // Off (the default), the literal is refused.
-    let r = run(one_row().project(vec![literal]), &ctx());
-    assert_eq!(
-        summary(&r),
-        serde_json::json!(["UNSUPPORTED_TIME_TYPE", {}])
-    );
+    // Off (the default), Spark 4.2.0 still evaluates the literal and refuses a time function over it
+    // (SQL-26, `tests/time_gate_off.rs` in krishiv-session).
+    let off = run(one_row().project(vec![literal]), &ctx()).unwrap();
+    assert_eq!(off.output[0].data_type, DataType::time(6).unwrap());
+    assert_eq!(off.output[0].name, "TIME '13:02:03'");
+    // The analyzed plan analyzes to itself with the gate off.
+    let again = block_on(DefaultAnalyzer.analyze(&off.plan, &ctx())).unwrap();
+    assert_eq!(again.output[0].data_type, off.output[0].data_type);
+    assert_eq!(again.plan, off.plan);
     // Casts: string to time, time to time and to bigint resolve; a double
     // does not.
     let cast = |from: Expr, to: DataType| run(one_row().project(vec![from.cast(to)]), &ctx_on);

@@ -4,6 +4,19 @@
 use super::*;
 use krishiv_kernels::cast::{TimestampText, timestamp_text};
 
+/// The cast a `TIME '..'` literal binds to (an explicit `Ansi` string cast to `TIME(6)`, never what the parser
+/// writes): it passes the `spark.sql.timeType.enabled` gate again, so a plan analyzed once analyzes to itself.
+pub(in crate::analyzer) fn is_time_literal_cast(
+    inner: &Expr,
+    to: &DataType,
+    mode: CastMode,
+) -> bool {
+    mode == CastMode::Ansi
+        && *to == (DataType::Time { precision: 6 })
+        && matches!(&inner.node, ExprNode::Literal(Literal::String(v))
+            if krishiv_kernels::cast::parse_time(v).is_some())
+}
+
 pub(in crate::analyzer) fn literal_type(v: &Literal) -> Option<DataType> {
     v.data_type()
 }
