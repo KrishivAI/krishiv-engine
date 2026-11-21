@@ -1135,6 +1135,17 @@ message WritePlan {
   // feature: write_column_types
   // Input columns whose Spark type their Arrow type doesn't say.
   repeated WriteColumnType column_types = 9;
+  // feature: write_bucketed
+  // Bucketed output: the input column with each row's bucket id, and the columns each bucket is sorted by.
+  WriteBucket bucket = 10;
+}
+
+// feature: write_bucketed
+message WriteBucket {
+  // feature: write_bucketed
+  uint64 column = 1;
+  // feature: write_bucketed
+  repeated uint64 sort_by = 2;
 }
 
 // feature: write_column_types

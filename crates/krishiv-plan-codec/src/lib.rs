@@ -66,6 +66,7 @@
 
 mod arrow;
 mod decode;
+mod decode_bucket;
 mod decode_sketch;
 mod decode_tail;
 mod decode_udt;

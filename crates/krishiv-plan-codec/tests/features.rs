@@ -609,6 +609,7 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     let write = WritePlan {
         partition_by: vec![0],
         column_types: std::collections::BTreeMap::new(),
+        bucket: None,
         ..base
     };
     let node = node_of(write);
