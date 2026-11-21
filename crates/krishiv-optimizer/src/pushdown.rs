@@ -667,6 +667,7 @@ pub(crate) fn collect_ids(plan: &LogicalPlan, out: &mut Attrs) -> bool {
         | PlanNode::Sort { input, .. }
         | PlanNode::Limit { input, .. }
         | PlanNode::Offset { input, .. }
+        | PlanNode::Tail { input, .. }
         | PlanNode::WithCte { input, .. }
         | PlanNode::JoinHint { input, .. }
         | PlanNode::Repartition { input, .. }

@@ -38,7 +38,7 @@ use krishiv_plan::{
 };
 use krishiv_sql::ast::{
     Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeSpec, DdlName,
-    DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind, FunctionBodyKind,
+    DeclareVariable, DropFunction, DropVariable, Expr, ExprKind, FunctionBodyKind,
     FunctionReturnsKind, Ident, ObjectName, Query, Refresh, RefreshKind, Reset, Set, SetExprKind,
     SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
 };
@@ -47,7 +47,7 @@ use krishiv_types::DataType;
 use crate::analyze::command_schema as cols;
 pub(crate) use crate::arrow_values::{arrow_field_value, arrow_value, declared_value};
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
-use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
+use crate::catalog::{is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::dataframe::DataFrame;
 use crate::session::{QueryEnv, Session};
@@ -368,27 +368,6 @@ impl Session {
             ),
         );
         self.state.cache.forget_table(&v.name.value);
-        self.empty_frame().await
-    }
-
-    /// Runs `DROP VIEW [IF EXISTS] name` over the temporary views,
-    /// returning an empty frame as in Spark.
-    pub(crate) async fn exec_drop_view(
-        &self,
-        v: &DropView,
-        env: &crate::session::QueryEnv,
-    ) -> Result<DataFrame, KrishivError> {
-        if !is_global_key(&v.name.value)
-            && self
-                .state
-                .catalog
-                .exists(&v.name.value, env.analysis.conf.case_sensitive)
-        {
-            self.state.catalog.drop_table(&v.name.value);
-            self.state.cache.forget_table(&v.name.value);
-        } else {
-            self.drop_bare_stored_view(&v.name.value, v.if_exists, env)?;
-        }
         self.empty_frame().await
     }
 
@@ -1966,6 +1945,7 @@ pub(crate) fn contains_subquery(e: &Expr) -> bool {
     })
 }
 
+mod drop_view;
 mod frames;
 
 #[cfg(test)]

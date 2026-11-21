@@ -394,10 +394,10 @@ error KRISHIV_UNSUPPORTED_FEATURE
 
 -- DropView: DROP VIEW v
 {"schema_version":"krishiv.analyze.v1",
-"statement_class":"SESSION",
+"statement_class":"DDL",
 "explain":null,
 "partial":false,
-"securables":[],
+"securables":[{"kind":"view","name":["spark_catalog","default","v"],"display":"view `spark_catalog`.`default`.`v`","privilege":"DROP","columns":[]}],
 "output_schema":[],
 "lineage":[],
 "filters":[],

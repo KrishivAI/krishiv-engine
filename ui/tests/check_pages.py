@@ -6,7 +6,7 @@ embedded and the profiles console show, and of TPC-H Q9's profile in the console
 
 Serves the built UI from the fixture server and fails when a page: scrolls sideways, loads anything from another
 origin, logs a console error, lacks the self-hosted Red Hat fonts, loses its key text, or has a navigation target
-under 40 px on a phone. With SHOT_DIR it also writes a PNG per page and view (the visual record; the assertions
+under 40 px on a phone (the responsive checks ask for 44 px on touch screens). With SHOT_DIR it also writes a PNG per page and view (the visual record; the assertions
 are the check, since pixels differ between machines). It ends with the responsive and device checks of
 `check_responsive.py` (13 screen sizes from a phone to an ultrawide monitor, touch targets, the SQL editor on a
 phone, text size, motion), whose pictures go to SHOT_DIR/responsive.
@@ -48,6 +48,9 @@ PAGES = [
             "HashJoin",
             "128.0 MiB",
             "Operators",
+            "Peak memory",
+            "not reported",
+            "do not add up",
             "Advisor hints",
             "SPILL",
             "HashJoin spilled 128 MiB; give the query more memory.",
@@ -481,9 +484,22 @@ def page_checks(origin: str) -> list[str]:
         no_markup("catalog")
         page.get_by_role("button", name="spark_catalog").click()
         page.get_by_role("button", name="default").click()
-        page.get_by_role("button", name="orders").click()
+        page.get_by_role("button", name="orders", exact=True).click()
         page.get_by_text("o_orderkey").wait_for(timeout=10000)
         no_markup("catalog columns")
+        # The editor's draft names a table by its three parts and a temporary view by its one.
+        for name, want in (
+            ("orders", "SELECT * FROM `spark_catalog`.`default`.`orders` LIMIT 100"),
+            ("recent_orders", "SELECT * FROM `recent_orders` LIMIT 100"),
+        ):
+            page.evaluate("window.location.hash = '#/catalog'")
+            for pick in ("spark_catalog", "default", name):
+                page.get_by_role("button", name=pick, exact=True).click()
+            page.get_by_role("link", name="Open in the SQL editor").click()
+            page.locator(".cm-content").wait_for(timeout=10000)
+            draft = page.locator(".cm-content").inner_text().strip()
+            if draft != want:
+                problems.append(f"catalog: the draft for {name} is {draft!r}")
         page.evaluate("window.location.hash = '#/sql'")
         editor = page.locator(".cm-content")
         editor.wait_for(timeout=10000)
@@ -789,6 +805,246 @@ VIEWER_TREE = """
 """
 
 
+# The heatmap's lines: depth, name, value text, state, border style and background.
+HEAT_ROWS = "main [data-testid='plan-tree'] > li"
+HEAT = """
+() => [...document.querySelectorAll("main [data-testid='plan-tree'] > li")].map(li => [
+  Number(li.dataset.depth),
+  li.querySelector("[data-part='name']").textContent,
+  li.querySelector("[data-part='value']").textContent.replace(/\\s+/g, ' ').trim(),
+  li.dataset.state,
+  getComputedStyle(li).borderTopStyle,
+  getComputedStyle(li).backgroundColor,
+])
+"""
+CLEAR = ("rgba(0, 0, 0, 0)", "transparent")
+
+# What the query page's fixture (`fixtures.json` `detail`) must show for each metric: depth, node, value.
+# The plan: an aggregate with a sink and a source, an exchange no operator runs, a join with a build and a
+# probe (and a child index that points nowhere), a filter, two scans, two headings with no id; the result sink
+# has no node and comes last.
+NODES = [
+    (0, "HashAggregate"),
+    (1, "Exchange"),
+    (2, "HashJoin"),
+    (3, "Filter"),
+    (4, "FileScan"),
+    (3, "Subquery"),
+    (4, "SharedPlan"),
+    (5, "FileScan"),
+    (0, "Result"),
+]
+NR = "not reported"
+HEATMAPS = {
+    # Times add up over a node's operators; each has its share of the plan's total.
+    "Compute time": ["600 ms 20.8%", NR, "1.7 s 58.8%", "90 ms 3.1%", "410 ms 14.2%", NR, NR, "90 ms 3.1%", "20.0 µs <0.1%"],
+    # The source side's rows; a sink has none.
+    "Rows out": ["5", NR, "15,000,000", "60,000,000", "75,000,000", NR, NR, "15,000,000", NR],
+    # The largest peak of a node's operators; an operator that reserved nothing (the filter, the second scan,
+    # the result) is not reported, never 0 B.
+    "Peak memory": ["47.7 MiB", NR, "95.4 MiB", NR, "143.1 MiB", NR, NR, NR, NR],
+    # The filter and the result waited 0 ns: a measured zero.
+    "Waiting time": ["20 ms 1.5%", NR, "300 ms 22.4%", "0 ns 0.0%", "900 ms 67.2%", NR, NR, "120 ms 9.0%", "0 ns 0.0%"],
+    # An operator that holds memory and spilled nothing is a measured zero; one that holds none cannot spill.
+    "Spilled bytes": ["0 B 0.0%", NR, "128.0 MiB 100.0%", NR, "0 B 0.0%", NR, NR, NR, NR],
+}  # fmt: skip
+TIME_METRICS = ("Compute time", "Waiting time")
+
+
+def tree_order(plan: list[dict]) -> list[dict]:
+    """The nodes of a profile's plan, depth first from the root, as the page draws them."""
+    out: list[dict] = []
+
+    def walk(at: int) -> None:
+        out.append(plan[at])
+        for child in plan[at]["children"]:
+            walk(child)
+
+    walk(0)
+    return out
+
+
+def heatmap_checks(origin: str) -> list[str]:
+    """The plan heatmap of the fixture's query, metric by metric: the tree's order and depths, each node's
+    value (how its operators combine, the share of the total), and the three looks: a shaded value, a measured
+    zero (dashed, no shade) and "not reported" (no shade, no figure). Then a query with no plan tree."""
+    problems: list[str] = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_context(viewport={"width": 1440, "height": 900}).new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{origin}/?token=fixture#/queries/{fixture_server.Q9_ID[:-1]}1")
+        page.locator(HEAT_ROWS).first.wait_for(timeout=10000)
+        for label, values in HEATMAPS.items():
+            page.get_by_role("button", name=label, exact=True).click()
+            view = f"heatmap {label}"
+            if (
+                page.get_by_role("button", name=label, exact=True).get_attribute(
+                    "aria-pressed"
+                )
+                != "true"
+            ):
+                problems.append(f"{view}: the metric's button is not pressed")
+            rows = page.evaluate(HEAT)
+            got = [(depth, name, value) for depth, name, value, *_ in rows]
+            want = [(depth, name, value) for (depth, name), value in zip(NODES, values)]
+            if got != want:
+                problems.append(f"{view}: the heatmap is {got}, not {want}")
+                continue
+            for _, name, value, state, border, background in rows:
+                want_state = (
+                    "none"
+                    if value == NR
+                    else "zero"
+                    if value.startswith("0 ")
+                    else "value"
+                )
+                if state != want_state:
+                    problems.append(
+                        f"{view}: {name} ({value}) is drawn as {state}, not {want_state}"
+                    )
+                if (border == "dashed") != (want_state == "zero"):
+                    problems.append(f"{view}: {name} ({value}) has a {border} border")
+                # Not reported has no colour; a measured zero has the card's own, a value its shade.
+                if (background in CLEAR) != (want_state == "none"):
+                    problems.append(
+                        f"{view}: {name} ({value}) has the background {background}"
+                    )
+            # One scale: the largest value has the strongest shade.
+            alphas = page.evaluate(
+                """() => [...document.querySelectorAll("main [data-testid='plan-tree'] > li[data-state='value']")].map(li => {
+                  const c = document.createElement('canvas').getContext('2d');
+                  c.fillStyle = getComputedStyle(li).backgroundColor; c.fillRect(0, 0, 1, 1);
+                  return c.getImageData(0, 0, 1, 1).data[3];
+                })"""
+            )
+            first = [r for r in rows if r[3] == "value"]
+            largest = max(range(len(first)), key=lambda i: alphas[i])
+            top = HEATMAP_TOP[label]
+            if first[largest][1] != top:
+                problems.append(
+                    f"{view}: the strongest shade is on {first[largest][1]}, not {top}"
+                )
+            note = page.get_by_test_id("wall-note")
+            if (note.count() == 1) != (label in TIME_METRICS):
+                problems.append(
+                    f"{view}: the wall-time sentence is shown {note.count()} times"
+                )
+        # The operator table follows the same rules: a source has no rows in, a sink no rows out, an operator
+        # that reserved nothing no peak, and only a scan waits on I/O.
+        table = page.locator("main tbody tr")
+        cells = [
+            [c.strip() for c in row.locator("td").all_inner_texts()]
+            for row in table.all()
+        ]
+        want_cells = {
+            "0 Result": ["5", "–", "20.0 µs", "– / 0 ns / 0 ns", "–", "–"],
+            "5 Filter": [
+                "75,000,000",
+                "60,000,000",
+                "90 ms",
+                "– / 0 ns / 0 ns",
+                "–",
+                "–",
+            ],
+            "6 FileScan": [
+                "–",
+                "75,000,000",
+                "410 ms",
+                "900 ms / 0 ns / 0 ns",
+                "143.1 MiB",
+                "0 B",
+            ],
+            "7 FileScan": [
+                "–",
+                "15,000,000",
+                "90 ms",
+                "120 ms / 0 ns / 0 ns",
+                "–",
+                "–",
+            ],
+        }
+        for row in cells:
+            name = " ".join(row[0].split()[:2]) if row else ""
+            if name in want_cells and row[1:] != want_cells[name]:
+                problems.append(
+                    f"operator table: {name} reads {row[1:]}, not {want_cells[name]}"
+                )
+            want_cells.pop(name, None)
+        problems += [f"operator table: no row for {name}" for name in want_cells]
+        if page.get_by_test_id("no-plan").count():
+            problems.append("heatmap: a query with a plan says it has none")
+        # No plan tree: the operators in id order, at one depth, and a sentence that says why.
+        page.goto(f"{origin}/?token=fixture#/queries/{fixture_server.NO_PLAN_ID}")
+        page.get_by_test_id("no-plan").wait_for(timeout=10000)
+        flat = [(depth, name, value) for depth, name, value, *_ in page.evaluate(HEAT)]
+        want_flat = [
+            (0, "Result", "20.0 µs <0.1%"),
+            (0, "HashAggregate", "400 ms 13.8%"),
+            (0, "HashAggregate", "200 ms 6.9%"),
+            (0, "HashJoinBuild", "500 ms 17.3%"),
+            (0, "HashJoinProbe", "1.2 s 41.5%"),
+            (0, "Filter", "90 ms 3.1%"),
+            (0, "FileScan", "410 ms 14.2%"),
+            (0, "FileScan", "90 ms 3.1%"),
+        ]
+        if flat != want_flat:
+            problems.append(f"heatmap without a plan: {flat}, not {want_flat}")
+        # Nothing is being stored for it: the page says so at once and does not ask again.
+        said = page.get_by_test_id("no-plan").inner_text()
+        if "No plan tree is stored for this query" not in said:
+            problems.append(f"heatmap without a plan: the page says {said!r}")
+        label = page.get_by_test_id("plan-tree").get_attribute("aria-label")
+        if label != "Operators shaded by compute time":
+            problems.append(f"heatmap without a plan: the list is labelled {label!r}")
+        asked = fixture_server.NO_PLAN_ASKED[0]
+        page.wait_for_timeout(2500)
+        if fixture_server.NO_PLAN_ASKED[0] != asked:
+            problems.append(
+                f"heatmap without a plan: the page asked {fixture_server.NO_PLAN_ASKED[0] - asked} more times"
+            )
+        # A query watched to its end: the first answers after it ended have no plan (the profile is written
+        # a moment later), the page asks again, and the tree is drawn when the plan arrives.
+        fixture_server.LATE_PLAN_ASKED[0] = 0
+        page.goto(f"{origin}/?token=fixture#/queries/{fixture_server.LATE_PLAN_ID}")
+        page.get_by_test_id("no-plan").wait_for(timeout=10000)
+        said = page.get_by_test_id("no-plan").inner_text()
+        if "being stored" not in said:
+            problems.append(
+                f"heatmap: while the plan is pending the page says {said!r}"
+            )
+        try:
+            page.locator(f"{HEAT_ROWS}[data-depth='5']").wait_for(timeout=10000)
+        except PlaywrightTimeout:
+            problems.append(
+                "heatmap: a plan that arrives after the query ended is never drawn"
+            )
+        else:
+            late = [(depth, name) for depth, name, *_ in page.evaluate(HEAT)]
+            if late != NODES:
+                problems.append(
+                    f"heatmap: the late plan is drawn as {late}, not {NODES}"
+                )
+            if page.get_by_test_id("no-plan").count():
+                problems.append(
+                    "heatmap: the page still says there is no plan after drawing it"
+                )
+        problems += [f"heatmap: page error: {e}" for e in errors]
+        browser.close()
+    return problems
+
+
+# The node with the largest value of each metric.
+HEATMAP_TOP = {
+    "Compute time": "HashJoin",
+    "Rows out": "FileScan",
+    "Peak memory": "FileScan",
+    "Waiting time": "FileScan",
+    "Spilled bytes": "HashJoin",
+}
+
+
 def q9_checks(shots: Path | None) -> list[str]:
     """TPC-H Q9's profile (`python/tests/fixtures/q09-profile.json`) in a browser: the console over stored profiles
     shows the query's page with every operator, and the offline viewer's page shows the plan as its tree, runs no
@@ -826,19 +1082,28 @@ def q9_checks(shots: Path | None) -> list[str]:
             page.on("pageerror", lambda e, errors=errors: errors.append(str(e)))
             page.goto(f"{origin}/?token=fixture#/queries/{fixture_server.Q9_ID}")
             view = f"q9 console {label}"
-            heat = page.locator(
-                "main ol[aria-label^='Operators shaded'] li > span:first-child"
-            )
             try:
-                expect(heat).to_have_count(len(listed), timeout=10000)
-            except AssertionError:
+                page.locator(HEAT_ROWS).first.wait_for(timeout=10000)
+            except PlaywrightTimeout:
+                problems.append(f"{view}: the page shows no heatmap")
+            heat = page.evaluate(HEAT)
+            # The heatmap is the profile's plan as a tree (the offline viewer's tree), then the operator no node
+            # claims: the result sink.
+            drawn = "".join(f"{'  ' * depth}{name}\n" for depth, name, *_ in heat)
+            if drawn != tree + "Result\n":
                 problems.append(
-                    f"{view}: the heatmap lists {heat.count()} operators, not {len(listed)}"
+                    f"{view}: the heatmap is not python/tests/fixtures/q09-plan-tree.txt and the result: {drawn!r}"
                 )
-            else:
-                got = [" ".join(t.split()) for t in heat.all_inner_texts()]
-                if got != listed:
-                    problems.append(f"{view}: the heatmap lists {got}, not {listed}")
+            # A node no operator runs (an exchange) is not reported; every other one has a compute time.
+            ran = {o["node"] for o in operators}
+            want_states = [
+                "none" if n["id"] not in ran else "value"
+                for n in tree_order(doc["plan"])
+            ] + ["value"]
+            if [state for *_, state, _, _ in heat] != want_states:
+                problems.append(
+                    f"{view}: the heatmap's states are {[h[3] for h in heat]}, not {want_states}"
+                )
             rows = page.locator("main :is(tbody tr, ul > li):visible")
             if rows.count() != len(listed):
                 problems.append(
@@ -917,13 +1182,14 @@ if __name__ == "__main__":
     found += role_checks()
     found += start_checks()
     found += filter_checks()
+    found += heatmap_checks(f"http://127.0.0.1:{server.server_address[1]}")
     found += q9_checks(shots)
     found += responsive_checks(shots / "responsive" if shots is not None else None)
     print(
         "\n".join(found)
         if found
         else "ui pages: ok (8 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, deep links, embed, "
-        "embedded and profiles consoles, operator, history filters, TPC-H Q9's profile, "
+        "embedded and profiles consoles, operator, history filters, the plan heatmap, TPC-H Q9's profile, "
         "responsive: 3 consoles x 13 screen sizes, touch targets, SQL editor on a phone, text size, motion)"
     )
     sys.exit(1 if found else 0)

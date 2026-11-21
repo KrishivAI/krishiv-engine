@@ -116,7 +116,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     WithColumnsRenamed => ("with_columns_renamed", 19, Partial, "rename_columns_map when its result depends on entry order (wire order is lost on decode)", "ColumnNames(Rename): the pairs in turn, case rule of the session, unknown names ignored", "P3-T012", 4),
     ShowString => ("show_string", 20, Missing, "", "server-side: execute, then format as Spark's Dataset.showString (truncate, vertical); returns a one-row, one-column relation", "P3-T012", 4),
     Drop => ("drop", 21, Partial, "columns that are qualified or tied to a DataFrame", "ColumnNames(Drop): by name; a plain one-part column expression resolves over the input (ambiguous is an error); unknown names ignored", "P3-T012", 4),
-    Tail => ("tail", 22, Missing, "", "new Tail (the last n rows in plan order; not Sort + Limit)", "P3-T012", 3),
+    Tail => ("tail", 22, Done, "", "Tail (the last n rows in plan order; not Sort + Limit); a negative n is INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE from the analyzer", "P3-T012", 3),
     WithColumns => ("with_columns", 23, Partial, "Alias.metadata", "WithColumns; metadata on the column field", "P3-T012", 4),
     Hint => ("hint", 24, Done, "", "Hint; as Spark 4.2: parameters are literals or lists of them, a partitioning hint is dropped with a warning (3.5 reads parameters differently)", "P3-T012", 3),
     Unpivot => ("unpivot", 25, Partial, "absent values, values that are not columns, and a column that is also an id or listed twice", "Project(ids, values) then Unpivot with nulls kept; values absent → every non-id column, known only after analysis", "P3-T012", 2),

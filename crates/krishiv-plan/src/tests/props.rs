@@ -437,7 +437,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 34 };
+        let kinds = if depth == 0 { 4 } else { 35 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -546,6 +546,10 @@ impl Gen<'_> {
             },
             29 => PlanNode::PipeOperator {
                 input: self.input(d),
+            },
+            34 => PlanNode::Tail {
+                input: self.input(d),
+                limit: Arc::new(self.expr(1)),
             },
             32 => PlanNode::CollectMetrics {
                 input: self.input(d),
@@ -1373,6 +1377,7 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
         }
         | PlanNode::Limit { input, limit: e }
         | PlanNode::Offset { input, offset: e }
+        | PlanNode::Tail { input, limit: e }
         | PlanNode::ReplicateRows { input, count: e } => m_expr(e, w) || m_plan(input, w),
         PlanNode::Sample {
             input,
