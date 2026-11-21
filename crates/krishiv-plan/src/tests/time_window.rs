@@ -172,10 +172,8 @@ fn an_inner_window_without_arguments_is_an_arity_error_not_a_panic() {
     // `window(window(), '5 minutes')`: Spark raises WRONG_NUM_ARGS for the inner call.
     let inner = f("window", vec![]);
     let nested = f("window", vec![inner, s("5 minutes")]);
-    assert_eq!(
-        class(&run(grouped(nested))),
-        "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
-    );
+    let plan = LogicalPlan::table(["t"]).aggregate(vec![nested], vec![count_star()]);
+    assert_eq!(class(&run(plan)), "WRONG_NUM_ARGS.WITHOUT_SUGGESTION");
 }
 
 #[test]
@@ -327,8 +325,17 @@ fn session_window_errors() {
 fn nested_windows_and_window_time() {
     // `window(window(ts, '1 minute'), '5 minutes')` windows the inner window's `window_time`.
     let nested = f("window", vec![window("ts", &["1 minute"]), s("5 minutes")]);
-    let r = run(grouped(nested));
+    let r = run(LogicalPlan::table(["t"]).aggregate(vec![nested], vec![count_star()]));
     assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    // A bare `window` beside the grouped nested window names the inner window's column.
+    let nested_bare = LogicalPlan::table(["t"]).aggregate(
+        vec![f(
+            "window",
+            vec![window("ts", &["1 minute"]), s("5 minutes")],
+        )],
+        vec![c("window"), count_star()],
+    );
+    assert_eq!(class(&run(nested_bare)), "MISSING_AGGREGATION");
     // `window_time` over a grouped window is neither a key nor an aggregate.
     let grouped_time = LogicalPlan::table(["t"]).aggregate(
         vec![window("ts", &["5 minutes"])],
