@@ -292,7 +292,7 @@ result. Pending, not stubbed: MERGE through SQL. See
   on every attempt (the scan fetches with a concurrency of 8). An empty change still validates (Spark commits with no
   validation when the optimizer removed the scan, `SparkWrite.java:473-492`), so an empty serializable DELETE fails
   against a concurrent append: a divergence toward refusal.
-- **Merge-on-read memory (PR-36c, review 36c1 m6):** `MorTask` charges the `iceberg-mor` consumer 8 bytes per deleted
+- **Merge-on-read memory (PR-36c, review 36c1 m6):** `MorTask` charges the `iceberg-mor` consumer (kept in `TaskOutput::held` until the commit drops the outputs) 8 bytes per deleted
   position (an upper bound of the `RoaringTreemap`s, per batch in `settle`), the absorbed positions, and each delete file
   before it is built (a Puffin file's bytes, a v2 file's positions at 8 bytes each), failing with the memory error class.
   `delete_write.rs` still builds each file whole in memory and writes it with one `put` (no multipart upload), so the

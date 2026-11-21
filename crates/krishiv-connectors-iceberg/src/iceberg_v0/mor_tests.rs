@@ -173,16 +173,27 @@ impl<'a> Mor<'a> {
         tasks: Vec<Task>,
     ) -> Result<Vec<TaskOutput>, KrishivError> {
         let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        self.write_in(w, tasks, &pool)
+    }
+
+    /// [`write`](Self::write) drawing on `pool`.
+    pub(super) fn write_in(
+        &self,
+        w: &Arc<MergeOnReadWrite>,
+        tasks: Vec<Task>,
+        pool: &Arc<dyn MemoryPool>,
+    ) -> Result<Vec<TaskOutput>, KrishivError> {
         self.env.rt.block_on(async {
             let mut out = Vec::new();
             for (i, t) in tasks.into_iter().enumerate() {
                 let mut task = w.task(
                     u32::try_from(i).unwrap(),
-                    ConsumerHandle::register(Arc::clone(&pool), "mor", None),
+                    ConsumerHandle::register(Arc::clone(pool), "mor", None),
                 );
                 for (f, p) in &t.deletes {
                     task.delete(f, *p)?;
                 }
+                task.settle().await?;
                 for b in &t.inserts {
                     task.insert(b).await?;
                 }
@@ -1266,4 +1277,30 @@ fn a_concurrently_removed_absorbed_delete_fails_update_not_delete() {
             assert_eq!(read_back(&env, &catalog), expected(0..10));
         }
     }
+}
+
+/// R36d m1: on v3 a finished task's output holds its positions until the commit, so the pool
+/// keeps their charge while the outputs live, and returns it when they are dropped.
+#[test]
+fn a_v3_output_keeps_its_positions_charged_until_dropped() {
+    let env = env();
+    let t = create(&env, 3, false, &[("write.delete.mode", "merge-on-read")]);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 100));
+    let mor = Mor::open(&env, &catalog, RowLevelOperation::Delete);
+    let w = mor.writer();
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let outputs = mor
+        .write_in(
+            &w,
+            vec![Task {
+                deletes: mor.ids("true"),
+                inserts: Vec::new(),
+            }],
+            &pool,
+        )
+        .unwrap();
+    assert!(pool.reserved() > 0, "the held positions are charged");
+    drop(outputs);
+    assert_eq!(pool.reserved(), 0);
 }

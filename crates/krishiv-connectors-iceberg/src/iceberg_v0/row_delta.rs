@@ -63,8 +63,9 @@
 //! replaced the scan with an empty relation, `scan == null`); the checks run
 //! in `validate.rs`'s fixed order; Puffin blob order and file counters follow
 //! data file paths, not Java's hash order; a position delete file's
-//! `split_offsets` are not written; the positions a task collects and the
-//! delete files it encodes are not charged to the query's memory.
+//! `split_offsets` are not written; the memory charge is an estimate: 8 bytes per position a
+//! task collects (and per absorbed one), held until the statement's commit drops the outputs,
+//! and each delete file's bytes while it is built and uploaded.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -475,6 +476,9 @@ pub(crate) struct WrittenDelete {
 /// What one task wrote.
 #[derive(Debug, Default)]
 pub(crate) struct TaskOutput {
+    /// The charge of the positions the output holds (`deletes`' bitmaps on v3), kept until the
+    /// statement's commit or abort drops the output.
+    pub(crate) held: Option<Reservation>,
     /// The data files (`UPDATE`/`MERGE` rows).
     pub(crate) data: Vec<WrittenDataFile>,
     /// The delete file entries.
@@ -650,6 +654,8 @@ impl MorTask {
             return Err(e);
         }
         guard.armed = false;
+        let held = self.charge.size();
+        out.held = Some(self.charge.split(held));
         Ok(out)
     }
 
@@ -722,7 +728,8 @@ impl MorTask {
                 .map(|t| (t.entry.file.path.as_str(), &t.positions))
                 .collect();
             let (bytes, blobs) = dv_puffin(&list, &w.created_by)?;
-            self.charge.grow(bytes.len()).await?;
+            let file_bytes = bytes.len();
+            self.charge.grow(file_bytes).await?;
             out.files.push(location.clone());
             guard.data.push(location.clone());
             let size = put(
@@ -732,6 +739,8 @@ impl MorTask {
                 bytes,
             )
             .await?;
+            // The bytes are gone; the positions stay charged while the output holds them.
+            self.charge.shrink(file_bytes);
             for (d, blob) in touched.iter().zip(blobs) {
                 let f = &d.entry.file;
                 let partition = partition_struct(base, f.spec_id, &f.partition)?;
@@ -782,6 +791,7 @@ impl MorTask {
                 &d.positions,
             )
             .await?;
+            self.charge.shrink(built);
             out.deletes.push(WrittenDelete {
                 file,
                 spec_id: f.spec_id,

@@ -523,7 +523,7 @@ fn append_into_a_partitioned_table_and_again() {
 }
 
 /// `ixn_schema` with `id` required.
-fn required_id_schema() -> iceberg::spec::Schema {
+pub(super) fn required_id_schema() -> iceberg::spec::Schema {
     iceberg::spec::Schema::builder()
         .with_fields(vec![
             NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),

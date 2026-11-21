@@ -13,7 +13,8 @@ use krishiv_memory::MemoryConfig;
 use super::cow_tests::{Dml, append, create, get, live, summary};
 use super::provider_tests::{Env, env};
 use super::sink_tests::{
-    Catalog, PerDriver, expected, parquet_files, range, read_back, run, run_in, settled,
+    Catalog, PerDriver, create as create_with, expected, parquet_files, range, read_back,
+    required_id_schema, run, run_in, settled,
 };
 
 const MOR: &[(&str, &str)] = &[
@@ -295,4 +296,28 @@ fn a_v3_merge_on_read_update_is_refused_up_front() {
         assert_eq!(catalog.metadata().current_snapshot_id(), snapshot, "{cond}");
         let _ = parquet_files(&env, false);
     }
+}
+
+/// An `UPDATE` setting a required column to NULL fails like the copy-on-write one does:
+/// `NOT_NULL_ASSERT_VIOLATION`, no new snapshot, no file left.
+#[test]
+fn a_merge_on_read_update_to_null_in_a_required_column_fails() {
+    let env = env();
+    let t = create_with(&env, required_id_schema(), false, MOR);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 5));
+    let before = table_files(&env);
+    let snapshot = catalog.metadata().current_snapshot_id();
+    let dml = Dml::open(&env, &catalog, RowLevelOperation::Update);
+    let select = format!(
+        "SELECT CAST(NULL AS BIGINT) AS id, x, name, {ROW_FILE_COLUMN}, {ROW_POSITION_COLUMN} \
+         FROM t WHERE id = 2"
+    );
+    let (sink, schema, batches) = dml.mor_parts(&select);
+    let (out, pool, _runner) = run(&env, sink.unwrap(), input(schema, batches, false), None);
+    let e = out.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::NotNullAssertViolation, "{e}");
+    assert_eq!(settled(&pool), 0);
+    assert_eq!(catalog.metadata().current_snapshot_id(), snapshot);
+    assert_eq!(table_files(&env), before);
 }
