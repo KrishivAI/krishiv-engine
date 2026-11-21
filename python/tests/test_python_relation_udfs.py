@@ -249,7 +249,7 @@ try:
     res = df.groupBy("id").agg(s(df["id"]).alias("s"), m(df["id"]).alias("m"))
     print("rows", len(res.collect()))
 except Exception as e:
-    print("error", "krishiv.python.udf.threads" in str(e))
+    print("error", "krishiv.python.udf.threads" in str(e) and "KRISHIV_PYTHON_WORKER_LIMIT" in str(e))
 """,
     )
     # Two lanes need two slots: a pool of one refuses by naming the setting, a pool of two runs it.

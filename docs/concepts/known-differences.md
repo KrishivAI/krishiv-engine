@@ -682,3 +682,12 @@ both forms, so a sketch written by one engine can be estimated or unioned by the
 `length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
 `hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
 (`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.
+
+## Several grouped-aggregate pandas UDFs in one `agg`
+
+Spark runs every grouped-aggregate pandas UDF of one `agg` in a single Python worker. Krishiv gives each UDF
+its own Python UDF worker, because each is a task that holds its worker until its partition ends. On the
+default of one worker (`krishiv.python.udf.threads` = 1),
+`df.groupBy(k).agg(udf1(x), udf2(y))` with two such UDFs therefore fails with
+`KRISHIV_PYTHON_WORKER_LIMIT` (SQLSTATE 54000), which names the setting. Raise `krishiv.python.udf.threads`
+to at least the number of grouped-aggregate UDFs in the `agg` and the query runs.
