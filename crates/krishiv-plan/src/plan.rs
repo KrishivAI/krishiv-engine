@@ -211,6 +211,8 @@ pub enum PlanNode {
     },
     /// The last `n` rows of `input` in plan order (Spark's `Dataset.tail`; not
     /// a `Sort` and a `Limit`); `n` is a foldable expression or a parameter.
+    /// Spark plans `Tail` only at the plan root (`ReturnAnswer`); Krishiv also
+    /// runs a nested one, a deliberate superset the Connect client cannot reach.
     Tail {
         /// Input.
         input: Arc<LogicalPlan>,

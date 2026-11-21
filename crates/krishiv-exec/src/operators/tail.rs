@@ -5,27 +5,38 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
+use futures::future::BoxFuture;
 use krishiv_common::error::KrishivUnsupportedFeature;
 use krishiv_memory::Reservation;
 use krishiv_types::batch::Batch;
 
-use super::local_mut;
+use super::{global_ref, local_mut};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
-use crate::operator::{LocalState, Operator, OperatorOutput};
+use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
+use crate::sync::{Mutex, lock};
 
 /// Keeps the last `limit` rows of its input and emits them, in input order,
-/// once the input ends ([`Operator::finish`]; Spark's `CollectTailExec`).
-/// This is not a `Sort` and a `Limit`: the rows are the stream's own last
-/// rows, so the operator is planned over one driver (the stream order is the
-/// plan order) and nothing is emitted before the input ends.
+/// once the input ends (Spark's `CollectTailExec`). This is not a `Sort` and
+/// a `Limit`: the rows are the stream's own last rows.
+///
+/// It is a pipeline breaker (sink and source), not a streaming operator: a
+/// `UNION ALL` below fans its branches into several pipelines, and a
+/// streaming operator would keep one tail per pipeline. The planner runs the
+/// input pipelines with one driver each (`preserve_order`), so each driver
+/// keeps its own last rows and `combine` appends them to the shared state in
+/// the order the drivers end: the members of a fan-in run one after another,
+/// in branch order, unless a branch needs a cross-driver flush (then the
+/// order between branches is unspecified, as for any consumer of such a
+/// union).
 ///
 /// **Memory.** The retained batches are reserved with the driver's consumer
 /// before they are kept (`NeedMemory` when the pool refuses, the state
 /// unchanged). A batch longer than `limit` is cut to its last `limit` rows
-/// and copied, so the buffers of a long input are not pinned; the state
-/// holds at most `limit` rows plus the part of one batch before them, and
-/// never more than one input batch per call.
+/// and copied, so the buffers of a long input are not pinned; a driver's
+/// state holds at most `limit` rows plus the part of one batch before them,
+/// and the shared state at most `limit` rows per driver until the source is
+/// done.
 ///
 /// **Weights.** Defined for insert-only input; weighted (change stream)
 /// input is rejected with `KRISHIV_UNSUPPORTED_FEATURE`.
@@ -42,11 +53,24 @@ struct Kept {
     bytes: usize,
 }
 
+/// One driver's last rows.
 #[derive(Debug)]
 struct TailLocal {
     kept: VecDeque<Kept>,
     rows: usize,
     reservation: Reservation,
+}
+
+/// The last rows of the drivers combined so far, in combine order, with the
+/// reservations that cover them.
+#[derive(Debug, Default)]
+struct TailGlobal(Mutex<Combined>);
+
+#[derive(Debug, Default)]
+struct Combined {
+    batches: VecDeque<Batch>,
+    rows: usize,
+    reservations: Vec<Reservation>,
 }
 
 impl Tail {
@@ -59,42 +83,15 @@ impl Tail {
     fn keep(&self) -> usize {
         usize::try_from(self.limit).unwrap_or(usize::MAX)
     }
-}
 
-impl Operator for Tail {
-    fn name(&self) -> &'static str {
-        "Tail"
-    }
-
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-
-    fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
-        Ok(Box::new(TailLocal {
-            kept: VecDeque::new(),
-            rows: 0,
-            reservation: ctx.consumer().reservation(),
-        }))
-    }
-
-    fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
-        if !input.is_unweighted() {
-            return Err(KrishivUnsupportedFeature {
-                feature: "tail over weighted (change stream) input".to_owned(),
-            }
-            .into());
-        }
+    /// Adds `input` to a driver's rows; `Some(bytes)` when the pool refused
+    /// the reservation (nothing changed).
+    fn add(&self, input: &Batch, l: &mut TailLocal) -> Result<Option<usize>> {
         let keep = self.keep();
         let rows = input.num_rows();
-        if keep == 0 {
-            // Nothing is ever kept: the upstream need not be read further.
-            return Ok(OperatorOutput::Finished(None));
-        }
         if rows == 0 {
-            return Ok(OperatorOutput::NeedMoreInput(None));
+            return Ok(None);
         }
-        let l = local_mut::<TailLocal>(local, "Tail")?;
         let batch = if rows > keep {
             // Copy the last rows (a `take`, not a zero-copy slice), so the kept
             // rows do not pin the long input's buffers.
@@ -108,7 +105,7 @@ impl Operator for Tail {
         };
         let bytes = batch.data().get_array_memory_size();
         if l.reservation.try_grow(bytes).is_err() {
-            return Ok(OperatorOutput::NeedMemory { bytes });
+            return Ok(Some(bytes));
         }
         l.rows += batch.num_rows();
         l.kept.push_back(Kept { batch, bytes });
@@ -129,16 +126,148 @@ impl Operator for Tail {
                 l.rows = keep;
             }
         }
-        Ok(OperatorOutput::NeedMoreInput(None))
+        Ok(None)
+    }
+}
+
+impl Sink for Tail {
+    fn name(&self) -> &'static str {
+        "Tail"
     }
 
-    fn finish(&self, local: &mut LocalState) -> Result<Option<Batch>> {
-        let l = local_mut::<TailLocal>(local, "Tail")?;
-        Ok(l.kept.pop_front().map(|k| {
-            l.reservation.shrink(k.bytes);
-            l.rows = l.rows.saturating_sub(k.batch.num_rows());
-            k.batch
+    fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
+        Ok(Arc::new(TailGlobal::default()))
+    }
+
+    fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
+        Ok(Box::new(TailLocal {
+            kept: VecDeque::new(),
+            rows: 0,
+            reservation: ctx.consumer().reservation(),
         }))
+    }
+
+    fn sink(
+        &self,
+        input: Batch,
+        local: &mut LocalState,
+        _global: &GlobalState,
+    ) -> Result<SinkStatus> {
+        if !input.is_unweighted() {
+            return Err(KrishivUnsupportedFeature {
+                feature: "tail over weighted (change stream) input".to_owned(),
+            }
+            .into());
+        }
+        if self.keep() == 0 {
+            // Nothing is ever kept: the upstream need not be read further.
+            return Ok(SinkStatus::Finished);
+        }
+        let l = local_mut::<TailLocal>(local, "Tail")?;
+        Ok(match self.add(&input, l)? {
+            Some(bytes) => SinkStatus::NeedMemory { bytes },
+            None => SinkStatus::NeedMoreInput,
+        })
+    }
+
+    fn combine(&self, local: LocalState, global: &GlobalState) -> Result<()> {
+        let g = global_ref::<TailGlobal>(global, "Tail")?;
+        let l = local
+            .downcast::<TailLocal>()
+            .map_err(|_| internal("wrong local state for Tail".to_owned()))?;
+        let l = *l;
+        let keep = self.keep();
+        let mut shared = lock(&g.0);
+        for k in l.kept {
+            shared.rows += k.batch.num_rows();
+            shared.batches.push_back(k.batch);
+        }
+        // The driver's reservation still covers what it kept; the trimmed
+        // rows' bytes are freed when the source is done.
+        shared.reservations.push(l.reservation);
+        while shared.rows > keep {
+            let excess = shared.rows - keep;
+            let Some(front) = shared.batches.front() else {
+                break;
+            };
+            let front_rows = front.num_rows();
+            if front_rows <= excess {
+                shared.rows -= front_rows;
+                shared.batches.pop_front();
+            } else {
+                let cut = front.slice(excess, front_rows - excess)?;
+                shared.batches[0] = cut;
+                shared.rows = keep;
+            }
+        }
+        Ok(())
+    }
+
+    fn finalize<'a>(
+        &'a self,
+        _global: &'a GlobalState,
+        _ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// The source side: the kept batches, in order.
+#[derive(Debug, Default)]
+struct TailSource {
+    taken: Option<Combined>,
+}
+
+impl Source for Tail {
+    fn name(&self) -> &'static str {
+        "Tail"
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
+        let state = ctx
+            .dependency()
+            .cloned()
+            .ok_or_else(|| internal("Tail read before it was built".to_owned()))?;
+        if !state.is::<TailGlobal>() {
+            return Err(internal("wrong global state for Tail".to_owned()));
+        }
+        Ok(state)
+    }
+
+    fn max_parallelism(&self, _global: &GlobalState) -> usize {
+        1
+    }
+
+    fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
+        Ok(Box::new(TailSource::default()))
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        global: &'a GlobalState,
+    ) -> BoxFuture<'a, Result<Option<Batch>>> {
+        let next = (|| {
+            let l = local_mut::<TailSource>(local, "Tail")?;
+            if l.taken.is_none() {
+                let g = global_ref::<TailGlobal>(global, "Tail")?;
+                l.taken = Some(std::mem::take(&mut *lock(&g.0)));
+            }
+            let Some(c) = l.taken.as_mut() else {
+                return Ok(None);
+            };
+            let out = c.batches.pop_front();
+            if out.is_none() {
+                // Done: the reservations go with the rows.
+                c.reservations.clear();
+            }
+            Ok(out)
+        })();
+        Box::pin(std::future::ready(next))
     }
 }
 

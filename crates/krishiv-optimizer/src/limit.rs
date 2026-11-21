@@ -60,7 +60,7 @@ pub(crate) fn limit_value(e: &Expr) -> Option<u64> {
 /// The most rows `plan` can return, when bounded.
 pub(crate) fn max_rows(plan: &LogicalPlan) -> Option<u64> {
     match &plan.node {
-        PlanNode::Limit { input, limit } => {
+        PlanNode::Limit { input, limit } | PlanNode::Tail { input, limit } => {
             let n = limit_value(limit)?;
             Some(max_rows(input).map_or(n, |m| m.min(n)))
         }

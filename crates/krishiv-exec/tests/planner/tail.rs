@@ -57,3 +57,25 @@ fn tail_is_not_a_sort_and_a_limit() {
     let (rows, _) = tail(&env, "SELECT b FROM t WHERE b >= 30", 2);
     assert_eq!(rows, ["80", "90"]);
 }
+
+#[test]
+fn tail_over_a_union_is_the_tail_of_the_union() {
+    let env = env();
+    // One tail per branch would give 80, 90, 81, 91.
+    let (rows, _) = tail(&env, "SELECT b FROM t UNION ALL SELECT b + 1 FROM t", 2);
+    assert_eq!(rows, ["81", "91"]);
+    // The last rows span the branches.
+    let (rows, _) = tail(&env, "SELECT b FROM t UNION ALL SELECT b + 1 FROM t", 12);
+    let all: Vec<String> = (0..10)
+        .map(|i| (i * 10).to_string())
+        .chain((0..10).map(|i| (i * 10 + 1).to_string()))
+        .collect();
+    assert_eq!(rows, all[8..]);
+    // A filter on one branch.
+    let (rows, _) = tail(
+        &env,
+        "SELECT b FROM t UNION ALL SELECT b + 1 FROM t WHERE b < 30",
+        3,
+    );
+    assert_eq!(rows, ["1", "11", "21"]);
+}

@@ -637,7 +637,10 @@ fn walk(p: &Arc<LogicalPlan>, ctx: u64, out: &mut Block) -> Option<()> {
             walk(input, ctx, out)
         }
         PlanNode::Shift { input, offset } => walk(input, ctx.checked_add(*offset)?, out),
-        PlanNode::Limit { .. } | PlanNode::Aggregate { .. } | PlanNode::Window { .. } => None,
+        PlanNode::Limit { .. }
+        | PlanNode::Tail { .. }
+        | PlanNode::Aggregate { .. }
+        | PlanNode::Window { .. } => None,
         _ => {
             // A leaf: a scan or another relation the block reads whole.
             // Everything below it too (a `rand()` or a limit under a union is not one value).

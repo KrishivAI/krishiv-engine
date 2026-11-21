@@ -12,11 +12,16 @@ use krishiv_memory::{MemoryConfig, MemoryPool, SpillOwner, TreePool};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::Tail;
-use crate::operator::{Operator, OperatorOutput};
+use crate::operator::{Sink, SinkStatus, Source};
 use crate::{
     ExecConfig, ExecutorConfig, OperatorId, QueryContext, QueryId, TaskContext, TokioExecutor,
     WorkloadClass,
 };
+
+/// A source's `get_data` is ready at once.
+fn ready<T>(f: impl std::future::Future<Output = T>) -> T {
+    futures::FutureExt::now_or_never(f).unwrap_or_else(|| unreachable!("pending"))
+}
 
 fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]))
@@ -42,27 +47,37 @@ fn ctx(config: &MemoryConfig) -> (Arc<TreePool>, TaskContext) {
     (root, ctx)
 }
 
-/// The rows `Tail(limit)` emits for batches of `sizes` rows numbered from 0, and
-/// the most rows the state held after a batch.
-fn run(limit: u64, sizes: &[usize]) -> Vec<i64> {
+/// Several drivers' batches sunk into one `Tail(limit)`, combined in order.
+/// Each driver is a list of batch sizes; rows are numbered across drivers.
+/// Returns the emitted rows.
+fn run_drivers(limit: u64, drivers: &[&[usize]]) -> Vec<i64> {
     let (_root, ctx) = ctx(&MemoryConfig::default());
     let t = Tail::new(schema(), limit);
-    let mut local = t.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let global = Sink::global_state(&*t, &ctx).unwrap_or_else(|e| unreachable!("{e}"));
     let mut next = 0i64;
-    for &n in sizes {
-        let rows: Vec<i64> = (next..next + n as i64).collect();
-        next += n as i64;
-        match t
-            .execute(&ints(&rows), &mut local)
-            .unwrap_or_else(|e| unreachable!("{e}"))
-        {
-            OperatorOutput::NeedMoreInput(None) => {}
-            OperatorOutput::Finished(None) => break,
-            other => unreachable!("unexpected {other:?}"),
+    for sizes in drivers {
+        let mut local =
+            Sink::local_state(&*t, &ctx, &global).unwrap_or_else(|e| unreachable!("{e}"));
+        for &n in *sizes {
+            let rows: Vec<i64> = (next..next + n as i64).collect();
+            next += n as i64;
+            match t
+                .sink(ints(&rows), &mut local, &global)
+                .unwrap_or_else(|e| unreachable!("{e}"))
+            {
+                SinkStatus::NeedMoreInput => {}
+                SinkStatus::Finished => break,
+                other => unreachable!("unexpected {other:?}"),
+            }
         }
+        t.combine(local, &global)
+            .unwrap_or_else(|e| unreachable!("{e}"));
     }
+    let mut local = Source::local_state(&*t, &ctx, &global).unwrap_or_else(|e| unreachable!("{e}"));
     let mut got = Vec::new();
-    while let Some(b) = t.finish(&mut local).unwrap_or_else(|e| unreachable!("{e}")) {
+    while let Some(b) =
+        ready(t.get_data(&mut local, &global)).unwrap_or_else(|e| unreachable!("{e}"))
+    {
         got.extend(
             b.data()
                 .column(0)
@@ -72,6 +87,10 @@ fn run(limit: u64, sizes: &[usize]) -> Vec<i64> {
         );
     }
     got
+}
+
+fn run(limit: u64, sizes: &[usize]) -> Vec<i64> {
+    run_drivers(limit, &[sizes])
 }
 
 #[test]
@@ -91,15 +110,27 @@ fn a_limit_past_the_input_returns_everything() {
 }
 
 #[test]
+fn the_last_rows_of_drivers_combined_in_order_are_the_last_rows_of_all() {
+    // Two branches of a union, combined in branch order: the tail is of the
+    // whole, not one tail per branch.
+    assert_eq!(run_drivers(2, &[&[3, 3], &[2]]), vec![6, 7]);
+    assert_eq!(run_drivers(4, &[&[3], &[1], &[3]]), vec![3, 4, 5, 6]);
+    // A branch with fewer rows than the limit contributes all of them.
+    assert_eq!(run_drivers(5, &[&[4], &[2]]), vec![1, 2, 3, 4, 5]);
+    assert_eq!(run_drivers(3, &[&[4], &[0], &[0]]), vec![1, 2, 3]);
+}
+
+#[test]
 fn tail_zero_is_empty_and_stops_the_input() {
     assert_eq!(run(0, &[3, 3]), Vec::<i64>::new());
     let (_root, ctx) = ctx(&MemoryConfig::default());
     let t = Tail::new(schema(), 0);
-    let mut local = t.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let global = Sink::global_state(&*t, &ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let mut local = Sink::local_state(&*t, &ctx, &global).unwrap_or_else(|e| unreachable!("{e}"));
     assert!(matches!(
-        t.execute(&ints(&[1]), &mut local)
+        t.sink(ints(&[1]), &mut local, &global)
             .unwrap_or_else(|e| unreachable!("{e}")),
-        OperatorOutput::Finished(None)
+        SinkStatus::Finished
     ));
 }
 
@@ -110,18 +141,21 @@ fn memory_is_bounded_by_the_limit_and_released() {
         ..MemoryConfig::default()
     });
     let t = Tail::new(schema(), 10);
-    let mut local = t.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let global = Sink::global_state(&*t, &ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let mut local = Sink::local_state(&*t, &ctx, &global).unwrap_or_else(|e| unreachable!("{e}"));
     for i in 0..200_i64 {
         let rows: Vec<i64> = (i * 1000..(i + 1) * 1000).collect();
         let out = t
-            .execute(&ints(&rows), &mut local)
+            .sink(ints(&rows), &mut local, &global)
             .unwrap_or_else(|e| unreachable!("{e}"));
-        assert!(matches!(out, OperatorOutput::NeedMoreInput(None)));
+        assert!(matches!(out, SinkStatus::NeedMoreInput));
         // Ten i64 rows plus slack, never the 8 kB of a whole input batch.
         assert!(root.reserved() < 4096, "{}", root.reserved());
     }
-    while t
-        .finish(&mut local)
+    t.combine(local, &global)
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let mut src = Source::local_state(&*t, &ctx, &global).unwrap_or_else(|e| unreachable!("{e}"));
+    while ready(t.get_data(&mut src, &global))
         .unwrap_or_else(|e| unreachable!("{e}"))
         .is_some()
     {}
@@ -136,14 +170,18 @@ fn a_refused_reservation_asks_for_memory_and_keeps_its_state() {
         ..MemoryConfig::default()
     });
     let t = Tail::new(schema(), 5);
-    let mut local = t.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let global = Sink::global_state(&*t, &ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let mut local = Sink::local_state(&*t, &ctx, &global).unwrap_or_else(|e| unreachable!("{e}"));
     assert!(matches!(
-        t.execute(&ints(&[1, 2]), &mut local)
+        t.sink(ints(&[1, 2]), &mut local, &global)
             .unwrap_or_else(|e| unreachable!("{e}")),
-        OperatorOutput::NeedMemory { .. }
+        SinkStatus::NeedMemory { .. }
     ));
+    t.combine(local, &global)
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let mut src = Source::local_state(&*t, &ctx, &global).unwrap_or_else(|e| unreachable!("{e}"));
     assert!(
-        t.finish(&mut local)
+        ready(t.get_data(&mut src, &global))
             .unwrap_or_else(|e| unreachable!("{e}"))
             .is_none()
     );
@@ -153,9 +191,10 @@ fn a_refused_reservation_asks_for_memory_and_keeps_its_state() {
 fn weighted_input_is_rejected() {
     let (_root, ctx) = ctx(&MemoryConfig::default());
     let t = Tail::new(schema(), 5);
-    let mut local = t.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let global = Sink::global_state(&*t, &ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let mut local = Sink::local_state(&*t, &ctx, &global).unwrap_or_else(|e| unreachable!("{e}"));
     let b = Batch::with_weights(ints(&[1]).into_parts().0, Weights::Const(2))
         .unwrap_or_else(|e| unreachable!("{e}"));
-    let e = t.execute(&b, &mut local).unwrap_err();
+    let e = t.sink(b, &mut local, &global).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
