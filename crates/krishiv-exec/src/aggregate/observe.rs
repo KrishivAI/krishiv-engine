@@ -256,11 +256,13 @@ impl Local {
                 let done = std::mem::replace(&mut self.table, fresh);
                 let states = done.state_batch(&[0])?;
                 drop(done);
-                self.query
-                    .observe_partial(&self.finalizer, (open, self.lane), states)?;
+                // Release the driver's charge before the query takes the states', as `send` does:
+                // the same bytes are never counted twice, so a pool that holds them once takes them.
                 let keep = self.table.memory_size();
                 self.reservation
                     .shrink(self.reservation.size().saturating_sub(keep));
+                self.query
+                    .observe_partial(&self.finalizer, (open, self.lane), states)?;
             }
             _ => {}
         }
@@ -381,5 +383,126 @@ impl Operator for CollectMetrics {
     fn finish(&self, local: &mut LocalState) -> Result<Option<Batch>> {
         local_mut::<Local>(local, "CollectMetrics")?.send()?;
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use krishiv_memory::{MemoryConfig, MemoryPool, SpillOwner, TreePool};
+
+    use super::*;
+    use crate::aggregate::{AggregateExpr, AggregateFunction, AggregateSpec};
+    use crate::{
+        ExecConfig, ExecutorConfig, OperatorId, QueryContext, QueryId, TaskContext, TokioExecutor,
+        WorkloadClass,
+    };
+
+    fn rows(n: i64) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from_iter_values(0..n))]).unwrap()
+    }
+
+    fn collect_list(schema: &SchemaRef) -> Arc<CollectMetrics> {
+        let spec = |input: &SchemaRef, aggregates, output| AggregateSpec {
+            input: Arc::clone(input),
+            group_by: Vec::new(),
+            aggregates,
+            output,
+            ansi: true,
+            spill: None,
+            require_unit_weights: false,
+            legacy_statistical: false,
+            udafs: None,
+        };
+        let agg = AggregateExpr::new(
+            AggregateFunction::CollectList,
+            0,
+            DataType::Int64,
+            "l".to_owned(),
+        );
+        let merging = agg.merging(0);
+        CollectMetrics::try_new(
+            "m",
+            0,
+            None,
+            Arc::clone(schema),
+            None,
+            spec(schema, vec![agg], AggregateOutput::Partial),
+            |states| Ok(spec(states, vec![merging], AggregateOutput::Final)),
+            |results| Project::try_new(results, Vec::new()),
+        )
+        .unwrap()
+    }
+
+    const POOL: usize = 10_000_000;
+
+    /// One driver over a big split 0 and a one-row split 1. After the first split is folded,
+    /// ballast leaves only `free` bytes of the pool (`None`: none taken). Returns the query and
+    /// the pool's reservation once split 0 is folded.
+    fn two_splits(free: Option<usize>) -> Result<(Arc<QueryContext>, usize)> {
+        let root = TreePool::new(&MemoryConfig {
+            limit: None,
+            quantum: 1,
+            spill_scratch_reserve: 0,
+            ..MemoryConfig::default()
+        });
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            root.child("q", Some(POOL)),
+        );
+        let exec = TokioExecutor::new(&ExecutorConfig::default())?;
+        let ctx = TaskContext::new(
+            Arc::clone(&query),
+            exec,
+            SpillOwner::new(),
+            OperatorId(0),
+            "op",
+        );
+        let batch = rows(1);
+        let op = collect_list(&batch.schema());
+        let mut local = op.local_state(&ctx)?;
+        let big = Batch::new(rows(20_000)).with_split(Some(0));
+        let small = Batch::new(rows(1)).with_split(Some(1));
+        let out = op.execute(&big, &mut local)?;
+        assert!(
+            matches!(out, OperatorOutput::NeedMoreInput(_)),
+            "the first split folds"
+        );
+        let held = query.pool().reserved();
+        let _ballast = free.map(|free| {
+            let mut ballast =
+                krishiv_memory::ConsumerHandle::register(Arc::clone(query.pool()), "ballast", None)
+                    .reservation();
+            ballast.try_grow(POOL - held - free).unwrap();
+            ballast
+        });
+        let out = op.execute(&small, &mut local)?;
+        assert!(
+            matches!(out, OperatorOutput::NeedMoreInput(_)),
+            "the second split folds"
+        );
+        op.finish(&mut local)?;
+        drop(local);
+        Ok((query, held))
+    }
+
+    /// A finished split's states move to the query's charge as the driver releases its own: a pool
+    /// that holds them once (and the next split's small table) takes the switch, and the query
+    /// holds one partial per split.
+    #[test]
+    fn a_split_switch_charges_the_states_once_and_keeps_both_partials() {
+        let (unlimited, _) = two_splits(None).unwrap();
+        let both = unlimited.pool().reserved();
+        // The first split's open table is `held`, its states about `both`. The pool has room for
+        // half the states beyond the table: the switch takes the states only because the driver
+        // releases the table first, so charging them before the release (twice over) fails.
+        let (query, _) = two_splits(Some(both / 2)).unwrap();
+        // Both splits' states are the query's (the unlimited run's total), and they merge.
+        assert_eq!(query.pool().reserved(), both);
+        assert!(query.observed_each().get("m").unwrap().is_ok());
     }
 }
