@@ -1659,24 +1659,32 @@ fn a_whole_batch_case_answers_as_the_lazy_one() {
 }
 
 /// The binder sets `whole` for a `CASE` whose arguments cannot raise
-/// (TPC-DS q59's `CASE WHEN d = 0 THEN d ELSE 5 END` shape) and keeps it lazy
-/// where one may raise: `d / 0.0` under ANSI.
+/// (`CASE WHEN d = 0 THEN d ELSE 5 END`, and TPC-DS q59's own
+/// `CASE WHEN d_day_name = 'Sunday' THEN ss_sales_price ELSE NULL END`:
+/// string equality, a decimal value, a NULL `ELSE`) and keeps it lazy where
+/// one may raise: `d / 0.0` under ANSI.
 #[test]
 fn case_binds_whole_batch_only_when_no_branch_may_raise() {
     use krishiv_plan::{BoundColumn, Builtin, Expr, ExprNode, ResolvedExpr};
     let env = env(true);
-    let layout = [AttrId(1)];
-    let schema = Arc::new(Schema::new(vec![Field::new("d", ArrowType::Float64, true)]));
-    let d = || {
+    let layout = [AttrId(1), AttrId(2), AttrId(3)];
+    let price = DecimalType::try_new(7, 2).unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("d", ArrowType::Float64, true),
+        Field::new("d_day_name", ArrowType::Utf8View, true),
+        Field::new("ss_sales_price", ArrowType::Decimal64(7, 2), true),
+    ]));
+    let col = |id: u64, name: &str, data_type: DataType| {
         Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
             BoundColumn {
-                id: AttrId(1),
-                name: "d".to_owned(),
-                data_type: DataType::Double,
+                id: AttrId(id),
+                name: name.to_owned(),
+                data_type,
                 nullable: true,
             },
         ))))
     };
+    let d = || col(1, "d", DataType::Double);
     let lit_double = |v: f64| Arc::new(Expr::new(ExprNode::Literal(Literal::Double(v))));
     let call = |b: Builtin, args: Vec<Arc<Expr>>, data_type: DataType| {
         Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
@@ -1705,4 +1713,26 @@ fn case_binds_whole_batch_only_when_no_branch_may_raise() {
         DataType::Double,
     )));
     assert!(lazy.contains("whole: false"), "{lazy}");
+    let q59 = call(
+        Builtin::When,
+        vec![
+            call(
+                Builtin::Eq,
+                vec![
+                    col(2, "d_day_name", DataType::String),
+                    Arc::new(Expr::new(ExprNode::Literal(Literal::String(
+                        "Sunday".to_owned(),
+                    )))),
+                ],
+                DataType::Boolean,
+            ),
+            col(3, "ss_sales_price", DataType::Decimal(price)),
+            Arc::new(Expr::new(ExprNode::Literal(Literal::Null(Some(
+                DataType::Decimal(price),
+            ))))),
+        ],
+        DataType::Decimal(price),
+    );
+    let q59 = bound(&q59);
+    assert!(q59.contains("whole: true"), "{q59}");
 }

@@ -627,19 +627,20 @@ impl When {
                 Some(n) => c.values() & n.inner(),
                 None => c.values().clone(),
             };
-            if rows > 0 && t.count_set_bits() == rows {
+            let n = t.count_set_bits();
+            if rows > 0 && n == rows {
                 all = Some(value);
                 break;
             }
-            taken.push((t, value));
+            taken.push((t, n, value));
         }
         let seed = match (all, &self.otherwise) {
             (Some(e), _) | (None, Some(e)) => e.eval(batch, partition)?.into_array(rows)?,
             (None, None) => new_null_array(&self.out, rows),
         };
         let mut acc = cast_null(seed, &self.out);
-        for (t, value) in taken.into_iter().rev() {
-            if t.count_set_bits() == 0 {
+        for (t, n, value) in taken.into_iter().rev() {
+            if n == 0 {
                 continue;
             }
             let v = cast_null(value.eval(batch, partition)?.into_array(rows)?, &self.out);
