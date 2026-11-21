@@ -11,11 +11,11 @@ arena is reserved, and it provides the pressure release hook (`mi_collect`) for 
 Paths are relative to this crate.
 - `src/lib.rs` the allocator policy (about 600 lines, with its tests):
 - `LIMITED_OPTIONS` the three `MIMALLOC_*` options (purge delay, THP off, minimal purge size) and their mimalloc option numbers
-- `GENEROUS_OPTIONS` the purge delay (30,000 ms) set under a generous limit (`is_generous`, at least `GENEROUS_MIN` 4 GiB) unless the user set `MIMALLOC_PURGE_DELAY`: mimalloc's 1 s default purged memory a query re-uses within seconds and faulted it back in (q65 SF10: 365K faults at 1 s, 4.8K at 30 s); finite because a delay <= 0 disables even forced purges
+- `GENEROUS_OPTIONS` the purge delay (30,000 ms) set under a generous limit (`is_generous`, at least `GENEROUS_MIN` 4 GiB) unless the user set `MIMALLOC_PURGE_DELAY`: mimalloc's 1 s default purged memory a query re-uses within seconds and faulted it back in (q65 SF10: 365K faults at 1 s, 4.8K at 30 s); finite because `-1` (never purge) would also disable a forced purge
 - `GLIBC_OPTIONS` glibc malloc's mmap and trim thresholds (4 MiB, 64 MiB), set by `init` with no limit or a generous one, unless the environment sets glibc's malloc: the C libraries (zstd's per-column-chunk decompression contexts) allocate with glibc, whose defaults mapped and trimmed those blocks per chunk
 - `limit_in_args` detects `--memory-limit` or `krishiv.memory.limit=` in program arguments
 - `LIMIT_VAR` the `KRISHIV_MEMORY_LIMIT` environment variable
-- `init` (glibc only, inside the `.init_array` constructor) applies `LIMITED_OPTIONS` when a limit is known at process start
+- `init` (glibc only, inside the `.init_array` constructor) applies `LIMITED_OPTIONS` below `GENEROUS_MIN`, `GENEROUS_OPTIONS` at or above it, when a limit is known at process start
 - `release` the pressure release hook (`mi_collect(true)`)
 - `install` links the constructor and returns `release` for `krishiv_memory::set_release_hook`
 - `src/heap.rs` (feature `heap-stats`) `Counting<A>`, a global-allocator wrapper that counts live and peak heap bytes for memory measurements; `tests/heap_stats.rs` covers it
@@ -24,7 +24,7 @@ Paths are relative to this crate.
 
 ## Extension points
 - A new glibc malloc parameter: add a row to `GLIBC_OPTIONS` (its `mallopt` number from glibc's `malloc.h`) and a case to `glibc_keeps_c_blocks_unless_bounded_or_configured`.
-- A new allocator option: add a row to `LIMITED_OPTIONS` with its mimalloc `mi_option_e` number and pin the number in a test.
+- A new allocator option: add a row to `LIMITED_OPTIONS` (tight limit) or `GENEROUS_OPTIONS` (generous limit) with its mimalloc `mi_option_e` number and pin the number in a test.
 - A new way to signal a limit at process start: extend `limit_in_args` (or `LIMIT_VAR`) and its test.
 - A host that embeds the engine owns its allocator; it calls `krishiv_memory::set_release_hook` itself rather than using this crate.
 
@@ -35,8 +35,8 @@ numbers to the linked mimalloc and check the argument detection and the null-`ar
 
 ## Invariants
 - The options must be in force before mimalloc reserves its first arena, so they are applied by the constructor, not from `main`.
-- A forced `mi_collect` (`release`) purges whatever the purge delay, as long as it is positive; the pressure hook relies on it under `GENEROUS_OPTIONS`.
 - They apply only when the limit is known at process start and the user has not set the `MIMALLOC_*` variable; with no limit mimalloc keeps its defaults.
+- A forced `mi_collect` (`release`) purges whatever the purge delay, as long as it is positive (`release_purges_under_the_generous_delay` pins it); the pressure hook relies on it under `GENEROUS_OPTIONS`.
 - With no limit or a generous one the constructor sets `GLIBC_OPTIONS` (glibc's mmap and trim thresholds) unless the user set the `MALLOC_*_` variable or a `glibc.malloc.` tunable; a tight limit keeps glibc's defaults. The test reads `mallinfo2` (glibc 2.33 and later; tests only).
 - A limit from a configuration file or a runtime `SET` is enforced by the memory pools and uses `release`, without the options.
 - Its `unsafe` blocks (the constructor, the mimalloc calls) each carry a `// SAFETY:` comment.

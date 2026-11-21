@@ -19,8 +19,8 @@
 //! 490 MiB cgroup, a 250 ms delay with huge pages off, or a 10 ms delay
 //! with huge pages on, was OOM-killed. So they apply below
 //! [`GENEROUS_MIN`] only. A generous limit keeps mimalloc's other defaults
-//! but purges after 30 s instead of 1 s ([`GENEROUS_OPTIONS`]: a fixed
-//! delay, as DuckDB keeps one jemalloc decay at every limit) and returns
+//! but purges after 30 s instead of 1 s ([`GENEROUS_OPTIONS`], one fixed
+//! delay at every generous limit) and returns
 //! memory through [`release`] under pressure. A forced collect purges
 //! whatever the delay, so the pressure hook keeps working. With no limit
 //! mimalloc keeps all its defaults: nothing would apply pressure.
@@ -30,7 +30,9 @@
 //! every re-use faulted it back in, zeroing huge pages: TPC-DS SF10 q65 (12
 //! threads, 12 GiB limit, a KVM guest) took 365K page faults and 14 s of
 //! system time per five runs at 1 s, 4.8K and 3.5 s at 30 s, for a peak
-//! resident set 16% higher (1.01 to 1.17 GiB).
+//! resident set 16% higher (1.01 to 1.17 GiB). mimalloc has no purge
+//! thread: a process that goes idle after a peak keeps it until its next
+//! allocation activity after the delay (as it did at 1 s).
 //!
 //! The options must be in force before mimalloc reserves its first arena,
 //! at the process's first allocation, before `main` (set from `main` they
@@ -68,9 +70,9 @@ pub const LIMITED_OPTIONS: [(&CStr, c_int, c_long); 3] = [
 
 /// `(environment variable, mimalloc option number, value)` set under a
 /// generous limit ([`is_generous`]): purge after 30,000 ms (mimalloc's
-/// default is 1,000). A finite delay, not `-1`: mimalloc schedules no purge
-/// at all with a delay of 0 or less, and then a forced [`release`] would not
-/// purge either.
+/// default is 1,000). A finite delay: `-1` (never purge) would also disable
+/// a forced purge, so [`release`] would return nothing. At 0 mimalloc purges
+/// at the free itself.
 pub const GENEROUS_OPTIONS: [(&CStr, c_int, c_long); 1] = [(c"MIMALLOC_PURGE_DELAY", 15, 30_000)];
 
 /// `(environment variable, mallopt parameter, value)` set for glibc's
@@ -90,7 +92,8 @@ pub const GLIBC_OPTIONS: [(&CStr, c_int, c_int); 2] = [
     (c"MALLOC_TRIM_THRESHOLD_", -1, 64 << 20),
 ];
 
-/// The smallest memory limit that keeps mimalloc's defaults (4 GiB).
+/// The smallest memory limit that keeps mimalloc's defaults but the purge
+/// delay ([`GENEROUS_OPTIONS`]) (4 GiB).
 ///
 /// Below it the process holds the resident-set bound of the memory gate
 /// (`1.25 x limit` plus a floor, `krishiv_bench_runner::rss_bound`), which
@@ -102,8 +105,8 @@ pub const GLIBC_OPTIONS: [(&CStr, c_int, c_int); 2] = [
 /// sized at twice its limit (24 GiB in 48 GiB) is the usual generous case.
 pub const GENEROUS_MIN: u64 = 4 << 30;
 
-/// Whether `limit` (bytes) is generous enough to keep mimalloc's
-/// defaults: at least [`GENEROUS_MIN`]. Above it a process that fills its
+/// Whether `limit` (bytes) is generous enough to keep mimalloc's defaults
+/// but the purge delay ([`GENEROUS_OPTIONS`]): at least [`GENEROUS_MIN`]. Above it a process that fills its
 /// pool can hold more than the `1.25 x limit` bound, up to about twice the
 /// limit (TPC-H SF1, 12 threads, defaults: peak RSS 911 MiB at 200 MiB,
 /// 1,600 MiB at 512 MiB, 1,950 MiB at 1 GiB), until the pressure hook
@@ -213,9 +216,7 @@ mod cpu_check {
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 mod init {
-    use std::ffi::{CStr, c_char, c_int};
-
-    use std::ffi::c_long;
+    use std::ffi::{CStr, c_char, c_int, c_long};
 
     use super::{
         GENEROUS_OPTIONS, LIMIT_VAR, LIMITED_OPTIONS, is_generous, limit_in_args, parse_size,
@@ -358,8 +359,9 @@ static BOUNDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// milliseconds. Then the binary also installs the resident-set guard's
 /// probe (`krishiv_memory::set_resident_probe`): the resident set tracks
 /// the memory pools closely enough for the guard to act on it. With
-/// mimalloc's defaults (a generous limit) freed memory stays resident for a
-/// second, and the guard would spill for memory about to be returned.
+/// a generous limit's 30 s purge delay ([`GENEROUS_OPTIONS`]) freed memory
+/// stays resident for up to 30 s, and the guard would spill for memory about
+/// to be returned.
 pub fn bounded() -> bool {
     BOUNDED.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -497,7 +499,39 @@ mod tests {
             // the constructor ran before it (not only that the option is set).
             println!("OPTIONS {:?} THP {}", read(), thp_enabled());
             println!("MAPPED {}", a_mib_is_mapped());
+            if std::env::var_os("KRISHIV_ALLOC_RELEASE").is_some() {
+                println!("RELEASE {}", resident_after_release());
+            }
         }
+    }
+
+    /// The resident set in MiB (`VmRSS`, 0 if the kernel does not report it).
+    fn resident_mib() -> u64 {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix("VmRSS:"))
+            .and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
+            .map_or(0, |kib| kib >> 10)
+    }
+
+    /// Touches a 256 MiB mimalloc block, frees it and calls [`release`]:
+    /// `"<during> <freed> <released>"`, the resident set in MiB while the
+    /// block is live, after the free and after the release.
+    fn resident_after_release() -> String {
+        const SIZE: usize = 256 << 20;
+        // SAFETY: a fresh block of SIZE bytes, written within its bounds and
+        // freed once; nothing else holds it.
+        let (during, freed) = unsafe {
+            let p = libmimalloc_sys::mi_malloc(SIZE).cast::<u8>();
+            assert!(!p.is_null());
+            std::ptr::write_bytes(p, 1, SIZE);
+            let during = resident_mib();
+            libmimalloc_sys::mi_free(p.cast());
+            (during, resident_mib())
+        };
+        super::release();
+        format!("{during} {freed} {}", resident_mib())
     }
 
     /// glibc's `struct mallinfo2` (glibc 2.33 and later; tests only).
@@ -621,6 +655,30 @@ mod tests {
             ),
             "(10, 0, 64) THP 0"
         );
+    }
+
+    /// Under the generous limit's 30 s purge delay a freed block stays
+    /// resident, and [`release`] (a forced `mi_collect`) returns it at once:
+    /// the pressure hook relies on mimalloc's forced purge ignoring the
+    /// delay, which this pins to the linked mimalloc.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn release_purges_under_the_generous_delay() {
+        let line = report(
+            Some("krishiv.memory.limit=24g"),
+            &[("KRISHIV_ALLOC_RELEASE", "1")],
+            "RELEASE ",
+        );
+        let mib: Vec<u64> = line.split(' ').map(|v| v.parse().unwrap()).collect();
+        let [during, freed, released] = mib[..] else {
+            panic!("{line}")
+        };
+        // The kernel reports the resident set (0 means it does not).
+        assert!(during >= 256, "{line}");
+        // The 30 s delay keeps the freed block resident ...
+        assert!(freed + 64 > during, "{line}");
+        // ... and the forced collect returns most of it.
+        assert!(released + 192 < during, "{line}");
     }
 
     /// A generous limit leaves mimalloc's defaults, huge pages included,
