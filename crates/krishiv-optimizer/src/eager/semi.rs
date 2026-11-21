@@ -26,7 +26,8 @@
 use std::sync::Arc;
 
 use krishiv_plan::{
-    BoundColumn, ExprNode, Grouping, JoinCondition, JoinKind, LogicalPlan, PlanNode, ResolvedExpr,
+    AttrId, BoundColumn, ExprNode, Grouping, JoinCondition, JoinKind, LogicalPlan, PlanNode,
+    ResolvedExpr,
 };
 use krishiv_types::DataType;
 
@@ -114,7 +115,7 @@ fn build(
         Ok(()) if !right_keys.is_empty() && !is_distinct_on(right, &right_keys) => {
             moved = true;
             notes.push("right distinct".to_owned());
-            then(distinct(right, &right_keys, join), est)
+            under_shift(right, &right_keys, join, est, then)
         }
         Ok(()) => Arc::clone(right),
         Err(why) => {
@@ -131,7 +132,7 @@ fn build(
             Ok(()) => {
                 moved = true;
                 notes.push("left distinct".to_owned());
-                (then(distinct(left, keys, plan), est), true)
+                (under_shift(left, keys, plan, est, then), true)
             }
             Err(why) => {
                 notes.push(format!("left kept: {why}"));
@@ -225,6 +226,17 @@ fn is_distinct_on(p: &LogicalPlan, keys: &[BoundColumn]) -> bool {
             kind: JoinKind::LeftSemi | JoinKind::LeftAnti,
             ..
         } => is_distinct_on(left, keys),
+        PlanNode::Shift { input, offset } => {
+            let inner: Option<Vec<BoundColumn>> = keys
+                .iter()
+                .map(|k| {
+                    let mut c = k.clone();
+                    c.id = AttrId(k.id.0.checked_sub(*offset)?);
+                    Some(c)
+                })
+                .collect();
+            inner.is_some_and(|inner| is_distinct_on(input, &inner))
+        }
         _ => distinct_keys(p).is_some_and(|have| {
             have.len() == keys.len() && keys.iter().all(|k| have.iter().any(|h| h.id == k.id))
         }),
@@ -239,14 +251,123 @@ fn reduces(
     est: &mut Estimator<'_>,
 ) -> Result<(), String> {
     let stats = est.plan(p);
-    let groups = groups_of(keys, &stats)?;
+    let ids: Vec<AttrId> = keys.iter().map(|k| k.id).collect();
+    let bound = source(p, ids, 0).map(|scan| est.plan(&scan).rows + 1.0);
+    let groups = match (groups_of(keys, &stats), bound) {
+        (Ok(g), b) => b.map_or(g, |b| g.min(b)),
+        (Err(_), Some(b)) => b,
+        (Err(why), None) => return Err(why),
+    };
     if stats.rows < MIN_REDUCTION * groups {
+        let counts: Vec<String> = keys
+            .iter()
+            .map(|k| {
+                let ndv = stats.cols.get(&k.id).map_or(f64::NAN, |c| c.ndv);
+                format!("{} {ndv:.0}", k.name)
+            })
+            .collect();
         return Err(format!(
-            "reduction below {MIN_REDUCTION}: rows {:.0}, groups {groups:.0}",
-            stats.rows
+            "reduction below {MIN_REDUCTION}: rows {:.0}, groups {groups:.0} ({})",
+            stats.rows,
+            counts.join(", ")
         ));
     }
     Ok(())
+}
+
+/// The scan every one of `ids` (columns of `p`) is a column of, through
+/// projections of columns, filters, joins and `Shift`s: the keys' groups are
+/// at most its rows (and a NULL an outer join adds). Distinct counts
+/// estimated from integral ranges over sparse ids (TPC-DS `i_brand_id`) run
+/// far above that.
+fn source(p: &Arc<LogicalPlan>, ids: Vec<AttrId>, depth: usize) -> Option<Arc<LogicalPlan>> {
+    if depth > 64 {
+        return None;
+    }
+    let has = |c: &Arc<LogicalPlan>, ids: &[AttrId]| {
+        c.resolved_output()
+            .is_some_and(|out| ids.iter().all(|id| out.iter().any(|o| o.id == *id)))
+    };
+    match &p.node {
+        PlanNode::Scan(_) => Some(Arc::clone(p)),
+        PlanNode::Filter { input, .. } => source(input, ids, depth + 1),
+        PlanNode::Project { input, exprs } => {
+            let below = ids
+                .iter()
+                .map(|id| {
+                    exprs.iter().find_map(|e| match &e.node {
+                        ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == *id => Some(c.id),
+                        ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
+                            if output.id == *id =>
+                        {
+                            match &expr.node {
+                                ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            source(input, below, depth + 1)
+        }
+        PlanNode::Shift { input, offset } => {
+            let below = ids
+                .iter()
+                .map(|id| id.0.checked_sub(*offset).map(AttrId))
+                .collect::<Option<Vec<_>>>()?;
+            source(input, below, depth + 1)
+        }
+        PlanNode::Join { left, right, .. } => {
+            if has(left, &ids) {
+                source(left, ids, depth + 1)
+            } else if has(right, &ids) {
+                source(right, ids, depth + 1)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// A distinct of `input` on `keys`, pushed on by `then`. Over a `Shift` (an
+/// instance of a shared subtree, q14's catalog and web channels) it goes
+/// inside, on the keys less the offset: a distinct makes no attribute ids, nor
+/// does eager aggregation pushing one (no calls, no states), so the instance
+/// stays an instance of its own subtree.
+fn under_shift(
+    input: &Arc<LogicalPlan>,
+    keys: &[BoundColumn],
+    like: &LogicalPlan,
+    est: &mut Estimator<'_>,
+    then: &mut dyn FnMut(Arc<LogicalPlan>, &mut Estimator<'_>) -> Arc<LogicalPlan>,
+) -> Arc<LogicalPlan> {
+    if let PlanNode::Shift {
+        input: body,
+        offset,
+    } = &input.node
+    {
+        let inner: Option<Vec<BoundColumn>> = keys
+            .iter()
+            .map(|k| {
+                let mut c = k.clone();
+                c.id = AttrId(k.id.0.checked_sub(*offset)?);
+                Some(c)
+            })
+            .collect();
+        if let Some(inner) = inner {
+            let pushed = under_shift(body, &inner, like, est, then);
+            return Arc::new(
+                LogicalPlan::new(PlanNode::Shift {
+                    input: pushed,
+                    offset: *offset,
+                })
+                .with_origin(input.origin),
+            );
+        }
+    }
+    then(distinct(input, keys, like), est)
 }
 
 /// A distinct of `input` on `keys`, with the origin of `like`.
