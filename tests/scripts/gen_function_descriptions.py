@@ -50,19 +50,27 @@ def escape(row: str) -> str:
 
 
 def main() -> int:
-    names = [
-        line.split("\t")[0]
-        for line in CATALOG.read_text().splitlines()
-        if line and not line.startswith("#")
-    ]
+    names = [line.split("\t")[0] for line in CATALOG.read_text().splitlines() if line and not line.startswith("#")]
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         (work / "names.txt").write_text("\n".join(names) + "\n")
         (work / "probe.py").write_text(PROBE)
         subprocess.run(
-            ["docker", "run", "--rm", "-u", "0", "-v", f"{work}:/work", IMAGE,
-             "/opt/spark/bin/spark-submit", "/work/probe.py"],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-u",
+                "0",
+                "-v",
+                f"{work}:/work",
+                IMAGE,
+                "/opt/spark/bin/spark-submit",
+                "/work/probe.py",
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         described = json.loads((work / "out.json").read_text())
     lines = [

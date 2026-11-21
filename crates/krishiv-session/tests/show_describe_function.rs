@@ -20,9 +20,10 @@ fn rows(s: &Session, sql: &str) -> R<Vec<String>> {
     Ok(out)
 }
 
+/// The error class a statement fails with (`"OK"` if it does not fail).
 fn err(s: &Session, sql: &str) -> String {
     match block_on(s.sql(sql)).and_then(|d| block_on(d.collect())) {
-        Ok(_) => panic!("{sql} should fail"),
+        Ok(_) => "OK".to_owned(),
         Err(e) => e.error_class().name().to_owned(),
     }
 }
