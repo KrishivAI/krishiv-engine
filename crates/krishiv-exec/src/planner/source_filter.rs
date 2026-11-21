@@ -38,6 +38,39 @@ pub(crate) fn and_all(parts: Vec<&Expr>) -> Option<Expr> {
     })
 }
 
+/// The `IsNotNull(column)` conjuncts Spark's `InferFiltersFromConstraints` adds for the scan columns
+/// `e` (one conjunct) compares or matches: null-rejecting comparisons and `LIKE`, not `<=>`, `IS NULL`
+/// or `IN`. Written order of the operands.
+pub(crate) fn inferred_not_null(e: &Expr, scan: &[BoundColumn]) -> Vec<Expr> {
+    let Some((b, args)) = builtin(e) else {
+        return Vec::new();
+    };
+    if !matches!(
+        b,
+        Builtin::Eq | Builtin::Lt | Builtin::LtEq | Builtin::Gt | Builtin::GtEq | Builtin::Like
+    ) {
+        return Vec::new();
+    }
+    args.into_iter()
+        .filter(|a| attribute(a, scan).is_some())
+        .map(|a| {
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                krishiv_plan::ResolvedFunction {
+                    id: krishiv_plan::FunctionId::Builtin(Builtin::IsNotNull),
+                    kind: krishiv_plan::FunctionKind::Scalar,
+                    args: vec![std::sync::Arc::new(a.clone())],
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: krishiv_types::DataType::Boolean,
+                    nullable: false,
+                    deterministic: true,
+                },
+            )))
+        })
+        .collect()
+}
+
 enum Tr {
     /// A serializable leaf or `Not` of a leaf.
     Leaf(SourceFilter),

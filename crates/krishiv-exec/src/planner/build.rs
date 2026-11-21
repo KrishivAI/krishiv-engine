@@ -1417,8 +1417,31 @@ impl<'a> Planner<'a> {
             })
             .collect();
         let mut offered = Vec::new();
-        let mut exprs = Vec::new();
+        let mut exprs: Vec<Expr> = Vec::new();
         let mut subqueries = Vec::new();
+        let written: Vec<&Expr> = krishiv_plan::conjuncts(predicate)
+            .into_iter()
+            .filter(|c| !krishiv_plan::has_subquery(c))
+            .collect();
+        // Spark infers `IsNotNull` of the columns the comparisons reject nulls of, all ahead of the
+        // written conjuncts (the oracle's `four_conjunct`).
+        for c in &written {
+            for inferred in super::source_filter::inferred_not_null(c, &scan.output) {
+                let known = |e: &Expr| {
+                    exprs
+                        .iter()
+                        .chain(written.iter().copied())
+                        .any(|k| e.to_string() == k.to_string())
+                };
+                if !known(&inferred) {
+                    offered.push(OfferedConjunct {
+                        filter: scan_filter(table, &layout, &inferred, scan, &self.env)?,
+                        source: super::source_filter::classify(&inferred, &scan.output),
+                    });
+                    exprs.push(inferred);
+                }
+            }
+        }
         for c in krishiv_plan::conjuncts(predicate) {
             if krishiv_plan::has_subquery(c) {
                 subqueries.push(c);
@@ -1428,7 +1451,7 @@ impl<'a> Planner<'a> {
                 filter: scan_filter(table, &layout, c, scan, &self.env)?,
                 source: super::source_filter::classify(c, &scan.output),
             });
-            exprs.push(c);
+            exprs.push(c.clone());
         }
         let decision = factory.decide(&offered, projection)?;
         if decision.pushed.len() != offered.len() {
@@ -1444,8 +1467,8 @@ impl<'a> Planner<'a> {
                 continue;
             }
             match o.source {
-                SourceConjunct::Untranslated => untranslated.push(*e),
-                _ => kept.push(*e),
+                SourceConjunct::Untranslated => untranslated.push(e),
+                _ => kept.push(e),
             }
         }
         kept.extend(untranslated);
