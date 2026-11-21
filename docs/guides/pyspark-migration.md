@@ -155,6 +155,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
 | [Delta Lake writes](../concepts/known-differences.md#delta-lake-writes) |
 | [HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)](../concepts/known-differences.md#hll-sketches-the-compact-form-hll_sketch_agg-hll_union_agg-hll_union) |
+| [Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)](../concepts/known-differences.md#metric-views-create-view--with-metrics-language-yaml) |
 
 ## Where it runs
 
