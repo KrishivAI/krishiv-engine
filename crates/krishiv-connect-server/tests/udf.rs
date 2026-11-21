@@ -52,9 +52,17 @@ use tonic::Code;
 use tonic::transport::Channel;
 
 const SESSION: &str = "5b2d9a3e-1c4f-4e8a-9d6b-7f0e3a2c1b94";
+/// Erin's session: a session id belongs to the principal that made it.
+const SESSION2: &str = "0c8e2f71-6b3a-4d5e-8f19-a4b7c2d9e603";
+
+fn session_of(token: &str) -> String {
+    (if token == ADMIN2 { SESSION2 } else { SESSION }).to_owned()
+}
 const VIEWER: &str = "viewer-token-0123456789abcdefghijklmnopqrstuv";
 const OPERATOR: &str = "operator-token-0123456789abcdefghijklmnopqrstu";
 const ADMIN: &str = "admin-token-0123456789abcdefghijklmnopqrstuvw";
+/// A second admin (`erin`), to tell principals apart without the `Usage` gate on client code.
+const ADMIN2: &str = "admin2-token-0123456789abcdefghijklmnopqrstuv";
 
 /// The child entry: the sandbox trampoline when started with `--` and spec arguments.
 #[test]
@@ -124,6 +132,7 @@ async fn start_store(
     let v = secret(dir.path(), "v", VIEWER);
     let o = secret(dir.path(), "o", OPERATOR);
     let a = secret(dir.path(), "a", ADMIN);
+    let e = secret(dir.path(), "e", ADMIN2);
     let auth = AuthConfig::from_settings([
         ("krishiv.auth.tokens.v.secret", v.as_str()),
         ("krishiv.auth.tokens.v.principal", "carol"),
@@ -134,6 +143,9 @@ async fn start_store(
         ("krishiv.auth.tokens.a.secret", a.as_str()),
         ("krishiv.auth.tokens.a.principal", "dana"),
         ("krishiv.auth.tokens.a.role", "admin"),
+        ("krishiv.auth.tokens.e.secret", e.as_str()),
+        ("krishiv.auth.tokens.e.principal", "erin"),
+        ("krishiv.auth.tokens.e.role", "admin"),
     ])
     .expect("auth config");
     let auth = Arc::new(ServerAuth::new(&auth).expect("auth"));
@@ -204,7 +216,7 @@ async fn execute(
     token: &str,
 ) -> Result<Vec<pb::ExecutePlanResponse>, tonic::Status> {
     let request = pb::ExecutePlanRequest {
-        session_id: SESSION.to_owned(),
+        session_id: session_of(token),
         user_context: Some(pb::UserContext {
             user_id: "someone".to_owned(),
             ..Default::default()
@@ -235,7 +247,7 @@ async fn analyze_schema(
     token: &str,
 ) -> Result<pb::AnalyzePlanResponse, tonic::Status> {
     let request = pb::AnalyzePlanRequest {
-        session_id: SESSION.to_owned(),
+        session_id: session_of(token),
         analyze: Some(pb::analyze_plan_request::Analyze::Schema(Box::new(
             pb::analyze_plan_request::Schema { plan: Some(plan) },
         ))),
@@ -1252,15 +1264,41 @@ async fn a_persisted_udf_survives_a_restart_and_is_typed_by_the_first_analysis()
         .await
         .expect("typed in a new session of a restarted server");
     assert!(schema.result.is_some());
-    // The same file, another authenticated principal (untenanted, so keyed by principal): the function
-    // is dana's alone, olga's session does not resolve it.
-    analyze_schema(&run.channel, query(), OPERATOR)
+    // The same file, another authenticated principal who may send code (erin, admin; untenanted, so keyed
+    // by principal): the function is dana's alone and erin's session does not resolve it.
+    execute(&run.channel, sql("SELECT 1"), ADMIN2)
+        .await
+        .expect("erin's session");
+    let e = analyze_schema(&run.channel, query(), ADMIN2)
         .await
         .expect_err("not visible to another principal of the same catalog");
+    assert_eq!(error_class(&e), "UNRESOLVED_ROUTINE", "{e:?}");
     // dana's own new session still does, on the same server.
     analyze_schema(&run.channel, query(), ADMIN)
         .await
         .expect("visible to its owner");
+    // erin persists her own `plus_one` and registers nothing of dana's: dana's row is unchanged.
+    execute(
+        &run.channel,
+        register(udf(None, "plus_one", PLUS_ONE, long(), Vec::new())),
+        ADMIN2,
+    )
+    .await
+    .expect("erin registers");
+    execute(&run.channel, persist("plus_one", false), ADMIN2)
+        .await
+        .expect("erin persists her own");
+    let owners = |key: &str| {
+        let catalog =
+            krishiv_catalogs::sqlite::SqliteCatalog::open("python_functions", &file, false)
+                .expect("catalog");
+        catalog
+            .python_function(Some(key), "plus_one")
+            .expect("read")
+            .map(|f| f.owner)
+    };
+    assert_eq!(owners("p:dana").as_deref(), Some("dana"));
+    assert_eq!(owners("p:erin").as_deref(), Some("erin"));
     // `drop` removes it for later sessions.
     execute(&run.channel, persist("plus_one", true), ADMIN)
         .await

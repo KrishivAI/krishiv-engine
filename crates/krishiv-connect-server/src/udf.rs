@@ -33,7 +33,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_connect::translate::{PythonUdf, UdfCallName, UdfHost as TranslateHost};
 use krishiv_exec::python_eval::UdfRuntime;
 use krishiv_plan::PythonUdfRef;
@@ -177,7 +177,8 @@ pub trait FunctionStore: Send + Sync + fmt::Debug {
         udf: &PythonUdf,
         override_owner: bool,
     ) -> Result<StoreChange, KrishivError>;
-    /// The principal that stored `tenant`'s function `name`, if there is one.
+    /// The principal that stored `tenant`'s function `name`, if there is one. Only a hint that lets `persist`
+    /// check `Manage` before the first write; the safety is the atomic check in `put` and `remove`.
     ///
     /// # Errors
     /// The store's failure.
@@ -440,7 +441,15 @@ impl SessionPython {
             authorize_manage(session).await?;
             outcome = change(true).await?;
         }
-        debug_assert!(outcome != StoreChange::OwnedByOther);
+        if outcome == StoreChange::OwnedByOther {
+            // A store that ignored `override_owner`: nothing was written, so do not report success.
+            return Err(InternalError {
+                message: format!(
+                    "the function store refused to change `{name}` although the caller may override"
+                ),
+            }
+            .into());
+        }
         Ok(())
     }
 
