@@ -372,13 +372,9 @@ async fn as_of_join_distances_overflow_where_sparks_do() {
     }
 }
 
-/// Without ANSI an integral distance wraps, so Spark's `min_by` over the distances can pick
-/// another row than the nearest as-of value (left `2147483647`, right `-2` and `2147483646`:
-/// Spark picks `-2`). The merge walks the values' order, so the Connect form refuses there.
-#[tokio::test]
-async fn as_of_join_distance_that_can_wrap_without_ansi_is_refused() {
+/// Sets `spark.sql.ansi.enabled=false` on the test session.
+async fn ansi_off(s: &Running) {
     use pb::config_request::operation::OpType as ConfOp;
-    let s = start().await;
     let request = pb::ConfigRequest {
         session_id: SESSION.to_owned(),
         user_context: Some(pb::UserContext {
@@ -407,13 +403,20 @@ async fn as_of_join_distance_that_can_wrap_without_ansi_is_refused() {
     )
     .await
     .expect("config set");
-    let side = |values: &[i32], column: &str| {
-        let rows: Vec<serde_json::Value> = values.iter().map(|v| serde_json::json!([v])).collect();
-        serde_json::json!({ "columns": [column], "rows": rows })
+}
+
+/// A keyless inner Connect as-of join of `SELECT * FROM VALUES <left> AS l(lt)` and the same of
+/// `right` as `r(rt)`, with an exact match allowed.
+fn keyless_as_of(left: &str, right: &str, direction: &str) -> pb::Relation {
+    let side = |rows: &str, alias: &str, column: &str| {
+        relation(RelType::Sql(pb::Sql {
+            query: format!("SELECT * FROM VALUES {rows} AS {alias}({column})"),
+            ..Default::default()
+        }))
     };
-    let rel = relation(RelType::AsOfJoin(Box::new(pb::AsOfJoin {
-        left: Some(Box::new(values(&side(&[i32::MAX], "lt"), "l"))),
-        right: Some(Box::new(values(&side(&[-2, i32::MAX - 1], "rt"), "r"))),
+    relation(RelType::AsOfJoin(Box::new(pb::AsOfJoin {
+        left: Some(Box::new(side(left, "l", "lt"))),
+        right: Some(Box::new(side(right, "r", "rt"))),
         left_as_of: Some(attr("lt")),
         right_as_of: Some(attr("rt")),
         join_expr: None,
@@ -421,10 +424,101 @@ async fn as_of_join_distance_that_can_wrap_without_ansi_is_refused() {
         join_type: "inner".to_owned(),
         tolerance: None,
         allow_exact_matches: true,
-        direction: "backward".to_owned(),
-    })));
+        direction: direction.to_owned(),
+    })))
+}
+
+/// Without ANSI an integral distance wraps, so Spark's `min_by` over the distances can pick
+/// another row than the nearest as-of value (left `2147483647`, right `-2` and `2147483646`:
+/// Spark picks `-2`). The merge walks the values' order, so the Connect form refuses there.
+#[tokio::test]
+async fn as_of_join_distance_that_can_wrap_without_ansi_is_refused() {
+    let s = start().await;
+    ansi_off(&s).await;
+    let rel = keyless_as_of(
+        &format!("({})", i32::MAX),
+        &format!("(-2), ({})", i32::MAX - 1),
+        "backward",
+    );
     let Err(e) = execute(&s.channel, rel).await else {
         panic!("a wrapping distance ran without ANSI");
     };
     assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+/// A value type, its left and right rows, and Spark's rows backward and forward.
+type Case = (
+    &'static str,
+    String,
+    String,
+    [&'static str; 2],
+    [&'static str; 2],
+);
+
+/// Timestamp, date, double and exact decimal distances do not wrap without ANSI (a datetime
+/// subtraction raises as with ANSI, a double is monotone, an exact decimal cannot overflow), so
+/// those Connect as-of joins run and give Spark's rows (Spark 4.3.0, `spark.sql.ansi.enabled=false`,
+/// `spark.sql.session.timeZone=UTC`, `_joinAsOf` over the same rows).
+#[tokio::test]
+async fn as_of_joins_on_non_integral_values_run_without_ansi() {
+    let s = start().await;
+    ansi_off(&s).await;
+    let ts = |sec: u32| format!("TIMESTAMP'2024-01-01 00:00:0{sec}'");
+    let date = |day: u32| format!("DATE'2024-01-0{day}'");
+    let cases: [Case; 4] = [
+        (
+            "timestamp",
+            format!("({}), ({})", ts(5), ts(2)),
+            format!("({}), ({}), ({})", ts(1), ts(4), ts(9)),
+            [
+                "2024-01-01 00:00:02|2024-01-01 00:00:01",
+                "2024-01-01 00:00:05|2024-01-01 00:00:04",
+            ],
+            [
+                "2024-01-01 00:00:02|2024-01-01 00:00:04",
+                "2024-01-01 00:00:05|2024-01-01 00:00:09",
+            ],
+        ),
+        (
+            "double",
+            "(5.5D), (2.0D)".to_owned(),
+            "(1.0D), (4.0D), (9.0D)".to_owned(),
+            ["2.0|1.0", "5.5|4.0"],
+            ["2.0|4.0", "5.5|9.0"],
+        ),
+        (
+            "date",
+            format!("({}), ({})", date(5), date(2)),
+            format!("({}), ({}), ({})", date(1), date(4), date(9)),
+            ["2024-01-02|2024-01-01", "2024-01-05|2024-01-04"],
+            ["2024-01-02|2024-01-04", "2024-01-05|2024-01-09"],
+        ),
+        (
+            "decimal",
+            "(5.50BD), (2.00BD)".to_owned(),
+            "(1.00BD), (4.00BD), (9.00BD)".to_owned(),
+            ["2.00|1.00", "5.50|4.00"],
+            ["2.00|4.00", "5.50|9.00"],
+        ),
+    ];
+    let text = |name: &str| {
+        expr(ExprType::Cast(Box::new(expression::Cast {
+            expr: Some(Box::new(attr(name))),
+            eval_mode: 0,
+            cast_to_type: Some(expression::cast::CastToType::TypeStr("string".to_owned())),
+        })))
+    };
+    for (name, left, right, backward, forward) in cases {
+        for (direction, want) in [("backward", backward), ("forward", forward)] {
+            // The values come back as text, printed as Spark prints them.
+            let rel = relation(RelType::Project(Box::new(pb::Project {
+                input: Some(Box::new(keyless_as_of(&left, &right, direction))),
+                expressions: vec![text("lt"), text("rt")],
+            })));
+            let got = execute(&s.channel, rel)
+                .await
+                .unwrap_or_else(|e| panic!("{name} {direction}: {e}"));
+            assert_eq!(rows(&got), want, "{name} {direction}");
+        }
+    }
 }

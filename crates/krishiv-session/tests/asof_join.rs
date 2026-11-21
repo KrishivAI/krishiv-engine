@@ -270,3 +270,85 @@ fn one_sided_conditions_filter_the_inputs_with_the_same_rows() {
     );
     assert!(rows(&s, &on_left("LEFT")).contains(&"2|NULL".to_owned()));
 }
+
+/// The class and message parameters of the failure of `sql`.
+fn failure(s: &Session, sql: &str) -> (String, Vec<(String, String)>) {
+    match block_on(async { s.sql(sql).await?.collect().await }) {
+        Ok(_) => panic!("{sql} ran"),
+        Err(e) => (
+            e.error_class().name().to_owned(),
+            e.message_parameters()
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        ),
+    }
+}
+
+/// The analysis errors of a match condition, with Spark's parameters: the cases and answers of
+/// Spark 4.3.0's `sql-tests/results/join-asof-errors.sql.out` (the 4.3.0 golden profile), over
+/// its `trades` and `quotes` views.
+#[test]
+fn match_condition_errors_are_sparks() {
+    let s = session();
+    for sql in [
+        "CREATE OR REPLACE TEMP VIEW trades(trade_time, symbol, quantity) AS VALUES \
+         (TIMESTAMP '2026-06-29 10:00:05', 'AAPL', 100), \
+         (TIMESTAMP '2026-06-29 10:00:11', 'AAPL', 200), \
+         (TIMESTAMP '2026-06-29 10:00:12', 'MSFT', 50), \
+         (TIMESTAMP '2026-06-29 09:59:59', 'GOOG', 30)",
+        "CREATE OR REPLACE TEMP VIEW quotes(quote_time, symbol, bid_price) AS VALUES \
+         (TIMESTAMP '2026-06-29 10:00:00', 'AAPL', 180.10), \
+         (TIMESTAMP '2026-06-29 10:00:07', 'AAPL', 180.15), \
+         (TIMESTAMP '2026-06-29 10:00:10', 'AAPL', 180.20), \
+         (TIMESTAMP '2026-06-29 10:00:08', 'MSFT', 420.50)",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    let p = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    };
+    let cases = [
+        (
+            "SELECT * FROM trades t ASOF JOIN quotes q \
+             MATCH_CONDITION (t.trade_time >= t.trade_time - INTERVAL 1 HOUR) \
+             ON t.symbol = q.symbol",
+            "ASOF_JOIN_MATCH_CONDITION_TABLE_REFERENCE",
+            p(&[
+                ("refs1", "\"trade_time\""),
+                ("refs2", "\"trade_time - INTERVAL '01' HOUR\""),
+            ]),
+        ),
+        (
+            "SELECT * FROM trades t ASOF JOIN quotes q \
+             MATCH_CONDITION (t.trade_time >= max(q.quote_time)) ON t.symbol = q.symbol",
+            "ASOF_JOIN_MATCH_CONDITION_INVALID_EXPRESSION",
+            p(&[("expr", "\"max(quote_time)\"")]),
+        ),
+        (
+            "SELECT * FROM VALUES (MAP('a', 1)) AS t(m) ASOF JOIN VALUES (MAP('a', 1)) AS r(m) \
+             MATCH_CONDITION (t.m >= r.m)",
+            "ASOF_JOIN_MATCH_CONDITION_INVALID_TYPE",
+            p(&[
+                ("type1", "\"MAP<STRING, INT>\""),
+                ("type2", "\"MAP<STRING, INT>\""),
+            ]),
+        ),
+    ];
+    for (sql, class, params) in cases {
+        assert_eq!(failure(&s, sql), (class.to_owned(), params), "{sql}");
+    }
+    // An operand reading both inputs. Spark names it `"(trade_time + (quote_time -
+    // trade_time))"`: its outer `+` is not yet rewritten to the timestamp addition when the
+    // check runs. Krishiv names the rewritten form, without the outer parentheses.
+    let sql = "SELECT * FROM trades t ASOF JOIN quotes q \
+               MATCH_CONDITION (t.trade_time + (q.quote_time - t.trade_time) >= q.quote_time) \
+               ON t.symbol = q.symbol";
+    let (class, params) = failure(&s, sql);
+    assert_eq!(class, "ASOF_JOIN_MATCH_CONDITION_TABLE_REFERENCE");
+    assert_eq!(params[1], ("refs2".to_owned(), "\"quote_time\"".to_owned()));
+}

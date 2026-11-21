@@ -13,8 +13,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_plan::{
-    AsOfDirection, AsOfMatch, AttrId, Expr, JoinCondition, JoinKind, Literal, LogicalPlan,
+    AsOfDirection, AsOfMatch, AttrId, Expr, ExprNode, JoinCondition, JoinKind, Literal,
+    LogicalPlan, ResolvedExpr,
 };
+use krishiv_types::DataType;
 
 use super::super::build::{Planned, Planner, unsupported};
 use super::super::explain::ExplainNode;
@@ -105,14 +107,14 @@ impl Planner<'_> {
         let (probe, build) = self.co_partition(probe, &probe_keys, build, &build_keys)?;
         let filter = residual_of(&probe, &build, &residual);
         // The Connect form picks the row of the smallest distance (Spark's `min_by`). Without
-        // ANSI a distance that could overflow wraps (or, decimal, is NULL), so its order need not
-        // be the as-of values' order, which the merge walks: refuse rather than pick another row.
+        // ANSI an integral distance wraps and a decimal one that is not exact is NULL on
+        // overflow, so its order need not be the as-of values' order, which the merge walks:
+        // refuse rather than pick another row. Timestamp, date and interval distances raise in
+        // Spark with ANSI off too (the distance below plans that), a floating-point one does not
+        // wrap and an exact decimal cannot overflow, so those run.
         if as_of.distance_on_every_pair
             && !self.env.ansi
-            && as_of
-                .distance
-                .as_deref()
-                .is_some_and(|d| krishiv_plan::may_raise(d, true))
+            && as_of.distance.as_deref().is_some_and(distance_can_wrap)
         {
             return Err(unsupported(
                 "a Connect as-of join whose distance can overflow without ANSI mode",
@@ -196,5 +198,18 @@ impl Planner<'_> {
             sites,
             placement,
         })
+    }
+}
+
+/// Whether an as-of distance can wrap or turn NULL without ANSI mode: an integral one, or a
+/// decimal one [`krishiv_plan::exact_decimal`] does not prove exact.
+fn distance_can_wrap(d: &Expr) -> bool {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &d.node else {
+        return false;
+    };
+    match f.data_type {
+        DataType::Byte | DataType::Short | DataType::Integer | DataType::Long => true,
+        DataType::Decimal(_) => !krishiv_plan::exact_decimal(d),
+        _ => false,
     }
 }
