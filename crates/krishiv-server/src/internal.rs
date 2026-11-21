@@ -125,6 +125,14 @@ pub trait UiSource: Send + Sync + 'static {
         Box::pin(async { Ok(None) })
     }
 
+    /// Whether the plan of the ended query whose row is `query` can still arrive: the source writes a history
+    /// store and the query ended a moment ago, so its profile may not be written yet. The page asks again
+    /// only while this holds; a source that will never have the plan says `false` and the page says so at once.
+    fn plan_pending(&self, query: &Row) -> bool {
+        let _ = query;
+        false
+    }
+
     /// Which console this is, as `/api/internal/health` reports it and the page reads it: `server` (every
     /// session of a server), `embedded` (one session of the host process) or `profiles` (stored profiles, no
     /// engine).
@@ -851,7 +859,8 @@ async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Respo
     ops.sort_by_key(|r| int(r, "operator_id"));
     // A source with no plan for the query leaves the page its flat operator list. A query that has not ended
     // has no stored plan, and its page asks again every second: the store is not searched for it.
-    let plan = if matches!(text(query, "state"), "running" | "queued") {
+    let ended = !matches!(text(query, "state"), "running" | "queued");
+    let plan = if !ended {
         None
     } else {
         s.source
@@ -868,6 +877,7 @@ async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Respo
             "query": pick_query(query),
             "operators": ops.iter().map(|r| Value::Object(pick(r, OPERATOR_COLUMNS))).collect::<Vec<_>>(),
             "hot_operator": hot_operator(&ops),
+            "plan_pending": ended && plan.is_none() && s.source.plan_pending(query),
             "plan": plan,
         }),
     )

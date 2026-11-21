@@ -123,8 +123,8 @@ fn a_query_id_stored_twice_reads_back_as_the_newest() {
     assert!(super::read_stored(&dir.path().join("missing"), "q1").is_err());
 }
 
-/// The row is found by its id and finish time alone: a segment whose `profile` column does not read still
-/// answers "not here" for another query, and a query in several row groups reads back as the one row.
+/// The row is found by its id and finish time, then read alone: a query in any of a segment's row groups
+/// reads back as its own row, and of two rows with one id and one finish time the later one is returned.
 #[test]
 fn a_lookup_reads_the_profile_of_the_one_row_it_returns() {
     use parquet::arrow::ArrowWriter;
@@ -173,6 +173,20 @@ fn a_lookup_reads_the_profile_of_the_one_row_it_returns() {
         );
     }
     assert_eq!(super::read_stored(dir.path(), "q3000").unwrap(), None);
+    let twin = |profile: &str| StoredProfile {
+        query_id: "twin".to_owned(),
+        ..row(9, profile.to_owned())
+    };
+    write_segment(
+        dir.path(),
+        "history-0000000000003-000003.parquet",
+        &[twin("first"), row(1, "between".to_owned()), twin("last")],
+    )
+    .unwrap();
+    assert_eq!(
+        super::read_stored(dir.path(), "twin").unwrap(),
+        Some(twin("last"))
+    );
 }
 
 #[test]

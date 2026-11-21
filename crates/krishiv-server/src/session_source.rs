@@ -49,6 +49,9 @@ pub struct SessionSource {
     own_session: bool,
 }
 
+/// How long after a query ended its plan is still expected from the history writer.
+const PLAN_WAIT_MICROS: i64 = 10_000_000;
+
 /// Stored queries a server's history shows beside its own (the newest; the History page lists at most 1,000).
 const MAX_STORED_QUERIES: usize = 1000;
 
@@ -594,6 +597,17 @@ impl UiSource for SessionSource {
             };
             Ok(self.with_stored(table, rows, &live))
         })
+    }
+
+    fn plan_pending(&self, query: &Row) -> bool {
+        // The writer holds an entry for half a second before it writes a segment; a query that ended longer
+        // ago than the window and is not in the store will not get there (trimmed, a failed write).
+        let ended_us = query.get("ended_at").and_then(Value::as_i64);
+        let now_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_micros()).unwrap_or(i64::MAX));
+        self.runtime.keeps_profile_history()
+            && ended_us.is_some_and(|ended| now_us.saturating_sub(ended) < PLAN_WAIT_MICROS)
     }
 
     fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {

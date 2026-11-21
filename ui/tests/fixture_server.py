@@ -108,6 +108,7 @@ LATE_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000b"
 LATE_PLAN_ASKED = [0]
 # A query the fixture answers with no plan tree.
 NO_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000a"
+NO_PLAN_ASKED = [0]
 Q9_PROFILE = json.loads(
     (
         HERE.parent.parent / "python" / "tests" / "fixtures" / "q09-profile.json"
@@ -235,13 +236,17 @@ def route(
     if path == f"/api/internal/queries/{Q9_ID}":
         return Q9_DETAIL
     if path == f"/api/internal/queries/{NO_PLAN_ID}":
-        # A query whose plan the source does not keep (a running one, a server with no history store).
-        return d["detail"] | {"plan": None}
+        # An ended query whose plan the source will never have (a server with no history store, a query
+        # trimmed out of it): the page is told not to wait.
+        NO_PLAN_ASKED[0] += 1
+        return d["detail"] | {"plan": None, "plan_pending": False}
     if path == f"/api/internal/queries/{LATE_PLAN_ID}":
         # A query that has just ended: its profile is written a moment later, so the first answers carry no
         # plan and a later one does.
         LATE_PLAN_ASKED[0] += 1
-        return d["detail"] | ({} if LATE_PLAN_ASKED[0] > 2 else {"plan": None})
+        return d["detail"] | (
+            {} if LATE_PLAN_ASKED[0] > 2 else {"plan": None, "plan_pending": True}
+        )
     if path.startswith("/api/internal/queries/"):
         return d["detail"]
     return None

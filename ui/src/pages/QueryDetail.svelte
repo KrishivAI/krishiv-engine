@@ -16,34 +16,24 @@
   let { id, embed = null }: { id: string; embed?: EmbedLink | null } = $props();
 
   const ended = (d: QueryDetail) => !["running", "queued"].includes(d.query.state ?? "");
-  /// Answers waited for the plan of a query that has ended (one a second).
-  const PLAN_WAITS = 10;
-  /// Answers so far that showed the query ended with no plan.
-  let planless = $state(0);
 
   const q = createQuery<QueryDetail>(() => ({
     queryKey: ["query", id],
-    queryFn: async () => {
-      const d = await api<QueryDetail>(
+    queryFn: () =>
+      api<QueryDetail>(
         embed
           ? `/api/internal/embed/queries/${encodeURIComponent(id)}?exp=${encodeURIComponent(embed.exp)}&sig=${encodeURIComponent(embed.sig)}`
           : `/api/internal/queries/${encodeURIComponent(id)}`,
-      );
-      if (ended(d) && !d.plan?.length) planless += 1;
-      return d;
-    },
+      ),
     refetchInterval: (query) => {
       const d = query.state.data;
       if (!d || consoleInfo.mode === "profiles") return false;
-      if (!ended(d)) return 1000;
-      // The query has ended. Its profile is written a moment later, off the query's thread, so an answer
-      // with no plan is asked for again, for a bounded time.
-      return !d.plan?.length && planless < PLAN_WAITS ? 1000 : false;
+      // A running query changes; an ended one is asked for again only while the server says its plan can
+      // still arrive (its profile is written a moment after it ends), which the server bounds in time.
+      return !ended(d) || d.plan_pending ? 1000 : false;
     },
   }));
   const live = $derived(!!q.data && !ended(q.data));
-  // Whether the page is still asking for the plan of an ended query.
-  const waiting = $derived(!live && !q.data?.plan?.length && consoleInfo.mode !== "profiles" && planless < PLAN_WAITS);
 
   const maxCompute = $derived(Math.max(1, ...(q.data?.operators ?? []).map((o) => o.compute_ns ?? 0)));
   const hotId = $derived(q.data?.hot_operator?.operator_id);
@@ -123,7 +113,7 @@
       <p class="mb-2 text-muted-foreground" data-testid="no-plan">
         {#if live}
           The plan tree is drawn once the query has ended; until then its operators are listed in id order.
-        {:else if waiting}
+        {:else if d.plan_pending}
           The query's profile is being stored; the plan tree is drawn when it is. Until then the operators are listed in id order.
         {:else}
           No plan tree is stored for this query, so its operators are listed in id order. The tree comes from the query history (<code>krishiv.history.path</code>).

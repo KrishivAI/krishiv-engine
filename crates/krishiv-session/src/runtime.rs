@@ -283,6 +283,12 @@ impl EngineRuntime {
         }
     }
 
+    /// Whether this runtime writes finished queries' profiles to a history store (`krishiv.history.path`).
+    #[must_use]
+    pub fn keeps_profile_history(&self) -> bool {
+        self.profile_history.is_some()
+    }
+
     /// The stored profile of a finished query, read from this runtime's history store (`krishiv.history.path`):
     /// the newest one under that id. `None` when the runtime keeps no history, or the store does not hold the
     /// query: one that is still running, one whose profile the writer has not reached yet (it writes off the

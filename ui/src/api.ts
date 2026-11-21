@@ -107,6 +107,8 @@ export interface QueryDetail {
   hot_operator: { operator_id: number; operator: string; compute_ns: number } | null;
   /** The plan tree, when the source keeps one for the query. */
   plan?: PlanNode[] | null;
+  /** The query has ended and its plan is not stored yet but can still arrive: ask again. */
+  plan_pending?: boolean;
 }
 
 export interface CacheRow {

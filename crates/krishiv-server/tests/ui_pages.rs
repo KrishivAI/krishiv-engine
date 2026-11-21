@@ -1111,6 +1111,15 @@ async fn an_earlier_runs_plan_is_not_shown_for_this_runs_query_of_the_same_id() 
         row["submitted_at"].as_i64().unwrap() / 1000 >= before[0].finished_at_ms,
         "{row:?}"
     );
+    // The query has just ended and the runtime writes a store: its plan can still arrive. One that ended
+    // long ago and is not in the store will not get there.
+    assert!(source.plan_pending(&row));
+    let mut old = row.clone();
+    old.insert(
+        "ended_at".to_owned(),
+        json!(row["ended_at"].as_i64().unwrap() - 60_000_000),
+    );
+    assert!(!source.plan_pending(&old));
     let mut later = row.clone();
     later.insert("submitted_at".to_owned(), json!(i64::MAX / 2));
     assert_eq!(source.plan(&later).await.unwrap(), None);
@@ -1178,6 +1187,7 @@ async fn a_server_returns_the_stored_plan_of_a_finished_query() {
     let detail = get(addr, &format!("/api/internal/queries/{id}")).await;
     assert!(doc["plan"].as_array().is_some_and(|p| p.len() > 1), "{doc}");
     assert_eq!(detail["plan"], page_plan(&doc["plan"]), "{detail}");
+    assert_eq!(detail["plan_pending"], json!(false), "{detail}");
     // The operators are the live rows of the same run: each names a node of that plan, or none.
     let nodes: Vec<&Value> = doc["plan"]
         .as_array()
@@ -1237,6 +1247,8 @@ async fn a_server_returns_the_stored_plan_of_a_finished_query() {
         .to_owned();
     let detail = get(addr, &format!("/api/internal/queries/{own}")).await;
     assert!(detail["plan"].is_null(), "{detail}");
+    // Nothing is being stored, so the page is told not to wait for a plan.
+    assert_eq!(detail["plan_pending"], json!(false), "{detail}");
     assert!(!detail["operators"].as_array().unwrap().is_empty());
 }
 

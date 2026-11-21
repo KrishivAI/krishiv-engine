@@ -658,39 +658,47 @@ fn open_segment(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<File>, St
 fn find_in_segment(path: &Path, query_id: &str) -> Result<Option<StoredProfile>, String> {
     let builder = open_segment(path)?;
     let ids = ProjectionMask::columns(builder.parquet_schema(), ["query_id", "finished_at_ms"]);
-    let groups = builder.metadata().num_row_groups();
-    // (finish time, row group, row within the group) of the newest match.
-    let mut newest: Option<(i64, usize, usize)> = None;
-    for group in 0..groups {
-        let reader = open_segment(path)?
-            .with_row_groups(vec![group])
-            .with_projection(ids.clone())
-            .build()
-            .map_err(|e| e.to_string())?;
-        let mut row = 0;
-        for batch in reader {
-            let batch = batch.map_err(|e| e.to_string())?;
-            let (Some(id), Some(at)) = (
-                batch
-                    .column_by_name("query_id")
-                    .and_then(|c| c.as_any().downcast_ref::<StringArray>()),
-                batch
-                    .column_by_name("finished_at_ms")
-                    .and_then(|c| c.as_any().downcast_ref::<Int64Array>()),
-            ) else {
-                return Err("a required column is missing".to_owned());
-            };
-            for i in 0..batch.num_rows() {
-                if id.value(i) == query_id && newest.is_none_or(|(best, ..)| at.value(i) > best) {
-                    newest = Some((at.value(i), group, row + i));
-                }
+    // The rows of each row group, to turn the row found into its group and its place there.
+    let group_rows: Vec<usize> = builder
+        .metadata()
+        .row_groups()
+        .iter()
+        .map(|g| usize::try_from(g.num_rows()).unwrap_or(0))
+        .collect();
+    let reader = builder
+        .with_projection(ids)
+        .build()
+        .map_err(|e| e.to_string())?;
+    // (finish time, row in the file) of the newest match; of two with one finish time, the later row.
+    let mut newest: Option<(i64, usize)> = None;
+    let mut seen = 0;
+    for batch in reader {
+        let batch = batch.map_err(|e| e.to_string())?;
+        let (Some(id), Some(at)) = (
+            batch
+                .column_by_name("query_id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>()),
+            batch
+                .column_by_name("finished_at_ms")
+                .and_then(|c| c.as_any().downcast_ref::<Int64Array>()),
+        ) else {
+            return Err("a required column is missing".to_owned());
+        };
+        for i in 0..batch.num_rows() {
+            if id.value(i) == query_id && newest.is_none_or(|(best, _)| at.value(i) >= best) {
+                newest = Some((at.value(i), seen + i));
             }
-            row += batch.num_rows();
         }
+        seen += batch.num_rows();
     }
-    let Some((_, group, row)) = newest else {
+    let Some((_, mut row)) = newest else {
         return Ok(None);
     };
+    let mut group = 0;
+    while group < group_rows.len() && row >= group_rows[group] {
+        row -= group_rows[group];
+        group += 1;
+    }
     let reader = open_segment(path)?
         .with_row_groups(vec![group])
         .with_row_selection(RowSelection::from(vec![
