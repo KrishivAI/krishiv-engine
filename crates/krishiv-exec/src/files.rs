@@ -13,6 +13,8 @@
 //! | neither | `PATH_NOT_FOUND`, the path qualified (`file:/abs/path`) |
 //! | no file left | `UNABLE_TO_INFER_SCHEMA` |
 //!
+//! A subdirectory that is not `name=value` is skipped with its files (Spark 4.2.0), or
+//! `CONFLICTING_DIRECTORY_STRUCTURES` beside partition directories.
 //! `name=value` directories under a path are partition columns (Spark's
 //! partition discovery, `krishiv_io::partition_columns`): typed by
 //! inference, appended after the data columns, read from the path of each
@@ -28,10 +30,7 @@
 //! all of them. Local paths and cloud URLs (`s3://`, `s3a://`, `gs://`,
 //! `abfs://`, `abfss://`, `az://`, resolved by [`ObjectPaths`] through the
 //! [`StoreRegistry`]) are supported. Not yet supported, failing with
-//! `KRISHIV_UNSUPPORTED_FEATURE`: subdirectories that are
-//! not `name=value` partition directories in a read by path (a catalog
-//! table reads its registered partitions only and skips other directories,
-//! as Spark's `CatalogFileIndex`), paths with any other scheme, file sources Spark
+//! `KRISHIV_UNSUPPORTED_FEATURE`: paths with any other scheme, file sources Spark
 //! knows but the engine has no [`FileFormat`] for, and merging the files'
 //! schemas (`mergeSchema`). A name Spark does not know at all fails with
 //! Spark's `DATA_SOURCE_NOT_FOUND`.
@@ -1172,6 +1171,8 @@ impl FileReads {
         };
         let mut seen = 0;
         let mut seen_inherited = 0;
+        let first_out = out.len();
+        let mut foreign_dir = false;
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<_> = meta.location.parts().skip(base).collect();
             if below.iter().any(|p| hidden(p.as_ref())) {
@@ -1215,8 +1216,21 @@ impl FileReads {
             {
                 continue;
             }
+            // A read by path (Spark 4.2.0): the files of a directory that is not a `name=value`
+            // partition directory are not read; beside partition directories it is
+            // `CONFLICTING_DIRECTORY_STRUCTURES`.
+            if !mode.recursive && names.iter().any(|d| parse_segment(d).is_none()) {
+                foreign_dir = true;
+                continue;
+            }
             let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
+        }
+        if foreign_dir && out[first_out..].iter().any(|(_, segs)| !segs.is_empty()) {
+            return Err(krishiv_common::error::ConflictingDirectoryStructures {
+                discovered_base_paths: format!("\n\t{}\n", at.display),
+            }
+            .into());
         }
         if committed.is_none() && inherited.is_none() && self.log_appeared(at, mode).await? {
             return Err(krishiv_common::error::KrishivConcurrentCommit {

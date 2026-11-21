@@ -202,11 +202,22 @@ fn directories_list_like_spark() {
         .block_on(r.infer("mock", &paths(&["/p"]), &none))
         .unwrap();
     assert_eq!(got.last().map(|c| c.name.as_str()), Some("k"));
-    // Any other subdirectory is refused.
+    // Any other subdirectory is skipped (Spark 4.2.0): alone it leaves no file.
     env.write(&fx, "q/plain/part-0", &a, &[ints(&a)], &[])
         .unwrap();
     let got = env.block_on(r.infer("mock", &paths(&["/q"]), &none));
-    assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(class(got).0, ErrorClass::UnableToInferSchema);
+    // Beside a partition directory it conflicts.
+    env.write(&fx, "q/k=1/part-0", &a, &[ints(&a)], &[])
+        .unwrap();
+    let got = env.block_on(r.infer("mock", &paths(&["/q"]), &none));
+    assert_eq!(class(got).0, ErrorClass::ConflictingDirectoryStructures);
+    // Beside a file of the directory itself it is skipped.
+    env.write(&fx, "w/part-0", &a, &[ints(&a)], &[]).unwrap();
+    env.write(&fx, "w/plain/part-0", &a, &[ints(&a)], &[])
+        .unwrap();
+    let got = env.block_on(r.infer("mock", &paths(&["/w"]), &none));
+    assert!(got.is_ok());
     // Credentials in paths (globs are expanded: see `partition_discovery` in krishiv-session).
     let got = env.block_on(r.infer("mock", &paths(&["s3://user:secret@bucket/k"]), &none));
     assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
