@@ -596,13 +596,15 @@ fn collated_rewrite(name: &str, n: usize, c: Collation) -> Option<Option<Rewrite
             )
         }
         // Spark compiles the pattern with `CASE_INSENSITIVE | UNICODE_CASE` under `UTF8_LCASE`: each character is
-        // matched by Java's case folding (`__like_fold`). `_RTRIM` and the escape form are not modelled.
-        ("like" | "ilike", 2) if lcase && !rtrim => {
+        // matched by Java's case folding (`__like_fold`). `_RTRIM` is not modelled.
+        ("like" | "ilike", 2 | 3) if lcase && !rtrim => {
             let mode = i32::from(name == "ilike");
-            (
-                "like",
-                vec![RwArg::LikeFoldKid(0, mode), RwArg::LikeFoldKid(1, mode)],
-            )
+            // The escape character is folded like the pattern, so it still matches its own copies there.
+            let mut args = vec![RwArg::LikeFoldKid(0, mode), RwArg::LikeFoldKid(1, mode)];
+            if n == 3 {
+                args.push(RwArg::LikeFoldKid(2, mode));
+            }
+            ("like", args)
         }
         ("replace" | "translate", 3) if !lcase => return Some(None),
         ("replace", 3) => (
@@ -988,7 +990,7 @@ impl Resolver<'_> {
                 if let (Some(own), Some(want)) = (own, chosen)
                     && own != want
                     && literal
-                    && !matches!(name.as_str(), "btrim" | "nvl2")
+                    && !matches!(name.as_str(), "btrim" | "nvl2" | "like" | "ilike")
                     && !matches!(
                         name.as_str(),
                         "encode" | "decode" | "to_binary" | "try_to_binary"
@@ -1797,6 +1799,15 @@ impl Resolver<'_> {
         n: usize,
         name: &str,
     ) -> Result<(Option<Collation>, bool), AnalysisError> {
+        // `LIKE`/`ILIKE` (Spark 4.1 to 4.3 runs, `tests/fixtures/spark-*/like-lcase.json`) match by the
+        // collation of the value operand alone: `'Ab' LIKE 'a%' COLLATE UTF8_LCASE` is false.
+        if matches!(name, "like" | "ilike") && matches!(n, 2 | 3) {
+            match kids[0].ty.data_type.as_ref() {
+                Some(DataType::CollatedString(c)) => return Ok((Some(*c), false)),
+                Some(DataType::String) => return Ok((Some(Collation::UTF8_BINARY), false)),
+                _ => {}
+            }
+        }
         let mut memo = Memo::new();
         let items: Vec<(Collation, Strength)> = kids
             [selector_args(name).min(n)..collation_args(name, n).max(selector_args(name).min(n))]

@@ -258,7 +258,6 @@ fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
     let l = "('Ab' COLLATE utf8_lcase)";
     for sql in [
         format!("SELECT {l} RLIKE '^a'"),
-        format!("SELECT {l} LIKE 'a%' ESCAPE '#'"),
         "SELECT 'Ab' COLLATE unicode_ci LIKE 'a%'".to_owned(),
         format!("SELECT regexp_replace({l}, 'a', 'x')"),
         "SELECT replace('aAb' COLLATE unicode_ci, 'a', 'x')".to_owned(),
@@ -1797,39 +1796,111 @@ fn nvl2_column_names_show_the_arguments_as_written() {
     }
 }
 
-/// `LIKE` and `ILIKE` over `UTF8_LCASE` (SQL-40); every value is from a Spark 4.3.0 local run (2026-11-21).
+/// `LIKE` and `ILIKE` over `UTF8_LCASE` (SQL-40) against the vendored Spark runs of
+/// `tests/fixtures/spark-<v>/like-lcase.json` (made by `tests/scripts/gen_like_lcase_goldens.py`):
+/// values, output column names and the `unicode_ci` refusal. Spark 4.0.0 differs in one row
+/// (`'ſ'` ILIKE `'S'` on a column operand is false there), so only 4.1 to 4.3 are compared.
 #[test]
-fn like_over_lcase_matches_like_spark() {
-    for (sql, want) in [
-        ("'APPLE' COLLATE utf8_lcase LIKE 'app%'", "true"),
-        ("'xyz' COLLATE utf8_lcase LIKE 'APP%'", "false"),
-        ("'APPLE' COLLATE utf8_lcase ILIKE 'app%'", "true"),
-        ("CAST(NULL AS STRING) COLLATE utf8_lcase LIKE 'a%'", "NULL"),
-        (
-            "'\u{391}\u{3a3}' COLLATE utf8_lcase LIKE '\u{3b1}\u{3c2}'",
-            "true",
-        ),
-        ("'\u{3c3}' COLLATE utf8_lcase LIKE '\u{3a3}'", "true"),
-        ("'\u{3c2}' COLLATE utf8_lcase LIKE '\u{3a3}'", "true"),
-        ("'\u{3c2}' COLLATE utf8_lcase LIKE '\u{3c3}'", "true"),
-        ("'\u{17f}' COLLATE utf8_lcase LIKE 's'", "true"),
-        ("'s' COLLATE utf8_lcase LIKE '\u{17f}'", "true"),
-        ("'\u{131}' COLLATE utf8_lcase LIKE 'i'", "true"),
-        ("'\u{130}' COLLATE utf8_lcase LIKE 'i'", "true"),
-        ("'i' COLLATE utf8_lcase LIKE '\u{130}'", "true"),
-        ("'\u{b5}' COLLATE utf8_lcase LIKE '\u{3bc}'", "true"),
-        ("'x\u{130}y' COLLATE utf8_lcase LIKE 'xiy'", "true"),
-        ("'x\u{130}y' COLLATE utf8_lcase LIKE 'x_y'", "true"),
-        ("'x\u{130}y' COLLATE utf8_lcase LIKE 'x__y'", "false"),
-        ("'\u{130}' COLLATE utf8_lcase ILIKE 'i'", "false"),
-        ("'\u{3c2}' COLLATE utf8_lcase ILIKE '\u{3a3}'", "true"),
-        ("'\u{17f}' COLLATE utf8_lcase ILIKE 's'", "true"),
-        ("'\u{b5}' COLLATE utf8_lcase ILIKE '\u{3bc}'", "true"),
-    ] {
-        assert_eq!(
-            one(&format!("SELECT CAST(({sql}) AS STRING)")),
-            want,
-            "{sql}"
-        );
+fn like_over_lcase_matches_the_spark_goldens() {
+    use arrow_array::types::Int32Type;
+    use arrow_schema::DataType;
+    for version in ["4.1.0", "4.2.0", "4.3.0"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../tests/fixtures/spark-{version}/like-lcase.json"
+        ));
+        let fx: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut bad: Vec<String> = Vec::new();
+        let s = Session::new().unwrap();
+        for sql in fx["setup"].as_array().unwrap() {
+            block_on(s.sql(sql.as_str().unwrap())).unwrap();
+        }
+        for case in fx["results"].as_array().unwrap() {
+            let sql = case["sql"].as_str().unwrap();
+            let id = case["id"].as_str().unwrap();
+            let got = block_on(async { s.sql(sql).await?.collect().await });
+            if let Some(err) = case.get("error") {
+                let e = got.expect_err(&format!("{version} {id}: {sql}"));
+                // Spark: DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE; a documented class difference
+                // (known-differences.md), the refusal itself is what is pinned.
+                assert_eq!(
+                    e.error_class(),
+                    ErrorClass::KrishivUnsupportedFeature,
+                    "{version} {id}: Spark gives {}",
+                    err["class"]
+                );
+                continue;
+            }
+            let batches = match got {
+                Ok(b) => b,
+                Err(e) => {
+                    bad.push(format!("{version} {id}: {sql}: {e}"));
+                    continue;
+                }
+            };
+            let df = block_on(s.sql(sql)).unwrap();
+            let names: Vec<String> = block_on(df.schema())
+                .unwrap()
+                .fields()
+                .iter()
+                .map(|f| f.name().to_owned())
+                .collect();
+            let want_names: Vec<&str> = case["columns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| c.as_str().unwrap())
+                .collect();
+            if names != want_names {
+                bad.push(format!("{version} {id}: {names:?} want {want_names:?}"));
+            }
+            let mut rows: Vec<Vec<Option<String>>> = Vec::new();
+            for b in &batches {
+                for r in 0..b.num_rows() {
+                    rows.push(
+                        b.columns()
+                            .iter()
+                            .map(|c| {
+                                if c.is_null(r) {
+                                    None
+                                } else {
+                                    Some(match c.data_type() {
+                                        DataType::Boolean => if c.as_boolean().value(r) {
+                                            "True"
+                                        } else {
+                                            "False"
+                                        }
+                                        .to_owned(),
+                                        DataType::Int32 => {
+                                            c.as_primitive::<Int32Type>().value(r).to_string()
+                                        }
+                                        _ => c
+                                            .as_string_view_opt()
+                                            .map(|v| v.value(r).to_owned())
+                                            .unwrap_or_else(|| format!("{c:?}")),
+                                    })
+                                }
+                            })
+                            .collect(),
+                    );
+                }
+            }
+            let want: Vec<Vec<Option<String>>> = case["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| {
+                    r.as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .collect();
+            if rows != want {
+                bad.push(format!("{version} {id}: {sql}: {rows:?} want {want:?}"));
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
     }
 }

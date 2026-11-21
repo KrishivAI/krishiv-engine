@@ -54,7 +54,7 @@ fn java_fold(c: char) -> char {
 /// The text `LIKE` and `ILIKE` compare over a `UTF8_LCASE` string (SQL-40). Spark matches each
 /// character by Java's case folding, so both operands go through [`java_fold`]. With `ilike` the
 /// operand is first lower-cased in full (`İ` becomes `i` and U+0307, which is why `ILIKE` and `LIKE`
-/// differ for `İ`). Oracle: a Spark 4.3.0 run, 2026-11-21.
+/// differ for `İ`). Oracle: a Spark 4.3.0 run, 2026-11-21 (`tests/fixtures/spark-4.3.0/like-lcase.json`).
 ///
 /// # Errors
 /// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the offset type.
@@ -449,4 +449,35 @@ pub fn icu_case<O: OffsetSizeTrait>(
         out.push_str(&mapped);
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod like_fold_tests {
+    use super::java_fold;
+
+    #[test]
+    fn java_fold_is_lower_of_upper_per_character() {
+        assert_eq!(java_fold('A'), 'a');
+        assert_eq!(java_fold('a'), 'a');
+        // Long s and Kelvin sign fold to their ASCII letters through the upper case.
+        assert_eq!(java_fold('\u{17f}'), 's');
+        assert_eq!(java_fold('\u{212a}'), 'k');
+        // `İ` folds to `i`; `ß` upper-cases to two characters, so it stays.
+        assert_eq!(java_fold('\u{130}'), 'i');
+        assert_eq!(java_fold('\u{df}'), '\u{df}');
+        // Final and non-final sigma meet at the same character.
+        assert_eq!(java_fold('\u{3c2}'), java_fold('\u{3a3}'));
+        assert_eq!(java_fold('1'), '1');
+    }
+
+    #[test]
+    fn java_fold_is_idempotent_over_the_bmp() {
+        for c in ('\0'..='\u{ffff}').filter_map(|c| {
+            (c as u32 >= 0xd800 && c as u32 <= 0xdfff)
+                .then_some(c)
+                .map_or(Some(c), |_| None)
+        }) {
+            assert_eq!(java_fold(java_fold(c)), java_fold(c), "{c:?}");
+        }
+    }
 }
