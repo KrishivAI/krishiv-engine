@@ -3539,6 +3539,7 @@ dependencies = [
  "hyper-util",
  "krishiv-access-proto",
  "krishiv-common",
+ "krishiv-connect-server",
  "krishiv-exec",
  "krishiv-plan",
  "krishiv-server",

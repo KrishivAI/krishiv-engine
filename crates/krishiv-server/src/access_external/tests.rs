@@ -398,6 +398,9 @@ async fn an_untrusted_version_never_repeats() {
     );
     s.access.note_version(0);
     assert_ne!(s.access.current_version(), s.access.current_version());
+    s.access.note_version(1 << 63);
+    assert!(s.access.current_version().0 >= 1 << 63);
+    assert_ne!(s.access.current_version(), s.access.current_version());
 }
 
 #[tokio::test]

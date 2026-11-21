@@ -272,7 +272,7 @@ impl ExternalAccess {
     /// a call started after the one last recorded counts, so a slow answer never brings back an
     /// older version. Any change counts, downwards too (a restarted service, hash-style
     /// versions): the cache compares versions for equality only (review D3). 0 (unknown) and a
-    /// failure leave the version untrusted.
+    /// failure leave the version untrusted, and so does one with the top bit set.
     fn note(&self, seq: u64, reported: Option<u64>) {
         let mut noted = self
             .noted
@@ -284,7 +284,8 @@ impl ExternalAccess {
         noted.seq = seq;
         noted.at = Some(Instant::now());
         match reported {
-            Some(v) if v != 0 => {
+            // A version with the top bit set could equal an untrusted value: not trusted (review r2).
+            Some(v) if v != 0 && v < 1 << 63 => {
                 noted.version = v;
                 noted.failed = false;
             }
