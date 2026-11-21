@@ -35,8 +35,8 @@ grouping(col)
 -- grouping, example 1
 > SELECT name, grouping(name), sum(age) FROM VALUES (2, 'Alice'), (5, 'Bob') people(age, name) GROUP BY cube(name);
 Alice | 0 | 2
-NULL | 1 | 7
 Bob | 0 | 5
+NULL | 1 | 7
 ```
 
 ## Version history
