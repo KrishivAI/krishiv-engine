@@ -6,6 +6,7 @@
 use pyo3::prelude::*;
 
 mod column;
+mod console;
 mod dataframe;
 mod errors;
 mod local;
@@ -40,6 +41,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__allocator__", ALLOCATOR)?;
     m.add("__commit__", COMMIT)?;
+    m.add("__ui__", console::AVAILABLE)?;
+    m.add_class::<console::PyConsole>()?;
     m.add_class::<stream::ArrowStream>()?;
     m.add_function(wrap_pyfunction!(udf::_udf_pool_shutdown, m)?)?;
     m.add_function(wrap_pyfunction!(udf::runtime::_udf_runner_conf, m)?)?;

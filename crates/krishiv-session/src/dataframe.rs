@@ -34,6 +34,7 @@ mod geo_gate;
 mod observe;
 pub use observe::ObservedSink;
 pub(crate) use observe::{Observers, PendingObservations, deliver};
+mod boxed;
 mod count;
 mod metadata;
 mod traced;
@@ -1594,6 +1595,7 @@ impl DataFrame {
             partition_by: Vec::new(),
             bucket_by: None,
             sort_by: None,
+            bucket_table: false,
             format_set: false,
         }
     }

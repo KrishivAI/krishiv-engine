@@ -35,6 +35,9 @@ pub enum Access {
     /// Cancelling another principal's query from the UI: `Operate` on `System("queries")`
     /// (operator).
     Operate,
+    /// The server's settings shown in the UI: `Manage` on `System("settings")` (admin; ADR 0024,
+    /// the modes table).
+    Manage,
 }
 
 /// The surface a guarded request arrived on.
@@ -167,6 +170,12 @@ impl Caller {
             method: "startup-token".to_owned(),
             identity: Some(Arc::new(LocalAdmin)),
         }
+    }
+
+    /// Whether the caller holds the admin role.
+    #[must_use]
+    pub fn is_admin(&self) -> bool {
+        self.role.as_deref() == Some("admin")
     }
 
     /// A caller a guard let through without saying who it is: no role, no identity.
