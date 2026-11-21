@@ -1691,3 +1691,32 @@ fn a_rename_map_whose_result_depends_on_entry_order_is_refused() {
         ColumnNamesOp::Rename(vec![("a".into(), "x".into()), ("b".into(), "y".into())])
     );
 }
+
+#[test]
+fn approx_quantile_plans_one_array_of_per_column_percentiles() {
+    let rel = relation(RelType::ApproxQuantile(Box::new(pb::StatApproxQuantile {
+        input: input(),
+        cols: vec!["a".into(), "b".into()],
+        probabilities: vec![0.25, 0.5],
+        relative_error: 0.01,
+    })));
+    let PlanNode::Aggregate { aggregates, .. } = node(&rel) else {
+        panic!("not an Aggregate node")
+    };
+    assert!(
+        matches!(&aggregates[0].node, ExprNode::Alias { name, .. } if name == "approx_quantile")
+    );
+}
+
+#[test]
+fn approx_quantile_refuses_a_negative_error_and_a_probability_out_of_range() {
+    for (p, e) in [(0.5, -1.0), (1.5, 0.1)] {
+        let rel = relation(RelType::ApproxQuantile(Box::new(pb::StatApproxQuantile {
+            input: input(),
+            cols: vec!["a".into()],
+            probabilities: vec![p],
+            relative_error: e,
+        })));
+        assert_eq!(code(&rel), ErrorClass::ConnectInvalidPlanAssertionFailure);
+    }
+}

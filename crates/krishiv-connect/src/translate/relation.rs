@@ -148,6 +148,7 @@ impl Translator<'_> {
                 self.stat_pair("StatCorr", c.input.as_deref(), &c.col1, &c.col2, "corr")?
             }
             RelType::SampleBy(s) => self.sample_by(s)?,
+            RelType::ApproxQuantile(a) => self.approx_quantile(a)?,
             RelType::FillNa(n) => self.na_fill(n)?,
             RelType::Replace(n) => self.na_replace(n)?,
             RelType::DropNa(n) => {
@@ -329,6 +330,89 @@ impl Translator<'_> {
             input,
             grouping: Grouping::GroupBy(Vec::new()),
             aggregates: vec![Arc::new(value)],
+        })
+    }
+
+    /// `StatApproxQuantile`: Spark's `StatFunctions.multipleApproxQuantiles`, answered as one row
+    /// with one `approx_quantile` column of `array<array<double>>`, one inner array per column. A
+    /// Spark 4.3 run: each column is cast to double and its NULLs and NaNs are dropped (unlike
+    /// `approx_percentile`, which sorts NaN last), a relative error of 0 is exact, and no rows
+    /// give an empty inner array. Lowered to `approx_percentile` with accuracy `ceil(1 / error)`
+    /// (the same Greenwald-Khanna summary: 100 for 0.01 agrees with Spark's rank answers), and a
+    /// `coalesce` to the empty array. A negative error and a probability outside [0, 1] are
+    /// `require` failures in Spark.
+    fn approx_quantile(&mut self, a: &pb::StatApproxQuantile) -> Result<PlanNode> {
+        let input = self.input("StatApproxQuantile", a.input.as_deref())?;
+        if a.relative_error.is_nan() || a.relative_error < 0.0 {
+            return Err(assertion(format!(
+                "Relative Error must be non-negative but got {}",
+                a.relative_error
+            )));
+        }
+        if let Some(p) = a.probabilities.iter().find(|p| !(0.0..=1.0).contains(*p)) {
+            return Err(assertion(format!(
+                "percentile should be in the range [0.0, 1.0] but got {p}"
+            )));
+        }
+        let wanted = (1.0 / a.relative_error).ceil();
+        let accuracy = if wanted >= f64::from(i32::MAX) {
+            i32::MAX
+        } else {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "a whole number below i32::MAX, checked above"
+            )]
+            {
+                wanted as i32
+            }
+        };
+        let probabilities = Expr::function(
+            "array",
+            a.probabilities
+                .iter()
+                .map(|p| Expr::literal(Literal::Double(*p)))
+                .collect(),
+        );
+        let empty = Expr::function("array", Vec::new());
+        let per_column = a
+            .cols
+            .iter()
+            .map(|c| {
+                let value = Expr::new(ExprNode::Cast {
+                    expr: Arc::new(Expr::column(parse_attribute_name(c)?)),
+                    to: krishiv_types::DataType::Double,
+                    mode: CastMode::Ansi,
+                });
+                // `nanvl(x, NULL)`: NaN becomes NULL, which the aggregate skips.
+                let clean = Expr::function(
+                    "nanvl",
+                    vec![
+                        value,
+                        Expr::literal(Literal::Null(Some(krishiv_types::DataType::Double))),
+                    ],
+                );
+                Ok(Expr::function(
+                    "coalesce",
+                    vec![
+                        Expr::function(
+                            "approx_percentile",
+                            vec![
+                                clean,
+                                probabilities.clone(),
+                                Expr::literal(Literal::Integer(accuracy)),
+                            ],
+                        ),
+                        empty.clone(),
+                    ],
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(PlanNode::Aggregate {
+            input,
+            grouping: Grouping::GroupBy(Vec::new()),
+            aggregates: vec![Arc::new(
+                Expr::function("array", per_column).alias("approx_quantile"),
+            )],
         })
     }
 

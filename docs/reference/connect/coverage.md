@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 20 done, 18 partial, 20 missing, 4 out of scope.
+62 arms: 20 done, 19 partial, 19 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -68,7 +68,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 102 | describe | missing |  | as summary with the fixed statistic list | P3-T012 | 5 |
 | 103 | cov | partial | a non-numeric column is answered when its values cast to double (Spark refuses by type; a value that is not a number is an error here, never 0.0) | Aggregate of coalesce(covar_samp over NULL-as-0.0 doubles, 0.0), as StatFunctions.calculateCov (a Spark 4.0 run) | P3-T012 | 5 |
 | 104 | corr | partial | method other than pearson; a non-numeric column is answered when its values cast to double (Spark refuses by type; a value that is not a number is an error here, never 0.0) | Aggregate of coalesce(corr over NULL-as-0.0 doubles, NaN); recorded difference: zero variance is NaN (Spark 4.0 ANSI: DIVIDE_BY_ZERO) | P3-T012 | 5 |
-| 105 | approx_quantile | missing |  | Aggregate approx_percentile with relative error | P3-T012 | 5 |
+| 105 | approx_quantile | partial | result values not yet checked against a Spark golden | Aggregate approx_percentile, NaN and NULL dropped, accuracy ceil(1/error) | P3-T012 | 5 |
 | 106 | freq_items | missing |  | new aggregate (Spark's frequent-items sketch, support) | P3-T012 | 5 |
 | 107 | sample_by | done |  | Filter(rand(seed) < CASE WHEN col = stratum THEN fraction ... ELSE 0.0 END), the draw made for every row as Spark does; a repeated stratum keeps its last fraction; strata compare with SQL = (numeric coercion), whether Spark's boxed lookup differs for an Int stratum on a Long column is not verified against a Spark run | P3-T012 | 5 |
 | 200 | catalog | done |  | a call of the session's `spark.catalog` run by the host while the plan is prepared (`LocalRequest::Catalog`), its rows the local relation the plan reads; `execute/catalog_call.rs`, tests/catalog.rs | P3-T082 | 9 |
