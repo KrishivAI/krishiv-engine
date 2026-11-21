@@ -128,36 +128,21 @@ pub(crate) fn isolation(
     }
 }
 
-impl RowLevelTable for IcebergRowLevel {
-    fn capabilities(&self) -> RowLevelCapabilities {
-        RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality)
+impl IcebergRowLevel {
+    /// Spark fails a statement whose `write.{delete,update,merge}.mode` is not a known mode
+    /// (`Unknown row-level operation mode`), before it reads anything.
+    fn check_mode(&self) -> krishiv_exec::Result<()> {
+        if let Some(t) = self.provider.write_target() {
+            super::row_delta::row_level_mode(t.base.properties(), self.op)?;
+        }
+        Ok(())
     }
 
-    fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
-        let inner = self.provider.row_level_scan(self.lineage, None)?;
-        Ok(Arc::new(RowIdScan::new(inner)?))
-    }
-
-    fn scan_files(&self, files: &[Vec<u8>]) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
-        let inner = self.provider.row_level_scan(self.lineage, Some(files))?;
-        Ok(Arc::new(RowIdScan::new(inner)?))
-    }
-
-    fn rewriter(&self, request: &RowLevelWrite) -> krishiv_exec::Result<Arc<dyn Sink>> {
-        let target = Arc::clone(self.provider.write_target().ok_or_else(|| {
-            KrishivError::from(krishiv_common::error::InternalError {
-                message: "a row-level Iceberg table without a write target".to_owned(),
-            })
-        })?);
-        let names = |s: &arrow_schema::Schema| {
-            s.fields()
-                .iter()
-                .any(|f| f.name() == super::lineage::ROW_ID)
-                && s.fields()
-                    .iter()
-                    .any(|f| f.name() == super::lineage::LAST_UPDATED)
-        };
-        if self.lineage && !names(&request.input_schema) {
+    /// Refuses a v3 table's rewrite whose rows lack the row lineage columns.
+    fn require_lineage(&self, request: &RowLevelWrite) -> krishiv_exec::Result<()> {
+        let s = &request.input_schema;
+        let has = |n: &str| s.fields().iter().any(|f| f.name() == n);
+        if self.lineage && !(has(super::lineage::ROW_ID) && has(super::lineage::LAST_UPDATED)) {
             return Err(KrishivUnsupportedFeature {
                 feature: format!(
                     "{} of the Iceberg format version 3 table {} whose rewrite does not carry \
@@ -170,6 +155,58 @@ impl RowLevelTable for IcebergRowLevel {
             }
             .into());
         }
+        Ok(())
+    }
+}
+
+impl RowLevelTable for IcebergRowLevel {
+    fn capabilities(&self) -> RowLevelCapabilities {
+        let mut c = RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality);
+        // A mode that cannot be read is the statement's error, raised by `scan` (`check_mode`).
+        c.merge_on_read = self.provider.write_target().is_some_and(|t| {
+            matches!(
+                super::row_delta::row_level_mode(t.base.properties(), self.op),
+                Ok(super::row_delta::RowLevelMode::MergeOnRead)
+            )
+        });
+        c
+    }
+
+    fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+        self.check_mode()?;
+        let inner = self.provider.row_level_scan(self.lineage, None)?;
+        Ok(Arc::new(RowIdScan::new(inner)?))
+    }
+
+    fn scan_files(&self, files: &[Vec<u8>]) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+        let inner = self.provider.row_level_scan(self.lineage, Some(files))?;
+        Ok(Arc::new(RowIdScan::new(inner)?))
+    }
+
+    fn rewriter(&self, request: &RowLevelWrite) -> krishiv_exec::Result<Arc<dyn Sink>> {
+        // A merge-on-read statement's rows end with the row id (`mor_sink.rs`).
+        if super::mor_sink::is_merge_on_read_input(&request.input_schema) {
+            // Before anything runs, as copy-on-write does: rows without the lineage columns
+            // fail only when a batch has some, so an empty UPDATE would commit.
+            if self.op != RowLevelOperation::Delete {
+                self.require_lineage(request)?;
+            }
+            let write = super::row_delta::MergeOnReadWrite::new(
+                &self.provider,
+                self.op,
+                request.read_filter_pushdown(),
+                request.write_id.clone(),
+            )?;
+            return Ok(Arc::new(super::mor_sink::MergeOnReadSink::new(
+                write, self.op,
+            )));
+        }
+        let target = Arc::clone(self.provider.write_target().ok_or_else(|| {
+            KrishivError::from(krishiv_common::error::InternalError {
+                message: "a row-level Iceberg table without a write target".to_owned(),
+            })
+        })?);
+        self.require_lineage(request)?;
         let isolation = self.isolation(target.base.properties())?;
         let touched = self.provider.touched(&request.touched)?;
         let data_files: BTreeSet<String> =

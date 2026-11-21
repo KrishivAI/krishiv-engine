@@ -502,6 +502,13 @@ impl Session {
         };
         #[cfg(feature = "delta")]
         if is_delta_table(&table) {
+            // A Delta table has no bucketing: refuse before anything is created.
+            if table.layout.bucket.is_some() {
+                return Err(super::delta::delta_write_refused(
+                    quoted(&table.namespace, &table.name),
+                    "bucketBy",
+                ));
+            }
             // Version 0 of a new Delta table with the rows (design section 4.1, "CTAS").
             drop(pre.take());
             let source =

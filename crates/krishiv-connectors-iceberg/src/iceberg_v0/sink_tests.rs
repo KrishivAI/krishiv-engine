@@ -45,6 +45,8 @@ pub(super) struct Catalog {
     pub(super) hang: AtomicBool,
     /// A request was sent.
     sent: AtomicBool,
+    /// Runs when a commit request reaches the catalog.
+    pub(super) observe: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl Catalog {
@@ -61,6 +63,7 @@ impl Catalog {
             state: Mutex::new((metadata, location, 0)),
             hang: AtomicBool::new(false),
             sent: AtomicBool::new(false),
+            observe: Mutex::new(None),
         })
     }
 
@@ -75,6 +78,7 @@ impl Catalog {
             )),
             hang: AtomicBool::new(false),
             sent: AtomicBool::new(false),
+            observe: Mutex::new(None),
         })
     }
 
@@ -113,6 +117,9 @@ impl CommitTable for Catalog {
         updates: Vec<TableUpdate>,
     ) -> CommitOutcome {
         self.sent.store(true, Ordering::SeqCst);
+        if let Some(f) = self.observe.lock().unwrap().as_ref() {
+            f();
+        }
         if self.hang.load(Ordering::SeqCst) {
             return std::future::pending().await;
         }
@@ -346,7 +353,18 @@ pub(super) fn run(
     input: Arc<dyn Source>,
     cancel_when: Option<Box<dyn Fn() -> bool + Send>>,
 ) -> (Result<(), KrishivError>, Arc<dyn MemoryPool>, QueryRunner) {
-    let root = TreePool::new(&MemoryConfig::default());
+    run_in(env, sink, input, cancel_when, &MemoryConfig::default())
+}
+
+/// [`run`] under the memory configuration `config`.
+pub(super) fn run_in(
+    env: &Env,
+    sink: Arc<dyn Sink>,
+    input: Arc<dyn Source>,
+    cancel_when: Option<Box<dyn Fn() -> bool + Send>>,
+    config: &MemoryConfig,
+) -> (Result<(), KrishivError>, Arc<dyn MemoryPool>, QueryRunner) {
+    let root = TreePool::new(config);
     let pool = root.child("q", None);
     let query = QueryContext::new(
         QueryId(7),
@@ -563,7 +581,7 @@ fn a_retried_append_with_the_same_idempotency_key_commits_once() {
 }
 
 /// `ixn_schema` with `id` required.
-fn required_id_schema() -> iceberg::spec::Schema {
+pub(super) fn required_id_schema() -> iceberg::spec::Schema {
     iceberg::spec::Schema::builder()
         .with_fields(vec![
             NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
@@ -868,4 +886,18 @@ fn nulls_in_required_positions_of_large_lists_and_maps() {
         true,
     );
     assert_eq!(found(&map(None), &mismatched), None);
+}
+
+/// The replacement rows of a merge-on-read UPDATE are checked like a copy-on-write write.
+#[test]
+fn check_required_names_a_null_in_a_required_column() {
+    let table: SchemaRef = Arc::new(Schema::new(vec![Field::new("id", A::Int64, false)]));
+    let loose: SchemaRef = Arc::new(Schema::new(vec![Field::new("id", A::Int64, true)]));
+    let batch = |v: Vec<Option<i64>>| {
+        RecordBatch::try_new(Arc::clone(&loose), vec![Arc::new(Int64Array::from(v))]).unwrap()
+    };
+    super::sink::check_required(&table, &batch(vec![Some(1), Some(2)])).unwrap();
+    let e = super::sink::check_required(&table, &batch(vec![Some(1), None])).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::NotNullAssertViolation, "{e}");
+    assert_eq!(e.sql_state(), Some("42000"));
 }

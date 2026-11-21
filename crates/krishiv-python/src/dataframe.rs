@@ -504,7 +504,7 @@ impl PyDataFrame {
         let options = options.unwrap_or_default();
         let partition_by = partition_by.unwrap_or_default();
         block_on(py, async move {
-            df.write_table_with(
+            Box::pin(df.write_table_with(
                 insert_into,
                 &table,
                 format.as_deref(),
@@ -513,7 +513,7 @@ impl PyDataFrame {
                 partition_by,
                 bucket_by,
                 sort_by,
-            )
+            ))
             .await
         })
     }

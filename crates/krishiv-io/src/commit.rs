@@ -605,21 +605,21 @@ fn is_job_file(name: &str, job: &str) -> bool {
     let Some(after_job) = rest[dash + 1..].strip_prefix(job) else {
         return false;
     };
-    // An optional `_<attempt>` (digits), then `-c<n>` or `.c<n>`; the
-    // suffix check stays lenient so future suffixes still match.
-    let after_attempt = match after_job.strip_prefix('_') {
-        Some(after_underscore) => {
-            let digits = after_underscore
-                .bytes()
-                .take_while(u8::is_ascii_digit)
-                .count();
-            if digits == 0 {
-                return false;
-            }
-            &after_underscore[digits..]
+    // Optional `_<digits>` parts (the attempt, then a bucketed file's bucket id), then `-c<n>` or
+    // `.c<n>`; the suffix check stays lenient so future suffixes still match.
+    let mut after_attempt = after_job;
+    let mut parts = 0;
+    while let Some(after_underscore) = after_attempt.strip_prefix('_') {
+        let digits = after_underscore
+            .bytes()
+            .take_while(u8::is_ascii_digit)
+            .count();
+        if digits == 0 || parts == 2 {
+            return false;
         }
-        None => after_job,
-    };
+        after_attempt = &after_underscore[digits..];
+        parts += 1;
+    }
     after_attempt
         .strip_prefix("-c")
         .or_else(|| after_attempt.strip_prefix(".c"))
