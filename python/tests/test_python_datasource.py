@@ -311,6 +311,18 @@ def test_reregistering_a_name_replaces_the_class(spark: SparkSession) -> None:
     assert rows(spark.read.format("fixed").load()) == [(9, 9)]
 
 
+def test_builtin_format_wins_over_a_python_source_of_the_same_name(spark: SparkSession, tmp_path: Path) -> None:
+    class Shadow(Fixed):
+        @classmethod
+        def name(cls) -> str:
+            return "parquet"
+
+    spark.dataSource.register(Shadow)
+    target = str(tmp_path / "t")
+    spark.createDataFrame([(5, 6)], "a int, b int").write.parquet(target)
+    assert rows(spark.read.format("parquet").load(target)) == [(5, 6)]
+
+
 def test_sessions_do_not_share_registrations(spark: SparkSession) -> None:
     spark.dataSource.register(Fixed)
     other = SparkSession.builder.create()

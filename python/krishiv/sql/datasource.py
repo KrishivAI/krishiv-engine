@@ -391,8 +391,14 @@ def _registry(session: SparkSession) -> dict[str, _Registered]:
     return registry
 
 
+_BUILTIN_FORMATS = frozenset({"parquet", "orc", "avro", "json", "csv", "text", "binaryfile", "image", "libsvm"})
+
+
 def registered(session: SparkSession, name: str) -> _Registered | None:
-    """The class registered under ``name`` (any letter case), if any."""
+    """The class registered under ``name`` (any letter case), if any. Spark's built-in file sources win over a
+    Python source of the same name (``DataSource.lookupDataSource``)."""
+    if name.lower() in _BUILTIN_FORMATS:
+        return None
     return _registry(session).get(name.lower())
 
 
