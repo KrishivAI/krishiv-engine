@@ -168,7 +168,7 @@ pub(crate) fn too_deep_known(root: Node<'_>, height: &mut PtrMap<usize, usize>) 
         if height.contains_key(&(node.key() as usize)) {
             continue;
         }
-        children(node, &mut next);
+        depth_children(node, &mut next);
         if expanded {
             let below = next
                 .drain(..)
@@ -185,6 +185,30 @@ pub(crate) fn too_deep_known(root: Node<'_>, height: &mut PtrMap<usize, usize>) 
         }
     }
     false
+}
+
+/// [`children`], plus the dimension and measure expressions of a [`PlanNode::MetricViewRead`]:
+/// `for_each_expr` leaves them out (they are never resolved in place), but they nest like any other
+/// expression the plan holds, so the depth check measures them.
+fn depth_children<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
+    children(node, out);
+    if let Node::Plan(LogicalPlan {
+        node:
+            PlanNode::MetricViewRead {
+                dimensions,
+                measures,
+                ..
+            },
+        ..
+    }) = node
+    {
+        out.extend(
+            dimensions
+                .iter()
+                .chain(measures)
+                .map(|c| Node::Expr(&c.expr)),
+        );
+    }
 }
 
 /// Whether no unresolved node remains under `root`. A cast in

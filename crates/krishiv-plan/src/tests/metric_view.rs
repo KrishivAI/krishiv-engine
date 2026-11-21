@@ -167,3 +167,50 @@ fn a_repeated_source_name_is_ambiguous_only_where_named() {
     let analyzed = run(plain, &ctx()).unwrap();
     assert!(!has_read(analyzed.plan.root()), "{}", analyzed.plan.root());
 }
+
+/// A read whose measure nests `n` deep over the `part` table: depth `n + 1`.
+fn read_with_deep_measure(n: usize) -> LogicalPlan {
+    let deep = (1..n).fold(c("p_size"), |e, _| {
+        Expr::builtin(crate::Builtin::Not, vec![e])
+    });
+    LogicalPlan::new(PlanNode::MetricViewRead {
+        input: Arc::new(LogicalPlan::table(["part"])),
+        name: vec!["spark_catalog".into(), "default".into(), "mv".into()],
+        dimensions: vec![column("brand", c("p_brand"), DataType::String)],
+        measures: vec![column("total", deep, DataType::Long)],
+        output: Vec::new(),
+        ansi: None,
+    })
+}
+
+#[test]
+fn the_depth_check_measures_dimension_and_measure_expressions() {
+    assert!(crate::check_depth(&read_with_deep_measure(crate::MAX_DEPTH - 1)).is_ok());
+    let err = crate::check_depth(&read_with_deep_measure(crate::MAX_DEPTH)).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::FailedToParseTooComplex
+    );
+    assert!(crate::Plan::try_new(read_with_deep_measure(crate::MAX_DEPTH)).is_err());
+}
+
+#[test]
+fn reads_whose_column_types_differ_in_nested_nullability_are_different_plans() {
+    let with = |contains_null: bool| {
+        let t = DataType::Array(Arc::new(krishiv_types::ArrayType::new(
+            DataType::Long,
+            contains_null,
+        )));
+        crate::Plan::try_new(LogicalPlan::new(PlanNode::MetricViewRead {
+            input: Arc::new(LogicalPlan::table(["part"])),
+            name: vec!["mv".into()],
+            dimensions: vec![column("xs", c("p_xs"), t)],
+            measures: Vec::new(),
+            output: Vec::new(),
+            ansi: None,
+        }))
+        .unwrap()
+    };
+    assert!(with(true).structurally_eq(&with(true)));
+    assert!(!with(true).structurally_eq(&with(false)));
+}

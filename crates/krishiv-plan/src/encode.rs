@@ -1027,12 +1027,19 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     for c in cols {
                         self.str(&c.name);
                         self.expr(&c.expr);
-                        self.data_type(&c.data_type);
+                        // Lossless: two reads whose column types differ only in nested
+                        // nullability, comments or fields are different plans.
+                        self.lossless_type(&c.data_type);
                         self.u8(u8::from(c.nullable));
                     }
                 }
                 self.len(output.len());
-                output.iter().for_each(|c| self.bound(c));
+                for c in output {
+                    self.put(&c.id.0.to_le_bytes());
+                    self.str(&c.name);
+                    self.lossless_type(&c.data_type);
+                    self.bool(c.nullable);
+                }
                 self.u8(match ansi {
                     None => 0,
                     Some(false) => 1,
