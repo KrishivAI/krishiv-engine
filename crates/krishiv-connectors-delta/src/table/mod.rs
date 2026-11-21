@@ -378,6 +378,41 @@ impl DeltaTable {
     pub fn delta_scan(&self) -> DeltaScan {
         DeltaScan::new(Arc::clone(&self.inner))
     }
+
+    /// The scan of a row-level statement (it reads row ids), of every live file or of the
+    /// files at `paths` (as the log names them), in the listing's order.
+    pub(crate) fn row_level_scan(
+        &self,
+        paths: Option<&std::collections::HashSet<String>>,
+    ) -> Result<DeltaScan, KrishivError> {
+        let Some(paths) = paths else {
+            return Ok(DeltaScan::with_row_ids(Arc::clone(&self.inner)));
+        };
+        let units: Arc<[ScanUnit]> = self
+            .inner
+            .units
+            .iter()
+            .filter(|u| paths.contains(u.path.as_str()))
+            .cloned()
+            .collect();
+        let i = &self.inner;
+        Ok(DeltaScan::with_row_ids(Arc::new(Inner {
+            engine: i.engine.clone(),
+            name: i.name.clone(),
+            snapshot: Arc::clone(&i.snapshot),
+            schema: Arc::clone(&i.schema),
+            partitions: i.partitions.clone(),
+            mapping: i.mapping.clone(),
+            units,
+            scan_options: i.scan_options,
+            limits: i.limits,
+        })))
+    }
+
+    /// The commit loop's bounds from the table's configuration.
+    pub(crate) fn retry_limits(&self) -> crate::commit::RetryLimits {
+        self.inner.limits
+    }
 }
 
 impl TableProvider for DeltaTable {
@@ -416,6 +451,15 @@ impl TableProvider for DeltaTable {
         request: &krishiv_exec::planner::WriteRequest,
     ) -> krishiv_exec::Result<Arc<dyn krishiv_exec::Sink>> {
         self.writer_with(request, self.inner.limits)
+    }
+
+    /// Copy-on-write `DELETE` and `UPDATE` ([`crate::write::dml`]); `MERGE` is not offered yet.
+    fn row_level(
+        &self,
+        op: krishiv_exec::planner::RowLevelOperation,
+    ) -> Option<Arc<dyn krishiv_exec::planner::RowLevelTable>> {
+        crate::write::dml::DeltaRowLevel::new(self.clone(), op)
+            .map(|t| Arc::new(t) as Arc<dyn krishiv_exec::planner::RowLevelTable>)
     }
 }
 

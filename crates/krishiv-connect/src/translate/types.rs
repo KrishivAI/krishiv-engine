@@ -3,7 +3,7 @@
 
 use krishiv_common::error::{KrishivError, UnsupportedTimePrecision};
 use krishiv_types::{
-    ArrayType, Collation, DataType, DecimalType, MapType, Srid, StructField, StructType,
+    ArrayType, Collation, DataType, DecimalType, MapType, Srid, StructField, StructType, UdtType,
 };
 
 use super::errors::{assertion, not_set, unsupported_variant};
@@ -84,6 +84,47 @@ fn data_type_at(proto: &Proto, depth: usize) -> Result<DataType, KrishivError> {
         }
         Kind::CalendarInterval(_) => DataType::CalendarInterval,
         Kind::Variant(_) => DataType::Variant,
+        // Spark's `toCatalystUDT`: the type must say `udt`; a type with no JVM class is a Python-only one and
+        // needs `python_class`, `serialized_python_class` and `sql_type`. Spark builds a JVM UDT from its class
+        // alone; Krishiv cannot load JVM classes, so it also needs `sql_type` (a documented divergence).
+        Kind::Udt(u) => {
+            if u.r#type != "udt" {
+                return Err(
+                    krishiv_common::error::ConnectInvalidPlanUdtTypeFieldInvalid {
+                        udt_type: u.r#type.clone(),
+                    }
+                    .into(),
+                );
+            }
+            let jvm = u.jvm_class.as_deref().filter(|c| !c.is_empty());
+            if jvm.is_none() {
+                let (Some(py), Some(ser), Some(_)) = (
+                    u.python_class.as_deref().filter(|c| !c.is_empty()),
+                    u.serialized_python_class
+                        .as_deref()
+                        .filter(|c| !c.is_empty()),
+                    u.sql_type.as_deref(),
+                ) else {
+                    return Err(
+                        krishiv_common::error::ConnectInvalidPlanPythonUdtMissingFields {}.into(),
+                    );
+                };
+                DataType::Udt(std::sync::Arc::new(UdtType::python(
+                    child(u.sql_type.as_deref())?,
+                    py.to_owned(),
+                    ser.to_owned(),
+                )))
+            } else {
+                if u.sql_type.is_none() {
+                    return Err(not_set("spark.connect.DataType.UDT", "SQL_TYPE_NOT_SET"));
+                }
+                DataType::Udt(std::sync::Arc::new(UdtType::jvm(
+                    child(u.sql_type.as_deref())?,
+                    jvm.unwrap_or_default().to_owned(),
+                    u.python_class.clone().filter(|c| !c.is_empty()),
+                )))
+            }
+        }
         Kind::Geometry(g) => DataType::geometry(Srid::from_i32(g.srid))?,
         Kind::Geography(g) => DataType::geography(Srid::from_i32(g.srid))?,
         Kind::String(s) => {

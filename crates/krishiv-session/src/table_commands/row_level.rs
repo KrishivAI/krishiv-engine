@@ -22,8 +22,13 @@
 //! The statement runs in-process: a hidden provider table gets no splits
 //! (`QueryCatalog`'s split planning), so a distributed stage would read it whole in every task.
 //!
-//! Not here yet: `MERGE` (PR-37c), merge-on-read (PR-37d), `SET c = DEFAULT`, the conflict
-//! check's read filter (the rewrite is checked as a whole-table read, which is wider), the
+//! A Delta table refuses a condition with a subquery (`DELTA_UNSUPPORTED_SUBQUERY`, as
+//! delta-spark's `PreprocessTableDelete`/`PreprocessTableUpdate` do) and wraps an error raised
+//! while the rewrite writes its rows in `TASK_WRITE_FAILED` (Spark's `FileFormatWriter`); the
+//! conflict check's read set is the table's (the Delta connector reads the condition's partition
+//! conjuncts).
+//!
+//! Not here yet: `MERGE` (PR-37c), merge-on-read (PR-37d), `SET c = DEFAULT`, the
 //! CHAR/VARCHAR write checks of an `UPDATE`, and a condition that names the table by a
 //! qualified name longer than its own (`db.t.c`: the target is read under its last name part or
 //! the statement's alias).
@@ -35,8 +40,9 @@ use arrow_array::{Array, RecordBatch};
 use arrow_schema::DataType as ArrowType;
 use futures::StreamExt;
 use krishiv_common::error::{
-    DuplicateAssignments, IncompatibleDataForTableCannotSafelyCast, KrishivError,
-    KrishivUnsupportedFeature,
+    DeltaCastOverflowInTableWrite, DeltaUnsupportedSubquery, DuplicateAssignments,
+    IncompatibleDataForTableCannotSafelyCast, KrishivError, KrishivUnsupportedFeature,
+    TaskWriteFailed,
 };
 use krishiv_exec::physical::{PhysNode, TableWriteRequest};
 use krishiv_exec::planner::{
@@ -49,6 +55,21 @@ use krishiv_types::DataType;
 
 use crate::dataframe::DataFrame;
 use crate::session::{Session, internal};
+
+/// The rewrite's option holding the rows the condition holds for (the find query's count): a
+/// table's metrics and result rows read it (Delta's `numDeletedRows` / `numUpdatedRows`).
+pub(crate) const AFFECTED_OPTION: &str = "__krishiv_row_level_affected";
+
+/// The rewrite's option holding the statement's condition as written (absent: none), for the
+/// table's commit record (Delta's `operationParameters.predicate`).
+pub(crate) const CONDITION_OPTION: &str = "__krishiv_row_level_condition";
+
+/// The rewrite's option holding the find query's milliseconds (Delta's `scanTimeMs`).
+pub(crate) const SCAN_MS_OPTION: &str = "__krishiv_row_level_scan_ms";
+
+/// The rewrite's option holding the name the statement reads the target under (its alias,
+/// else the table's last name part): the qualifier the condition's column names may carry.
+pub(crate) const ALIAS_OPTION: &str = "__krishiv_row_level_alias";
 
 /// A column of the statement's `SET` list: the column and the value's SQL text (`None`:
 /// `DEFAULT`).
@@ -124,6 +145,12 @@ impl Session {
         let Some(table) = provider.row_level(op) else {
             return Ok(None);
         };
+        // A Delta table's root as delta-spark's errors name it (`file:/..`), for a table by path
+        // and for a catalog table over a Delta location alike (its scan keeps the table's name).
+        #[cfg(feature = "delta")]
+        let delta_root = probe.env.catalog.delta_root(&scan).transpose()?;
+        #[cfg(not(feature = "delta"))]
+        let delta_root: Option<String> = None;
         let columns: Vec<TableColumn> = probe
             .analyzed
             .output
@@ -194,19 +221,37 @@ impl Session {
             nullable: false,
             char_varchar: None,
         });
+        // delta-spark refuses any subquery in the condition after resolution
+        // (`PreprocessTableDelete.scala:35-45`, `PreprocessTableUpdate.scala:44`;
+        // `delete.allowExistsSubquery` is off by default and not read here).
+        if delta_root.is_some()
+            && let Some(c) = condition
+            && has_subquery(&crate::functions::expr(c)?.expr)
+        {
+            return Err(DeltaUnsupportedSubquery {
+                operation: match op {
+                    RowLevelOperation::Update => "UPDATE",
+                    _ => "DELETE",
+                }
+                .to_owned(),
+                cond: c.to_owned(),
+            }
+            .into());
+        }
         let hit =
             condition.map_or_else(|| "true".to_owned(), |c| format!("coalesce(({c}), false)"));
-        self.check_assignments(
-            quoted,
-            alias,
-            &hit,
-            &columns,
-            &with_row_id,
-            &table,
-            op,
-            assignments,
-        )
-        .await?;
+        let value_types = self
+            .check_assignments(
+                quoted,
+                alias,
+                &hit,
+                &columns,
+                &with_row_id,
+                &table,
+                op,
+                assignments,
+            )
+            .await?;
 
         // 1. The touched files and the hit count, over the whole snapshot.
         let (whole, whole_entry) = self.state.catalog.put_hidden_provider(
@@ -223,7 +268,9 @@ impl Session {
             .filter(crate::functions::expr(&hit)?)
             .group_by([crate::functions::col(ROW_FILE_COLUMN)])
             .agg([crate::functions::expr("count(*)")?]);
+        let find_started = std::time::Instant::now();
         let batches = found.collect().await?;
+        let scan_ms = find_started.elapsed().as_millis();
         let (touched, affected) = touched_files(&batches)?;
 
         // 2. The rewrite of the touched files, into the table's rewriter.
@@ -269,15 +316,64 @@ impl Session {
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let target = first_scan(physical.root())
             .ok_or_else(|| internal("a row-level rewrite that reads no table".to_owned()))?;
-        let mut request =
-            RowLevelWrite::new(op, quoted, Arc::clone(physical.schema()), touched, None);
+        // The rewrite's own read is the hidden provider: a scan of the target in it is a subquery's
+        // (or a view's) read of the table. A Delta target is compared by its resolved root, so
+        // `/t`, `/t/`, `file:/t` and the catalog table over that location are one table.
+        #[cfg(feature = "delta")]
+        let rereads_target = match &delta_root {
+            Some(root) => crate::catalog::reads_delta_root(
+                analysis.analyzed.plan.root(),
+                root,
+                &analysis.env.catalog,
+            ),
+            None => crate::catalog::reads_source(analysis.analyzed.plan.root(), &scan.source),
+        };
+        #[cfg(not(feature = "delta"))]
+        let rereads_target =
+            crate::catalog::reads_source(analysis.analyzed.plan.root(), &scan.source);
+        let read_filter = read_filter(condition, rereads_target)?;
+        #[cfg(test)]
+        tests::READ_FILTERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((quoted.to_string(), read_filter.is_some()));
+        let mut request = RowLevelWrite::new(
+            op,
+            quoted,
+            Arc::clone(physical.schema()),
+            touched,
+            read_filter,
+        );
         request.write_id = Some(crate::session::job_uuid());
-        let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
-        let mut stream = self.run(&plan, &analysis.env).await?;
-        while let Some(batch) = stream.next().await {
-            batch?;
+        request
+            .options
+            .insert(AFFECTED_OPTION.to_owned(), affected.to_string());
+        request
+            .options
+            .insert(SCAN_MS_OPTION.to_owned(), scan_ms.to_string());
+        request
+            .options
+            .insert(ALIAS_OPTION.to_owned(), alias.to_owned());
+        if let Some(c) = condition {
+            request
+                .options
+                .insert(CONDITION_OPTION.to_owned(), c.to_owned());
         }
-        drop(stream);
+        let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
+        let written = async {
+            let mut stream = self.run(&plan, &analysis.env).await?;
+            while let Some(batch) = stream.next().await {
+                batch?;
+            }
+            Ok::<(), KrishivError>(())
+        }
+        .await;
+        if let Err(e) = written {
+            return Err(match &delta_root {
+                Some(root) => delta_task_write_failed(e, root, &columns, &value_types),
+                None => e,
+            });
+        }
         self.refresh_files();
 
         // 3. The statement's result.
@@ -310,7 +406,7 @@ impl Session {
         table: &Arc<dyn RowLevelTable>,
         op: RowLevelOperation,
         assignments: &[Assignment],
-    ) -> Result<(), KrishivError> {
+    ) -> Result<Vec<(String, DataType)>, KrishivError> {
         let (name, entry) = self.state.catalog.put_hidden_provider(
             with_row_id.to_vec(),
             Arc::new(Target {
@@ -341,6 +437,7 @@ impl Session {
             }
             .into());
         }
+        let mut value_types = Vec::with_capacity(assignments.len());
         for (a, out) in assignments.iter().zip(&analysis.analyzed.output) {
             let Some(column) = columns
                 .iter()
@@ -348,6 +445,7 @@ impl Session {
             else {
                 continue;
             };
+            value_types.push((column.name.clone(), out.data_type.clone()));
             if !super::can_store(&out.data_type, &column.data_type) {
                 return Err(IncompatibleDataForTableCannotSafelyCast {
                     table_name: quoted.to_owned(),
@@ -361,7 +459,7 @@ impl Session {
                 .into());
             }
         }
-        Ok(())
+        Ok(value_types)
     }
 
     /// A frame reading the hidden table `name` (`columns`), which owns `entry`: a resolved
@@ -394,6 +492,131 @@ impl Session {
         let mut df = DataFrame::new(self.clone(), Arc::new(plan));
         df.keep.push(entry);
         df
+    }
+}
+
+/// What the statement read, for the table's conflict check: the condition (the parsed,
+/// unresolved expression: column names as written), or `None` for every row. A statement whose
+/// subquery (in an assignment, or through a view) reads the target table again reads every row:
+/// delta-spark records that scan's own predicates in the transaction's read set, and the whole
+/// table is a superset of them, so no conflict is missed (an over-approximation: delta-spark
+/// conflicts only on the subquery's predicates). A subquery over another table records nothing on
+/// the target, so the condition stays (#909 review, finding 2).
+fn read_filter(
+    condition: Option<&str>,
+    rereads_target: bool,
+) -> Result<Option<Arc<krishiv_plan::Expr>>, KrishivError> {
+    if rereads_target {
+        return Ok(None);
+    }
+    condition
+        .map(|c| Ok(Arc::new(crate::functions::expr(c)?.expr)))
+        .transpose()
+}
+
+/// Whether `e` holds a subquery anywhere.
+fn has_subquery(e: &krishiv_plan::Expr) -> bool {
+    let mut stack: Vec<&krishiv_plan::Expr> = vec![e];
+    while let Some(x) = stack.pop() {
+        if matches!(x.node, krishiv_plan::ExprNode::Subquery { .. }) {
+            return true;
+        }
+        x.for_each_child(&mut |c| stack.push(c));
+    }
+    false
+}
+
+/// An error raised while a Delta `DELETE`/`UPDATE` writes its rows, as delta-spark raises it:
+/// Spark's `FileFormatWriter` wraps whatever a write task raises in `TASK_WRITE_FAILED` (the
+/// table's root). An arithmetic error under an `UPDATE`'s store-assignment cast is
+/// delta-spark's `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE` naming the column
+/// ([`store_assignment_overflow`]); any other error is the cause as it came. Errors that
+/// are not the task's (the commit's `DELTA_*` conflicts, Krishiv's own refusals and limits,
+/// internal errors, cancellation) are returned as they came. `value_types` are the assigned
+/// columns and their new values' types.
+fn delta_task_write_failed(
+    e: KrishivError,
+    root: &str,
+    columns: &[TableColumn],
+    value_types: &[(String, DataType)],
+) -> KrishivError {
+    let class = e.error_class().name();
+    if class.starts_with("DELTA_")
+        || class.starts_with("KRISHIV_")
+        || class.starts_with("UNSUPPORTED_FEATURE")
+        || class == "INTERNAL_ERROR"
+        || e.sql_state() == Some("HY008")
+    {
+        return e;
+    }
+    let cause = store_assignment_overflow(&e, columns, value_types).unwrap_or(e);
+    KrishivError::from(TaskWriteFailed {
+        path: root.to_owned(),
+    })
+    .with_cause(cause)
+}
+
+/// `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE` for an arithmetic error `e` (SQLSTATE 22003 or 22012:
+/// Spark's `ArithmeticException`s, such as `CAST_OVERFLOW`, `ARITHMETIC_OVERFLOW` and
+/// `DIVIDE_BY_ZERO`) raised in a new value whose store-assignment cast can overflow:
+/// delta-spark's `CheckOverflowInTableWrite` (`UpdateExpressionsSupport.scala:735-757`) catches
+/// any `ArithmeticException` of the value under such a cast (a column whose type holds an
+/// integral or decimal type, at any depth, and that the value's type does not `Cast.canUpCast`
+/// to, `:719-732`) and names the column and the cast's types.
+/// Krishiv cannot tell which value raised: the first such column in table order is named.
+fn store_assignment_overflow(
+    e: &KrishivError,
+    columns: &[TableColumn],
+    value_types: &[(String, DataType)],
+) -> Option<KrishivError> {
+    if !matches!(e.sql_state(), Some("22003" | "22012")) {
+        return None;
+    }
+    // delta-spark's `canCauseCastOverflow` (`:729-732`).
+    let can_overflow = |from: &DataType, to: &DataType| {
+        contains_integral_or_decimal(to) && !crate::view_schema::can_up_cast(from, to)
+    };
+    let sql = |t: &DataType| format!("\"{}\"", t.catalog_string().to_uppercase());
+    let (column, value) = columns.iter().find_map(|c| {
+        value_types
+            .iter()
+            .find(|(name, value)| {
+                name.eq_ignore_ascii_case(&c.name) && can_overflow(value, &c.data_type)
+            })
+            .map(|(_, value)| (c, value))
+    })?;
+    Some(
+        DeltaCastOverflowInTableWrite {
+            source_type: sql(value),
+            target_type: sql(&column.data_type),
+            column_name: format!("`{}`", column.name.replace('`', "``")),
+            store_assignment_policy_flag: "spark.sql.storeAssignmentPolicy".to_owned(),
+            update_and_merge_casting_follows_ansi_enabled_flag:
+                "spark.databricks.delta.updateAndMergeCastingFollowsAnsiEnabledFlag".to_owned(),
+            ansi_enabled_flag: "spark.sql.ansi.enabled".to_owned(),
+        }
+        .into(),
+    )
+}
+
+/// delta-spark's `containsIntegralOrDecimalType` (`UpdateExpressionsSupport.scala:719-727`).
+fn contains_integral_or_decimal(t: &DataType) -> bool {
+    match t {
+        DataType::Byte
+        | DataType::Short
+        | DataType::Integer
+        | DataType::Long
+        | DataType::Decimal(_) => true,
+        DataType::Array(a) => contains_integral_or_decimal(a.element_type()),
+        DataType::Map(m) => {
+            contains_integral_or_decimal(m.key_type())
+                || contains_integral_or_decimal(m.value_type())
+        }
+        DataType::Struct(s) => s
+            .fields()
+            .iter()
+            .any(|f| contains_integral_or_decimal(f.data_type())),
+        _ => false,
     }
 }
 
@@ -430,6 +653,16 @@ fn touched_files(batches: &[RecordBatch]) -> Result<(Vec<Vec<u8>>, u64), Krishiv
         }
     }
     Ok((files, hits))
+}
+
+#[cfg(all(test, feature = "delta"))]
+#[test]
+fn the_delta_connector_reads_the_same_option_keys() {
+    use krishiv_connectors_delta::write::dml as d;
+    assert_eq!(AFFECTED_OPTION, d::ROW_LEVEL_AFFECTED_OPTION);
+    assert_eq!(CONDITION_OPTION, d::ROW_LEVEL_CONDITION_OPTION);
+    assert_eq!(SCAN_MS_OPTION, d::ROW_LEVEL_SCAN_MS_OPTION);
+    assert_eq!(ALIAS_OPTION, d::ROW_LEVEL_ALIAS_OPTION);
 }
 
 #[cfg(test)]

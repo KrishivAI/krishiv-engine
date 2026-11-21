@@ -53,6 +53,7 @@
 //! - `DELTA_REPLACE_WHERE_MISMATCH`'s nested message names the constraint by the filter's text,
 //!   where delta-spark prints its expression tree.
 
+pub mod dml;
 mod files;
 pub mod filter;
 pub(crate) mod sink;

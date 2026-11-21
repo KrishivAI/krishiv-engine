@@ -178,6 +178,7 @@ registry! {
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
+    (udt_type, UdtType, POST_MIGRATION_READER_VERSION, Semantic, "User-defined types (Spark `UserDefinedType`): stored as their SQL type, with the class names in the plan."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
     (variant_explode, VariantExplode, POST_MIGRATION_READER_VERSION, Semantic, "The `variant_explode` generator (and `variant_explode_outer`): the fields of a variant object or the elements of a variant array."),
     (variant_type, VariantType, POST_MIGRATION_READER_VERSION, Semantic, "The `VARIANT` type (Parquet Variant v1 values, unshredded in memory)."),
@@ -292,6 +293,7 @@ fn type_feature(t: &DataType) -> Option<Feature> {
         }
         DataType::CollatedString(c) if !c.is_utf8_binary() => Some(Feature::CollatedStrings),
         DataType::Variant => Some(Feature::VariantType),
+        DataType::Udt(_) => Some(Feature::UdtType),
         _ => t.is_nested().then_some(Feature::NestedTypes),
     }
 }
@@ -303,6 +305,7 @@ fn collated(t: &DataType) -> bool {
         DataType::Array(a) => collated(a.element_type()),
         DataType::Map(m) => collated(m.key_type()) || collated(m.value_type()),
         DataType::Struct(s) => s.fields().iter().any(|x| collated(x.data_type())),
+        DataType::Udt(u) => collated(u.sql_type()),
         _ => false,
     }
 }
@@ -374,6 +377,8 @@ fn visit_type<'a>(t: &'a DataType, f: &mut impl FnMut(Construct<'a>)) {
             visit_type(m.value_type(), f);
         }
         DataType::Struct(s) => s.fields().iter().for_each(|x| visit_type(x.data_type(), f)),
+        // A user-defined type is stored as its SQL type: what that holds is a construct too.
+        DataType::Udt(u) => visit_type(u.sql_type(), f),
         _ => {}
     }
 }
