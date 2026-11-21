@@ -105,7 +105,7 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   refused, `vended_secrets_never_shown`). Feature `testing` exports the stand-in and `write_s3_table` for other crates' tests
   (krishiv-connect-server `tests/delegated_catalog.rs`: `vended_blocks_not_shared_across_delegated_users`, `catalog_mode_matrix`).
 - Not here yet: Unity vended credentials, distributed reads of declared tables (refused by the session), a fuzz
-  target for the REST and the Unity Catalog response parsers (§5.6), the T021 decision on `MANAGED` Delta tables of a UC server (they may be catalog-managed: UC-ratified commits not yet in `_delta_log`, so a by-path read can be stale; `UnityTable` says so), the write half of the
+  target for the Unity Catalog response parsers (§5.6; the REST one is `fuzz/fuzz_targets/iceberg_rest_response.rs` over `iceberg_rest/fuzz_entry.rs`, seeds `fuzz/seeds/iceberg_rest_response/`), the T021 decision on `MANAGED` Delta tables of a UC server (they may be catalog-managed: UC-ratified commits not yet in `_delta_log`, so a by-path read can be stale; `UnityTable` says so), the write half of the
   Hive catalog, the Docker acceptance against a real metastore and a real Unity Catalog server
   (the default port, transport and SASL are settings and unverified until then).
 

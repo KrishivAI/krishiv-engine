@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Iceberg types as Spark sees them (`iceberg_type_mapping`): the mapping of
-//! Iceberg's `TypeToSparkType` at apache-iceberg 1.12.0, Spark 4.1 module
-//! (`research/p3/t022a-iceberg-spark-types.md`). Field nullability is the field's
+//! Iceberg types as Spark sees them: the mapping of Iceberg's `TypeToSparkType` at
+//! apache-iceberg 1.12.0, Spark 4.1 module, checked against a real Spark 4.1.0 + Iceberg 1.12.0
+//! run (`type_golden_tests.rs`, `tests/fixtures/iceberg-1.12.0/types.json`). Field nullability is the field's
 //! `optional`, a list's `containsNull` its element's, a map's `valueContainsNull`
 //! its value's; a doc becomes the `comment` metadata; field ids are not carried by the Spark
 //! schema, only by the Arrow table schema a scan maps files onto ([`arrow_schema`]).

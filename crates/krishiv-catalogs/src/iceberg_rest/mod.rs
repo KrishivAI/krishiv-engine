@@ -26,6 +26,10 @@ mod transport;
 pub mod types;
 pub(crate) mod vended;
 
+/// The response parsers on one arbitrary body, for `fuzz/fuzz_targets/iceberg_rest_response.rs` only.
+#[doc(hidden)]
+pub mod fuzz_entry;
+
 pub use client::RestClient;
 pub use config::{ONELAKE_URI, RestAuth, RestConfig, RestLimits};
 pub use delegated::{DelegationLimits, RestCaller, SubjectToken};
