@@ -254,3 +254,27 @@ fn spark_4_3_0() {
     let gaps: Vec<&str> = gaps::GAPS.iter().chain(gaps::GAPS_4_3).copied().collect();
     check("4.3.0", &gaps);
 }
+
+/// The classes only these goldens raise (`cargo xtask registry-coverage` reads test sources, not
+/// fixtures). Each must be the expected error of a step in a 4.2.1 case that is no known gap, so
+/// `spark_4_2_1` matches it.
+const GOLDEN_CLASSES: &[&str] = &[
+    "MISSING_ATTRIBUTES.RESOLVED_ATTRIBUTE_APPEAR_IN_OPERATION",
+    "UNSUPPORTED_FEATURE.ANALYZE_VIEW",
+    "UNSUPPORTED_INSERT.RDD_BASED",
+    "UNSUPPORTED_SHOW_CREATE_TABLE.ON_METRIC_VIEW",
+];
+
+#[test]
+fn the_goldens_raise_these_classes() {
+    let fixture = fixture("4.2.1");
+    for class in GOLDEN_CLASSES {
+        let matched = fixture["cases"].as_array().unwrap().iter().any(|case| {
+            !gaps::GAPS.contains(&case["name"].as_str().unwrap_or_default())
+                && case["steps"].as_array().into_iter().flatten().any(|step| {
+                    step["kind"] != "api" && step["outcome"]["error"]["condition"] == *class
+                })
+        });
+        assert!(matched, "no matched 4.2.1 case expects {class}");
+    }
+}

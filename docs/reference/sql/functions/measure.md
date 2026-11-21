@@ -34,7 +34,7 @@ measure(expr)
 > SELECT dimension_col, measure(measure_col)
 > FROM test_metric_view
 > GROUP BY dimension_col;
-Error: KRISHIV_UNSUPPORTED_FEATURE
+Error: TABLE_OR_VIEW_NOT_FOUND
 ```
 
 ## Version history
