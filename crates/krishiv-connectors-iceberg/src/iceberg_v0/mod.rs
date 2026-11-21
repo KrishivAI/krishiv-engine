@@ -5,13 +5,6 @@
 pub(crate) mod append;
 pub(crate) mod commit;
 pub(crate) mod data_file;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "PR-36c's merge-on-read writer; the session wires it through PR-37d's contract"
-    )
-)]
 pub(crate) mod delete_write;
 pub(crate) mod deletes;
 pub(crate) mod eq_deletes;
@@ -20,17 +13,11 @@ pub(crate) mod lazy;
 pub(crate) mod lineage;
 pub(crate) mod manifest_cache;
 pub(crate) mod merge;
+pub(crate) mod mor_sink;
 pub(crate) mod overwrite;
 pub(crate) mod provider;
 pub(crate) mod puffin_stats;
 pub(crate) mod rolling;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "PR-36c's merge-on-read writer; the session wires it through PR-37d's contract"
-    )
-)]
 pub(crate) mod row_delta;
 pub(crate) mod row_level;
 pub(crate) mod scan;
@@ -75,6 +62,8 @@ mod lineage_tests;
 mod merge_tests;
 #[cfg(test)]
 mod mor_fault_tests;
+#[cfg(test)]
+mod mor_sink_tests;
 #[cfg(test)]
 mod mor_tests;
 #[cfg(test)]

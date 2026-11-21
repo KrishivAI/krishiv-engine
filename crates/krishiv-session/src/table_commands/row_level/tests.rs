@@ -2,7 +2,7 @@
 //! The row-level planner over a test provider (design `P3-PR-DML-row-level.md` §5): files as
 //! batches, a scan with the row id, and a commit that swaps the touched files for one new file.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::cast::AsArray;
@@ -36,6 +36,8 @@ struct Files {
     files: Mutex<Vec<(Vec<u8>, RecordBatch)>>,
     commits: AtomicUsize,
     next: AtomicUsize,
+    /// The table records changes as deletes by position (merge-on-read).
+    mor: AtomicBool,
     /// Each rewrite request's `read_filter`, printed (`None`: every row).
     reads: Mutex<Vec<Option<String>>>,
 }
@@ -67,6 +69,7 @@ impl Files {
             ]),
             commits: AtomicUsize::new(0),
             next: AtomicUsize::new(3),
+            mor: AtomicBool::new(false),
             reads: Mutex::new(Vec::new()),
         })
     }
@@ -144,7 +147,11 @@ struct RowLevel(Arc<Files>, bool);
 
 impl RowLevelTable for RowLevel {
     fn capabilities(&self) -> RowLevelCapabilities {
-        RowLevelCapabilities::copy_on_write(CardinalityRule::DeltaWithUnconditionalDeleteExemption)
+        let mut c = RowLevelCapabilities::copy_on_write(
+            CardinalityRule::DeltaWithUnconditionalDeleteExemption,
+        );
+        c.merge_on_read = self.0.mor.load(Ordering::Relaxed);
+        c
     }
 
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
@@ -156,6 +163,14 @@ impl RowLevelTable for RowLevel {
     }
 
     fn rewriter(&self, request: &RowLevelWrite) -> krishiv_exec::Result<Arc<dyn Sink>> {
+        if self.0.mor.load(Ordering::Relaxed) {
+            return Ok(Arc::new(Swap {
+                files: Arc::clone(&self.0),
+                touched: Vec::new(),
+                written: Mutex::new(Vec::new()),
+                by_position: true,
+            }));
+        }
         self.0
             .reads
             .lock()
@@ -165,6 +180,7 @@ impl RowLevelTable for RowLevel {
             files: Arc::clone(&self.0),
             touched: request.touched.clone(),
             written: Mutex::new(Vec::new()),
+            by_position: false,
         }))
     }
 
@@ -188,6 +204,9 @@ struct Swap {
     files: Arc<Files>,
     touched: Vec<Vec<u8>>,
     written: Mutex<Vec<RecordBatch>>,
+    /// Merge-on-read: the last two columns of each row name a row to delete; any columns
+    /// before them are the new values.
+    by_position: bool,
 }
 
 impl Sink for Swap {
@@ -227,6 +246,46 @@ impl Sink for Swap {
     ) -> BoxFuture<'a, krishiv_exec::Result<()>> {
         let written =
             std::mem::take(&mut *self.written.lock().unwrap_or_else(PoisonError::into_inner));
+        if self.by_position {
+            let mut files = self.files.lock();
+            let mut added = Vec::new();
+            let mut deleted: std::collections::HashMap<Vec<u8>, Vec<i64>> =
+                std::collections::HashMap::new();
+            for b in &written {
+                let n = b.num_columns();
+                let file = b.column(n - 2).as_binary_view();
+                let pos = b.column(n - 1).as_primitive::<Int64Type>();
+                for r in 0..b.num_rows() {
+                    deleted
+                        .entry(file.value(r).to_vec())
+                        .or_default()
+                        .push(pos.value(r));
+                }
+                if n > 2 {
+                    added.push(b.project(&(0..n - 2).collect::<Vec<_>>()).unwrap());
+                }
+            }
+            for (name, rows) in files.iter_mut() {
+                if let Some(gone) = deleted.get(name) {
+                    let keep: Vec<bool> = (0..rows.num_rows())
+                        .map(|i| !gone.contains(&(i as i64)))
+                        .collect();
+                    *rows = arrow_select::filter::filter_record_batch(
+                        rows,
+                        &arrow_array::BooleanArray::from(keep),
+                    )
+                    .unwrap();
+                }
+            }
+            if !added.is_empty() {
+                let batch = arrow_select::concat::concat_batches(&schema(), &added).unwrap();
+                let n = self.files.next.fetch_add(1, Ordering::Relaxed);
+                files.push((format!("f{n}").into_bytes(), batch));
+            }
+            files.retain(|(_, b)| b.num_rows() > 0);
+            self.files.commits.fetch_add(1, Ordering::Relaxed);
+            return Box::pin(std::future::ready(Ok(())));
+        }
         let mut files = self.files.lock();
         files.retain(|(n, _)| !self.touched.contains(n));
         let rows = written.iter().map(RecordBatch::num_rows).sum::<usize>();
@@ -532,6 +591,45 @@ fn with_options_on_a_row_level_table_are_refused_not_ignored() {
         Some("t.id = 1"),
         vec![],
     );
+    assert_eq!(files.commits.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn merge_on_read_delete_records_positions_and_rewrites_nothing() {
+    let files = Files::new();
+    files.mor.store(true, Ordering::Relaxed);
+    let (session, name) = session(&files);
+    let out = run(
+        &session,
+        &name,
+        RowLevelOperation::Delete,
+        Some("t.id IN (2, 5, 6)"),
+        vec![],
+    );
+    // The hit count is not known before the commit.
+    assert_eq!(affected(&out), 0);
+    assert_eq!(files.ids(), [1, 3, 4, 7, 8, 9]);
+    // The files keep their names: no copy-on-write swap.
+    assert_eq!(files.names(), ["f0", "f1", "f2"]);
+    assert_eq!(files.commits.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn merge_on_read_update_deletes_old_rows_and_adds_new_ones() {
+    let files = Files::new();
+    files.mor.store(true, Ordering::Relaxed);
+    let (session, name) = session(&files);
+    run(
+        &session,
+        &name,
+        RowLevelOperation::Update,
+        Some("t.id IN (2, 8)"),
+        vec![set("s", "'x'")],
+    );
+    assert_eq!(files.ids(), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(files.names(), ["f0", "f1", "f2", "f3"]);
+    let f3 = files.lock().last().unwrap().1.clone();
+    assert_eq!(f3.num_rows(), 2);
     assert_eq!(files.commits.load(Ordering::Relaxed), 1);
 }
 
