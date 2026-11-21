@@ -139,7 +139,7 @@ pub(crate) fn share(
         let whole = est.plan(scan);
         let kept = est.plan(&def);
         if !whole.from_statistics
-            || whole.rows < MIN_ROWS
+            || whole.rows_for_costing() < MIN_ROWS
             || kept.rows > MAX_KEPT * whole.rows_for_costing()
         {
             continue;

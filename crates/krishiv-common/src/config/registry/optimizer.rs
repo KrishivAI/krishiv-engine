@@ -58,7 +58,8 @@ pub static SHARE_FILTERED_SCANS: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Bool(true)),
     doc: "Read a table once when two or more filters are its only readers (TPC-DS q28): the rows \
           any of the filters keeps are stored, and each filter reads them. Only when statistics \
-          say the filters keep at most a quarter of the table, and no predicate can raise. Needs \
+          say the filters keep at most a quarter of the table, and no predicate can raise. The stored \
+          rows are charged to the query's memory and spill to disk under pressure. Needs \
           `krishiv.sql.optimizer.shareCteInstances`. Results are the same either way; `false` turns it off.",
     scope: Scope::Session,
     settable_by: SettableBy::User,

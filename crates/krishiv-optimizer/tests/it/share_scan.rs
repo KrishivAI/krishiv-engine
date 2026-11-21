@@ -151,3 +151,35 @@ fn a_raising_predicate_keeps_the_scans() {
     let on = optimize(sql, &StoreSales, true);
     assert_eq!(shared(&on), 0, "{}", on.root());
 }
+
+/// Readers with equal predicates are one chain read twice: rescanning serves
+/// as well, so nothing is stored (`ShareCte`'s rule for chains without a
+/// pipeline breaker).
+#[test]
+fn equal_predicates_keep_the_scans() {
+    let sql = "SELECT * FROM \
+         (SELECT count(*) AS a FROM store_sales WHERE ss_quantity BETWEEN 1 AND 5) x, \
+         (SELECT sum(ss_quantity) AS b FROM store_sales WHERE ss_quantity BETWEEN 1 AND 5) y";
+    let on = optimize(sql, &StoreSales, true);
+    assert_eq!(shared(&on), 0, "{}", on.root());
+}
+
+/// Readers inside scalar subqueries are redirected too (`Sharer` rewrites
+/// subquery plans), and the plan is a fixed point.
+#[test]
+fn readers_in_subqueries_share_the_scan() {
+    let sql = "SELECT \
+         (SELECT count(*) FROM store_sales WHERE ss_quantity BETWEEN 1 AND 5) AS a, \
+         (SELECT count(*) FROM store_sales WHERE ss_quantity BETWEEN 96 AND 100) AS b";
+    let off = optimize(sql, &StoreSales, false);
+    let on = optimize(sql, &StoreSales, true);
+    let refs = |p: &Plan| p.root().to_string().matches("__shared_scan_0").count();
+    if refs(&off) == 0 && on.root().to_string().contains("WithCte [__shared_scan_0]") {
+        Plan::try_new(Arc::clone(on.root())).unwrap();
+        let again =
+            optimize_with_udfs(&on, &StoreSales, &UdfLibrary::new(), &config(true)).unwrap();
+        assert!(again.structurally_eq(&on), "{}", again.root());
+    } else {
+        panic!("not shared:\n{}", on.root());
+    }
+}
