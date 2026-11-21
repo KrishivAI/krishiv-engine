@@ -200,10 +200,7 @@ impl Activity {
 /// (with `impersonates = *` a service could otherwise name the `spark` admin principal and read
 /// its rows; P3-T061 security review).
 pub(crate) fn owner_key(p: &krishiv_plan::analyzer::Principal) -> String {
-    format!(
-        "{:?}|{:?}|{}|{:?}",
-        p.kind, p.tenant, p.name, p.delegated_by
-    )
+    krishiv_common::PrincipalKey::of(p).to_string()
 }
 
 /// One row of `system.sessions`.

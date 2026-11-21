@@ -49,6 +49,7 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Repartition { .. } => "PlanNode::Repartition",
         PlanNode::CollectMetrics { .. } => "PlanNode::CollectMetrics",
         PlanNode::JoinHint { .. } => "PlanNode::JoinHint",
+        PlanNode::SecurityBarrier { .. } => "PlanNode::SecurityBarrier",
         PlanNode::Union { .. } => "PlanNode::Union",
         PlanNode::Distinct { .. } => "PlanNode::Distinct",
         PlanNode::SetOp { .. } => "PlanNode::SetOp",

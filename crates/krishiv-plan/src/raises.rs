@@ -52,6 +52,43 @@ pub fn runs_on_any_row(e: &Expr, ansi: bool) -> bool {
     is_deterministic(e) && !has_subquery(e) && (exact_decimal(e) || !may_raise(e, ansi))
 }
 
+/// Whether `e` is **leakproof** (design `P3-E14-security-barrier.md` §4): evaluating it on any
+/// row reveals nothing about the row except through its value, so a security barrier may run it
+/// on rows its policy rejects. Both must hold:
+/// 1. [`runs_on_any_row`] under `ansi` (an `EvalMode` pin decides by its own mode);
+/// 2. every call in `e` is declared leakproof: an operator in [`Builtin::leakproof`], or a
+///    registry function the registry flags (`krishiv-functions` `registry/leakproof.rs`).
+///    UDFs and unresolved calls never are.
+///
+/// Rules call it with `ansi = true`, the conservative side.
+#[must_use]
+pub fn leakproof(e: &Expr, ansi: bool) -> bool {
+    runs_on_any_row(e, ansi) && every_call_declared(e)
+}
+
+fn every_call_declared(e: &Expr) -> bool {
+    let mut ok = true;
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        if let crate::walk::Node::Expr(x) = n
+            && let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
+        {
+            let declared = match &f.id {
+                FunctionId::Builtin(b) => b.leakproof(),
+                FunctionId::Registry { name, .. } => {
+                    krishiv_functions::registry::builtins().leakproof(name)
+                }
+                FunctionId::Udf { .. } | FunctionId::PythonUdf { .. } => false,
+            };
+            if !declared {
+                ok = false;
+                return std::ops::ControlFlow::Break(());
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    ok
+}
+
 fn has_subquery(e: &Expr) -> bool {
     let mut found = false;
     let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
@@ -722,5 +759,138 @@ mod tests {
         );
         assert!(!exact_decimal(&int));
         assert!(!runs_on_any_row(&int, true));
+    }
+
+    #[test]
+    fn leakproof_needs_both_conditions() {
+        let k = col("k", DataType::Integer);
+        let s = col("s", DataType::String);
+        let eq = op(
+            Builtin::Eq,
+            vec![k.clone(), lit(Literal::Integer(5))],
+            DataType::Boolean,
+        );
+        let coalesce = gt0(named(
+            "coalesce",
+            vec![k.clone(), lit(Literal::Integer(0))],
+            DataType::Integer,
+        ));
+        let try_div = gt0(named(
+            "try_divide",
+            vec![k.clone(), lit(Literal::Integer(2))],
+            DataType::Double,
+        ));
+        for ansi in [false, true] {
+            for e in [&eq, &coalesce, &try_div] {
+                assert!(leakproof(e, ansi), "{e}");
+            }
+        }
+        // Never raises, but not declared: the LIKE family and `startswith`.
+        let like = op(
+            Builtin::Like,
+            vec![s.clone(), lit(Literal::String("ab%".to_owned()))],
+            DataType::Boolean,
+        );
+        let starts = named(
+            "startswith",
+            vec![s.clone(), lit(Literal::String("a".to_owned()))],
+            DataType::Boolean,
+        );
+        for e in [&like, &starts] {
+            assert!(runs_on_any_row(e, true), "{e}");
+            assert!(!leakproof(e, true), "{e}");
+        }
+        // A UDF and an undeclared registry function, inside a declared operator.
+        let udf = gt0(call(
+            FunctionId::Udf {
+                name: "leak".to_owned(),
+                version: 1,
+            },
+            vec![k],
+            DataType::Integer,
+        ));
+        let upper = op(
+            Builtin::Eq,
+            vec![
+                named("upper", vec![s], DataType::String),
+                lit(Literal::String("A".to_owned())),
+            ],
+            DataType::Boolean,
+        );
+        assert!(!leakproof(&udf, false));
+        assert!(!leakproof(&upper, false));
+    }
+
+    #[test]
+    fn arithmetic_is_leakproof_only_where_it_cannot_raise() {
+        let k = col("k", DataType::Integer);
+        // ANSI `1 / (k - 42) > 0`: DIVIDE_BY_ZERO reveals a row with k = 42.
+        let div = gt0(op(
+            Builtin::Divide,
+            vec![
+                lit(Literal::Integer(1)),
+                op(
+                    Builtin::Subtract,
+                    vec![k, lit(Literal::Integer(42))],
+                    DataType::Integer,
+                ),
+            ],
+            DataType::Double,
+        ));
+        assert!(leakproof(&div, false));
+        assert!(!leakproof(&div, true));
+        // Exact decimal `+` is leakproof under ANSI too; inexact decimal `*` is not.
+        // (`exact_decimal` decides the whole expression, as `runs_on_any_row` reads it.)
+        let exact = op(
+            Builtin::Add,
+            vec![col("a", dec(10, 2)), col("bb", dec(10, 2))],
+            dec(11, 2),
+        );
+        let inexact = op(
+            Builtin::Multiply,
+            vec![col("a", dec(30, 2)), col("bb", dec(30, 2))],
+            dec(38, 4),
+        );
+        assert!(leakproof(&exact, true));
+        assert!(!leakproof(&inexact, true));
+        // An `EvalMode` pin decides by its own mode, whatever the argument says.
+        let pinned = |ansi: bool| {
+            Expr::new(ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi,
+                expr: Arc::new(div.clone()),
+                data_type: DataType::Boolean,
+                nullable: true,
+            }))
+        };
+        assert!(leakproof(&pinned(false), true));
+        assert!(!leakproof(&pinned(true), false));
+        // ANSI `CAST(s AS INT)` raises on a bad string; `TRY_CAST` does not.
+        let s = col("s", DataType::String);
+        assert!(!leakproof(
+            &gt0(cast(s.clone(), DataType::Integer, CastMode::Ansi)),
+            true
+        ));
+        assert!(leakproof(
+            &gt0(cast(s, DataType::Integer, CastMode::Try)),
+            true
+        ));
+    }
+
+    #[test]
+    fn every_declared_operator_is_leakproof_for_some_arguments() {
+        // A declaration that never takes effect would be a mistake: each declared operator
+        // runs on any row over integer operands with ANSI off.
+        let k = col("k", DataType::Integer);
+        for b in Builtin::ALL.into_iter().filter(|b| b.leakproof()) {
+            let args = match b {
+                Builtin::Not | Builtin::IsNull | Builtin::IsNotNull | Builtin::Negative => {
+                    vec![k.clone()]
+                }
+                Builtin::Between => vec![k.clone(), k.clone(), k.clone()],
+                _ => vec![k.clone(), lit(Literal::Integer(1))],
+            };
+            let e = op(b, args, DataType::Integer);
+            assert!(every_call_declared(&e), "{b:?}");
+        }
     }
 }

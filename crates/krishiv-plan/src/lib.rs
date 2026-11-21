@@ -82,6 +82,7 @@
 //! | `PlanNode::Repartition` | U, R | - | - |
 //! | `PlanNode::CollectMetrics` | U, R | - | `observe` |
 //! | `PlanNode::JoinHint` | R | - | - |
+//! | `PlanNode::SecurityBarrier` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
 //! | `PlanNode::SetOp` | U | - | - |
@@ -127,6 +128,7 @@
 #![forbid(unsafe_code)]
 
 pub mod analyzer;
+mod barrier;
 pub mod cache;
 mod dag;
 mod display;
@@ -146,6 +148,7 @@ mod tests;
 pub mod udtf;
 mod walk;
 
+pub use barrier::PolicyRef;
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash, semantic_plan_hash};
 pub use display::Annotated;
 #[doc(hidden)]
@@ -189,5 +192,7 @@ pub use python::{
     check_python_aggregates, check_python_relation_determinism, is_python_udaf,
     plan_is_deterministic, python_relation_is_deterministic,
 };
-pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
+pub use raises::{
+    conjuncts, exact_decimal, is_deterministic, leakproof, may_raise, runs_on_any_row,
+};
 pub use walk::{MAX_DEPTH, check_depth};

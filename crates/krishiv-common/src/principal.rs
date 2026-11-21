@@ -136,8 +136,63 @@ impl Principal {
     }
 }
 
+/// The identity a session and a policy barrier are owned by: kind, tenant, name and the service
+/// principal acting for it. Groups and a definer's reader are left out: two sessions of one user
+/// with different groups are one owner. `Display` is the owner key `system.sessions` compares.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct PrincipalKey {
+    /// [`Principal::kind`].
+    pub kind: PrincipalKind,
+    /// [`Principal::tenant`].
+    pub tenant: Option<String>,
+    /// [`Principal::name`].
+    pub name: String,
+    /// [`Principal::delegated_by`].
+    pub delegated_by: Option<String>,
+}
+
+impl PrincipalKey {
+    /// The key of `principal`.
+    #[must_use]
+    pub fn of(principal: &Principal) -> Self {
+        Self {
+            kind: principal.kind,
+            tenant: principal.tenant.clone(),
+            name: principal.name.clone(),
+            delegated_by: principal.delegated_by.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for PrincipalKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?}|{:?}|{}|{:?}",
+            self.kind, self.tenant, self.name, self.delegated_by
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_principal_key_leaves_groups_and_the_definer_reader_out() {
+        let mut a = Principal::new("ana", PrincipalKind::User).with_delegator("svc");
+        a.tenant = Some("t".to_owned());
+        let mut b = a.clone();
+        b.groups = vec!["g".to_owned()];
+        b.definer_for = Some("bob".to_owned());
+        assert_eq!(PrincipalKey::of(&a), PrincipalKey::of(&b));
+        assert_eq!(
+            PrincipalKey::of(&a).to_string(),
+            r#"User|Some("t")|ana|Some("svc")"#
+        );
+        let other = Principal::new("ana", PrincipalKind::Service);
+        assert_ne!(PrincipalKey::of(&a), PrincipalKey::of(&other));
+    }
     use super::*;
 
     #[test]

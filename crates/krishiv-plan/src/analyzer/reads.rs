@@ -235,6 +235,7 @@ impl Walk {
                 | PlanNode::Offset { .. }
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
+                | PlanNode::SecurityBarrier { .. }
                 | PlanNode::JoinHint { .. }
                 | PlanNode::Repartition { .. }
                 | PlanNode::Sample { .. }

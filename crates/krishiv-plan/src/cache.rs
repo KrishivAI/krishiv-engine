@@ -913,6 +913,13 @@ impl Encoder {
                 self.debug(strategy);
                 self.plan(input, bias);
             }
+            PlanNode::SecurityBarrier { input, policy } => {
+                self.tag("SecurityBarrier");
+                self.text(&policy.securable.to_string());
+                self.text(&policy.principal.to_string());
+                self.num(policy.version);
+                self.plan(input, bias);
+            }
             PlanNode::Union {
                 inputs,
                 by_name,

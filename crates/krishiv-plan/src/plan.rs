@@ -307,6 +307,16 @@ pub enum PlanNode {
         /// The strategy.
         strategy: JoinStrategy,
     },
+    /// A policy fence (design `P3-E14-security-barrier.md`): the rows of `input`, unchanged, with
+    /// its attribute ids. The optimizer moves no expression that is not leakproof into `input`,
+    /// nothing out of it, and reads `input`'s rows only through this node; the physical planner
+    /// plans `input` with no node of its own.
+    SecurityBarrier {
+        /// The guarded subtree: the policy's mask projection over its filter over the scan.
+        input: Arc<LogicalPlan>,
+        /// The policy applied.
+        policy: crate::PolicyRef,
+    },
     /// `UNION ALL`, `df.union`, `df.unionByName`: the rows of every input.
     /// Columns match by position, or by name with `by_name` (then a column
     /// some input lacks reads NULL there if `allow_missing_columns`).
@@ -1159,6 +1169,15 @@ impl LogicalPlan {
         })
     }
 
+    /// `input` behind a policy barrier (design `P3-E14-security-barrier.md`).
+    #[must_use]
+    pub fn security_barrier(self, policy: crate::PolicyRef) -> Self {
+        Self::new(PlanNode::SecurityBarrier {
+            input: Arc::new(self),
+            policy,
+        })
+    }
+
     /// Calls `f` on each child relation, in order: CTE definitions before
     /// the main query. Plans inside subquery expressions are not children.
     pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Arc<Self>)) {
@@ -1192,6 +1211,7 @@ impl LogicalPlan {
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1258,6 +1278,7 @@ impl LogicalPlan {
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1308,6 +1329,7 @@ impl LogicalPlan {
             | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
             | PlanNode::PipeOperator { .. }
+            | PlanNode::SecurityBarrier { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
@@ -1414,6 +1436,7 @@ impl LogicalPlan {
             | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
             | PlanNode::PipeOperator { .. }
+            | PlanNode::SecurityBarrier { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
@@ -1537,6 +1560,7 @@ impl LogicalPlan {
                 | PlanNode::Limit { input, .. }
                 | PlanNode::Offset { input, .. }
                 | PlanNode::WithCte { input, .. }
+                | PlanNode::SecurityBarrier { input, .. }
                 | PlanNode::JoinHint { input, .. }
                 | PlanNode::Repartition { input, .. }
                 | PlanNode::Sample { input, .. }

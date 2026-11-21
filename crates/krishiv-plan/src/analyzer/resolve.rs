@@ -1040,6 +1040,7 @@ impl Resolver<'_> {
             | PlanNode::Expand { .. }
             | PlanNode::Range { .. }
             | PlanNode::PythonTableFunction { .. }
+            | PlanNode::SecurityBarrier { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
             PlanNode::MapPartitions {
                 input,
@@ -1182,6 +1183,16 @@ impl Resolver<'_> {
                     input: Arc::clone(&c.plan),
                     bounds: *bounds,
                     seed: *seed,
+                };
+                let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
+                r.widen = Some(Arc::new(Widen::Through { child: c }));
+                Ok(r)
+            }
+            PlanNode::SecurityBarrier { input, policy } => {
+                let c = self.child(input, env)?;
+                let node = PlanNode::SecurityBarrier {
+                    input: Arc::clone(&c.plan),
+                    policy: policy.clone(),
                 };
                 let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
                 r.widen = Some(Arc::new(Widen::Through { child: c }));
