@@ -245,7 +245,7 @@ impl Session {
             let Some(key) = variable_key(name) else {
                 return Err(crate::command::unresolved_variable(
                     name,
-                    crate::variables::RESOLVE_SEARCH_PATH,
+                    &self.search_path(),
                     text,
                 ));
             };

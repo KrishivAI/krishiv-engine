@@ -585,7 +585,9 @@ impl Session {
                     name.namespace = from;
                     name.bare = false;
                 }
-                let columns = self.columns_of_relation(&name, Privilege::Browse).await?;
+                let columns = self
+                    .columns_of_relation(&name, Privilege::Browse, true)
+                    .await?;
                 let rows = columns.into_iter().map(|c| vec![s(c.0)]).collect();
                 self.frame_with_order(cols::SHOW_COLUMNS, &[], rows, false)
                     .await
@@ -935,14 +937,31 @@ impl Session {
     /// The stored table or view `name` names (temporary views have no stored form).
     /// One the principal may not see under the grants provider reads as missing (review B3).
     async fn stored_relation(&self, name: &TableName) -> Result<Arc<CatalogTable>, KrishivError> {
+        self.stored_relation_on(name, false).await
+    }
+
+    /// [`Self::stored_relation`]; `table_only` names the path of a command that resolves tables and views
+    /// only (`SHOW COLUMNS`), without `system.builtin`.
+    async fn stored_relation_on(
+        &self,
+        name: &TableName,
+        table_only: bool,
+    ) -> Result<Arc<CatalogTable>, KrishivError> {
+        let path = || {
+            if table_only {
+                self.table_search_path()
+            } else {
+                self.search_path()
+            }
+        };
         let table = self
             .state
             .catalog
             .store
             .table(&name.namespace, &name.name)
-            .ok_or_else(|| name.not_found())?;
+            .ok_or_else(|| name.not_found(path()))?;
         if self.hidden(&Self::relation_securable(&table)) {
-            return Err(name.not_found());
+            return Err(name.not_found(path()));
         }
         Ok(table)
     }
@@ -954,6 +973,7 @@ impl Session {
         &self,
         name: &TableName,
         privilege: Privilege,
+        table_only: bool,
     ) -> Result<Vec<(String, DataType, Option<String>)>, KrishivError> {
         let env = self.query_env();
         if !name.bare
@@ -989,7 +1009,7 @@ impl Session {
                 .map(|c| (c.name.clone(), c.data_type.clone(), None))
                 .collect());
         }
-        let table = self.stored_relation(name).await?;
+        let table = self.stored_relation_on(name, table_only).await?;
         if table.view.is_some() {
             self.authorize_view(&name.namespace, &name.name, privilege, &env)
                 .await?;
@@ -1082,7 +1102,7 @@ impl Session {
                 } else {
                     Privilege::Browse
                 };
-                let columns = self.columns_of_relation(&name, privilege).await?;
+                let columns = self.columns_of_relation(&name, privilege, false).await?;
                 let temp = self.temp_entry_of(&name, &env)
                     || (!name.bare
                         && name

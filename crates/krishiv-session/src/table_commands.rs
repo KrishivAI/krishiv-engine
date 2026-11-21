@@ -201,10 +201,11 @@ impl TableName {
     }
 
     /// Spark's `TABLE_OR_VIEW_NOT_FOUND` for this name: as written, with the search path.
-    pub(crate) fn not_found(&self) -> KrishivError {
+    /// `search_path` is the session's ([`Session::search_path`]).
+    pub(crate) fn not_found(&self, search_path: String) -> KrishivError {
         TableOrViewNotFound {
             relation_name: self.written.clone(),
-            search_path: crate::catalog::search_path(),
+            search_path,
         }
         .into()
     }
@@ -1011,7 +1012,7 @@ impl Session {
         } else {
             Err(TableOrViewNotFound {
                 relation_name: format!("`{}`.`{name}`", crate::catalog::GLOBAL_NAMESPACE),
-                search_path: crate::catalog::search_path(),
+                search_path: self.search_path(),
             }
             .into())
         })
@@ -1049,7 +1050,7 @@ impl Session {
             }
             .into()),
             None if if_exists => Ok(()),
-            None => Err(name.not_found()),
+            None => Err(self.drop_view_not_found(&name.namespace, &name.name)),
         }
     }
 
@@ -1080,7 +1081,7 @@ impl Session {
             );
         }
         let Some(existing) = self.state.catalog.store.table(&name.namespace, &name.name) else {
-            return Err(name.not_found());
+            return Err(name.not_found(self.search_path()));
         };
         if existing.view.is_none() {
             return Err(krishiv_common::error::ExpectViewNotTableUseAlterTable {
@@ -1547,6 +1548,10 @@ fn table_writer(
         writer = writer.partition_by(&table.layout.partition_columns);
     }
     for (k, v) in &table.options {
+        // A key stored before this rule would deduplicate every later write.
+        if k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION) {
+            continue;
+        }
         writer = writer.option(k, v);
     }
     // Stored when an admin (or a `Manage` holder) created or altered the table: not asked again.

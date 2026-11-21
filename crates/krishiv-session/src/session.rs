@@ -1967,4 +1967,5 @@ mod planning;
 mod definer;
 
 mod ran;
+mod search_path;
 pub(crate) use ran::Ran;
