@@ -5,6 +5,14 @@
     ],
     "sqlState" : "42809"
   },
+  "DELTA_CAST_OVERFLOW_IN_TABLE_WRITE" : {
+    "message" : [
+      "Failed to write a value of <sourceType> type into the <targetType> type column <columnName> due to an overflow.",
+      "Use `try_cast` on the input value to tolerate overflow and return NULL instead.",
+      "If necessary, set <storeAssignmentPolicyFlag> to \"LEGACY\" to bypass this error or set <updateAndMergeCastingFollowsAnsiEnabledFlag> to true to revert to the old behaviour and follow <ansiEnabledFlag> in UPDATE and MERGE."
+    ],
+    "sqlState" : "22003"
+  },
   "DELTA_CONCURRENT_APPEND" : {
     "message" : [
       "Transaction conflict detected. a concurrent <operation> added data to table <tableName> committed at version <version>."
@@ -232,6 +240,12 @@
       "Unsupported Delta write feature: table \"<tableNameOrPath>\" requires writer table feature(s) that are unsupported by Delta Lake \"<deltaVersion>\": <unsupported>."
     ],
     "sqlState" : "56038"
+  },
+  "DELTA_UNSUPPORTED_SUBQUERY" : {
+    "message" : [
+      "Subqueries are not supported in the <operation> (condition = <cond>)."
+    ],
+    "sqlState" : "0AKDC"
   },
   "DELTA_VERSION_NOT_FOUND" : {
     "message" : [

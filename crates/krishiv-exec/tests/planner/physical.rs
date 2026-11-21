@@ -292,6 +292,7 @@ fn inconsistent_plans_are_internal_errors() {
             target_file_bytes: 0,
             partition_by: Vec::new(),
             column_types: std::collections::BTreeMap::new(),
+            bucket: None,
         }),
     };
     check(
