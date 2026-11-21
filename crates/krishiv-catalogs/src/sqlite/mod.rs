@@ -28,7 +28,7 @@ mod functions;
 mod store;
 mod write;
 
-pub use functions::StoredPythonFunction;
+pub use functions::{FunctionChange, StoredPythonFunction};
 
 use std::collections::BTreeMap;
 use std::path::Path;

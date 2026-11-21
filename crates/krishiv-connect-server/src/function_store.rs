@@ -4,12 +4,12 @@
 
 use std::sync::Arc;
 
-use krishiv_catalogs::sqlite::{SqliteCatalog, StoredPythonFunction};
+use krishiv_catalogs::sqlite::{FunctionChange, SqliteCatalog, StoredPythonFunction};
 use krishiv_common::error::KrishivError;
 use krishiv_connect::translate::PythonUdf;
 use sha2::{Digest, Sha256};
 
-use crate::udf::FunctionStore;
+use crate::udf::{FunctionStore, StoreChange};
 
 /// A [`FunctionStore`] over a SQLite catalog file.
 #[derive(Debug, Clone)]
@@ -31,6 +31,14 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{b:02x}");
         out
     })
+}
+
+fn store_change(c: FunctionChange) -> StoreChange {
+    match c {
+        FunctionChange::Done => StoreChange::Done,
+        FunctionChange::Absent => StoreChange::Absent,
+        FunctionChange::OwnedByOther => StoreChange::OwnedByOther,
+    }
 }
 
 impl FunctionStore for SqliteFunctionStore {
@@ -63,29 +71,46 @@ impl FunctionStore for SqliteFunctionStore {
         Ok(udfs)
     }
 
-    fn put(&self, tenant: Option<&str>, owner: &str, udf: &PythonUdf) -> Result<(), KrishivError> {
+    fn put(
+        &self,
+        tenant: Option<&str>,
+        owner: &str,
+        udf: &PythonUdf,
+        override_owner: bool,
+    ) -> Result<StoreChange, KrishivError> {
         let digest = hex(&Sha256::digest(&udf.command));
-        self.catalog.put_python_function(
-            tenant,
-            &StoredPythonFunction::new(
-                udf.name.clone(),
-                udf.eval_type,
-                udf.deterministic,
-                udf.return_type.catalog_string(),
-                udf.command.clone(),
-                digest,
-                udf.python_ver.clone(),
-                owner,
-            ),
-        )
+        self.catalog
+            .put_python_function(
+                tenant,
+                &StoredPythonFunction::new(
+                    udf.name.clone(),
+                    udf.eval_type,
+                    udf.deterministic,
+                    udf.return_type.catalog_string(),
+                    udf.command.clone(),
+                    digest,
+                    udf.python_ver.clone(),
+                    owner,
+                ),
+                override_owner,
+            )
+            .map(store_change)
     }
 
     fn owner(&self, tenant: Option<&str>, name: &str) -> Result<Option<String>, KrishivError> {
         Ok(self.catalog.python_function(tenant, name)?.map(|f| f.owner))
     }
 
-    fn remove(&self, tenant: Option<&str>, name: &str) -> Result<bool, KrishivError> {
-        self.catalog.drop_python_function(tenant, name)
+    fn remove(
+        &self,
+        tenant: Option<&str>,
+        name: &str,
+        caller: &str,
+        override_owner: bool,
+    ) -> Result<StoreChange, KrishivError> {
+        self.catalog
+            .drop_python_function(tenant, name, caller, override_owner)
+            .map(store_change)
     }
 }
 
@@ -105,7 +130,7 @@ mod tests {
             SqliteCatalog::open_in_memory("f", false).expect("catalog"),
         ));
         store
-            .put(Some("acme"), "alice", &udf("Plus1"))
+            .put(Some("acme"), "alice", &udf("Plus1"), false)
             .expect("put");
         let listed = store.list(Some("acme")).expect("list");
         assert_eq!(listed.len(), 1);
@@ -113,8 +138,18 @@ mod tests {
         assert_eq!(listed[0].return_type, DataType::Long);
         assert_eq!(listed[0].command, vec![9, 9]);
         assert!(store.list(Some("globex")).expect("list").is_empty());
-        assert!(store.remove(Some("acme"), "PLUS1").expect("remove"));
-        assert!(!store.remove(Some("acme"), "plus1").expect("remove"));
+        assert_eq!(
+            store
+                .remove(Some("acme"), "PLUS1", "alice", false)
+                .expect("remove"),
+            StoreChange::Done
+        );
+        assert_eq!(
+            store
+                .remove(Some("acme"), "plus1", "alice", false)
+                .expect("remove"),
+            StoreChange::Absent
+        );
     }
 
     #[test]
@@ -124,10 +159,11 @@ mod tests {
             .put_python_function(
                 None,
                 &StoredPythonFunction::new("bad", 999, true, "bigint", vec![1], "d", "3.12", "x"),
+                false,
             )
             .expect("put");
         let store = SqliteFunctionStore::new(catalog);
-        store.put(None, "x", &udf("good")).expect("put");
+        store.put(None, "x", &udf("good"), false).expect("put");
         let names: Vec<_> = store
             .list(None)
             .expect("list")

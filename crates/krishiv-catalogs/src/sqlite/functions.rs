@@ -78,12 +78,39 @@ impl StoredPythonFunction {
     }
 }
 
+/// What a guarded change of a stored function did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FunctionChange {
+    /// The row was written or removed.
+    Done,
+    /// There was no row to remove.
+    Absent,
+    /// The row belongs to another principal and the caller may not override it; nothing changed.
+    OwnedByOther,
+}
+
+/// The owner of the row `(tenant, name)`, read inside the transaction that changes it.
+fn stored_owner(
+    tx: &rusqlite::Connection,
+    tenant: Option<&str>,
+    name: &str,
+) -> Result<Option<String>, rusqlite::Error> {
+    tx.query_row(
+        "SELECT owner FROM python_functions WHERE tenant = ?1 AND name = ?2",
+        params![key(tenant), name],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
 fn key(tenant: Option<&str>) -> &str {
     tenant.unwrap_or("")
 }
 
 impl SqliteCatalog {
     /// Stores `function` for `tenant` (`None`: the server's one tenant), replacing a function of the same name.
+    /// A row of another owner is replaced only with `override_owner`; the check runs in the write's own
+    /// transaction, so two writers cannot both pass it ([`FunctionChange::OwnedByOther`] otherwise).
     ///
     /// # Errors
     /// `KRISHIV_CATALOG_FAILURE`, also for a payload over `MAX_STORED_PAYLOAD_BYTES`.
@@ -91,7 +118,8 @@ impl SqliteCatalog {
         &self,
         tenant: Option<&str>,
         function: &StoredPythonFunction,
-    ) -> Result<(), KrishivError> {
+        override_owner: bool,
+    ) -> Result<FunctionChange, KrishivError> {
         if function.payload.len() > MAX_STORED_PAYLOAD_BYTES {
             return Err(self.fault(
                 &function.name,
@@ -103,6 +131,11 @@ impl SqliteCatalog {
         }
         let name = self.fold(&function.name);
         self.change(&function.name, |tx| {
+            if !override_owner
+                && stored_owner(tx, tenant, &name)?.is_some_and(|o| o != function.owner)
+            {
+                return Ok((FunctionChange::OwnedByOther, false));
+            }
             let version = bump_epoch(tx)?;
             tx.execute(
                 "INSERT OR REPLACE INTO python_functions \
@@ -121,11 +154,12 @@ impl SqliteCatalog {
                     version,
                 ],
             )?;
-            Ok(((), true))
+            Ok((FunctionChange::Done, true))
         })
     }
 
-    /// Removes `tenant`'s function `name`; whether there was one.
+    /// Removes `tenant`'s function `name` for `caller`. A row of another owner is removed only with
+    /// `override_owner` (checked in the same transaction).
     ///
     /// # Errors
     /// `KRISHIV_CATALOG_FAILURE`.
@@ -133,9 +167,14 @@ impl SqliteCatalog {
         &self,
         tenant: Option<&str>,
         name: &str,
-    ) -> Result<bool, KrishivError> {
+        caller: &str,
+        override_owner: bool,
+    ) -> Result<FunctionChange, KrishivError> {
         let name = self.fold(name);
         self.change(&name, |tx| {
+            if !override_owner && stored_owner(tx, tenant, &name)?.is_some_and(|o| o != caller) {
+                return Ok((FunctionChange::OwnedByOther, false));
+            }
             let n = tx.execute(
                 "DELETE FROM python_functions WHERE tenant = ?1 AND name = ?2",
                 params![key(tenant), name],
@@ -143,7 +182,12 @@ impl SqliteCatalog {
             if n > 0 {
                 bump_epoch(tx)?;
             }
-            Ok((n > 0, n > 0))
+            let outcome = if n > 0 {
+                FunctionChange::Done
+            } else {
+                FunctionChange::Absent
+            };
+            Ok((outcome, n > 0))
         })
     }
 

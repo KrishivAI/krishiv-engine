@@ -1212,7 +1212,8 @@ fn file_store(path: &Path) -> Arc<dyn krishiv_connect_server::FunctionStore> {
 }
 
 /// A UDF persisted over the Connect service survives a server restart: a new server on the reopened catalog
-/// file types it in a fresh session whose first request is `AnalyzePlan`; one on another file does not.
+/// file types it in a fresh session whose first request is `AnalyzePlan`; another principal of that file
+/// does not see it (tenants are keyed the same way, `t:<tenant>` instead of `p:<principal>`).
 #[cfg(feature = "function-catalog")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_persisted_udf_survives_a_restart_and_is_typed_by_the_first_analysis() {
@@ -1251,17 +1252,15 @@ async fn a_persisted_udf_survives_a_restart_and_is_typed_by_the_first_analysis()
         .await
         .expect("typed in a new session of a restarted server");
     assert!(schema.result.is_some());
-    // A server on an empty catalog does not know the function.
-    let empty = dir.path().join("empty.db");
-    let other = start_store(
-        None,
-        Some(Arc::new(Spy::default())),
-        Some(file_store(&empty)),
-    )
-    .await;
-    analyze_schema(&other.channel, query(), ADMIN)
+    // The same file, another authenticated principal (untenanted, so keyed by principal): the function
+    // is dana's alone, olga's session does not resolve it.
+    analyze_schema(&run.channel, query(), OPERATOR)
         .await
-        .expect_err("unknown there");
+        .expect_err("not visible to another principal of the same catalog");
+    // dana's own new session still does, on the same server.
+    analyze_schema(&run.channel, query(), ADMIN)
+        .await
+        .expect("visible to its owner");
     // `drop` removes it for later sessions.
     execute(&run.channel, persist("plus_one", true), ADMIN)
         .await

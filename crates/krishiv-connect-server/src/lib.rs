@@ -46,4 +46,4 @@ pub use operation::{ExecuteLimits, Operation, OperationState, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};
 pub use service::ConnectService;
 pub use status::status_of;
-pub use udf::{FunctionStore, PythonArchive, RunnerConf, SessionUdfRuntime, UdfHost};
+pub use udf::{FunctionStore, PythonArchive, RunnerConf, SessionUdfRuntime, StoreChange, UdfHost};

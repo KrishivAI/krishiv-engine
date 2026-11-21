@@ -406,11 +406,24 @@ impl super::FunctionStore for MemStore {
             .map(|(_, _, u)| u.clone())
             .collect())
     }
-    fn put(&self, tenant: Option<&str>, owner: &str, udf: &PythonUdf) -> Result<(), KrishivError> {
+    fn put(
+        &self,
+        tenant: Option<&str>,
+        owner: &str,
+        udf: &PythonUdf,
+        override_owner: bool,
+    ) -> Result<super::StoreChange, KrishivError> {
         let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
+        if !override_owner
+            && rows
+                .iter()
+                .any(|(t, o, u)| t.as_deref() == tenant && u.name == udf.name && o != owner)
+        {
+            return Ok(super::StoreChange::OwnedByOther);
+        }
         rows.retain(|(t, _, u)| !(t.as_deref() == tenant && u.name == udf.name));
         rows.push((tenant.map(str::to_owned), owner.to_owned(), udf.clone()));
-        Ok(())
+        Ok(super::StoreChange::Done)
     }
     fn owner(&self, tenant: Option<&str>, name: &str) -> Result<Option<String>, KrishivError> {
         Ok(self
@@ -421,11 +434,28 @@ impl super::FunctionStore for MemStore {
             .find(|(t, _, u)| t.as_deref() == tenant && u.name == name)
             .map(|(_, o, _)| o.clone()))
     }
-    fn remove(&self, tenant: Option<&str>, name: &str) -> Result<bool, KrishivError> {
+    fn remove(
+        &self,
+        tenant: Option<&str>,
+        name: &str,
+        caller: &str,
+        override_owner: bool,
+    ) -> Result<super::StoreChange, KrishivError> {
         let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
+        if !override_owner
+            && rows
+                .iter()
+                .any(|(t, o, u)| t.as_deref() == tenant && u.name == name && o != caller)
+        {
+            return Ok(super::StoreChange::OwnedByOther);
+        }
         let before = rows.len();
         rows.retain(|(t, _, u)| !(t.as_deref() == tenant && u.name == name));
-        Ok(rows.len() < before)
+        Ok(if rows.len() < before {
+            super::StoreChange::Done
+        } else {
+            super::StoreChange::Absent
+        })
     }
 }
 
@@ -500,10 +530,10 @@ async fn load_keeps_the_sessions_own_name_retries_after_a_failure_and_skip_stops
     let host: Arc<dyn UdfHost> = Arc::new(Host::default());
     let store = Arc::new(MemStore::default());
     store
-        .put(Some("p:alice"), "bob", &udf("f", b"stored"))
+        .put(Some("p:alice"), "bob", &udf("f", b"stored"), false)
         .unwrap();
     store
-        .put(Some("p:alice"), "bob", &udf("g", b"stored"))
+        .put(Some("p:alice"), "bob", &udf("g", b"stored"), false)
         .unwrap();
     let s = session();
     let python = with_store(&host, &store, None, &s);
@@ -610,6 +640,66 @@ async fn untenanted_authenticated_principals_do_not_share_functions() {
     assert!(bob.lock().payloads.is_empty());
 }
 
+/// A store whose `owner` always says "no row", as if another principal's row appeared after the read.
+#[derive(Debug, Default)]
+struct BlindStore(MemStore);
+
+impl super::FunctionStore for BlindStore {
+    fn list(&self, t: Option<&str>) -> Result<Vec<PythonUdf>, KrishivError> {
+        self.0.list(t)
+    }
+    fn put(
+        &self,
+        t: Option<&str>,
+        o: &str,
+        u: &PythonUdf,
+        ov: bool,
+    ) -> Result<super::StoreChange, KrishivError> {
+        self.0.put(t, o, u, ov)
+    }
+    fn owner(&self, _: Option<&str>, _: &str) -> Result<Option<String>, KrishivError> {
+        Ok(None)
+    }
+    fn remove(
+        &self,
+        t: Option<&str>,
+        n: &str,
+        c: &str,
+        ov: bool,
+    ) -> Result<super::StoreChange, KrishivError> {
+        self.0.remove(t, n, c, ov)
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn a_row_that_appears_after_the_owner_read_is_still_refused() {
+    use krishiv_session::auth::Role;
+    let host: Arc<dyn UdfHost> = Arc::new(Host::default());
+    let blind = Arc::new(BlindStore::default());
+    blind
+        .0
+        .put(Some("t:acme"), "alice", &udf("mask", b"alice"), false)
+        .unwrap();
+    let store: Arc<dyn super::FunctionStore> = Arc::clone(&blind) as _;
+    let sb = role_session(Role::Operator);
+    let bob =
+        SessionPython::new(Some(&host), "bob", Some("acme"), true, &sb).with_store(Some(&store));
+    bob.register(&sb, udf("mask", b"bob")).unwrap();
+    for drop in [false, true] {
+        let e = bob.persist(&sb, "mask", drop).await.expect_err("not owner");
+        assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    }
+    let rows = blind.0.rows.lock().unwrap();
+    assert_eq!(
+        (rows.len(), rows[0].1.as_str(), rows[0].2.command.as_slice()),
+        (1, "alice", b"alice".as_slice())
+    );
+}
+
 /// A store whose `list` waits until released, to hold the first request mid-load.
 #[derive(Debug)]
 struct SlowStore {
@@ -622,14 +712,26 @@ impl super::FunctionStore for SlowStore {
         self.gate.wait();
         self.inner.list(tenant)
     }
-    fn put(&self, t: Option<&str>, o: &str, u: &PythonUdf) -> Result<(), KrishivError> {
-        self.inner.put(t, o, u)
+    fn put(
+        &self,
+        t: Option<&str>,
+        o: &str,
+        u: &PythonUdf,
+        ov: bool,
+    ) -> Result<super::StoreChange, KrishivError> {
+        self.inner.put(t, o, u, ov)
     }
     fn owner(&self, t: Option<&str>, n: &str) -> Result<Option<String>, KrishivError> {
         self.inner.owner(t, n)
     }
-    fn remove(&self, t: Option<&str>, n: &str) -> Result<bool, KrishivError> {
-        self.inner.remove(t, n)
+    fn remove(
+        &self,
+        t: Option<&str>,
+        n: &str,
+        c: &str,
+        ov: bool,
+    ) -> Result<super::StoreChange, KrishivError> {
+        self.inner.remove(t, n, c, ov)
     }
 }
 
@@ -645,7 +747,7 @@ async fn a_second_first_request_waits_for_the_load() {
         gate: std::sync::Barrier::new(2),
     });
     slow.inner
-        .put(Some("p:alice"), "x", &udf("f", b"x"))
+        .put(Some("p:alice"), "x", &udf("f", b"x"), false)
         .unwrap();
     let s = Arc::new(session());
     let store: Arc<dyn super::FunctionStore> = Arc::clone(&slow) as _;

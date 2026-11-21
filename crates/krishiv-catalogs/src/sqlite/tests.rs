@@ -2,6 +2,7 @@
 //! The SQLite catalog against the contract every catalog shares (`krishiv_plan::analyzer::contract`) and against what
 //! only a file catalog has to answer: a restart, a second connection, a second process, a process killed mid-change.
 
+use super::FunctionChange;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -619,11 +620,11 @@ fn python_functions_are_per_tenant_and_survive_a_restart() {
     let path = dir.path().join("cat.db");
     {
         let cat = SqliteCatalog::open("lite", &path, false).unwrap();
-        cat.put_python_function(Some("a"), &stored("Plus1", "alice"))
+        cat.put_python_function(Some("a"), &stored("Plus1", "alice"), false)
             .unwrap();
-        cat.put_python_function(Some("b"), &stored("plus1", "bob"))
+        cat.put_python_function(Some("b"), &stored("plus1", "bob"), false)
             .unwrap();
-        cat.put_python_function(Some("a"), &stored("other", "alice"))
+        cat.put_python_function(Some("a"), &stored("other", "alice"), false)
             .unwrap();
     }
     let cat = SqliteCatalog::open("lite", &path, false).unwrap();
@@ -639,12 +640,20 @@ fn python_functions_are_per_tenant_and_survive_a_restart() {
 #[test]
 fn drop_python_function_removes_only_that_tenants_row() {
     let cat = SqliteCatalog::open_in_memory("lite", false).unwrap();
-    cat.put_python_function(Some("a"), &stored("f", "x"))
+    cat.put_python_function(Some("a"), &stored("f", "x"), false)
         .unwrap();
-    cat.put_python_function(Some("b"), &stored("f", "y"))
+    cat.put_python_function(Some("b"), &stored("f", "y"), false)
         .unwrap();
-    assert!(cat.drop_python_function(Some("a"), "F").unwrap());
-    assert!(!cat.drop_python_function(Some("a"), "f").unwrap());
+    assert_eq!(
+        cat.drop_python_function(Some("a"), "F", "x", false)
+            .unwrap(),
+        FunctionChange::Done
+    );
+    assert_eq!(
+        cat.drop_python_function(Some("a"), "f", "x", false)
+            .unwrap(),
+        FunctionChange::Absent
+    );
     assert!(cat.python_function(Some("a"), "f").unwrap().is_none());
     assert!(cat.python_function(Some("b"), "f").unwrap().is_some());
 }
@@ -652,9 +661,11 @@ fn drop_python_function_removes_only_that_tenants_row() {
 #[test]
 fn replacing_a_python_function_moves_its_version() {
     let cat = SqliteCatalog::open_in_memory("lite", false).unwrap();
-    cat.put_python_function(None, &stored("f", "x")).unwrap();
+    cat.put_python_function(None, &stored("f", "x"), false)
+        .unwrap();
     let v1 = cat.python_function(None, "f").unwrap().unwrap().version;
-    cat.put_python_function(None, &stored("f", "x")).unwrap();
+    cat.put_python_function(None, &stored("f", "x"), false)
+        .unwrap();
     assert!(cat.python_function(None, "f").unwrap().unwrap().version > v1);
 }
 
@@ -663,7 +674,7 @@ fn an_oversized_python_payload_is_refused() {
     let cat = SqliteCatalog::open_in_memory("lite", false).unwrap();
     let mut f = stored("f", "x");
     f.payload = vec![0; super::functions::MAX_STORED_PAYLOAD_BYTES + 1];
-    assert!(cat.put_python_function(None, &f).is_err());
+    assert!(cat.put_python_function(None, &f, false).is_err());
     assert!(cat.python_function(None, "f").unwrap().is_none());
 }
 
@@ -679,6 +690,49 @@ fn a_version_1_file_is_upgraded_on_open() {
         conn.pragma_update(None, "user_version", 1).unwrap();
     }
     let cat = SqliteCatalog::open("lite", &path, false).unwrap();
-    cat.put_python_function(None, &stored("f", "x")).unwrap();
+    cat.put_python_function(None, &stored("f", "x"), false)
+        .unwrap();
     assert!(cat.python_function(None, "f").unwrap().is_some());
+}
+
+#[test]
+fn another_owners_python_function_changes_only_with_the_override() {
+    let cat = SqliteCatalog::open_in_memory("lite", false).unwrap();
+    assert_eq!(
+        cat.put_python_function(None, &stored("f", "alice"), false)
+            .unwrap(),
+        FunctionChange::Done
+    );
+    // The check is inside the write: bob is refused without reading the owner first.
+    assert_eq!(
+        cat.put_python_function(None, &stored("f", "bob"), false)
+            .unwrap(),
+        FunctionChange::OwnedByOther
+    );
+    assert_eq!(
+        cat.drop_python_function(None, "f", "bob", false).unwrap(),
+        FunctionChange::OwnedByOther
+    );
+    assert_eq!(
+        cat.python_function(None, "f").unwrap().unwrap().owner,
+        "alice"
+    );
+    assert_eq!(
+        cat.put_python_function(None, &stored("f", "alice"), false)
+            .unwrap(),
+        FunctionChange::Done
+    );
+    assert_eq!(
+        cat.put_python_function(None, &stored("f", "bob"), true)
+            .unwrap(),
+        FunctionChange::Done
+    );
+    assert_eq!(
+        cat.python_function(None, "f").unwrap().unwrap().owner,
+        "bob"
+    );
+    assert_eq!(
+        cat.drop_python_function(None, "f", "carol", true).unwrap(),
+        FunctionChange::Done
+    );
 }

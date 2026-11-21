@@ -165,20 +165,57 @@ pub trait FunctionStore: Send + Sync + fmt::Debug {
     /// The store's failure.
     fn list(&self, tenant: Option<&str>) -> Result<Vec<PythonUdf>, KrishivError>;
     /// Stores `udf` for `tenant`, replacing one of the same name; `owner` is the principal that persisted it.
+    /// A function another principal stored is replaced only with `override_owner`, and the store checks that
+    /// atomically with the write: [`StoreChange::OwnedByOther`] changes nothing.
     ///
     /// # Errors
     /// The store's failure.
-    fn put(&self, tenant: Option<&str>, owner: &str, udf: &PythonUdf) -> Result<(), KrishivError>;
+    fn put(
+        &self,
+        tenant: Option<&str>,
+        owner: &str,
+        udf: &PythonUdf,
+        override_owner: bool,
+    ) -> Result<StoreChange, KrishivError>;
     /// The principal that stored `tenant`'s function `name`, if there is one.
     ///
     /// # Errors
     /// The store's failure.
     fn owner(&self, tenant: Option<&str>, name: &str) -> Result<Option<String>, KrishivError>;
-    /// Removes `tenant`'s function `name`; whether there was one.
+    /// Removes `tenant`'s function `name` for `caller`; another principal's only with `override_owner`
+    /// (checked atomically with the removal).
     ///
     /// # Errors
     /// The store's failure.
-    fn remove(&self, tenant: Option<&str>, name: &str) -> Result<bool, KrishivError>;
+    fn remove(
+        &self,
+        tenant: Option<&str>,
+        name: &str,
+        caller: &str,
+        override_owner: bool,
+    ) -> Result<StoreChange, KrishivError>;
+}
+
+/// What a [`FunctionStore`] change did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreChange {
+    /// Written or removed.
+    Done,
+    /// There was nothing to remove.
+    Absent,
+    /// Another principal owns the function and the caller may not override it; nothing changed.
+    OwnedByOther,
+}
+
+/// `Manage` on the cluster: what changing another principal's stored function takes (a refusal is audited).
+async fn authorize_manage(session: &Session) -> Result<(), KrishivError> {
+    session
+        .authorize_privilege(
+            &krishiv_session::Securable::System("cluster".to_owned()),
+            krishiv_session::Privilege::Manage,
+            krishiv_session::StatementClass::Ddl,
+        )
+        .await
 }
 
 /// A Connect session's Python UDFs.
@@ -382,22 +419,29 @@ impl SessionPython {
         let owner_store = Arc::clone(&store);
         let stored_by =
             blocking(move || owner_store.owner(owner_key.as_deref(), &owner_name)).await?;
-        if stored_by.is_some_and(|o| o != self.principal) {
-            session
-                .authorize_privilege(
-                    &krishiv_session::Securable::System("cluster".to_owned()),
-                    krishiv_session::Privilege::Manage,
-                    krishiv_session::StatementClass::Ddl,
-                )
-                .await?;
+        let foreign = stored_by.is_some_and(|o| o != self.principal);
+        if foreign {
+            authorize_manage(session).await?;
         }
         let name = name.to_owned();
         let owner = self.principal.clone();
-        blocking(move || match udf {
-            Some(udf) => store.put(key.as_deref(), &owner, &udf),
-            None => store.remove(key.as_deref(), &name).map(|_| ()),
-        })
-        .await
+        let change = |override_owner: bool| {
+            let (store, udf, key) = (Arc::clone(&store), udf.clone(), key.clone());
+            let (name, owner) = (name.clone(), owner.clone());
+            blocking(move || match udf {
+                Some(udf) => store.put(key.as_deref(), &owner, &udf, override_owner),
+                None => store.remove(key.as_deref(), &name, &owner, override_owner),
+            })
+        };
+        // The store checks the owner inside the write, so a row that appeared after the read above is
+        // still refused; the retry runs only once `Manage` passed.
+        let mut outcome = change(foreign).await?;
+        if outcome == StoreChange::OwnedByOther {
+            authorize_manage(session).await?;
+            outcome = change(true).await?;
+        }
+        debug_assert!(outcome != StoreChange::OwnedByOther);
+        Ok(())
     }
 
     /// The runtime of `session`, installed on it at the first call. Only after the session's principal
