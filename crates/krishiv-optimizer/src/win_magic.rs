@@ -604,6 +604,16 @@ fn flatten_block(p: &Arc<LogicalPlan>) -> Option<Block> {
     Some(block)
 }
 
+/// Whether a `Limit` or a `Tail` is anywhere in `p`: its rows are not one value to share.
+fn has_bounded_node(p: &Arc<LogicalPlan>) -> bool {
+    if matches!(p.node, PlanNode::Limit { .. } | PlanNode::Tail { .. }) {
+        return true;
+    }
+    let mut found = false;
+    p.for_each_child(&mut |c| found = found || has_bounded_node(c));
+    found
+}
+
 fn walk(p: &Arc<LogicalPlan>, ctx: u64, out: &mut Block) -> Option<()> {
     let add = |pred: &Arc<Expr>, out: &mut Block| -> Option<()> {
         if !is_deterministic(pred) || has_subquery(pred) || has_outer_reference(pred) {
@@ -644,7 +654,7 @@ fn walk(p: &Arc<LogicalPlan>, ctx: u64, out: &mut Block) -> Option<()> {
         _ => {
             // A leaf: a scan or another relation the block reads whole.
             // Everything below it too (a `rand()` or a limit under a union is not one value).
-            crate::inline_cte::deterministic(p).then(|| {
+            (crate::inline_cte::deterministic(p) && !has_bounded_node(p)).then(|| {
                 out.leaves.push(Leaf {
                     body: Arc::clone(p),
                     offset: ctx,

@@ -131,7 +131,8 @@ fn tail_binds_its_count_like_a_limit() {
     let ctx = ctx();
     let a = run(LogicalPlan::table(["t"]).tail(add(int(1), int(2))), &ctx).unwrap();
     assert!(
-        a.plan.root().to_string().starts_with("Tail 3"),
+        matches!(a.plan.root().node, PlanNode::Tail { .. })
+            && a.plan.root().to_string().lines().next() == Some("Tail 3"),
         "{}",
         a.plan.root()
     );

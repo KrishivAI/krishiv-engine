@@ -68,7 +68,9 @@ struct TailGlobal(Mutex<Combined>);
 
 #[derive(Debug, Default)]
 struct Combined {
-    batches: VecDeque<Batch>,
+    /// Each batch with the index (in `reservations`) of the driver reservation that
+    /// covers it and the bytes charged for it.
+    batches: VecDeque<(Batch, usize, usize)>,
     rows: usize,
     reservations: Vec<Reservation>,
 }
@@ -178,25 +180,31 @@ impl Sink for Tail {
         let l = *l;
         let keep = self.keep();
         let mut shared = lock(&g.0);
+        // The driver's reservation covers what it kept; a batch trimmed away
+        // below gives its bytes back at once, so many union branches do not
+        // hold memory for rows no longer kept.
+        let owner = shared.reservations.len();
+        shared.reservations.push(l.reservation);
         for k in l.kept {
             shared.rows += k.batch.num_rows();
-            shared.batches.push_back(k.batch);
+            shared.batches.push_back((k.batch, owner, k.bytes));
         }
-        // The driver's reservation still covers what it kept; the trimmed
-        // rows' bytes are freed when the source is done.
-        shared.reservations.push(l.reservation);
         while shared.rows > keep {
             let excess = shared.rows - keep;
             let Some(front) = shared.batches.front() else {
                 break;
             };
-            let front_rows = front.num_rows();
+            let front_rows = front.0.num_rows();
             if front_rows <= excess {
                 shared.rows -= front_rows;
-                shared.batches.pop_front();
+                if let Some((_, owner, bytes)) = shared.batches.pop_front() {
+                    // A slice still retains its buffers, so it keeps the full
+                    // charge; only a batch dropped whole is released.
+                    shared.reservations[owner].shrink(bytes);
+                }
             } else {
-                let cut = front.slice(excess, front_rows - excess)?;
-                shared.batches[0] = cut;
+                let cut = front.0.slice(excess, front_rows - excess)?;
+                shared.batches[0].0 = cut;
                 shared.rows = keep;
             }
         }
@@ -260,7 +268,7 @@ impl Source for Tail {
             let Some(c) = l.taken.as_mut() else {
                 return Ok(None);
             };
-            let out = c.batches.pop_front();
+            let out = c.batches.pop_front().map(|(b, _, _)| b);
             if out.is_none() {
                 // Done: the reservations go with the rows.
                 c.reservations.clear();
