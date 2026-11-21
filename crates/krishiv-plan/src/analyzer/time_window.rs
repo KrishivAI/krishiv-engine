@@ -333,31 +333,6 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
             origin,
         ));
     }
-    // `window(window(ts, ..), ..)` grouped: a bare `window` in the select list names the inner window's
-    // column (Spark's inner expansion), which the outer grouping does not cover.
-    if let PlanNode::Aggregate { aggregates, .. } = &p.node
-        && call_of(&call, WINDOW)
-            .is_some_and(|w| w.args.first().is_some_and(|a| call_of(a, WINDOW).is_some()))
-    {
-        let mut bare = false;
-        for a in aggregates {
-            Arc::clone(a).transform_up(&mut |x| {
-                if matches!(&x.node, ExprNode::Column(c) if c.name.first().is_some_and(|n| n == WINDOW)) {
-                    bare = true;
-                }
-                Ok::<_, AnalysisError>(x)
-            })?;
-        }
-        if bare {
-            return Err(AnalysisError::new(
-                MissingAggregation {
-                    expression: "\"window\"".to_owned(),
-                    expression_any_value: "\"any_value(window)\"".to_owned(),
-                },
-                origin,
-            ));
-        }
-    }
     // A window call in a `HAVING` or `ORDER BY` over an aggregate: the rewrite adds the window below the
     // operator, where the aggregate's input is not visible.
     let over_aggregate = |input: &Arc<LogicalPlan>| match &input.node {
@@ -408,6 +383,31 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
     } else {
         session_input(&p, base, f, wkey, origin)?
     };
+    // `window(window(ts, ..), ..)` grouped: a bare `window` in the select list names the inner window's
+    // column (Spark's inner expansion), which the outer grouping does not cover.
+    if let PlanNode::Aggregate { aggregates, .. } = &p.node
+        && call_of(&call, WINDOW)
+            .is_some_and(|w| w.args.first().is_some_and(|a| call_of(a, WINDOW).is_some()))
+    {
+        let mut bare = false;
+        for a in aggregates {
+            Arc::clone(a).transform_up(&mut |x| {
+                if matches!(&x.node, ExprNode::Column(c) if c.name.first().is_some_and(|n| n == WINDOW)) {
+                    bare = true;
+                }
+                Ok::<_, AnalysisError>(x)
+            })?;
+        }
+        if bare {
+            return Err(AnalysisError::new(
+                MissingAggregation {
+                    expression: "\"window\"".to_owned(),
+                    expression_any_value: "\"any_value(window)\"".to_owned(),
+                },
+                origin,
+            ));
+        }
+    }
     let Some(project) = qualify else {
         let with_input = p.map_children(|_| Ok::<_, AnalysisError>(Arc::clone(&input)))?;
         let with_input = except_added_column(with_input, name);
