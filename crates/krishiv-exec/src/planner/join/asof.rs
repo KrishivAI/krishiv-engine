@@ -124,12 +124,17 @@ impl Planner<'_> {
             }));
         }
         // A floating-point distance ranks unlike the values at the infinities (`-Infinity -
-        // -Infinity` is NaN, which Spark orders above every number), so `min_by` can pick
-        // another row than the nearest value: refuse the Connect form on floating-point values.
-        if as_of.distance_on_every_pair
+        // -Infinity` is NaN, which Spark orders above every number), so `min_by`, and the SQL
+        // scan forward, can pick another row than the nearest value: refuse those forms on
+        // floating-point values, ANSI or not (a double subtraction never raises).
+        if (as_of.distance_on_every_pair || direction == AsOfMergeDirection::Forward)
             && as_of.distance.as_deref().is_some_and(distance_is_floating)
         {
-            return Err(unsupported("a Connect as-of join on floating-point values"));
+            return Err(unsupported(if as_of.distance_on_every_pair {
+                "a Connect as-of join on floating-point values"
+            } else {
+                "a forward as-of join on floating-point values"
+            }));
         }
         // Only a distance that can raise is evaluated: its value is never used.
         let distance = as_of

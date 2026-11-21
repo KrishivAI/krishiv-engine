@@ -222,19 +222,13 @@ fn filtered(est: &RelStats, pred: &Expr, propagate: bool) -> RelStats {
     }
 }
 
-/// The pairs `(left column, right column)` of the equalities between a
-/// column of `l` and a column of `r` among the conjuncts of `pred`.
 /// The fraction of a left as-of join's left rows estimated to find no right row: those whose
 /// as-of value is NULL, and those whose key values the right side lacks (the keys' distinct
 /// counts, as an equi-join's matched fraction). Which rows the match condition leaves without a
 /// nearest row is not modelled.
 fn as_of_unmatched(condition: &JoinCondition, value: &Expr, l: &RelStats, r: &RelStats) -> f64 {
-    let null_value = match &value.node {
-        ExprNode::Resolved(ResolvedExpr::Column(c)) => {
-            l.cols.get(&c.id).map_or(0.0, |s| s.null_frac)
-        }
-        _ => 0.0,
-    };
+    // A column, or a cast of one that carries its statistics (the analyzer widens the value).
+    let null_value = derived(value, l, l.rows).map_or(0.0, |s| s.null_frac);
     let keys_missing = match condition {
         JoinCondition::On(c) => key_pairs(c, l, r)
             .iter()
@@ -250,6 +244,8 @@ fn as_of_unmatched(condition: &JoinCondition, value: &Expr, l: &RelStats, r: &Re
     (1.0 - (1.0 - null_value) * (1.0 - keys_missing)).clamp(0.0, 1.0)
 }
 
+/// The pairs `(left column, right column)` of the equalities between a
+/// column of `l` and a column of `r` among the conjuncts of `pred`.
 fn key_pairs(pred: &Arc<Expr>, l: &RelStats, r: &RelStats) -> Vec<(AttrId, AttrId)> {
     let column = |e: &Expr| match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),

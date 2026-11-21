@@ -480,7 +480,8 @@ type Case = (
 );
 
 /// Timestamp, date and exact decimal distances do not wrap without ANSI (a datetime subtraction
-/// raises as with ANSI, an exact decimal cannot overflow), so those Connect as-of joins run and give Spark's rows (Spark 4.3.0, `spark.sql.ansi.enabled=false`,
+/// raises as with ANSI, an exact decimal cannot overflow), so those Connect as-of joins run and
+/// give Spark's rows (Spark 4.3.0, `spark.sql.ansi.enabled=false`,
 /// `spark.sql.session.timeZone=UTC`, `_joinAsOf` over the same rows).
 #[tokio::test]
 async fn as_of_joins_on_non_integral_values_run_without_ansi() {

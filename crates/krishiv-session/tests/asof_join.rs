@@ -396,3 +396,45 @@ fn match_condition_errors_are_sparks() {
     assert_eq!(class, "ASOF_JOIN_MATCH_CONDITION_TABLE_REFERENCE");
     assert_eq!(params[1], ("refs2".to_owned(), "\"quote_time\"".to_owned()));
 }
+
+/// A floating-point distance ranks unlike the values at the infinities: Spark's forward scan over
+/// left `-Infinity` and right `-Infinity`, `0`, `5` sees the distances NaN then +Infinity, and
+/// +Infinity is smaller than NaN in Spark's order, so Spark returns `-Infinity|0.0` where the merge
+/// takes the first right value at or above the left one. The SQL forward join on `DOUBLE` values
+/// is refused, ANSI or not; backward Spark evaluates no distance, so that runs.
+#[test]
+fn a_forward_as_of_join_on_floating_point_values_is_refused() {
+    let s = session();
+    let sql = |left: &str, rights: &str, op: &str| {
+        format!(
+            "SELECT * FROM VALUES ({left}) AS t(v) ASOF JOIN VALUES {rights} AS r(v) \
+             MATCH_CONDITION (t.v {op} r.v)"
+        )
+    };
+    for ansi in ["true", "false"] {
+        block_on(async {
+            s.sql(&format!("SET spark.sql.ansi.enabled={ansi}"))
+                .await?
+                .collect()
+                .await
+        })
+        .unwrap();
+        assert_eq!(
+            error(
+                &s,
+                &sql(
+                    "CAST('-Infinity' AS DOUBLE)",
+                    "(CAST('-Infinity' AS DOUBLE)), (0D), (5D)",
+                    "<="
+                )
+            ),
+            "KRISHIV_UNSUPPORTED_FEATURE"
+        );
+        let backward = sql("5D", "(1D), (3D), (9D)", ">=").replacen(
+            "SELECT *",
+            "SELECT CAST(t.v AS STRING), CAST(r.v AS STRING)",
+            1,
+        );
+        assert_eq!(rows(&s, &backward), ["5.0|3.0"]);
+    }
+}
