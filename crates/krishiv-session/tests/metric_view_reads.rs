@@ -561,3 +561,83 @@ fn order_by_and_having_over_an_aggregate_with_no_measure_follow_sparks_rule_orde
         assert_eq!(class(&e), "UNRESOLVED_COLUMN.WITH_SUGGESTION", "{sql}: {e}");
     }
 }
+
+/// A source with two columns of one name reads as Spark 4.2.1 reads it (#941 review thread; probe
+/// `~/krishiv-data/tmp/opus-2/probe-941/probe.py`, 2026-11-21): the passthrough columns keep
+/// their identity, so a measure and a dimension that do not use them resolve (`(1)`, `(3, 1)`).
+#[test]
+fn a_source_with_a_repeated_column_name_reads_its_measures() {
+    let (s, _dir) = session();
+    run(
+        &s,
+        "CREATE VIEW mvdup WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsource: SELECT 1 AS a, 2 AS a\nmeasures:\n  - name: c\n    expr: count(1)\n$$",
+    )
+    .unwrap();
+    assert_eq!(
+        longs(&run(&s, "SELECT measure(c) FROM mvdup").unwrap(), 0),
+        vec![1]
+    );
+    run(
+        &s,
+        "CREATE VIEW mvdup2 WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsource: SELECT 1 AS a, 2 AS a, 3 AS b\ndimensions:\n  - name: b\n    expr: b\nmeasures:\n  - name: c\n    expr: count(1)\n$$",
+    )
+    .unwrap();
+    let out = run(&s, "SELECT b, measure(c) FROM mvdup2 GROUP BY b").unwrap();
+    assert_eq!(longs(&out, 1), vec![1]);
+}
+
+/// Only the built-in `measure` reads a measure: a qualified SQL function of that name is that
+/// function, never the measure's aggregate (#941 review thread). Spark 4.2.1 raises
+/// `MISSING_AGGREGATION` for it (probe `~/krishiv-data/tmp/opus-2/probe-941/`), as it does for
+/// such a function over a plain table's non-grouped column; Krishiv inlines a SQL function's body
+/// before that check, so a parameter the body never reads is not checked (a general SQL-function
+/// gap, queued apart): here the call's argument is then the view's measure column, unresolved.
+#[test]
+fn a_qualified_function_named_measure_is_not_the_built_in() {
+    let (s, _dir) = session();
+    run(
+        &s,
+        "CREATE FUNCTION default.measure(x BIGINT) RETURNS BIGINT RETURN 7",
+    )
+    .unwrap();
+    for q in [
+        "SELECT region, default.measure(total) FROM mv GROUP BY region",
+        "SELECT region, spark_catalog.default.measure(total) FROM mv GROUP BY region",
+    ] {
+        let e = run(&s, q).unwrap_err();
+        assert!(class(&e).starts_with("UNRESOLVED_COLUMN"), "{q}: {e}");
+    }
+    let out = run(&s, "SELECT region, measure(total) FROM mv GROUP BY region").unwrap();
+    assert_eq!(longs(&out, 1), vec![3, 5]);
+    let out = run(
+        &s,
+        "SELECT region, builtin.measure(total) FROM mv GROUP BY region",
+    )
+    .unwrap();
+    assert_eq!(longs(&out, 1), vec![3, 5]);
+}
+
+/// An asset source followed by a line comment (`source: "src -- note"`) is the table it names:
+/// the comment never swallows the clauses built after it (#941 review thread; Spark 4.2.1 reads
+/// both views, the filtered one `('b', 5)` here).
+#[test]
+fn an_asset_source_with_a_line_comment_reads_the_table() {
+    let (s, _dir) = session();
+    for (name, filter) in [("mvc", ""), ("mvcf", "filter: n > 2\n")] {
+        run(
+            &s,
+            &format!(
+                "CREATE VIEW {name} WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsource: \"src -- note\"\n{filter}dimensions:\n  - name: region\n    expr: region\nmeasures:\n  - name: total\n    expr: sum(n)\n$$"
+            ),
+        )
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    }
+    let all = run(&s, "SELECT region, measure(total) FROM mvc GROUP BY region").unwrap();
+    assert_eq!(longs(&all, 1), vec![3, 5]);
+    let filtered = run(
+        &s,
+        "SELECT region, measure(total) FROM mvcf GROUP BY region",
+    )
+    .unwrap();
+    assert_eq!(longs(&filtered, 1), vec![5]);
+}

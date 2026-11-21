@@ -428,9 +428,10 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         | Statement::AddResource(_)
         | Statement::LoadData(_)
         | Statement::ListResource(_)
-        | Statement::AccessControl(_)
-        // A metric view's source query is YAML text, parsed when the session creates the view.
-        | Statement::CreateMetricView(_) => Vec::new(),
+        | Statement::AccessControl(_) => Vec::new(),
+        // A metric view's source and expressions are YAML text, read only when the session creates
+        // the view: its reads are not known here, so fail closed (`partial`), as `MERGE` does.
+        Statement::CreateMetricView(_) => return None,
     })
 }
 

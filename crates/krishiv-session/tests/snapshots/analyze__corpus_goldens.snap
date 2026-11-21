@@ -671,12 +671,12 @@ error KRISHIV_UNSUPPORTED_FEATURE
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"DDL",
 "explain":null,
-"partial":false,
+"partial":true,
 "securables":[{"kind":"namespace","name":["spark_catalog","db"],"display":"namespace `spark_catalog`.`db`","privilege":"CREATE","columns":[]}],
 "output_schema":[],
 "lineage":[],
 "filters":[],
-"warnings":[]}
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
 
 -- DropPermanentView: DROP VIEW db.v
 {"schema_version":"krishiv.analyze.v1",

@@ -139,12 +139,8 @@ impl Resolver<'_> {
         };
         let meas = output.get(dimensions.len()..).unwrap_or_default();
         let meas_ids: HashSet<AttrId> = meas.iter().map(|c| c.id).collect();
-        let source_names: Vec<String> = source
-            .resolved_output()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|c| c.name)
-            .collect();
+        let source_columns: Vec<BoundColumn> = source.resolved_output().unwrap_or_default();
+        let source_names: Vec<String> = source_columns.iter().map(|c| c.name.clone()).collect();
         let missing = |cols: &[&BoundColumn], operator: &str| {
             let names: Vec<String> = cols.iter().map(|c| format!("\"{}\"", c.name)).collect();
             let input: Vec<String> = source_names
@@ -265,7 +261,9 @@ impl Resolver<'_> {
             items.push(item);
         }
         self.check_dimension_up_casts(input, dimensions, env, p.origin)?;
-        let Some(rewritten_input) = self.replace_read(input, &source_names, dimensions) else {
+        let written: Vec<&MetricColumn> = dimensions.iter().chain(measures).collect();
+        let Some(rewritten_input) = self.replace_read(input, &source_columns, dimensions, &written)
+        else {
             return Ok(first);
         };
         let agg = Arc::new(
@@ -555,16 +553,35 @@ impl Resolver<'_> {
     fn replace_read(
         &self,
         plan: &Arc<LogicalPlan>,
-        source_names: &[String],
+        source_columns: &[BoundColumn],
         dimensions: &[MetricColumn],
+        written: &[&MetricColumn],
     ) -> Option<Arc<LogicalPlan>> {
         let node = match &plan.node {
             PlanNode::MetricViewRead { input, .. } => {
-                let mut exprs: Vec<Arc<Expr>> = source_names
-                    .iter()
-                    .filter(|n| !dimensions.iter().any(|d| self.same_name(&d.name, n)))
-                    .map(|n| Arc::new(Expr::column([n.clone()]).with_origin(plan.origin)))
-                    .collect();
+                // The source's columns by name, each once. A name the source repeats is ambiguous
+                // by name, so it is projected only when a dimension or measure names it (then
+                // `AMBIGUOUS_REFERENCE`, as in Spark); otherwise nothing can read it (the view's
+                // output is its dimensions and measures), and Spark reads the view (#941 review).
+                let mut exprs: Vec<Arc<Expr>> = Vec::new();
+                for (i, c) in source_columns.iter().enumerate() {
+                    let n = &c.name;
+                    let seen = source_columns[..i]
+                        .iter()
+                        .any(|o| self.same_name(&o.name, n));
+                    let repeated = source_columns
+                        .iter()
+                        .filter(|o| self.same_name(&o.name, n))
+                        .count()
+                        > 1;
+                    if seen
+                        || dimensions.iter().any(|d| self.same_name(&d.name, n))
+                        || (repeated && !names_column(written, n, |a, b| self.same_name(a, b)))
+                    {
+                        continue;
+                    }
+                    exprs.push(Arc::new(Expr::column([n.clone()]).with_origin(plan.origin)));
+                }
                 for d in dimensions {
                     exprs.push(Arc::new(
                         (*d.expr)
@@ -581,11 +598,11 @@ impl Resolver<'_> {
                 }
             }
             PlanNode::Filter { input, predicate } => PlanNode::Filter {
-                input: self.replace_read(input, source_names, dimensions)?,
+                input: self.replace_read(input, source_columns, dimensions, written)?,
                 predicate: Arc::clone(predicate),
             },
             PlanNode::Project { input, exprs } => PlanNode::Project {
-                input: self.replace_read(input, source_names, dimensions)?,
+                input: self.replace_read(input, source_columns, dimensions, written)?,
                 exprs: exprs.clone(),
             },
             PlanNode::SubqueryAlias {
@@ -593,7 +610,7 @@ impl Resolver<'_> {
                 alias,
                 columns,
             } => PlanNode::SubqueryAlias {
-                input: self.replace_read(input, source_names, dimensions)?,
+                input: self.replace_read(input, source_columns, dimensions, written)?,
                 alias: alias.clone(),
                 columns: columns.clone(),
             },
@@ -859,12 +876,34 @@ fn holds_no_aggregate(grouping: &Grouping, aggregates: &[Arc<Expr>]) -> bool {
         })
 }
 
-/// The measure `measure(m)` names (unresolved).
+/// Whether an expression of `columns` (unresolved) names a column `name` (its last part).
+fn names_column(columns: &[&MetricColumn], name: &str, same: impl Fn(&str, &str) -> bool) -> bool {
+    columns.iter().any(|m| {
+        let mut found = false;
+        let _ = visit_distinct(Node::Expr(&m.expr), |n| {
+            if let Node::Expr(x) = n
+                && let ExprNode::Column(c) = &x.node
+                && c.name.last().is_some_and(|l| same(l, name))
+            {
+                found = true;
+            }
+            std::ops::ControlFlow::<()>::Continue(())
+        });
+        found
+    })
+}
+
+/// The measure `measure(m)` names (unresolved). Only the built-in reads a measure: a call
+/// qualified by anything but `builtin.` / `system.builtin.` is a catalog function of that name
+/// (Spark 4.2.1: `default.measure(m)` over a measure is `MISSING_AGGREGATION`, #941 review).
 fn measure_name(x: &Expr) -> Option<&str> {
     let ExprNode::Function(f) = &x.node else {
         return None;
     };
-    if !f.name.eq_ignore_ascii_case(MEASURE) || f.args.len() != 1 {
+    if !f.name.eq_ignore_ascii_case(MEASURE)
+        || f.args.len() != 1
+        || !(f.qualifier.is_empty() || super::bind::is_builtin_qualifier(&f.qualifier))
+    {
         return None;
     }
     let ExprNode::Column(c) = &f.args.first()?.node else {

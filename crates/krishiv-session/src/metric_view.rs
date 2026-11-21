@@ -29,12 +29,16 @@ pub(crate) struct MetricViewSpec {
 
 impl MetricViewSpec {
     /// Appends ` FROM source [WHERE (filter)]` to `text` and returns where the filter's text sits
-    /// in it. A query source and the filter each close on a line of their own, so one ending in a
-    /// `--` comment leaves the parenthesis (and what follows) in place.
+    /// in it. The source and the filter each end a line of their own, so one ending in a `--`
+    /// comment (an asset name parses with one after it, as Spark's `parseMultipartIdentifier`
+    /// reads it) leaves the parenthesis and the clauses built after it in place.
     pub(crate) fn push_from(&self, text: &mut String) -> Option<std::ops::Range<usize>> {
         text.push_str(" FROM ");
         match &self.source {
-            MetricViewSource::Asset(name) => text.push_str(name),
+            MetricViewSource::Asset(name) => {
+                text.push_str(name);
+                text.push('\n');
+            }
             MetricViewSource::Sql(query) => {
                 text.push('(');
                 text.push_str(query);
