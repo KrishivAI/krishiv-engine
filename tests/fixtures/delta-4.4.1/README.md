@@ -75,3 +75,13 @@ Write-path oracle (PR-37a part 2; `gen_delta_fixtures.py /out writes`, run as th
   a catalog table). Each step's error or commits and rows.
 - `write-features/<name>` and `FEATURES.json`: one table per row of the writer allow-list (design 4.2), each with one
   row, its protocol and whether Krishiv refuses writing it.
+
+DML oracle (PR-37b part 2; `gen_delta_fixtures.py /out dml`, run as the session probes are): `dml/<scenario>/before` is a
+table set up by delta-spark (`unpartitioned`, `partitioned` by `p`, `column-mapping` (mode `name`, a renamed column),
+`deletion-vectors` (100 rows, a DELETE that left a DV), `change-data-feed`, `append-only`), and `dml/DML.json` records
+for each `DELETE`/`UPDATE` step, each run on its own copy of `before`: the confs set around it, the command's output
+(`num_affected_rows`) or error, the commits it wrote (commitInfo, adds with stats, removes), the rows read back and
+`DESCRIBE HISTORY`'s newest row. The `deletion-vectors` steps run with and without delta-spark's
+`...deletionVectors.persistent` confs. Consumer: krishiv-session `tests/delta_dml.rs`. `dml/krishiv-written/` holds
+tables after Krishiv's statements (`write_dml_readback_tables`, `--ignored`, `KRISHIV_DELTA_READBACK_OUT`) and the
+`READBACK.json` Spark recorded reading them (`gen_delta_fixtures.py /out readback /in`).
