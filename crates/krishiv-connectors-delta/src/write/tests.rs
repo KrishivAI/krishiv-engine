@@ -1188,6 +1188,7 @@ fn column_mapping_writes_physical_names_and_field_ids() {
     assert_eq!(ids(&env.read(&env.open().unwrap())), vec![1, 2]);
 }
 
+mod dml;
 mod lifecycle;
 mod readback;
 mod streaming;

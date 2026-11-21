@@ -91,6 +91,26 @@ pub(crate) struct Count {
 
 static HOOKS: Mutex<BTreeMap<String, Hook>> = Mutex::new(BTreeMap::new());
 
+static FAILS: Mutex<std::collections::BTreeSet<String>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+/// The write `write_id` fails where it asks [`fails`] (a row-level change's stage, after its
+/// listing).
+pub(crate) fn fail(write_id: &str) {
+    FAILS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(write_id.to_owned());
+}
+
+/// Whether the write `write_id` is to fail here.
+pub(crate) fn fails(write_id: &str) -> bool {
+    FAILS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(write_id)
+}
+
 type Globals = BTreeMap<String, Weak<dyn Any + Send + Sync>>;
 static GLOBALS: Mutex<Globals> = Mutex::new(BTreeMap::new());
 

@@ -500,6 +500,104 @@ fn to_float(v: Num, f32_target: bool) -> f64 {
     }
 }
 
+/// A decimal cast that widens (no smaller scale, no fewer integer digits:
+/// `s2 >= s1` and `p2 - s2 >= p1 - s1`) keeps every in-type value and
+/// cannot fail: the same scale is the input retyped, a larger one a
+/// multiply (TPC-DS q28's `decimal(7,2)` columns against integer bounds).
+/// Every result is still checked against `10^p2`, because a file can hold
+/// a value outside its own declared precision. `None` for any other cast
+/// and for any value out of the target's range, which the general path
+/// then reports (ANSI error, legacy NULL) as before.
+fn widen_decimal(input: &dyn Array, to: &DataType) -> Option<Result<ArrayRef, KernelError>> {
+    let (p1, s1) = match input.data_type() {
+        DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => (*p, *s),
+        _ => return None,
+    };
+    let (p2, s2) = match to {
+        DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => (*p, *s),
+        _ => return None,
+    };
+    // Precision and scale are below 100, so the differences cannot wrap;
+    // `wrapping_sub` because the crate denies `arithmetic_side_effects`.
+    let widens = s1 >= 0
+        && s2 >= s1
+        && i16::from(p2).wrapping_sub(i16::from(s2)) >= i16::from(p1).wrapping_sub(i16::from(s1));
+    if !widens {
+        return None;
+    }
+    let k = s2.abs_diff(s1);
+    let m = pow10(k);
+    // `|unscaled| < 10^p2`; p2 <= 38, so the bound fits u128.
+    let bound = pow10(p2).unsigned_abs();
+    let typed = |r: Result<ArrayRef, arrow_schema::ArrowError>| {
+        r.map_err(|e| KernelError::internal(e.to_string()))
+    };
+    // `with_precision_and_scale` checks the type, not the values.
+    match (input.data_type(), to) {
+        (DataType::Decimal64(..), DataType::Decimal64(..)) => {
+            let a = input.as_primitive::<Decimal64Type>();
+            let bound = u64::try_from(bound).ok()?;
+            let out = if k == 0 {
+                // A scan of the raw slots, NULL ones included: a NULL slot
+                // out of range only sends the batch to the general path.
+                if !a.values().iter().all(|v| v.unsigned_abs() < bound) {
+                    return None;
+                }
+                a.clone()
+            } else {
+                let m = i64::try_from(m).ok()?;
+                a.try_unary::<_, Decimal64Type, ()>(|v| {
+                    v.checked_mul(m)
+                        .filter(|u| u.unsigned_abs() < bound)
+                        .ok_or(())
+                })
+                .ok()?
+            };
+            Some(typed(
+                out.with_precision_and_scale(p2, s2)
+                    .map(|o| Arc::new(o) as ArrayRef),
+            ))
+        }
+        (DataType::Decimal64(..), DataType::Decimal128(..)) => {
+            let out = input
+                .as_primitive::<Decimal64Type>()
+                .try_unary::<_, Decimal128Type, ()>(|v| {
+                    i128::from(v)
+                        .checked_mul(m)
+                        .filter(|u| u.unsigned_abs() < bound)
+                        .ok_or(())
+                })
+                .ok()?;
+            Some(typed(
+                out.with_precision_and_scale(p2, s2)
+                    .map(|o| Arc::new(o) as ArrayRef),
+            ))
+        }
+        (DataType::Decimal128(..), DataType::Decimal128(..)) => {
+            let a = input.as_primitive::<Decimal128Type>();
+            let out = if k == 0 {
+                if !a.values().iter().all(|v| v.unsigned_abs() < bound) {
+                    return None;
+                }
+                a.clone()
+            } else {
+                a.try_unary::<_, Decimal128Type, ()>(|v| {
+                    v.checked_mul(m)
+                        .filter(|u| u.unsigned_abs() < bound)
+                        .ok_or(())
+                })
+                .ok()?
+            };
+            Some(typed(
+                out.with_precision_and_scale(p2, s2)
+                    .map(|o| Arc::new(o) as ArrayRef),
+            ))
+        }
+        // A wide carrier into a narrow one: the general path narrows it.
+        _ => None,
+    }
+}
+
 /// `CAST(input AS to)` with Spark semantics.
 ///
 /// # Errors
@@ -529,6 +627,9 @@ pub fn cast(
     let from = input.data_type();
     if from == to {
         return Ok(arrow_array::make_array(input.to_data()));
+    }
+    if let Some(out) = widen_decimal(input, to) {
+        return out;
     }
     // `Decimal64` is a carrier of `decimal(p <= 18, s)` (design P2-T160):
     // the cast is the `Decimal128` one, with the operand widened and the

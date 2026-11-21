@@ -137,6 +137,7 @@ pub(crate) fn write_plan() -> krishiv_exec::physical::WritePlan {
         target_file_bytes: 1 << 20,
         partition_by: Vec::new(),
         column_types: std::collections::BTreeMap::new(),
+        bucket: None,
     }
 }
 
@@ -1236,6 +1237,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "tail",
+            PhysNode::Tail {
+                input: boxed(scan()),
+                limit: 5,
+            },
+        ),
+        (
             "window_group_limit",
             PhysNode::Window {
                 input: boxed(PhysNode::WindowGroupLimit {
@@ -1621,6 +1629,19 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                             end: krishiv_types::DayTimeField::Hour,
                         },
                     )]),
+                    ..write_plan()
+                }),
+            },
+        ),
+        (
+            "write_files_bucketed",
+            PhysNode::WriteFiles {
+                input: boxed(scan()),
+                write: Some(WritePlan {
+                    bucket: Some(krishiv_exec::physical::BucketWrite {
+                        column: 1,
+                        sort_by: vec![0],
+                    }),
                     ..write_plan()
                 }),
             },
