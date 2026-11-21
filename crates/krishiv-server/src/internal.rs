@@ -33,6 +33,32 @@ use crate::guard::{
 /// One system-table row as JSON (column name to value).
 pub type Row = Map<String, Value>;
 
+/// The W3C `traceparent` and `baggage` header values of an HTTP request: untrusted text the session validates
+/// (a malformed value means no trace and never fails the request).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InboundTrace {
+    /// The `traceparent` header value.
+    pub traceparent: Option<String>,
+    /// The `baggage` header value.
+    pub baggage: Option<String>,
+}
+
+impl InboundTrace {
+    /// The trace headers of `headers` (a non-ASCII value is no header at all).
+    pub fn from_headers(headers: &axum::http::HeaderMap) -> Self {
+        let text = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        Self {
+            traceparent: text("traceparent"),
+            baggage: text("baggage"),
+        }
+    }
+}
+
 /// A boxed future the source returns (object safe, no `async_trait`).
 pub type UiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, UiError>> + Send + 'a>>;
 
@@ -164,6 +190,18 @@ pub trait UiSource: Send + Sync + 'static {
     fn sql_start<'a>(&'a self, sql: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, String> {
         let _ = (sql, caller);
         Box::pin(async { Err(UiError::new("this source runs no SQL")) })
+    }
+
+    /// As [`Self::sql_start`], with the W3C trace headers of the HTTP request (P3-T068): the statement's queries join
+    /// that trace. A source that does not trace starts the run as `sql_start` does.
+    fn sql_start_traced<'a>(
+        &'a self,
+        sql: &'a str,
+        caller: Option<&'a Caller>,
+        trace: &'a InboundTrace,
+    ) -> UiFuture<'a, String> {
+        let _ = trace;
+        self.sql_start(sql, caller)
     }
 
     /// The state of an editor run (`state` is `running`, `finished`, `failed` or `cancelled`; a finished run
@@ -1209,7 +1247,23 @@ async fn events(State(s): State<UiState>, caller: Option<Extension<Caller>>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{CSP, mask_literals, percent_decode};
+    use super::{CSP, InboundTrace, mask_literals, percent_decode};
+
+    /// P3-T068: the trace headers of an HTTP request; a non-ASCII value is no header.
+    #[test]
+    fn the_trace_headers_are_read_as_text_and_a_bad_one_is_none() {
+        use axum::http::{HeaderMap, HeaderValue};
+        assert_eq!(
+            InboundTrace::from_headers(&HeaderMap::new()),
+            InboundTrace::default()
+        );
+        let mut h = HeaderMap::new();
+        h.insert("traceparent", HeaderValue::from_static("00-a-b-01"));
+        h.insert("baggage", HeaderValue::from_bytes(&[0xE9]).unwrap());
+        let t = InboundTrace::from_headers(&h);
+        assert_eq!(t.traceparent.as_deref(), Some("00-a-b-01"));
+        assert_eq!(t.baggage, None);
+    }
 
     /// `ui/tests/fixture_server.py` repeats the policy; the page check is only honest while both agree.
     #[test]

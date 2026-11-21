@@ -67,6 +67,10 @@ object_store = { workspace = true, features = ["fs"] }
 # The persisted query history (`profile_history.rs`): Parquet segments of finished queries' profiles.
 parquet = { workspace = true, features = ["arrow"] }
 
+# The effective user id of a group-file replace (design P3-T066 §5.4); safe API, Unix only.
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
 [dev-dependencies]
 bytes.workspace = true
 krishiv-alloc = { path = "../krishiv-alloc", features = ["heap-stats"] }

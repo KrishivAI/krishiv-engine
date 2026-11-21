@@ -20,7 +20,7 @@ use serde_json::{Number, Value};
 use krishiv_session::auth::{Authenticated, Role};
 
 use crate::guard::Caller;
-use crate::internal::{Row, SystemTable, UiError, UiFuture, UiSource};
+use crate::internal::{InboundTrace, Row, SystemTable, UiError, UiFuture, UiSource};
 
 /// The principal of the UI's own session; its queries are hidden from the UI.
 pub const UI_PRINCIPAL: &str = "krishiv-ui";
@@ -312,8 +312,9 @@ async fn run_to_end(
     run: Arc<Mutex<Run>>,
     sql: String,
     tag: String,
+    trace: InboundTrace,
 ) {
-    supervise(&run, execute(editor, Arc::clone(&run), sql, tag)).await;
+    supervise(&run, execute(editor, Arc::clone(&run), sql, tag, trace)).await;
     drop(runtime);
 }
 
@@ -342,6 +343,7 @@ async fn execute(
     run: Arc<Mutex<Run>>,
     sql: String,
     tag: String,
+    trace: InboundTrace,
 ) -> Result<Option<RunOutput>, KrishivError> {
     // A cancel that came before the statement started: do not run it at all (a write would otherwise commit).
     if lock(&run).cancel_requested {
@@ -350,7 +352,9 @@ async fn execute(
     let df = editor
         .sql_with_boxed(
             &sql,
-            krishiv_session::QueryOptions::new().tags([tag.as_str()]),
+            krishiv_session::QueryOptions::new()
+                .tags([tag.as_str()])
+                .inbound_trace(trace.traceparent.as_deref(), trace.baggage.as_deref()),
         )
         .await?;
     // A cancel that came before the query was registered has nothing to stop yet: honour it now.
@@ -692,6 +696,19 @@ impl UiSource for SessionSource {
     }
 
     fn sql_start<'a>(&'a self, sql: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, String> {
+        static NO_TRACE: InboundTrace = InboundTrace {
+            traceparent: None,
+            baggage: None,
+        };
+        self.sql_start_traced(sql, caller, &NO_TRACE)
+    }
+
+    fn sql_start_traced<'a>(
+        &'a self,
+        sql: &'a str,
+        caller: Option<&'a Caller>,
+        trace: &'a InboundTrace,
+    ) -> UiFuture<'a, String> {
         Box::pin(async move {
             // The statement runs as the caller, under the caller's policy. Only the local administrator (a server
             // with no authentication, whoever holds its start-up token) runs in the ordinary session; a caller no
@@ -778,6 +795,7 @@ impl UiSource for SessionSource {
                 run,
                 sql.to_owned(),
                 tag,
+                trace.clone(),
             ));
             Ok(id)
         })

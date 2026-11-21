@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use krishiv_common::config::Config;
 use krishiv_common::principal::{Principal, PrincipalKind};
 use krishiv_server::guard::Caller;
-use krishiv_server::internal::UiSource;
+use krishiv_server::internal::{InboundTrace, UiSource};
 use krishiv_server::session_source::SessionSource;
 use krishiv_session::auth::{Authenticated, Method, Role, RolePolicy};
 use krishiv_session::{EngineRuntime, PathPrefixPolicy, PolicyVersion, Session};
@@ -175,4 +175,48 @@ async fn a_path_outside_the_allowed_roots_is_refused_through_the_editor() {
     // Spark's CSV reader without a header: one string column `_c0`, the file's lines in order.
     assert_eq!(inside["columns"], json!(["_c0"]), "{inside}");
     assert_eq!(inside["rows"], json!([["1"], ["2"]]), "{inside}");
+}
+
+/// P3-T068: the HTTP request's `traceparent` names the trace of the statement it starts (`system.queries.trace_id`);
+/// a malformed header or none means no trace and does not fail the run.
+#[tokio::test]
+async fn a_requests_traceparent_names_the_trace_of_the_statement_it_starts() {
+    let s = source(None);
+    let admin = caller("ann", Role::Admin, Method::Oidc);
+    let trace = "4bf92f3577b34da6a3ce929d0e0e4736";
+    let traced = InboundTrace {
+        traceparent: Some(format!("00-{trace}-00f067aa0ba902b7-01")),
+        baggage: Some("tenant=acme".to_owned()),
+    };
+    let malformed = InboundTrace {
+        traceparent: Some("not-a-traceparent".to_owned()),
+        baggage: None,
+    };
+    for (sql, t) in [
+        ("SELECT 41 AS t68_traced", &traced),
+        ("SELECT 42 AS t68_malformed", &malformed),
+        ("SELECT 43 AS t68_plain", &InboundTrace::default()),
+    ] {
+        let id = s.sql_start_traced(sql, Some(&admin), t).await.unwrap();
+        let start = Instant::now();
+        loop {
+            let v = s.sql_status(&id, Some(&admin)).await.unwrap().unwrap();
+            if v["state"] != "running" {
+                assert_eq!(v["state"], "finished", "{v}");
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(30), "{v}");
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    }
+    // The text of another caller's query is not shown, so count by trace: only the traced statement has one.
+    let seen = finish(
+        &s,
+        &admin,
+        "SELECT trace_id FROM system.queries WHERE trace_id IS NOT NULL",
+    )
+    .await;
+    assert_eq!(seen["rows"], json!([[trace]]), "{seen}");
+    let all = finish(&s, &admin, "SELECT count(*) FROM system.queries").await;
+    assert!(all["rows"][0][0].as_i64().unwrap() >= 3, "{all}");
 }
