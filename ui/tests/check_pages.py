@@ -23,8 +23,8 @@ from html import escape
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
+from playwright.sync_api import Page, expect, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
-from playwright.sync_api import expect, sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
 import fixture_server
@@ -544,7 +544,9 @@ def page_checks(origin: str) -> list[str]:
     return problems
 
 
-def shows(page: Page, texts: list[str], where: str = "body", timeout: int = 5000) -> bool:
+def shows(
+    page: Page, texts: list[str], where: str = "body", timeout: int = 5000
+) -> bool:
     """Waits until `where` shows every one of `texts` (any case); whether it did within `timeout` ms."""
     try:
         page.wait_for_function(
@@ -681,7 +683,9 @@ def start_checks() -> list[str]:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1440, "height": 900})
         page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
-        if not shows(page, ["The console did not load", "the console is starting"], "main"):
+        if not shows(
+            page, ["The console did not load", "the console is starting"], "main"
+        ):
             problems.append("start: a failed first answer is not shown as one")
         main = page.inner_text("main")
         if "Open the address" in main:
