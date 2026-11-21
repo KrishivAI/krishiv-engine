@@ -50,6 +50,22 @@ pub static SHARE_REPEATED_SUBTREES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// A table scan read only by filters, two or more, is read once under the
+/// disjunction of their predicates (`krishiv.optimizer.shareFilteredScans`).
+pub static SHARE_FILTERED_SCANS: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.shareFilteredScans",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Read a table once when two or more filters are its only readers (TPC-DS q28): the rows \
+          any of the filters keeps are stored, and each filter reads them. Only when statistics \
+          say the filters keep at most a quarter of the table, and no predicate can raise. Needs \
+          `krishiv.sql.optimizer.shareCteInstances`. Results are the same either way; `false` turns it off.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
 /// A group key computed from other group keys moves above the aggregate
 /// (`krishiv.optimizer.derivedKeysAbove`, P3-A part 2c).
 pub static DERIVED_KEYS_ABOVE: ConfigEntry = ConfigEntry {
