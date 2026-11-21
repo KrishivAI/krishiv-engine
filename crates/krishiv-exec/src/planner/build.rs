@@ -133,7 +133,8 @@ fn plan_once(
         planner.env.to_plan(),
     )
     .with_shared(shared)?
-    .with_warnings(planner.warnings);
+    .with_warnings(planner.warnings)
+    .with_guarded(planner.guarded.into_iter().collect());
     Ok((plan, shareable))
 }
 
@@ -302,7 +303,9 @@ pub(crate) struct Planner<'a> {
     /// The next runtime filter's id.
     pub(crate) next_filter: u64,
     /// The next scan's id.
-    next_scan: u64,
+    pub(super) next_scan: u64,
+    /// The scans planned under a security barrier.
+    pub(super) guarded: HashSet<ScanId>,
     /// The next subquery's id.
     next_subquery: u64,
     /// The next exchange's id.
@@ -365,6 +368,7 @@ impl<'a> Planner<'a> {
             rf: Settings::new(&cx.config),
             next_filter: 1,
             next_scan: 0,
+            guarded: HashSet::new(),
             next_subquery: next_id.saturating_add(SUBQUERY_GAP),
             next_exchange: 0,
             scan_filters: HashMap::new(),
@@ -606,6 +610,7 @@ impl<'a> Planner<'a> {
                 let input = self.plan(input)?;
                 self.sort(input, order, *global)
             }
+            PlanNode::SecurityBarrier { input, .. } => self.barrier(input),
             PlanNode::JoinHint { input, strategy } => {
                 if !self.consumed_hints.contains(&(Arc::as_ptr(p) as usize)) {
                     self.warnings.push(format!(

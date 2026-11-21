@@ -166,6 +166,7 @@ Paths are relative to this crate.
 - Physical plans are serializable data: plan types in `physical/` hold no `Arc<dyn …>`, locks, atomics or cells
   (`PlanData`, `cargo xtask source-guard`); scan sources, spill scopes, runtime-filter and subquery cells are
   created at instantiation. Review question for every change: does this assume one process?
+- Security barriers (E14): `planner/barrier.rs` plans a barrier's input with no node of its own, adds its scans to the planner's guarded set and clears its runtime-filter sites (no join's build filters a scan inside it; a barrier's own rows may still filter another scan); probe fusion skips a guarded scan; `PhysicalPlan::guarded` carries the set (coordinator-side, not in the codec: `without_guarded` for a round-trip comparison; `into_write`/`into_table_write` keep it), and `profile_scans` lists no compared column for a table any guarded scan reads. A pass that reads the set runs on the coordinator; one elsewhere needs a codec mark first (P5). Tests `tests/planner/barrier.rs`.
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 

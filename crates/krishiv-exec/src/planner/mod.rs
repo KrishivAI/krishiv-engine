@@ -26,6 +26,7 @@
 //! merge their drivers' states at `finalize`.
 
 mod aggregate;
+mod barrier;
 mod build;
 mod build_project;
 pub(crate) mod eval;

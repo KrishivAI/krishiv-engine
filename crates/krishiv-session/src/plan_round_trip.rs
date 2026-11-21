@@ -33,7 +33,9 @@ pub(crate) fn round_trip(
     };
     let bytes = krishiv_plan_codec::encode(plan).map_err(|e| fail(e.to_string()))?;
     let back = krishiv_plan_codec::decode(&bytes).map_err(|e| fail(e.to_string()))?;
-    if back != *plan {
+    // The codec does not carry the guarded-scan set (coordinator-side, design
+    // `P3-E14-security-barrier.md` §6): the decoded plan is compared with the set cleared.
+    if back != plan.clone().without_guarded() {
         return Err(fail(
             "the decoded plan differs from the encoded one".to_owned(),
         ));

@@ -81,6 +81,7 @@ Paths are relative to this crate.
 - Over an aggregate, `ORDER BY`/`HAVING` expressions are matched to grouping and output expressions by
   `semantic_key` (Spark's `semanticEquals`: commutative operands sorted, `a > b` as `b < a`); a memo keyed by
   address must never see an expression that is dropped (`group_substitute` keys probes with a fresh memo).
+- Security barrier (E14, design `P3-E14-security-barrier.md`): `PlanNode::SecurityBarrier { input, policy }` has its input's rows and attribute ids; `PolicyRef` (`barrier.rs`) is the securable, the `PrincipalKey` and the policy version, and two barriers are equal only with equal references and inputs. `leakproof(e, ansi)` (`raises.rs`) is `runs_on_any_row` and every call declared (`Builtin::leakproof`, the registry's `FunctionDef::leakproof`): a declaration is a security decision, separate from the never-raises list. Nothing places a barrier yet (`AllowWith` stays refused until P5-T045).
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
