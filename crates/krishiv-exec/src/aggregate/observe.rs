@@ -210,6 +210,15 @@ impl CollectMetrics {
 /// One driver's partial states, sent to the query when it ends.
 struct Local {
     table: AggTable,
+    /// The aggregate's plan and seed, to start the next split's table.
+    core: Arc<AggCore>,
+    seed: Option<u64>,
+    /// The split (or, untagged, the driver's partition) the open `table` folds.
+    open: Option<u32>,
+    /// The states of the splits this driver finished, each under its own source key: Spark folds a
+    /// partition on its own, so which driver the morsels of two splits reached must not decide
+    /// whether a fold overflows (it would fail the action instead of the merge dropping a buffer).
+    sealed: Vec<((u32, usize), RecordBatch)>,
     query: Arc<crate::context::QueryContext>,
     finalizer: Arc<Finalizer>,
     partition: u32,
@@ -232,11 +241,33 @@ impl Local {
         if std::mem::replace(&mut self.sent, true) {
             return Ok(());
         }
-        let states = self.table.state_batch(&[0])?;
+        let last = self.table.state_batch(&[0])?;
+        let key = (self.open.unwrap_or(self.partition), self.lane);
         // The states move to the query's own charge: release the driver's first.
         self.reservation.shrink(self.reservation.size());
-        self.query
-            .observe_partial(&self.finalizer, (self.partition, self.lane), states)
+        for (source, states) in std::mem::take(&mut self.sealed) {
+            self.query
+                .observe_partial(&self.finalizer, source, states)?;
+        }
+        self.query.observe_partial(&self.finalizer, key, last)
+    }
+
+    /// Ends the open split's table when a batch of another split arrives.
+    fn switch_to(&mut self, split: u32) -> Result<()> {
+        match self.open {
+            Some(open) if open != split => {
+                let fresh = AggTable::new(&self.core, &HashSeed::new(self.seed))?;
+                let done = std::mem::replace(&mut self.table, fresh);
+                self.sealed
+                    .push(((open, self.lane), done.state_batch(&[0])?));
+                let keep = self.table.memory_size();
+                self.reservation
+                    .shrink(self.reservation.size().saturating_sub(keep));
+            }
+            _ => {}
+        }
+        self.open = Some(split);
+        Ok(())
     }
 }
 
@@ -286,6 +317,10 @@ impl Operator for CollectMetrics {
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
         Ok(Box::new(Local {
             table: AggTable::new(&self.core, &HashSeed::new(ctx.query().config().seed))?,
+            core: Arc::clone(&self.core),
+            seed: ctx.query().config().seed,
+            open: None,
+            sealed: Vec::new(),
             query: Arc::clone(ctx.query()),
             finalizer: Arc::clone(&self.finalizer),
             partition: ctx.partition(),
@@ -302,6 +337,8 @@ impl Operator for CollectMetrics {
         if input.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
+        // A retry after `NeedMemory` is the same batch: the split is already open.
+        l.switch_to(input.split().unwrap_or(l.partition))?;
         let take = match l.claimed {
             Some(take) => take,
             None => self.claim(input.num_rows()),
