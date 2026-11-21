@@ -122,7 +122,7 @@ impl Session {
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
-        let class = krishiv_sql::classify_with(&statement, &env.parser);
+        let class = self.statement_class(&statement, &env);
         if let Statement::ExecuteImmediate(e) = &statement {
             return Box::pin(self.immediate_parts(e, class, statement.clone(), text)).await;
         }

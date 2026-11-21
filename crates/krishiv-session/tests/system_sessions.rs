@@ -452,6 +452,33 @@ fn a_draining_runtime_refuses_drop_table_and_leaves_the_table() {
     );
 }
 
+/// A bare `DROP VIEW` of a stored view is the qualified drop (DDL): refused while draining, the view
+/// kept; a bare drop of a temporary view stays session-local and is admitted.
+#[test]
+fn a_draining_runtime_refuses_a_bare_drop_of_a_stored_view_and_keeps_it() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let s = session_of(&rt, "alice");
+    let run = |sql: &str| block_on(async { s.sql(sql).await.unwrap().collect().await.unwrap() });
+    run("CREATE VIEW drain_bare_v AS SELECT 1 AS a");
+    run("CREATE TEMPORARY VIEW drain_bare_tv AS SELECT 2 AS a");
+    rt.set_draining(true);
+    let Err(err) = block_on(s.sql("DROP VIEW drain_bare_v")) else {
+        panic!("a bare DROP VIEW of a stored view must be refused while draining");
+    };
+    assert_eq!(err.error_class().name(), "KRISHIV_SERVER_DRAINING");
+    // The command runs in `sql`; its result frame is a new query, which the drain refuses.
+    assert!(block_on(s.sql("DROP VIEW drain_bare_tv")).is_ok());
+    rt.set_draining(false);
+    assert_eq!(
+        texts(&s, "SELECT CAST(a AS STRING) FROM drain_bare_v"),
+        ["1"]
+    );
+    let Err(gone) = block_on(s.sql("SELECT a FROM drain_bare_tv")) else {
+        panic!("the temporary view must have been dropped");
+    };
+    assert_eq!(gone.error_class().name(), "TABLE_OR_VIEW_NOT_FOUND");
+}
+
 /// Every statement that writes, creates or drops is refused while the server drains, before its
 /// handler changes anything, and leaves a failed `system.queries` row as a refused query does
 /// (design P3-T066 §5.1).
