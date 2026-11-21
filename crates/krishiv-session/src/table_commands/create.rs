@@ -554,6 +554,11 @@ impl Session {
             if let Some(owned) = owned {
                 owned.keep();
             }
+            // The idempotency key belongs to this one write, never to the table: stored, it would
+            // deduplicate every later write of the table.
+            table.options.retain(|k, _| {
+                !k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION)
+            });
             self.add_table(table, mode, true).await?;
             return Ok(());
         }
@@ -566,6 +571,11 @@ impl Session {
         if let Some(owned) = owned {
             owned.keep();
         }
+        // The idempotency key belongs to this one write, never to the table: stored, it would
+        // deduplicate every later write of the table.
+        table
+            .options
+            .retain(|k, _| !k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION));
         self.add_table(table, mode, true).await?;
         // `RepairTableCommand`: the partitions written, with their file statistics.
         self.register_partitions(&name, &dirs, true);
@@ -640,7 +650,7 @@ impl Session {
                 None,
             )
         } else {
-            return Err(source.not_found());
+            return Err(source.not_found(self.search_path()));
         };
         let (provider, provider_written) = match &t.using {
             Some(u) => {
@@ -741,7 +751,7 @@ impl Session {
                 remove_dir(&dir)?;
             }
         } else if !if_exists {
-            return Err(name.not_found());
+            return Err(name.not_found(self.search_path()));
         }
         Ok(())
     }

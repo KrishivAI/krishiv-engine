@@ -76,7 +76,13 @@ impl Session {
             }
             .into());
         }
-        Err(name.not_found())
+        // ALTER TABLE resolves a table only, so its path has no `system.builtin` (Spark's goldens).
+        let path = if matches!(operation, "ALTER TABLE" | "COMMENT ON TABLE") {
+            self.table_search_path()
+        } else {
+            self.search_path()
+        };
+        Err(name.not_found(path))
     }
 
     /// `INSERT INTO|OVERWRITE [TABLE] name [(columns)] [BY NAME] query`, or the multi-table
@@ -956,6 +962,8 @@ impl Session {
         }
         let mut options = BTreeMap::new();
         for (k, v) in &spec.options {
+            // The idempotency key travels with the creation write (`create_table_from` strips it
+            // before the table is stored: it belongs to this one write, never to the table).
             // Table metadata is stored as plain text: a secret never is.
             let Some(text) = v.as_plain() else {
                 return Err(unsupported("secret table options"));

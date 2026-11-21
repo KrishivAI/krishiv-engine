@@ -212,7 +212,12 @@ impl Expander<'_> {
         {
             return Err(TableOrViewNotFound {
                 relation_name: quote(view),
-                search_path: search_path(),
+                search_path: crate::catalog::search_path_in(
+                    &self
+                        .view_namespace
+                        .clone()
+                        .unwrap_or_else(|| self.catalog.current_namespace()),
+                ),
             }
             .into());
         }
