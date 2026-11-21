@@ -839,7 +839,7 @@ jobs:
             coverage: true
           - name: cp314t
             python: "3.14t"
-            maturin_args: "--no-default-features --features mimalloc,cloud"
+            maturin_args: "--no-default-features --features mimalloc,cloud,ui"
             wheel_tag: cp314t
             coverage: false
     name: wheels (${{ matrix.name }})
@@ -892,6 +892,14 @@ jobs:
             if [ "$COVERAGE" = "true" ]; then exit 1; fi
             echo "::notice::mypy has no install for this interpreter; the stub checks are skipped"
           fi
+          # P2-T096: python/tests/test_notebooks.py runs the notebooks under python/tests/notebooks with
+          # nbval (each cell's output must equal the stored one); it skips when nbval or ipykernel is
+          # absent. Required on the coverage leg, as mypy is.
+          if ! uv pip install --python "$RUNNER_TEMP/venv/bin/python" --only-binary :all: "nbval==0.11.0" "ipykernel==7.4.0"; then
+            if [ "$COVERAGE" = "true" ]; then exit 1; fi
+            echo "::notice::nbval or ipykernel has no install for this interpreter; the notebook check is skipped"
+          fi
+          if [ "$COVERAGE" = "true" ]; then export KRISHIV_REQUIRE_NBVAL=1; fi
           # The Arrow PyCapsule consumers the bridge tests run against, from
           # binary wheels only. All are required on abi3; Polars and DuckDB
           # publish no free-threaded wheels yet, so on cp314t a missing one

@@ -73,14 +73,14 @@
 {#if message}<p class="mb-3 text-destructive wrap-anywhere">{message}</p>{/if}
 <div class="grid gap-4 md:grid-cols-3">
   {#each levels as lv (lv.key)}
-    <section aria-label={lv.title}>
+    <section class="min-w-0" aria-label={lv.title}>
       <h2 class="mb-2 text-base font-bold">{lv.title}</h2>
       <ul class="m-0 list-none p-0">
         {#each lv.items as it (it.name)}
           <li>
             <button
               type="button"
-              class="min-h-10 w-full rounded-md px-3 py-2 text-left hover:bg-accent {lv.selected === it.name ? 'bg-accent font-medium' : ''}"
+              class="min-h-11 w-full rounded-md px-3 py-2 text-left wrap-anywhere hover:bg-accent {lv.selected === it.name ? 'bg-accent font-medium' : ''}"
               aria-pressed={lv.selected === it.name}
               onclick={() => pick(lv.key, it.name)}>{it.name}</button
             >
@@ -94,7 +94,7 @@
 </div>
 {#if table}
   <h2 class="mt-6 mb-2 text-base font-bold">Columns of <span class="mono">{table}</span></h2>
-  <div class="overflow-x-auto">
+  <div data-table-box class="overflow-x-auto">
     <table class="w-full text-left">
       <thead>
         <tr><th class="py-2 pr-4">Column</th><th class="py-2 pr-4">Type</th><th class="py-2">Comment</th></tr>
