@@ -49,9 +49,11 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.zstd.level", &SPILL_ZSTD_LEVEL),
     ("krishiv.sql.ansi.enabled", &ANSI_ENABLED),
     ("krishiv.sql.path.enabled", &SQL_PATH_ENABLED),
+    ("krishiv.ui.embed.linkTtl", &UI_EMBED_LINK_TTL),
     ("krishiv.flightSql.enabled", &FLIGHT_SQL_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
+    ("krishiv.ui.allowedOrigins", &UI_ALLOWED_ORIGINS),
     ("krishiv.catalog.maxColumns", &CATALOG_MAX_COLUMNS),
     ("krishiv.deterministicOrder", &DETERMINISTIC_ORDER),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
@@ -166,8 +168,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
     ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
+    (
+        "krishiv.server.readiness.timeout",
+        &SERVER_READINESS_TIMEOUT,
+    ),
     ("krishiv.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     ("krishiv.sql.files.commitProtocol", &FILES_COMMIT_PROTOCOL),
+    (
+        "krishiv.ui.embed.hideAttribution",
+        &UI_EMBED_HIDE_ATTRIBUTION,
+    ),
     (
         "krishiv.write.commitRetryTimeout",
         &WRITE_COMMIT_RETRY_TIMEOUT,
@@ -230,6 +240,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.python.worker.memoryLimit",
         &PYTHON_WORKER_MEMORY_LIMIT,
+    ),
+    (
+        "krishiv.server.readiness.interval",
+        &SERVER_READINESS_INTERVAL,
+    ),
+    (
+        "krishiv.server.readiness.required",
+        &SERVER_READINESS_REQUIRED,
     ),
     (
         "krishiv.sql.files.maxPartitionNum",
@@ -605,6 +623,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.experimental.unalignedCheckpoints",
         &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    ),
+    (
+        "krishiv.server.readiness.failureThreshold",
+        &SERVER_READINESS_FAILURE_THRESHOLD,
     ),
     (
         "krishiv.sql.avro.datetimeRebaseModeInRead",

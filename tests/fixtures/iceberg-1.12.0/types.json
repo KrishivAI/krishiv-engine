@@ -1,0 +1,1621 @@
+{
+ "spark": "4.1.0",
+ "iceberg": "1.12.0",
+ "cases": [
+  {
+   "case": "optional boolean",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "boolean"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "boolean",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required boolean",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "boolean"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "boolean",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional int",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "int"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "integer",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required int",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "int"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "integer",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional long",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "long"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "long",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required long",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "long"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "long",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional float",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "float"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "float",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required float",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "float"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "float",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional double",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "double"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "double",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required double",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "double"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "double",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional decimal(9,2)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "decimal(9,2)"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "decimal(9,2)",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required decimal(9,2)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "decimal(9,2)"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "decimal(9,2)",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional decimal(38,10)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "decimal(38,10)"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "decimal(38,10)",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required decimal(38,10)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "decimal(38,10)"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "decimal(38,10)",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional decimal(38,0)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "decimal(38,0)"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "decimal(38,0)",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required decimal(38,0)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "decimal(38,0)"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "decimal(38,0)",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional date",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "date"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "date",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required date",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "date"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "date",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional time",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "time"
+     }
+    ]
+   },
+   "error": {
+    "class": "UnsupportedOperationException",
+    "message": "Spark does not support time fields"
+   }
+  },
+  {
+   "case": "required time",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "time"
+     }
+    ]
+   },
+   "error": {
+    "class": "UnsupportedOperationException",
+    "message": "Spark does not support time fields"
+   }
+  },
+  {
+   "case": "optional timestamp",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "timestamp"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "timestamp_ntz",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required timestamp",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "timestamp"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "timestamp_ntz",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional timestamptz",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "timestamptz"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "timestamp",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required timestamptz",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "timestamptz"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "timestamp",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional timestamp_ns",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "timestamp_ns"
+     }
+    ]
+   },
+   "error": {
+    "class": "UnsupportedOperationException",
+    "message": "Cannot convert unsupported type to Spark: timestamp_ns"
+   }
+  },
+  {
+   "case": "required timestamp_ns",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "timestamp_ns"
+     }
+    ]
+   },
+   "error": {
+    "class": "UnsupportedOperationException",
+    "message": "Cannot convert unsupported type to Spark: timestamp_ns"
+   }
+  },
+  {
+   "case": "optional timestamptz_ns",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "timestamptz_ns"
+     }
+    ]
+   },
+   "error": {
+    "class": "UnsupportedOperationException",
+    "message": "Cannot convert unsupported type to Spark: timestamptz_ns"
+   }
+  },
+  {
+   "case": "required timestamptz_ns",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "timestamptz_ns"
+     }
+    ]
+   },
+   "error": {
+    "class": "UnsupportedOperationException",
+    "message": "Cannot convert unsupported type to Spark: timestamptz_ns"
+   }
+  },
+  {
+   "case": "optional string",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "string"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "string",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required string",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "string"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "string",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional uuid",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "uuid"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "string",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required uuid",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "uuid"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "string",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional fixed[16]",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "fixed[16]"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "binary",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required fixed[16]",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "fixed[16]"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "binary",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional binary",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "binary"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "binary",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required binary",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "binary"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "binary",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional variant",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "variant"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "variant",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required variant",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "variant"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "variant",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional unknown",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "unknown"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "void",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional geometry(OGC:CRS84)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "geometry(OGC:CRS84)"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "geometry(OGC:CRS84)",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required geometry(OGC:CRS84)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "geometry(OGC:CRS84)"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "geometry(OGC:CRS84)",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional geometry(EPSG:4326)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "geometry(EPSG:4326)"
+     }
+    ]
+   },
+   "error": {
+    "class": "IllegalArgumentException",
+    "message": "[ST_INVALID_CRS_VALUE] Invalid or unsupported CRS (coordinate reference system) value: 'EPSG:4326'. SQLSTATE: 22023"
+   }
+  },
+  {
+   "case": "required geometry(EPSG:4326)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "geometry(EPSG:4326)"
+     }
+    ]
+   },
+   "error": {
+    "class": "IllegalArgumentException",
+    "message": "[ST_INVALID_CRS_VALUE] Invalid or unsupported CRS (coordinate reference system) value: 'EPSG:4326'. SQLSTATE: 22023"
+   }
+  },
+  {
+   "case": "optional geometry(NOT:A_CRS)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "geometry(NOT:A_CRS)"
+     }
+    ]
+   },
+   "error": {
+    "class": "IllegalArgumentException",
+    "message": "[ST_INVALID_CRS_VALUE] Invalid or unsupported CRS (coordinate reference system) value: 'NOT:A_CRS'. SQLSTATE: 22023"
+   }
+  },
+  {
+   "case": "required geometry(NOT:A_CRS)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "geometry(NOT:A_CRS)"
+     }
+    ]
+   },
+   "error": {
+    "class": "IllegalArgumentException",
+    "message": "[ST_INVALID_CRS_VALUE] Invalid or unsupported CRS (coordinate reference system) value: 'NOT:A_CRS'. SQLSTATE: 22023"
+   }
+  },
+  {
+   "case": "optional geography(OGC:CRS84, spherical)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "geography(OGC:CRS84, spherical)"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "geography(OGC:CRS84, SPHERICAL)",
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "required geography(OGC:CRS84, spherical)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "geography(OGC:CRS84, spherical)"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "geography(OGC:CRS84, SPHERICAL)",
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "optional geography(OGC:CRS84, vincenty)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "geography(OGC:CRS84, vincenty)"
+     }
+    ]
+   },
+   "error": {
+    "class": "UnsupportedOperationException",
+    "message": "Spark does not support geography edge algorithm: vincenty"
+   }
+  },
+  {
+   "case": "required geography(OGC:CRS84, vincenty)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "geography(OGC:CRS84, vincenty)"
+     }
+    ]
+   },
+   "error": {
+    "class": "UnsupportedOperationException",
+    "message": "Spark does not support geography edge algorithm: vincenty"
+   }
+  },
+  {
+   "case": "optional geography(EPSG:3857, spherical)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "geography(EPSG:3857, spherical)"
+     }
+    ]
+   },
+   "error": {
+    "class": "IllegalArgumentException",
+    "message": "[ST_INVALID_CRS_VALUE] Invalid or unsupported CRS (coordinate reference system) value: 'EPSG:3857'. SQLSTATE: 22023"
+   }
+  },
+  {
+   "case": "required geography(EPSG:3857, spherical)",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": true,
+      "type": "geography(EPSG:3857, spherical)"
+     }
+    ]
+   },
+   "error": {
+    "class": "IllegalArgumentException",
+    "message": "[ST_INVALID_CRS_VALUE] Invalid or unsupported CRS (coordinate reference system) value: 'EPSG:3857'. SQLSTATE: 22023"
+   }
+  },
+  {
+   "case": "doc becomes comment",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "int",
+      "doc": "the doc"
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "integer",
+      "nullable": true,
+      "metadata": {
+       "comment": "the doc"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "case": "struct",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "s",
+      "required": false,
+      "type": {
+       "type": "struct",
+       "fields": [
+        {
+         "id": 2,
+         "name": "a",
+         "required": true,
+         "type": "int"
+        },
+        {
+         "id": 3,
+         "name": "b",
+         "required": false,
+         "type": "string",
+         "doc": "inner doc"
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "s",
+      "type": {
+       "type": "struct",
+       "fields": [
+        {
+         "name": "a",
+         "type": "integer",
+         "nullable": false,
+         "metadata": {}
+        },
+        {
+         "name": "b",
+         "type": "string",
+         "nullable": true,
+         "metadata": {
+          "comment": "inner doc"
+         }
+        }
+       ]
+      },
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "list, element optional",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "l",
+      "required": false,
+      "type": {
+       "type": "list",
+       "element-id": 2,
+       "element": "long",
+       "element-required": false
+      }
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "l",
+      "type": {
+       "type": "array",
+       "elementType": "long",
+       "containsNull": true
+      },
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "list, element required",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "l",
+      "required": false,
+      "type": {
+       "type": "list",
+       "element-id": 2,
+       "element": "long",
+       "element-required": true
+      }
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "l",
+      "type": {
+       "type": "array",
+       "elementType": "long",
+       "containsNull": false
+      },
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "map, value optional",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "m",
+      "required": false,
+      "type": {
+       "type": "map",
+       "key-id": 2,
+       "key": "string",
+       "value-id": 3,
+       "value": "double",
+       "value-required": false
+      }
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "m",
+      "type": {
+       "type": "map",
+       "keyType": "string",
+       "valueType": "double",
+       "valueContainsNull": true
+      },
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "map, value required",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "m",
+      "required": false,
+      "type": {
+       "type": "map",
+       "key-id": 2,
+       "key": "string",
+       "value-id": 3,
+       "value": "double",
+       "value-required": true
+      }
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "m",
+      "type": {
+       "type": "map",
+       "keyType": "string",
+       "valueType": "double",
+       "valueContainsNull": false
+      },
+      "nullable": true,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "nested list of struct in map",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "n",
+      "required": true,
+      "type": {
+       "type": "map",
+       "key-id": 2,
+       "key": "int",
+       "value-id": 3,
+       "value": {
+        "type": "list",
+        "element-id": 4,
+        "element": {
+         "type": "struct",
+         "fields": [
+          {
+           "id": 5,
+           "name": "x",
+           "required": false,
+           "type": "timestamptz"
+          }
+         ]
+        },
+        "element-required": true
+       },
+       "value-required": false
+      }
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "n",
+      "type": {
+       "type": "map",
+       "keyType": "integer",
+       "valueType": {
+        "type": "array",
+        "elementType": {
+         "type": "struct",
+         "fields": [
+          {
+           "name": "x",
+           "type": "timestamp",
+           "nullable": true,
+           "metadata": {}
+          }
+         ]
+        },
+        "containsNull": false
+       },
+       "valueContainsNull": true
+      },
+      "nullable": false,
+      "metadata": {}
+     }
+    ]
+   }
+  },
+  {
+   "case": "column default values",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "c",
+      "required": false,
+      "type": "int",
+      "initial-default": 5,
+      "write-default": 7
+     }
+    ]
+   },
+   "spark": {
+    "type": "struct",
+    "fields": [
+     {
+      "name": "c",
+      "type": "integer",
+      "nullable": true,
+      "metadata": {
+       "EXISTS_DEFAULT": "5",
+       "CURRENT_DEFAULT": "7"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "case": "list of time",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "l",
+      "required": false,
+      "type": {
+       "type": "list",
+       "element-id": 2,
+       "element": "time",
+       "element-required": true
+      }
+     }
+    ]
+   },
+   "error": {
+    "class": "UnsupportedOperationException",
+    "message": "Spark does not support time fields"
+   }
+  },
+  {
+   "case": "time nested in a struct",
+   "iceberg": {
+    "type": "struct",
+    "schema-id": 0,
+    "fields": [
+     {
+      "id": 1,
+      "name": "s",
+      "required": false,
+      "type": {
+       "type": "struct",
+       "fields": [
+        {
+         "id": 2,
+         "name": "t",
+         "required": false,
+         "type": "time"
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "error": {
+    "class": "UnsupportedOperationException",
+    "message": "Spark does not support time fields"
+   }
+  }
+ ]
+}

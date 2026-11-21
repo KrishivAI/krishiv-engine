@@ -5,6 +5,10 @@
 # when warning, nothing otherwise; always exits 0 (never 2).
 . "$(dirname "$0")/lib.sh" 2>/dev/null || exit 0
 
+# Lane sessions run in tmux and keep their own handoffs (krishiv-internal CLAUDE.md, owner 2026-11-20): the STATUS.md
+# reminder made them end turns early, pointing at a stale active plan. Interactive sessions outside tmux still get it.
+[ -n "${TMUX:-}" ] && exit 0
+
 engine=$(krishiv_engine_dir) || exit 0
 internal=$(krishiv_internal_dir "$engine") || exit 0
 status="$internal/STATUS.md"

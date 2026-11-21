@@ -654,6 +654,11 @@ fn parse_text(
             in_pipelines = true;
             continue;
         }
+        // A section after the pipelines (`== Hints ==`, which a spill can
+        // raise depending on timing) ends the list.
+        if in_pipelines && line.starts_with("==") {
+            in_pipelines = false;
+        }
         if in_pipelines {
             // `   p2: wall 125.5 ms, 12 drivers, 12 threads: #16 ...`.
             let line = line.trim_start();

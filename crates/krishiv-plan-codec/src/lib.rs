@@ -67,6 +67,7 @@
 mod arrow;
 mod decode;
 mod decode_sketch;
+mod decode_udt;
 mod encode;
 mod error;
 pub mod features;

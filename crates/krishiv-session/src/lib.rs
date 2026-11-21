@@ -84,6 +84,8 @@ mod nested_value;
 mod observation;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
+#[cfg(feature = "unstable-ir")]
+pub mod parameter_types;
 mod partition_advice;
 mod partition_keys;
 mod partitions;
@@ -154,6 +156,7 @@ pub use krishiv_udf_sdk::{
     ReturnField, ScalarUdf, Signature, StateField, UdfArg, UdfError, UdfInputType, UdfLibrary,
     UdfProperties,
 };
+pub use memory_table::BatchSource;
 pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use python_udfs::{

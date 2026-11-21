@@ -195,6 +195,42 @@ pub(super) async fn load(
     Ok((out, vec![held]))
 }
 
+/// The positions the delete files `files` (a DV or v2 position delete
+/// files) delete from the data file `data`: what a merge-on-read write
+/// absorbs into its new delete (PR-36c, Java's `BaseDeleteLoader
+/// .loadPositionDeletes` through `PreviousDeleteLoader`). Read with the
+/// scan's readers and checks; the charge of `mem` is released once they are
+/// unioned (the result is the caller's to account).
+///
+/// # Errors
+/// As [`load`].
+pub(super) async fn positions_of(
+    io: &IoContext,
+    locate: &(dyn Fn(&str) -> Result<FileRef, KrishivError> + Send + Sync),
+    mem: &Arc<ConsumerHandle>,
+    data: &str,
+    files: &[Arc<DeleteFileEntry>],
+) -> Result<RoaringTreemap, KrishivError> {
+    let mut out = RoaringTreemap::new();
+    let paths = BTreeSet::from([data.to_owned()]);
+    for d in files {
+        match d.kind {
+            crate::plan::DeleteKind::DeletionVector => {
+                let (p, charge) = read_dv(io, locate, mem, d).await?;
+                out |= p;
+                drop(charge);
+            }
+            crate::plan::DeleteKind::PositionDelete => {
+                let (mut by_path, charge) = read_position_file(io, locate, mem, d, &paths).await?;
+                out.extend(by_path.remove(data).unwrap_or_default());
+                drop(charge);
+            }
+            crate::plan::DeleteKind::EqualityDelete => {}
+        }
+    }
+    Ok(out)
+}
+
 /// The positions of a v2 position delete file `d` that name one of `paths`,
 /// by data path, and the reservation of `mem` paying for them.
 async fn read_position_file(

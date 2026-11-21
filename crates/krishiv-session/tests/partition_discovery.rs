@@ -164,8 +164,10 @@ fn files_at_different_depths_conflict() {
         format!("{root}/year=2020/loose.parquet"),
     )
     .unwrap();
+    // One base path, two column lists: Spark 4.2.0 names the lists (`read-user-schema.json`, "partition
+    // directories of two depths").
     let e = block_on(s.read().parquet([root.as_str()]).schema()).unwrap_err();
-    assert_eq!(e.error_class().name(), "CONFLICTING_DIRECTORY_STRUCTURES");
+    assert_eq!(e.error_class().name(), "CONFLICTING_PARTITION_COLUMN_NAMES");
 }
 
 #[test]
@@ -310,11 +312,18 @@ fn a_glob_reads_each_match_as_its_own_root() {
         &format!("SELECT CAST(id AS STRING), region FROM parquet.`{root}/year=2020`"),
     );
     assert_eq!(ids, [["1", "eu"], ["2", "us"]]);
-    let globbed = rows(
-        &s,
-        &format!("SELECT CAST(id AS STRING), region FROM parquet.`{root}/year=202{{0,1}}`"),
+    // Two matches each with partition directories are two base paths: Spark 4.2.0 refuses them
+    // (`read-user-schema.json`, "a glob over partition directories").
+    let globbed = block_on(
+        s.read()
+            .parquet([format!("{root}/year=202{{0,1}}")])
+            .schema(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        globbed.error_class().name(),
+        "CONFLICTING_DIRECTORY_STRUCTURES"
     );
-    assert_eq!(globbed, [["1", "eu"], ["2", "us"], ["3", "eu"]]);
     let star = rows(
         &s,
         &format!("SELECT CAST(id AS STRING) FROM parquet.`{root}/year=2021/region=e?`"),

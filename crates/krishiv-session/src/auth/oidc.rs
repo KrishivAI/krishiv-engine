@@ -82,6 +82,8 @@ struct CacheState {
     keys: Arc<[Jwk]>,
     /// The last fetch asked for by a request.
     last_on_demand: Option<Instant>,
+    /// When a key set was last installed (readiness: never fetched, or too old).
+    installed_at: Option<Instant>,
 }
 
 /// The answer of [`JwksCache::lookup`].
@@ -144,8 +146,9 @@ impl JwksCache {
     }
 
     /// Replaces the keys with the set in `document`. A document that does not parse, or holds
-    /// no usable key while keys are cached, keeps the old keys (an empty set from a provider in
-    /// trouble must not lock every user out).
+    /// no usable key, is refused: cached keys stay (an empty set from a provider in trouble must
+    /// not lock every user out) and a fresh cache stays "not fetched", so readiness waits for a
+    /// usable set.
     ///
     /// # Errors
     /// The parse error, or `no usable key`.
@@ -153,11 +156,17 @@ impl JwksCache {
         let keys = jose::parse_jwks(document)?;
         let n = keys.len();
         let mut state = self.state();
-        if n == 0 && !state.keys.is_empty() {
+        if n == 0 {
             return Err(JoseError::Invalid("no usable key"));
         }
         state.keys = keys.into();
+        state.installed_at = Some(Instant::now());
         Ok(n)
+    }
+
+    /// How long ago a key set was last installed; `None` when none ever was.
+    pub(crate) fn age(&self) -> Option<Duration> {
+        self.state().installed_at.map(|t| t.elapsed())
     }
 
     /// How many keys are cached (tests).
@@ -181,6 +190,8 @@ pub(crate) struct Oidc {
     skew_secs: u64,
     max_lifetime_secs: u64,
     jwks: Arc<JwksCache>,
+    /// The fetch period; the key set is stale past three of them.
+    jwks_refresh: Duration,
     /// Requests to the fetch thread; dropping it stops the thread.
     fetch: mpsc::Sender<FetchRequest>,
 }
@@ -249,6 +260,7 @@ impl Oidc {
             skew_secs: config.clock_skew.as_secs(),
             max_lifetime_secs: config.max_lifetime.as_secs(),
             jwks,
+            jwks_refresh: every,
             fetch: tx,
         })
     }
@@ -316,6 +328,18 @@ impl Oidc {
         if self.fetch.send(done).is_err() {
             // The receiver of a waiting request then errors at once, so nobody hangs.
             tracing::error!(target: "krishiv::auth", "the JWK set thread has stopped");
+        }
+    }
+
+    /// Readiness of the key set (design P3-T066 §5.2 check 2): `Err` when it was never
+    /// fetched or is older than three refresh periods.
+    pub(crate) fn jwks_ready(&self) -> Result<(), String> {
+        match self.jwks.age() {
+            None => Err("the JWK set has not been fetched yet".to_owned()),
+            Some(age) if age > self.jwks_refresh.saturating_mul(3) => {
+                Err(format!("the JWK set is {}s old", age.as_secs()))
+            }
+            Some(_) => Ok(()),
         }
     }
 
