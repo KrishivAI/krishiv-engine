@@ -34,12 +34,15 @@ pub(crate) type DoPutStream = Pin<Box<dyn Stream<Item = Result<PutResult, Status
 /// commands' `num_affected_rows`).
 const AFFECTED_ROWS: &str = "num_affected_rows";
 
-/// `record_count` of a command's result rows (design §4.3): the affected rows where the statement
-/// reports them (a first column `num_affected_rows` of one `BIGINT` row), else `-1`.
+/// `record_count` of a command's result rows (design §4.3, amended 2026-11-20): the affected rows
+/// where the statement reports them (a first column `num_affected_rows` of one `BIGINT` row),
+/// else `0`, as a JDBC update count of DDL is. Not `-1` ("unknown" in Flight SQL): Arrow's JDBC
+/// driver (Avatica) reads an update count of `-1` as a statement with a result set and asks for
+/// it, which runs the command a second time.
 pub(crate) fn record_count(batches: &[RecordBatch]) -> i64 {
     let mut rows = batches.iter().filter(|b| b.num_rows() > 0);
     let (Some(batch), None) = (rows.next(), rows.next()) else {
-        return -1;
+        return 0;
     };
     if batch.num_rows() != 1
         || batch
@@ -48,14 +51,14 @@ pub(crate) fn record_count(batches: &[RecordBatch]) -> i64 {
             .first()
             .is_none_or(|f| f.name() != AFFECTED_ROWS)
     {
-        return -1;
+        return 0;
     }
     batch
         .column(0)
         .as_any()
         .downcast_ref::<Int64Array>()
         .filter(|a| a.is_valid(0))
-        .map_or(-1, |a| a.value(0))
+        .map_or(0, |a| a.value(0))
 }
 
 /// The answer of an update: one `PutResult` carrying `DoPutUpdateResult{record_count}`.
@@ -160,19 +163,19 @@ mod tests {
             record_count(&[empty.clone(), batch(AFFECTED_ROWS, vec![Some(3)]), empty]),
             3
         );
-        assert_eq!(record_count(&[]), -1, "INSERT reports nothing");
-        assert_eq!(record_count(&[batch("x", vec![Some(7)])]), -1);
-        assert_eq!(record_count(&[batch(AFFECTED_ROWS, vec![None])]), -1);
+        assert_eq!(record_count(&[]), 0, "INSERT reports nothing");
+        assert_eq!(record_count(&[batch("x", vec![Some(7)])]), 0);
+        assert_eq!(record_count(&[batch(AFFECTED_ROWS, vec![None])]), 0);
         assert_eq!(
             record_count(&[batch(AFFECTED_ROWS, vec![Some(1), Some(2)])]),
-            -1
+            0
         );
         assert_eq!(
             record_count(&[
                 batch(AFFECTED_ROWS, vec![Some(1)]),
                 batch(AFFECTED_ROWS, vec![Some(2)])
             ]),
-            -1
+            0
         );
     }
 }

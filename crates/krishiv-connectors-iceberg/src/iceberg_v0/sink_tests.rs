@@ -85,6 +85,20 @@ impl Catalog {
     pub(super) fn metadata(&self) -> TableMetadata {
         self.state.lock().unwrap().0.clone()
     }
+
+    /// The table's metadata and its location, to put back with [`Self::restore`].
+    pub(super) fn state(&self) -> (TableMetadata, String) {
+        let s = self.state.lock().unwrap();
+        (s.0.clone(), s.1.clone())
+    }
+
+    /// Puts back a state [`Self::state`] returned (a test staging another
+    /// writer's commit for later).
+    pub(super) fn restore(&self, state: (TableMetadata, String)) {
+        let mut s = self.state.lock().unwrap();
+        s.0 = state.0;
+        s.1 = state.1;
+    }
 }
 
 #[async_trait]

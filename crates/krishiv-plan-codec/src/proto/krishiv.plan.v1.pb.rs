@@ -1694,8 +1694,10 @@ pub struct DataType {
     #[prost(uint32, tag = "3")]
     pub scale: u32,
     /// feature: nested_types
-    /// `KIND_NESTED` only: an array, map or struct type as Spark's JSON form
+    /// `KIND_NESTED`: an array, map or struct type as Spark's JSON form
     /// (`DataType.json`), which keeps nullability and field metadata.
+    /// `KIND_UDT`: the user-defined type as Spark's JSON form (class names and
+    /// the storage type).
     #[prost(string, tag = "4")]
     pub json: ::prost::alloc::string::String,
     /// feature: geo_types
@@ -1774,6 +1776,8 @@ pub mod data_type {
         CollatedString = 22,
         /// feature: variant_type
         Variant = 23,
+        /// feature: udt_type
+        Udt = 24,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -1806,6 +1810,7 @@ pub mod data_type {
                 Self::CalendarInterval => "KIND_CALENDAR_INTERVAL",
                 Self::CollatedString => "KIND_COLLATED_STRING",
                 Self::Variant => "KIND_VARIANT",
+                Self::Udt => "KIND_UDT",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1835,6 +1840,7 @@ pub mod data_type {
                 "KIND_CALENDAR_INTERVAL" => Some(Self::CalendarInterval),
                 "KIND_COLLATED_STRING" => Some(Self::CollatedString),
                 "KIND_VARIANT" => Some(Self::Variant),
+                "KIND_UDT" => Some(Self::Udt),
                 _ => None,
             }
         }
