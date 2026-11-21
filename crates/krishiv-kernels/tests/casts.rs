@@ -1019,3 +1019,59 @@ fn a_widening_cast_of_an_out_of_type_value_is_not_wrapped() {
     let legacy = run(bad.as_ref(), &to, CastMode::Legacy).unwrap();
     assert_eq!(unscaled(legacy.as_ref()), vec![None]);
 }
+
+/// A value outside its own declared precision (a file can hold one) that a widening cast would
+/// keep in its carrier is still checked against the target precision: under ANSI the
+/// out-of-range error, under legacy and `try_cast` NULL, as on the general path.
+#[test]
+fn a_widening_cast_checks_an_out_of_type_value_against_the_target() {
+    let d64 = |v: i64, p: u8, sc: i8| -> ArrayRef {
+        Arc::new(
+            arrow_array::Decimal64Array::from(vec![v])
+                .with_precision_and_scale(p, sc)
+                .unwrap(),
+        )
+    };
+    let cases: [(ArrayRef, DataType); 4] = [
+        // A rescale whose product fits the carrier: 10^9 * 10^2 = 10^11 > 10^10.
+        (dec(10_i128.pow(9), 5, 0), DataType::Decimal128(10, 2)),
+        (d64(10_i64.pow(9), 5, 0), DataType::Decimal64(10, 2)),
+        (d64(10_i64.pow(9), 5, 0), DataType::Decimal128(10, 2)),
+        // A retype (same scale): 10^6 > 10^6 - 1, the largest decimal(6, 2).
+        (dec(10_i128.pow(6), 5, 2), DataType::Decimal128(6, 2)),
+    ];
+    for (a, to) in &cases {
+        let err = run(a.as_ref(), to, Ansi).unwrap_err();
+        assert!(
+            err.to_string().contains("NUMERIC_VALUE_OUT_OF_RANGE"),
+            "{to}: {err}"
+        );
+        for mode in [Legacy, Try] {
+            let out = run(a.as_ref(), to, mode).unwrap();
+            assert_eq!(out.data_type(), to);
+            assert_eq!(unscaled(out.as_ref()), vec![None], "{to} {mode:?}");
+        }
+    }
+    let retype = d64(10_i64.pow(6), 5, 2);
+    let to = DataType::Decimal64(6, 2);
+    assert!(run(retype.as_ref(), &to, Ansi).is_err());
+    assert_eq!(
+        unscaled(run(retype.as_ref(), &to, Legacy).unwrap().as_ref()),
+        vec![None]
+    );
+}
+
+/// A same-scale widening cast of in-type values is the input retyped: it shares the value
+/// buffer (the zero copy behind TPC-DS q28's gain).
+#[test]
+fn a_same_scale_widening_cast_shares_the_values() {
+    use arrow_array::cast::AsArray as _;
+    let a = dec(12_345, 7, 2);
+    let out = run(a.as_ref(), &DataType::Decimal128(10, 2), Ansi).unwrap();
+    assert!(
+        out.as_primitive::<Decimal128Type>()
+            .values()
+            .inner()
+            .ptr_eq(a.as_primitive::<Decimal128Type>().values().inner())
+    );
+}
