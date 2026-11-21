@@ -34,7 +34,9 @@ const MIN_SAMPLED: usize = 32;
 /// The rate so follows the distinct keys of two intervals, not the driver's
 /// history: a unique stream of an interval of 1M run starts settles near
 /// level 4 (about 1,000 sampled keys an interval), where an interval of
-/// 4-row runs still samples over 200 run starts.
+/// 4-row runs still samples over 200 run starts. The level never falls: after
+/// intervals of about 1M distinct run starts, recurring keys in runs longer
+/// than about 32 rows are rarely sampled and their table stays append-only.
 #[derive(Debug)]
 pub(super) struct Recur {
     slots: Box<[u64]>,

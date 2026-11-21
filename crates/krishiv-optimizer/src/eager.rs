@@ -510,7 +510,7 @@ fn read_below(node: &LogicalPlan, read: &Attrs, args: &Attrs) -> Result<Attrs, S
         // where something above reads it too.
         if args.contains(&out.id) && !values.iter().all(|v| is_column(v, out.id)) {
             return Err(format!(
-                "the argument {} is computed above the join",
+                "the argument {} is computed between the aggregate and its new input",
                 out.name
             ));
         }
@@ -519,10 +519,16 @@ fn read_below(node: &LogicalPlan, read: &Attrs, args: &Attrs) -> Result<Attrs, S
         }
         for v in values {
             if has_subquery(v) || has_outer_reference(v) {
-                return Err("a projection above the join holds a subquery".to_owned());
+                return Err(
+                    "a projection between the aggregate and its new input holds a subquery"
+                        .to_owned(),
+                );
             }
             if !is_deterministic(v) {
-                return Err("a projection above the join is nondeterministic".to_owned());
+                return Err(
+                    "a projection between the aggregate and its new input is nondeterministic"
+                        .to_owned(),
+                );
             }
             references_into(v, &mut below);
         }
@@ -531,7 +537,8 @@ fn read_below(node: &LogicalPlan, read: &Attrs, args: &Attrs) -> Result<Attrs, S
     match &node.node {
         PlanNode::Project { exprs, .. } => {
             for e in exprs {
-                let out = output_of(e).ok_or("an unnamed projection above the join")?;
+                let out = output_of(e)
+                    .ok_or("an unnamed projection between the aggregate and its new input")?;
                 item(out, &[e])?;
             }
         }

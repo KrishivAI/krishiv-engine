@@ -1342,7 +1342,12 @@ fn recurring_keys_after_a_unique_prefix_return_to_the_index() {
     let keys = 50_000_i64;
     let rows = 3 << 20;
     feed(&mut t, &core, rows, |i| (1 << 40) | ((i / 4) % keys));
-    assert!(matches!(t.mode, Mode::Fixed { .. }), "{:?}", t.mode);
+    // The restored index is sized for the recurring keys, not the starting limit.
+    assert!(
+        matches!(t.mode, Mode::Fixed { limit } if limit >= 50_000),
+        "{:?}",
+        t.mode
+    );
     let (_, _, _, level, _) = t.adapt.as_ref().unwrap().recur.state();
     assert!(level > 0, "the full set never sampled more sparsely");
     // The prefix's runs, then at most two decisions' worth of runs
