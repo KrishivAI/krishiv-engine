@@ -46,6 +46,20 @@ impl ExecNode for OrderedNode {
     }
 }
 
+/// `inner` built into a pipeline that keeps its input order from the start,
+/// so the branches of a `UNION ALL` below inherit the one-driver rule
+/// ([`PipelineBuilder::fan_in`] reads the flag when the union is built).
+pub(crate) struct OrderedInput {
+    pub(crate) inner: Arc<dyn ExecNode>,
+}
+
+impl ExecNode for OrderedInput {
+    fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+        b.preserve_order();
+        Arc::clone(&self.inner).build_pipelines(b)
+    }
+}
+
 /// A pipeline breaker: the sink of its input's pipeline and the source of
 /// the current one; `ordered` keeps its output order (one driver above it).
 pub(crate) struct BreakerNode {
