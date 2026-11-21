@@ -135,6 +135,8 @@ pub struct WorkerContext {
     exchange: Option<Arc<dyn Exchange>>,
     /// The job's broadcast builds on this worker, shared by its tasks.
     broadcasts: Option<Arc<BroadcastTables>>,
+    /// The rows one execution read from decided scans, shared by its tasks.
+    execution_reads: Option<Arc<crate::operators::ExecutionReads>>,
     /// Whether a partial and a final aggregate around an exchange run as one
     /// breaker (the default; see [`fused_aggregate`]).
     fuse_aggregates: bool,
@@ -226,6 +228,7 @@ impl WorkerContext {
             producer: Producer::default(),
             exchange: None,
             broadcasts: None,
+            execution_reads: None,
             fuse_aggregates: true,
         }
     }
@@ -323,6 +326,13 @@ impl WorkerContext {
         self
     }
 
+    /// The same context keeping the rows a decided scan reads in `reads`, shared by the execution's tasks.
+    #[must_use]
+    pub fn with_execution_reads(mut self, reads: Arc<crate::operators::ExecutionReads>) -> Self {
+        self.execution_reads = Some(reads);
+        self
+    }
+
     /// The same context running a partial aggregate, its exchange and its
     /// final aggregate as written (`false`) instead of as one breaker: the
     /// operators a worker runs on each side of a cut exchange, for tests.
@@ -402,6 +412,7 @@ impl fmt::Debug for WorkerContext {
             .field("producer", &self.producer)
             .field("exchange", &self.exchange.is_some())
             .field("broadcasts", &self.broadcasts.is_some())
+            .field("execution_reads", &self.execution_reads.is_some())
             .field("fuse_aggregates", &self.fuse_aggregates)
             .finish_non_exhaustive()
     }
@@ -1346,7 +1357,16 @@ impl Instantiation<'_> {
     }
 
     fn scan(&mut self, s: &ScanNode) -> Result<Built> {
-        let factory = self.worker.tables.provider(&s.scan)?.scan()?;
+        let factory = match &s.decided {
+            Some(decided) => {
+                let Some(reads) = &self.worker.execution_reads else {
+                    return Err(internal("a decided scan outside an execution".to_owned()));
+                };
+                let bound = self.worker.tables.bound_scan(decided.id)?;
+                reads.get_or_read(decided.id, || bound.read())?
+            }
+            None => self.worker.tables.provider(&s.scan)?.scan()?,
+        };
         let factory = self.splits(s.id, factory)?;
         if s.row_id && !factory.supports_take() {
             return Err(internal(format!(

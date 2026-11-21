@@ -1282,7 +1282,16 @@ impl<'a> Planner<'a> {
         let mut pushed = Vec::new();
         let mut scan_filter_plan = None;
         let mut detail = format!("{} [{}]", source_name(scan), columns(&scan.output));
-        if let Some(predicate) = filter {
+        // A scan that decides once (a Python data source) sees every conjunct at once; a plan that
+        // is only looked at, or a row-level probe, keeps the whole filter above the scan instead.
+        let deciding = filter.is_some() && factory.decides_once();
+        let mut decision = None;
+        if let (true, Some(predicate)) = (deciding, filter) {
+            if self.cx.decisions && !row_id {
+                decision =
+                    Some(self.decide_scan(&*factory, &table, scan, predicate, &projection)?);
+            }
+        } else if let Some(predicate) = filter {
             // The scan evaluates pushed filters over its table schema.
             let layout: Vec<AttrId> = table
                 .fields()
@@ -1309,11 +1318,24 @@ impl<'a> Planner<'a> {
             metadata,
             ..ScanPushdowns::default()
         };
-        if let Some(more) = factory.explain(&pushdowns) {
+        let bound = decision.as_ref().map(|d| Arc::clone(&d.bound));
+        if let Some(d) = &decision
+            && !d.shown.is_empty()
+        {
+            detail.push_str(&format!(", PushedFilters: [{}]", d.shown.join(", ")));
+        }
+        let more = match &bound {
+            Some(b) => b.explain(&pushdowns),
+            None => factory.explain(&pushdowns),
+        };
+        if let Some(more) = more {
             detail.push_str(", ");
             detail.push_str(&more);
         }
-        let schema = factory.output_schema(&pushdowns)?;
+        let schema = match &bound {
+            Some(b) => b.output_schema(&pushdowns)?,
+            None => factory.output_schema(&pushdowns)?,
+        };
         let id = self.next_scan_id()?;
         let sites = if self.rf.enabled() {
             let scan_rows = self.estimated_rows(plan);
@@ -1350,7 +1372,7 @@ impl<'a> Planner<'a> {
                 runtime_filters: Vec::new(),
                 row_stage: self.rf.row_stage(),
                 row_id,
-                decided: None,
+                decided: decision.as_ref().map(|d| Box::new(d.decided.clone())),
             }),
             layout,
             explain: ExplainNode::leaf("Scan", detail).with_facts(super::scan_facts::of(
@@ -1364,10 +1386,84 @@ impl<'a> Planner<'a> {
         if let Some(predicate) = filter {
             self.no_runtime_filters_before(&mut planned, predicate);
         }
-        match filter {
-            Some(predicate) if !exact => self.filter(planned, predicate),
+        match (decision, filter) {
+            (Some(d), _) => match d.residual {
+                Some(residual) => self.filter(planned, &residual),
+                None => Ok(planned),
+            },
+            (None, Some(predicate)) if !exact => self.filter(planned, predicate),
             _ => Ok(planned),
         }
+    }
+
+    /// Offers every conjunct of `predicate` to a scan that decides once, and binds the read it planned.
+    /// The residual is Spark's: the conjuncts the scan did not take that translate, then those that do
+    /// not, then those holding a subquery.
+    fn decide_scan(
+        &mut self,
+        factory: &dyn crate::operators::ScanPushdown,
+        table: &SchemaRef,
+        scan: &krishiv_plan::Scan,
+        predicate: &Arc<Expr>,
+        projection: &[ColumnPath],
+    ) -> Result<Decision> {
+        use crate::operators::{DecidedScan, OfferedConjunct, SourceConjunct};
+        let layout: Vec<AttrId> = table
+            .fields()
+            .iter()
+            .map(|f| match scan.output.iter().find(|c| c.name == *f.name()) {
+                Some(c) => c.id,
+                None => self.fresh_id(),
+            })
+            .collect();
+        let mut offered = Vec::new();
+        let mut exprs = Vec::new();
+        let mut subqueries = Vec::new();
+        for c in krishiv_plan::conjuncts(predicate) {
+            if krishiv_plan::has_subquery(c) {
+                subqueries.push(c);
+                continue;
+            }
+            offered.push(OfferedConjunct {
+                filter: scan_filter(table, &layout, c, scan, &self.env)?,
+                source: super::source_filter::classify(c, &scan.output),
+            });
+            exprs.push(c);
+        }
+        let decision = factory.decide(&offered, projection)?;
+        if decision.pushed.len() != offered.len() {
+            return Err(internal(
+                "a scan decided on a different number of conjuncts",
+            ));
+        }
+        let id = self.cx.tables.bind_scan(Arc::clone(&decision.bound))?;
+        let taken = |i: usize| decision.pushed.get(i).copied().unwrap_or(false);
+        let (mut kept, mut untranslated) = (Vec::new(), Vec::new());
+        for (i, (o, e)) in offered.iter().zip(&exprs).enumerate() {
+            if taken(i) {
+                continue;
+            }
+            match o.source {
+                SourceConjunct::Untranslated => untranslated.push(*e),
+                _ => kept.push(*e),
+            }
+        }
+        kept.extend(untranslated);
+        kept.extend(subqueries);
+        let pushed: Vec<u32> = (0..offered.len())
+            .filter(|i| taken(*i))
+            .filter_map(|i| u32::try_from(i).ok())
+            .collect();
+        Ok(Decision {
+            shown: pushed
+                .iter()
+                .filter_map(|i| exprs.get(*i as usize))
+                .map(ToString::to_string)
+                .collect(),
+            decided: DecidedScan { id, pushed },
+            residual: super::source_filter::and_all(kept),
+            bound: decision.bound,
+        })
     }
 
     /// A scan whose filter has a conjunct that may raise gets no runtime
@@ -1979,4 +2075,13 @@ fn unseeded_sample_seed(salt: Option<u64>, n: u64) -> i64 {
         None => std::collections::hash_map::RandomState::new().hash_one(n),
     };
     (draw % 1000).cast_signed()
+}
+
+/// What a scan that decides once answered for one filter: see `Builder::decide_scan`.
+struct Decision {
+    decided: crate::operators::DecidedScan,
+    bound: Arc<dyn crate::operators::BoundScan>,
+    /// The pushed conjuncts as `EXPLAIN` shows them.
+    shown: Vec<String>,
+    residual: Option<Expr>,
 }
