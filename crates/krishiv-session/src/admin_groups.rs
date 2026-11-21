@@ -160,12 +160,15 @@ impl EngineRuntime {
     #[must_use]
     pub fn resource_group_document(&self) -> ResourceGroupDocument {
         match (&self.resource_groups, self.group_file()) {
-            (Some(groups), Some(path)) => ResourceGroupDocument {
-                document: groups.document(),
-                etag: groups.etag(),
-                loaded_at_ms: i64::try_from(groups.loaded_at_ms()).unwrap_or(i64::MAX),
-                file_etag: ResourceGroups::file_etag(path),
-            },
+            (Some(groups), Some(path)) => {
+                let (document, etag, loaded_at_ms) = groups.snapshot();
+                ResourceGroupDocument {
+                    document,
+                    etag,
+                    loaded_at_ms: i64::try_from(loaded_at_ms).unwrap_or(i64::MAX),
+                    file_etag: ResourceGroups::file_etag(path),
+                }
+            }
             _ => ResourceGroupDocument {
                 document: String::new(),
                 etag: String::new(),

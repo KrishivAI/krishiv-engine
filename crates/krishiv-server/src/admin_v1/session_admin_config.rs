@@ -4,6 +4,7 @@
 //! reading and changing the runtime's configuration defaults.
 
 use krishiv_common::error::KrishivError;
+use krishiv_common::redact::is_redacted_setting;
 use krishiv_common::secret::is_sensitive_key;
 use krishiv_session::{ConfigListing, ConfigSource, Privilege, ResourceGroupInfo};
 
@@ -28,6 +29,7 @@ fn admin_error(e: &KrishivError) -> AdminError {
         }
         "KRISHIV_RESOURCE_GROUP_CONFIG_INVALID"
         | "CANNOT_MODIFY_STATIC_CONFIG"
+        | "KRISHIV_INVALID_CONFIG_VALUE"
         | "KRISHIV_UNKNOWN_CONFIG" => ErrorKind::InvalidArgument,
         n if n.starts_with("INVALID_CONF_VALUE") || n.starts_with("INVALID_") => {
             ErrorKind::InvalidArgument
@@ -91,7 +93,9 @@ fn entry_message(c: &ConfigListing) -> ConfigEntry {
 fn shown(key: &str, value: Option<&str>) -> String {
     match value {
         None => "(unset)".to_owned(),
-        Some(_) if is_sensitive_key(key) => "(withheld)".to_owned(),
+        Some(v) if is_sensitive_key(key) || is_redacted_setting(key, Some(v)) => {
+            "(withheld)".to_owned()
+        }
         Some(v) => {
             // A request may carry a value of any length: the record keeps the start of it.
             const MAX: usize = 256;
@@ -362,5 +366,31 @@ impl SessionAdmin {
             format!("unset {k}: {}", shown(&k, current(&k).as_deref()))
         }));
         parts.join("; ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_credential_inside_a_value_is_withheld() {
+        assert_eq!(
+            shown(
+                "spark.datasource.jdbc.url",
+                Some("postgres://user:password@host/db")
+            ),
+            "(withheld)"
+        );
+        assert_eq!(shown("spark.sql.ansi.enabled", Some("true")), "true");
+    }
+
+    #[test]
+    fn an_invalid_config_value_is_an_invalid_argument() {
+        let entry = krishiv_common::config::lookup("krishiv.sql.ansi.enabled").expect("registered");
+        let err = entry
+            .parse("krishiv.sql.ansi.enabled", "maybe")
+            .expect_err("not a boolean");
+        assert!(matches!(admin_error(&err).kind, ErrorKind::InvalidArgument));
     }
 }

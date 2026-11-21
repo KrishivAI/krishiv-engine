@@ -1993,7 +1993,7 @@ async fn a_requests_traceparent_names_the_trace_of_its_query_and_update() {
     let mut headers = std::mem::take(odd.metadata_mut()).into_headers();
     headers.insert(
         "traceparent",
-        tonic::codegen::http::HeaderValue::from_bytes(b"00-caf\xe9-00f067aa0ba902b7-01")
+        tonic::codegen::http::HeaderValue::from_bytes(b"00-ab\xe9-00f067aa0ba902b7-01")
             .expect("opaque bytes"),
     );
     *odd.metadata_mut() = tonic::metadata::MetadataMap::from_headers(headers);

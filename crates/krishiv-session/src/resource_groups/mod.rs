@@ -40,6 +40,25 @@ pub struct ResourceGroups {
     shared: Arc<Shared>,
     /// One replace of the group file at a time.
     replacing: std::sync::Mutex<()>,
+    /// The group each waiting `admit` queued its request in, keyed by the request's address (it
+    /// is borrowed for the whole wait): `queued_group` answers with it, not a fresh selection a
+    /// reload may have changed.
+    waiting: Arc<std::sync::Mutex<std::collections::HashMap<usize, String>>>,
+}
+
+/// Forgets a waiting request when its `admit` ends or is dropped.
+struct WaitingEntry {
+    map: Arc<std::sync::Mutex<std::collections::HashMap<usize, String>>>,
+    key: usize,
+}
+
+impl Drop for WaitingEntry {
+    fn drop(&mut self) {
+        self.map
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.key);
+    }
 }
 
 /// The document the tree was last built from.
@@ -113,6 +132,7 @@ impl ResourceGroups {
             total_memory,
             shared,
             replacing: std::sync::Mutex::new(()),
+            waiting: Arc::default(),
         })
     }
 
@@ -179,6 +199,13 @@ impl ResourceGroups {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         self.swap(&read_file(path)?)
+    }
+
+    /// The document, its etag and load time from one snapshot (a reload between three reads
+    /// would pair an old document with a new etag).
+    pub(crate) fn snapshot(&self) -> (String, String, u64) {
+        let l = self.current();
+        (l.document.clone(), l.etag.clone(), l.loaded_at_ms)
     }
 
     /// The loaded document as canonical JSON.
@@ -285,6 +312,15 @@ impl AdmissionController for ResourceGroups {
             let slot = match admitted {
                 Admitted::Now(slot) => slot,
                 Admitted::Queued(rx, guard) => {
+                    let key = std::ptr::from_ref(request) as usize;
+                    self.waiting
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(key, group.clone());
+                    let _entry = WaitingEntry {
+                        map: Arc::clone(&self.waiting),
+                        key,
+                    };
                     let granted = rx.await;
                     drop(guard);
                     granted.map_err(|_| {
@@ -311,6 +347,13 @@ impl AdmissionController for ResourceGroups {
     }
 
     fn queued_group(&self, request: &QueryRequest) -> Option<String> {
-        Some(select::select(&self.current().config, request).to_owned())
+        let key = std::ptr::from_ref(request) as usize;
+        let waiting = self
+            .waiting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&key)
+            .cloned();
+        waiting.or_else(|| Some(select::select(&self.current().config, request).to_owned()))
     }
 }
