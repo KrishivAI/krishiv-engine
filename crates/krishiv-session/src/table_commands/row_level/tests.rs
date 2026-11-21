@@ -840,7 +840,7 @@ fn a_delta_update_reads_the_whole_table_only_when_a_subquery_reads_the_target() 
         ));
     }
     let (t, o) = (root.display().to_string(), other.display().to_string());
-    let filters = |update: &str| {
+    let filters_of = |update: &str, target: &str| {
         let before = READ_FILTERS
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -849,10 +849,11 @@ fn a_delta_update_reads_the_whole_table_only_when_a_subquery_reads_the_target() 
         let seen = READ_FILTERS.lock().unwrap_or_else(PoisonError::into_inner);
         seen[before..]
             .iter()
-            .filter(|(name, _)| name.contains(&t))
+            .filter(|(name, _)| name.contains(target))
             .map(|(_, kept)| *kept)
             .collect::<Vec<_>>()
     };
+    let filters = |update: &str| filters_of(update, &t);
     assert_eq!(
         filters(&format!(
             "UPDATE delta.`{t}` SET v = (SELECT max(v) FROM delta.`{o}`) WHERE p = 1"
@@ -864,5 +865,21 @@ fn a_delta_update_reads_the_whole_table_only_when_a_subquery_reads_the_target() 
             "UPDATE delta.`{t}` SET v = (SELECT max(v) FROM delta.`file:{t}/`) WHERE p = 1"
         )),
         vec![false]
+    );
+    // A catalog table over a Delta location is the same table as its path (#909 review thread):
+    // its own root is resolved through the catalog, so a re-read by path reads the whole table.
+    assert_eq!(
+        filters_of(
+            &format!("UPDATE rt SET v = (SELECT max(v) FROM delta.`{t}`) WHERE p = 1"),
+            "`rt`"
+        ),
+        vec![false]
+    );
+    assert_eq!(
+        filters_of(
+            &format!("UPDATE rt SET v = (SELECT max(v) FROM delta.`{o}`) WHERE p = 1"),
+            "`rt`"
+        ),
+        vec![true]
     );
 }

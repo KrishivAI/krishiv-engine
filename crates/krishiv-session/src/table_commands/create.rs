@@ -894,6 +894,20 @@ impl Session {
         };
         #[cfg(not(feature = "delta"))]
         let by_path: Option<String> = None;
+        // The statement's own check named the target as a table; a table by path changes the
+        // files at that path, so `Modify` on it is asked first, as a Delta save to the path asks.
+        #[cfg(feature = "delta")]
+        if by_path.is_some()
+            && let [_, path] = crate::access::ddl_parts(table, &env)?.as_slice()
+        {
+            let qualified = self.qualify_path(path)?;
+            self.authorize_qualified_root(
+                &qualified,
+                &[Privilege::Modify],
+                krishiv_sql::StatementClass::Write,
+            )
+            .await?;
+        }
         let quoted = match by_path {
             Some(q) => q,
             None => {

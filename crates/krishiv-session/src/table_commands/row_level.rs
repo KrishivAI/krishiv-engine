@@ -145,13 +145,10 @@ impl Session {
         let Some(table) = provider.row_level(op) else {
             return Ok(None);
         };
-        // A Delta table's root as delta-spark's errors name it (`file:/..`).
+        // A Delta table's root as delta-spark's errors name it (`file:/..`), for a table by path
+        // and for a catalog table over a Delta location alike (its scan keeps the table's name).
         #[cfg(feature = "delta")]
-        let delta_root = if crate::delta::is_delta(&scan.source) {
-            Some(probe.env.catalog.delta.hadoop_root(&scan.source)?)
-        } else {
-            None
-        };
+        let delta_root = probe.env.catalog.delta_root(&scan).transpose()?;
         #[cfg(not(feature = "delta"))]
         let delta_root: Option<String> = None;
         let columns: Vec<TableColumn> = probe
