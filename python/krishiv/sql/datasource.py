@@ -391,13 +391,39 @@ def _registry(session: SparkSession) -> dict[str, _Registered]:
     return registry
 
 
-_BUILTIN_FORMATS = frozenset({"parquet", "orc", "avro", "json", "csv", "text", "binaryfile", "image", "libsvm"})
+# The short names of Spark 4.3's `DataSourceRegister` services (sql/core, avro, kafka, hive, mllib) and the
+# `org.apache.spark.` class names `lookupDataSource` resolves first. Checked by hand against the module list:
+# re-diff the service files when the supported Spark version moves.
+_BUILTIN_FORMATS = frozenset(
+    {
+        "parquet",
+        "orc",
+        "avro",
+        "json",
+        "csv",
+        "text",
+        "xml",
+        "jdbc",
+        "binaryfile",
+        "image",
+        "libsvm",
+        "kafka",
+        "hive",
+        "noop",
+        "console",
+        "rate",
+        "rate-micro-batch",
+        "socket",
+        "memory",
+    }
+)
 
 
 def registered(session: SparkSession, name: str) -> _Registered | None:
     """The class registered under ``name`` (any letter case), if any. Spark's built-in file sources win over a
     Python source of the same name (``DataSource.lookupDataSource``)."""
-    if name.lower() in _BUILTIN_FORMATS:
+    lowered = name.lower()
+    if lowered in _BUILTIN_FORMATS or lowered.startswith("org.apache.spark."):
         return None
     return _registry(session).get(name.lower())
 

@@ -17,7 +17,7 @@ from krishiv.errors import (
     PySparkTypeError,
     SparkRuntimeException,
 )
-from krishiv.sql import SparkSession
+from krishiv.sql import SparkSession, datasource
 from krishiv.sql.datasource import (
     CaseInsensitiveDict,
     DataSource,
@@ -321,6 +321,17 @@ def test_builtin_format_wins_over_a_python_source_of_the_same_name(spark: SparkS
     target = str(tmp_path / "t")
     spark.createDataFrame([(5, 6)], "a int, b int").write.parquet(target)
     assert rows(spark.read.format("parquet").load(target)) == [(5, 6)]
+
+
+@pytest.mark.parametrize("builtin", ["xml", "jdbc", "noop", "rate", "org.apache.spark.sql.parquet"])
+def test_every_spark_registered_short_name_wins_over_a_python_source(spark: SparkSession, builtin: str) -> None:
+    class Shadow(Fixed):
+        @classmethod
+        def name(cls) -> str:
+            return builtin
+
+    spark.dataSource.register(Shadow)
+    assert datasource.registered(spark, builtin) is None
 
 
 def test_sessions_do_not_share_registrations(spark: SparkSession) -> None:
