@@ -125,6 +125,15 @@ impl UiSource for EmbeddedSource {
         })
     }
 
+    fn plan_pending(&self, query: &Row) -> bool {
+        self.inner.plan_pending(query)
+    }
+
+    fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
+        // `query` is a row this source listed, so one of the session's own.
+        self.inner.plan(query)
+    }
+
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool> {
         Box::pin(async move {
             self.open()?;

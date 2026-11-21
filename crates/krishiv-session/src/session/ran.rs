@@ -92,7 +92,7 @@ impl Session {
         }
         // Before any side effect: what the statement writes, creates or
         // drops (its reads are checked by analysis, first thing).
-        let class = krishiv_sql::classify_with(&statement, &env.parser);
+        let class = self.statement_class(&statement, &env);
         if queries_only && !matches!(statement, Statement::Query(_)) {
             return Ok(Ran::NotAQuery(class));
         }

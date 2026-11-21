@@ -233,6 +233,7 @@ impl Walk {
                 | PlanNode::Sort { .. }
                 | PlanNode::Limit { .. }
                 | PlanNode::Offset { .. }
+                | PlanNode::Tail { .. }
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
                 | PlanNode::JoinHint { .. }

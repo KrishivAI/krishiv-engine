@@ -354,6 +354,32 @@ fn the_creator_owns_and_a_drop_takes_the_grants_with_it() {
     denied(&ana, "SELECT * FROM mine");
 }
 
+/// `DROP VIEW v` with a bare name that names no temporary view drops the stored view: it asks
+/// `DROP` on that view and clears its ownership, as `DROP VIEW default.v` does (found on #941).
+#[test]
+fn a_bare_drop_view_of_a_stored_view_needs_the_drop_privilege() {
+    let w = World::new();
+    let (root, ana, bob) = (w.admin(), w.user("ana"), w.user("bob"));
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:bob");
+    ok(&ana, "CREATE VIEW v AS SELECT 1 AS a");
+    ok(&ana, "GRANT SELECT ON v TO user:bob");
+    denied(&bob, "DROP VIEW v");
+    denied(&bob, "DROP VIEW IF EXISTS v");
+    denied(&bob, "DROP VIEW default.v");
+    assert_eq!(ok(&bob, "SELECT * FROM v"), 1);
+    // A temporary view of the bare name is the session's own: dropped with no check.
+    ok(&bob, "CREATE TEMPORARY VIEW v AS SELECT 2 AS a");
+    ok(&bob, "DROP VIEW v");
+    denied(&bob, "DROP VIEW v");
+    // The owner drops it with the bare name, and the drop takes its grants with it.
+    ok(&ana, "DROP VIEW v");
+    ok(&root, "CREATE VIEW v AS SELECT 1 AS a");
+    denied(&bob, "SELECT * FROM v");
+    denied(&ana, "SELECT * FROM v");
+    denied(&ana, "DROP VIEW v");
+}
+
 #[test]
 fn show_grants_lists_own_grants_and_needs_monitor_for_others() {
     let w = World::new();

@@ -270,6 +270,16 @@ pub enum PlanNode {
         /// Number of rows to skip.
         offset: Arc<Expr>,
     },
+    /// The last `n` rows of `input` in plan order (Spark's `Dataset.tail`; not
+    /// a `Sort` and a `Limit`); `n` is a foldable expression or a parameter.
+    /// Spark plans `Tail` only at the plan root (`ReturnAnswer`); Krishiv also
+    /// runs a nested one, a deliberate superset the Connect client cannot reach.
+    Tail {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// Number of rows to keep.
+        limit: Arc<Expr>,
+    },
     /// `input AS alias (columns)`, a derived table or `df.alias(...)`.
     SubqueryAlias {
         /// Input.
@@ -1109,6 +1119,15 @@ impl LogicalPlan {
         })
     }
 
+    /// The last `limit` rows of `self` in plan order (`Dataset.tail`).
+    #[must_use]
+    pub fn tail(self, limit: impl Into<Arc<Expr>>) -> Self {
+        Self::new(PlanNode::Tail {
+            input: Arc::new(self),
+            limit: limit.into(),
+        })
+    }
+
     /// `(self) AS alias`.
     #[must_use]
     pub fn alias(self, alias: impl Into<String>) -> Self {
@@ -1146,6 +1165,7 @@ impl LogicalPlan {
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
+            | PlanNode::Tail { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
@@ -1214,6 +1234,7 @@ impl LogicalPlan {
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
+            | PlanNode::Tail { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
@@ -1308,6 +1329,7 @@ impl LogicalPlan {
             PlanNode::Filter { predicate: e, .. }
             | PlanNode::Limit { limit: e, .. }
             | PlanNode::Offset { offset: e, .. }
+            | PlanNode::Tail { limit: e, .. }
             | PlanNode::ReplicateRows { count: e, .. } => f(e),
             PlanNode::Aggregate {
                 grouping,
@@ -1426,6 +1448,7 @@ impl LogicalPlan {
             PlanNode::Filter { predicate: e, .. }
             | PlanNode::Limit { limit: e, .. }
             | PlanNode::Offset { offset: e, .. }
+            | PlanNode::Tail { limit: e, .. }
             | PlanNode::ReplicateRows { count: e, .. } => f(e),
             PlanNode::Aggregate {
                 grouping,
@@ -1520,6 +1543,7 @@ impl LogicalPlan {
                 | PlanNode::Sort { input, .. }
                 | PlanNode::Limit { input, .. }
                 | PlanNode::Offset { input, .. }
+                | PlanNode::Tail { input, .. }
                 | PlanNode::WithCte { input, .. }
                 | PlanNode::JoinHint { input, .. }
                 | PlanNode::Repartition { input, .. }

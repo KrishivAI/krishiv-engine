@@ -88,7 +88,13 @@ ENVIRONMENT = {
 CATALOG = {
     "catalogs": [{"name": "spark_catalog"}, {"name": XSS}],
     "spark_catalog": {"schemas": [{"name": "default"}]},
-    "default": {"tables": [{"name": "orders"}, {"name": "lineitem"}]},
+    "default": {
+        "tables": [
+            {"name": "orders", "is_temporary": False},
+            {"name": "lineitem", "is_temporary": False},
+            {"name": "recent_orders", "is_temporary": True},
+        ]
+    },
     "orders": {
         "columns": [
             {"name": "o_orderkey", "data_type": "bigint"},
@@ -103,6 +109,12 @@ SESSION_ID = "01932a40-1a00-7a01-8001-5e5510000001"
 # What a console over stored profiles answers: the history, a query's page and the health the page reads its mode from.
 # TPC-H Q9 as a stored profile: the document the Python viewer's tests read, at SF 0.01.
 Q9_ID = "01932a40-1a00-7a01-8001-000000000009"
+# A query whose plan arrives with the third answer; the count of answers so far.
+LATE_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000b"
+LATE_PLAN_ASKED = [0]
+# A query the fixture answers with no plan tree.
+NO_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000a"
+NO_PLAN_ASKED = [0]
 Q9_PROFILE = json.loads(
     (
         HERE.parent.parent / "python" / "tests" / "fixtures" / "q09-profile.json"
@@ -117,6 +129,7 @@ OPERATOR_METRICS = {
     "blocked_io_ns": "blocked_on_io_ns",
     "blocked_memory_ns": "blocked_on_memory_ns",
     "blocked_sink_ns": "blocked_on_sink_ns",
+    "peak_reserved_bytes": "peak_reserved_bytes",
     "spilled_bytes": "spilled_bytes",
 }
 PROFILES_ROUTES = (
@@ -145,11 +158,17 @@ def history(query: str) -> list[dict]:
 
 def stored_detail(query_id: str, profile: dict, sql: str) -> dict:
     """A query's page from its stored profile, as the console over stored profiles answers it: the profile's
-    operators in id order and the one with the most compute time. A stored profile without a `usage` member has
+    operators in id order (each with its plan node and role), the one with the most compute time and the
+    profile's plan tree. A stored profile without a `usage` member has
     no CPU time, peak memory or row count, and the page says so. This run has no warning: nothing spilled, no
     driver did most of an operator's work and nothing waited for memory."""
     operators = [
-        {"operator_id": o["id"], "name": o["name"]}
+        {
+            "operator_id": o["id"],
+            "node_id": o["node"],
+            "name": o["name"],
+            "role": o["role"],
+        }
         | {column: o["metrics"][metric] for column, metric in OPERATOR_METRICS.items()}
         for o in sorted(profile["operators"], key=lambda o: o["id"])
     ]
@@ -174,6 +193,11 @@ def stored_detail(query_id: str, profile: dict, sql: str) -> dict:
             "operator": hot["name"],
             "compute_ns": hot["compute_ns"],
         },
+        # The server sends a node's id, name and children, never its detail text.
+        "plan": [
+            {"id": n["id"], "name": n["name"], "children": n["children"]}
+            for n in profile["plan"]
+        ],
         "warnings": [],
     }
 
@@ -218,6 +242,18 @@ def route(
         return {"memory": d["resources"]["memory"], "caches": d["health"]["caches"]}
     if path == f"/api/internal/queries/{Q9_ID}":
         return Q9_DETAIL
+    if path == f"/api/internal/queries/{NO_PLAN_ID}":
+        # An ended query whose plan the source will never have (a server with no history store, a query
+        # trimmed out of it): the page is told not to wait.
+        NO_PLAN_ASKED[0] += 1
+        return d["detail"] | {"plan": None, "plan_pending": False}
+    if path == f"/api/internal/queries/{LATE_PLAN_ID}":
+        # A query that has just ended: its profile is written a moment later, so the first answers carry no
+        # plan and a later one does.
+        LATE_PLAN_ASKED[0] += 1
+        return d["detail"] | (
+            {} if LATE_PLAN_ASKED[0] > 2 else {"plan": None, "plan_pending": True}
+        )
     if path.startswith("/api/internal/queries/"):
         return d["detail"]
     return None
