@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Copy-on-write `DELETE` and `UPDATE` on a Delta table (design note P3-T021 sections 2.3, 6.1 and
-//! 6.2; PR-37b part 2): [`DeltaRowLevel`], the table's
-//! [`RowLevelTable`]. It also commits a `MERGE`
-//! ([`super::merge`], PR-37c).
+//! Copy-on-write `DELETE`, `UPDATE` and `MERGE` on a Delta table (design note P3-T021 sections
+//! 2.3, 6.1 and 6.2; PR-37b part 2, PR-37c): [`DeltaRowLevel`], the table's [`RowLevelTable`]; what
+//! a `MERGE` commits is in [`super::merge`].
 //!
 //! The session plans the statement (krishiv-session `table_commands/row_level.rs`): a find query
 //! over [`scan`](DeltaRowLevel) (the live rows, deletion vectors applied, with
