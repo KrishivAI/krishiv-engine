@@ -1044,9 +1044,27 @@ async fn embed_query(
     }
 }
 
-async fn cancel(State(s): State<UiState>, Path(id): Path<String>) -> Response {
+/// `POST /api/internal/queries/{id}/cancel`: an operator's kill of a running query; a query that was
+/// cancelled is one audit record.
+async fn cancel(
+    State(s): State<UiState>,
+    caller: Option<Extension<Caller>>,
+    Path(id): Path<String>,
+) -> Response {
     match s.source.cancel(&id).await {
-        Ok(true) => json_response(StatusCode::OK, &json!({"cancelled": true})),
+        Ok(true) => {
+            let caller = caller.map(|c| c.0);
+            tracing::info!(
+                target: "krishiv::audit",
+                principal = caller.as_ref().map_or("unknown", |c| c.principal.as_str()),
+                role = caller.as_ref().and_then(|c| c.role.as_deref()).unwrap_or("none"),
+                surface = "ui",
+                action = "cancel_query",
+                query = %id,
+                "query cancelled"
+            );
+            json_response(StatusCode::OK, &json!({"cancelled": true}))
+        }
         Ok(false) => error(
             StatusCode::NOT_FOUND,
             "not_running",

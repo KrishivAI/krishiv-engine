@@ -828,7 +828,9 @@ def workload_checks() -> list[str]:
         page.evaluate("window.location.hash = '#/sessions'")
         count("sessions: the open sessions", 3)
         if "idle_timeout" in page.inner_text("main"):
-            problems.append("sessions: an ended session is listed before it is asked for")
+            problems.append(
+                "sessions: an ended session is listed before it is asked for"
+            )
         filter_box = page.get_by_label("Filter", exact=True)
         for typed, want in (("flight", 1), ("TEAM=RISK", 1), ("no-such-client", 0)):
             filter_box.fill(typed)
@@ -851,9 +853,7 @@ def workload_checks() -> list[str]:
             problems.append("sessions: Keep does not take the question back")
         bob.get_by_role("button", name="End session").click()
         bob.get_by_role("button", name="End it and cancel 1 running").click()
-        if not shows(
-            page, ["Ended the session of bob and cancelled 1 query."], "main"
-        ):
+        if not shows(page, ["Ended the session of bob and cancelled 1 query."], "main"):
             problems.append("sessions: the page does not say what ending a session did")
         count("sessions: after one was ended", 2)
         if server.closed != [fixture_server.SESSION_B]:
@@ -861,7 +861,9 @@ def workload_checks() -> list[str]:
 
         # A session's query count opens History on that session's queries.
         ann = page.locator(rows).filter(has_text="ann")
-        ann.get_by_role("button", name="The 14 queries of this session in History").click()
+        ann.get_by_role(
+            "button", name="The 14 queries of this session in History"
+        ).click()
         page.wait_for_function("location.hash === '#/history'", timeout=5000)
         history_rows = "main a[href^='#/queries/']:visible"
         try:
@@ -935,7 +937,9 @@ def workload_checks() -> list[str]:
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 390, "height": 844})
-        page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture#/workload")
+        page.goto(
+            f"http://127.0.0.1:{server.server_address[1]}/?token=fixture#/workload"
+        )
         try:
             page.locator("[data-no-groups]").wait_for(timeout=10000)
         except PlaywrightTimeout:

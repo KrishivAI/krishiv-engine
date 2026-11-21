@@ -717,7 +717,7 @@ async fn a_failing_source_fails_the_session_and_group_routes_as_json() {
 }
 
 #[tokio::test]
-async fn the_lists_name_a_querys_session_and_history_filters_by_it_but_a_querys_page_does_not() {
+async fn the_lists_name_a_session_and_history_filters_by_it_but_the_query_page_does_not() {
     let (addr, _) = start(false).await;
     let live = get(addr, "/api/internal/queries").await;
     assert_eq!(live["queries"][1]["query_id"], "q-run");
