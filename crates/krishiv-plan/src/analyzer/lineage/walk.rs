@@ -701,6 +701,7 @@ impl<'a> Walker<'a> {
             | PlanNode::Sql { .. }
             | PlanNode::WithColumns { .. }
             | PlanNode::Hint { .. }
+            | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::SetOp { .. }
             | PlanNode::Pivot { .. }

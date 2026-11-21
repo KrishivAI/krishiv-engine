@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `CloneSession` and `GetStatus` end to end over a raw tonic client
 //! (design P3-T011a §3.11, §3.12, §5: `clone_session_*`,
-//! `get_status_states`; PR-15c).
+//! `get_status_states`; PR-15c), and `CachedLocalRelation` reading the
+//! session's own `cache/<hash>` artifacts (design P3-T012a §1, "Security: a
+//! client hash never reaches the relation store").
 #![expect(
     clippy::expect_used,
     reason = "integration-test helpers are outside #[test] fns"
@@ -215,8 +217,16 @@ fn exec_request(session: &str, plan: pb::Plan, op: Option<&str>) -> pb::ExecuteP
 
 /// The rows of `query` on `session`, as the text of the first column.
 async fn rows(channel: &Channel, session: &str, query: &str) -> Result<usize, tonic::Status> {
-    let responses =
-        drain(execute(channel, exec_request(session, sql_plan(query), None)).await?).await?;
+    plan_rows(channel, session, sql_plan(query)).await
+}
+
+/// The number of rows `plan` returns on `session`.
+async fn plan_rows(
+    channel: &Channel,
+    session: &str,
+    plan: pb::Plan,
+) -> Result<usize, tonic::Status> {
+    let responses = drain(execute(channel, exec_request(session, plan, None)).await?).await?;
     Ok(responses
         .iter()
         .filter_map(|r| match &r.response_type {
@@ -985,4 +995,105 @@ async fn get_status_only_looks_up_and_checks_the_server_side_id() {
         .await
         .unwrap_err();
     assert_eq!(error_class(&e), "INVALID_HANDLE.SESSION_NOT_FOUND");
+}
+
+// ------------------------------------------------------ CachedLocalRelation
+
+/// The hash a client names its cached relation by (Spark's is the SHA-256 of
+/// the serialized `LocalRelation`; the server does not recompute it).
+const CACHED: &str = "3f1b0c9e2d4a5b6c7d8e9f00112233445566778899aabbccddeeff0011223344";
+
+/// A serialized `LocalRelation` of the `Int64` rows 1, 2, 3, as a client
+/// stores it under `cache/<hash>` above its inline threshold.
+fn cached_bytes() -> Vec<u8> {
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+    )
+    .expect("batch");
+    let mut data = Vec::new();
+    {
+        let mut w = arrow_ipc::writer::StreamWriter::try_new(&mut data, &schema).expect("writer");
+        w.write(&batch).expect("write");
+        w.finish().expect("finish");
+    }
+    pb::LocalRelation {
+        data: Some(data),
+        schema: None,
+    }
+    .encode_to_vec()
+}
+
+fn cached_plan(hash: &str) -> pb::Plan {
+    pb::Plan {
+        op_type: Some(PlanOp::Root(Box::new(pb::Relation {
+            common: None,
+            rel_type: Some(RelType::CachedLocalRelation(pb::CachedLocalRelation {
+                hash: hash.to_owned(),
+            })),
+        }))),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cached_local_relation_reads_only_its_own_sessions_artifact() {
+    let run = start().await;
+    let name = format!("cache/{CACHED}");
+    add_artifacts(&run.channel, SESSION, &[(&name, &cached_bytes())])
+        .await
+        .expect("added");
+    assert_eq!(
+        plan_rows(&run.channel, SESSION, cached_plan(CACHED))
+            .await
+            .expect("reads"),
+        3
+    );
+    // The relation's rows are now in the store the sessions share, but another session
+    // naming the same hash holds no such artifact: Spark's error for a hash its artifact
+    // manager never registered, the same as for a hash nobody holds.
+    for (session, hash) in [(TARGET, CACHED), (SESSION, "00ff")] {
+        let e = plan_rows(&run.channel, session, cached_plan(hash))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error_class(&e),
+            "CONNECT_INVALID_PLAN.CANNOT_FIND_CACHED_LOCAL_RELATION"
+        );
+        assert!(info(&e)["messageParameters"].contains(hash));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cloned_session_reads_its_sources_cached_relations() {
+    let run = start().await;
+    let name = format!("cache/{CACHED}");
+    add_artifacts(&run.channel, SESSION, &[(&name, &cached_bytes())])
+        .await
+        .expect("added");
+    clone(&run.channel, clone_request(Some(TARGET)))
+        .await
+        .expect("cloned");
+    assert_eq!(
+        plan_rows(&run.channel, TARGET, cached_plan(CACHED))
+            .await
+            .expect("reads"),
+        3
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cached_artifact_that_is_not_a_local_relation_is_refused() {
+    let run = start().await;
+    let name = format!("cache/{CACHED}");
+    // A field key cut off mid-varint: no `LocalRelation`.
+    add_artifacts(&run.channel, SESSION, &[(&name, b"\xff\xff")])
+        .await
+        .expect("added");
+    let e = plan_rows(&run.channel, SESSION, cached_plan(CACHED))
+        .await
+        .unwrap_err();
+    assert_eq!(error_class(&e), "CONNECT_INVALID_PLAN.CANNOT_PARSE");
 }

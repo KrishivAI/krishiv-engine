@@ -1629,6 +1629,8 @@ mod join;
 
 mod asof;
 
+mod na;
+
 mod distinct;
 
 mod aggregate;

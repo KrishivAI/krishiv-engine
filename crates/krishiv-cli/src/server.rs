@@ -711,8 +711,9 @@ fn admin_router(
         krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
     );
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {
-        let mut source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
+        let source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
             .map_err(|e| e.to_string())?;
+        let mut source = with_stored_history(source, config);
         if let Some(denials) = denials {
             // The editor runs a statement as the authenticated caller, in the session a Spark Connect session of
             // that caller gets: the same role matrix and path confinement.
@@ -788,6 +789,31 @@ fn admin_router(
         app,
         krishiv_server::admin::HttpLimits::default(),
     ))
+}
+
+/// `source` with the history of earlier runs of the server, read from the store this run writes to
+/// (`krishiv.history.path`). A store that does not read costs the old history, not the server.
+#[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
+fn with_stored_history(
+    source: krishiv_server::session_source::SessionSource,
+    config: &Config,
+) -> krishiv_server::session_source::SessionSource {
+    let Some(dir) = config
+        .get(&krishiv_common::config::HISTORY_PATH)
+        .and_then(ConfigValue::as_str)
+        .filter(|p| !p.is_empty())
+    else {
+        return source;
+    };
+    match krishiv_session::read_profile_history(std::path::Path::new(dir)) {
+        Ok(stored) => source.with_stored_history(&stored),
+        Err(e) => {
+            eprintln!(
+                "warning: the stored query history was not read ({e}); the console lists this run only"
+            );
+            source
+        }
+    }
 }
 
 /// Whether `/metrics` is on and behind the admin token: it is open only on

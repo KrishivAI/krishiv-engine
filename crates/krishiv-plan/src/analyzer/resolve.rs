@@ -1027,6 +1027,16 @@ impl Resolver<'_> {
                 params,
             } => self.hint(p, input, name, params, env),
             PlanNode::PipeOperator { input } => self.pipe_operator(input, env),
+            PlanNode::ColumnNames { input, op } => {
+                let mut r = self.column_names(p, input, op, env)?;
+                // The result is a relation of its own: `renamed["x"]` resolves against it, also when the
+                // operation changed nothing and returned the child.
+                if let Some(id) = p.origin.plan_id {
+                    let out = Arc::clone(&r.out);
+                    Arc::make_mut(&mut r.carriers).insert(id, vec![out]);
+                }
+                Ok(r)
+            }
             PlanNode::Repartition { input, exprs } => self.repartition(p, input, exprs, env),
             PlanNode::CollectMetrics {
                 input,
@@ -1255,6 +1265,7 @@ impl Resolver<'_> {
             | PlanNode::SubqueryAlias { .. }
             | PlanNode::WithCte { .. }
             | PlanNode::Hint { .. }
+            | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::Repartition { .. }
             | PlanNode::CollectMetrics { .. }

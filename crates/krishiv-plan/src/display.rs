@@ -417,6 +417,58 @@ impl Display for NodeLine<'_> {
                 write!(f, " ({})", List(params))
             }
             PlanNode::PipeOperator { .. } => f.write_str("PipeOperator"),
+            PlanNode::ColumnNames { op, .. } => match op {
+                crate::ColumnNamesOp::ToDf(names) => write!(f, "ToDF {}", Names(names)),
+                crate::ColumnNamesOp::Rename(pairs) => {
+                    f.write_str("RenameColumns ")?;
+                    for (i, (a, b)) in pairs.iter().enumerate() {
+                        if i > 0 {
+                            f.write_str(", ")?;
+                        }
+                        write!(
+                            f,
+                            "{} -> {}",
+                            Name(std::slice::from_ref(a)),
+                            Name(std::slice::from_ref(b))
+                        )?;
+                    }
+                    Ok(())
+                }
+                crate::ColumnNamesOp::Drop { names, columns } => {
+                    write!(f, "DropColumns {}", Names(names))?;
+                    if !columns.is_empty() {
+                        write!(f, " (resolved: {})", Names(columns))?;
+                    }
+                    Ok(())
+                }
+                crate::ColumnNamesOp::DropNa {
+                    subset,
+                    min_non_nulls,
+                } => {
+                    f.write_str("DropNa")?;
+                    if let Some(n) = min_non_nulls {
+                        write!(f, " min {n}")?;
+                    }
+                    if !subset.is_empty() {
+                        write!(f, " {}", Names(subset))?;
+                    }
+                    Ok(())
+                }
+                crate::ColumnNamesOp::Replace { cols, pairs } => {
+                    write!(f, "Replace ({})", List(pairs))?;
+                    if !cols.is_empty() {
+                        write!(f, " {}", Names(cols))?;
+                    }
+                    Ok(())
+                }
+                crate::ColumnNamesOp::FillNa { cols, values } => {
+                    write!(f, "FillNa ({})", List(values))?;
+                    if !cols.is_empty() {
+                        write!(f, " {}", Names(cols))?;
+                    }
+                    Ok(())
+                }
+            },
             PlanNode::Repartition { exprs, .. } => write!(f, "Repartition ({})", List(exprs)),
             PlanNode::CollectMetrics { name, metrics, .. } => {
                 write!(
@@ -736,6 +788,21 @@ impl Display for List<'_> {
 
 /// A multi-part name, back-quoting parts that are not plain identifiers.
 struct Name<'a>(&'a [String]);
+
+/// Several one-part names, each quoted on its own, comma separated.
+struct Names<'a>(&'a [String]);
+
+impl Display for Names<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for (i, n) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}", Name(std::slice::from_ref(n)))?;
+        }
+        Ok(())
+    }
+}
 
 impl Display for Name<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
