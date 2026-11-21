@@ -91,32 +91,30 @@ pub(super) async fn write(
                 .await
         }
         WriteTarget::SaveAsTable(table) => {
-            source
-                .write_table_with(
-                    false,
-                    &table,
-                    format.as_deref(),
-                    mode,
-                    options,
-                    partition_by,
-                    bucket_by,
-                    sort_by,
-                )
-                .await
+            Box::pin(source.write_table_with(
+                false,
+                &table,
+                format.as_deref(),
+                mode,
+                options,
+                partition_by,
+                bucket_by,
+                sort_by,
+            ))
+            .await
         }
         WriteTarget::InsertInto(table) => {
-            source
-                .write_table_with(
-                    true,
-                    &table,
-                    format.as_deref(),
-                    mode,
-                    options,
-                    partition_by,
-                    bucket_by,
-                    sort_by,
-                )
-                .await
+            Box::pin(source.write_table_with(
+                true,
+                &table,
+                format.as_deref(),
+                mode,
+                options,
+                partition_by,
+                bucket_by,
+                sort_by,
+            ))
+            .await
         }
     }
 }

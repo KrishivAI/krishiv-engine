@@ -36,12 +36,17 @@ pub struct OperatorMetrics {
     pub rows_out: u64,
     /// Batches produced.
     pub batches_out: u64,
-    /// Time in `execute` / `sink` / `finalize`; for a source, in
-    /// `get_data` while it was not waiting.
+    /// Time in `execute` / `sink` and in a source's `get_data` while it was
+    /// not waiting; in an operator's `flush` and a sink's `finalize` while it
+    /// was not waiting, plus the time their blocking-pool work ran.
     pub compute_time: Duration,
     /// The largest [`compute_time`](Self::compute_time) of one driver (skew).
     pub max_driver_compute_time: Duration,
-    /// Time a source's `get_data` was pending (I/O).
+    /// Time a source's `get_data` was pending (I/O), and an operator's
+    /// `flush` or a sink's `finalize` was pending other than for its
+    /// blocking-pool work (I/O, memory, other drivers, a pool thread; also
+    /// the driver spilling its other operators to make room, which no
+    /// operator is credited with).
     pub blocked_on_io: Duration,
     /// The largest [`blocked_on_io`](Self::blocked_on_io) of one driver.
     pub max_driver_blocked_on_io: Duration,
@@ -73,6 +78,16 @@ pub struct OperatorMetrics {
 }
 
 impl OperatorMetrics {
+    /// Adds one asynchronous step (a flush or finalize) that took `elapsed`,
+    /// of which its future was pending `waited`, while its blocking-pool
+    /// work ran `ran`: the work and the time the step was not pending are
+    /// compute time, the rest of the pending time is blocked.
+    pub(crate) fn step(&mut self, elapsed: Duration, waited: Duration, ran: Duration) {
+        let ran = ran.min(waited);
+        self.compute_time += elapsed.saturating_sub(waited) + ran;
+        self.blocked_on_io += waited.saturating_sub(ran);
+    }
+
     /// Adds `o` (another driver's or worker's counters), saturating (a
     /// merged profile may come from a document).
     pub fn merge(&mut self, o: &Self) {

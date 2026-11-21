@@ -1612,16 +1612,16 @@ enum ColumnChange {
     DropDefault,
 }
 
-/// The writer of `df` into `table` with `mode` (bucketed tables refused).
+/// The writer of `df` into `table` with `mode`; into a bucketed table each row goes to its bucket's file.
 fn table_writer(
     table: &CatalogTable,
     df: &DataFrame,
     mode: &str,
 ) -> Result<crate::dataframe::DataFrameWriter, KrishivError> {
-    if table.layout.bucket.is_some() {
-        return Err(unsupported("writes to bucketed tables"));
-    }
     let mut writer = df.write().format(&table.provider).mode(mode);
+    if let Some(bucket) = &table.layout.bucket {
+        writer = writer.for_table_bucket(bucket);
+    }
     if table.is_partitioned() {
         writer = writer.partition_by(&table.layout.partition_columns);
     }
@@ -1782,6 +1782,34 @@ pub(crate) struct V2WriteSpec {
     pub partitioned_by: Vec<String>,
     /// `clusterBy` columns.
     pub cluster_by: Vec<String>,
+    /// `bucketBy` and `sortBy` (a `saveAsTable` only).
+    pub bucket: Option<krishiv_sql::ast::BucketSpec>,
+}
+
+/// `CLUSTERED BY (columns) SORTED BY (sort) INTO buckets BUCKETS` as `bucketBy`/`sortBy` give it.
+pub(crate) fn bucket_spec(
+    buckets: u64,
+    columns: &[String],
+    sort: &[String],
+) -> krishiv_sql::ast::BucketSpec {
+    let ident = |name: &String| krishiv_sql::ast::Ident {
+        value: name.clone(),
+        quoted: false,
+        span: krishiv_sql::ast::Span::default(),
+    };
+    krishiv_sql::ast::BucketSpec {
+        clustered_by: columns.iter().map(ident).collect(),
+        sorted_by: sort
+            .iter()
+            .map(|c| krishiv_sql::ast::OrderedIdent {
+                name: ident(c),
+                asc: None,
+                span: krishiv_sql::ast::Span::default(),
+            })
+            .collect(),
+        buckets,
+        span: krishiv_sql::ast::Span::default(),
+    }
 }
 
 /// What [`Session::exec_write_v2`] does with the table.
