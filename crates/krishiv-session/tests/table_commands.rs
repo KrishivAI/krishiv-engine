@@ -747,6 +747,7 @@ fn provider_names_and_defaults() {
         "CREATE TABLE b (a INT) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS",
     );
     run(&s, "INSERT INTO b VALUES (1)");
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM b"), ["1"]);
     assert_eq!(
         class(&s, "CREATE TEMPORARY TABLE tt (a INT) USING parquet"),
         "KRISHIV_UNSUPPORTED_FEATURE"

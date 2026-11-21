@@ -625,6 +625,46 @@ fn a_bucketed_table_of_one_string_column_writes_as_text() {
     assert_eq!(count(&s, "tb"), 3);
 }
 
+/// A text table keeps one stored column: the partition column is not counted by the format check.
+#[test]
+fn a_partitioned_and_bucketed_text_table_checks_only_the_stored_column() {
+    let s = session();
+    let two = s
+        .table("people")
+        .select_expr(["name", "CAST(id AS STRING) AS p"])
+        .unwrap();
+    block_on(
+        two.write()
+            .format("text")
+            .partition_by(["p"])
+            .bucket_by(2, ["name"])
+            .save_as_table("tp"),
+    )
+    .unwrap();
+    assert_eq!(count(&s, "tp"), 3);
+}
+
+/// A bucket column the hash refuses (a MAP) is found before an overwrite drops the old table.
+#[test]
+fn an_unhashable_bucket_column_keeps_the_table_an_overwrite_would_replace() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("keep")).unwrap();
+    let m = s
+        .table("people")
+        .select_expr(["id", "map('k', name) AS m"])
+        .unwrap();
+    let e = block_on(
+        m.write()
+            .mode("overwrite")
+            .bucket_by(2, ["m"])
+            .save_as_table("keep"),
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(count(&s, "keep"), 3);
+    assert_eq!(count(&s, "keep"), 3);
+}
+
 #[test]
 fn an_append_names_the_tables_bucketing_or_none() {
     let s = session();

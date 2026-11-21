@@ -1285,6 +1285,8 @@ fn the_orphan_sweep_matches_partitioned_and_unpartitioned_file_names() {
         "part-00003-job_2-c000.snappy.parquet",
         "part-00000-job.c000.snappy.parquet",
         "part-00003-job_2.c012.snappy.parquet",
+        "part-00000-job_1_00003.c000.snappy.parquet",
+        "part-00000-job_00003.c000.snappy.parquet",
     ] {
         assert!(is_job_file(name, "job"), "{name}");
     }
@@ -1292,6 +1294,7 @@ fn the_orphan_sweep_matches_partitioned_and_unpartitioned_file_names() {
         "part-00000-xjob.c000.parquet",
         "part-00000-job_.c000.parquet",
         "part-00000-job.cx.parquet",
+        "part-00000-job_1_2_3.c000.parquet",
         "part-00000-job.parquet",
         "_SUCCESS",
         "other-00000-job.c000.parquet",

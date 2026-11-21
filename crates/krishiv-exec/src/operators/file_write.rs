@@ -195,16 +195,18 @@ impl FileWriteSink {
             }
             .into());
         }
-        let written = match bucket_column {
-            Some(b) if b < schema.fields().len() => {
-                let keep: Vec<usize> = (0..schema.fields().len()).filter(|i| *i != b).collect();
-                Arc::new(
-                    schema
-                        .project(&keep)
-                        .map_err(|e| internal(format!("cannot drop the bucket column: {e}")))?,
-                )
-            }
-            _ => Arc::clone(&schema),
+        // The columns the writer stores: all but the partition columns and the bucket id column.
+        let keep: Vec<usize> = (0..schema.fields().len())
+            .filter(|i| Some(*i) != bucket_column && !options.partition_by.contains(i))
+            .collect();
+        let written = if keep.len() == schema.fields().len() {
+            Arc::clone(&schema)
+        } else {
+            Arc::new(
+                schema
+                    .project(&keep)
+                    .map_err(|e| internal(format!("cannot drop the layout columns: {e}")))?,
+            )
         };
         format
             .check_write(&written, &format_options)

@@ -421,13 +421,14 @@ impl FileWriter {
         }
         let texts = self.partition_texts(batch)?;
         let buckets = self.bucket_ids(batch)?;
+        let bucket_of = |i: usize| buckets.as_ref().map(|b| b.value(i));
         let mut start = 0;
         while start < batch.num_rows() {
             // Runs are found on the raw texts; only a run's first row is escaped.
             let mut end = start + 1;
             while end < batch.num_rows()
                 && texts.iter().all(|t| t[end] == t[start])
-                && buckets.as_ref().is_none_or(|b| b[end] == b[start])
+                && bucket_of(end) == bucket_of(start)
             {
                 end += 1;
             }
@@ -435,7 +436,10 @@ impl FileWriter {
                 .iter()
                 .map(|t| partition_segment(t[start].as_deref()))
                 .collect();
-            let bucket = buckets.as_ref().map(|b| b[start]);
+            let bucket = bucket_of(start)
+                .map(u32::try_from)
+                .transpose()
+                .map_err(|_| internal("a row has no valid bucket id".to_owned()))?;
             self.write_partition_run(&batch.slice(start, end - start), &key, bucket)
                 .await?;
             start = end;
@@ -443,8 +447,8 @@ impl FileWriter {
         Ok(())
     }
 
-    /// The bucket id of every row of `batch`, when the output is bucketed.
-    fn bucket_ids(&self, batch: &RecordBatch) -> Result<Option<Vec<u32>>> {
+    /// The bucket id column of `batch`, when the output is bucketed, checked once: no nulls, no negatives.
+    fn bucket_ids(&self, batch: &RecordBatch) -> Result<Option<arrow_array::Int32Array>> {
         let Some(c) = self.bucket_column else {
             return Ok(None);
         };
@@ -453,14 +457,10 @@ impl FileWriter {
             .get(c)
             .and_then(|a| a.as_any().downcast_ref::<arrow_array::Int32Array>())
             .ok_or_else(|| internal(format!("bucket column {c} is not an Int32 column")))?;
-        column
-            .iter()
-            .map(|v| {
-                v.and_then(|v| u32::try_from(v).ok())
-                    .ok_or_else(|| internal("a row has no valid bucket id".to_owned()))
-            })
-            .collect::<Result<Vec<_>>>()
-            .map(Some)
+        if arrow_array::Array::null_count(column) > 0 || column.values().iter().any(|v| *v < 0) {
+            return Err(internal("a row has no valid bucket id".to_owned()));
+        }
+        Ok(Some(column.clone()))
     }
 
     /// The text of every row of `batch` for each partition column.

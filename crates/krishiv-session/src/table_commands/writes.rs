@@ -733,6 +733,22 @@ impl Session {
                 // not come after the drop.
                 let provider = self.provider_of(spec.provider.clone())?;
                 let schema = df.schema().await?;
+                // A bucket column the write cannot hash (a MAP, inside or not) is refused here, not
+                // after the drop.
+                if let Some(b) = &spec.bucket {
+                    for c in &b.clustered_by {
+                        let field = schema
+                            .fields()
+                            .iter()
+                            .find(|f| f.name().eq_ignore_ascii_case(&c.value));
+                        if field.is_some_and(|f| arrow_type_has_map(f.data_type())) {
+                            return Err(unsupported(&format!(
+                                "bucketing by the MAP column {}",
+                                c.value
+                            )));
+                        }
+                    }
+                }
                 self.check_write_ready(&provider, &spec.options, &schema, &env)?;
                 // The write asks the policy about the table's directory, in the form
                 // `write_files` asks it (`locate_write_path`), and the create refuses
@@ -971,6 +987,17 @@ enum Access {
     Read,
     /// Writes or changes it.
     Write,
+}
+
+/// Whether an Arrow type is or contains a map (which the bucket hash cannot take).
+fn arrow_type_has_map(t: &arrow_schema::DataType) -> bool {
+    use arrow_schema::DataType as T;
+    match t {
+        T::Map(..) => true,
+        T::List(f) | T::LargeList(f) | T::FixedSizeList(f, _) => arrow_type_has_map(f.data_type()),
+        T::Struct(fs) => fs.iter().any(|f| arrow_type_has_map(f.data_type())),
+        _ => false,
+    }
 }
 
 /// The class name Spark's `_LEGACY_ERROR_TEMP_1159` prints for a provider (observed on Spark 4.3.0:

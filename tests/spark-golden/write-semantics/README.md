@@ -90,3 +90,14 @@ v4.3.0), `compat` (all `compatible`: nothing here needs `allowIncompatible`), op
 
 No case needs `krishiv.expr.<name>.allowIncompatible`. Cases with `target: dsv2 ...` cannot be oracle-checked on stock
 Spark (no V2 catalog); use the Iceberg 1.12 / Delta runtimes of the plan and re-derive `expect` from those runs.
+
+## Regeneration
+
+`gen_write_semantics_goldens.py` reads these input files and writes only the `observed` blocks to
+`tests/fixtures/spark-<ver>/write-semantics/`; it never rewrites an input file. The curation step is by hand: where a
+run differs from the source-derived text, set `expect` to the run's result and keep the old text beside it
+(`spark_expected_by_source`, `old_expect`). The script refuses a server whose version is not `--version`, creates a
+uniquely named scratch database per case (never dropping one it did not create), restores the session configuration
+after each case, records field nullability, skips the classic-only writer mode strings and all V2 cases, and, for a
+refused statement whose case states the table's rows, records the rows read back (`after`). `TT-v1-spark-catalog-sql`
+now has a setup and a statement, so a run covers it; the fixture keeps its `skipped` record until one is made.

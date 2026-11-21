@@ -61,6 +61,19 @@ fn text(column: &dyn Array, i: usize) -> Option<String> {
 }
 
 /// `(id, name)` pairs of the table `table`, ordered by `id`.
+fn rows_of_columns(s: &Session, table: &str) -> Vec<(i32, Option<String>)> {
+    let df = s.table(table).select_expr(["id", "name"]).unwrap();
+    let mut out = Vec::new();
+    for batch in block_on(df.collect()).unwrap() {
+        let ids = batch.column(0).as_primitive::<Int32Type>();
+        for i in 0..batch.num_rows() {
+            out.push((ids.value(i), text(batch.column(1), i)));
+        }
+    }
+    out.sort();
+    out
+}
+
 fn rows(s: &Session, table: &str) -> Vec<(i32, Option<String>)> {
     let batches = block_on(s.table(table).collect()).unwrap();
     let mut rows = Vec::new();
@@ -216,6 +229,17 @@ fn overwrites_and_clustered_creates_are_unsupported() {
             .create(),
     )
     .unwrap();
+    // The rows are all there, and `name` is the partition column (Spark lists it last).
+    assert_eq!(
+        rows_of_columns(&s, "p"),
+        vec![
+            (1, None),
+            (2, Some("b".to_owned())),
+            (3, Some("c".to_owned()))
+        ]
+    );
+    let described = block_on(async { s.sql("SHOW PARTITIONS p").await?.collect().await }).unwrap();
+    assert!(!described.is_empty());
     let err = block_on(
         s.table("people")
             .write_to_table("c")

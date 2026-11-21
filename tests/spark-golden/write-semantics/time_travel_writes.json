@@ -3,7 +3,7 @@
  "spark_tag": "v4.3.0",
  "status": "unverified-by-run",
  "generator": "tests/scripts/gen_write_semantics_goldens.py",
- "note": "Expected values are derived from the v4.3.0 source and suite assertions; no Spark runtime was executed (see README.md). The generator overwrites 'expect' with 'observed' from a real run.",
+ "note": "Expected values are derived from the v4.3.0 source and suite assertions. The generator (tests/scripts/gen_write_semantics_goldens.py) never rewrites this file: it writes the run's 'observed' blocks to tests/fixtures/spark-4.3.0/write-semantics/. Where a run differs from the source-derived text, 'expect' is edited by hand to the run's result and the old text kept (see README.md).",
  "cases": [
   {
    "id": "TT-sql-insert-both-keys",
@@ -294,7 +294,11 @@
    "source": [
     "sql/catalyst/.../analysis/RelationResolution.scala:248-258 (tryResolvePersistent rejects whenever writePrivileges != null, for any catalog including the session catalog)"
    ],
-   "note": "derived from the source only (no suite covers a SQL write to a V1 table with time-travel options); must be oracle-checked"
+   "note": "derived from the source only (no suite covers a SQL write to a V1 table with time-travel options); must be oracle-checked",
+   "setup": [
+    "CREATE TABLE t (a INT) USING parquet"
+   ],
+   "stmt": "INSERT INTO t WITH ('versionAsOf' = '1') VALUES (1)"
   },
   {
    "id": "TT-v1-dataframe-write-ignored",

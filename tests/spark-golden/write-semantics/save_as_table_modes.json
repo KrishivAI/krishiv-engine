@@ -3,7 +3,7 @@
  "spark_tag": "v4.3.0",
  "status": "unverified-by-run",
  "generator": "tests/scripts/gen_write_semantics_goldens.py",
- "note": "Expected values are derived from the v4.3.0 source and suite assertions; no Spark runtime was executed (see README.md). The generator overwrites 'expect' with 'observed' from a real run.",
+ "note": "Expected values are derived from the v4.3.0 source and suite assertions. The generator (tests/scripts/gen_write_semantics_goldens.py) never rewrites this file: it writes the run's 'observed' blocks to tests/fixtures/spark-4.3.0/write-semantics/. Where a run differs from the source-derived text, 'expect' is edited by hand to the run's result and the old text kept (see README.md).",
  "cases": [
   {
    "id": "SAT-01-flat-missing-error",

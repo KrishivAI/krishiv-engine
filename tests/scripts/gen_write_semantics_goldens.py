@@ -7,11 +7,15 @@ Output: tests/fixtures/spark-<ver>/write-semantics/<file>.json with an `observed
 
 Usage: gen_write_semantics_goldens.py --remote sc://127.0.0.1:15013 --version 4.3.0
 
-Needs `pyspark-client` matching the server. Cases whose target is `dsv2 ...` need a V2 catalog named `testcat`
-(the InMemoryTableCatalog from the Spark sql/core test jar, or Iceberg 1.12 on Spark 4.1 per the T023 plan);
-without one they are recorded as `skipped`. Hive-serde cases need a Hive-enabled server. Each case runs in a fresh
-database so cases do not interact. Statements that must run through a classic-only client (SAT invalid-mode) are
-recorded as `skipped` when the Connect client rejects them first.
+Needs `pyspark-client` matching the server; the connected server's version must equal `--version`. Cases whose
+target is `dsv2 ...` are always recorded as `skipped` (this script has no V2 setup or read-back path: they stay
+source-derived until one is written). Hive-serde cases need a Hive-enabled server. Each case runs in a fresh,
+uniquely named database (never dropped before it is created) so cases and runs do not interact; the scratch name is
+replaced by `default` in the recorded diagnostics. Cases that need a classic-only client (the writer mode strings
+`default` and `foo`, which the Connect client rejects while building the command) are recorded as `skipped`.
+
+The output carries only `observed`. Curated `expect` overrides (and `spark_expected_by_source`) live in the input
+files and are edited by hand after a run; regeneration never rewrites them.
 """
 
 from __future__ import annotations
@@ -19,24 +23,49 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 CASES = ROOT / "tests" / "spark-golden" / "write-semantics"
 FORMAT_VERSION = 1
 
 
-def run_sql(spark, stmt, conf):
+CLASSIC_ONLY_MODES = {"default", "foo"}
+
+
+def set_conf(spark, conf):
+    """Set `conf`; return what to pass to `restore_conf` (the prior value of each key, None if unset)."""
     saved = {k: spark.conf.get(k, None) for k in conf}
     for k, v in conf.items():
         spark.conf.set(k, v)
+    return saved
+
+
+def restore_conf(spark, saved):
+    for k, v in saved.items():
+        if v is None:
+            spark.conf.unset(k)
+        else:
+            spark.conf.set(k, v)
+
+
+def run_sql(spark, stmt, conf):
+    saved = set_conf(spark, conf)
     try:
         return spark.sql(stmt)
     finally:
-        for k, v in saved.items():
-            if v is None:
-                spark.conf.unset(k)
-            else:
-                spark.conf.set(k, v)
+        restore_conf(spark, saved)
+
+
+def fields_of(df):
+    return [{"name": f.name, "type": f.dataType.simpleString(), "nullable": f.nullable} for f in df.schema.fields]
+
+
+def first_line(exc):
+    for line in str(exc).splitlines():
+        if line.strip():
+            return line.strip()
+    return type(exc).__name__
 
 
 def err_record(exc):
@@ -46,7 +75,7 @@ def err_record(exc):
         "class": cls,
         "sqlstate": getattr(exc, "getSqlState", lambda: None)(),
         "params": getattr(exc, "getMessageParameters", lambda: None)(),
-        "message": str(exc).splitlines()[0],
+        "message": first_line(exc),
     }
 
 
@@ -61,10 +90,21 @@ def observe_sql_case(spark, case):
     try:
         run_sql(spark, case["stmt"], conf).collect()
     except Exception as exc:
-        return err_record(exc)
+        rec = err_record(exc)
+        if "rows" in case["expect"]:  # the case states what the table holds after the refusal
+            try:
+                rec["after"] = sorted(rows_of(spark.sql(case["expect"].get("query", "SELECT * FROM t"))), key=repr)
+            except Exception as read_exc:
+                rec["after_error"] = first_line(read_exc)
+        return rec
     q = case["expect"].get("query", "SELECT * FROM t")
     df = spark.sql(q)
-    return {"kind": "rows", "rows": sorted(rows_of(df), key=repr), "schema": df.schema.simpleString()}
+    return {
+        "kind": "rows",
+        "rows": sorted(rows_of(df), key=repr),
+        "schema": df.schema.simpleString(),
+        "fields": fields_of(df),
+    }
 
 
 def observe_save_as_table(spark, case):
@@ -77,9 +117,10 @@ def observe_save_as_table(spark, case):
             w = w.partitionBy(*ex["partitionBy"])
         w.saveAsTable("t")
     wr = case["write"]
+    if wr["mode"].lower() in CLASSIC_ONLY_MODES:
+        return {"kind": "skipped", "reason": "classic-only: the Connect client rejects this writer mode string"}
     conf = case.get("conf", {})
-    for k, v in conf.items():
-        spark.conf.set(k, v)
+    saved = set_conf(spark, conf)
     mode = wr["mode"]
     note = None
     if mode.lower() == "errorifexists":
@@ -99,11 +140,15 @@ def observe_save_as_table(spark, case):
             rec["note"] = note
         return rec
     finally:
-        for k in conf:
-            spark.conf.unset(k)
+        restore_conf(spark, saved)
     try:
         df = spark.table("t")
-        rec = {"kind": "rows", "rows": sorted(rows_of(df), key=repr), "schema": df.schema.simpleString()}
+        rec = {
+            "kind": "rows",
+            "rows": sorted(rows_of(df), key=repr),
+            "schema": df.schema.simpleString(),
+            "fields": fields_of(df),
+        }
         if note:
             rec["note"] = note
         return rec
@@ -121,13 +166,15 @@ def main():
     from pyspark.sql import SparkSession  # imported late: the module is importable without a server
 
     spark = SparkSession.builder.remote(args.remote).getOrCreate()
+    if not spark.version.startswith(args.version):
+        raise SystemExit(f"the server is Spark {spark.version}, not {args.version}: refusing to write its results")
+    run_id = uuid.uuid4().hex[:8]
     out_dir = ROOT / "tests" / "fixtures" / f"spark-{args.version}" / "write-semantics"
     out_dir.mkdir(parents=True, exist_ok=True)
     for path in sorted(CASES.glob("*.json")):
         doc = json.loads(path.read_text())
         for i, case in enumerate(doc["cases"]):
-            db = f"ws_{path.stem}_{i}"
-            spark.sql(f"DROP DATABASE IF EXISTS {db} CASCADE")
+            db = f"ws_{run_id}_{path.stem}_{i}"
             spark.sql(f"CREATE DATABASE {db}")
             spark.sql(f"USE {db}")
             for tv in spark.catalog.listTables():  # temp views are session-wide: drop leftovers of earlier cases
@@ -138,14 +185,15 @@ def main():
                     case["observed"] = observe_save_as_table(spark, case)
                 elif "stmt" in case:
                     if str(case.get("target", "")).startswith("dsv2"):
-                        case["observed"] = {"kind": "skipped", "reason": "needs V2 catalog testcat"}
+                        case["observed"] = {"kind": "skipped", "reason": "V2 cases have no capture path in this script"}
                     else:
                         case["observed"] = observe_sql_case(spark, case)
                 else:
                     case["observed"] = {"kind": "skipped", "reason": "DataFrame-API case: see 'how' (not scripted)"}
+                case["observed"] = json.loads(json.dumps(case["observed"], default=str).replace(db, "default"))
             finally:
                 spark.sql("USE default")
-                spark.sql(f"DROP DATABASE IF EXISTS {db} CASCADE")
+                spark.sql(f"DROP DATABASE IF EXISTS {db} CASCADE")  # created above by this run
         doc["status"] = "oracle"
         doc["format_version"] = FORMAT_VERSION
         doc["spark_version"] = args.version
