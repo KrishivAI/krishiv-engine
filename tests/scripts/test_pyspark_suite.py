@@ -190,3 +190,31 @@ def test_conditional_skips_leave_the_denominator_outside_the_cap(tmp_path):
 def test_no_oracle_run_means_no_conditional_skips():
     den, _ = compute("4.3.0", {"a.py::T::t"}, set(), set(), [])
     assert den.conditional_skips == 0
+
+
+def test_ratchet_cli_fails_on_lost_pass_or_low_rate(tmp_path, monkeypatch):
+    import argparse
+    import json
+
+    from pyspark_suite import __main__ as cli
+
+    (tmp_path / "summary").mkdir()
+    base = {"version": "4.0.5", "source": "run", "passed": 2, "pass_rate": 80.0, "passed_ids": ["a", "b"]}
+    (tmp_path / "summary" / "4.0.5.json").write_text(json.dumps(base))
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+
+    def run(cur, **kw):
+        f = tmp_path / "cur.json"
+        f.write_text(json.dumps(dict(base, **cur)))
+        a = argparse.Namespace(version="4.0.5", current=f, min_rate=kw.get("min_rate"), report_only=kw.get("ro", False))
+        cli.cmd_ratchet(a)
+
+    run({})  # same list: ok
+    run({"passed_ids": ["a", "b", "c"]})  # gained a pass: ok
+    with pytest.raises(SystemExit):
+        run({"passed_ids": ["a"]})  # lost b
+    run({"passed_ids": ["a"]}, ro=True)  # report-only never fails
+    with pytest.raises(SystemExit):
+        run({}, min_rate=90.0)  # under the floor
+    with pytest.raises(SystemExit):
+        run({"source": "static"})  # not a run
