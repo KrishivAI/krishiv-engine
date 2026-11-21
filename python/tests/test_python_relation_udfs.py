@@ -173,3 +173,127 @@ def test_a_limit_over_a_map_returns_its_rows_and_frees_the_pool() -> None:
     # must be finite; what matters is that the pool thread is free again afterwards.
     assert len(spark.range(1).mapInPandas(many, "id long").limit(3).collect()) == 3
     assert len(spark.range(2).mapInPandas(lambda it: it, "id long").collect()) == 2
+
+
+# --- pool occupancy: many groups on a small pool (review of 8e47688fa, findings 1-2). The process's pool is
+# started once, with the first session's size, so each case runs in its own interpreter, under a deadline.
+
+_DEADLINE_S = 90
+
+_PRELUDE = """
+import sys
+import pyarrow as pa
+from krishiv import _native
+from krishiv.sql.session import SparkSession
+from krishiv.sql.functions import pandas_udf
+
+config = [("krishiv.python.udf.threads", sys.argv[1])]
+spark = SparkSession(_native.Session(config), config)
+"""
+
+
+def _run_isolated(threads: int, body: str) -> str:
+    import subprocess
+    import sys
+
+    try:
+        done = subprocess.run(
+            [sys.executable, "-c", _PRELUDE + body, str(threads)],
+            capture_output=True,
+            text=True,
+            timeout=_DEADLINE_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:  # a hang is the failure this guards against
+        raise AssertionError(f"no result within {_DEADLINE_S}s on {threads} thread(s)") from e
+    assert done.returncode == 0, done.stderr[-2000:]
+    return done.stdout.strip().splitlines()[-1]
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_apply_in_pandas_over_a_thousand_groups_finishes(threads: int) -> None:
+    out = _run_isolated(
+        threads,
+        """
+df = spark.range(1000).repartition(4)
+res = df.groupBy("id").applyInPandas(lambda pdf: pdf, "id long")
+print("rows", len(res.collect()))
+""",
+    )
+    assert out == "rows 1000"
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_grouped_aggregate_udf_over_a_thousand_groups_finishes(threads: int) -> None:
+    out = _run_isolated(
+        threads,
+        """
+df = spark.range(1000).repartition(4)
+s = pandas_udf(lambda v: v.sum(), "long", 202)
+res = df.groupBy("id").agg(s(df["id"]).alias("s"))
+print("rows", len(res.collect()))
+""",
+    )
+    assert out == "rows 1000"
+
+
+@pytest.mark.skip(
+    reason="OPEN (review finding 1): two grouped-agg UDFs in one agg are two chained relation nodes; the upstream "
+    "node's tasks hold every slot while blocked on a downstream node that needs one, so this hangs"
+)
+@pytest.mark.parametrize("threads", [1, 2])
+def test_two_grouped_aggregate_udfs_in_one_agg_finish_or_name_the_limit(threads: int) -> None:
+    out = _run_isolated(
+        threads,
+        """
+df = spark.range(200).repartition(4)
+s = pandas_udf(lambda v: v.sum(), "long", 202)
+m = pandas_udf(lambda v: v.max(), "long", 202)
+try:
+    res = df.groupBy("id").agg(s(df["id"]).alias("s"), m(df["id"]).alias("m"))
+    print("rows", len(res.collect()))
+except Exception as e:
+    print("error", "krishiv.python.udf.threads" in str(e))
+""",
+    )
+    # Two lanes need two slots: a pool of one refuses by naming the setting, a pool of two runs it.
+    assert out == ("error True" if threads == 1 else "rows 200")
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_cogroup_over_many_keys_finishes(threads: int) -> None:
+    out = _run_isolated(
+        threads,
+        """
+left = spark.range(500).repartition(3)
+right = spark.range(500).repartition(2)
+
+def f(lt, rt):
+    return pa.table({"nl": [lt.num_rows], "nr": [rt.num_rows]})
+
+res = left.groupBy("id").cogroup(right.groupBy("id")).applyInArrow(f, "nl long, nr long")
+print("rows", len(res.collect()))
+""",
+    )
+    assert out == "rows 500"
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_a_failing_group_frees_the_pool_for_the_next_query(threads: int) -> None:
+    out = _run_isolated(
+        threads,
+        """
+def boom(pdf):
+    raise ValueError("kaboom")
+
+df = spark.range(300).repartition(3)
+try:
+    df.groupBy("id").applyInPandas(boom, "id long").collect()
+    print("no error")
+except Exception as e:
+    assert "kaboom" in str(e)
+    ok = spark.range(5).mapInPandas(lambda it: it, "id long").collect()
+    print("rows", len(ok))
+""",
+    )
+    assert out == "rows 5"

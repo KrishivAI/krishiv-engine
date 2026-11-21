@@ -11,10 +11,12 @@
 //! (`export_column`, and `import_column` with full validation: pyarrow is the only trusted producer).
 //!
 //! **Pool occupancy.** A task holds its thread until its partition ends, so with a pool of one thread (the
-//! GIL default) partitions run one after another. This cannot deadlock: a task waiting for a thread has its
-//! sink blocked, which parks only that driver, and the task holding the thread is fed by drivers that are not
-//! blocked on it. A task whose runner stopped reading closes its input at once, so frames sent after that are
-//! dropped, not waited for.
+//! GIL default) partitions run one after another. The pool has one **slot** per thread (`slots`), which a
+//! driver takes for all its lanes together or waits for, holding none: a driver whose tasks outnumbered the
+//! threads would hang, its first tasks waiting for frames that its last, queued task never reads. A driver
+//! that needs more slots than threads fails with `KRISHIV_PYTHON_WORKER_LIMIT` naming
+//! `krishiv.python.udf.threads`. A task whose runner stopped reading closes its input at once, so frames sent
+//! after that are dropped, not waited for.
 //!
 //! **Cancellation.** Dropping the task drops its channels: a runner waiting for a frame raises, a result
 //! waiting for room is abandoned, and a runner inside bytecode is interrupted as a scalar call is
@@ -31,11 +33,11 @@ use futures::executor::block_on;
 use futures::future::BoxFuture;
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::python_relation::{
-    Frame, PreparedRelationUdf, RelationCallSpec, RelationSlot, UdfTask,
+    Frame, PreparedRelationUdf, RelationCallSpec, RelationSlot, RelationSlots, UdfTask,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
+use pyo3::sync::{MutexExt, PyOnceLock};
 use pyo3::types::{PyList, PyTuple, PyType};
 
 use super::interrupt::{Call, CancelOnDrop};
@@ -89,9 +91,13 @@ struct PreparedRelation {
 }
 
 impl PreparedRelationUdf for PreparedRelation {
+    fn capacity(&self) -> Option<Arc<dyn RelationSlots>> {
+        // One slot per pool thread, taken by a driver for all its lanes together (module doc).
+        let pool = self.pool.get().ok()?;
+        Some(Arc::new(super::slots::SlotHandle(Arc::clone(pool.slots()))))
+    }
+
     fn open(&self, slot: Option<RelationSlot>) -> krishiv_exec::Result<Box<dyn UdfTask>> {
-        // Embedded tasks are bounded by the pool's own queue, not by slots.
-        drop(slot);
         let pool = self.pool.get()?;
         let (frames_tx, frames_rx) = mpsc::channel::<Frame>(FRAME_WINDOW);
         let (results_tx, results_rx) =
@@ -105,6 +111,7 @@ impl PreparedRelationUdf for PreparedRelation {
             frames: frames_rx,
             results: results_tx,
             call,
+            _slot: slot,
         };
         pool.submit(Box::new(move |py| job.run(py)));
         Ok(Box::new(InProcessTask {
@@ -153,6 +160,8 @@ struct Job {
     frames: mpsc::Receiver<Frame>,
     results: mpsc::Sender<Result<RecordBatch, KrishivError>>,
     call: Arc<Call>,
+    /// Frees the pool slot when the job ends (or is dropped unrun).
+    _slot: Option<RelationSlot>,
 }
 
 impl Job {
@@ -164,6 +173,7 @@ impl Job {
             frames,
             mut results,
             call,
+            _slot,
         } = self;
         // A task dropped before it started has nobody to read it.
         if results.is_closed() {
@@ -173,7 +183,7 @@ impl Job {
         let outcome = drive(py, &registered, &spec, frames, &results, &call);
         if let Err(e) = outcome {
             // The engine may be gone already; then there is nobody to tell.
-            let _ = block_on(results.send(Err(e)));
+            let _ = py.detach(|| block_on(results.send(Err(e))));
         }
     }
 }
@@ -233,7 +243,7 @@ fn drive(
     // At once: an interrupt that came too late is cleared here.
     drop(running);
     // The input closes now, so a runner that stopped reading does not leave the engine waiting.
-    source.bind(py).borrow().close();
+    source.bind(py).borrow().close(py);
     produced
 }
 
@@ -314,11 +324,13 @@ struct FrameSource {
 }
 
 impl FrameSource {
-    fn close(&self) {
-        // Dropping the receiver makes every later send fail, which the engine side takes as "ended".
+    fn close(&self, py: Python<'_>) {
+        // Dropping the receiver makes every later send fail, which the engine side takes as "ended". The lock
+        // is taken detached while it waits: another Python thread may hold it inside `next`, waiting for a
+        // frame.
         drop(
             self.frames
-                .lock()
+                .lock_py_attached(py)
                 .unwrap_or_else(PoisonError::into_inner)
                 .take(),
         );
@@ -355,7 +367,12 @@ impl FrameSource {
 impl FrameSource {
     /// The next frame as `("batch", side, batch)`, `("end_group",)` or `("end",)`.
     fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let mut guard = self.frames.lock().unwrap_or_else(PoisonError::into_inner);
+        // Another Python thread calling `next` waits for the lock detached (never attached, which would stop
+        // the thread holding it from re-attaching).
+        let mut guard = self
+            .frames
+            .lock_py_attached(py)
+            .unwrap_or_else(PoisonError::into_inner);
         let Some(frames) = guard.as_mut() else {
             return Err(PyRuntimeError::new_err(
                 "the Python relation task has ended",

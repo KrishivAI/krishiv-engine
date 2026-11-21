@@ -17,6 +17,7 @@ pub(crate) mod interrupt;
 pub(crate) mod pool;
 pub(crate) mod relation;
 pub(crate) mod runtime;
+pub(crate) mod slots;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};

@@ -90,9 +90,16 @@ pub(crate) struct Pool {
     /// keeps its pin instead of releasing it, because the interpreter may be
     /// finalizing by the time it gets there (review M1).
     abandoned: Arc<AtomicBool>,
+    /// One relation task slot per thread (see `slots`).
+    slots: Arc<super::slots::Slots>,
 }
 
 impl Pool {
+    /// The relation task slots of this pool's threads.
+    pub(crate) fn slots(&self) -> &Arc<super::slots::Slots> {
+        &self.slots
+    }
+
     /// Starts `size` pinned threads (at least one). Called attached or not;
     /// a new thread pins once the GIL (if any) is free.
     ///
@@ -124,6 +131,7 @@ impl Pool {
             threads: Mutex::new(threads),
             pid: std::process::id(),
             abandoned,
+            slots: super::slots::Slots::new(size),
         })
     }
 
