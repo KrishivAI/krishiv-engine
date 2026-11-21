@@ -911,7 +911,13 @@ fn builtin(
         // `rlike(a, b)` is Spark's `RLike(a, b)`: the `regexp_like` kernel
         // over the same arguments, reporting Spark's `rlike` name.
         (Builtin::RLike, 2) => func::compile("rlike", f, args, input, e)?,
-        (Builtin::When, n) if n >= 2 => cond::when(args, out, env)?,
+        (Builtin::When, n) if n >= 2 => {
+            let whole = f
+                .args
+                .iter()
+                .all(|a| krishiv_plan::runs_on_any_row(a, env.ansi));
+            cond::when(args, out, env, whole)?
+        }
         (Builtin::Concat, _) => strings::concat(args, f.nullable)?,
         _ => {
             return Err(unsupported(&format!(

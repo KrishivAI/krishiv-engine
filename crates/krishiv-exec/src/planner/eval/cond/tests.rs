@@ -919,6 +919,7 @@ fn when_unifies_string_encodings() {
         ],
         ArrowType::Utf8View,
         &env,
+        false,
     )
     .unwrap();
     assert_eq!(e.data_type(), &ArrowType::Utf8View);
@@ -937,6 +938,7 @@ fn when_unifies_string_encodings() {
         ],
         ArrowType::Utf8View,
         &env,
+        false,
     )
     .unwrap_err();
     assert!(
@@ -1548,4 +1550,110 @@ fn nullif_with_a_value_outside_the_result_type_fails_evaluation() {
     .unwrap();
     assert_eq!(e.data_type(), &ArrowType::Utf8View);
     assert!(e.eval(&batch, 0).is_err());
+}
+
+/// A whole-batch `CASE` ([`When`]'s `whole`) answers as the lazy one: the
+/// first true condition wins, a NULL condition is not true, rows no branch
+/// takes get the `ELSE` or NULL, whichever branches a batch takes (none, some
+/// or all of its rows).
+#[test]
+fn a_whole_batch_case_answers_as_the_lazy_one() {
+    let env = env(true);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", ArrowType::Boolean, true),
+        Field::new("b", ArrowType::Boolean, true),
+        Field::new("x", ArrowType::Int64, true),
+        Field::new("y", ArrowType::Int64, true),
+        Field::new("s", ArrowType::Utf8View, true),
+    ]));
+    // Conditions over 0..rows: some rows true, false or NULL in each.
+    let flags = |rows: usize, k: usize| -> BooleanArray {
+        (0..rows)
+            .map(|i| match (i * 7 + k) % 5 {
+                0 => None,
+                1 | 2 => Some(true),
+                _ => Some(false),
+            })
+            .collect()
+    };
+    let constant =
+        |rows: usize, v: Option<bool>| -> BooleanArray { vec![v; rows].into_iter().collect() };
+    let longs = |rows: usize, k: i64| -> Int64Array {
+        (0..rows)
+            .map(|i| {
+                let i = i64::try_from(i).unwrap();
+                (i % 4 != 3).then_some(i * 10 + k)
+            })
+            .collect()
+    };
+    let batch = |a: BooleanArray, b: BooleanArray, rows: usize| {
+        let s: StringViewArray = (0..rows)
+            .map(|i| (i % 3 != 0).then(|| format!("s{i}")))
+            .collect();
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(a) as ArrayRef,
+                Arc::new(b),
+                Arc::new(longs(rows, 1)),
+                Arc::new(longs(rows, 2)),
+                Arc::new(s),
+            ],
+        )
+        .unwrap()
+    };
+    let batches = [
+        batch(flags(37, 0), flags(37, 3), 37),
+        batch(constant(9, Some(true)), flags(9, 1), 9),
+        batch(constant(9, Some(false)), constant(9, None), 9),
+        batch(constant(9, None), constant(9, Some(true)), 9),
+        batch(constant(0, None), constant(0, None), 0),
+    ];
+    let bool_col = |i| column(i, ArrowType::Boolean, true);
+    let long_col = |i| column(i, ArrowType::Int64, true);
+    let shapes: Vec<(Vec<Arc<dyn PhysExpr>>, ArrowType)> = vec![
+        // CASE WHEN a THEN x END
+        (vec![bool_col(0), long_col(2)], ArrowType::Int64),
+        // CASE WHEN a THEN x WHEN b THEN y ELSE 5 END
+        (
+            vec![
+                bool_col(0),
+                long_col(2),
+                bool_col(1),
+                long_col(3),
+                lit(&Literal::Long(5)),
+            ],
+            ArrowType::Int64,
+        ),
+        // CASE WHEN b THEN NULL WHEN a THEN 7 ELSE y END
+        (
+            vec![
+                bool_col(1),
+                lit(&Literal::Null(None)),
+                bool_col(0),
+                lit(&Literal::Long(7)),
+                long_col(3),
+            ],
+            ArrowType::Int64,
+        ),
+        // CASE WHEN a THEN s WHEN b THEN 'b' END
+        (
+            vec![
+                bool_col(0),
+                column(4, ArrowType::Utf8View, true),
+                bool_col(1),
+                lit(&Literal::String("b".to_owned())),
+            ],
+            ArrowType::Utf8View,
+        ),
+    ];
+    for (args, out) in shapes {
+        let lazy = when(args.clone(), out.clone(), &env, false).unwrap();
+        let whole = when(args, out, &env, true).unwrap();
+        for b in &batches {
+            let (l, w) = (values(&lazy, b), values(&whole, b));
+            assert_eq!(w.data_type(), l.data_type());
+            assert_eq!(w.to_data(), l.to_data(), "rows {}", b.num_rows());
+        }
+    }
 }

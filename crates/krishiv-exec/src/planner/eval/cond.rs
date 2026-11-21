@@ -561,17 +561,28 @@ impl PhysExpr for InList {
 
 /// `CASE WHEN c1 THEN v1 ... [ELSE e] END`, lazily: each condition sees only
 /// the rows no earlier branch took, each value only the rows it takes.
+///
+/// With `whole` set, every condition and value runs on the whole batch and
+/// the branches combine with `zip`, last to first. The binder sets it only
+/// when every argument may run on rows Spark would not evaluate it on
+/// ([`krishiv_plan::runs_on_any_row`]), so the answers are the same. The
+/// lazy path filters the whole remaining batch twice per branch and
+/// interleaves the parts, which costs more than running a column, literal or
+/// comparison on every row (TPC-DS q59's seven `CASE WHEN d_day_name = ...`).
 #[derive(Debug)]
 struct When {
     branches: Vec<(Arc<dyn PhysExpr>, Arc<dyn PhysExpr>)>,
     otherwise: Option<Arc<dyn PhysExpr>>,
     out: ArrowType,
+    whole: bool,
 }
 
+/// Binds `CASE`; `whole` as on [`When`].
 pub(super) fn when(
     mut args: Vec<Arc<dyn PhysExpr>>,
     out: ArrowType,
     env: &EvalEnv,
+    whole: bool,
 ) -> Result<Arc<dyn PhysExpr>> {
     let mut otherwise = if args.len() % 2 == 1 {
         args.pop()
@@ -593,7 +604,43 @@ pub(super) fn when(
         branches,
         otherwise,
         out,
+        whole,
     }))
+}
+
+impl When {
+    /// The `whole` evaluation: the `ELSE` (or NULL), then each branch from
+    /// the last to the first takes the rows its condition is true on, so the
+    /// first true condition wins. A NULL condition is not true.
+    fn eval_whole(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let rows = batch.num_rows();
+        let mut acc = match &self.otherwise {
+            Some(e) => cast_null(e.eval(batch, partition)?.into_array(rows)?, &self.out),
+            None => new_null_array(&self.out, rows),
+        };
+        for (cond, value) in self.branches.iter().rev() {
+            let c = cond.eval(batch, partition)?.into_array(rows)?;
+            let c = c
+                .as_boolean_opt()
+                .ok_or_else(|| internal("CASE condition"))?;
+            let taken = match c.nulls() {
+                Some(n) => c.values() & n.inner(),
+                None => c.values().clone(),
+            };
+            let set = taken.count_set_bits();
+            if set == 0 {
+                continue;
+            }
+            let v = cast_null(value.eval(batch, partition)?.into_array(rows)?, &self.out);
+            acc = if set == rows {
+                v
+            } else {
+                zip(&BooleanArray::new(taken, None), &v, &acc)
+                    .map_err(|e| internal(&e.to_string()))?
+            };
+        }
+        Ok(Value::Array(acc))
+    }
 }
 
 /// `v` as a value of the `CASE` result type `out`: branches of one Spark
@@ -625,6 +672,9 @@ impl PhysExpr for When {
     }
 
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        if self.whole {
+            return self.eval_whole(batch, partition);
+        }
         let rows = batch.num_rows();
         // `rest`: the rows no branch took yet, as a batch and their row
         // numbers in `batch`.
@@ -731,7 +781,7 @@ pub(super) fn coalesce(
             None => a,
             Some(taken) => {
                 let cond = is_null(false, Arc::clone(&a));
-                when(vec![cond, a, taken], out.clone(), env)?
+                when(vec![cond, a, taken], out.clone(), env, false)?
             }
         });
     }
