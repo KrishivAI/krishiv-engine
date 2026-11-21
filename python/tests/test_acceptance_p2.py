@@ -49,7 +49,7 @@ def test_unknown_attribute_has_class_and_state(spark: SparkSession) -> None:
 
 def test_select_wrong_type_names_col_and_has_state(spark: SparkSession) -> None:
     with pytest.raises(PySparkTypeError) as e:
-        spark.sql("select 1 a").select(5)  # type: ignore[arg-type]
+        spark.sql("select 1 a").select(5)  # ty: ignore[invalid-argument-type]
     assert e.value.getCondition() == "NOT_EXPECTED_TYPE"
     assert e.value.getSqlState() == "42K09"
     assert (e.value.getMessageParameters() or {})["arg_name"] == "col"
