@@ -914,6 +914,93 @@ fn partitioned_writes_follow_sparks_layout() {
 }
 
 #[test]
+fn bucketed_writes_name_files_by_bucket_and_drop_the_bucket_column() {
+    let env = Env::memory();
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("p", DataType::Utf8, false),
+        Field::new("__bucket", DataType::Int32, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+            Arc::new(arrow_array::StringArray::from(vec![
+                "a", "a", "a", "b", "b",
+            ])),
+            Arc::new(Int32Array::from(vec![0, 0, 3, 1, 1])),
+        ],
+    )
+    .unwrap();
+    let w = env
+        .begin_dynamic("t", SaveMode::ErrorIfExists, "u", false)
+        .unwrap()
+        .unwrap()
+        .partitioned(true);
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let files = env
+        .rt
+        .block_on(async {
+            let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+            let id = pool.register("write", None);
+            let mut options = w.write_options(0);
+            options.partition_by = vec![1];
+            options.partition_names = vec!["p".to_owned()];
+            let mut writer = FileWriter::new(
+                &env.io,
+                Arc::clone(&format),
+                &schema,
+                o.clone(),
+                options,
+                krishiv_memory::Reservation::new(pool, id),
+            )?
+            .bucketed_by(&schema, 2)?;
+            writer.write(&batch).await?;
+            let files = writer.finish().await?;
+            w.commit(&env.io, format.as_ref(), schema, &o, files).await
+        })
+        .unwrap();
+    let paths: Vec<String> = files.iter().map(|f| f.path.to_string()).collect();
+    assert_eq!(
+        paths,
+        [
+            "t/p=a/part-00000-u_00000.c000.snappy.parquet",
+            "t/p=a/part-00000-u_00003.c001.snappy.parquet",
+            "t/p=b/part-00000-u_00001.c002.snappy.parquet",
+        ]
+    );
+    let ids: Vec<_> = files.iter().map(|f| env.read_ids(&f.path)).collect();
+    assert_eq!(ids, [vec![1, 2], vec![3], vec![4, 5]]);
+    for f in &files {
+        assert_eq!(env.read_fields(&f.path), ["id"]);
+    }
+    let names: Vec<_> = paths
+        .iter()
+        .map(|p| crate::bucket_id_of_file_name(p.rsplit('/').next().unwrap()))
+        .collect();
+    assert_eq!(names, [Some(0), Some(3), Some(1)]);
+}
+
+#[test]
+fn the_bucket_id_is_read_from_a_file_name_as_spark_reads_it() {
+    use crate::bucket_id_of_file_name as id;
+    assert_eq!(
+        id("part-00000-2dd664f9-d2c4-4ffe-878f-c6c70c1fb0cb_00003.gz.parquet"),
+        Some(3)
+    );
+    assert_eq!(
+        id("part-r-00000-2dd664f9-d2c4-4ffe-878f-431234567891.gz.parquet"),
+        None
+    );
+    assert_eq!(id("x_7"), Some(7));
+    assert_eq!(id("x_7a.parquet"), None);
+    assert_eq!(id("a_1_22.c000"), Some(22));
+    assert_eq!(id("a_1.b_22x"), Some(1));
+}
+
+#[test]
 fn partition_by_order_is_respected() {
     let env = Env::memory();
     let schema = Arc::new(Schema::new(vec![
@@ -1200,6 +1287,8 @@ fn the_orphan_sweep_matches_partitioned_and_unpartitioned_file_names() {
         "part-00003-job_2-c000.snappy.parquet",
         "part-00000-job.c000.snappy.parquet",
         "part-00003-job_2.c012.snappy.parquet",
+        "part-00000-job_1_00003.c000.snappy.parquet",
+        "part-00000-job_00003.c000.snappy.parquet",
     ] {
         assert!(is_job_file(name, "job"), "{name}");
     }
@@ -1207,6 +1296,7 @@ fn the_orphan_sweep_matches_partitioned_and_unpartitioned_file_names() {
         "part-00000-xjob.c000.parquet",
         "part-00000-job_.c000.parquet",
         "part-00000-job.cx.parquet",
+        "part-00000-job_1_2_3.c000.parquet",
         "part-00000-job.parquet",
         "_SUCCESS",
         "other-00000-job.c000.parquet",

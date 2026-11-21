@@ -1,0 +1,631 @@
+{
+ "format_version": 1,
+ "spark_tag": "v4.3.0",
+ "status": "unverified-by-run",
+ "generator": "tests/scripts/gen_write_semantics_goldens.py",
+ "note": "Expected values are derived from the v4.3.0 source and suite assertions. The generator (tests/scripts/gen_write_semantics_goldens.py) never rewrites this file: it writes the run's 'observed' blocks to tests/fixtures/spark-4.3.0/write-semantics/. Where a run differs from the source-derived text, 'expect' is edited by hand to the run's result and the old text kept (see README.md).",
+ "cases": [
+  {
+   "id": "DML-parquet-delete-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WITH ('k' = 'v') WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1245-1258"
+   ],
+   "note": "options parse and bind as read options of the v1 relation; the statement then fails exactly as it does without WITH (...)"
+  },
+  {
+   "id": "DML-parquet-delete-alias-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t AS x WITH ('k' = 'v') WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "alias precedes WITH (grammar order: tableAlias optionsClause?)"
+  },
+  {
+   "id": "DML-parquet-delete-nooptions",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))"
+   ],
+   "note": "baseline without options (same error)"
+  },
+  {
+   "id": "DML-parquet-update-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t WITH ('k' = 'v') SET b = 9 WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1260-1275"
+   ],
+   "note": "raised at planning (SparkUnsupportedOperationException), SQLSTATE 0A000"
+  },
+  {
+   "id": "DML-parquet-update-alias-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t AS x WITH ('k' = 'v') SET b = 9 WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ]
+  },
+  {
+   "id": "DML-parquet-merge-target-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('k' = 'v') USING s ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1284-1385"
+   ]
+  },
+  {
+   "id": "DML-parquet-merge-source-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t USING s WITH ('k' = 'v') ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1286-1290 (source options are a separate bag; source is a read)"
+   ]
+  },
+  {
+   "id": "DML-parquet-merge-both-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('a' = '1') USING s WITH ('b' = '2') ON t.a = s.a WHEN NOT MATCHED THEN INSERT *",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "SPARK-58007 parser test: sql/catalyst/src/test/.../DDLParserSuite.scala:2462-2490 (parse shape only)"
+  },
+  {
+   "id": "DML-hv-parquet-delete-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WITH ('k' = 'v') WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1245-1258"
+   ],
+   "note": "options parse and bind as read options of the v1 relation; the statement then fails exactly as it does without WITH (...)"
+  },
+  {
+   "id": "DML-hv-parquet-delete-alias-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t AS x WITH ('k' = 'v') WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "alias precedes WITH (grammar order: tableAlias optionsClause?)"
+  },
+  {
+   "id": "DML-hv-parquet-delete-nooptions",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))"
+   ],
+   "note": "baseline without options (same error)"
+  },
+  {
+   "id": "DML-hv-parquet-update-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t WITH ('k' = 'v') SET b = 9 WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1260-1275"
+   ],
+   "note": "raised at planning (SparkUnsupportedOperationException), SQLSTATE 0A000"
+  },
+  {
+   "id": "DML-hv-parquet-update-alias-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t AS x WITH ('k' = 'v') SET b = 9 WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ]
+  },
+  {
+   "id": "DML-hv-parquet-merge-target-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('k' = 'v') USING s ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1284-1385"
+   ]
+  },
+  {
+   "id": "DML-hv-parquet-merge-source-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t USING s WITH ('k' = 'v') ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1286-1290 (source options are a separate bag; source is a read)"
+   ]
+  },
+  {
+   "id": "DML-hv-parquet-merge-both-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('a' = '1') USING s WITH ('b' = '2') ON t.a = s.a WHEN NOT MATCHED THEN INSERT *",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "SPARK-58007 parser test: sql/catalyst/src/test/.../DDLParserSuite.scala:2462-2490 (parse shape only)"
+  },
+  {
+   "id": "DML-hv-textfile-delete-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WITH ('k' = 'v') WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/hive/.../HiveStrategies.scala:HiveAnalysis (DeleteFromTable over SubqueryAlias(_, HiveTableRelation) -> unsupportedTableOperationError(table.identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1245-1258"
+   ],
+   "note": "options parse and bind as read options of the v1 relation; the statement then fails exactly as it does without WITH (...)"
+  },
+  {
+   "id": "DML-hv-textfile-delete-alias-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t AS x WITH ('k' = 'v') WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/hive/.../HiveStrategies.scala:HiveAnalysis (DeleteFromTable over SubqueryAlias(_, HiveTableRelation) -> unsupportedTableOperationError(table.identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "alias precedes WITH (grammar order: tableAlias optionsClause?)"
+  },
+  {
+   "id": "DML-hv-textfile-delete-nooptions",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/hive/.../HiveStrategies.scala:HiveAnalysis (DeleteFromTable over SubqueryAlias(_, HiveTableRelation) -> unsupportedTableOperationError(table.identifier, \"DELETE\"))"
+   ],
+   "note": "baseline without options (same error)"
+  },
+  {
+   "id": "DML-hv-textfile-update-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t WITH ('k' = 'v') SET b = 9 WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`unknown`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1260-1275"
+   ],
+   "note": "raised at planning (SparkUnsupportedOperationException), SQLSTATE 0A000; textfile Hive table not converted to a LogicalRelation, so the table name is `unknown` (unverified-by-run)"
+  },
+  {
+   "id": "DML-hv-textfile-update-alias-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t AS x WITH ('k' = 'v') SET b = 9 WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`unknown`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ]
+  },
+  {
+   "id": "DML-hv-textfile-merge-target-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('k' = 'v') USING s ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`unknown`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1284-1385"
+   ]
+  },
+  {
+   "id": "DML-hv-textfile-merge-source-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t USING s WITH ('k' = 'v') ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`unknown`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1286-1290 (source options are a separate bag; source is a read)"
+   ]
+  },
+  {
+   "id": "DML-hv-textfile-merge-both-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('a' = '1') USING s WITH ('b' = '2') ON t.a = s.a WHEN NOT MATCHED THEN INSERT *",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`unknown`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "SPARK-58007 parser test: sql/catalyst/src/test/.../DDLParserSuite.scala:2462-2490 (parse shape only)"
+  },
+  {
+   "id": "DML-nowith-4.2-grammar",
+   "target": "any",
+   "setup": [],
+   "stmt": "DELETE FROM t WITH ('k' = 'v') WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "PARSE_SYNTAX_ERROR",
+    "sqlstate": "42601",
+    "versions_only": [
+     "3.5",
+     "4.0",
+     "4.1",
+     "4.2"
+    ]
+   },
+   "source": [
+    "v4.2.0 SqlBaseParser.g4:742-743: DELETE/UPDATE have no optionsClause; v4.1.0 :677-678; v3.5.8 :445-446"
+   ],
+   "note": "WITH(...) on UPDATE/DELETE/MERGE is new in 4.3 (SPARK-57681/58007/58008); parameters of the syntax error not captured (unverified-by-run)"
+  },
+  {
+   "id": "DML-v2-delete-opts-reach-table",
+   "target": "dsv2 (InMemoryRowLevelOperationTableCatalog)",
+   "setup": [
+    "CREATE TABLE testcat.t (pk int, dep string) ...",
+    "INSERT ..."
+   ],
+   "stmt": "DELETE FROM testcat.t WITH ('k' = 'v') WHERE pk = 1",
+   "expect": {
+    "kind": "ok",
+    "note": "options reach DeleteFromTableExec(options) / RowLevelOperationInfoImpl(command, options)"
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:547-567",
+    "sql/catalyst/.../analysis/RewriteRowLevelCommand.scala:78-84 (buildOperationTable(table, command, options))",
+    "sql/core/src/test/.../connector/DeleteFromTableSuiteBase.scala, MergeIntoTableSuiteBase.scala (grep 'WITH (')"
+   ],
+   "note": "behavioural detail (which option map each operation sees) must be captured from the V2 test catalog or Iceberg run; not derived"
+  }
+ ]
+}
