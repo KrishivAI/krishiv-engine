@@ -190,6 +190,7 @@ registry! {
     (window_range_bounds, WindowRangeBounds, POST_MIGRATION_READER_VERSION, Semantic, "`RANGE` window frame bounds at a value distance from the current row's ordering key (`RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING`)."),
     (window_range_day_time_bounds, WindowRangeDayTimeBounds, POST_MIGRATION_READER_VERSION, Semantic, "`RANGE` window frame bounds that are a day-time interval over a timestamp ordering key (`RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW`): whole days on the session zone's clock for a `TIMESTAMP`, elapsed time below a day."),
     (window_range_month_bounds, WindowRangeMonthBounds, POST_MIGRATION_READER_VERSION, Semantic, "`RANGE` window frame bounds that are a year-month interval, moving a date or timestamp ordering key by calendar months (`RANGE BETWEEN CURRENT ROW AND INTERVAL '1' MONTH FOLLOWING`)."),
+    (write_bucketed, WriteBucketed, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` with a bucket column: the writer drops it from the files, names each file with its bucket id and expects the rows sorted by partition, bucket and `sortBy` columns; a reader without it would write the bucket id as data."),
     (write_column_types, WriteColumnTypes, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` naming the Spark types of input columns whose Arrow type doesn't say them (an interval's fields): without them a file's footer and text forms would use other fields."),
     (write_plan, WritePlan, POST_MIGRATION_READER_VERSION, Semantic, "The `WriteFiles` node's `WritePlan` (format, store, directory, job id and file limits): the file sink is built at instantiation from it with the task's partition and attempt."),
 }
@@ -251,6 +252,8 @@ pub enum Construct<'a> {
     Lambda,
     /// An expression pinned to an ANSI mode (`ResolvedExpr::EvalMode`).
     EvalMode,
+    /// A `WritePlan` with a bucket column.
+    WriteBucketed,
     /// A `WritePlan` naming the Spark types of input columns.
     WriteColumnTypes,
     /// The type of a nested literal (array, map or struct): a nested type
@@ -556,6 +559,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // it misreads the higher-order call's argument.
         Construct::Lambda => Some(Feature::LambdaFunctions),
         Construct::EvalMode => Some(Feature::CapturedEvalMode),
+        Construct::WriteBucketed => Some(Feature::WriteBucketed),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
         Construct::NestedLiteralType | Construct::SchemaType => Some(Feature::NestedTypes),
         Construct::FileSourceSchema => Some(Feature::FileSourceSchema),
@@ -831,6 +835,9 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::WriteFiles { write, .. } => {
             if write.as_ref().is_some_and(|w| !w.column_types.is_empty()) {
                 f(Construct::WriteColumnTypes);
+            }
+            if write.as_ref().is_some_and(|w| w.bucket.is_some()) {
+                f(Construct::WriteBucketed);
             }
         }
     }

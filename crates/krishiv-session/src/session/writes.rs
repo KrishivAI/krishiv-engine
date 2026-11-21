@@ -280,6 +280,35 @@ pub(super) fn resolve_partitions(
     Ok(out)
 }
 
+/// The indices of the columns `names` name in `schema` (a `sortBy` column of a bucketed write), matched as the
+/// session's case sensitivity says.
+///
+/// # Errors
+/// `PARTITION_COLUMN_NOT_FOUND_IN_SCHEMA`-style `UNRESOLVED_COLUMN` is not needed here: the names were checked when
+/// the table was created, so a missing one is `INTERNAL_ERROR`.
+pub(super) fn resolve_columns(
+    schema: &SchemaRef,
+    names: &[String],
+    case_sensitive: bool,
+) -> Result<Vec<usize>, KrishivError> {
+    names
+        .iter()
+        .map(|name| {
+            schema
+                .fields()
+                .iter()
+                .position(|f| {
+                    if case_sensitive {
+                        f.name() == name
+                    } else {
+                        f.name().eq_ignore_ascii_case(name)
+                    }
+                })
+                .ok_or_else(|| internal(format!("sort column `{name}` is not in the written rows")))
+        })
+        .collect()
+}
+
 /// `schema` as Spark prints one (`struct<id:int,...>`).
 pub(super) fn schema_simple_string(schema: &SchemaRef) -> String {
     let fields: Vec<String> = schema

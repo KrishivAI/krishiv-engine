@@ -65,6 +65,7 @@ fn query_results_are_written_committed_and_read_back() {
             target_file_bytes: 0,
             partition_by: Vec::new(),
             column_types: std::collections::BTreeMap::new(),
+            bucket: None,
         })
         .unwrap()
         .with_io(io.clone())
@@ -128,6 +129,7 @@ fn query_results_are_written_committed_and_read_back() {
                 target_file_bytes: 0,
                 partition_by: Vec::new(),
                 column_types: std::collections::BTreeMap::new(),
+                bucket: None,
             }),
         },
         krishiv_exec::physical::WritePlan::result_schema(),
@@ -170,6 +172,7 @@ fn query_results_are_written_committed_and_read_back() {
         target_file_bytes: 0,
         partition_by: Vec::new(),
         column_types: std::collections::BTreeMap::new(),
+        bucket: None,
     };
     let bad_plan = krishiv_exec::physical::PhysicalPlan::new(
         PhysNode::WriteFiles {
@@ -341,6 +344,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
             target_file_bytes: 0,
             partition_by: Vec::new(),
             column_types: std::collections::BTreeMap::new(),
+            bucket: None,
         };
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
@@ -527,6 +531,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
             target_file_bytes: 0,
             partition_by: Vec::new(),
             column_types: std::collections::BTreeMap::new(),
+            bucket: None,
         };
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
@@ -730,6 +735,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
             target_file_bytes: 0,
             partition_by: Vec::new(),
             column_types: std::collections::BTreeMap::new(),
+            bucket: None,
         };
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
@@ -871,6 +877,7 @@ fn a_write_without_a_configuration_is_refused() {
                 target_file_bytes: 0,
                 partition_by: Vec::new(),
                 column_types: std::collections::BTreeMap::new(),
+                bucket: None,
             }),
         },
         krishiv_exec::physical::WritePlan::result_schema(),
@@ -919,6 +926,7 @@ fn a_partitioned_write_sorts_by_the_partition_columns_below_the_writer() {
         target_file_bytes: 0,
         partition_by,
         column_types: std::collections::BTreeMap::new(),
+        bucket: None,
     };
     // A partition column the input does not have is refused, not
     // indexed.
@@ -983,6 +991,7 @@ fn a_write_with_an_out_of_range_partition_column_is_refused() {
                 target_file_bytes: 0,
                 partition_by: vec![9],
                 column_types: std::collections::BTreeMap::new(),
+                bucket: None,
             }),
         },
         WritePlan::result_schema(),
@@ -1053,6 +1062,7 @@ fn a_worker_writes_csv_binaries_in_the_sessions_output_style() {
                 target_file_bytes: 0,
                 partition_by: Vec::new(),
                 column_types: BTreeMap::new(),
+                bucket: None,
             })
             .unwrap()
             .with_io(sched.context())
