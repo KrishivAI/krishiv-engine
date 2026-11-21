@@ -449,9 +449,11 @@ fn fixed_index_adapts() {
 }
 
 /// The first append decision comes after `FIRST_ADAPT_ROWS` input rows,
-/// not `ADAPT_ROWS`; keys that repeat by then keep the index, and a table
-/// that turned append-only still counts every key once the final phase
-/// merges its rows (append is permanent, so later repeats become rows).
+/// not `ADAPT_ROWS`; a table whose index clears before it with a fill of
+/// new keys appends on trial until then. Keys that repeat by then (farther
+/// apart than one fill) go back to the index, and a table that stayed
+/// append-only still counts every key once the final phase merges its rows
+/// (a confirmed append is permanent, so later repeats become rows).
 #[test]
 fn the_first_append_decision_comes_early() {
     let core = core();
@@ -460,7 +462,7 @@ fn the_first_append_decision_comes_early() {
         || RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
     let (mut unique, mut repeat) = (fixed(), fixed());
     let step = 8192;
-    let mut decided_at = None;
+    let (mut tried_at, mut repeat_tried) = (None, false);
     for start in (0..FIRST_ADAPT_ROWS + step).step_by(step) {
         let s = i64::try_from(start).unwrap();
         apply(&mut unique, &batch(&core, s..s + 8192));
@@ -468,12 +470,23 @@ fn the_first_append_decision_comes_early() {
             &mut repeat,
             &batch(&core, (s..s + 8192).map(|i| i % 50_000)),
         );
-        if decided_at.is_none() && unique.mode == Mode::Append {
-            decided_at = Some(start + step);
+        if tried_at.is_none() && unique.mode == Mode::Append {
+            tried_at = Some(start + step);
+        }
+        repeat_tried |= repeat.mode == Mode::Append;
+        let trial = |t: &RowTable| t.adapt.as_ref().unwrap().trial;
+        if start + step <= FIRST_ADAPT_ROWS {
+            assert_eq!(trial(&unique).is_some(), unique.mode == Mode::Append);
+        } else {
+            assert_eq!((trial(&unique), trial(&repeat)), (None, None));
         }
     }
-    assert_eq!(decided_at, Some(FIRST_ADAPT_ROWS + step));
-    assert_ne!(repeat.mode, Mode::Append);
+    // The first batch filled and cleared the index; the second appends.
+    assert_eq!(tried_at, Some(2 * step));
+    assert_eq!(unique.mode, Mode::Append);
+    // The repeating keys tried too, then went back to the fixed index.
+    assert!(repeat_tried);
+    assert_eq!(repeat.mode, Mode::Fixed { limit: 1024 });
     // Unique for the first rows, then the same keys again: the final
     // phase's merge still makes one group per key.
     let n = i64::try_from(FIRST_ADAPT_ROWS + step).unwrap();
@@ -487,6 +500,41 @@ fn the_first_append_decision_comes_early() {
         merged.apply_merge(&unique, &c).unwrap();
     }
     assert_eq!(merged.groups, FIRST_ADAPT_ROWS + step);
+    // The trial's rows and the index's after it make each key once.
+    let mut merged = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS).unwrap();
+    for p in 0..repeat.parts.len() {
+        let c = repeat.merge_chunk(p, 0..repeat.part_len(p)).unwrap();
+        merged.apply_merge(&repeat, &c).unwrap();
+    }
+    assert_eq!(merged.groups, 50_000);
+}
+
+/// A trial append ends as soon as the sketch sees keys repeat, before the
+/// first decision: the table goes back to its fixed index (which may then
+/// grow), and the final merge still makes each key once.
+#[test]
+fn a_trial_append_ends_when_keys_repeat() {
+    let core = core();
+    let seed = HashSeed::new(Some(3));
+    let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    let step = 8192;
+    let mut modes = Vec::new();
+    for start in (0..6 * step).step_by(step) {
+        let s = i64::try_from(start).unwrap();
+        apply(&mut t, &batch(&core, (s..s + 8192).map(|i| i % 20_000)));
+        modes.push(t.mode == Mode::Append);
+    }
+    // Tried from the second batch; the third repeats keys, so the fourth
+    // or fifth goes back (well before FIRST_ADAPT_ROWS).
+    assert!(modes[1], "{modes:?}");
+    assert_eq!(t.mode, Mode::Fixed { limit: 1024 }, "{modes:?}");
+    assert_eq!(t.adapt.as_ref().unwrap().trial, None);
+    let mut merged = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS).unwrap();
+    for p in 0..t.parts.len() {
+        let c = t.merge_chunk(p, 0..t.part_len(p)).unwrap();
+        merged.apply_merge(&t, &c).unwrap();
+    }
+    assert_eq!(merged.groups, 20_000);
 }
 
 /// A full fixed index grows (DuckDB 2.0's rule) only once its partial

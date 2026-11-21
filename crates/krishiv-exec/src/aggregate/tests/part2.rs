@@ -518,7 +518,7 @@ async fn resizes_and_probe_lengths_on_both_layouts() {
 }
 
 /// `EXPLAIN ANALYZE` counters of the row tables: abandons of full fixed
-/// indexes, final-phase tasks, the groups and the layout; the default
+/// indexes, tables turned append-only, final-phase tasks, the groups and the layout; the default
 /// tables report none of the row counters.
 #[tokio::test]
 async fn row_layout_metrics() {
@@ -535,6 +535,15 @@ async fn row_layout_metrics() {
         .unwrap();
     assert!(extra(&m, "HashAggregate", "row_abandons") > 0);
     assert!(extra(&m, "HashAggregate", "row_final_tasks") > 1);
+    // Every key new: the drivers' tables turn append-only.
+    let (su, bu) = grouped_input(200_000, 200_000);
+    let spu = spec(&su, vec![0], grouped_aggs(&su));
+    let agg = HashAggregate::with_row_mode(spu, rowtable::Mode::Fixed { limit: 5_000 }).unwrap();
+    let (_, mu) = exec_with(AggregateNode::new(scan(&su, bu), agg), o, true)
+        .await
+        .unwrap();
+    assert!(extra(&mu, "HashAggregate", "row_appends") > 0);
+    assert_eq!(extra(&mu, "HashAggregate", "groups"), 200_000);
     assert_eq!(extra(&m, "HashAggregate", "row_final_spills"), 0);
     assert_eq!(extra(&m, "HashAggregate", "row_final_flushes"), 0);
     assert_eq!(extra(&m, "HashAggregate", "groups"), 90_000);

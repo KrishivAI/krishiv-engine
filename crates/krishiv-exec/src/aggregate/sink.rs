@@ -104,6 +104,8 @@ struct Counters {
     row_layout: std::sync::atomic::AtomicBool,
     /// Times a thread-local row table's fixed index was cleared when full.
     row_abandons: Arc<AtomicU64>,
+    /// Thread-local row tables whose fixed index turned append-only.
+    row_appends: Arc<AtomicU64>,
     /// Reallocations of the tables' hash indexes (every table, local and
     /// final).
     resizes: Arc<AtomicU64>,
@@ -409,6 +411,7 @@ impl HashAggregate {
                     RowTable::new(&self.core, &g.seed, mode, local, 0)?
                         .widening(widen, self.widen_at)
                         .with_abandons(Arc::clone(&self.counters.row_abandons))
+                        .with_appends(Arc::clone(&self.counters.row_appends))
                         .with_resizes(Arc::clone(&self.counters.resizes))
                         .with_probes(g.probes.clone())
                         .with_direct(local && g.direct),
@@ -1788,6 +1791,7 @@ impl Sink for HashAggregate {
         if c.row_layout.load(AtomicOrdering::Relaxed) {
             out.extend(crate::metrics::counts([
                 ("row_abandons", c.row_abandons.load(AtomicOrdering::Relaxed)),
+                ("row_appends", c.row_appends.load(AtomicOrdering::Relaxed)),
                 (
                     "row_final_tasks",
                     c.row_final_tasks.load(AtomicOrdering::Relaxed),

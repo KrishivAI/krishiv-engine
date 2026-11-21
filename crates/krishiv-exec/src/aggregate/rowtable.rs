@@ -316,6 +316,10 @@ struct Adapt {
     filled: bool,
     /// The last hash of the previous batch (a run may cross batches).
     last: Option<u64>,
+    /// The fixed limit of a table appending on trial (it turned append-only
+    /// at a clear before the first decision); the decision keeps the append
+    /// or goes back to this limit.
+    trial: Option<usize>,
 }
 
 /// Share of input rows that must make new rows, once a fixed index has
@@ -328,6 +332,12 @@ const EARLY_RATE: f64 = 0.25;
 /// Share of input rows that made new rows from which a table widens as
 /// soon as it is due: nearly every row is new (no adaptation needed).
 const ALL_NEW: f64 = 0.9;
+/// Share of a first fill's rows that must be new keys for a table cleared
+/// before its first decision to append on trial.
+const TRIAL_NEW: f64 = 0.95;
+/// Input rows before a cleared index may append on trial: the sketch (1/8
+/// of the hashes) holds about 1,000 of them by then.
+const TRIAL_MIN_ROWS: usize = 1 << 13;
 
 /// A batch prepared for [`RowTable::apply`].
 pub(crate) struct RowPrepared {
@@ -434,6 +444,8 @@ pub(crate) struct RowTable {
     unique: bool,
     /// Counts clears of a full fixed index (`EXPLAIN ANALYZE`).
     abandons: Option<Arc<AtomicU64>>,
+    /// Counts thread-local tables that turned append-only (`EXPLAIN ANALYZE`).
+    appends: Option<Arc<AtomicU64>>,
     /// Counts reallocations of the index (`EXPLAIN ANALYZE`).
     resizes: Option<Arc<AtomicU64>>,
     /// Where probe lengths go, for a detailed profile only.
@@ -493,12 +505,14 @@ impl RowTable {
                 window: (0, 0),
                 early: false,
                 filled: false,
+                trial: None,
                 last: None,
             }),
             groups: 0,
             rows_in: 0,
             unique: true,
             abandons: None,
+            appends: None,
             resizes: None,
             probes: None,
             local_skip: 0,
@@ -524,6 +538,12 @@ impl RowTable {
     /// Counts the clears of a full fixed index into `counter`.
     pub(crate) fn with_abandons(mut self, counter: Arc<AtomicU64>) -> Self {
         self.abandons = Some(counter);
+        self
+    }
+
+    /// Counts the switches of a fixed index to append-only into `counter`.
+    pub(crate) fn with_appends(mut self, counter: Arc<AtomicU64>) -> Self {
+        self.appends = Some(counter);
         self
     }
 
@@ -836,23 +856,54 @@ impl RowTable {
     /// nearly every key is unique, and
     /// grows after it filled ([`grown_limit`](Self::grown_limit)).
     fn next_mode(&self) -> Mode {
-        let (Mode::Fixed { limit }, Some(a)) = (self.mode, &self.adapt) else {
+        let Some(a) = &self.adapt else {
             return self.mode;
         };
-        if a.rows >= a.next {
-            // Over the run starts: an input clustered by the key whose
-            // runs are nearly all new keys (TPC-H q18's `l_orderkey`, four
-            // rows a key) is appended a row per run, without an index.
+        let limit = match (self.mode, a.trial) {
+            (Mode::Fixed { limit }, _) => limit,
+            // A trial append goes back to its index as soon as the sketch
+            // sees keys repeat (the index may then grow: TPC-DS q22), and
+            // is confirmed or undone at the first decision.
+            (Mode::Append, Some(limit)) => {
+                return if Self::mostly_new_keys(a) {
+                    Mode::Append
+                } else {
+                    Mode::Fixed { limit }
+                };
+            }
+            _ => return self.mode,
+        };
+        if a.rows >= a.next && Self::mostly_new_keys(a) {
+            return Mode::Append;
+        }
+        let grown = a.filled.then(|| self.grown_limit(limit, a)).flatten();
+        if let Some(limit) = grown {
+            return Mode::Fixed { limit };
+        }
+        if a.filled && (TRIAL_MIN_ROWS..FIRST_ADAPT_ROWS).contains(&a.rows) {
+            // The index was cleared before the first decision and caught
+            // almost no repeats in its fill (TPC-DS q39: keys repeat four
+            // times, ~170K rows apart): append on trial until the decision
+            // judges the whole input, or until the sketch sees keys repeat
+            // (keys that repeat farther apart than one fill, TPC-H q13, go
+            // back to the index then; the trial's rows cost no more than
+            // the clears they replace).
             #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
-            let rows = a.runs.max(1) as f64;
-            if Self::distinct(a) / rows > 0.95 {
+            let rate = (a.pushed - a.window.1) as f64 / (a.rows - a.window.0).max(1) as f64;
+            if rate >= TRIAL_NEW && Self::mostly_new_keys(a) {
                 return Mode::Append;
             }
         }
-        match a.filled.then(|| self.grown_limit(limit, a)).flatten() {
-            Some(limit) => Mode::Fixed { limit },
-            None => self.mode,
-        }
+        self.mode
+    }
+
+    /// Over the run starts: an input clustered by the key whose runs are
+    /// nearly all new keys (TPC-H q18's `l_orderkey`, four rows a key) is
+    /// appended a row per run, without an index.
+    fn mostly_new_keys(a: &Adapt) -> bool {
+        #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
+        let rows = a.runs.max(1) as f64;
+        Self::distinct(a) / rows > 0.95
     }
 
     /// The input's distinct keys, estimated from the sample (1/8 of the
@@ -1055,11 +1106,15 @@ impl RowTable {
     /// index keeps its keys under a new limit).
     fn switch(&mut self, mode: Mode) {
         if mode == Mode::Append && self.mode != Mode::Append {
+            if let Some(c) = &self.appends {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
             self.unique &= self.groups == 0;
             self.index = HashTable::new();
             self.merge_index = None;
         }
         let grew = mode != self.mode && mode != Mode::Append;
+        let before = self.mode;
         self.mode = mode;
         if grew
             && !self.unique
@@ -1071,6 +1126,12 @@ impl RowTable {
             return;
         };
         a.filled = false;
+        if a.rows >= a.next || mode != Mode::Append {
+            // The first decision settles a trial append either way.
+            a.trial = None;
+        } else if let (Mode::Append, Mode::Fixed { limit }) = (mode, before) {
+            a.trial = Some(limit);
+        }
         if grew {
             // The early-widening rate counts from here: the rows of the
             // clears before are not the input's new keys.
@@ -1550,6 +1611,7 @@ impl RowTable {
                     rows_in: 0,
                     unique: self.unique,
                     abandons: None,
+                    appends: None,
                     resizes: None,
                     probes: None,
                     local_skip: 0,
