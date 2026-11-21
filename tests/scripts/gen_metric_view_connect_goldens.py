@@ -101,6 +101,16 @@ CASE_IDS = FOCUS + CONTROLS
 # ---------------------------------------------------------------------------------------------------------------
 
 
+def dump_golden(doc: dict) -> str:
+    """The golden as JSON with one case per line, so a review diff shows changed cases, not 20,000 lines."""
+    head = {k: v for k, v in doc.items() if k != "cases"}
+    lines = [json.dumps(head, ensure_ascii=True)[:-1] + ', "cases": [']
+    cases = [json.dumps(c, ensure_ascii=True) for c in doc["cases"]]
+    lines += [c + ("," if i + 1 < len(cases) else "") for i, c in enumerate(cases)]
+    lines.append("]}")
+    return "\n".join(lines) + "\n"
+
+
 def _error(e: Any, phase: str) -> dict:
     import warnings
 
@@ -326,7 +336,7 @@ def main() -> None:
             "cases": data["cases"],
         }
         out = ROOT / "tests/fixtures" / fixture_dir / "metric-views/connect.json"
-        out.write_text(json.dumps(doc, indent=1, ensure_ascii=True) + "\n", encoding="utf-8")
+        out.write_text(dump_golden(doc), encoding="utf-8")
         n = sum(len(c["steps"]) for c in data["cases"])
         print(f"Spark {version}: {len(data['cases'])} cases, {n} steps -> {out.relative_to(ROOT)}", file=sys.stderr)
 

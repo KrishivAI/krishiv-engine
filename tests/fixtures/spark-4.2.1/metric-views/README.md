@@ -17,6 +17,9 @@ metric view. Every outcome was produced by a real Spark run; nothing is transcri
 The 4.1 and 3.5 runs used the images already on the machine (4.1.0, 3.5.7), so their directories are named after
 those exact versions.
 
+Each file is written with one case per line (`dump_golden` in both generators), so a diff shows the cases that
+changed.
+
 ## How to regenerate
 
 From the repo root (needs docker; about four minutes per full release):
