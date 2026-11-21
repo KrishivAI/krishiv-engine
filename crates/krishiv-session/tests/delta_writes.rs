@@ -973,6 +973,28 @@ fn a_keyed_save_retry_succeeds_under_errorifexists_and_overwrite() {
     );
 }
 
+/// E34: `saveAsTable` that creates a Delta table records its explicit key in version 0, so the same
+/// append retried writes nothing; the key is not kept in the table's options.
+#[test]
+fn a_keyed_save_as_table_creation_is_retried_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    for _ in 0..2 {
+        block_on(
+            block_on(s.sql("SELECT CAST(1 AS INT) AS a"))
+                .unwrap()
+                .write()
+                .format("delta")
+                .mode("append")
+                .option("krishiv.write.idempotencyKey", "job-1")
+                .option("path", tmp.path().join("t").to_string_lossy().as_ref())
+                .save_as_table("keyed_t"),
+        )
+        .unwrap();
+    }
+    assert_eq!(query(&s, "SELECT a FROM keyed_t"), serde_json::json!([[1]]));
+}
+
 #[test]
 fn a_bucketed_save_as_table_of_delta_is_refused_before_the_table_exists() {
     let s = Session::new().unwrap();

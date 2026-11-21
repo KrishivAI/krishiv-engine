@@ -113,6 +113,43 @@ pub(super) async fn key_already_committed(
     Ok(log.exists().await? && log.key_version(&key).await?.is_some())
 }
 
+/// Refuses a write key before anything is touched when the write cannot be logged for sure:
+/// `commitProtocol=NONE` and no commit log in the directory. Unlike [`uses_commit_log`] it probes
+/// nothing (the probe writes into the directory), so the later refusal of [`logged_or_plain`] still
+/// covers the store without put-if-absent.
+///
+/// # Errors
+/// An invalid key; `KRISHIV_UNSUPPORTED_FEATURE` for the case above; the log's read errors.
+pub(super) async fn refuse_unlogged_key_early(
+    config: &Config,
+    options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+    io: &krishiv_io::IoContext,
+    store: &StoreId,
+    at: &krishiv_exec::files::LocatedPath,
+) -> Result<(), KrishivError> {
+    if write_idempotency_key(config, options)?.is_none() {
+        return Ok(());
+    }
+    let none = config
+        .get(&krishiv_common::config::FILES_COMMIT_PROTOCOL)
+        .and_then(ConfigValue::as_str)
+        .is_some_and(|p| p.eq_ignore_ascii_case("NONE"));
+    if !none {
+        return Ok(());
+    }
+    let log = krishiv_io::commit_log::CommitLog::new(
+        io,
+        store.clone(),
+        at.path.clone(),
+        at.display.clone(),
+    );
+    if log.exists().await? {
+        Ok(())
+    } else {
+        Err(unlogged_key(&at.display))
+    }
+}
+
 /// `write`, through the commit log when the directory uses one (with the write's idempotency key,
 /// E34), else as it is.
 ///

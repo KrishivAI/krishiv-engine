@@ -595,6 +595,34 @@ fn an_idempotency_key_on_a_directory_without_a_log_is_refused() {
     assert!(e.message().contains("commit log"), "{e}");
 }
 
+/// An overwrite of an existing file with a key and no commit log is refused before the file is deleted.
+#[test]
+fn a_refused_key_leaves_the_file_an_overwrite_would_have_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("one.parquet");
+    let s = session_with(&[1, 2]);
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "NONE")
+        .unwrap();
+    block_on(
+        s.table("t")
+            .write()
+            .mode("overwrite")
+            .parquet(path.to_str().unwrap()),
+    )
+    .unwrap();
+    let before = std::fs::metadata(&path).map(|m| m.len()).ok();
+    let r = block_on(
+        s.table("t")
+            .write()
+            .mode("overwrite")
+            .option("krishiv.write.idempotencyKey", "k")
+            .parquet(path.to_str().unwrap()),
+    );
+    assert!(r.unwrap_err().message().contains("commit log"));
+    assert_eq!(path.exists(), before.is_some(), "the target was removed");
+}
+
 /// E34: a keyed retry under `errorifexists` or `overwrite` finds its key in the log and writes nothing,
 /// instead of failing on the directory the first try created or replacing what it wrote.
 #[test]
