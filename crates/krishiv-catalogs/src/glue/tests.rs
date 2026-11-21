@@ -372,6 +372,11 @@ fn formats_and_providers_krishiv_does_not_read_are_table_operation_refusals() {
             "does not read",
         ),
         (r#""table_type": "ICEBERG""#, "x", "no metadata_location"),
+        (
+            r#""spark.sql.sources.provider": "parquet", "spark.sql.sources.schema.numParts": "1""#,
+            "x",
+            "table properties",
+        ),
     ] {
         let body = table(params, "s3://b/t", input);
         let body = if input.contains("Text") {

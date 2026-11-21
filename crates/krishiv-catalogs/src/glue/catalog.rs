@@ -272,6 +272,16 @@ fn format_of(relation: &str, raw: &GlueTableRaw) -> Result<(GlueFormat, String),
         };
         return Ok((GlueFormat::Iceberg, location));
     }
+    // A Spark data-source table keeps its real schema in `spark.sql.sources.schema*`; the Glue column list is a
+    // placeholder, so reading it would give the wrong columns. Refused until a golden pins the Spark encoding.
+    if raw.parameters.iter().any(|(k, _)| {
+        let k = k.to_ascii_lowercase();
+        k == "spark.sql.sources.schema" || k.starts_with("spark.sql.sources.schema.")
+    }) {
+        return Err(refused(
+            "reading an AWS Glue table whose schema Spark keeps in its table properties".to_owned(),
+        ));
+    }
     let hive = |needle: &str| {
         [raw.input_format.as_deref(), raw.serde.as_deref()]
             .into_iter()
