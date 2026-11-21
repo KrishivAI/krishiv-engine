@@ -638,7 +638,14 @@ impl Session {
                 let ids = (&*env.identifier_spans, &*env.identifier_written);
                 self.exec_create_permanent_view(&v, query, ids).await
             }
-            Statement::CreateMetricView(v) => self.exec_create_metric_view(&v, query).await,
+            Statement::CreateMetricView(v) => {
+                if let Some(e) =
+                    ran::metric_view_gate_error(&v, self.state.profile, query, redacted)
+                {
+                    return Err(e);
+                }
+                self.exec_create_metric_view(&v, query).await
+            }
             Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
             Statement::AlterView(a) => {
                 let ids = (&*env.identifier_spans, &*env.identifier_written);

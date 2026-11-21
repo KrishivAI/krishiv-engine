@@ -289,3 +289,30 @@ $$"
     assert_eq!(names, ["r", "measure(rows)"]);
     assert_eq!(longs(&rows, 1), vec![1, 2]);
 }
+
+/// A release before 4.2 has no metric views: `EXECUTE IMMEDIATE` and a script statement fail to
+/// parse them as a top-level statement does (review b047d8901 finding 2).
+#[test]
+fn a_metric_view_inside_execute_immediate_or_a_script_is_refused_before_4_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_1)
+        .build()
+        .unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", &dir.path().display().to_string())
+        .unwrap();
+    run(&s, "CREATE TABLE src (region STRING, n INT) USING parquet").unwrap();
+    let body = VIEW.replacen("CREATE VIEW mv", "CREATE VIEW mv41", 1);
+    let quoted = body.replace('\'', "''");
+    for sql in [
+        body.clone(),
+        format!("EXECUTE IMMEDIATE '{quoted}'"),
+        format!("BEGIN\n{body};\nEND"),
+    ] {
+        let err = run(&s, &sql).unwrap_err();
+        assert_eq!(class(&err), "PARSE_SYNTAX_ERROR", "{sql}");
+    }
+    let err = run(&s, "SELECT * FROM mv41").unwrap_err();
+    assert_eq!(class(&err), "TABLE_OR_VIEW_NOT_FOUND");
+}

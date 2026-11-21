@@ -75,14 +75,9 @@ impl Session {
         // Metric views arrive in Spark 4.2: older releases fail to parse the statement, at `WITH`
         // (3.5) or at `METRICS` (4.0, 4.1), the gate goldens of P3 4.2-MV.
         if let Statement::CreateMetricView(v) = &statement
-            && let Some(span) = metric_view_gate(v, self.state.profile)
+            && let Some(e) = metric_view_gate_error(v, self.state.profile, query, &redacted)
         {
-            let token = query.get(span.start..span.end).unwrap_or_default();
-            let error = krishiv_common::error::ParseSyntaxError {
-                error: format!("'{token}'"),
-                hint: String::new(),
-            };
-            return Err(sql_context(error.into(), &redacted, span.start, span.end));
+            return Err(e);
         }
         // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
         // clause when it drops it; the parser sees only the evaluated name.
@@ -109,6 +104,25 @@ impl Session {
         df.with_statement(&redacted, class.name());
         Ok(Ran::Frame(df, command))
     }
+}
+
+/// Spark's `PARSE_SYNTAX_ERROR` for a metric view on a release before 4.2, told against `query`
+/// (the text `v` was parsed from). Checked right after the parse of a top-level statement (before
+/// any access check) and again where the statement is dispatched, for the statements of
+/// `EXECUTE IMMEDIATE` and of a script.
+pub(crate) fn metric_view_gate_error(
+    v: &krishiv_sql::ast::CreateMetricView,
+    profile: SparkProfile,
+    query: &str,
+    redacted: &RedactedSql,
+) -> Option<KrishivError> {
+    let span = metric_view_gate(v, profile)?;
+    let token = query.get(span.start..span.end).unwrap_or_default();
+    let error = krishiv_common::error::ParseSyntaxError {
+        error: format!("'{token}'"),
+        hint: String::new(),
+    };
+    Some(sql_context(error.into(), redacted, span.start, span.end))
 }
 
 /// Where a Spark release before 4.2 stops parsing `CREATE VIEW .. WITH METRICS`, if `profile` is
