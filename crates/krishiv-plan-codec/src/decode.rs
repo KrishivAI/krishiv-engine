@@ -391,11 +391,9 @@ fn expr_children(m: &pb::Expr) -> impl Iterator<Item = u32> + '_ {
 /// `i` as an index into a table of `len` entries.
 fn slot(i: u32, len: usize) -> Result<usize> {
     let at = usize::try_from(i).map_err(|_| corrupt("an index out of range"))?;
-    if at < len {
-        Ok(at)
-    } else {
-        Err(corrupt("a reference to a later or missing entry"))
-    }
+    (at < len)
+        .then_some(at)
+        .ok_or_else(|| corrupt("a reference to a later or missing entry"))
 }
 
 pub(crate) fn usize_of(v: u64) -> Result<usize> {
