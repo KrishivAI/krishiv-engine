@@ -67,6 +67,13 @@ jobs:
         env:
           KRISHIV_TIGHT_MEMORY_CASES: "256"
         run: cargo nextest run --workspace --all-features --locked --no-tests=pass
+      # Needs Java 21 or Docker and the network (the driver jar), so it is ignored in the
+      # workspace run above (P3-T101 note §17). The Java toolcache is removed above; the
+      # script falls back to Docker.
+      - name: Flight SQL JDBC end to end
+        run: >-
+          cargo nextest run -p krishiv-cli --features flight-sql --locked --test flight_sql
+          --run-ignored only -E 'test(jdbc)'
       - name: doctests (all features)
         run: cargo test --workspace --doc --all-features --locked
       - name: docs (all features)
@@ -399,6 +406,8 @@ jobs:
         run: "cargo test -p krishiv-testkit --release --locked --test golden_ratchet serialize_through_matches_the_frozen_baseline -- --ignored"
       - name: ICU collation goldens (collations-icu)
         run: "cargo test -p krishiv-testkit --release --locked --features collations-icu --test golden_icu"
+      - name: Exact vector top-k at 100k x 768 (P3-T077 design 8.3)
+        run: "cargo test -p krishiv-session --release --locked --test vector_topk top_k_brute_force_at_100k_by_768 -- --ignored"
 
   # Object stores against throw-away emulators (P2-T084): krishiv-io's S3 (MinIO) and Azure (Azurite) round trips,
   # then TPC-H SF1 uploaded to MinIO and read back over `s3a://`, equal to the local answers. The script names and
