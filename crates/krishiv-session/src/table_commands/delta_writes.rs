@@ -419,7 +419,8 @@ impl Session {
         reads_target: bool,
     ) -> Result<(), KrishivError> {
         let (overwrite, statics) = (target.overwrite, target.statics);
-        // `maxRecordsPerFile` of a DataFrame append (`writeTo(..).append()`, `saveAsTable`).
+        // `maxRecordsPerFile` of a DataFrame write into the table (`writeTo(..).append()`,
+        // `saveAsTable` append, `insertInto`).
         let mut options = match target.options {
             // Only the option the writer reads is asked to be plain: an append ignores the
             // others, a secret one included.
