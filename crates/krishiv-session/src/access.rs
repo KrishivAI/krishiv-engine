@@ -29,8 +29,10 @@ use krishiv_sql::{
     statement_targets,
 };
 
+mod intersection;
 mod path_prefix;
 
+pub use intersection::{IntersectionPolicy, SystemOnlyPolicy};
 pub use path_prefix::PathPrefixPolicy;
 pub(crate) use path_prefix::{allowed_roots, resolve_links};
 
@@ -349,11 +351,15 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
     // ADR 0046 §5: the client's own `user_id` is recorded, marked unverified, never used.
     let client_user_id = session.state.activity.client_user_id();
     let provider = if session.state.grants.is_some() {
-        crate::grants::denial_provider(e)
+        crate::grants::denial_provider(e).as_str()
     } else {
-        crate::grants::DecidedBy::Roles
-    }
-    .as_str();
+        // Another provider in a list (`external`, ADR 0049 §3) names itself; the role matrix otherwise.
+        session
+            .state
+            .policy
+            .refusal_label()
+            .unwrap_or(crate::grants::DecidedBy::Roles.as_str())
+    };
     // A refusal of a principal acting for this one (the definer of a `SQL SECURITY DEFINER` view
     // the session read, P3-T062 §2.4) names it: the record shows both.
     let own =
@@ -1467,6 +1473,22 @@ impl AccessPolicy for ReadOnlyPolicy {
     fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
         self.inner.denied(principal, securable, privilege);
     }
+
+    fn prefetch<'a>(
+        &'a self,
+        principal: &'a Principal,
+        items: &'a [(Securable, Privilege)],
+    ) -> BoxFuture<'a, ()> {
+        self.inner.prefetch(principal, items)
+    }
+
+    fn decides(&self, securable: &Securable) -> bool {
+        self.inner.decides(securable)
+    }
+
+    fn refusal_label(&self) -> Option<&'static str> {
+        self.inner.refusal_label()
+    }
 }
 
 /// The policy of a trial analysis ([`crate::session::QueryEnv::set_quiet_denials`], P3 PR-14d):
@@ -1503,6 +1525,22 @@ impl AccessPolicy for QuietPolicy {
     }
 
     // `denied` keeps the default: told nothing.
+
+    fn prefetch<'a>(
+        &'a self,
+        principal: &'a Principal,
+        items: &'a [(Securable, Privilege)],
+    ) -> BoxFuture<'a, ()> {
+        self.inner.prefetch(principal, items)
+    }
+
+    fn decides(&self, securable: &Securable) -> bool {
+        self.inner.decides(securable)
+    }
+
+    fn refusal_label(&self) -> Option<&'static str> {
+        self.inner.refusal_label()
+    }
 }
 
 /// `KRISHIV_RESERVED_NAME` for a statement that creates, replaces, drops or

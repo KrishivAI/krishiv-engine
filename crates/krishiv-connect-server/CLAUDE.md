@@ -208,3 +208,6 @@ Paths are relative to this crate.
 ## Tests
 `cargo nextest run -p krishiv-connect-server` · `cargo clippy -p krishiv-connect-server --all-targets -- -D warnings` · feature `oidc` (signed act-as assertions): `--features oidc`
 · the generated stub: `cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check`
+
+## Access providers (ADR 0049)
+`auth.rs` `provider_sessions(base, config, denials, Option<ExtraProvider>)`: `role_sessions` with another provider, each caller's policy `PathPrefixPolicy(IntersectionPolicy[role matrix, extra])`; `ExtraProvider::roles_decide_data` false wraps the role matrix in `SystemOnlyPolicy`. `krishiv-cli` passes the `external` provider here.

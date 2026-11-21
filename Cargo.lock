@@ -2978,6 +2978,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "krishiv-access-proto"
+version = "0.2.1"
+dependencies = [
+ "prost",
+]
+
+[[package]]
 name = "krishiv-alloc"
 version = "0.2.1"
 dependencies = [
@@ -3529,8 +3536,11 @@ dependencies = [
  "axum",
  "futures",
  "getrandom 0.4.3",
+ "hyper-util",
+ "krishiv-access-proto",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-plan",
  "krishiv-server",
  "krishiv-session",
  "krishiv-ui-assets",
@@ -5232,6 +5242,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki",
@@ -6129,9 +6140,11 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
+ "rustls-native-certs",
  "socket2",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tower",
