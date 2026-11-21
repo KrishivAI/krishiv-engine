@@ -101,6 +101,8 @@ struct Setup {
     limits: SessionLimits,
     /// The session factory; `role_sessions` when `None`.
     factory: Option<Box<krishiv_connect_server::manager::SessionFactory>>,
+    /// The server's base session (its config is every caller's default); a plain one when `None`.
+    base: Option<Session>,
 }
 
 async fn start_with(config: FlightSqlConfig, setup: Setup) -> Harness {
@@ -109,11 +111,12 @@ async fn start_with(config: FlightSqlConfig, setup: Setup) -> Harness {
         stream_window,
         limits,
         factory,
+        base,
     } = setup;
     let dir = tempfile::tempdir().expect("tempdir");
     let auth = server_auth(dir.path());
     let denials = Arc::new(DeniedCounts::new());
-    let base = Session::new().expect("session");
+    let base = base.unwrap_or_else(|| Session::new().expect("session"));
     let runtime = Arc::clone(base.runtime());
     let factory = match factory {
         Some(f) => f,
@@ -615,6 +618,61 @@ async fn stalled_reader_cancelled_after_idle_timeout() {
             .get("x-krishiv-error-class")
             .and_then(|v| v.to_str().ok()),
         Some("KRISHIV_FLIGHT_SQL_FETCH_IDLE")
+    );
+}
+
+/// The server default `krishiv.query.maxExecutionTime` (the base session's config) cancels a long
+/// fetch: the stream ends with `DEADLINE_EXCEEDED` and the class `KRISHIV_QUERY_TIMEOUT`, and the
+/// session is released (E4).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_statement_past_the_server_time_limit_ends_with_krishiv_query_timeout() {
+    let base = Session::builder()
+        .config("krishiv.query.maxExecutionTime", "200ms")
+        .build()
+        .expect("session");
+    let mut h = start_with(
+        FlightSqlConfig {
+            encode: krishiv_flight_sql::EncodeLimits {
+                batch_bytes: 64 << 10,
+                data_bytes: 16 << 10,
+            },
+            ..FlightSqlConfig::default()
+        },
+        Setup {
+            base: Some(base),
+            ..Setup::default()
+        },
+    )
+    .await;
+    let (info, _) = info(
+        &mut h,
+        OPS,
+        None,
+        "SELECT id, id * 2 AS d FROM range(0, 2000000000)",
+    )
+    .await
+    .expect("info");
+    let mut stream = h
+        .client
+        .do_get(authed(ticket(&info), OPS, None))
+        .await
+        .expect("do_get")
+        .into_inner();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let end = loop {
+        assert!(Instant::now() < deadline, "the statement never timed out");
+        match stream.message().await {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("the stream finished instead of timing out"),
+            Err(status) => break status,
+        }
+    };
+    assert_eq!(end.code(), Code::DeadlineExceeded, "{end:?}");
+    assert_eq!(
+        end.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("KRISHIV_QUERY_TIMEOUT")
     );
 }
 
