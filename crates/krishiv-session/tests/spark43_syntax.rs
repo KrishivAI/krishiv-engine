@@ -358,6 +358,10 @@ fn the_clause_is_refused_for_every_kind_of_relation() {
             "`c`",
         ),
         ("select * from tv@v1", "`tv`"),
+        (
+            "describe query select * from tbl version as of 1",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
         ("select * from pv@v1", "`spark_catalog`.`default`.`pv`"),
         (
             "create view v2 as select * from tbl@v1",
