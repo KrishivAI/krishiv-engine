@@ -74,6 +74,6 @@ All of these are set at start-up. Restart the server after a change.
 
 A client can keep a registered Python UDF with the `krishiv.v1.PersistPythonFunction` command (`drop` removes it).
 The server advertises the `persistpythonfunction` capability whether or not it has a function catalog; without one
-(`function-catalog` feature and `krishiv.connect.pythonFunctions.catalog`) the command is refused with
+(`python-function-catalog` build feature of `krishiv` and `krishiv.connect.pythonFunctions.catalog`) the command is refused with
 `KRISHIV_UNSUPPORTED_FEATURE`. Stored functions are per tenant (an untenanted principal is its own key); replacing
 or dropping another principal's function needs `Manage` on the cluster.
