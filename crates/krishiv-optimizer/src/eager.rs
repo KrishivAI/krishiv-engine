@@ -16,8 +16,9 @@
 //!
 //! 1. Its arguments read only `S`, are deterministic, hold no subquery and
 //!    cannot raise under ANSI: the join may drop a row Spark never evaluated
-//!    the argument on. Exact decimal `+`, `-` and `*` ([`exact_decimal`]: the
-//!    result type holds every value) never raise.
+//!    the argument on. Exact decimal `+`, `-` and `*` (the result type holds
+//!    every value) and their division by a nonzero integral literal that keeps
+//!    the integral digits never raise ([`decimal_never_raises`]).
 //! 2. It cannot be affected by summation order. Spark checks overflow in
 //!    processing order, so a sum runs here only where no buffer can overflow:
 //!    `sum` of at most 32-bit integers into `bigint` (fewer than 2^32 rows per
@@ -60,8 +61,8 @@ use std::sync::Arc;
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionKind, Grouping, JoinCondition, JoinKind,
-    Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, exact_decimal, may_raise,
-    partial_state_columns,
+    Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, decimal_never_raises,
+    may_raise, partial_state_columns,
 };
 use krishiv_types::DataType;
 
@@ -701,7 +702,7 @@ pub(crate) fn refusal_of_call(
             || has_subquery(a)
             || has_outer_reference(a)
             || is_state(a)
-            || (may_raise(a, true) && !exact_decimal(a))
+            || (may_raise(a, true) && !decimal_never_raises(a))
     }) {
         return Err(format!("{name}'s argument can raise or is not plain"));
     }
