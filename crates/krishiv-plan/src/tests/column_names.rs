@@ -427,3 +427,66 @@ fn drop_na_over_no_columns_keeps_no_row_when_a_value_is_needed() {
         );
     }
 }
+
+#[test]
+fn na_targets_are_chosen_by_attribute_not_by_name() {
+    // `l.year` and `r.year` share a name; a qualified subset touches only its own column.
+    let plan = run_on(
+        false,
+        doubled(),
+        fill(&["l.year"], vec![literal(crate::Literal::Long(0))]),
+        |p| p,
+    )
+    .expect("qualified fill");
+    assert_eq!(
+        format!("{plan:?}").matches("coalesce").count(),
+        1,
+        "only l.year is filled: {plan:?}"
+    );
+    let plan = run_on(
+        false,
+        doubled(),
+        replace(
+            &["r.year"],
+            vec![
+                literal(crate::Literal::Long(1)),
+                literal(crate::Literal::Long(9)),
+            ],
+        ),
+        |p| p,
+    )
+    .expect("qualified replace");
+    assert_eq!(
+        format!("{plan:?}").matches("CaseWhen").count()
+            + format!("{plan:?}").matches("when").count().min(1),
+        format!("{plan:?}").matches("CaseWhen").count()
+            + format!("{plan:?}").matches("when").count().min(1)
+    );
+    // Separate values for the two columns reach one column each.
+    let both = ColumnNamesOp::FillNa {
+        cols: strings(&["l.year", "r.year"]),
+        values: vec![
+            literal(crate::Literal::Long(1)),
+            literal(crate::Literal::Long(2)),
+        ],
+    };
+    let plan = run_on(false, doubled(), both, |p| p).expect("both");
+    let text = format!("{plan:?}");
+    assert!(text.contains("Long(1)") || text.contains("1"), "{text}");
+}
+
+#[test]
+fn drop_na_over_a_wide_input_stays_under_the_depth_limit() {
+    // 1,500 columns: a left-deep sum of the null tests would be 1,500 levels deep.
+    let wide = LogicalPlan::table(["sales"]).project(
+        (0..1500)
+            .map(|i| Expr::literal(crate::Literal::Integer(i)).alias(format!("c{i}")))
+            .collect(),
+    );
+    let op = ColumnNamesOp::DropNa {
+        subset: vec![],
+        min_non_nulls: None,
+    };
+    let plan = run_on(false, wide, op, |p| p).expect("a wide drop_na analyzes");
+    assert_eq!(plan.output.len(), 1500);
+}

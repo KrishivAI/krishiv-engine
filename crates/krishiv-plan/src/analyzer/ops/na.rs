@@ -107,7 +107,7 @@ impl Resolver<'_> {
         // One 0/1 term per column, summed: `AtLeastNNonNulls`.
         let one = || Arc::new(Expr::literal(Literal::Integer(1)));
         let zero = || Arc::new(Expr::literal(Literal::Integer(0)));
-        let mut terms = cols.iter().map(|a| {
+        let terms = cols.iter().map(|a| {
             let value = self.pass_expr(&a.col);
             let mut valid = call(Builtin::IsNotNull.name(), vec![Arc::clone(&value)]);
             if is_floating(&a.col.data_type) {
@@ -119,12 +119,27 @@ impl Resolver<'_> {
             }
             call(Builtin::When.name(), vec![valid, one(), zero()])
         });
-        let first = terms.next();
-        // No column: the sum of nothing is 0, below any positive threshold, so no row stays.
-        let sum = match first {
-            Some(f) => terms.fold(f, |acc, t| call(Builtin::Add.name(), vec![acc, t])),
-            None => zero(),
-        };
+        // A balanced tree of additions: the depth is logarithmic in the number of columns, so a wide
+        // table stays under the IR's depth limit.
+        let mut level: Vec<Arc<Expr>> = terms.collect();
+        if level.is_empty() {
+            // No column: the sum of nothing is 0, below any positive threshold, so no row stays.
+            level.push(zero());
+        }
+        while level.len() > 1 {
+            level = level
+                .chunks(2)
+                .filter_map(|pair| match pair {
+                    [a, b] => Some(call(
+                        Builtin::Add.name(),
+                        vec![Arc::clone(a), Arc::clone(b)],
+                    )),
+                    [a] => Some(Arc::clone(a)),
+                    _ => None,
+                })
+                .collect();
+        }
+        let sum = level.remove(0);
         let predicate = call(
             Builtin::GtEq.name(),
             vec![
@@ -157,7 +172,6 @@ impl Resolver<'_> {
         values: &[Arc<Expr>],
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
-        let cs = self.ctx.conf.case_sensitive;
         let mut literals = Vec::with_capacity(values.len());
         for v in values {
             let ExprNode::Literal(l) = &v.node else {
@@ -173,14 +187,15 @@ impl Resolver<'_> {
         // column's type whatever its kind. One value is `fill(value, subset)`, which only reaches
         // the columns its kind fits.
         let by_kind = literals.len() == 1;
-        let value_for = |name: &str| -> Option<&(Fills, Arc<Expr>)> {
+        let value_for = |id: AttrId| -> Option<&(Fills, Arc<Expr>)> {
             if named.is_empty() {
                 return literals.first();
             }
             let at = named
                 .iter()
-                // A name given twice takes the last value (Spark builds a `Map` from the pairs).
-                .rposition(|n| crate::analyzer::bind::same(name, &n.col.name, cs))?;
+                // A column named twice takes the last value (Spark builds a `Map` from the pairs); the
+                // match is by attribute, so `l.year` is not `r.year`.
+                .rposition(|n| n.col.id == id)?;
             if literals.len() == 1 {
                 literals.first()
             } else {
@@ -191,8 +206,8 @@ impl Resolver<'_> {
         let mut exprs = Vec::with_capacity(c.out.len());
         for a in c.out.iter() {
             let pass = self.pass_expr(&a.col);
-            let fill = value_for(&a.col.name)
-                .filter(|(kind, _)| !by_kind || kind.reaches(&a.col.data_type));
+            let fill =
+                value_for(a.col.id).filter(|(kind, _)| !by_kind || kind.reaches(&a.col.data_type));
             let Some((_, value)) = fill else {
                 exprs.push(pass);
                 continue;
@@ -256,7 +271,6 @@ impl Resolver<'_> {
         pairs: &[Arc<Expr>],
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
-        let cs = self.ctx.conf.case_sensitive;
         let mut literals = Vec::with_capacity(pairs.len());
         for v in pairs {
             match &v.node {
@@ -290,10 +304,7 @@ impl Resolver<'_> {
         let mut exprs = Vec::with_capacity(c.out.len());
         for a in c.out.iter() {
             let pass = self.pass_expr(&a.col);
-            let named = resolved.is_empty()
-                || resolved
-                    .iter()
-                    .any(|n| crate::analyzer::bind::same(&a.col.name, &n.col.name, cs));
+            let named = resolved.is_empty() || resolved.iter().any(|n| n.col.id == a.col.id);
             if !named || !kind.reaches(&a.col.data_type) {
                 exprs.push(pass);
                 continue;
