@@ -741,15 +741,13 @@ fn provider_names_and_defaults() {
         class(&s, "CREATE TABLE e (a INT) USING parquet LOCATION ''"),
         "INVALID_EMPTY_LOCATION"
     );
-    // A bucketed table is created, but the engine writes no bucketed files.
+    // A bucketed table is created and written: the files are named by bucket id (P3-T023).
     run(
         &s,
         "CREATE TABLE b (a INT) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS",
     );
-    assert_eq!(
-        class(&s, "INSERT INTO b VALUES (1)"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
+    run(&s, "INSERT INTO b VALUES (1)");
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM b"), ["1"]);
     assert_eq!(
         class(&s, "CREATE TEMPORARY TABLE tt (a INT) USING parquet"),
         "KRISHIV_UNSUPPORTED_FEATURE"
@@ -823,7 +821,7 @@ fn insert_column_lists_by_name_and_conflicts() {
     );
     assert_eq!(
         class(&s, "INSERT INTO t REPLACE WHERE a = 1 VALUES (1, 'x')"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "UNSUPPORTED_FEATURE.TABLE_OPERATION"
     );
     // The multi-table insert writes one row per clause (`tests/multi_insert.rs`).
     let before = col0(&s, "SELECT CAST(count(*) AS STRING) FROM t");

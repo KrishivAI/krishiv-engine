@@ -314,6 +314,43 @@ fn write_modes_match_oracle() {
 }
 
 #[test]
+fn delta_save_as_table_append_infers_partitioning_and_overwrite_refuses_bucketing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("t").to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    let df = |sql: &str| block_on(s.sql(sql)).unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE inf USING delta PARTITIONED BY (p) LOCATION '{path}' AS \
+             SELECT CAST(1 AS BIGINT) AS id, 'a' AS v, 'x' AS p"
+        ),
+    )
+    .unwrap();
+    // An append that leaves partitioning unspecified takes the table's own.
+    block_on(
+        df("SELECT CAST(2 AS BIGINT) AS id, 'b' AS v, 'y' AS p")
+            .write()
+            .format("delta")
+            .mode("append")
+            .save_as_table("inf"),
+    )
+    .unwrap();
+    assert_eq!(block_on(s.table("inf").count()).unwrap(), 2);
+    // An overwrite that asks for bucketing is refused and leaves the rows.
+    let r = block_on(
+        df("SELECT CAST(3 AS BIGINT) AS id, 'c' AS v, 'z' AS p")
+            .write()
+            .format("delta")
+            .bucket_by(4, ["id"])
+            .mode("overwrite")
+            .save_as_table("inf"),
+    );
+    assert!(r.is_err());
+    assert_eq!(block_on(s.table("inf").count()).unwrap(), 2);
+}
+
+#[test]
 fn delta_v1_save_as_table_overwrite() {
     let oracle = oracle();
     let steps = oracle["save_as_table"].as_array().unwrap();
@@ -855,4 +892,80 @@ fn max_records_per_file_reaches_a_catalog_append() {
         "{e}"
     );
     assert_eq!(rows(), 15);
+}
+
+#[test]
+fn a_bucketed_save_as_table_of_delta_is_refused_before_the_table_exists() {
+    let s = Session::new().unwrap();
+    let e = block_on(
+        block_on(s.sql("SELECT CAST(1 AS BIGINT) AS id"))
+            .unwrap()
+            .write()
+            .format("delta")
+            .bucket_by(4, ["id"])
+            .save_as_table("bt"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::UnsupportedFeatureTableOperation,
+        "{e}"
+    );
+    assert!(
+        block_on(s.sql("SELECT * FROM bt")).is_err(),
+        "no table was registered"
+    );
+}
+
+/// `insertInto` overwrite of a partitioned Delta catalog table ignores a
+/// `partitionOverwriteMode` writer option: the session configuration alone makes it dynamic,
+/// as in delta-spark (`WRITE-EDGES.json` `insert_into_overwrite_mode`).
+#[test]
+fn insert_into_overwrite_mode_follows_the_session_config_only() {
+    let oracle: Value =
+        serde_json::from_slice(&std::fs::read(fixtures().join("WRITE-EDGES.json")).unwrap())
+            .unwrap();
+    let steps = oracle["insert_into_overwrite_mode"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let rows_after = |name: &str| {
+        let step = steps
+            .iter()
+            .find(|s| s["step"] == name)
+            .unwrap_or_else(|| panic!("{name}"));
+        assert!(step["error"].is_null(), "{name}");
+        step["rows"].clone()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("t").to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE iom (id BIGINT, p STRING) USING delta PARTITIONED BY (p) \
+             LOCATION '{path}'"
+        ),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO iom VALUES (1, 'a'), (2, 'b')").unwrap();
+    let overwrite = |id: i64, option: &str| {
+        let df = block_on(s.sql(&format!("SELECT CAST({id} AS BIGINT) AS id, 'a' AS p"))).unwrap();
+        block_on(
+            df.write()
+                .mode("overwrite")
+                .option("partitionOverwriteMode", option)
+                .insert_into("iom"),
+        )
+        .unwrap();
+    };
+    let rows = || query(&s, "SELECT id, p FROM iom ORDER BY id");
+    overwrite(3, "dynamic");
+    assert_eq!(rows(), rows_after("option_dynamic_conf_unset"));
+    run(&s, "INSERT INTO iom VALUES (4, 'b')").unwrap();
+    assert_eq!(rows(), rows_after("insert_b"));
+    run(&s, "SET spark.sql.sources.partitionOverwriteMode = dynamic").unwrap();
+    overwrite(5, "static");
+    run(&s, "RESET spark.sql.sources.partitionOverwriteMode").unwrap();
+    assert_eq!(rows(), rows_after("option_static_conf_dynamic"));
 }

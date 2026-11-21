@@ -187,8 +187,10 @@ fn class_of(
                 DynamicText::Authorized => StatementClass::Session,
             },
         },
-        // The legacy view nodes are temporary views with a one-part name:
-        // session-local, re-analyzed under the session's principal.
+        // The legacy view nodes have a one-part name: a temporary view, session-local and
+        // re-analyzed under the session's principal. A bare `DROP VIEW` may also drop a stored
+        // view of the current namespace; the session reclassifies that one as `DDL`
+        // (`Session::statement_class`).
         Statement::Set(_)
         | Statement::Reset(_)
         | Statement::Use(_)

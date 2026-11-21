@@ -948,3 +948,130 @@ fn timestamp_text_past_the_micros_range_in_a_zone() {
         .unwrap();
     assert_eq!(s.value(0), "-290308-12-21 12:06:07.224192");
 }
+
+/// The unscaled values of a decimal result on either carrier (`None` for NULL).
+fn unscaled(a: &dyn Array) -> Vec<Option<i128>> {
+    use arrow_array::cast::AsArray;
+    match a.data_type() {
+        DataType::Decimal64(..) => a
+            .as_primitive::<arrow_array::types::Decimal64Type>()
+            .iter()
+            .map(|v| v.map(i128::from))
+            .collect(),
+        _ => a.as_primitive::<Decimal128Type>().iter().collect(),
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: if cfg!(miri) { 2 } else { 256 },
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    /// A widening decimal cast (no smaller scale, no fewer integer digits), between either
+    /// carriers and in every mode, multiplies each value by `10^(s2 - s1)` and keeps the NULLs.
+    #[test]
+    fn widening_decimal_casts_scale_the_values(
+        v in any::<i64>(),
+        p in 1..=18_u8,
+        s in 0..=18_i8,
+        extra_int in 0..=20_u8,
+        extra_scale in 0..=20_u8,
+    ) {
+        let s = s.min(i8::try_from(p).unwrap());
+        let v = i128::from(v) % 10_i128.pow(u32::from(p));
+        let p2 = (p + extra_int + extra_scale).min(38);
+        let s2 = (i16::from(s) + i16::from(extra_scale)).min(i16::from(p2) - (i16::from(p) - i16::from(s)));
+        let s2 = i8::try_from(s2).unwrap();
+        let want = v * 10_i128.pow(u32::try_from(s2 - s).unwrap());
+        let d128: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![Some(v), None]).with_precision_and_scale(p, s).unwrap(),
+        );
+        let d64: ArrayRef = Arc::new(
+            arrow_array::Decimal64Array::from(vec![Some(i64::try_from(v).unwrap()), None])
+                .with_precision_and_scale(p, s)
+                .unwrap(),
+        );
+        let mut targets = vec![DataType::Decimal128(p2, s2)];
+        if p2 <= 18 {
+            targets.push(DataType::Decimal64(p2, s2));
+        }
+        for mode in [CastMode::Ansi, CastMode::Legacy, CastMode::Try] {
+            for a in [&d128, &d64] {
+                for t in &targets {
+                    let out = run(a.as_ref(), t, mode).unwrap();
+                    prop_assert_eq!(out.data_type(), t);
+                    prop_assert_eq!(unscaled(out.as_ref()), vec![Some(want), None]);
+                }
+            }
+        }
+    }
+}
+
+/// A value already outside its own type that a widening cast would overflow takes the general
+/// path: under ANSI its error, never a wrapped value.
+#[test]
+fn a_widening_cast_of_an_out_of_type_value_is_not_wrapped() {
+    let bad = dec(10_i128.pow(37), 5, 0);
+    let to = DataType::Decimal128(38, 10);
+    assert!(run(bad.as_ref(), &to, CastMode::Ansi).is_err());
+    let legacy = run(bad.as_ref(), &to, CastMode::Legacy).unwrap();
+    assert_eq!(unscaled(legacy.as_ref()), vec![None]);
+}
+
+/// A value outside its own declared precision (a file can hold one) that a widening cast would
+/// keep in its carrier is still checked against the target precision: under ANSI the
+/// out-of-range error, under legacy and `try_cast` NULL, as on the general path.
+#[test]
+fn a_widening_cast_checks_an_out_of_type_value_against_the_target() {
+    let d64 = |v: i64, p: u8, sc: i8| -> ArrayRef {
+        Arc::new(
+            arrow_array::Decimal64Array::from(vec![v])
+                .with_precision_and_scale(p, sc)
+                .unwrap(),
+        )
+    };
+    let cases: [(ArrayRef, DataType); 4] = [
+        // A rescale whose product fits the carrier: 10^9 * 10^2 = 10^11 > 10^10.
+        (dec(10_i128.pow(9), 5, 0), DataType::Decimal128(10, 2)),
+        (d64(10_i64.pow(9), 5, 0), DataType::Decimal64(10, 2)),
+        (d64(10_i64.pow(9), 5, 0), DataType::Decimal128(10, 2)),
+        // A retype (same scale): 10^6 > 10^6 - 1, the largest decimal(6, 2).
+        (dec(10_i128.pow(6), 5, 2), DataType::Decimal128(6, 2)),
+    ];
+    for (a, to) in &cases {
+        let err = run(a.as_ref(), to, Ansi).unwrap_err();
+        assert!(
+            err.to_string().contains("NUMERIC_VALUE_OUT_OF_RANGE"),
+            "{to}: {err}"
+        );
+        for mode in [Legacy, Try] {
+            let out = run(a.as_ref(), to, mode).unwrap();
+            assert_eq!(out.data_type(), to);
+            assert_eq!(unscaled(out.as_ref()), vec![None], "{to} {mode:?}");
+        }
+    }
+    let retype = d64(10_i64.pow(6), 5, 2);
+    let to = DataType::Decimal64(6, 2);
+    assert!(run(retype.as_ref(), &to, Ansi).is_err());
+    assert_eq!(
+        unscaled(run(retype.as_ref(), &to, Legacy).unwrap().as_ref()),
+        vec![None]
+    );
+}
+
+/// A same-scale widening cast of in-type values is the input retyped: it shares the value
+/// buffer (the zero copy behind TPC-DS q28's gain).
+#[test]
+fn a_same_scale_widening_cast_shares_the_values() {
+    use arrow_array::cast::AsArray as _;
+    let a = dec(12_345, 7, 2);
+    let out = run(a.as_ref(), &DataType::Decimal128(10, 2), Ansi).unwrap();
+    assert!(
+        out.as_primitive::<Decimal128Type>()
+            .values()
+            .inner()
+            .ptr_eq(a.as_primitive::<Decimal128Type>().values().inner())
+    );
+}
