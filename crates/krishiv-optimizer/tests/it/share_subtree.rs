@@ -248,3 +248,49 @@ fn a_nondeterministic_chain_over_a_shared_core_stays_per_instance() {
         again.root()
     );
 }
+
+/// A mixed group where one instance's body is the shared core itself (a CTE that ends in its
+/// aggregate) and the other keeps a filter above it: the core is the definition, the bare
+/// instance reads it as a shifted `CteRef` in place of its `Shift`, and only the filtered one
+/// keeps its `Shift` (`share_cte.rs`, the `equal(&m.body, &def)` arm of a mixed group).
+#[test]
+fn an_instance_equal_to_the_core_reads_it_without_its_shift() {
+    let sql = "WITH a AS (SELECT o_custkey, count(*) AS n FROM orders GROUP BY o_custkey) \
+               SELECT x.o_custkey, x.n, y.n FROM a x \
+                 JOIN (SELECT o_custkey, n FROM a WHERE n > 3) y ON x.o_custkey = y.o_custkey";
+    let plan = run(sql, false);
+    let text = plan.root().to_string();
+    assert_eq!(
+        scans(plan.root(), "spark_catalog.default.orders"),
+        1,
+        "{text}"
+    );
+    let krishiv_plan::PlanNode::WithCte { ctes, .. } = &plan.root().node else {
+        panic!("the aggregate is shared:\n{text}");
+    };
+    assert_eq!(ctes.len(), 1, "{text}");
+    assert!(ctes[0].plan.to_string().starts_with("Aggregate"), "{text}");
+    assert_eq!(text.matches("CteRef").count(), 2, "{text}");
+    // The filtered member reads the core in its body's own ids under its `Shift`; the bare one
+    // reads it in shifted ids, with no `Shift` of its own (the `Shift +` left is the subquery
+    // alias's, above the filtered member).
+    let lines: Vec<&str> = text.lines().collect();
+    let under: Vec<&str> = (1..lines.len())
+        .filter(|&i| lines[i].contains("CteRef"))
+        .map(|i| lines[i - 1].trim_start_matches([' ', ':', '+', '-']))
+        .collect();
+    assert_eq!(under.len(), 2, "{text}");
+    assert!(under.iter().all(|l| !l.starts_with("Shift")), "{text}");
+    assert_eq!(
+        under.iter().filter(|l| l.starts_with("Filter")).count(),
+        1,
+        "{text}"
+    );
+    Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
+    let again = optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &Config::new()).unwrap();
+    assert!(
+        again.structurally_eq(&plan),
+        "a fixed point:\n{}",
+        again.root()
+    );
+}

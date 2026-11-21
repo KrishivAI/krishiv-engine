@@ -261,10 +261,13 @@ fn instances_differing_above_their_common_window_share_it() {
     assert!(rows.len() > 3, "{rows:?}");
 }
 
-/// A group where one instance has its own filter above the window and the other is the
-/// windowed aggregate itself: both read the one definition and return what the copies return.
+/// A group where one instance has its own filter above the window and the other has none
+/// (both keep the CTE's renaming projection, so neither body equals the core): both read the
+/// one definition through their `Shift`s and return what the copies return. The member whose
+/// body is the core itself is `krishiv-optimizer`'s
+/// `an_instance_equal_to_the_core_reads_it_without_its_shift`.
 #[test]
-fn an_instance_that_is_the_common_window_reads_it_beside_a_filtered_one() {
+fn an_unfiltered_instance_reads_the_common_window_beside_a_filtered_one() {
     let env = env();
     let sql = "WITH c AS (SELECT a % 3 AS k, count(*) AS n, \
                  sum(count(*)) OVER (PARTITION BY a % 3 > 0) AS w FROM t GROUP BY a % 3) \
