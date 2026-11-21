@@ -681,7 +681,7 @@ both forms, so a sketch written by one engine can be estimated or unioned by the
 Metric views follow Spark 4.2.1 and 4.3.0 (goldens in `tests/fixtures/spark-{4.2.1,4.3.0}/metric-views/`), with
 these differences:
 
-- **Malformed YAML.** `INVALID_METRIC_VIEW_YAML` keeps Spark's `Failed to parse YAML: ` prefix; the rest of the
+- **Malformed YAML.** `INVALID_METRIC_VIEW_YAML` keeps Spark's `Failed to parse YAML:` prefix; the rest of the
   message is Krishiv's YAML parser's, not SnakeYAML's scanner text.
 - **YAML Krishiv refuses where Spark reads on.** An alias to an anchor the document never defined is a YAML
   syntax error (Spark's binding reads the alias name as the value). A `name` or `expr` that is null is refused when
