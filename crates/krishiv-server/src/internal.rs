@@ -119,7 +119,7 @@ pub trait UiSource: Send + Sync + 'static {
     /// stores it (an array of nodes: `id`, `name`, `children` as indexes into the array), `None` when this
     /// source keeps no plan for it. The page joins the nodes to the query's operators by `node_id`, and lists
     /// the operators alone when there is none. Only a node's id, name and children reach the page
-    /// ([`plan_nodes`]).
+    /// (`plan_nodes`).
     fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
         let _ = query;
         Box::pin(async { Ok(None) })
