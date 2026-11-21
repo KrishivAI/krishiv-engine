@@ -1456,12 +1456,20 @@ fn cov_reads_its_columns_as_attribute_references() {
     let PlanNode::Aggregate { aggregates, .. } = node(&rel) else {
         panic!("not an Aggregate node")
     };
-    let text = format!("{:?}", aggregates[0]);
-    assert!(
-        text.contains("\"t\", \"x\"") || text.contains("t.x"),
-        "{text}"
+    // The two argument columns of covar_samp, under the alias and the zero fill: `t.x` is the
+    // qualified reference ["t", "x"], the quoted name the single part "a.b".
+    let mut seen: Vec<Vec<String>> = Vec::new();
+    fn columns(e: &krishiv_plan::Expr, out: &mut Vec<Vec<String>>) {
+        if let krishiv_plan::ExprNode::Column(c) = &e.node {
+            out.push(c.name.clone());
+        }
+        e.for_each_child(&mut |child| columns(child, out));
+    }
+    columns(&aggregates[0], &mut seen);
+    assert_eq!(
+        seen,
+        vec![vec!["t".to_owned(), "x".to_owned()], vec!["a.b".to_owned()]]
     );
-    assert!(text.contains("a.b"), "{text}");
 }
 
 #[test]

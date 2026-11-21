@@ -47,6 +47,27 @@ impl Fills {
     }
 }
 
+/// `value` as a double when it is a number (Spark's `convertToDouble`).
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Spark converts every numeric replacement value to a Double"
+)]
+fn numeric_as_double(value: &Literal) -> Option<f64> {
+    match value {
+        Literal::Byte(v) => Some(f64::from(*v)),
+        Literal::Short(v) => Some(f64::from(*v)),
+        Literal::Integer(v) => Some(f64::from(*v)),
+        Literal::Long(v) => Some(*v as f64),
+        Literal::Float(v) => Some(f64::from(*v)),
+        Literal::Double(v) => Some(*v),
+        Literal::Decimal {
+            unscaled,
+            data_type,
+        } => Some(*unscaled as f64 / 10f64.powi(i32::from(data_type.scale()))),
+        _ => None,
+    }
+}
+
 fn call(name: &str, args: Vec<Arc<Expr>>) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Function(FunctionCall {
         name: name.to_owned(),
@@ -240,7 +261,14 @@ impl Resolver<'_> {
         for v in pairs {
             match &v.node {
                 ExprNode::Literal(l) => {
-                    literals.push((Fills::of(l), Arc::clone(v), matches!(l, Literal::Null(_))));
+                    // Spark's `replace0` turns every numeric key and new value into a Double first
+                    // (`convertToDouble`), so a BIGINT or DECIMAL column is compared in DOUBLE and the
+                    // new value goes through a double.
+                    let value = match numeric_as_double(l) {
+                        Some(d) => Arc::new(Expr::literal(Literal::Double(d))),
+                        None => Arc::clone(v),
+                    };
+                    literals.push((Fills::of(l), value, matches!(l, Literal::Null(_))));
                 }
                 _ => return Err(unsupported_replace(p.origin)),
             }

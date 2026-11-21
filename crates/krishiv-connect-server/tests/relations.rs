@@ -607,7 +607,8 @@ async fn cov_of_a_column_that_is_not_a_number_is_an_error_not_zero() {
         col1: "x".to_owned(),
         col2: "y".to_owned(),
     })));
-    assert!(run(&server, cov).await.is_err());
+    let status = run(&server, cov).await.expect_err("not a number");
+    assert_eq!(error_class(&status), "CAST_INVALID_INPUT");
 }
 
 fn sample_by(fractions: Vec<(pb::expression::Literal, f64)>) -> pb::Relation {
@@ -640,4 +641,66 @@ async fn sample_by_with_fractions_zero_and_one_is_deterministic() {
         .await
         .expect("runs");
     assert_eq!(rows, strings(&[&["1", "a"], &["1", "b"]]));
+}
+
+fn null_of_long() -> pb::expression::Literal {
+    lit(pb::expression::literal::LiteralType::Null(pb::DataType {
+        kind: Some(pb::data_type::Kind::Long(pb::data_type::Long::default())),
+    }))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_replace_compares_and_converts_numbers_as_doubles() {
+    let server = start().await;
+    const BIG: &str =
+        "SELECT * FROM VALUES (CAST(9007199254740993 AS BIGINT)), (CAST(5 AS BIGINT)) AS t(n)";
+    // (a) Spark compares double(col) = 9.007199254740992E15, true for 2^53 + 1: the row becomes 0.
+    let rows = run(
+        &server,
+        replace(BIG, &[], vec![(long(9_007_199_254_740_992), long(0))]),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows, strings(&[&["0"], &["5"]]));
+    // (c) The new value goes through a double: 2^53 + 1 is stored as 2^53.
+    let rows = run(
+        &server,
+        replace(BIG, &[], vec![(long(5), long(9_007_199_254_740_993))]),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(
+        rows,
+        strings(&[&["9007199254740992"], &["9007199254740993"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_replace_with_a_null_new_value_writes_null() {
+    let server = start().await;
+    const NUMBERS: &str = "SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(n, s)";
+    let rows = run(
+        &server,
+        replace(NUMBERS, &["n"], vec![(long(1), null_of_long())]),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows, strings(&[&["2", "b"], &["NULL", "a"]]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn na_drop_how_all_keeps_a_row_with_any_value() {
+    let server = start().await;
+    const ROWS: &str = "SELECT * FROM VALUES (CAST(NULL AS STRING), CAST(NULL AS INT)), \
+                        (CAST(NULL AS STRING), 3), ('a', 5) AS t(name, age)";
+    // `how="all"` is min_non_nulls = 1.
+    let drop = relation(RelType::DropNa(Box::new(pb::NaDrop {
+        input: Some(Box::new(sql(ROWS))),
+        cols: vec![],
+        min_non_nulls: Some(1),
+    })));
+    assert_eq!(
+        run(&server, drop).await.expect("runs"),
+        strings(&[&["NULL", "3"], &["a", "5"]])
+    );
 }
