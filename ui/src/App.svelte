@@ -1,6 +1,6 @@
 <script lang="ts">
   import { QueryClient, QueryClientProvider } from "@tanstack/svelte-query";
-  import { api, initSession } from "./api";
+  import { api, ApiError, initSession } from "./api";
   import { consoleInfo, loadConsole, pagesOf } from "./console.svelte";
   import { applyTheme, embedLink, listenForTheme, validateTheme } from "./embed";
   import { parseRoute } from "./routes";
@@ -25,13 +25,31 @@
   const embed = embedLink(window.location.search);
   // The mark shows only once the config says it may (no flash in an embed that hides it).
   let hideAttribution = $state(true);
-  let session = $state<"checking" | "yes" | "no">(embed ? "yes" : "checking");
+  // "failed": the browser was let in, but the console's first answer did not arrive. Asking for the token
+  // again would be wrong then (it is gone from the address, and the cookie is set): the page offers a retry.
+  let session = $state<"checking" | "yes" | "no" | "failed">(embed ? "yes" : "checking");
+  let startError = $state("");
   // The mode is read before the first page is drawn, so no page of another mode flashes by or asks for data
   // this console does not have.
-  if (!embed)
-    initSession()
-      .then((ok) => (ok ? loadConsole().then(() => true) : false))
-      .then((ok) => (session = ok ? "yes" : "no"), () => (session = "no"));
+  async function open(first: boolean) {
+    session = "checking";
+    try {
+      if (first && !(await initSession())) {
+        session = "no";
+        return;
+      }
+      await loadConsole();
+      session = "yes";
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+        session = "no";
+      } else {
+        startError = e instanceof Error ? e.message : String(e);
+        session = "failed";
+      }
+    }
+  }
+  if (!embed) void open(true);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   let hash = $state(window.location.hash);
@@ -168,6 +186,13 @@
         The console needs the token in the <code>http://…/?token=…</code> address that <code>krishiv server</code>,
         <code>krishiv ui</code> or <code>krishiv.ui()</code> printed when it started: open that address.
       </p>
+    {:else if session === "failed"}
+      <h1 class="mb-4">The console did not load</h1>
+      <p class="mb-4 text-muted-foreground">
+        Krishiv did not answer the console's first request (<span data-start-error>{startError}</span>). This
+        browser's session is kept, so the address with the token is not needed again.
+      </p>
+      <Button onclick={() => open(false)}>Try again</Button>
     {:else if page === "queries" && route.id}
       <QueryDetail id={route.id} />
     {:else if page === "queries"}

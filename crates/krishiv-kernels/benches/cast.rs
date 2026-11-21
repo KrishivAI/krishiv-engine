@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Cast kernel benchmarks (64K rows, one thread; CodSpeed in CI): the
 //! TPC-H load and DataFrame casts — string to int/decimal/date, decimal
-//! rescale, int to decimal and decimal to string.
+//! rescale, int to decimal, decimal to string, and double to decimal and to string (fares).
 
 #![expect(
     missing_docs,
@@ -14,7 +14,7 @@
 
 use std::hint::black_box;
 
-use arrow_array::{Decimal128Array, Int64Array, StringArray, Time64NanosecondArray};
+use arrow_array::{Decimal128Array, Float64Array, Int64Array, StringArray, Time64NanosecondArray};
 use arrow_schema::DataType;
 use criterion::{Criterion, criterion_group, criterion_main};
 use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, cast};
@@ -52,6 +52,17 @@ fn casts(c: &mut Criterion) {
     bench("decimal_to_string", &d, DataType::Utf8);
     let l: Int64Array = (0..ROWS).map(Some).collect();
     bench("bigint_to_decimal_20_2", &l, DataType::Decimal128(20, 2));
+    // Taxi fares: dollars and cents read as doubles (PY-063).
+    #[expect(clippy::cast_precision_loss, reason = "small integers")]
+    let fares: Float64Array = (0..ROWS)
+        .map(|i| Some((i * 7919 % 20_000) as f64 / 100.0 + 2.5))
+        .collect();
+    bench(
+        "double_to_decimal_12_2",
+        &fares,
+        DataType::Decimal128(12, 2),
+    );
+    bench("double_to_string", &fares, DataType::Utf8);
     let times: StringArray = (0..ROWS)
         .map(|i| {
             Some(format!(

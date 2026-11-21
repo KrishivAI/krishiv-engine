@@ -23,8 +23,8 @@ from html import escape
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
+from playwright.sync_api import Page, expect, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
-from playwright.sync_api import expect, sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
 import fixture_server
@@ -547,6 +547,22 @@ def page_checks(origin: str) -> list[str]:
     return problems
 
 
+def shows(
+    page: Page, texts: list[str], where: str = "body", timeout: int = 5000
+) -> bool:
+    """Waits until `where` shows every one of `texts` (any case); whether it did within `timeout` ms."""
+    try:
+        page.wait_for_function(
+            "([sel, ts]) => { const b = document.querySelector(sel).innerText.toLowerCase();"
+            " return ts.every(t => b.includes(t)); }",
+            arg=[where, [t.lower() for t in texts]],
+            timeout=timeout,
+        )
+    except PlaywrightTimeout:
+        return False
+    return True
+
+
 # What each mode's console shows and leaves out, beyond the server console the checks above cover:
 # (page, text that must be there, text that must not be).
 MODE_PAGES = {
@@ -603,7 +619,9 @@ def mode_checks() -> list[str]:
                 for frag, wanted, unwanted in pages:
                     view = f"{mode} {frag or '(no page)'} {label}"
                     page.evaluate(f"window.location.hash = {frag!r}")
-                    page.wait_for_timeout(700)
+                    # The page of this address, not the one before it or its loading state: the texts it
+                    # must show are there. A page that never shows them is reported just below.
+                    shows(page, wanted)
                     body = page.inner_text("main").lower()
                     if label == "desktop":
                         body += page.inner_text("header").lower()
@@ -655,6 +673,31 @@ def mode_checks() -> list[str]:
                 ]
             server.shutdown()
         browser.close()
+    return problems
+
+
+def start_checks() -> list[str]:
+    """A console whose first answer fails after the token was taken: it says so and offers a retry, and
+    does not ask for the token again."""
+    problems: list[str] = []
+    server = fixture_server.serve(health_failures=1)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
+        if not shows(
+            page, ["The console did not load", "the console is starting"], "main"
+        ):
+            problems.append("start: a failed first answer is not shown as one")
+        main = page.inner_text("main")
+        if "Open the address" in main:
+            problems.append("start: a failed first answer asks for the token again")
+        page.get_by_role("button", name="Try again").click()
+        if not shows(page, ["uptime"], "main"):
+            problems.append("start: the retry does not open the console's first page")
+        browser.close()
+    server.shutdown()
     return problems
 
 
@@ -726,7 +769,7 @@ def role_checks() -> list[str]:
         if "Environment" in links or len(links) != len(PAGES) - 2:
             problems.append(f"operator: the menu lists {links}")
         page.evaluate("window.location.hash = '#/environment'")
-        page.wait_for_timeout(700)
+        shows(page, ["uptime"], "main")
         main = page.inner_text("main").lower()
         if "uptime" not in main or "secrets show" in main:
             problems.append("operator: #/environment does not open the Health page")
@@ -1124,6 +1167,7 @@ if __name__ == "__main__":
     )
     found += mode_checks()
     found += role_checks()
+    found += start_checks()
     found += filter_checks()
     found += heatmap_checks(f"http://127.0.0.1:{server.server_address[1]}")
     found += q9_checks(shots)

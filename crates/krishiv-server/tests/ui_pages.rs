@@ -135,19 +135,26 @@ async fn the_catalog_browser_lists_catalogs_schemas_tables_and_columns() {
     assert_eq!(names, ["catalog_probe_table"], "{tables}");
     let cols = get(
         addr,
-        "/api/internal/catalog/spark_catalog/system/queries/columns",
+        "/api/internal/catalog/spark_catalog/default/catalog_probe_table/columns",
     )
     .await;
-    assert!(
-        cols["columns"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|c| c["name"] == "query_id" && c["data_type"].is_string()),
+    assert_eq!(
+        cols["columns"],
+        json!([{"name": "a", "data_type": "int"}]),
         "{cols}"
     );
-    // A name with a quoting character is refused before it reaches SQL.
+    // Every statement names its catalog: `system` is a catalog, not a schema of `spark_catalog`.
     let a = auth();
+    let (status, ..) = raw(
+        addr,
+        "GET",
+        "/api/internal/catalog/spark_catalog/system/queries/columns",
+        &["Host: localhost", &a],
+        "",
+    )
+    .await;
+    assert_ne!(status, 200);
+    // A name with a quoting character is refused before it reaches SQL.
     let (status, ..) = raw(
         addr,
         "GET",
@@ -360,6 +367,14 @@ async fn a_host_name_that_is_not_ours_is_refused_before_anything_is_read() {
 #[tokio::test]
 async fn the_page_endpoints_are_documented_in_the_openapi_document() {
     let addr = start().await;
+    let (_, body) = post(
+        addr,
+        "/api/internal/sql",
+        &json!({"sql": "CREATE TABLE documented_columns (a INT) USING parquet"}).to_string(),
+    )
+    .await;
+    let run = body["run_id"].as_str().unwrap().to_owned();
+    wait_state(addr, &run, "finished", Duration::from_secs(20)).await;
     let doc = get(addr, "/api/internal/openapi.json").await;
     let paths = doc["paths"].as_object().unwrap();
     for p in [
@@ -564,6 +579,14 @@ async fn a_listener_on_another_address_does_not_refuse_remote_host_names() {
 #[tokio::test]
 async fn the_documented_properties_are_the_ones_the_responses_carry() {
     let addr = start().await;
+    let (_, body) = post(
+        addr,
+        "/api/internal/sql",
+        &json!({"sql": "CREATE TABLE documented_columns (a INT) USING parquet"}).to_string(),
+    )
+    .await;
+    let run = body["run_id"].as_str().unwrap().to_owned();
+    wait_state(addr, &run, "finished", Duration::from_secs(20)).await;
     let doc = get(addr, "/api/internal/openapi.json").await;
     let props = |name: &str| -> Vec<String> {
         doc["components"]["schemas"][name]["properties"]
@@ -581,7 +604,7 @@ async fn the_documented_properties_are_the_ones_the_responses_carry() {
             "Tables",
         ),
         (
-            "/api/internal/catalog/spark_catalog/system/queries/columns",
+            "/api/internal/catalog/spark_catalog/default/documented_columns/columns",
             "Columns",
         ),
         ("/api/internal/environment", "Environment"),

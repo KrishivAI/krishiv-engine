@@ -137,6 +137,7 @@ pub(crate) fn write_plan() -> krishiv_exec::physical::WritePlan {
         target_file_bytes: 1 << 20,
         partition_by: Vec::new(),
         column_types: std::collections::BTreeMap::new(),
+        bucket: None,
     }
 }
 
@@ -1626,6 +1627,19 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "write_files_bucketed",
+            PhysNode::WriteFiles {
+                input: boxed(scan()),
+                write: Some(WritePlan {
+                    bucket: Some(krishiv_exec::physical::BucketWrite {
+                        column: 1,
+                        sort_by: vec![0],
+                    }),
+                    ..write_plan()
+                }),
+            },
+        ),
+        (
             "exchange_hash",
             PhysNode::Exchange(ExchangePlan {
                 schema: None,
@@ -2609,6 +2623,38 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
     ];
     let mut variants = file_scan();
     variants.scan.output = vec![column(3, "v", DataType::Variant, true)];
+    let mut udts = file_scan();
+    let point_storage = DataType::Array(std::sync::Arc::new(krishiv_types::ArrayType::new(
+        DataType::Double,
+        false,
+    )));
+    udts.scan.output = vec![column(
+        3,
+        "p",
+        DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::jvm(
+            point_storage,
+            "org.apache.spark.sql.test.ExamplePointUDT".to_owned(),
+            Some("pyspark.testing.objects.ExamplePointUDT".to_owned()),
+        ))),
+        true,
+    )];
+    // A UDT over a collated string, inside a struct: the collation is written inline in the UDT's storage type
+    // (Spark 4.2.0), so it has to survive the codec.
+    let mut udt_collated = file_scan();
+    let lcase = DataType::collated_string(krishiv_types::Collation::parse("UTF8_LCASE").unwrap());
+    let text_udt = DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::python(
+        lcase,
+        "__main__.TextUDT".to_owned(),
+        "gAWV".to_owned(),
+    )));
+    udt_collated.scan.output = vec![column(
+        3,
+        "s",
+        DataType::Struct(krishiv_types::StructType::new(vec![
+            krishiv_types::StructField::new("p", text_udt, true),
+        ])),
+        true,
+    )];
     let geometry = col(
         5,
         "g3857",
@@ -2879,6 +2925,8 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
+        ("udt_scan", PhysNode::Scan(udts)),
+        ("udt_collated_scan", PhysNode::Scan(udt_collated)),
         ("variant_scan", PhysNode::Scan(variants)),
         ("collated_scan", PhysNode::Scan(collated_columns)),
         ("collated_nested", collated_nested),

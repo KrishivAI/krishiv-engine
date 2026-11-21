@@ -298,6 +298,7 @@ pub(crate) async fn commit_validated(
         start_ms: cx.clock.now_ms(),
         s0_version: base.format_version(),
         s0_uuid: base.uuid().to_string(),
+        position_delete_file: new.position_delete_file.clone(),
         s0: validation
             .start
             .unwrap_or_else(|| branch_head(base, ids.branch).flatten()),
@@ -426,6 +427,9 @@ struct Loop<'a> {
     start_ms: i64,
     s0_version: FormatVersion,
     s0_uuid: String,
+    /// A position delete file (not a DV) the write adds: a rebase onto a v3
+    /// table is refused (a row delta, PR-36c).
+    position_delete_file: Option<String>,
     /// The branch's head when the write started (S0; `None`: no snapshot).
     s0: Option<i64>,
     /// What every rebase validates (`validate.rs`).
@@ -455,6 +459,14 @@ impl Loop<'_> {
         mut current: TableMetadata,
         new: &mut NewManifests,
     ) -> Result<TableMetadata, End> {
+        // A replayed write (the same key) whose first run already landed on this base is final:
+        // sending it again would publish its rows twice. Checked before validation, which has no
+        // exemption for the write's own first run. No request was sent and the found snapshot is
+        // another write's, so nothing this run produced can be in the table: delete it.
+        if self.found(&current)?.is_some() {
+            delete_all(self.cx.io, new, &[]).await;
+            return Ok(current);
+        }
         // An explicit start validates the first attempt too (Java's
         // `validate` runs on every `apply`); S0 itself has nothing between.
         if self.validation.start.is_some() {
@@ -733,6 +745,13 @@ impl Loop<'_> {
                     self.s0_uuid
                 ),
             ))
+        } else if let Some(path) = self.position_delete_file.as_ref().filter(|_| to as u8 >= 3) {
+            // `validateDeleteFileForVersion` re-run at `apply` (notes 36c
+            // §2.1; design note §7.3 step 4a.0).
+            Some((
+                "format version",
+                format!("Must use DVs for position deletes in V{}: {path}", to as u8),
+            ))
         } else if from != to && !(from == FormatVersion::V2 && to == FormatVersion::V3) {
             Some((
                 "format version",
@@ -920,6 +939,7 @@ async fn delete_all(io: &FileIO, new: &NewManifests, lists: &[String]) {
     for path in new
         .data_files
         .iter()
+        .chain(&new.delete_files)
         .chain(manifests)
         .chain(&new.merged)
         .chain(&new.statistics_files)

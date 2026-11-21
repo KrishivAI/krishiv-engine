@@ -398,11 +398,11 @@ fn slot(i: u32, len: usize) -> Result<usize> {
     }
 }
 
-fn usize_of(v: u64) -> Result<usize> {
+pub(crate) fn usize_of(v: u64) -> Result<usize> {
     usize::try_from(v).map_err(|_| corrupt("a count or index out of range"))
 }
 
-fn usizes(v: &[u64]) -> Result<Vec<usize>> {
+pub(crate) fn usizes(v: &[u64]) -> Result<Vec<usize>> {
     v.iter().map(|i| usize_of(*i)).collect()
 }
 
@@ -1713,6 +1713,7 @@ fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
                 Ok((usize_of(c.column)?, spark_type(t)?))
             })
             .collect::<Result<_>>()?,
+        bucket: crate::decode_bucket::bucket_of(m.bucket.as_ref())?,
     })
 }
 
@@ -1744,6 +1745,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         CalendarInterval => DataType::CalendarInterval,
         CollatedString => collated_string(t)?,
         Variant => DataType::Variant,
+        Udt => crate::decode_udt::udt(t)?,
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),
@@ -1764,7 +1766,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
     {
         return Err(corrupt("a type parameter on a type that has none"));
     }
-    if !data_type.is_nested() && !t.json.is_empty() {
+    if !data_type.is_nested() && !matches!(data_type, DataType::Udt(_)) && !t.json.is_empty() {
         return Err(corrupt("a JSON form on a type that is not nested"));
     }
     if !matches!(data_type, DataType::CollatedString(_)) && !t.collation.is_empty() {

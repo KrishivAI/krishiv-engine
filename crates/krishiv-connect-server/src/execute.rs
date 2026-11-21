@@ -46,6 +46,7 @@
 
 pub mod arrow;
 mod cache_command;
+mod catalog_call;
 #[cfg(test)]
 pub(crate) mod hooks;
 pub mod observed;
@@ -392,7 +393,7 @@ pub async fn execute_plan(
             match Box::pin(execution_plan(entry, plan, limits, &query_options)).await? {
                 Executed::Relation(requested) => {
                     let df = requested.frame(session, query_options).await?;
-                    let schema = df.schema().await?;
+                    let schema = df.schema_boxed().await?;
                     let schema_response = schema::proto_schema(&schema)?;
                     Ok(Prepared::Rows(
                         df,
@@ -884,6 +885,7 @@ async fn build_local_relation(
                 .local_relation(data.as_deref(), schema)
                 .await
         }
+        LocalRequest::Catalog(call) => catalog_call::run(entry.session(), call).await,
         LocalRequest::Cached { hash } => Err(ConnectInvalidPlanNotFoundCachedLocalRelation {
             hash,
             session_u_u_i_d: entry.server_side_id().to_owned(),
@@ -1283,7 +1285,7 @@ async fn produce(
     sender.send(first).await?;
     #[cfg(test)]
     hooks::encoding(sender.op.id().as_str());
-    let mut stream: RecordBatchStream = df.execute_stream().await?;
+    let mut stream: RecordBatchStream = df.execute_stream_boxed().await?;
     let mut offset: i64 = 0;
     let mut sent = false;
     while let Some(batch) = stream.next().await {

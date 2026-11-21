@@ -29,7 +29,9 @@ turmoil.workspace = true
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
 object_store = { workspace = true, features = ["fs"] }
+parquet = { workspace = true, features = ["arrow"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "rt"] }
 

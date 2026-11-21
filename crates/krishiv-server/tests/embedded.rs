@@ -182,6 +182,40 @@ async fn a_query_of_another_session_cannot_be_cancelled_and_an_own_one_can() {
     assert!(their_task.await.unwrap().is_err());
 }
 
+/// The names the catalog page lists under `path`.
+async fn listed(source: &EmbeddedSource, path: &[&str]) -> Vec<String> {
+    let path: Vec<String> = path.iter().map(|p| (*p).to_owned()).collect();
+    source
+        .catalog(&path)
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["name"].as_str())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The page's statements name their catalog, so what is listed under `spark_catalog` does not change when
+/// the program makes another catalog the current one.
+#[tokio::test]
+async fn spark_catalog_is_listed_whatever_the_sessions_current_catalog() {
+    let (mine, _other) = two_sessions();
+    run(&mine, "CREATE TEMPORARY VIEW seen AS SELECT 1 AS x").await;
+    let source = EmbeddedSource::new(&mine).unwrap();
+    let schemas = listed(&source, &["spark_catalog"]).await;
+    let tables = listed(&source, &["spark_catalog", "default"]).await;
+    assert!(schemas.contains(&"default".to_owned()), "{schemas:?}");
+    assert!(tables.contains(&"seen".to_owned()), "{tables:?}");
+
+    run(&mine, "USE system").await;
+    let current = mine.catalog().current_catalog();
+    assert_eq!(current, "system");
+    assert_eq!(listed(&source, &["spark_catalog"]).await, schemas);
+    assert_eq!(listed(&source, &["spark_catalog", "default"]).await, tables);
+    // The current catalog's own schemas are another list.
+    assert_ne!(listed(&source, &["system"]).await, schemas);
+}
+
 #[tokio::test]
 async fn the_editor_shares_the_sessions_views_and_the_catalog_lists_them() {
     let (mine, other) = two_sessions();

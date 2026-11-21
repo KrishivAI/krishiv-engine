@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import atexit
 import contextlib
-import threading
 import weakref
 from html import escape
 from typing import TYPE_CHECKING, Any, overload
@@ -29,7 +28,6 @@ if TYPE_CHECKING:
 
 __all__ = ["Console", "ui"]
 
-_lock = threading.Lock()
 # Consoles not yet stopped, so the exit hook stops them: no thread or port outlives the interpreter.
 # Weak: a console belongs to its session and goes with it.
 _RUNNING: weakref.WeakSet[Console] = weakref.WeakSet()
@@ -121,15 +119,19 @@ def _start(session: SparkSession, port: int) -> Console:
     """The session's console: the running one, or a new one on ``port`` (0 picks a free port)."""
     if not _native.__ui__:
         raise unsupported_feature("krishiv.ui() (this build has no web console)")
-    with _lock:
+    # The session's own lock, which its `stop()` takes too: a start is not cut in two by a stop, which
+    # would otherwise forget the new console while stopping only the old one.
+    with session._console_lock:
         current: Console | None = session._console
         if current is not None and current.running and port in (0, current.port):
             return current
         # The new one first: when it cannot start (the port is taken), the running one stays.
+        # A set-up failure (the port is taken) is a `RuntimeError`, said here with what was being done. An
+        # error of the engine is not one: it passes as it is, with its error class and SQLSTATE.
         try:
             console = Console(_native.Console(session._native, port))
         except RuntimeError as e:
-            raise RuntimeError(f"cannot start the console: {e}") from None
+            raise RuntimeError(f"cannot start the console: {e}") from e.__cause__
         session._console = console
         if current is not None:
             current.stop()

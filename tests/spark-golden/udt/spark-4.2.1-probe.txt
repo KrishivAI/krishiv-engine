@@ -1,0 +1,9 @@
+# Captured 2026-11-19 from pyspark==4.2.1 (local[1]) running probe_python_only.py (below); the long serializedClass is elided.
+PYONLY jvm class: org.apache.spark.sql.types.PythonUserDefinedType
+PYONLY jvm json: {"type":"udt","pyClass":"__main__.PyOnlyUDT","serializedClass":"gAWV...","sqlType":{"type":"array","elementType":"double","containsNull":false}}
+PYONLY simple/typeName/catalog/sql: pythonuserdefined pythonuserdefined array<double> ARRAY<DOUBLE>
+PARQUET reread (python-only UDT): struct<p:udt>
+PARSE jvm-null-pyclass   {"type":"udt","class":"org.apache.spark.sql.test.ExamplePointUDT","pyClass":null,"sqlType":..}: OK ExamplePointUDT examplepoint
+PARSE jvm-no-pyclass     {"type":"udt","class":"...ExamplePointUDT","sqlType":..}: ERR INVALID_JSON_DATA_TYPE
+PARSE py-only            {"type":"udt","pyClass":"pt.PyOnlyUDT","serializedClass":"gASV","sqlType":..}: OK PythonUserDefinedType pythonuserdefined
+PARSE py-only-no-serial  {"type":"udt","pyClass":"pt.PyOnlyUDT","sqlType":..}: ERR INVALID_JSON_DATA_TYPE

@@ -175,8 +175,8 @@ impl SessionSource {
     /// listed). Read only by a source with a stored history.
     async fn live_ids(&self) -> Result<std::collections::HashSet<String>, UiError> {
         let sql = "SELECT query_id FROM system.queries";
-        let df = self.session.sql(sql).await.map_err(ui_error)?;
-        let batches = df.collect().await.map_err(ui_error)?;
+        let df = self.session.sql_boxed(sql).await.map_err(ui_error)?;
+        let batches = df.collect_boxed().await.map_err(ui_error)?;
         Ok(batches_to_rows(&batches)
             .iter()
             .filter_map(|r| query_id(r).map(str::to_owned))
@@ -187,8 +187,8 @@ impl SessionSource {
     /// (`system.sessions`). A query whose session is no longer listed has none.
     async fn add_client_types(&self, queries: &mut [Row]) -> Result<(), UiError> {
         let sql = "SELECT session_id, client_type FROM system.sessions";
-        let df = self.session.sql(sql).await.map_err(ui_error)?;
-        let batches = df.collect().await.map_err(ui_error)?;
+        let df = self.session.sql_boxed(sql).await.map_err(ui_error)?;
+        let batches = df.collect_boxed().await.map_err(ui_error)?;
         let clients: std::collections::HashMap<String, Value> = batches_to_rows(&batches)
             .into_iter()
             .filter_map(|mut s| match s.remove("session_id") {
@@ -348,7 +348,7 @@ async fn execute(
         return Ok(None);
     }
     let df = editor
-        .sql_with(
+        .sql_with_boxed(
             &sql,
             krishiv_session::QueryOptions::new().tags([tag.as_str()]),
         )
@@ -361,13 +361,13 @@ async fn execute(
     let capped = df.limit(i32::try_from(MAX_RESULT_ROWS + 1).unwrap_or(i32::MAX));
     let work = Box::pin(async {
         let columns: Vec<String> = capped
-            .schema()
+            .schema_boxed()
             .await?
             .fields()
             .iter()
             .map(|f| f.name().clone())
             .collect();
-        capped.collect().await.map(|b| Some((columns, b)))
+        capped.collect_boxed().await.map(|b| Some((columns, b)))
     });
     // A cancel that reached the run after the last check above may find no registered query to stop
     // (`cancel_by_tag` sees only attached queries): watch the flag while the statement runs and drop the work when
@@ -514,28 +514,17 @@ pub fn batches_to_rows(batches: &[RecordBatch]) -> Vec<Row> {
 
 /// The catalog objects one level below `path` as `session` sees them ([`UiSource::catalog`]).
 pub(crate) async fn catalog_rows(session: &Session, path: &[String]) -> Result<Vec<Row>, UiError> {
-    // The built-in catalog's objects are named without it (`default.t`): the grammar of `SHOW` takes a
-    // schema, and a name with a catalog in front is only needed for another catalog.
-    let scoped = |c: &str, rest: String| {
-        if c == "spark_catalog" {
-            rest
-        } else {
-            format!("{}.{rest}", quote(c))
-        }
-    };
+    // Every statement names its catalog, the built-in one included: a bare `SHOW SCHEMAS` or `default.t`
+    // is read in the session's current catalog, which `USE <catalog>` changes.
     let sql = match path {
         [] => "SHOW CATALOGS".to_owned(),
-        [c] if c == "spark_catalog" => "SHOW SCHEMAS".to_owned(),
         [c] => format!("SHOW SCHEMAS IN {}", quote(c)),
-        [c, s] => format!("SHOW TABLES IN {}", scoped(c, quote(s))),
-        [c, s, t] => format!(
-            "DESCRIBE TABLE {}",
-            scoped(c, format!("{}.{}", quote(s), quote(t)))
-        ),
+        [c, s] => format!("SHOW TABLES IN {}.{}", quote(c), quote(s)),
+        [c, s, t] => format!("DESCRIBE TABLE {}.{}.{}", quote(c), quote(s), quote(t)),
         _ => return Ok(Vec::new()),
     };
-    let df = session.sql(&sql).await.map_err(ui_error)?;
-    let batches = df.collect().await.map_err(ui_error)?;
+    let df = session.sql_boxed(&sql).await.map_err(ui_error)?;
+    let batches = df.collect_boxed().await.map_err(ui_error)?;
     let mut out = Vec::new();
     for r in batches_to_rows(&batches) {
         let first = |keys: &[&str]| {
@@ -570,8 +559,8 @@ impl UiSource for SessionSource {
     fn rows(&self, table: SystemTable) -> UiFuture<'_, Vec<Row>> {
         Box::pin(async move {
             let sql = format!("SELECT * FROM system.{}", table_name(table));
-            let df = self.session.sql(&sql).await.map_err(ui_error)?;
-            let batches = df.collect().await.map_err(ui_error)?;
+            let df = self.session.sql_boxed(&sql).await.map_err(ui_error)?;
+            let batches = df.collect_boxed().await.map_err(ui_error)?;
             let mut rows = batches_to_rows(&batches);
             if table == SystemTable::Queries {
                 rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));

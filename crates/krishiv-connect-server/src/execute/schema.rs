@@ -154,6 +154,13 @@ pub fn proto_type(t: &DataType) -> Result<pb::DataType, KrishivError> {
         DataType::Variant => kind(Kind::Variant(dt::Variant {
             type_variation_reference: v,
         })),
+        DataType::Udt(u) => kind(Kind::Udt(Box::new(dt::Udt {
+            r#type: "udt".to_owned(),
+            jvm_class: u.jvm_class().map(str::to_owned),
+            python_class: u.python_class().map(str::to_owned),
+            serialized_python_class: u.serialized_python_class().map(str::to_owned),
+            sql_type: Some(Box::new(proto_type(u.sql_type())?)),
+        }))),
         DataType::Array(a) => kind(Kind::Array(Box::new(dt::Array {
             element_type: Some(Box::new(proto_type(a.element_type())?)),
             contains_null: a.contains_null(),
@@ -195,4 +202,33 @@ pub fn proto_type(t: &DataType) -> Result<pb::DataType, KrishivError> {
             .into());
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use krishiv_types::UdtType;
+
+    use super::*;
+
+    /// P3-T079: a UDT goes out as Spark's `DataType.UDT` with its classes and storage type.
+    #[test]
+    fn a_udt_is_written_with_its_classes_and_storage_type() {
+        let udt = DataType::Udt(Arc::new(UdtType::jvm(
+            DataType::Integer,
+            "org.example.PointUDT".to_owned(),
+            Some("pkg.PointUDT".to_owned()),
+        )));
+        let proto = proto_type(&udt).unwrap();
+        let Some(Kind::Udt(u)) = proto.kind else {
+            panic!("not a UDT");
+        };
+        assert_eq!(u.r#type, "udt");
+        assert_eq!(u.python_class.as_deref(), Some("pkg.PointUDT"));
+        assert_eq!(u.jvm_class.as_deref(), Some("org.example.PointUDT"));
+        assert_eq!(u.serialized_python_class, None);
+        let sql = u.sql_type.expect("storage type");
+        assert!(matches!(sql.kind, Some(Kind::Integer(_))));
+    }
 }
