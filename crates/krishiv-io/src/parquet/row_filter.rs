@@ -125,24 +125,41 @@ fn column<'a>(batch: &'a RecordBatch, c: &ColumnPath) -> Option<&'a dyn Array> {
     }
 }
 
-/// `op` over two ordered values.
-fn test<T: PartialOrd>(op: CmpOp, a: &T, b: &T) -> bool {
-    match op {
-        CmpOp::Eq => a == b,
-        CmpOp::NotEq => a != b,
-        CmpOp::Lt => a < b,
-        CmpOp::LtEq => a <= b,
-        CmpOp::Gt => a > b,
-        CmpOp::GtEq => a >= b,
-    }
+/// `collect_bool` over `n` rows of `$at(i) $cmp $v` for the comparison
+/// `$op` names, chosen once outside the loop so each loop is one
+/// monomorphic comparison (vectorized for primitives).
+macro_rules! by_op {
+    ($op:expr, $n:expr, |$i:ident| $at:expr, $v:expr) => {{
+        let n = $n;
+        match $op {
+            CmpOp::Eq => BooleanBuffer::collect_bool(n, |$i| $at == $v),
+            CmpOp::NotEq => BooleanBuffer::collect_bool(n, |$i| $at != $v),
+            CmpOp::Lt => BooleanBuffer::collect_bool(n, |$i| $at < $v),
+            CmpOp::LtEq => BooleanBuffer::collect_bool(n, |$i| $at <= $v),
+            CmpOp::Gt => BooleanBuffer::collect_bool(n, |$i| $at > $v),
+            CmpOp::GtEq => BooleanBuffer::collect_bool(n, |$i| $at >= $v),
+        }
+    }};
 }
 
 fn prim<T: ArrowPrimitiveType>(a: &dyn Array, op: CmpOp, v: T::Native) -> BooleanBuffer
 where
     T::Native: PartialOrd,
 {
-    let values = a.as_primitive::<T>().values();
-    BooleanBuffer::collect_bool(values.len(), |i| test(op, &values[i], &v))
+    let values: &[T::Native] = a.as_primitive::<T>().values();
+    by_op!(op, values.len(), |i| values[i], v)
+}
+
+/// `op(value, lit)` for every row of a byte-string column (see [`bytes`]).
+fn bytes_cmp(a: &dyn Array, op: CmpOp, lit: &[u8]) -> Option<BooleanBuffer> {
+    match op {
+        CmpOp::Eq => bytes(a, |x| x == lit),
+        CmpOp::NotEq => bytes(a, |x| x != lit),
+        CmpOp::Lt => bytes(a, |x| x < lit),
+        CmpOp::LtEq => bytes(a, |x| x <= lit),
+        CmpOp::Gt => bytes(a, |x| x > lit),
+        CmpOp::GtEq => bytes(a, |x| x >= lit),
+    }
 }
 
 /// `op(value, lit)` for every row of a byte-string column, or `None` for a
@@ -210,7 +227,7 @@ fn compare(a: &dyn Array, op: CmpOp, lit: &ScalarValue) -> Option<BooleanBuffer>
         ) if s == scale => prim::<Decimal128Type>(a, op, *unscaled),
         (DataType::Boolean, S::Boolean(v)) => {
             let values = a.as_boolean().values();
-            BooleanBuffer::collect_bool(values.len(), |i| test(op, &values.value(i), v))
+            by_op!(op, values.len(), |i| values.value(i), *v)
         }
         (_, S::Utf8(v))
             if matches!(
@@ -218,8 +235,7 @@ fn compare(a: &dyn Array, op: CmpOp, lit: &ScalarValue) -> Option<BooleanBuffer>
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
             ) =>
         {
-            let v = v.as_bytes();
-            bytes(a, |x| test(op, &x, &v))?
+            bytes_cmp(a, op, v.as_bytes())?
         }
         (_, S::Binary(v))
             if matches!(
@@ -227,7 +243,7 @@ fn compare(a: &dyn Array, op: CmpOp, lit: &ScalarValue) -> Option<BooleanBuffer>
                 DataType::Binary | DataType::LargeBinary | DataType::BinaryView
             ) =>
         {
-            bytes(a, |x| test(op, &x, &v.as_slice()))?
+            bytes_cmp(a, op, v)?
         }
         _ => return None,
     })
@@ -334,6 +350,169 @@ fn in_list(a: &dyn Array, values: &[ScalarValue]) -> Option<BooleanBuffer> {
     }
 }
 
+/// The surviving fraction at or below which an `And`'s later conjuncts
+/// run on a compacted copy of the surviving rows: below it, copying the
+/// few rows of the columns they read costs less than evaluating a Bloom
+/// probe or an `IN` on every row.
+const SPARSE: f64 = 0.25;
+
+/// One conjunct of a flattened `And`, with the `And` it was written in.
+type Conjunct<'e> = (usize, &'e PushdownExpr);
+
+/// Appends the conjuncts of `xs` (the `And` numbered `group`) to `out`,
+/// nested `And`s flattened, each numbered from `next`. A runtime filter's
+/// `In` is skipped only beside the exact membership of its own `And`
+/// ([`eval_rest`]), so the numbers keep the nesting that matters.
+fn conjuncts<'e>(
+    xs: &'e [PushdownExpr],
+    group: usize,
+    next: &mut usize,
+    out: &mut Vec<Conjunct<'e>>,
+) {
+    for x in xs {
+        if let PushdownExpr::And(ys) = x {
+            *next += 1;
+            let inner = *next;
+            conjuncts(ys, inner, next, out);
+        } else {
+            out.push((group, x));
+        }
+    }
+}
+
+/// Whether a conjunct is one vectorized pass over one column (or none):
+/// these run first, over the whole batch.
+fn cheap(e: &PushdownExpr) -> bool {
+    matches!(
+        e,
+        PushdownExpr::Constant(_)
+            | PushdownExpr::Cmp { .. }
+            | PushdownExpr::IsNull(_)
+            | PushdownExpr::IsNotNull(_)
+    )
+}
+
+/// The `And` of `xs`: the cheap conjuncts over the whole batch, then the
+/// others only on the rows those may keep, over a compacted copy of the
+/// columns they read when few rows survive, and not at all when none does
+/// (a runtime filter's Bloom probe and `In` after its range and the
+/// query's own comparisons, which often drop almost every row).
+///
+/// Where the later conjuncts are not evaluated on a row the `And` is not
+/// known to be false there (`may_false` unknown), which is a superset.
+fn eval_and(xs: &[Conjunct<'_>], batch: &RecordBatch) -> Maybe {
+    let n = batch.num_rows();
+    let (first, rest): (Vec<_>, Vec<_>) = xs.iter().copied().partition(|(_, x)| cheap(x));
+    let mut acc = Maybe::constant(true, n);
+    for (_, x) in &first {
+        acc = conj(acc, eval(x, batch));
+    }
+    if rest.is_empty() {
+        return acc;
+    }
+    let Some(live) = acc.may_true.clone() else {
+        return conj(acc, eval_rest(&rest, batch));
+    };
+    let survivors = live.count_set_bits();
+    if survivors == 0 {
+        return Maybe {
+            may_true: Some(live),
+            may_false: None,
+        };
+    }
+    #[expect(clippy::cast_precision_loss, reason = "a ratio")]
+    let sparse = survivors as f64 <= n as f64 * SPARSE;
+    if !sparse {
+        return conj(acc, eval_rest(&rest, batch));
+    }
+    let Some(compact) = compacted(batch, &rest, &live).filter(|c| c.num_rows() == survivors) else {
+        return conj(acc, eval_rest(&rest, batch));
+    };
+    let m = eval_rest(&rest, &compact);
+    Maybe {
+        may_true: Some(match m.may_true {
+            Some(t) if t.len() == survivors => scatter(&live, &t),
+            _ => live,
+        }),
+        may_false: None,
+    }
+}
+
+/// The conjunction of two results of an `And`'s conjuncts.
+fn conj(acc: Maybe, m: Maybe) -> Maybe {
+    Maybe {
+        may_true: and(acc.may_true, m.may_true),
+        may_false: or(acc.may_false, m.may_false),
+    }
+}
+
+/// The rows of `live` of the columns `xs` read, or `None` if they cannot
+/// be copied (the caller then evaluates `xs` on the whole batch).
+fn compacted(
+    batch: &RecordBatch,
+    xs: &[Conjunct<'_>],
+    live: &BooleanBuffer,
+) -> Option<RecordBatch> {
+    let schema = batch.schema();
+    let mut read: Vec<usize> = Vec::new();
+    for (_, x) in xs {
+        for c in columns(x) {
+            if let [name] = c.0.as_slice()
+                && let Ok(i) = schema.index_of(name)
+                && !read.contains(&i)
+            {
+                read.push(i);
+            }
+        }
+    }
+    read.sort_unstable();
+    let projected = batch.project(&read).ok()?;
+    let mask = BooleanArray::new(live.clone(), None);
+    arrow_select::filter::filter_record_batch(&projected, &mask).ok()
+}
+
+/// `compact` (one bit per set bit of `live`, in order) spread back over
+/// the rows of `live`; unset elsewhere.
+fn scatter(live: &BooleanBuffer, compact: &BooleanBuffer) -> BooleanBuffer {
+    let mut out = arrow_buffer::BooleanBufferBuilder::new(live.len());
+    out.append_n(live.len(), false);
+    for (row, keep) in live.set_indices().zip(compact.iter()) {
+        if keep {
+            out.set_bit(row, true);
+        }
+    }
+    out.finish()
+}
+
+/// The `And` of conjuncts that are not [`cheap`]: memberships first, then
+/// the rest. A runtime filter lowers to an `In` of its keys (for
+/// statistics) beside a `Membership` over the same keys. Where that
+/// membership is evaluated and exact, the `In` keeps no row fewer: it is
+/// skipped (as unknown), not compared value by value.
+fn eval_rest(xs: &[Conjunct<'_>], batch: &RecordBatch) -> Maybe {
+    let mut covered: Vec<(usize, &ColumnPath)> = Vec::new();
+    let mut acc = Maybe::constant(true, batch.num_rows());
+    for (group, x) in xs {
+        if let PushdownExpr::Membership { column: c, filter } = x {
+            let m = eval(x, batch);
+            if m.may_true.is_some() && filter.keys.exact_rows() {
+                covered.push((*group, c));
+            }
+            acc = conj(acc, m);
+        }
+    }
+    for (group, x) in xs {
+        match x {
+            PushdownExpr::Membership { .. } => {}
+            PushdownExpr::In { column: c, .. } if covered.contains(&(*group, c)) => {
+                acc = conj(acc, Maybe::default());
+            }
+            _ => acc = conj(acc, eval(x, batch)),
+        }
+    }
+    acc
+}
+
 /// Evaluates `e` (negation normal form) on `batch`.
 fn eval(e: &PushdownExpr, batch: &RecordBatch) -> Maybe {
     let n = batch.num_rows();
@@ -353,35 +532,9 @@ fn eval(e: &PushdownExpr, batch: &RecordBatch) -> Maybe {
     match e {
         PushdownExpr::Constant(b) => Maybe::constant(*b, n),
         PushdownExpr::And(xs) => {
-            let conj = |acc: Maybe, m: Maybe| Maybe {
-                may_true: and(acc.may_true, m.may_true),
-                may_false: or(acc.may_false, m.may_false),
-            };
-            // A runtime filter lowers to an `In` of its keys (for
-            // statistics) beside a `Membership` over the same keys. Where
-            // that membership is evaluated and exact, the `In` keeps no row
-            // fewer: it is skipped (as unknown), not compared value by value.
-            let mut covered: Vec<&ColumnPath> = Vec::new();
-            let mut acc = Maybe::constant(true, n);
-            for x in xs {
-                if let PushdownExpr::Membership { column: c, filter } = x {
-                    let m = eval(x, batch);
-                    if m.may_true.is_some() && filter.keys.exact_rows() {
-                        covered.push(c);
-                    }
-                    acc = conj(acc, m);
-                }
-            }
-            for x in xs {
-                match x {
-                    PushdownExpr::Membership { .. } => {}
-                    PushdownExpr::In { column: c, .. } if covered.contains(&c) => {
-                        acc = conj(acc, Maybe::default());
-                    }
-                    _ => acc = conj(acc, eval(x, batch)),
-                }
-            }
-            acc
+            let mut flat = Vec::new();
+            conjuncts(xs, 0, &mut 0, &mut flat);
+            eval_and(&flat, batch)
         }
         PushdownExpr::Or(xs) => xs.iter().fold(Maybe::constant(false, n), |acc, x| {
             let m = eval(x, batch);

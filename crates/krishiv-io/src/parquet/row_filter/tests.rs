@@ -36,6 +36,18 @@ fn n(f: &RowFilter) -> usize {
         .unwrap_or_else(|| panic!("{text}"))
 }
 
+/// `op` over two ordered values: the reference the comparators match.
+fn test<T: PartialOrd>(op: CmpOp, a: &T, b: &T) -> bool {
+    match op {
+        CmpOp::Eq => a == b,
+        CmpOp::NotEq => a != b,
+        CmpOp::Lt => a < b,
+        CmpOp::LtEq => a <= b,
+        CmpOp::Gt => a > b,
+        CmpOp::GtEq => a >= b,
+    }
+}
+
 fn c(name: &str) -> ColumnPath {
     ColumnPath::new(name)
 }
@@ -1021,4 +1033,268 @@ fn forced_and_ineligible_policies() {
     let mut none =
         LateMaterialization::new(crate::request::RowFilterPolicy::On, None, None, true, None);
     assert_eq!(n(&none.filter(true, &[], &[], all)), 0);
+}
+
+/// A column name, its values and the literal of a value of its type.
+type TypedColumn = (&'static str, ArrayRef, fn(i64) -> ScalarValue);
+
+/// Every operator over every exactly compared type, against the operator
+/// applied to each value on its own (the comparator is chosen once per
+/// batch, outside the loop over rows).
+#[test]
+fn every_operator_matches_its_scalar_meaning_on_every_type() {
+    let ops = [
+        CmpOp::Eq,
+        CmpOp::NotEq,
+        CmpOp::Lt,
+        CmpOp::LtEq,
+        CmpOp::Gt,
+        CmpOp::GtEq,
+    ];
+    let ints: Vec<Option<i64>> = vec![Some(-2), Some(0), None, Some(1), Some(3), Some(1)];
+    let want = |op: CmpOp, lit: i64| -> Vec<bool> {
+        ints.iter()
+            .map(|v| v.is_some_and(|v| test(op, &v, &lit)))
+            .collect()
+    };
+    #[expect(clippy::cast_possible_truncation, reason = "values lie in -2..=3")]
+    let cols: Vec<TypedColumn> = vec![
+        (
+            "i8",
+            Arc::new(Int8Array::from_iter(
+                ints.iter().map(|v| v.map(|v| v as i8)),
+            )),
+            |v| ScalarValue::Int8(v as i8),
+        ),
+        (
+            "i16",
+            Arc::new(Int16Array::from_iter(
+                ints.iter().map(|v| v.map(|v| v as i16)),
+            )),
+            |v| ScalarValue::Int16(v as i16),
+        ),
+        (
+            "i32",
+            Arc::new(Int32Array::from_iter(
+                ints.iter().map(|v| v.map(|v| v as i32)),
+            )),
+            |v| ScalarValue::Int32(v as i32),
+        ),
+        (
+            "i64",
+            Arc::new(Int64Array::from(ints.clone())),
+            ScalarValue::Int64,
+        ),
+        (
+            "d",
+            Arc::new(Date32Array::from_iter(
+                ints.iter().map(|v| v.map(|v| v as i32)),
+            )),
+            |v| ScalarValue::Date32(v as i32),
+        ),
+        (
+            "ts",
+            Arc::new(TimestampMicrosecondArray::from(ints.clone())),
+            ScalarValue::TimestampMicros,
+        ),
+        (
+            "dec",
+            Arc::new(
+                Decimal128Array::from_iter(ints.iter().map(|v| v.map(i128::from)))
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ),
+            |v| ScalarValue::Decimal128 {
+                unscaled: i128::from(v),
+                precision: 10,
+                scale: 2,
+            },
+        ),
+    ];
+    let b = batch(cols.iter().map(|(n, a, _)| (*n, Arc::clone(a))).collect());
+    for (name, _, lit) in &cols {
+        for op in ops {
+            for v in [-3, -2, 0, 1, 3, 4] {
+                assert_eq!(
+                    kept(&cmp(name, op, lit(v)), &b),
+                    want(op, v),
+                    "{name} {op:?} {v}"
+                );
+            }
+        }
+    }
+    // Booleans and byte strings, every operator.
+    let flags = [Some(false), Some(true), None];
+    let words = [Some("ab"), Some("b"), None, Some(""), Some("ba")];
+    let b = batch(vec![(
+        "b",
+        Arc::new(BooleanArray::from(flags.to_vec())) as ArrayRef,
+    )]);
+    let s = batch(vec![
+        ("s", Arc::new(StringArray::from(words.to_vec())) as ArrayRef),
+        ("v", Arc::new(StringViewArray::from(words.to_vec()))),
+        (
+            "bin",
+            Arc::new(BinaryArray::from(
+                words
+                    .iter()
+                    .map(|w| w.map(str::as_bytes))
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+    ]);
+    for op in ops {
+        for lit in [false, true] {
+            let want: Vec<bool> = flags
+                .iter()
+                .map(|v| v.is_some_and(|v| test(op, &v, &lit)))
+                .collect();
+            assert_eq!(kept(&cmp("b", op, ScalarValue::Boolean(lit)), &b), want);
+        }
+        for lit in ["", "ab", "b", "c"] {
+            let want: Vec<bool> = words
+                .iter()
+                .map(|v| v.is_some_and(|v| test(op, &v.as_bytes(), &lit.as_bytes())))
+                .collect();
+            for col in ["s", "v"] {
+                assert_eq!(
+                    kept(&cmp(col, op, ScalarValue::Utf8(lit.to_owned())), &s),
+                    want,
+                    "{col} {op:?} {lit:?}"
+                );
+            }
+            assert_eq!(
+                kept(
+                    &cmp("bin", op, ScalarValue::Binary(lit.as_bytes().to_vec())),
+                    &s
+                ),
+                want
+            );
+        }
+    }
+}
+
+/// A pseudo-random sequence for the tests below (no seeding crate needed).
+fn lcg(seed: u64) -> impl FnMut() -> u64 {
+    let mut x = seed;
+    move || {
+        x = x
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        x >> 33
+    }
+}
+
+/// An `And` keeps exactly the rows every conjunct keeps, whether its cheap
+/// comparisons leave many, few or no rows for the later conjuncts (which
+/// run on the surviving rows only), with runtime filters nested as their
+/// lowering builds them (an `And`, or an `Or` with `IS NULL`).
+#[test]
+fn an_and_keeps_what_its_conjuncts_keep_however_few_rows_survive() {
+    let mut next = lcg(7);
+    let n = 4_000;
+    let a: Vec<Option<i32>> = (0..n)
+        .map(|_| (!next().is_multiple_of(17)).then(|| (next() % 1_000) as i32))
+        .collect();
+    let k: Vec<Option<i32>> = (0..n)
+        .map(|_| (!next().is_multiple_of(11)).then(|| (next() % 300) as i32))
+        .collect();
+    let s: Vec<Option<String>> = (0..n)
+        .map(|_| (!next().is_multiple_of(13)).then(|| format!("w{}", next() % 50)))
+        .collect();
+    let b = batch(vec![
+        ("a", Arc::new(Int32Array::from(a)) as ArrayRef),
+        ("k", Arc::new(Int32Array::from(k))),
+        ("s", Arc::new(StringArray::from(s))),
+    ]);
+    let keys: Vec<i32> = (0..300).filter(|v| v % 7 == 1).collect();
+    let exact = key_filter(&keys, KeyFilterOptions::default());
+    let bloom = key_filter(
+        &keys,
+        KeyFilterOptions {
+            exact_max_values: 0,
+            ..KeyFilterOptions::default()
+        },
+    );
+    let on_k = |f: &Arc<crate::KeyFilter>| {
+        f.lower(&c("k"), &DataType::Int32, crate::FilterId(1), 1)
+            .unwrap_or_else(|| panic!("lowers"))
+    };
+    let mut nulls = KeyFilterBuilder::new(DataType::Int32, KeyFilterOptions::default())
+        .unwrap_or_else(|| panic!("Int32 keys"));
+    nulls
+        .add(&Int32Array::from(vec![Some(8), None, Some(15)]), None)
+        .unwrap();
+    let mut nulls = nulls.finish();
+    nulls.nulls_pass = true;
+    let null_safe = Arc::new(nulls)
+        .lower(&c("k"), &DataType::Int32, crate::FilterId(2), 1)
+        .unwrap_or_else(|| panic!("lowers"));
+    let words = PushdownExpr::In {
+        column: c("s"),
+        values: (0..20)
+            .map(|i| ScalarValue::Utf8(format!("w{i}")))
+            .collect(),
+        collation: Collation::Utf8Binary,
+    };
+    let prefix = PushdownExpr::StartsWith {
+        column: c("s"),
+        prefix: "w1".to_owned(),
+        collation: Collation::Utf8Binary,
+    };
+    // Ranges on `a` keeping about 100%, 30%, 2%, 0.1% and none of the rows.
+    for (lo, hi) in [(0, 999), (100, 400), (500, 519), (7, 7), (2_000, 3_000)] {
+        let range = || {
+            vec![
+                cmp("a", CmpOp::GtEq, ScalarValue::Int32(lo)),
+                cmp("a", CmpOp::LtEq, ScalarValue::Int32(hi)),
+            ]
+        };
+        let rest = [
+            on_k(&exact),
+            on_k(&bloom),
+            null_safe.clone(),
+            words.clone(),
+            prefix.clone(),
+            PushdownExpr::Or(vec![prefix.clone(), PushdownExpr::IsNull(c("s"))]),
+        ];
+        for extra in 0..rest.len() {
+            for second in [None, Some((extra + 2) % rest.len())] {
+                let mut xs = vec![rest[extra].clone()];
+                xs.extend(second.map(|i| rest[i].clone()));
+                // The range written after the others, and nested in an `And`.
+                xs.push(PushdownExpr::And(range()));
+                let e = PushdownExpr::And(xs.clone());
+                let mut want = vec![true; n];
+                for x in xs.iter().flat_map(|x| match x {
+                    PushdownExpr::And(ys) => ys.clone(),
+                    x => vec![x.clone()],
+                }) {
+                    for (w, k) in want.iter_mut().zip(kept(&x, &b)) {
+                        *w &= k;
+                    }
+                }
+                assert_eq!(kept(&e, &b), want, "range {lo}..={hi}, {xs:?}");
+            }
+        }
+    }
+}
+
+/// The later conjuncts of an `And` that nothing survives are not looked at:
+/// a column they need may be missing and the result is still exact.
+#[test]
+fn an_and_whose_comparisons_drop_every_row_is_false_on_every_row() {
+    let b = ints();
+    let e = PushdownExpr::And(vec![
+        PushdownExpr::StartsWith {
+            column: c("zz"),
+            prefix: "x".to_owned(),
+            collation: Collation::Utf8Binary,
+        },
+        cmp("a", CmpOp::Gt, ScalarValue::Int32(9)),
+    ]);
+    assert_eq!(kept(&e, &b), [false; 4]);
+    // NOT of it (never in negation normal form) keeps every row: the
+    // unexamined conjunct may be false anywhere.
+    assert_eq!(eval(&PushdownExpr::Not(Box::new(e)), &b).may_true, None);
 }
