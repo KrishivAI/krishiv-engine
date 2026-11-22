@@ -651,6 +651,21 @@ impl PyDataFrame {
         })
     }
 
+    /// `(name, Spark JSON type, nullable)` per column, by analysis. The JSON form keeps every
+    /// nested field name and field exactly (the simple string does not quote names).
+    fn schema_json(&self, py: Python<'_>) -> PyResult<Vec<(String, String, bool)>> {
+        let df = self.inner.clone();
+        let schema = block_on(py, async move { df.schema().await })?;
+        schema
+            .fields()
+            .iter()
+            .map(|f| {
+                let data_type = DataType::from_arrow_field(f).map_err(|e| to_py(py, &e))?;
+                Ok((f.name().clone(), data_type.json(), f.is_nullable()))
+            })
+            .collect()
+    }
+
     /// `(name, Spark simple type string, nullable)` per column, by analysis.
     fn schema(&self, py: Python<'_>) -> PyResult<Vec<(String, String, bool)>> {
         let df = self.inner.clone();
