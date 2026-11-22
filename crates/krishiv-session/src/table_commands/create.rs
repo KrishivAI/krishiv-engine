@@ -567,7 +567,11 @@ impl Session {
         } else {
             "errorifexists"
         };
-        let dirs = self.write_table_rows(&table, &df, write_mode, pre).await?;
+        let key =
+            super::explicit_key(&table.options, |v: &String| Some(v.as_str())).map(str::to_owned);
+        let dirs = self
+            .write_table_rows(&table, &df, write_mode, key.as_deref(), pre)
+            .await?;
         if let Some(owned) = owned {
             owned.keep();
         }
