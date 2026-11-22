@@ -278,8 +278,28 @@ fn a_refused_key_on_an_overwrite_keeps_the_old_table() {
             .option("krishiv.write.idempotencyKey", "job-1")
             .save_as_table("kept"),
     );
-    assert!(none.is_err());
+    assert_eq!(class(none), "KRISHIV_UNSUPPORTED_FEATURE");
     assert_eq!(count(&s, "kept"), n);
+}
+
+/// E34: an overwrite with a usable key replaces the table, and repeating it with that key adds nothing.
+#[test]
+fn a_usable_key_on_an_overwrite_replaces_the_table() {
+    let s = session();
+    let n = count(&s, "people");
+    let keyed = || {
+        block_on(
+            s.table("people")
+                .write()
+                .mode("overwrite")
+                .option("krishiv.write.idempotencyKey", "job-9")
+                .save_as_table("replaced"),
+        )
+    };
+    keyed().unwrap();
+    assert_eq!(count(&s, "replaced"), n);
+    keyed().unwrap();
+    assert_eq!(count(&s, "replaced"), n);
 }
 
 /// E34 (review of #966): strict option checking accepts the forwarded key.
