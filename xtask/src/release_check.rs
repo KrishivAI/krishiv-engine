@@ -252,9 +252,13 @@ fn check(root: &Path, flags: &[&str]) -> Result<(String, Report), String> {
         Err(e) => (0, format!("; {e}")),
     };
     r.check(
+        fragment_error.is_empty(),
+        format!("changelog.d fragments are readable{fragment_error}"),
+    );
+    r.check(
         has_section(&changelog, &version) || pending > 0,
         format!(
-            "CHANGELOG.md has `## {version}` or changelog.d has fragments to assemble ({pending} pending{fragment_error})"
+            "CHANGELOG.md has `## {version}` or changelog.d has fragments to assemble ({pending} pending)"
         ),
     );
 
@@ -326,16 +330,6 @@ mod tests {
         let m = "[target.'cfg(unix)'.dependencies]\nkrishiv-a = \"1\"\n[dependencies]\nbridge = { package = \"krishiv-b\", version = \"1\" }\nother = { package = \"serde\", version = \"1\" }\n[target.'cfg(unix)'.dev-dependencies]\nkrishiv-c = \"1\"\n";
         let d: Vec<_> = internal_deps(m).into_iter().collect();
         assert_eq!(d, ["krishiv-a", "krishiv-b"]);
-    }
-
-    #[test]
-    fn a_comment_in_the_publish_list_fails() {
-        let d = fixture(
-            "0.3.0",
-            "# order\nkrishiv-a\nkrishiv-b\n",
-            "krishiv-a = \"1\"",
-        );
-        assert!(run(d.path(), &[]).is_err());
     }
 
     #[test]
@@ -463,6 +457,15 @@ mod tests {
         std::fs::write(d.path().join("CHANGELOG.md"), "").expect("write");
         std::fs::write(d.path().join("changelog.d/README.md"), "x").expect("write");
         one(failures(&d), "CHANGELOG.md has");
+        let d = fixture(
+            "0.3.0",
+            "# order\nkrishiv-a\nkrishiv-b\n",
+            "krishiv-a = \"1\"",
+        );
+        one(failures(&d), "no comment lines");
+        let d = fixture("0.3.0", "krishiv-a\nkrishiv-b\n", "krishiv-a = \"1\"");
+        std::fs::write(d.path().join("changelog.d/not-a-fragment.md"), "x").expect("write");
+        one(failures(&d), "fragments are readable");
     }
 
     #[test]

@@ -97,7 +97,8 @@ New crate → add it to `xtask/layers.toml` and root `Cargo.toml`, and write its
   Divergence is explicit and opt-in per expression; no global allowIncompatible switch. Observable hashing is
   Murmur3 seed 42.
 - **Flaky tests:** a test that fails and passes on a retry (nextest `FLAKY`) is a bug, not noise. The nightly run on main
-  fails on one that is not in `tests/quarantine.toml` (`cargo xtask quarantine --flaky LOG` prints the stanza to add:
+  fails on one that is not in `tests/quarantine.toml` (the tests `.config/nextest.toml` retries on purpose are exempt;
+  `cargo xtask quarantine --flaky LOG` prints the stanza to add:
   owner, issue, deadline within 3 days). Quarantine is a stop-gap; fix the test or the code, then remove the entry. Never
   loosen an assertion or raise a limit to hide a flake.
 - **Cargo features are additive only**; behaviour flags are runtime config `krishiv.*` / `krishiv.experimental.*`

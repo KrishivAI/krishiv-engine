@@ -94,8 +94,9 @@ jobs:
         env:
           KRISHIV_TIGHT_MEMORY_CASES: "256"
         shell: bash
-        run: set -o pipefail; cargo nextest run --workspace --all-features --locked --no-tests=pass --retries 1 2>&1 | tee "$RUNNER_TEMP/nextest.log"
-      # The run above retries every test once, so a test that passed only on a retry shows as FLAKY. It must
+        run: set -o pipefail; cargo nextest run --workspace --all-features --locked --no-tests=pass --profile nightly 2>&1 | tee "$RUNNER_TEMP/nextest.log"
+      # The run above uses the `nightly` profile (every test retried once; a command-line `--retries` would
+      # replace the five per-test overrides), so so a test that passed only on a retry shows as FLAKY. It must
       # be in tests/quarantine.toml (owner, issue, deadline) or this step fails and prints the stanza; the
       # five tests the default profile retries on purpose (.config/nextest.toml) are exempt.
       - name: flaky tests are quarantined

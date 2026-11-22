@@ -191,7 +191,9 @@ fn flaky_tests(log: &str) -> BTreeSet<(String, String)> {
     out
 }
 
-/// Names of the tests the default profile retries on purpose (`[[profile.default.overrides]]` with `retries`):
+/// Names of the tests the default profile retries on purpose (by name alone, as nextest's
+/// `test(=name)` filter matches: a same-named test in another package is exempt too),
+/// from `[[profile.default.overrides]]` entries with `retries`:
 /// they flake by design on loaded runners, so a `FLAKY` line for them is not a finding.
 fn retried_on_purpose(nextest: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
@@ -385,6 +387,18 @@ mod tests {
         std::fs::write(dir.join("tests/quarantine.toml"), registry).unwrap();
         std::fs::write(dir.join(".config/nextest.toml"), nextest).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_test_retried_on_purpose_is_exempt_and_another_is_not() {
+        let nx = format!("{NX}[[profile.default.overrides]]\nfilter = \"test(=t)\"\nretries = 2\n");
+        let dir = repo("exempt", REG, &nx);
+        let log = dir.join("log.txt");
+        let path = log.to_str().unwrap();
+        std::fs::write(&log, "FLAKY 3/3 [ 1s] p::bin t\n").unwrap();
+        assert!(run(&dir, &["--flaky", path]).is_ok());
+        std::fs::write(&log, "FLAKY 2/2 [ 1s] p::bin zzz\n").unwrap();
+        assert!(run(&dir, &["--flaky", path]).is_err());
     }
 
     #[test]
