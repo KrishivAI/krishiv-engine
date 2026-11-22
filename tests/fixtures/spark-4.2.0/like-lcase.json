@@ -1,0 +1,1453 @@
+{
+ "format_version": 1,
+ "generator": "tests/scripts/gen_like_lcase_goldens.py",
+ "spark_version": "4.2.0",
+ "spark_tag": "v4.2.0",
+ "setup": [
+  "CREATE OR REPLACE TEMPORARY VIEW t AS SELECT id, collate(c, 'utf8_lcase') AS c, collate(p, 'utf8_lcase') AS p FROM VALUES (1, '\u03a3X', '\u03c3%'), (2, '\u017f', 'S'), (3, '\u0130', 'i'), (4, '\u0130', 'i\u0307'), (5, 'x', 'X'), (6, 'i\u0307', '\u0130'), (7, '\u03c2', '\u03a3'), (8, '\u00b5', '\u03bc'), (9, '\u0131', 'I'), (10, '50%', '50\\%'), (11, '500', '50\\%'), (12, NULL, 'a'), (13, 'a', NULL) AS v(id, c, p)"
+ ],
+ "results": [
+  {
+   "id": "plain_like",
+   "sql": "SELECT 'APPLE' collate utf8_lcase LIKE 'app%'",
+   "columns": [
+    "collate(APPLE, utf8_lcase) LIKE app%"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "plain_like_false",
+   "sql": "SELECT 'xyz' collate utf8_lcase LIKE 'APP%'",
+   "columns": [
+    "collate(xyz, utf8_lcase) LIKE APP%"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "plain_ilike",
+   "sql": "SELECT 'APPLE' collate utf8_lcase ILIKE 'app%'",
+   "columns": [
+    "ilike(collate(APPLE, utf8_lcase), app%)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "null_like",
+   "sql": "SELECT CAST(NULL AS STRING) collate utf8_lcase LIKE 'a%'",
+   "columns": [
+    "collate(CAST(NULL AS STRING), utf8_lcase) LIKE a%"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     null
+    ]
+   ]
+  },
+  {
+   "id": "final_sigma_word",
+   "sql": "SELECT '\u0391\u03a3' collate utf8_lcase LIKE '\u03b1\u03c2'",
+   "columns": [
+    "collate(\u0391\u03a3, utf8_lcase) LIKE \u03b1\u03c2"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "sigma_caps",
+   "sql": "SELECT '\u03c3' collate utf8_lcase LIKE '\u03a3'",
+   "columns": [
+    "collate(\u03c3, utf8_lcase) LIKE \u03a3"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "final_caps",
+   "sql": "SELECT '\u03c2' collate utf8_lcase LIKE '\u03a3'",
+   "columns": [
+    "collate(\u03c2, utf8_lcase) LIKE \u03a3"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "final_sigma",
+   "sql": "SELECT '\u03c2' collate utf8_lcase LIKE '\u03c3'",
+   "columns": [
+    "collate(\u03c2, utf8_lcase) LIKE \u03c3"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "sigma_final",
+   "sql": "SELECT '\u03c3' collate utf8_lcase LIKE '\u03c2'",
+   "columns": [
+    "collate(\u03c3, utf8_lcase) LIKE \u03c2"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "ilike_final_caps",
+   "sql": "SELECT '\u03c2' collate utf8_lcase ILIKE '\u03a3'",
+   "columns": [
+    "ilike(collate(\u03c2, utf8_lcase), \u03a3)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "ilike_final_sigma",
+   "sql": "SELECT '\u03c2' collate utf8_lcase ILIKE '\u03c3'",
+   "columns": [
+    "ilike(collate(\u03c2, utf8_lcase), \u03c3)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "long_s",
+   "sql": "SELECT '\u017f' collate utf8_lcase LIKE 's'",
+   "columns": [
+    "collate(\u017f, utf8_lcase) LIKE s"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "s_long",
+   "sql": "SELECT 's' collate utf8_lcase LIKE '\u017f'",
+   "columns": [
+    "collate(s, utf8_lcase) LIKE \u017f"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "ilike_long_s",
+   "sql": "SELECT '\u017f' collate utf8_lcase ILIKE 's'",
+   "columns": [
+    "ilike(collate(\u017f, utf8_lcase), s)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "dotless_i",
+   "sql": "SELECT '\u0131' collate utf8_lcase LIKE 'i'",
+   "columns": [
+    "collate(\u0131, utf8_lcase) LIKE i"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "i_dotless",
+   "sql": "SELECT 'i' collate utf8_lcase LIKE '\u0131'",
+   "columns": [
+    "collate(i, utf8_lcase) LIKE \u0131"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "ilike_dotless_i",
+   "sql": "SELECT '\u0131' collate utf8_lcase ILIKE 'i'",
+   "columns": [
+    "ilike(collate(\u0131, utf8_lcase), i)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "idot_like_i",
+   "sql": "SELECT '\u0130' collate utf8_lcase LIKE 'i'",
+   "columns": [
+    "collate(\u0130, utf8_lcase) LIKE i"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "i_like_idot",
+   "sql": "SELECT 'i' collate utf8_lcase LIKE '\u0130'",
+   "columns": [
+    "collate(i, utf8_lcase) LIKE \u0130"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "idot_like_idot",
+   "sql": "SELECT '\u0130' collate utf8_lcase LIKE '\u0130'",
+   "columns": [
+    "collate(\u0130, utf8_lcase) LIKE \u0130"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "micro_like",
+   "sql": "SELECT '\u00b5' collate utf8_lcase LIKE '\u03bc'",
+   "columns": [
+    "collate(\u00b5, utf8_lcase) LIKE \u03bc"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "micro_ilike",
+   "sql": "SELECT '\u00b5' collate utf8_lcase ILIKE '\u03bc'",
+   "columns": [
+    "ilike(collate(\u00b5, utf8_lcase), \u03bc)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "idot_ilike_i",
+   "sql": "SELECT '\u0130' collate utf8_lcase ILIKE 'i'",
+   "columns": [
+    "ilike(collate(\u0130, utf8_lcase), i)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "idot_ilike_i_dot",
+   "sql": "SELECT '\u0130' collate utf8_lcase ILIKE 'i\u0307'",
+   "columns": [
+    "ilike(collate(\u0130, utf8_lcase), i\u0307)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "i_dot_ilike_idot",
+   "sql": "SELECT 'i\u0307' collate utf8_lcase ILIKE '\u0130'",
+   "columns": [
+    "ilike(collate(i\u0307, utf8_lcase), \u0130)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "idot_like_i_dot",
+   "sql": "SELECT '\u0130' collate utf8_lcase LIKE 'i\u0307'",
+   "columns": [
+    "collate(\u0130, utf8_lcase) LIKE i\u0307"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "xidoty_like_xiy",
+   "sql": "SELECT 'x\u0130y' collate utf8_lcase LIKE 'xiy'",
+   "columns": [
+    "collate(x\u0130y, utf8_lcase) LIKE xiy"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "xidoty_like_x_y",
+   "sql": "SELECT 'x\u0130y' collate utf8_lcase LIKE 'x_y'",
+   "columns": [
+    "collate(x\u0130y, utf8_lcase) LIKE x_y"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "xidoty_like_x__y",
+   "sql": "SELECT 'x\u0130y' collate utf8_lcase LIKE 'x__y'",
+   "columns": [
+    "collate(x\u0130y, utf8_lcase) LIKE x__y"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "not_like",
+   "sql": "SELECT 'APPLE' collate utf8_lcase NOT LIKE 'app%'",
+   "columns": [
+    "(NOT collate(APPLE, utf8_lcase) LIKE app%)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "not_like_long_s",
+   "sql": "SELECT '\u017f' collate utf8_lcase NOT LIKE 's'",
+   "columns": [
+    "(NOT collate(\u017f, utf8_lcase) LIKE s)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "not_ilike",
+   "sql": "SELECT 'APPLE' collate utf8_lcase NOT ILIKE 'app%'",
+   "columns": [
+    "(NOT ilike(collate(APPLE, utf8_lcase), app%))"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "not_paren_like",
+   "sql": "SELECT NOT ('\u017f' collate utf8_lcase LIKE 's')",
+   "columns": [
+    "(NOT collate(\u017f, utf8_lcase) LIKE s)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "like_func",
+   "sql": "SELECT like('\u017f' collate utf8_lcase, 's')",
+   "columns": [
+    "collate(\u017f, utf8_lcase) LIKE s"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "like_func_escape",
+   "sql": "SELECT like('50%' collate utf8_lcase, '50/%' collate utf8_lcase, '/')",
+   "columns": [
+    "collate(50%, utf8_lcase) LIKE collate(50/%, utf8_lcase) ESCAPE '/'"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "ilike_func",
+   "sql": "SELECT ilike('\u03c2' collate utf8_lcase, '\u03a3')",
+   "columns": [
+    "ilike(collate(\u03c2, utf8_lcase), \u03a3)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "like_func_col_collate",
+   "sql": "SELECT like('AB' collate utf8_lcase, 'a%' collate utf8_lcase)",
+   "columns": [
+    "collate(AB, utf8_lcase) LIKE collate(a%, utf8_lcase)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "escape_percent",
+   "sql": "SELECT '50%' collate utf8_lcase LIKE '50\\%'",
+   "columns": [
+    "collate(50%, utf8_lcase) LIKE 50\\%"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "escape_percent_no_match",
+   "sql": "SELECT '500' collate utf8_lcase LIKE '50\\%'",
+   "columns": [
+    "collate(500, utf8_lcase) LIKE 50\\%"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "escape_percent_case",
+   "sql": "SELECT 'AB%' collate utf8_lcase LIKE 'ab\\%'",
+   "columns": [
+    "collate(AB%, utf8_lcase) LIKE ab\\%"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "escape_clause",
+   "sql": "SELECT '50%' collate utf8_lcase LIKE '50/%' ESCAPE '/'",
+   "columns": [
+    "collate(50%, utf8_lcase) LIKE 50/% ESCAPE '/'"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "escape_clause_ilike",
+   "sql": "SELECT 'AB%' collate utf8_lcase ILIKE 'ab/%' ESCAPE '/'",
+   "columns": [
+    "ilike(collate(AB%, utf8_lcase), ab/%)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "pattern_collated",
+   "sql": "SELECT 'Ab' collate utf8_lcase LIKE 'a%' collate utf8_lcase",
+   "columns": [
+    "collate(Ab, utf8_lcase) LIKE collate(a%, utf8_lcase)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "operand_pattern_collated",
+   "sql": "SELECT 'Ab' LIKE 'a%' collate utf8_lcase",
+   "columns": [
+    "Ab LIKE collate(a%, utf8_lcase)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "pattern_collate_fn",
+   "sql": "SELECT 'Ab' collate utf8_lcase LIKE collate('a%', 'utf8_lcase')",
+   "columns": [
+    "collate(Ab, utf8_lcase) LIKE collate(a%, utf8_lcase)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "ilike_name",
+   "sql": "SELECT 'Ab' collate utf8_lcase ILIKE 'a%' collate utf8_lcase",
+   "columns": [
+    "ilike(collate(Ab, utf8_lcase), collate(a%, utf8_lcase))"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "underscore_counts_code_points",
+   "sql": "SELECT '\u00df' collate utf8_lcase LIKE '_'",
+   "columns": [
+    "collate(\u00df, utf8_lcase) LIKE _"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "sharp_s_ss",
+   "sql": "SELECT '\u00df' collate utf8_lcase LIKE 'ss'",
+   "columns": [
+    "collate(\u00df, utf8_lcase) LIKE ss"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "unicode_ci_like",
+   "sql": "SELECT 'APPLE' collate unicode_ci LIKE 'app%'",
+   "error": {
+    "class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+    "sqlState": "42K09",
+    "params": {
+     "inputSql": "\"collate(APPLE, unicode_ci)\"",
+     "inputType": "\"STRING COLLATE UNICODE_CI\"",
+     "paramIndex": "first",
+     "requiredType": "\"STRING\"",
+     "sqlExpr": "\"collate(APPLE, unicode_ci) LIKE app%\""
+    },
+    "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"collate(APPLE, unicode_ci) LIKE app%\" due to data type mismatch: The first parameter requires the \"STRING\" type, however \"collate(APPLE, unicode_ci)\" has the type \"STRING COLLATE UNICODE_CI\". SQLSTATE: 42K09; line 1 pos 34;"
+   }
+  },
+  {
+   "id": "unicode_ci_ilike",
+   "sql": "SELECT 'APPLE' collate unicode_ci ILIKE 'app%'",
+   "error": {
+    "class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+    "sqlState": "42K09",
+    "params": {
+     "inputSql": "\"collate(APPLE, unicode_ci)\"",
+     "inputType": "\"STRING COLLATE UNICODE_CI\"",
+     "paramIndex": "first",
+     "requiredType": "\"STRING\"",
+     "sqlExpr": "\"ilike(collate(APPLE, unicode_ci), app%)\""
+    },
+    "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"ilike(collate(APPLE, unicode_ci), app%)\" due to data type mismatch: The first parameter requires the \"STRING\" type, however \"collate(APPLE, unicode_ci)\" has the type \"STRING COLLATE UNICODE_CI\". SQLSTATE: 42K09; line 1 pos 34;"
+   }
+  },
+  {
+   "id": "binary_like",
+   "sql": "SELECT 'APPLE' collate utf8_binary LIKE 'app%'",
+   "columns": [
+    "collate(APPLE, utf8_binary) LIKE app%"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "binary_ilike",
+   "sql": "SELECT 'APPLE' collate utf8_binary ILIKE 'app%'",
+   "columns": [
+    "ilike(collate(APPLE, utf8_binary), app%)"
+   ],
+   "types": [
+    "boolean"
+   ],
+   "rows": [
+    [
+     "True"
+    ]
+   ]
+  },
+  {
+   "id": "col_like",
+   "sql": "SELECT id, c LIKE p FROM t ORDER BY id",
+   "columns": [
+    "id",
+    "c LIKE p"
+   ],
+   "types": [
+    "int",
+    "boolean"
+   ],
+   "rows": [
+    [
+     "1",
+     "True"
+    ],
+    [
+     "2",
+     "True"
+    ],
+    [
+     "3",
+     "True"
+    ],
+    [
+     "4",
+     "False"
+    ],
+    [
+     "5",
+     "True"
+    ],
+    [
+     "6",
+     "False"
+    ],
+    [
+     "7",
+     "True"
+    ],
+    [
+     "8",
+     "True"
+    ],
+    [
+     "9",
+     "True"
+    ],
+    [
+     "10",
+     "True"
+    ],
+    [
+     "11",
+     "False"
+    ],
+    [
+     "12",
+     null
+    ],
+    [
+     "13",
+     null
+    ]
+   ]
+  },
+  {
+   "id": "col_ilike",
+   "sql": "SELECT id, c ILIKE p FROM t ORDER BY id",
+   "columns": [
+    "id",
+    "ilike(c, p)"
+   ],
+   "types": [
+    "int",
+    "boolean"
+   ],
+   "rows": [
+    [
+     "1",
+     "True"
+    ],
+    [
+     "2",
+     "True"
+    ],
+    [
+     "3",
+     "False"
+    ],
+    [
+     "4",
+     "True"
+    ],
+    [
+     "5",
+     "True"
+    ],
+    [
+     "6",
+     "True"
+    ],
+    [
+     "7",
+     "True"
+    ],
+    [
+     "8",
+     "True"
+    ],
+    [
+     "9",
+     "True"
+    ],
+    [
+     "10",
+     "True"
+    ],
+    [
+     "11",
+     "False"
+    ],
+    [
+     "12",
+     null
+    ],
+    [
+     "13",
+     null
+    ]
+   ]
+  },
+  {
+   "id": "col_not_like",
+   "sql": "SELECT id, c NOT LIKE p FROM t ORDER BY id",
+   "columns": [
+    "id",
+    "(NOT c LIKE p)"
+   ],
+   "types": [
+    "int",
+    "boolean"
+   ],
+   "rows": [
+    [
+     "1",
+     "False"
+    ],
+    [
+     "2",
+     "False"
+    ],
+    [
+     "3",
+     "False"
+    ],
+    [
+     "4",
+     "True"
+    ],
+    [
+     "5",
+     "False"
+    ],
+    [
+     "6",
+     "True"
+    ],
+    [
+     "7",
+     "False"
+    ],
+    [
+     "8",
+     "False"
+    ],
+    [
+     "9",
+     "False"
+    ],
+    [
+     "10",
+     "False"
+    ],
+    [
+     "11",
+     "True"
+    ],
+    [
+     "12",
+     null
+    ],
+    [
+     "13",
+     null
+    ]
+   ]
+  },
+  {
+   "id": "col_not_ilike",
+   "sql": "SELECT id, c NOT ILIKE p FROM t ORDER BY id",
+   "columns": [
+    "id",
+    "(NOT ilike(c, p))"
+   ],
+   "types": [
+    "int",
+    "boolean"
+   ],
+   "rows": [
+    [
+     "1",
+     "False"
+    ],
+    [
+     "2",
+     "False"
+    ],
+    [
+     "3",
+     "True"
+    ],
+    [
+     "4",
+     "False"
+    ],
+    [
+     "5",
+     "False"
+    ],
+    [
+     "6",
+     "False"
+    ],
+    [
+     "7",
+     "False"
+    ],
+    [
+     "8",
+     "False"
+    ],
+    [
+     "9",
+     "False"
+    ],
+    [
+     "10",
+     "False"
+    ],
+    [
+     "11",
+     "True"
+    ],
+    [
+     "12",
+     null
+    ],
+    [
+     "13",
+     null
+    ]
+   ]
+  },
+  {
+   "id": "col_like_func",
+   "sql": "SELECT id, like(c, p) FROM t ORDER BY id",
+   "columns": [
+    "id",
+    "c LIKE p"
+   ],
+   "types": [
+    "int",
+    "boolean"
+   ],
+   "rows": [
+    [
+     "1",
+     "True"
+    ],
+    [
+     "2",
+     "True"
+    ],
+    [
+     "3",
+     "True"
+    ],
+    [
+     "4",
+     "False"
+    ],
+    [
+     "5",
+     "True"
+    ],
+    [
+     "6",
+     "False"
+    ],
+    [
+     "7",
+     "True"
+    ],
+    [
+     "8",
+     "True"
+    ],
+    [
+     "9",
+     "True"
+    ],
+    [
+     "10",
+     "True"
+    ],
+    [
+     "11",
+     "False"
+    ],
+    [
+     "12",
+     null
+    ],
+    [
+     "13",
+     null
+    ]
+   ]
+  },
+  {
+   "id": "col_ilike_func",
+   "sql": "SELECT id, ilike(c, p) FROM t ORDER BY id",
+   "columns": [
+    "id",
+    "ilike(c, p)"
+   ],
+   "types": [
+    "int",
+    "boolean"
+   ],
+   "rows": [
+    [
+     "1",
+     "True"
+    ],
+    [
+     "2",
+     "True"
+    ],
+    [
+     "3",
+     "False"
+    ],
+    [
+     "4",
+     "True"
+    ],
+    [
+     "5",
+     "True"
+    ],
+    [
+     "6",
+     "True"
+    ],
+    [
+     "7",
+     "True"
+    ],
+    [
+     "8",
+     "True"
+    ],
+    [
+     "9",
+     "True"
+    ],
+    [
+     "10",
+     "True"
+    ],
+    [
+     "11",
+     "False"
+    ],
+    [
+     "12",
+     null
+    ],
+    [
+     "13",
+     null
+    ]
+   ]
+  },
+  {
+   "id": "col_not_paren",
+   "sql": "SELECT id, NOT (c LIKE p) FROM t ORDER BY id",
+   "columns": [
+    "id",
+    "(NOT c LIKE p)"
+   ],
+   "types": [
+    "int",
+    "boolean"
+   ],
+   "rows": [
+    [
+     "1",
+     "False"
+    ],
+    [
+     "2",
+     "False"
+    ],
+    [
+     "3",
+     "False"
+    ],
+    [
+     "4",
+     "True"
+    ],
+    [
+     "5",
+     "False"
+    ],
+    [
+     "6",
+     "True"
+    ],
+    [
+     "7",
+     "False"
+    ],
+    [
+     "8",
+     "False"
+    ],
+    [
+     "9",
+     "False"
+    ],
+    [
+     "10",
+     "False"
+    ],
+    [
+     "11",
+     "True"
+    ],
+    [
+     "12",
+     null
+    ],
+    [
+     "13",
+     null
+    ]
+   ]
+  },
+  {
+   "id": "col_literal_pattern",
+   "sql": "SELECT id, c LIKE '\u03c3%' FROM t ORDER BY id",
+   "columns": [
+    "id",
+    "c LIKE \u03c3%"
+   ],
+   "types": [
+    "int",
+    "boolean"
+   ],
+   "rows": [
+    [
+     "1",
+     "True"
+    ],
+    [
+     "2",
+     "False"
+    ],
+    [
+     "3",
+     "False"
+    ],
+    [
+     "4",
+     "False"
+    ],
+    [
+     "5",
+     "False"
+    ],
+    [
+     "6",
+     "False"
+    ],
+    [
+     "7",
+     "True"
+    ],
+    [
+     "8",
+     "False"
+    ],
+    [
+     "9",
+     "False"
+    ],
+    [
+     "10",
+     "False"
+    ],
+    [
+     "11",
+     "False"
+    ],
+    [
+     "12",
+     null
+    ],
+    [
+     "13",
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "col_literal_pattern_ilike",
+   "sql": "SELECT id, c ILIKE 'S' FROM t ORDER BY id",
+   "columns": [
+    "id",
+    "ilike(c, S)"
+   ],
+   "types": [
+    "int",
+    "boolean"
+   ],
+   "rows": [
+    [
+     "1",
+     "False"
+    ],
+    [
+     "2",
+     "True"
+    ],
+    [
+     "3",
+     "False"
+    ],
+    [
+     "4",
+     "False"
+    ],
+    [
+     "5",
+     "False"
+    ],
+    [
+     "6",
+     "False"
+    ],
+    [
+     "7",
+     "False"
+    ],
+    [
+     "8",
+     "False"
+    ],
+    [
+     "9",
+     "False"
+    ],
+    [
+     "10",
+     "False"
+    ],
+    [
+     "11",
+     "False"
+    ],
+    [
+     "12",
+     null
+    ],
+    [
+     "13",
+     "False"
+    ]
+   ]
+  },
+  {
+   "id": "col_operand_literal",
+   "sql": "SELECT id, '\u0391\u03a3' collate utf8_lcase LIKE p FROM t ORDER BY id",
+   "columns": [
+    "id",
+    "collate(\u0391\u03a3, utf8_lcase) LIKE p"
+   ],
+   "types": [
+    "int",
+    "boolean"
+   ],
+   "rows": [
+    [
+     "1",
+     "False"
+    ],
+    [
+     "2",
+     "False"
+    ],
+    [
+     "3",
+     "False"
+    ],
+    [
+     "4",
+     "False"
+    ],
+    [
+     "5",
+     "False"
+    ],
+    [
+     "6",
+     "False"
+    ],
+    [
+     "7",
+     "False"
+    ],
+    [
+     "8",
+     "False"
+    ],
+    [
+     "9",
+     "False"
+    ],
+    [
+     "10",
+     "False"
+    ],
+    [
+     "11",
+     "False"
+    ],
+    [
+     "12",
+     "False"
+    ],
+    [
+     "13",
+     null
+    ]
+   ]
+  }
+ ]
+}

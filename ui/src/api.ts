@@ -41,6 +41,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export interface Query {
   query_id: string;
+  /** The session the query ran in; only the lists carry it, and a row stored before a restart has none. */
+  session_id?: string | null;
   state: string;
   principal?: string;
   /** What the client of the query's session said it is; a server console only. */
@@ -137,6 +139,53 @@ export interface Health {
   memory: { reserved_bytes: number; peak_bytes: number; limit_bytes: number | null } | null;
   spill_bytes_total: number;
   caches: CacheRow[];
+}
+
+/** One row of `system.sessions`; times are microseconds since the epoch. */
+export interface Session {
+  session_id: string;
+  principal: string;
+  client_user_id?: string | null;
+  client_type?: string | null;
+  transport: string;
+  /** `active`, or how it ended: `closed`, `expired`, `killed`. */
+  state: string;
+  created_at: number;
+  last_active_at: number;
+  closed_at?: number | null;
+  close_reason?: string | null;
+  idle_timeout_ms?: number | null;
+  current_catalog: string;
+  current_namespace: string;
+  tags?: Record<string, string> | null;
+  queries_running: number;
+  queries_started: number;
+  delegated_by?: string | null;
+  /** `false` on the session the console's editor runs in, which the console cannot end. */
+  endable?: boolean | null;
+}
+
+/** One row of `system.resource_groups`; a group's counters include its subgroups'. */
+export interface ResourceGroup {
+  group_id: string;
+  parent_id?: string | null;
+  /** `active`, or `removed` while a group taken out of the configuration still holds queries. */
+  state: string;
+  scheduling_policy: string;
+  scheduling_weight: number;
+  priority: number;
+  workload_class: string;
+  hard_concurrency_limit: number;
+  max_queued: number;
+  soft_memory_limit_bytes?: number | null;
+  per_query_memory_limit_bytes?: number | null;
+  scan_quota_bytes?: number | null;
+  scan_quota_period_s?: number | null;
+  running: number;
+  queued: number;
+  memory_reserved_bytes: number;
+  scan_bytes_in_window?: number | null;
+  scan_window_resets_at?: number | null;
 }
 
 export interface MemoryRow {

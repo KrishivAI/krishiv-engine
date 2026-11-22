@@ -11,6 +11,8 @@ export const ROUTES = [
   "/queries/{id}",
   "/queries/{id}/profile",
   "/history",
+  "/sessions",
+  "/workload",
   "/resources",
   "/catalog",
   "/sql",
