@@ -239,3 +239,33 @@ fn a_write_that_fails_while_it_runs_is_listed_once_with_its_text() {
         [Some("INSERT INTO no_such_table VALUES (1)".to_owned())]
     );
 }
+
+/// A script from the editor: the script's own row (the one a cancel addresses) has the script's text and
+/// class, and each statement the script runs is a row with that statement's own text and class. The read of
+/// the script's result is a run of its own and carries neither.
+#[test]
+fn a_script_is_listed_with_its_text_and_each_statement_with_its_own() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE TABLE zs (a INT) USING parquet")).unwrap();
+    let script = "BEGIN INSERT INTO zs VALUES (1); SELECT a FROM zs; SELECT a + 1 FROM zs; END";
+    let df = block_on(s.sql_with(
+        script,
+        krishiv_session::QueryOptions::new().tags(["ui-run-11"]),
+    ))
+    .unwrap();
+    let mut rows = tagged(&s, "ui-run-11");
+    rows.sort();
+    let listed = vec![
+        Some(format!("{script} | WRITE")),
+        Some("INSERT INTO zs VALUES (1) | WRITE".to_owned()),
+        Some("SELECT a + 1 FROM zs | READ".to_owned()),
+        Some("SELECT a FROM zs | READ".to_owned()),
+    ];
+    assert_eq!(rows, listed);
+    block_on(df.limit(10).collect()).unwrap();
+    let mut rows = tagged(&s, "ui-run-11");
+    rows.sort();
+    let mut with_read = vec![None];
+    with_read.extend(listed);
+    assert_eq!(rows, with_read);
+}

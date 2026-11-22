@@ -766,10 +766,8 @@ impl Session {
     ) -> Result<Admitted, KrishivError> {
         // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
         // A query a command runs for itself (an `INSERT`'s write) has no statement: it is the command's.
-        let command = match env.text {
-            None => super::ran::command_statement(),
-            Some(_) => None,
-        };
+        // A statement of a script is listed under its own text, not the script's (which `env` carries).
+        let command = super::ran::command_statement(env.text.is_some());
         let (text, class) = match &command {
             Some(c) => (Some(&*c.text), Some(c.class)),
             None => (env.text.as_deref(), env.statement_class),

@@ -1990,4 +1990,4 @@ mod definer;
 
 mod ran;
 mod search_path;
-pub(crate) use ran::Ran;
+pub(crate) use ran::{Ran, as_script_statement, command_statement};

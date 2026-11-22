@@ -18,14 +18,17 @@ struct Command {
     listed: std::sync::atomic::AtomicBool,
     /// The statement's slot for the id of the row a query of it began (`sql_ran` adds no refused row then).
     row: Arc<std::sync::Mutex<Option<String>>>,
+    /// A statement of a script. Its queries carry the script's text (the text their error positions
+    /// index), and are listed under the statement's own.
+    of_script: bool,
 }
 
-/// The command a query begun with no text of its own is listed under.
-pub(super) struct Listing {
-    pub(super) text: Arc<str>,
-    pub(super) class: &'static str,
+/// The command a query is listed under.
+pub(crate) struct Listing {
+    pub(crate) text: Arc<str>,
+    pub(crate) class: &'static str,
     /// Where the id of the query's row goes: the query is the statement's listed run.
-    pub(super) row: Arc<std::sync::Mutex<Option<String>>>,
+    pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// `work` under the command the calling task is running, if any: a task the command starts for a query of
@@ -37,18 +40,40 @@ pub(super) fn in_running_command<F: Future>(work: F) -> impl Future<Output = F::
     }
 }
 
-/// The text and class of the command the calling task is running, for a query begun with no text of its own.
-pub(super) fn command_statement() -> Option<Listing> {
+/// The command the calling task is running, for a query begun with no text of its own (`has_text` false) or
+/// begun by a statement of a script.
+pub(crate) fn command_statement(has_text: bool) -> Option<Listing> {
     COMMAND
         .try_with(|c| {
-            c.listed.store(true, Ordering::Relaxed);
-            Listing {
-                text: Arc::clone(&c.text),
-                class: c.class,
-                row: Arc::clone(&c.row),
-            }
+            (!has_text || c.of_script).then(|| {
+                c.listed.store(true, Ordering::Relaxed);
+                Listing {
+                    text: Arc::clone(&c.text),
+                    class: c.class,
+                    row: Arc::clone(&c.row),
+                }
+            })
         })
         .ok()
+        .flatten()
+}
+
+/// `work`, the run of one statement of a script: the queries it runs are listed in `system.queries` under
+/// `text` (the statement's own, redacted) and `class`, not under the script's.
+pub(crate) fn as_script_statement<F: Future>(
+    text: &str,
+    class: &'static str,
+    work: F,
+) -> impl Future<Output = F::Output> {
+    let statement = Arc::new(Command {
+        text: Arc::from(text),
+        class,
+        listed: std::sync::atomic::AtomicBool::new(false),
+        // The statement's own slot: the script's failure is told by the script's row.
+        row: Arc::default(),
+        of_script: true,
+    });
+    COMMAND.scope(statement, work)
 }
 
 /// What [`Session::sql_here_marked`] did with a statement.
@@ -157,6 +182,7 @@ impl Session {
             class: class.name(),
             listed: std::sync::atomic::AtomicBool::new(false),
             row: Arc::clone(&env.row),
+            of_script: false,
         });
         // Boxed, as `sql_here_marked`'s future is: the scope is one more nested future level.
         let run = Box::pin(self.run_statement(statement, env, query, &redacted));

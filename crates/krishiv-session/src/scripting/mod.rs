@@ -483,6 +483,20 @@ impl Run<'_> {
         let env = handle.query_env();
         let class = handle.statement_class(statement, &env);
         handle.authorize_statement(statement, class, &env).await?;
+        // The queries the statement runs are listed under its own text, not the script's.
+        let span = statement.span();
+        let own = self.redacted.fragment(span.start..span.end);
+        let run = self.run_leaf(statement, handle, env);
+        Box::pin(crate::session::as_script_statement(own, class.name(), run)).await
+    }
+
+    /// The run of [`Self::leaf`]'s statement, classified and authorized, on `handle`.
+    async fn run_leaf(
+        &mut self,
+        statement: &Statement,
+        handle: Session,
+        env: crate::session::QueryEnv,
+    ) -> Result<(), KrishivError> {
         // `EXECUTE IMMEDIATE ... INTO` assigns to locals too, which only this interpreter can do.
         if let Statement::ExecuteImmediate(e) = statement
             && !e.into.is_empty()
