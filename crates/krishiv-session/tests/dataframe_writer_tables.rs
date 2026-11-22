@@ -230,6 +230,29 @@ fn a_creation_key_is_not_kept_in_the_files_tables_options() {
     assert_eq!(count(&s, "keyed_files"), 2 * n);
 }
 
+/// E34: the key reaches the file table's own writes, the creating one and an append to the existing
+/// table: repeating either with the same key adds no rows.
+#[test]
+fn an_explicit_key_deduplicates_file_table_saves() {
+    let s = session();
+    let n = count(&s, "people");
+    let keyed = |mode: &str, key: &str| {
+        block_on(
+            s.table("people")
+                .write()
+                .mode(mode)
+                .option("krishiv.write.idempotencyKey", key)
+                .save_as_table("keyed_dedup"),
+        )
+    };
+    keyed("append", "job-1").unwrap();
+    assert_eq!(count(&s, "keyed_dedup"), n);
+    keyed("append", "job-1").unwrap();
+    assert_eq!(count(&s, "keyed_dedup"), n);
+    keyed("append", "job-2").unwrap();
+    assert_eq!(count(&s, "keyed_dedup"), 2 * n);
+}
+
 #[test]
 fn text_writes_one_string_column_and_orc_is_unsupported() {
     let s = session();
