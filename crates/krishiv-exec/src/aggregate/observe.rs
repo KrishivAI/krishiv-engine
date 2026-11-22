@@ -431,7 +431,7 @@ mod tests {
             None,
             spec(schema, vec![agg], AggregateOutput::Partial),
             |states| Ok(spec(states, vec![merging], AggregateOutput::Final)),
-            |results| Project::try_new(results, Vec::new()),
+            |results| Project::try_new(results, vec![crate::operators::ProjectItem::column(0)]),
         )
         .unwrap()
     }
@@ -503,6 +503,23 @@ mod tests {
         let (query, _) = two_splits(Some(both / 2)).unwrap();
         // Both splits' states are the query's (the unlimited run's total), and they merge.
         assert_eq!(query.pool().reserved(), both);
-        assert!(query.observed_each().get("m").unwrap().is_ok());
+        let merged = query
+            .observed_each()
+            .remove("m")
+            .unwrap()
+            .expect("the two partials merge");
+        let list = merged
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::ListArray>()
+            .expect("a list column");
+        let values = list.value(0);
+        let values = values
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("int64 elements");
+        let mut want: Vec<i64> = (0..20_000).collect();
+        want.push(0);
+        assert_eq!(values.values().to_vec(), want);
     }
 }
