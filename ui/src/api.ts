@@ -188,6 +188,27 @@ export interface ResourceGroup {
   scan_window_resets_at?: number | null;
 }
 
+/** One partition-column suggestion for a table (`system.partition_advice`). */
+export interface AdvisedColumn {
+  /** 1 is the table's best suggestion. */
+  rank: number;
+  column_name: string;
+  /** How many of the table's queries filtered on the column by equality. */
+  column_queries: number;
+  /** The column's distinct values: the partitions the table would have. */
+  partitions: number;
+  /** The share of the bytes the table's queries read that partitioning by the column is expected to skip. */
+  pruned_fraction: number;
+}
+
+/** A table the query history has partition advice for; `columns` by rank. */
+export interface TableAdvice {
+  table_name: string;
+  /** The finished queries in the history that read the table. */
+  table_queries: number;
+  columns: AdvisedColumn[];
+}
+
 export interface MemoryRow {
   worker_id?: string;
   path: string;
