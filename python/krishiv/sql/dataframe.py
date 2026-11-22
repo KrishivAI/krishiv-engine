@@ -222,7 +222,7 @@ class DataFrame:
         except ImportError:
             return None
         rows = _eager_max_rows(self._session)
-        table = self.limit(rows)._shown()._arrow()
+        table = self.limit(rows)._shown()._arrow("_repr_html_")
         cells = _convert.table_cells(table, self._session_zone())
         columns = [(name, type_) for name, type_ in self.dtypes]
         return _convert.repr_html_string(columns, cells)
@@ -1974,9 +1974,10 @@ class DataFrame:
             )
         return table
 
-    def _arrow(self) -> Any:
-        """The result as a ``pyarrow.Table``, whatever its types."""
-        pa = _convert.require_pyarrow("toArrow")
+    def _arrow(self, action: str = "toArrow") -> Any:
+        """The result as a ``pyarrow.Table``, whatever its types; ``action`` names the caller in the
+        message when pyarrow is missing."""
+        pa = _convert.require_pyarrow(action)
         stream = self._df.execute()
         stream.use_placeholder_names()
         try:
@@ -1994,7 +1995,7 @@ class DataFrame:
     def toPandas(self) -> Any:
         """The result as a ``pandas.DataFrame``, converted from Arrow (needs pyarrow and pandas). Instants are
         wall-clock times in the session time zone without a zone, as Spark's ``toPandas``."""
-        table = self._arrow()
+        table = self._arrow("toPandas")
         try:
             importlib.import_module("pandas")  # pandas itself is optional: only checked here
         except ImportError as e:
@@ -2004,7 +2005,7 @@ class DataFrame:
     def collect(self) -> list[Row]:
         """All result rows (needs pyarrow). As PySpark's Connect client, it refuses a year-month or calendar interval
         at any depth, by its Arrow type."""
-        table = self._arrow()
+        table = self._arrow("collect")
         for f in table.schema:
             if (name := _convert.not_collectable_arrow(f.type)) is not None:
                 raise PySparkTypeError(
@@ -2039,7 +2040,7 @@ class DataFrame:
         if not isinstance(truncate, bool | int):
             raise not_expected_type("truncate", "bool or int", truncate)
         rows = min(max(n, 0), _SHOW_MAX)  # Spark's bounds: MAX_ROUNDED_ARRAY_LENGTH - 1
-        cells = _convert.table_cells(self.limit(rows + 1)._shown()._arrow(), self._session_zone())
+        cells = _convert.table_cells(self.limit(rows + 1)._shown()._arrow("show"), self._session_zone())
         print(_convert.show_string(self.columns, cells, rows, truncate, vertical), end="")
 
     def _shown(self) -> DataFrame:
