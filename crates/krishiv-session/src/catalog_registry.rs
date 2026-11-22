@@ -269,6 +269,27 @@ pub trait CallerCatalog: fmt::Debug + Send + Sync {
         })
     }
 
+    /// The procedure `name` (lower-case) of the catalog's `system` namespace for `caller`
+    /// (`CALL cat.system.name(..)`, design P3-T027 PR-36e §3); `None` when there is none. The
+    /// default is a catalog without procedures: `MISSING_CATALOG_ABILITY.PROCEDURES`.
+    ///
+    /// # Errors
+    /// The catalog's failure; the default's refusal.
+    fn load_procedure<'a>(
+        &'a self,
+        caller: &'a CatalogCaller,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn krishiv_plan::procedure::Procedure>>, KrishivError>>
+    {
+        let _ = (caller, name);
+        Box::pin(async move {
+            Err(krishiv_common::error::MissingCatalogAbilityProcedures {
+                plugin: "this catalog".to_owned(),
+            }
+            .into())
+        })
+    }
+
     /// `REFRESH TABLE` of `id` for `caller`: drops what the catalog keeps of the table (its
     /// metadata cache entries, for every caller) and moves [`Self::epoch`], so plans and frames
     /// that read it are analyzed again. Whether the table exists. The default keeps nothing and

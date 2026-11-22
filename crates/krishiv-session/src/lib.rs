@@ -49,6 +49,7 @@ mod analyze;
 mod arrow_values;
 pub mod auth;
 mod cache;
+mod call;
 mod cancel;
 mod carrier;
 mod catalog;

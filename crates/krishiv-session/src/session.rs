@@ -601,6 +601,7 @@ impl Session {
                 Box::pin(self.exec_cache(&c, query, &env.identifier_spans)).await
             }
             Statement::Refresh(r) => self.exec_refresh(&r).await,
+            Statement::Call(c) => Box::pin(self.exec_call(&c, query)).await,
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,

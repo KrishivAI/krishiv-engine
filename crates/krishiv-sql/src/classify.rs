@@ -263,9 +263,10 @@ fn class_of(
         // process.
         // cluster-scope: shared caches, process-wide code loading, and the grants and roles
         // that decide every principal's access (P3-T062).
-        Statement::Refresh(_) | Statement::AddResource(_) | Statement::AccessControl(_) => {
-            StatementClass::Admin
-        }
+        Statement::Refresh(_)
+        | Statement::AddResource(_)
+        | Statement::Call(_)
+        | Statement::AccessControl(_) => StatementClass::Admin,
     }
 }
 
@@ -427,6 +428,7 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         | Statement::Analyze(_)
         | Statement::Repair(_)
         | Statement::AddResource(_)
+        | Statement::Call(_)
         | Statement::LoadData(_)
         | Statement::ListResource(_)
         | Statement::AccessControl(_) => Vec::new(),
@@ -782,7 +784,9 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
             }
             RefreshKind::Function { .. } | RefreshKind::Path { .. } => vec![t(O::Cluster, Manage)],
         },
-        Statement::AddResource(_) => vec![t(O::Cluster, Manage)],
+        // A procedure changes tables the engine cannot name from the call (the table is an
+        // argument the procedure resolves), so a call needs the cluster right.
+        Statement::AddResource(_) | Statement::Call(_) => vec![t(O::Cluster, Manage)],
     }
 }
 
