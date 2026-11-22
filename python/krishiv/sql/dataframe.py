@@ -2218,6 +2218,13 @@ class DataFrame:
             else:
                 raise not_expected_type("col", "Column or str", value)
         case_sensitive = _case_sensitive(self._session)
+        names = list(values)
+        for i, n in enumerate(names):
+            if any(_same(n, m, case_sensitive) for m in names[:i]):
+                raise ValueError(
+                    f"[COLUMN_ALREADY_EXISTS] The column `{n}` already exists. "
+                    "Choose another name or rename the existing column."
+                )
         taken: set[str] = set()
         picked: list[Column] = []
         for c in self.columns:

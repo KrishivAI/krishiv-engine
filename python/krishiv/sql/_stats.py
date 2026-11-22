@@ -230,7 +230,11 @@ def approx_quantile(
             )
     if not columns:
         return []
-    accuracy = _INT_MAX if relative_error == 0 else int(min(float(_INT_MAX), math.ceil(1.0 / relative_error)))
+    accuracy = (
+        _INT_MAX
+        if relative_error == 0
+        else int(min(float(_INT_MAX), math.ceil(min(1.0 / relative_error, float(_INT_MAX)))))
+    )
     # One scalar aggregate for each column and probability (the engine takes no array of percentages).
     aggregates = []
     for i, name in enumerate(columns):

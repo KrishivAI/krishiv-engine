@@ -476,4 +476,10 @@ def test_runtime_config_is_modifiable_and_get_all(spark: SparkSession) -> None:
     assert spark.conf.isModifiable("no.such.key") is False
     spark.conf.set("spark.sql.session.timeZone", "Europe/Paris")
     # The engine names the key `krishiv.sql.session.timeZone`.
-    assert "Europe/Paris" in spark.conf.getAll.values()
+    assert spark.conf.getAll["krishiv.sql.session.timeZone"] == "Europe/Paris"
+
+
+def test_with_columns_rejects_resolver_duplicates(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(1,)], "a int")
+    with pytest.raises(ValueError, match="COLUMN_ALREADY_EXISTS"):
+        df.withColumns({"x": F.lit(1), "X": F.lit(2)})

@@ -25,10 +25,6 @@ def test_public_methods_have_docstrings(cls: type) -> None:
 
 
 def test_public_functions_have_docstrings() -> None:
-    names = [
-        n
-        for n, o in inspect.getmembers(F)
-        if not n.startswith("_") and inspect.isfunction(o) and o.__module__ == F.__name__
-    ]
+    names = [n for n, o in inspect.getmembers(F) if not n.startswith("_") and inspect.isfunction(o) and n in F.__all__]
     missing = [n for n in names if not inspect.getdoc(getattr(F, n))]
     assert not missing, f"functions without a docstring: {missing}"
