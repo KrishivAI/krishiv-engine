@@ -33,7 +33,7 @@ from krishiv.sql.observation import Observation, _pyspark_error
 from krishiv.sql.profile_view import ProfileView
 from krishiv.sql.row import Row
 from krishiv.sql.stat import DataFrameStatFunctions
-from krishiv.sql.types import StructType, _struct_from_columns
+from krishiv.sql.types import StructType, _parse_datatype_json_string
 from krishiv.storagelevel import StorageLevel
 
 if TYPE_CHECKING:
@@ -142,7 +142,7 @@ class DataFrame:
     @property
     def schema(self) -> StructType:
         """The result schema, by analysis."""
-        return _struct_from_columns(self._df.schema())
+        return cast(StructType, _parse_datatype_json_string(self._df.schema_json()))
 
     @property
     def columns(self) -> list[str]:

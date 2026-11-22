@@ -685,11 +685,6 @@ def test_create_dataframe_rejects_bad_shapes(spark: SparkSession) -> None:
         spark.createDataFrame([1], schema=["a"])
     with pytest.raises(errors.PySparkTypeError, match="NOT_EXPECTED_TYPE"):
         spark.createDataFrame({"a": 1})
-    with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
-        spark.createDataFrame(
-            [(1,)],
-            T.StructType([T.StructField("a", T.ArrayType(T.IntegerType()), True)]),
-        )
 
 
 def test_create_dataframe_dict_missing_is_null(spark: SparkSession) -> None:

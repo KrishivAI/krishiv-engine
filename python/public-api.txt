@@ -24,6 +24,7 @@ Column.def div(self, other: Column) -> Column
 Column.def drop_fields(self, names: list[str]) -> Column
 Column.def eq(self, other: Column) -> Column
 Column.def eq_null_safe(self, other: Column) -> Column
+Column.def filter_where(self, condition: Column) -> Column | None
 Column.def ge(self, other: Column) -> Column
 Column.def get_field(self, name: str) -> Column
 Column.def gt(self, other: Column) -> Column
@@ -59,6 +60,7 @@ DataFrame.def col(self, name: str) -> Column
 DataFrame.def count(self) -> int
 DataFrame.def create_global_temp_view(self, name: str, replace: bool) -> None
 DataFrame.def create_or_replace_temp_view(self, name: str) -> None
+DataFrame.def cube(self, cols: list[Column]) -> GroupedData
 DataFrame.def distinct(self) -> DataFrame
 DataFrame.def except_all(self, other: DataFrame) -> DataFrame
 DataFrame.def execute(self) -> ArrowStream
@@ -66,6 +68,7 @@ DataFrame.def explain(self, mode: str, json: bool=...) -> str
 DataFrame.def filter(self, condition: Column) -> DataFrame
 DataFrame.def filter_expr(self, condition: str) -> DataFrame
 DataFrame.def group_by(self, cols: list[Column]) -> GroupedData
+DataFrame.def grouping_sets(self, sets: list[list[Column]], cols: list[Column]) -> GroupedData
 DataFrame.def hint(self, name: str, params: list[Column]) -> DataFrame
 DataFrame.def intersect(self, other: DataFrame) -> DataFrame
 DataFrame.def intersect_all(self, other: DataFrame) -> DataFrame
@@ -77,8 +80,10 @@ DataFrame.def observe(self, observation: Observation, metrics: list[Column]) -> 
 DataFrame.def offset(self, n: int) -> DataFrame
 DataFrame.def order_by(self, cols: list[Column]) -> DataFrame
 DataFrame.def persist(self, use_disk: bool, use_memory: bool, use_offheap: bool, deserialized: bool, replication: int) -> DataFrame
+DataFrame.def rollup(self, cols: list[Column]) -> GroupedData
 DataFrame.def sample(self, with_replacement: bool, fraction: float, seed: int) -> DataFrame
 DataFrame.def schema(self) -> list[tuple[str, str, bool]]
+DataFrame.def schema_json(self) -> str
 DataFrame.def select(self, cols: list[Column]) -> DataFrame
 DataFrame.def select_expr(self, exprs: list[str]) -> DataFrame
 DataFrame.def storage_level(self) -> tuple[bool, bool, bool, bool, int]
@@ -1329,6 +1334,7 @@ DataFrame.def approxQuantile(self, col: str | list[str] | tuple[str, ...], proba
 DataFrame.def cache(self) -> DataFrame
 DataFrame.def checkpoint(self, eager: bool=True) -> DataFrame
 DataFrame.def coalesce(self, numPartitions: int) -> DataFrame
+DataFrame.def colRegex(self, colName: str) -> Column
 DataFrame.def collect(self) -> list[Row]
 DataFrame.def corr(self, col1: str, col2: str, method: str | None=None) -> float
 DataFrame.def count(self) -> int
@@ -1336,8 +1342,10 @@ DataFrame.def cov(self, col1: str, col2: str) -> float
 DataFrame.def createGlobalTempView(self, name: str) -> None
 DataFrame.def createOrReplaceGlobalTempView(self, name: str) -> None
 DataFrame.def createOrReplaceTempView(self, name: str) -> None
+DataFrame.def createTempView(self, name: str) -> None
 DataFrame.def crossJoin(self, other: DataFrame) -> DataFrame
 DataFrame.def crosstab(self, col1: str, col2: str) -> DataFrame
+DataFrame.def cube(self, *cols: ColumnsOrNames) -> GroupedData
 DataFrame.def describe(self, *cols: str | list[str]) -> DataFrame
 DataFrame.def distinct(self) -> DataFrame
 DataFrame.def drop(self, *cols: ColumnOrName) -> DataFrame
@@ -1349,12 +1357,17 @@ DataFrame.def explainString(self, extended: bool | str | None=None, mode: str | 
 DataFrame.def fillna(self, value: float | str | bool | dict[str, Any], subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
 DataFrame.def filter(self, condition: Column | str) -> DataFrame
 DataFrame.def first(self) -> Row | None
+DataFrame.def foreach(self, f: Any) -> None
+DataFrame.def foreachPartition(self, f: Any) -> None
 DataFrame.def freqItems(self, cols: list[str] | tuple[str, ...], support: float | None=None) -> DataFrame
 DataFrame.def groupBy(self, *cols: ColumnsOrNames) -> GroupedData
+DataFrame.def groupingSets(self, groupingSets: Sequence[Sequence[ColumnOrName]], *cols: ColumnOrName) -> GroupedData
 DataFrame.def head(self, n: int | None=None) -> Row | list[Row] | None
 DataFrame.def hint(self, name: str, *parameters: Any) -> DataFrame
 DataFrame.def intersect(self, other: DataFrame) -> DataFrame
 DataFrame.def intersectAll(self, other: DataFrame) -> DataFrame
+DataFrame.def isEmpty(self) -> bool
+DataFrame.def isLocal(self) -> bool
 DataFrame.def join(self, other: DataFrame, on: str | list[str] | Column | list[Column] | None=None, how: str | None=None) -> DataFrame
 DataFrame.def limit(self, num: int) -> DataFrame
 DataFrame.def localCheckpoint(self, eager: bool=True, storageLevel: StorageLevel | None=None) -> DataFrame
@@ -1366,12 +1379,15 @@ DataFrame.def persist(self, storageLevel: StorageLevel=StorageLevel.MEMORY_AND_D
 DataFrame.def printSchema(self) -> None
 DataFrame.def profile(self) -> ProfileView
 DataFrame.def repartition(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame
+DataFrame.def repartitionByRange(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame
 DataFrame.def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
+DataFrame.def rollup(self, *cols: ColumnsOrNames) -> GroupedData
 DataFrame.def sample(self, withReplacement: bool | float | None=None, fraction: float | None=None, seed: int | None=None) -> DataFrame
 DataFrame.def sampleBy(self, col: ColumnOrName, fractions: dict[Any, float], seed: int | None=None) -> DataFrame
 DataFrame.def select(self, *cols: ColumnsOrNames) -> DataFrame
 DataFrame.def selectExpr(self, *expr: str | list[str]) -> DataFrame
 DataFrame.def show(self, n: int=20, truncate: bool | int=True, vertical: bool=False) -> None
+DataFrame.def sortWithinPartitions(self, *cols: ColumnOrName, ascending: bool | list[bool]=True) -> DataFrame
 DataFrame.def subtract(self, other: DataFrame) -> DataFrame
 DataFrame.def summary(self, *statistics: str | list[str]) -> DataFrame
 DataFrame.def tail(self, num: int) -> list[Row]
@@ -1389,6 +1405,7 @@ DataFrame.def unpersist(self, blocking: bool=False) -> DataFrame
 DataFrame.def unpivot(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
 DataFrame.def withColumn(self, colName: str, col: Column) -> DataFrame
 DataFrame.def withColumnRenamed(self, existing: str, new: str) -> DataFrame
+DataFrame.def withColumns(self, colsMap: dict[str, Column]) -> DataFrame
 DataFrame.def withColumnsRenamed(self, colsMap: dict[str, str]) -> DataFrame
 DataFrame.def writeTo(self, table: str) -> DataFrameWriterV2
 DataFrame.drop_duplicates
@@ -1658,6 +1675,7 @@ class DataFrameReader()
 class DataFrameWriter()
 class DataFrameWriterV2()
 ## sql/row.py
+Row.def __call__(self, *args: Any) -> Row
 Row.def __contains__(self, item: object) -> bool
 Row.def __getattr__(self, name: str) -> Any
 Row.def __getitem__(self, item: Any) -> Any
@@ -1697,6 +1715,7 @@ SparkSession.@property def conf(self) -> RuntimeConfig
 SparkSession.@property def dataSource(self) -> DataSourceRegistration
 SparkSession.@property def profile(self) -> Profile
 SparkSession.@property def read(self) -> DataFrameReader
+SparkSession.@property def readStream(self) -> Any
 SparkSession.@property def sparkContext(self) -> Any
 SparkSession.@property def udf(self) -> UDFRegistration
 SparkSession.@property def version(self) -> str

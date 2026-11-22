@@ -519,12 +519,7 @@ def test_agg_dict(spark: SparkSession) -> None:
         df.groupBy("name").agg("age")  # ty: ignore[invalid-argument-type]
 
 
-def test_pivot_is_unsupported(df: DataFrame) -> None:
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        df.groupBy("name").pivot("name")
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    with pytest.raises(errors.UnsupportedOperationException):
-        df.groupBy("name").pivot("name", ["Alice"])
+def test_pivot_checks_its_arguments(df: DataFrame) -> None:
     with pytest.raises(errors.PySparkTypeError):
         df.groupBy("name").pivot(1)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError):
@@ -622,10 +617,9 @@ def test_create_verify_schema(spark: SparkSession) -> None:
         spark.createDataFrame(pa.table({"a": [1]}), schema="a int")
 
 
-def test_create_nested_schema_is_engine_unsupported(spark: SparkSession) -> None:
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        spark.createDataFrame([([1, 2],)], T.StructType([T.StructField("a", T.ArrayType(T.IntegerType()))]))
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+def test_create_a_nested_schema_works_and_char_is_engine_unsupported(spark: SparkSession) -> None:
+    df = spark.createDataFrame([([1, 2],)], T.StructType([T.StructField("a", T.ArrayType(T.IntegerType()))]))
+    assert df.dtypes == [("a", "array<int>")]
     with pytest.raises(errors.UnsupportedOperationException):
         spark.createDataFrame([("x",)], "a char(3)")
 

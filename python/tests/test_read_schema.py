@@ -8,6 +8,7 @@ reports every column nullable and puts partition columns last (the goldens in
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -120,3 +121,11 @@ def test_sql_declares_the_columns(spark: SparkSession, path: str) -> None:
     spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW zones ({columns}) USING csv OPTIONS (path '{path}', header 'true')")
     rows = spark.sql("SELECT LocationID FROM zones ORDER BY LocationID").collect()
     assert [r[0] for r in rows] == [1, 2, 10]
+
+
+def test_a_nested_field_name_that_is_not_an_identifier_is_in_the_schema(spark: SparkSession) -> None:
+    """KN-8: ``+1``, ``-1`` (GitHub Archive's reactions) and ``x y`` are field names."""
+    schema = spark.sql("select named_struct('+1', 1, 'ok', 2) s, named_struct('x y', 'a,b:c') t").schema
+    assert [f.name for f in cast(StructType, schema["s"].dataType).fields] == ["+1", "ok"]
+    assert [f.name for f in cast(StructType, schema["t"].dataType).fields] == ["x y"]
+    assert schema["s"].dataType.simpleString() == "struct<+1:int,ok:int>"

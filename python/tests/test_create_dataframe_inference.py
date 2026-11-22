@@ -124,10 +124,9 @@ def test_nested_values_merge_before_the_engine_rejects_them(spark: SparkSession)
     with pytest.raises(errors.PySparkTypeError) as bad:
         spark.createDataFrame([(Row(a=1),), (Row(a="x"),)])
     assert bad.value.getCondition() == "CANNOT_MERGE_TYPE"
-    # Merged, the type is the engine's to hold: it has no array type yet.
-    with pytest.raises(errors.UnsupportedOperationException) as unsupported:
-        spark.createDataFrame([([1, 2],), ([],), ([3],)])
-    assert "array<bigint>" in str(unsupported.value)
+    # Merged, the arrays are one array<bigint> column (PY-019).
+    merged = spark.createDataFrame([([1, 2],), ([],), ([3],)])
+    assert merged.dtypes == [("_1", "array<bigint>")]
 
 
 def test_values_without_a_spark_type_are_unsupported(spark: SparkSession) -> None:
@@ -256,3 +255,33 @@ def test_create_dataframe_honors_timestamp_ntz() -> None:
     spark = SparkSession.builder.config("spark.sql.timestampType", "TIMESTAMP_NTZ").create()
     df = spark.createDataFrame([(datetime.datetime(2024, 1, 2, 3, 4, 5),)])
     assert df.dtypes == [("_1", "timestamp_ntz")]
+
+
+def test_py019_py024_array_map_and_struct_columns(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(1, "a", [1, 2])], ["id", "s", "arr"])
+    assert df.dtypes == [("id", "bigint"), ("s", "string"), ("arr", "array<bigint>")]
+    assert [tuple(r) for r in df.collect()] == [(1, "a", [1, 2])]
+
+    typed = spark.createDataFrame(
+        [(1, {"k": 2}, (3, "z"), [(1, "p")]), (2, None, None, None)],
+        "a int, m map<string,int>, s struct<x:int,y:string>, l array<struct<n:int,t:string>>",
+    )
+    assert typed.dtypes == [
+        ("a", "int"),
+        ("m", "map<string,int>"),
+        ("s", "struct<x:int,y:string>"),
+        ("l", "array<struct<n:int,t:string>>"),
+    ]
+    rows = typed.orderBy("a").collect()
+    assert rows[0]["m"] == {"k": 2}
+    assert rows[0]["s"]["y"] == "z"
+    assert rows[0]["l"][0]["t"] == "p"
+    assert rows[1]["m"] is None
+    assert rows[1]["s"] is None
+
+
+def test_a_nested_timestamp_keeps_its_instant(spark: SparkSession) -> None:
+    ts = datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
+    df = spark.createDataFrame([([ts],)], "t array<timestamp>")
+    # collect gives a naive datetime in the process's local zone, as PySpark does
+    assert df.collect()[0]["t"] == [ts.astimezone().replace(tzinfo=None)]

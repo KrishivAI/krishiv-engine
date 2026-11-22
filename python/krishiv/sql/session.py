@@ -524,6 +524,7 @@ def _is_pandas(data: Any) -> bool:
 def _pa_type(data_type: DataType, pa: Any) -> Any:
     """The Arrow type holding ``data_type`` values when ``createDataFrame`` converts rows."""
     from krishiv.sql.types import (
+        ArrayType,
         BinaryType,
         BooleanType,
         ByteType,
@@ -533,9 +534,11 @@ def _pa_type(data_type: DataType, pa: Any) -> Any:
         FloatType,
         IntegerType,
         LongType,
+        MapType,
         NullType,
         ShortType,
         StringType,
+        StructType,
         TimestampNTZType,
         TimestampType,
     )
@@ -570,6 +573,15 @@ def _pa_type(data_type: DataType, pa: Any) -> Any:
         return pa.timestamp("us", tz="UTC")
     if isinstance(data_type, TimestampNTZType):
         return pa.timestamp("us")
+    if isinstance(data_type, ArrayType):
+        return pa.list_(pa.field("element", _pa_type(data_type.elementType, pa), nullable=data_type.containsNull))
+    if isinstance(data_type, MapType):
+        return pa.map_(
+            pa.field("key", _pa_type(data_type.keyType, pa), nullable=False),
+            pa.field("value", _pa_type(data_type.valueType, pa), nullable=data_type.valueContainsNull),
+        )
+    if isinstance(data_type, StructType):
+        return pa.struct([pa.field(f.name, _pa_type(f.dataType, pa), nullable=f.nullable) for f in data_type.fields])
     raise unsupported_feature(f"createDataFrame with {data_type.simpleString()} columns")
 
 
@@ -610,8 +622,21 @@ def _cell(value: Any, data_type: DataType, session: SparkSession) -> Any:
     ``timestamp`` column is read in the Python process's local time zone, as
     PySpark reads it."""
     from krishiv.sql import _convert
-    from krishiv.sql.types import TimestampNTZType, TimestampType
+    from krishiv.sql.types import ArrayType, MapType, StructType, TimestampNTZType, TimestampType
 
+    if value is None:
+        return None
+    if isinstance(data_type, ArrayType):
+        return [_cell(v, data_type.elementType, session) for v in value]
+    if isinstance(data_type, MapType):
+        return [
+            (_cell(k, data_type.keyType, session), _cell(v, data_type.valueType, session)) for k, v in value.items()
+        ]
+    if isinstance(data_type, StructType):
+        names = [f.name for f in data_type.fields]
+        # a dict by name; a tuple, a list or a Row by position
+        items = [value.get(n) for n in names] if isinstance(value, dict) else list(value)
+        return {f.name: _cell(v, f.dataType, session) for f, v in zip(data_type.fields, items, strict=False)}
     if isinstance(value, datetime.datetime):
         if isinstance(data_type, TimestampType):
             if value.tzinfo is None:

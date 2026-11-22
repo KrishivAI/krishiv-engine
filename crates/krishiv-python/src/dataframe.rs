@@ -661,6 +661,26 @@ impl PyDataFrame {
             })
             .collect()
     }
+
+    /// The result schema as Spark's `StructType.json` text, which names nested fields without a type-string
+    /// parse (a field may be called `+1` or `x y`).
+    fn schema_json(&self, py: Python<'_>) -> PyResult<String> {
+        let df = self.inner.clone();
+        let schema = block_on(py, async move { df.schema_boxed().await })?;
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|f| {
+                let data_type = DataType::from_arrow_field(f).map_err(|e| to_py(py, &e))?;
+                Ok(krishiv_types::StructField::new(
+                    f.name().clone(),
+                    data_type,
+                    f.is_nullable(),
+                ))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(DataType::Struct(krishiv_types::StructType::new(fields)).json())
+    }
 }
 
 /// A DataFrame grouped by key columns.
