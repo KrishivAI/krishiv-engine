@@ -111,6 +111,10 @@ def dump_golden(doc: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _stable(text: str) -> str:
+    return re.sub(r"ExprId\(\d+,[0-9a-f-]+\)", "ExprId(N,<uuid>)", text)
+
+
 def _error(e: Any, phase: str) -> dict:
     import warnings
 
@@ -118,7 +122,8 @@ def _error(e: Any, phase: str) -> dict:
     rec["python_mro"] = [c.__qualname__ for c in type(e).__mro__ if c.__module__.startswith("pyspark")]
     full = e.getMessage() if hasattr(e, "getMessage") else str(e)
     head, sep, stack = full.partition(STACK_MARK)
-    rec["message"] = head
+    # A JVM's expression ids carry a per-run UUID: masked (number and UUID) so that two runs agree.
+    rec["message"] = _stable(head)
     rec["has_jvm_stacktrace"] = bool(sep)
     rec["jvm_class"] = stack.split("\n", 1)[0] if sep else None
     rec["str_equals_get_message"] = str(e) == full
@@ -192,6 +197,9 @@ def client(version: str, port: int) -> None:
                 rec["outcome"] = {}
             else:
                 raise SystemExit(f"{name}: api steps are not supported in Connect mode")
+            if step.get("setup") and rec["outcome"].get("error"):
+                # A failed setup step leaves the probes without their data: abort this release's capture.
+                raise SystemExit(f"{version}: setup step of {name} failed: {rec['outcome']['error']}")
             steps.append(rec)
         results.append(
             {
@@ -251,7 +259,7 @@ def _vs_classic(conn: dict, classic: dict | None) -> dict | None:
         "parameters_same": conn.get("parameters") == classic.get("parameters"),
         "message_same": cm == msg,
         "message_same_modulo_expr_ids": _mask(cm) == _mask(msg),
-        "classic_message": msg,
+        "classic_message": None if msg is None else _stable(msg),
     }
 
 

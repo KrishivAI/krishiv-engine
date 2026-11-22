@@ -1428,10 +1428,40 @@ def read_cases() -> None:
     case(
         "read_ansi_cast_in_dimension",
         "read",
-        "coverage: ANSI, whitespace in casts",
+        "coverage: ANSI, a malformed cast input",
         [
             sql("CREATE TABLE c (s STRING) USING parquet", True),
-            sql("INSERT INTO c VALUES (' 12 '), ('x'), (NULL), ('\\u00a012')", True),
+            sql("INSERT INTO c VALUES ('x'), (NULL)", True),
+            mv(yaml(source="c", dims=[("v", "CAST(s AS INT)")], meas=[("n", "count(1)")])),
+            conf("spark.sql.ansi.enabled", "false"),
+            sql("SELECT v, measure(n) FROM mv GROUP BY v ORDER BY v NULLS FIRST"),
+            conf("spark.sql.ansi.enabled", "true"),
+            sql("SELECT v, measure(n) FROM mv GROUP BY v ORDER BY v NULLS FIRST"),
+        ],
+        tables=False,
+    )
+    case(
+        "read_ansi_cast_ascii_space_in_dimension",
+        "read",
+        "coverage: ANSI, ASCII whitespace in casts",
+        [
+            sql("CREATE TABLE c (s STRING) USING parquet", True),
+            sql("INSERT INTO c VALUES (' 12 '), (NULL)", True),
+            mv(yaml(source="c", dims=[("v", "CAST(s AS INT)")], meas=[("n", "count(1)")])),
+            conf("spark.sql.ansi.enabled", "false"),
+            sql("SELECT v, measure(n) FROM mv GROUP BY v ORDER BY v NULLS FIRST"),
+            conf("spark.sql.ansi.enabled", "true"),
+            sql("SELECT v, measure(n) FROM mv GROUP BY v ORDER BY v NULLS FIRST"),
+        ],
+        tables=False,
+    )
+    case(
+        "read_ansi_cast_nbsp_in_dimension",
+        "read",
+        "coverage: ANSI, a no-break space in casts",
+        [
+            sql("CREATE TABLE c (s STRING) USING parquet", True),
+            sql("INSERT INTO c VALUES ('\\u00a012'), (NULL)", True),
             mv(yaml(source="c", dims=[("v", "CAST(s AS INT)")], meas=[("n", "count(1)")])),
             conf("spark.sql.ansi.enabled", "false"),
             sql("SELECT v, measure(n) FROM mv GROUP BY v ORDER BY v NULLS FIRST"),
@@ -1585,7 +1615,28 @@ def _schema(st: Any) -> list:
     return out
 
 
+# A JVM's expression ids carry a per-run UUID (`ExprId(6358,a946f8fa-...)`): masked so that two runs agree.
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_EXPR_ID = re.compile(r"ExprId\(\d+,")
+
+
+def _stable(text: Any) -> Any:
+    if not isinstance(text, str):
+        return text
+    return _EXPR_ID.sub("ExprId(N,", _UUID.sub("<uuid>", text))
+
+
 def _error(spark: Any, e: BaseException, phase: str) -> dict:
+    rec = _error_raw(spark, e, phase)
+    for k in ("message", "pyspark_conversion_error"):
+        if k in rec:
+            rec[k] = _stable(rec[k])
+    for c in rec.get("causes", []):
+        c["message"] = _stable(c["message"])
+    return rec
+
+
+def _error_raw(spark: Any, e: BaseException, phase: str) -> dict:
     jt = getattr(e, "_origin", None) or getattr(e, "java_exception", None)
     if jt is None and e.__context__ is not None and getattr(e.__context__, "java_exception", None) is not None:
         # PySpark failed while converting the JVM error; the Py4J error it was handling holds the JVM throwable.
@@ -1642,6 +1693,8 @@ def _normalize_rows(text: str, rows: list) -> list:
         rows = _sub_all(rows, r"(Created Time|Last Access): [^\n]*", r"\1: <normalized>")
     if up.startswith("EXPLAIN"):
         rows = _sub_all(_sub_all(rows, r"#\d+L?", "#N"), r"plan_id=\d+", "plan_id=N")
+        # The local warehouse root: no local path in a fixture; the table path below it stays.
+        rows = _sub_all(rows, "file:" + re.escape(SPARK_CONF["spark.sql.warehouse.dir"]), "file:<warehouse>")
     return rows
 
 
@@ -1750,6 +1803,9 @@ def probe(version: str, gate_only: bool) -> None:
             else:
                 rec["outcome"] = _run_api(s, step["op"], step["args"])
             rec["match"] = _match(rec["outcome"])
+            if step.get("setup") and rec["outcome"].get("error"):
+                # A failed setup step leaves the probes without their data: abort this release's capture.
+                raise SystemExit(f"{version}: setup step of {c['name']} failed: {rec['outcome']['error']}")
             steps.append(rec)
         results.append(
             {
