@@ -324,7 +324,11 @@ fn map_variable_error_attaches_contexts() {
             .collect(),
         span: Span::new(28, 32),
     };
-    let e = unresolved_variable(&name(&["builtin", "var1"]), RESOLVE_SEARCH_PATH, &text);
+    let e = unresolved_variable(
+        &name(&["builtin", "var1"]),
+        "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]",
+        &text,
+    );
     assert_eq!(e.error_class(), ErrorClass::UnresolvedVariable);
     assert_eq!(
         e.query_contexts(),

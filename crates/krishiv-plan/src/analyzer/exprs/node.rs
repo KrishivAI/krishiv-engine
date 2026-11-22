@@ -75,6 +75,8 @@ impl Resolver<'_> {
                 kind: TypedLiteralKind::Time,
                 value,
             } => {
+                // Spark evaluates a `TIME '..'` literal with the gate off too (4.2.0 probe); the
+                // functions that take one refuse it (`unexecutable`).
                 let (cast, shown, precision) = self.time_literal(e, value)?;
                 Bound {
                     expr: cast,
@@ -1611,7 +1613,12 @@ impl Resolver<'_> {
                 }
                 bound
             }
-            ExprNode::Cast { to, mode, .. } => {
+            ExprNode::Cast {
+                expr: inner,
+                to,
+                mode,
+            } => {
+                let from_literal = is_time_literal_cast(inner, to, *mode);
                 let mode = match mode {
                     CastMode::Default if self.ctx.conf.ansi => CastMode::Ansi,
                     CastMode::Default => CastMode::Legacy,
@@ -1620,7 +1627,9 @@ impl Resolver<'_> {
                 // Spark's parser rejects the `TIME` type before any cast
                 // is checked (`spark.sql.timeType.enabled` is false by
                 // default; TIME cannot be evaluated here either way).
-                if !self.ctx.conf.time_type && to.any_type(&|t| matches!(t, DataType::Time { .. }))
+                if !self.ctx.conf.time_type
+                    && !from_literal
+                    && to.any_type(&|t| matches!(t, DataType::Time { .. }))
                 {
                     return Err(AnalysisError::new(
                         krishiv_common::error::UnsupportedTimeType {},

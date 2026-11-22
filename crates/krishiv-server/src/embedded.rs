@@ -74,13 +74,7 @@ impl EmbeddedSource {
 
     /// The ids of the session's own queries.
     async fn own_ids(&self) -> Result<HashSet<String>, UiError> {
-        Ok(self
-            .own_queries()
-            .await?
-            .iter()
-            .filter_map(|r| r.get("query_id").and_then(Value::as_str))
-            .map(str::to_owned)
-            .collect())
+        self.inner.query_ids_of(self.session.id()).await
     }
 }
 
@@ -121,6 +115,15 @@ impl UiSource for EmbeddedSource {
                     Ok(rows)
                 }
                 SystemTable::Caches => self.inner.rows(table).await,
+                // The one session the console shows.
+                SystemTable::Sessions => {
+                    let id = self.session.id();
+                    let mut rows = self.inner.rows(table).await?;
+                    rows.retain(|r| r.get("session_id").and_then(Value::as_str) == Some(id));
+                    Ok(rows)
+                }
+                // The groups are a server's, and the advice is folded from every session's queries.
+                SystemTable::ResourceGroups | SystemTable::PartitionAdvice => Ok(Vec::new()),
             }
         })
     }
@@ -142,6 +145,20 @@ impl UiSource for EmbeddedSource {
                 return Ok(false);
             };
             Ok(self.session.cancel(&id))
+        })
+    }
+
+    fn cancel_in_session<'a>(
+        &'a self,
+        query_id: &'a str,
+        session_id: &'a str,
+    ) -> UiFuture<'a, bool> {
+        Box::pin(async move {
+            // The console's one session; a query of any other is not its to end.
+            if session_id != self.session.id() {
+                return Ok(false);
+            }
+            self.cancel(query_id).await
         })
     }
 

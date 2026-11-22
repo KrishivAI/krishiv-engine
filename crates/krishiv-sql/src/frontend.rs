@@ -49,6 +49,7 @@ impl SqlFrontend for Frontend {
             o.having_without_group_by_as_where,
             o.spark_4_3,
             o.timestamp_nanos_types,
+            o.time_travel_at_syntax,
         ]
         .iter()
         .fold(0, |acc, b| acc << 1 | u64::from(*b));

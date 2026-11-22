@@ -17,8 +17,8 @@ Delete(
                 span: 12..13,
             },
         ),
-        alias: None,
         options: [],
+        alias: None,
         where_clause: Some(
             Expr {
                 kind: Binary(
@@ -63,8 +63,8 @@ Delete(
                 span: 12..13,
             },
         ),
-        alias: None,
         options: [],
+        alias: None,
         where_clause: None,
         span: 0..13,
     },
@@ -99,8 +99,8 @@ Delete(
                 span: 12..35,
             },
         ),
-        alias: None,
         options: [],
+        alias: None,
         where_clause: Some(
             Expr {
                 kind: Binary(
@@ -145,8 +145,8 @@ Update(
                 span: 7..8,
             },
         ),
-        alias: None,
         options: [],
+        alias: None,
         assignments: [
             UpdateAssignment {
                 target: ObjectName {
@@ -190,8 +190,8 @@ Update(
                 span: 7..8,
             },
         ),
-        alias: None,
         options: [],
+        alias: None,
         assignments: [
             UpdateAssignment {
                 target: ObjectName {
@@ -303,6 +303,7 @@ Update(
                 span: 7..8,
             },
         ),
+        options: [],
         alias: Some(
             Ident {
                 value: "x",
@@ -310,7 +311,6 @@ Update(
                 span: 12..13,
             },
         ),
-        options: [],
         assignments: [
             UpdateAssignment {
                 target: ObjectName {
@@ -359,6 +359,7 @@ Update(
                 span: 7..8,
             },
         ),
+        options: [],
         alias: Some(
             Ident {
                 value: "x",
@@ -366,7 +367,6 @@ Update(
                 span: 9..10,
             },
         ),
-        options: [],
         assignments: [
             UpdateAssignment {
                 target: ObjectName {
@@ -430,8 +430,8 @@ Update(
                 span: 7..30,
             },
         ),
-        alias: None,
         options: [],
+        alias: None,
         assignments: [
             UpdateAssignment {
                 target: ObjectName {
@@ -475,6 +475,7 @@ Merge(
                 span: 11..12,
             },
         ),
+        options: [],
         target_alias: Some(
             Ident {
                 value: "x",
@@ -482,7 +483,6 @@ Merge(
                 span: 16..17,
             },
         ),
-        target_options: [],
         source: Table {
             name: Parts(
                 ObjectName {
@@ -597,8 +597,8 @@ Merge(
                 span: 11..12,
             },
         ),
+        options: [],
         target_alias: None,
-        target_options: [],
         source: Table {
             name: Parts(
                 ObjectName {
@@ -682,8 +682,8 @@ Merge(
                 span: 11..12,
             },
         ),
+        options: [],
         target_alias: None,
-        target_options: [],
         source: Query {
             query: Query {
                 with: None,
@@ -858,8 +858,8 @@ Merge(
                 span: 11..12,
             },
         ),
+        options: [],
         target_alias: None,
-        target_options: [],
         source: Table {
             name: Parts(
                 ObjectName {
@@ -1022,8 +1022,8 @@ Merge(
                 span: 11..12,
             },
         ),
+        options: [],
         target_alias: None,
-        target_options: [],
         source: Table {
             name: Parts(
                 ObjectName {
@@ -1147,6 +1147,7 @@ Merge(
                 span: 11..34,
             },
         ),
+        options: [],
         target_alias: Some(
             Ident {
                 value: "t",
@@ -1154,7 +1155,6 @@ Merge(
                 span: 38..39,
             },
         ),
-        target_options: [],
         source: Table {
             name: Dynamic(
                 DynamicName {

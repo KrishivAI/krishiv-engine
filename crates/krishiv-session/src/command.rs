@@ -46,7 +46,7 @@ use krishiv_types::DataType;
 
 use crate::analyze::command_schema as cols;
 pub(crate) use crate::arrow_values::{arrow_field_value, arrow_value, declared_value};
-use crate::catalog::{CATALOG, NAMESPACE, TempTable};
+use crate::catalog::TempTable;
 use crate::catalog::{is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::dataframe::DataFrame;
@@ -54,8 +54,7 @@ use crate::session::{QueryEnv, Session};
 use crate::sql_functions::Entry;
 use crate::store::{CatalogStore, StoredFunction};
 use crate::variables::{
-    DECLARE_SEARCH_PATH, RESOLVE_SEARCH_PATH, StoredVariable, quote_name, quote_normalized,
-    variable_key,
+    DECLARE_SEARCH_PATH, StoredVariable, quote_name, quote_normalized, variable_key,
 };
 
 /// What `SET key` shows for a key with no value, as in Spark.
@@ -278,7 +277,7 @@ impl Session {
             .into());
         }
         let plan = krishiv_sql::lower_identified(&v.query, self.next_source_id(), false, ids)
-            .map_err(|e| self.lowering_error(e, &env))?;
+            .map_err(|e| e.error)?;
         crate::catalog::check_view_cycle(
             &self.state.catalog,
             &key,
@@ -287,7 +286,9 @@ impl Session {
         )?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let case_sensitive = env.analysis.conf.case_sensitive;
-        let analysis = df.analyzed_in(env).await?;
+        let analysis = df.analyzed_in(env.clone()).await?;
+        env.catalog
+            .check_reference_options(analysis.analyzed.plan.root())?;
         let output: Vec<String> =
             crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?
                 .output
@@ -462,7 +463,7 @@ impl Session {
                 if let Some(key) = self.cache_key(&parts)? {
                     self.uncache_table(&key);
                 } else if !if_exists {
-                    return Err(table_not_found(&parts));
+                    return Err(table_not_found(&parts, self.search_path()));
                 }
             }
             CacheKind::Cache {
@@ -483,7 +484,7 @@ impl Session {
                 // `CACHE TABLE t AS query` first makes the temporary view `t`.
                 if let Some(q) = query {
                     let [view] = parts.as_slice() else {
-                        return Err(table_not_found(&parts));
+                        return Err(table_not_found(&parts, self.search_path()));
                     };
                     let body = original.get(q.span.start..q.span.end).unwrap_or_default();
                     let prefix = format!("CREATE TEMPORARY VIEW `{}` AS ", view.replace('`', "``"));
@@ -557,12 +558,12 @@ impl Session {
                         name: parts[parts.len() - 1].clone(),
                     };
                     if !built.refresh(&caller, &id).await? {
-                        return Err(table_not_found(&parts));
+                        return Err(table_not_found(&parts, self.search_path()));
                     }
                     return self.empty_frame().await;
                 }
                 let Some(key) = self.cache_key(&parts)? else {
-                    return Err(table_not_found(&parts));
+                    return Err(table_not_found(&parts, self.search_path()));
                 };
                 self.refresh_table(&key);
             }
@@ -687,7 +688,7 @@ impl Session {
                 let mut keys = Vec::with_capacity(assignments.len());
                 for a in assignments {
                     let Some(key) = variable_key(&a.name) else {
-                        return Err(unresolved_variable(&a.name, RESOLVE_SEARCH_PATH, text));
+                        return Err(unresolved_variable(&a.name, &self.search_path(), text));
                     };
                     keys.push(key);
                 }
@@ -750,7 +751,7 @@ impl Session {
                 let mut keys = Vec::with_capacity(targets.len());
                 for name in targets {
                     let Some(key) = variable_key(name) else {
-                        return Err(unresolved_variable(name, RESOLVE_SEARCH_PATH, text));
+                        return Err(unresolved_variable(name, &self.search_path(), text));
                     };
                     keys.push(key);
                 }
@@ -880,7 +881,7 @@ impl Session {
         text: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
         let Some(key) = variable_key(&v.name) else {
-            return Err(unresolved_variable(&v.name, RESOLVE_SEARCH_PATH, text));
+            return Err(unresolved_variable(&v.name, &self.search_path(), text));
         };
         if self.state.variables.remove(&key).is_none() && !v.if_exists {
             return Err(VariableNotFound {
@@ -1116,7 +1117,7 @@ impl Session {
                 .into());
             }
         }
-        let lower_err = |e: krishiv_sql::ParseError| self.lowering_error(e, &self.query_env());
+        let lower_err = |e: krishiv_sql::ParseError| e.error;
         let mut out_params = Vec::with_capacity(params.len());
         for (n, p) in &params {
             let default = match &p.default {
@@ -1555,9 +1556,6 @@ impl Session {
         s: &krishiv_sql::ast::Show,
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
-        if s.as_json {
-            return self.exec_show_json(s, original).await;
-        }
         match &s.kind {
             krishiv_sql::ast::ShowKind::CurrentNamespace { .. } => {
                 // `system` (and a declared catalog) has no namespace here: after `USE system` the
@@ -1652,10 +1650,10 @@ fn ddl_table_parts(name: &DdlName) -> Option<Vec<String>> {
 }
 
 /// `TABLE_OR_VIEW_NOT_FOUND` quoting the whole multipart name, as Spark does.
-fn table_not_found(parts: &[String]) -> KrishivError {
+fn table_not_found(parts: &[String], search_path: String) -> KrishivError {
     TableOrViewNotFound {
         relation_name: parts.iter().map(|p| quote(p)).collect::<Vec<_>>().join("."),
-        search_path: search_path(),
+        search_path,
     }
     .into()
 }
@@ -1673,11 +1671,6 @@ fn list(names: &[String]) -> String {
 /// (`check_column_name_duplication`).
 fn unique_view_columns(columns: &[TableColumn], case_sensitive: bool) -> Result<(), KrishivError> {
     check_column_name_duplication(columns.iter().map(|c| c.name.as_str()), case_sensitive)
-}
-
-/// Spark's search path, as analysis reports it for a missing table.
-fn search_path() -> String {
-    format!("[`system`.`builtin`, `system`.`session`, `{CATALOG}`.`{NAMESPACE}`]")
 }
 
 /// `name` on `search_path`, which it is not shaped like, as Spark reports

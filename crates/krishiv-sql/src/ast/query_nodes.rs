@@ -889,10 +889,22 @@ pub struct TemporalClause {
     pub kind: TemporalKind,
     /// The version (an integer or string literal) or timestamp.
     pub value: Expr,
-    /// Written as the `@v1` / `@20240101000000000` suffix of the table name (Spark 4.3), not a clause.
-    pub at_suffix: bool,
     /// Source text.
     pub span: Span,
+    /// A fact Spark's `AstBuilder` checks after the whole statement parsed; `validate` raises it.
+    pub fault: Option<TemporalFault>,
+}
+
+/// What is wrong with a [`TemporalClause`], raised after syntax parsing (as Spark's `AstBuilder` does).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TemporalFault {
+    /// The `@` suffix with `spark.sql.timeTravel.atSyntax.enabled` off; the span is name and suffix.
+    AtSyntaxDisabled(Span),
+    /// An `@` timestamp that is not `yyyyMMddHHmmssSSS`: the digits written, and name and suffix.
+    InvalidAtTimestamp(String, Span),
+    /// A second time travel specification beside the suffix: the span of the clause.
+    Multiple(Span),
 }
 
 /// A table option, `key [=] value`. Keys and values keep their spans, so

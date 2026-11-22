@@ -76,10 +76,6 @@ pub fn check_temporary_function_name(
     parser::check_temporary_function_name(name, span)
 }
 
-/// The `feature` of the `KRISHIV_UNSUPPORTED_FEATURE` the lowerer raises for time travel, at the relation's name:
-/// the session recognises it to name Spark's error from the resolved relation.
-pub const TIME_TRAVEL_FEATURE: &str = "time travel";
-
 /// The deepest tree the parser builds, counted in nested expressions,
 /// queries and relations; deeper statements fail with
 /// `FAILED_TO_PARSE_TOO_COMPLEX` at the span of the whole statement (Spark's
@@ -156,6 +152,9 @@ pub struct ParserOptions {
     /// nanosecond timestamp types when on; Krishiv has none yet, so under [`Self::spark_4_3`]
     /// a nanosecond type is `KRISHIV_UNSUPPORTED_FEATURE` instead of `FEATURE_NOT_ENABLED`.
     pub timestamp_nanos_types: bool,
+    /// `spark.sql.timeTravel.atSyntax.enabled` (on by default): a table name may carry an `@v123` or
+    /// `@yyyyMMddHHmmssSSS` time travel suffix.
+    pub time_travel_at_syntax: bool,
 }
 
 impl Default for ParserOptions {
@@ -206,6 +205,7 @@ impl ParserOptions {
             schema_level_collations: on("spark.sql.collation.schemaLevel.enabled", false),
             spark_4_3: true,
             timestamp_nanos_types: on("spark.sql.timestampNanosTypes.enabled", false),
+            time_travel_at_syntax: on("spark.sql.timeTravel.atSyntax.enabled", true),
         }
     }
 }

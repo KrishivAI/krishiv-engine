@@ -749,7 +749,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "filters":[],
 "warnings":[]}
 
--- AlterTable::AlterColumn: ALTER TABLE t ALTER COLUMN a SET NOT NULL
+-- AlterTable::CommentOnColumns: COMMENT ON COLUMN t.a IS 'c'
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"DDL",
 "explain":null,
@@ -761,13 +761,13 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "filters":[],
 "warnings":[]}
 
--- AlterTable::AlterColumn: COMMENT ON COLUMN d.t.a IS NULL
+-- AlterTable::AlterColumn: ALTER TABLE t ALTER COLUMN a SET NOT NULL
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"DDL",
 "explain":null,
 "partial":false,
-"securables":[{"kind":"table","name":["spark_catalog","d","t"],"display":"table `spark_catalog`.`d`.`t`","privilege":"DROP","columns":[]},
-  {"kind":"namespace","name":["spark_catalog","d"],"display":"namespace `spark_catalog`.`d`","privilege":"CREATE","columns":[]}],
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
 "output_schema":[],
 "lineage":[],
 "filters":[],
@@ -1180,7 +1180,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"BROWSE","columns":[]}],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"function","type":"string","type_json":"\"string\"","nullable":false,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -1261,7 +1261,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"function_desc","type":"string","type_json":"\"string\"","nullable":false,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}

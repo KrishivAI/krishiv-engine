@@ -597,31 +597,19 @@ impl Lowerer {
                 temporal,
                 options,
             } => {
-                if temporal.is_some() {
-                    let parts: Vec<String> = name.parts.iter().map(|p| p.value.clone()).collect();
-                    // A CTE name is Spark's `TIME_TRAVEL` error as written (`CTESubstitution`).
-                    if let [only] = &parts[..]
-                        && self.ctes.iter().any(|c| {
-                            if self.case_sensitive {
-                                c == only
-                            } else {
-                                c.eq_ignore_ascii_case(only)
-                            }
-                        })
-                    {
-                        let relation_id = format!("`{}`", only.replace('`', "``"));
-                        return Err(err(
-                            krishiv_common::error::UnsupportedFeatureTimeTravel { relation_id },
-                            name.span,
-                        ));
-                    }
-                    // Any other relation: the session resolves it to name Spark's error
-                    // (`time_travel_error`) from the parts.
-                    let mut e = unsupported(crate::TIME_TRAVEL_FEATURE, name.span);
-                    e.relation = Some(parts);
-                    return Err(e);
-                }
                 let mut opts = BTreeMap::new();
+                if let Some(t) = temporal {
+                    // No table reads an older version yet. Spark raises the error where the
+                    // relation resolves (a missing table is `TABLE_OR_VIEW_NOT_FOUND` first), so
+                    // the clause rides on the read for the session to refuse then.
+                    opts.insert(
+                        krishiv_plan::TIME_TRAVEL_OPTION.to_owned(),
+                        OptionValue::from_user(
+                            krishiv_plan::TIME_TRAVEL_OPTION,
+                            format!("{:?}", t.kind),
+                        ),
+                    );
+                }
                 for o in options {
                     let key: Vec<&str> = o.key.parts.iter().map(|p| p.value.as_str()).collect();
                     let key = key.join(".");
@@ -788,7 +776,7 @@ impl Lowerer {
                 krishiv_common::error::DatatypeMismatchInvalidJsonTablePath {
                     sql_expr: format!("\"{call_text}\""),
                     location,
-                    path: format!("'{path}'"),
+                    path: sql_string_value(path),
                 },
                 at,
             )
@@ -878,6 +866,9 @@ impl Lowerer {
                         vec![
                             arc(self.column(vec![row.to_owned()], sp)),
                             arc(self.text_literal(&path_text, sp)),
+                            // The call Spark names when no cast reaches the column's type: the analyzer
+                            // checks the cast in the session's mode and prints this text.
+                            arc(self.text_literal(&call_text, sp)),
                         ],
                         sp,
                     );
@@ -1038,7 +1029,7 @@ fn json_table_path_ok(path: &str, row: bool) -> bool {
     while !rest.is_empty() {
         if let Some(r) = rest.strip_prefix('.') {
             let end = r.find(['.', '[']).unwrap_or(r.len());
-            if end == 0 || &r[..end] == "*" || r[..end].contains(['"', '\'']) {
+            if end == 0 || &r[..end] == "*" {
                 return false;
             }
             rest = &r[end..];
@@ -1069,27 +1060,30 @@ fn json_table_path_ok(path: &str, row: bool) -> bool {
     true
 }
 
-/// The path of a column written without one: `$.name`, quoted when the name has path punctuation.
+/// The path of a column written without one, as Spark builds it: `$['name']` (a name holding `'` makes it invalid).
+/// Spark's path parser reads the name between the quotes as is, so a backslash is a key character; the kernel's
+/// parser unescapes, so it is doubled here to select the same key.
 fn json_table_default_path(name: &str) -> String {
-    if name.contains(['.', '[', ']', '*', '\'', '"']) {
-        format!("$['{}']", name.replace('\'', "\\'"))
-    } else {
-        format!("$.{name}")
-    }
+    format!("$['{}']", name.replace('\\', "\\\\"))
 }
 
-/// `JSON_TABLE(...)` as Spark prints the call in an error: the input as written when it is a literal or a column,
-/// the paths and the columns with upper-case types.
+/// A value as Spark's `toSQLValue` prints a string: quoted, `\` and `'` escaped.
+fn sql_string_value(s: &str) -> String {
+    format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// `JSON_TABLE(...)` as Spark prints the call in an error: the paths as written and the columns with their SQL
+/// types. **Named divergence:** Spark prints the input text; here it is elided as `...` because an error message
+/// must not repeat a document (pinned by `the_error_does_not_repeat_the_input_document`).
 fn json_table_text(t: &crate::ast::JsonTable) -> String {
     use crate::ast::JsonTableColumnKind as Kind;
-    // The input is never copied into the message: a literal can be a whole document.
-    let input = "...".to_owned();
+    let input = "...";
     let columns: Vec<String> = t
         .columns
         .iter()
         .map(|c| match &c.kind {
             Kind::Ordinality => format!("{} FOR ORDINALITY", c.name.value),
-            Kind::Value { path, .. } | Kind::Exists { path, .. } => {
+            Kind::Value { data_type, path } | Kind::Exists { data_type, path } => {
                 let exists = if matches!(c.kind, Kind::Exists { .. }) {
                     " EXISTS"
                 } else {
@@ -1099,7 +1093,11 @@ fn json_table_text(t: &crate::ast::JsonTable) -> String {
                     || json_table_default_path(&c.name.value),
                     |(p, _)| p.clone(),
                 );
-                format!("{} ...{exists} PATH '{path}'", c.name.value)
+                let ty = data_type
+                    .without_char_varchar()
+                    .to_data_type()
+                    .map_or_else(|_| "...".to_owned(), |d| d.sql());
+                format!("{} {ty}{exists} PATH '{path}'", c.name.value)
             }
         })
         .collect();
@@ -1109,4 +1107,15 @@ fn json_table_text(t: &crate::ast::JsonTable) -> String {
         columns.join(", "),
         if t.error_on_error { "ERROR" } else { "NULL" }
     )
+}
+
+#[cfg(test)]
+mod default_path_tests {
+    use super::json_table_default_path;
+
+    #[test]
+    fn a_backslash_in_a_column_name_stays_a_key_character() {
+        assert_eq!(json_table_default_path("a"), "$['a']");
+        assert_eq!(json_table_default_path("a\\b"), "$['a\\\\b']");
+    }
 }

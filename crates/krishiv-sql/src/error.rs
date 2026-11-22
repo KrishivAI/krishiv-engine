@@ -19,14 +19,12 @@
 use krishiv_common::error::{
     CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, IdentifierTooManyNameParts,
     InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidSqlPathSchemaReference,
-    InvalidSqlSyntaxCommentOnColumnIncorrectIdentifier,
     InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace,
     InvalidSqlSyntaxCreateTempFuncWithDatabase, InvalidSqlSyntaxCreateTempFuncWithIfNotExists,
-    InvalidStatementOrClause, InvalidTempObjQualifier, InvalidTimeTravelTimestampFormat,
-    KrishivError, KrishivJvmFunctionUnsupported, KrishivUnsupportedFeature, LegacyErrorTemp0035,
-    LegacyErrorTemp0045, LegacyErrorTemp0053, MultipleTimeTravelSpec, ParseEmptyStatement,
-    ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
-    UnsupportedFeatureShowTableExtendedJsonWithPartition,
+    InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, KrishivJvmFunctionUnsupported,
+    KrishivUnsupportedFeature, LegacyErrorTemp0035, LegacyErrorTemp0045, LegacyErrorTemp0053,
+    ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
+    UnclosedBracketedComment,
 };
 
 use crate::ast::Span;
@@ -86,9 +84,6 @@ pub struct ParseError {
     pub error: KrishivError,
     /// The source text the error refers to (empty at the end of input).
     pub span: Span,
-    /// For the refusal of a time-travel read: the parts of the relation's name as written, which the
-    /// session resolves to name Spark's error.
-    pub relation: Option<Vec<String>>,
 }
 
 impl PartialEq for ParseError {
@@ -128,7 +123,6 @@ fn at(error: impl Into<KrishivError>, span: Span) -> ParseError {
     ParseError {
         error: error.into(),
         span,
-        relation: None,
     }
 }
 
@@ -282,30 +276,35 @@ pub(crate) fn legacy_error_temp_0035(message: String, span: Span) -> ParseError 
     at(LegacyErrorTemp0035 { message }, span)
 }
 
-/// `INVALID_SQL_SYNTAX.COMMENT_ON_COLUMN_INCORRECT_IDENTIFIER`: `COMMENT ON COLUMN` with one name part.
-pub(crate) fn comment_on_column_incorrect_identifier(span: Span) -> ParseError {
-    at(InvalidSqlSyntaxCommentOnColumnIncorrectIdentifier {}, span)
+/// `MULTIPLE_TIME_TRAVEL_SPEC`: an `@` suffix together with a time travel clause.
+pub(crate) fn multiple_time_travel_spec(span: Span) -> ParseError {
+    at(krishiv_common::error::MultipleTimeTravelSpec {}, span)
 }
 
-/// `UNSUPPORTED_FEATURE.SHOW_TABLE_EXTENDED_JSON_WITH_PARTITION`.
-pub(crate) fn show_table_extended_json_with_partition(span: Span) -> ParseError {
+/// `INVALID_SQL_SYNTAX.COMMENT_ON_COLUMN_INCORRECT_IDENTIFIER`: `COMMENT ON COLUMN` with a bare name.
+pub(crate) fn comment_on_column_incorrect_identifier(span: Span) -> ParseError {
     at(
-        UnsupportedFeatureShowTableExtendedJsonWithPartition {},
+        krishiv_common::error::InvalidSqlSyntaxCommentOnColumnIncorrectIdentifier {},
         span,
     )
 }
 
-/// `MULTIPLE_TIME_TRAVEL_SPEC`: the `@` suffix of a table name and a time-travel clause together.
-pub(crate) fn multiple_time_travel_spec(span: Span) -> ParseError {
-    at(MultipleTimeTravelSpec {}, span)
-}
-
-/// `INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT`: a `@<digits>` suffix that is not `yyyyMMddHHmmssSSS`.
+/// `INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT`: an `@` timestamp that is not `yyyyMMddHHmmssSSS`.
 pub(crate) fn invalid_time_travel_timestamp_format(timestamp: String, span: Span) -> ParseError {
     at(
-        InvalidTimeTravelTimestampFormat {
+        krishiv_common::error::InvalidTimeTravelTimestampFormat {
             timestamp,
             format: "yyyyMMddHHmmssSSS".to_owned(),
+        },
+        span,
+    )
+}
+
+/// `UNSUPPORTED_FEATURE.TIME_TRAVEL_AT_SYNTAX`: the `@` suffix with its config off.
+pub(crate) fn time_travel_at_syntax(span: Span) -> ParseError {
+    at(
+        krishiv_common::error::UnsupportedFeatureTimeTravelAtSyntax {
+            config: "\"spark.sql.timeTravel.atSyntax.enabled\"".to_owned(),
         },
         span,
     )

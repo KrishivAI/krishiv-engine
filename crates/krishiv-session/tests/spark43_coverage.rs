@@ -20,12 +20,11 @@ use krishiv_session::Session;
 use serde_json::Value;
 
 /// Cases that differ from Spark today: `(id, how)`. They are the 4.3 work the golden tail (plan row GT) takes, by area:
-/// new functions (`fn_*`), the nanosecond and TIME(p) types, `@` time travel, `WITH` options on DML, `COMMENT ON COLUMN`,
+/// new functions (`fn_*`), the nanosecond and TIME(p) types,
 /// `SHOW ... AS JSON`, and `counter_diff` (the window function of P3-T031, PR #898).
 const PENDING: &[(&str, &str)] = &[
     ("fn_localtime", "UNRESOLVED_ROUTINE"),
     ("fn_localtime_precision_error", "UNRESOLVED_ROUTINE"),
-    ("fn_time_disabled", "UNSUPPORTED_TIME_TYPE"),
     ("fn_time_precision_9_disabled", "UNSUPPORTED_TIME_PRECISION"),
     (
         "fn_timestamp_nanos_disabled",
@@ -52,7 +51,9 @@ const PENDING: &[(&str, &str)] = &[
         "fix_insert_struct_by_position_legacy",
         "setup: INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
     ),
-    ("syn_insert_replace_where_columns", "PARSE_SYNTAX_ERROR"),
+    ("syn_show_tables_as_json", "PARSE_SYNTAX_ERROR"),
+    ("syn_show_table_extended_as_json", "PARSE_SYNTAX_ERROR"),
+    ("syn_show_partitions_as_json", "PARSE_SYNTAX_ERROR"),
 ];
 
 fn fixture() -> Value {

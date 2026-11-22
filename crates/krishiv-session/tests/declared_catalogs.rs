@@ -319,45 +319,6 @@ fn the_catalog_api_never_lists_embedded_namespaces_as_a_declared_catalogs() {
     assert_eq!(t.catalog.as_deref(), Some("spark_catalog"));
 }
 
-/// `SHOW TABLE EXTENDED ... AS JSON` names the session catalog and a stored table type, which a declared
-/// catalog's tables do not have: refused there (by name or as the current catalog), not labelled `spark_catalog`
-/// (Codex review of #879). The plain `SHOW TABLES ... AS JSON` and the session catalog keep working.
-#[test]
-fn show_table_extended_as_json_is_refused_for_a_declared_catalog() {
-    let rt = runtime(DeclMode::Embedded, &LAKE);
-    let s = Session::builder().runtime(rt).build().unwrap();
-    run(&s, "CREATE TABLE default.e (a INT) USING parquet").unwrap();
-    for sql in [
-        "SHOW TABLE EXTENDED IN lake.db LIKE 't' AS JSON",
-        "SHOW TABLE EXTENDED IN spark_catalog.default LIKE 'e' AS JSON",
-    ] {
-        let r = run(&s, sql);
-        if sql.contains("lake") {
-            let e = r.unwrap_err();
-            assert_eq!(
-                e.error_class().name(),
-                "KRISHIV_UNSUPPORTED_FEATURE",
-                "{sql}: {e}"
-            );
-        } else {
-            assert!(r.is_ok(), "{sql}: {r:?}");
-        }
-    }
-    run(&s, "USE lake").unwrap();
-    let e = run(&s, "SHOW TABLE EXTENDED LIKE 'e' AS JSON").unwrap_err();
-    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
-}
-
-/// `SHOW TABLES IN lake.a.b ... AS JSON` cannot give the namespace as `["a","b"]` (the listing carries one dotted
-/// label), so a multipart namespace of a declared catalog is refused (Codex review of #879).
-#[test]
-fn show_tables_as_json_refuses_a_multipart_declared_namespace() {
-    let rt = runtime(DeclMode::Embedded, &LAKE);
-    let s = Session::builder().runtime(rt).build().unwrap();
-    let e = run(&s, "SHOW TABLES IN lake.a.b AS JSON").unwrap_err();
-    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
-}
-
 /// With a declared catalog current, the SQL namespace and table commands that would resolve in it
 /// refuse rather than read or change the embedded catalog in its name, as the Catalog API does;
 /// `spark_catalog.<db>` forms, `global_temp` and temporary views keep working.

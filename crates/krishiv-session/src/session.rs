@@ -157,9 +157,6 @@ pub(crate) struct SessionState {
     /// Decides when each query may start (E5); the default admits at once.
     pub(crate) admission: Arc<dyn AdmissionController>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
-    /// Whether no policy was set (the default [`AllowAll`], not an explicitly passed one): nothing is
-    /// denied, so a lookup that runs before the analysis asks the policy tells no one anything.
-    pub(crate) policy_open: bool,
     /// The grants provider this session's `GRANT`, `REVOKE` and `SHOW GRANTS` change and read
     /// (P3-T062); `None`: those statements are refused.
     pub(crate) grants: Option<Arc<crate::grants::GrantsPolicy>>,
@@ -435,7 +432,6 @@ impl SessionBuilder {
         let parts = SessionParts {
             profile: self.profile,
             principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
-            policy_open: self.policy.is_none(),
             policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
             grants: self.grants,
             functions: self.functions,
@@ -451,7 +447,6 @@ struct SessionParts {
     profile: SparkProfile,
     principal: Arc<Principal>,
     policy: Arc<dyn AccessPolicy>,
-    policy_open: bool,
     grants: Option<Arc<crate::grants::GrantsPolicy>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
     admission: Option<Arc<dyn AdmissionController>>,
@@ -688,6 +683,8 @@ impl Session {
                     values: &[],
                     condition: d.where_clause.as_ref(),
                     options: &d.options,
+                    more: &[],
+                    sources: &[],
                 };
                 self.exec_row_level_change(&d.table, d.alias.as_ref(), "DELETE", &changes, query)
                     .await
@@ -700,6 +697,8 @@ impl Session {
                     values: &values,
                     condition: u.where_clause.as_ref(),
                     options: &u.options,
+                    more: &[],
+                    sources: &[],
                 };
                 self.exec_row_level_change(
                     &u.table,
@@ -711,11 +710,31 @@ impl Session {
                 .await
             }
             Statement::Merge(m) => {
+                let more: Vec<&krishiv_sql::ast::Expr> = std::iter::once(&m.on)
+                    .chain(m.clauses.iter().flat_map(|c| {
+                        let action: Vec<&krishiv_sql::ast::Expr> = match &c.action {
+                            krishiv_sql::ast::MergeAction::Update(assignments) => {
+                                assignments.iter().map(|a| &a.value).collect()
+                            }
+                            krishiv_sql::ast::MergeAction::Insert(
+                                krishiv_sql::ast::MergeInsert::Values { values, .. },
+                            ) => values.iter().collect(),
+                            _ => Vec::new(),
+                        };
+                        c.condition.iter().chain(action)
+                    }))
+                    .collect();
+                let sources: Vec<&krishiv_sql::ast::Query> = match &m.source {
+                    krishiv_sql::ast::MergeSource::Query { query, .. } => vec![&**query],
+                    _ => Vec::new(),
+                };
                 let changes = crate::table_commands::RowChanges {
                     targets: &[],
                     values: &[],
                     condition: None,
-                    options: &m.target_options,
+                    options: &m.options,
+                    more: &more,
+                    sources: &sources,
                 };
                 self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
                     .await
@@ -1975,4 +1994,5 @@ mod planning;
 mod definer;
 
 mod ran;
+mod search_path;
 pub(crate) use ran::Ran;

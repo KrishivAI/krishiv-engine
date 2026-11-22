@@ -132,10 +132,8 @@ impl Session {
         let mut securables: Vec<SecurableUse> = Vec::new();
         let mut analyzed = Vec::new();
         for query in queries.unwrap_or_default() {
-            let plan = krishiv_sql::lower(&query, SourceId(0)).map_err(|e| {
-                let (start, end) = (e.span.start, e.span.end);
-                sql_context(self.lowering_error(e, &env), redacted, start, end)
-            })?;
+            let plan = krishiv_sql::lower(&query, SourceId(0))
+                .map_err(|e| sql_context(e.error, redacted, e.span.start, e.span.end))?;
             let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
             let analysis = df
                 .analyzed_in_with_text(self.query_env(), Some(redacted))

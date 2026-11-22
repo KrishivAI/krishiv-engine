@@ -839,6 +839,7 @@ impl Resolver<'_> {
                 let literal = match p.default {
                     NamedDefault::Null => Literal::Null(None),
                     NamedDefault::Text(s) => Literal::String(s.to_owned()),
+                    NamedDefault::Bool(b) => Literal::Boolean(b),
                     NamedDefault::Required => {
                         return Err(unsupported("a required parameter default", origin));
                     }
