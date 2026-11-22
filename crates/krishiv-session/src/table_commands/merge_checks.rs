@@ -79,6 +79,8 @@ pub(super) fn clause_order(clauses: &[MergeClause]) -> Result<(), KrishivError> 
 pub(super) struct Checks<'a> {
     pub(super) target: &'a str,
     pub(super) source_alias: &'a str,
+    /// The name the target is read under in the find and rewrite queries.
+    pub(super) target_alias: &'a str,
     pub(super) columns: &'a [TableColumn],
     pub(super) source_columns: &'a [String],
     /// The target, which raises its own classes ([`RowLevelTable::error`]).
@@ -392,16 +394,80 @@ impl Checks<'_> {
                     .into());
                 }
             }
+            // A one-sided clause reads its side alone; the find and rewrite queries read the join
+            // of both, so its unqualified references are qualified by that side's alias here
+            // (else a column both sides have is ambiguous there). `MATCHED` clauses see both.
+            let side: Option<(&str, Vec<&str>)> = match clause.kind {
+                ClauseKind::Matched => None,
+                ClauseKind::NotMatched => Some((
+                    self.source_alias,
+                    self.source_columns.iter().map(String::as_str).collect(),
+                )),
+                ClauseKind::NotMatchedBySource => Some((
+                    self.target_alias,
+                    self.columns.iter().map(|c| c.name.as_str()).collect(),
+                )),
+            };
+            let parse = |text: &str| -> Result<krishiv_plan::Expr, KrishivError> {
+                let e = Arc::new(expr(text)?.expr);
+                Ok(match &side {
+                    Some((alias, names)) => (*qualify(&e, alias, names)).clone(),
+                    None => (*e).clone(),
+                })
+            };
+            let cond = clause.condition.as_deref().map(parse).transpose()?;
+            let exprs = values
+                .iter()
+                .map(|v| v.as_deref().map(parse).transpose())
+                .collect::<Result<_, _>>()?;
             out.push(Resolved {
                 kind: clause.kind,
                 condition: clause.condition.clone(),
+                cond,
                 delete,
                 insert,
-                values,
+                exprs,
             });
         }
         Ok((out, value_types))
     }
+}
+
+/// `e` with each column reference whose first name part is one of `names` (and not `alias`)
+/// qualified by `alias`. Lambda variables keep their names: a name any lambda of `e` binds is
+/// left as written everywhere in `e`. Subquery plans are not entered (they resolve in their own
+/// scope).
+fn qualify(e: &Arc<krishiv_plan::Expr>, alias: &str, names: &[&str]) -> Arc<krishiv_plan::Expr> {
+    use krishiv_plan::ExprNode;
+    let mut bound: Vec<String> = Vec::new();
+    let mut stack: Vec<&krishiv_plan::Expr> = vec![e];
+    while let Some(x) = stack.pop() {
+        if let ExprNode::Lambda { params, .. } = &x.node {
+            bound.extend(params.iter().map(|p| p.name.clone()));
+        }
+        x.for_each_child(&mut |c| stack.push(c));
+    }
+    Arc::clone(e)
+        .transform_up(&mut |x| {
+            Ok::<_, std::convert::Infallible>(match &x.node {
+                ExprNode::Column(c)
+                    if c.plan_id.is_none()
+                        && c.name.first().is_some_and(|first| {
+                            !first.eq_ignore_ascii_case(alias)
+                                && names.iter().any(|n| n.eq_ignore_ascii_case(first))
+                                && !bound.iter().any(|b| b.eq_ignore_ascii_case(first))
+                        }) =>
+                {
+                    let mut c = c.clone();
+                    c.name.insert(0, alias.to_owned());
+                    let mut out = (*x).clone();
+                    out.node = ExprNode::Column(c);
+                    Arc::new(out)
+                }
+                _ => x,
+            })
+        })
+        .unwrap_or_else(|e| match e {})
 }
 
 /// Whether `e` holds a subquery anywhere.

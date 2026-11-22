@@ -176,9 +176,12 @@ pub(crate) struct MergeStatement {
 pub(super) struct Resolved {
     pub(super) kind: ClauseKind,
     pub(super) condition: Option<String>,
+    /// The condition parsed, a one-sided clause's references qualified by its side's alias.
+    pub(super) cond: Option<krishiv_plan::Expr>,
     pub(super) delete: bool,
     pub(super) insert: bool,
-    pub(super) values: Vec<Option<String>>,
+    /// Per target column the value a clause assigns, parsed, qualified as `cond`.
+    pub(super) exprs: Vec<Option<krishiv_plan::Expr>>,
 }
 
 /// What the find query found.
@@ -209,8 +212,12 @@ fn qualified(alias: &str, column: &str) -> String {
     format!("{}.{}", ident(alias), ident(column))
 }
 
-fn hit(condition: Option<&str>) -> String {
-    condition.map_or_else(|| "true".to_owned(), |c| format!("coalesce(({c}), false)"))
+/// Whether a clause's condition holds (`NULL` does not; no condition always does).
+fn hit(c: &Resolved) -> Column {
+    c.cond.as_ref().map_or_else(
+        || lit(true),
+        |e| call_function("coalesce", [Column::new(e.clone()), lit(false)]),
+    )
 }
 
 /// `if(c1, v1, if(c2, v2, .. otherwise))`: the first branch whose condition holds.
@@ -338,6 +345,7 @@ impl Session {
         let checks = super::merge_checks::Checks {
             target: &m.target,
             source_alias: &m.source_alias,
+            target_alias: &m.target_alias,
             columns: &columns,
             source_columns: &source_columns,
             table: &table,
@@ -374,7 +382,7 @@ impl Session {
         let on = expr(&m.on)?;
         let tp = qualified(&m.target_alias, &target_present);
         let sp = qualified(&m.source_alias, &source_present);
-        let guards: Vec<String> = resolved
+        let guards: Vec<Column> = resolved
             .iter()
             .map(|c| {
                 let kind = match c.kind {
@@ -384,17 +392,17 @@ impl Session {
                         format!("{tp} IS NOT NULL AND {sp} IS NULL")
                     }
                 };
-                format!("({kind}) AND {}", hit(c.condition.as_deref()))
+                Ok(expr(&kind)?.and(hit(c)))
             })
-            .collect();
+            .collect::<Result<_, KrishivError>>()?;
         // The clause that fires for a joined row (its index), -1 to copy a target row, -2 to drop
         // a source row.
         let action = first_of(
             guards
                 .iter()
                 .zip(0_i64..)
-                .map(|(g, i)| Ok((expr(g)?, lit(i))))
-                .collect::<Result<_, KrishivError>>()?,
+                .map(|(g, i)| (g.clone(), lit(i)))
+                .collect(),
             call_function(
                 "if",
                 [
@@ -422,13 +430,14 @@ impl Session {
             };
             let touch = if !inserts && !by_source {
                 // Every clause is `MATCHED`: a file is touched by a row some clause holds for.
-                let any: Vec<String> = resolved
+                let any = resolved
                     .iter()
-                    .map(|c| hit(c.condition.as_deref()))
-                    .collect();
-                format!("{sp} IS NOT NULL AND ({})", any.join(" OR "))
+                    .map(hit)
+                    .reduce(Column::or)
+                    .unwrap_or_else(|| lit(false));
+                expr(&format!("{sp} IS NOT NULL"))?.and(any)
             } else {
-                format!("{tp} IS NOT NULL")
+                expr(&format!("{tp} IS NOT NULL"))?
             };
             let insert_codes: Vec<String> = resolved
                 .iter()
@@ -441,7 +450,7 @@ impl Session {
                 expr(&qualified(&m.target_alias, ROW_POSITION_COLUMN))?.alias("i"),
                 expr(&sp)?.alias("sp"),
                 action.clone().alias("act"),
-                call_function("if", [expr(&touch)?, lit(1_i64), lit(0_i64)]).alias("touch"),
+                call_function("if", [touch, lit(1_i64), lit(0_i64)]).alias("touch"),
             ]);
             let ins = if insert_codes.is_empty() {
                 "0".to_owned()
@@ -488,15 +497,9 @@ impl Session {
             // own conditions decide.
             let (name, whole) = target_frame(None);
             let rows = s.join(&whole, on, JoinType::LeftAnti);
-            let guards: Vec<String> = resolved
-                .iter()
-                .map(|c| hit(c.condition.as_deref()))
-                .collect();
+            let guards: Vec<Column> = resolved.iter().map(hit).collect();
             let keep = first_of(
-                guards
-                    .iter()
-                    .map(|g| Ok((expr(g)?, lit(true))))
-                    .collect::<Result<_, KrishivError>>()?,
+                guards.iter().map(|g| (g.clone(), lit(true))).collect(),
                 lit(false),
             );
             (
@@ -515,8 +518,8 @@ impl Session {
                 resolved
                     .iter()
                     .zip(&guards)
-                    .map(|(c, g)| Ok((expr(g)?, lit(!c.delete))))
-                    .collect::<Result<_, KrishivError>>()?,
+                    .map(|(c, g)| (g.clone(), lit(!c.delete)))
+                    .collect(),
                 expr(&format!("{tp} IS NOT NULL"))?,
             );
             (
@@ -638,7 +641,7 @@ impl Session {
 fn merge_project(
     rows: &DataFrame,
     resolved: &[Resolved],
-    guards: &[String],
+    guards: &[Column],
     columns: &[TableColumn],
     target: Option<&str>,
 ) -> Result<DataFrame, KrishivError> {
@@ -658,12 +661,12 @@ fn merge_project(
             if clause.delete {
                 continue;
             }
-            let value = match clause.values.get(i).cloned().flatten() {
-                Some(v) => expr(&v)?.cast_ansi(c.data_type.clone()),
+            let value = match clause.exprs.get(i).cloned().flatten() {
+                Some(v) => Column::new(v).cast_ansi(c.data_type.clone()),
                 None if clause.insert => null(),
                 None => own.clone(),
             };
-            branches.push((expr(guard)?, value));
+            branches.push((guard.clone(), value));
         }
         select.push(first_of(branches, own).alias(&c.name));
     }

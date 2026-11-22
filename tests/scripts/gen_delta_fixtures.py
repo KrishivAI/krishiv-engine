@@ -27,7 +27,8 @@ consuming test checks what the oracle wrote, never a hand-written value.
 ``dml/DML.json`` with each ``DELETE``/``UPDATE`` step's output, commits, rows and history.
 
 ``... /out merge`` writes the MERGE oracle (``merge_cases``): the same for ``MERGE`` steps, in
-``merge/MERGE.json``, with the file-backed sources the steps read.
+``merge/MERGE.json``, with the file-backed sources the steps read. Use a fresh ``$OUT`` for each
+attempt: the run refuses an ``$OUT/merge`` left by an earlier or interrupted one.
 
 ``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
 (``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
@@ -1780,7 +1781,9 @@ def merge_cases(spark: SparkSession, out: str) -> None:
     plus the file-backed sources the steps read (``source-parquet``, ``source-delta``; ``<src_parquet>``
     and ``<src_delta>`` in the SQL) and each step's ``cdc`` action count."""
     root = os.path.join(out, "merge")
-    os.makedirs(root, exist_ok=True)
+    if os.path.exists(root):
+        raise SystemExit(f"{root} exists: write the MERGE oracle into a fresh output directory")
+    os.makedirs(root)
     src_parquet = os.path.join(root, "source-parquet")
     src_delta = os.path.join(root, "source-delta")
     spark.sql(MERGE_FILE_SOURCE).coalesce(1).write.parquet(src_parquet)

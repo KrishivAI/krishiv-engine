@@ -688,10 +688,13 @@ reads the tables back, `merge/krishiv-written/`). It differs in:
   its cause. This matches a delta-spark 4.4.1 defect: its error class file lacks the class it
   raises. Revisit when a delta-spark release ships the class. A SQL script's handler does not take
   it (Krishiv's handlers never take `INTERNAL_ERROR`).
-- **Source.** delta-spark copies the source unless the `MERGE` only inserts or the source reads only
-  Delta tables (`MergeIntoMaterializeSource`). Krishiv reads an insert-only `MERGE`'s source once
-  and a source that is one scan of a Delta table at its snapshot; any other source (a query, files)
-  is copied into a spill file of its own first, a batch at a time, and read back from it. An
+- **Source.** delta-spark copies the source unless the `MERGE` only inserts (with
+  `spark.databricks.delta.merge.optimizeInsertOnlyMerge.enabled`, on by default) or the source
+  reads only Delta tables and is deterministic (`MergeIntoMaterializeSource`). Krishiv reads an
+  insert-only `MERGE`'s source once, under the same setting (with it off, the source is chosen as
+  for any other `MERGE`), and a source that is one bare scan of a Delta table at its snapshot; any
+  other source (a query, files, a Delta read under a filter or a projection) is copied into a
+  spill file of its own first, a batch at a time, and read back from it. An
   insert-only `MERGE` and a Delta-table source are read once more to count `numSourceRows`.
 - **Read predicates.** The conflict check reads by the `ON` condition's partition-only conjuncts
   (the whole table with a `NOT MATCHED BY SOURCE` clause); delta-spark also skips data files by

@@ -1052,6 +1052,46 @@ mod merge {
     }
 
     #[test]
+    fn one_sided_clauses_read_unqualified_names_from_their_own_side() {
+        // Target and source both have `id` and `s`. A `NOT MATCHED` clause sees only the source
+        // and a `NOT MATCHED BY SOURCE` clause only the target, so their bare names are not
+        // ambiguous, even though the rewrite reads the join of both (review of #962).
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let out = merge(
+            &session,
+            statement(
+                "SELECT CAST(id AS BIGINT) AS id, s FROM VALUES (2, 'u2'), (10, 'n10') AS v(id, s)",
+                vec![
+                    clause(
+                        ClauseKind::Matched,
+                        None,
+                        ClauseAction::Update(vec![set("s", "src.s")]),
+                    ),
+                    clause(
+                        ClauseKind::NotMatched,
+                        Some("s = 'n10'"),
+                        ClauseAction::Insert(vec![set("id", "id"), set("s", "concat(s, '!')")]),
+                    ),
+                    clause(
+                        ClauseKind::NotMatchedBySource,
+                        Some("id = 9"),
+                        ClauseAction::Update(vec![set("s", "concat(s, '?')")]),
+                    ),
+                ],
+            ),
+        );
+        assert_eq!(affected(&out), 3);
+        assert_eq!(files.ids(), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let rows = strings(&files);
+        assert!(rows.contains(&(2, "u2".to_owned())), "{rows:?}");
+        assert!(rows.contains(&(10, "n10!".to_owned())), "{rows:?}");
+        let nine = rows.iter().find(|(id, _)| *id == 9).map(|(_, s)| s.clone());
+        assert!(nine.is_some_and(|s| s.ends_with('?')), "{rows:?}");
+        assert_eq!(session.memory_reserved(), 0);
+    }
+
+    #[test]
     fn multiple_matches_raise_deltas_class_unless_the_only_matched_clause_deletes() {
         use krishiv_common::error::ErrorClass;
         let dup = "SELECT CAST(id AS BIGINT) AS id, s FROM VALUES (2, 'a'), (2, 'b') AS v(id, s)";
