@@ -36,8 +36,9 @@
 //! side's selections are (`compact_sparse_views`), so a small output batch
 //! is not charged downstream for the whole payload. The columns (one copy
 //! per build, at most 4,096 rows and 256 KiB plus builder slack) are
-//! reserved from the index's reservation for its life; a refused
-//! reservation probes without them, decoding per pair.
+//! reserved from the index's reservation for its life: the cap before the
+//! decode, trued up to the columns' size after it; a refused reservation
+//! probes without them, decoding per pair.
 
 use std::sync::Arc;
 
@@ -164,13 +165,32 @@ impl Direct {
         })
     }
 
-    /// This index with the build's payload decoded once (`payload`), when
-    /// its reservation grants the payload's bytes.
-    pub(crate) fn with_payload(mut self, payload: Option<DirectPayload>) -> Self {
-        let memory = &mut self.memory;
-        self.payload = payload
-            .filter(|p| memory.try_grow(p.memory_size()).is_ok())
-            .map(Arc::new);
+    /// This index with the build's payload decoded once by `decode`, when
+    /// its reservation grants the payload's bytes. [`MAX_PAYLOAD_BYTES`] is
+    /// reserved before the decode, so the decode never holds bytes the pool
+    /// has not granted, then trued up to the payload's size; a refusal
+    /// before (`decode` does not run) or after keeps no payload.
+    pub(crate) fn with_payload_of(
+        mut self,
+        decode: impl FnOnce() -> Option<DirectPayload>,
+    ) -> Self {
+        if self.memory.try_grow(MAX_PAYLOAD_BYTES).is_err() {
+            return self;
+        }
+        let payload = decode();
+        let size = payload.as_ref().map_or(0, DirectPayload::memory_size);
+        let fits = match size.checked_sub(MAX_PAYLOAD_BYTES) {
+            Some(extra) => self.memory.try_grow(extra).is_ok(),
+            None => {
+                self.memory.shrink(MAX_PAYLOAD_BYTES - size);
+                true
+            }
+        };
+        if fits {
+            self.payload = payload.map(Arc::new);
+        } else {
+            self.memory.shrink(MAX_PAYLOAD_BYTES);
+        }
         self
     }
 
@@ -554,18 +574,52 @@ mod tests {
         };
         let bytes = payload.memory_size();
         assert!(bytes > 64 * 40, "the payload holds its strings: {bytes}");
-        let kept = index(None).with_payload(Some(payload));
+        let kept = index(None).with_payload_of(|| Some(payload));
         assert!(kept.payload().is_some());
         assert_eq!(kept.reserved(), bytes);
 
-        let Some(payload) = DirectPayload::of_lens(0, &lens, decode)? else {
-            panic!("a payload under the cap is decoded");
-        };
-        let refused = index(Some(bytes - 1)).with_payload(Some(payload));
+        // The cap is reserved before the decode: a pool that grants the
+        // payload's bytes but not the cap decodes nothing.
+        let mut ran = false;
+        let refused = index(Some(MAX_PAYLOAD_BYTES - 1)).with_payload_of(|| {
+            ran = true;
+            None
+        });
+        assert!(!ran, "refused before the decode");
         assert!(
             refused.payload().is_none(),
             "a refused reservation probes per pair"
         );
+        assert_eq!(refused.reserved(), 0);
+
+        // A decode that gives no payload keeps nothing reserved.
+        let none = index(None).with_payload_of(|| None);
+        assert!(none.payload().is_none());
+        assert_eq!(none.reserved(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_payload_past_the_cap_is_trued_up_or_refused_after_the_decode() -> Result<()> {
+        // Long strings: the decoded columns hold more than the cap.
+        let wide = |pairs: &[(usize, u32)]| -> Result<Vec<ArrayRef>> {
+            let text: StringViewArray = pairs
+                .iter()
+                .map(|&(_, r)| Some(format!("{r:0>200}")))
+                .collect();
+            Ok(vec![Arc::new(text) as ArrayRef])
+        };
+        let lens = [Some(2_000)];
+        let payload = || DirectPayload::of_lens(0, &lens, wide).ok().flatten();
+        let Some(bytes) = payload().map(|p| p.memory_size()) else {
+            panic!("decoded");
+        };
+        assert!(bytes > MAX_PAYLOAD_BYTES, "{bytes}");
+        let kept = index(None).with_payload_of(payload);
+        assert!(kept.payload().is_some());
+        assert_eq!(kept.reserved(), bytes);
+        let refused = index(Some(bytes - 1)).with_payload_of(payload);
+        assert!(refused.payload().is_none());
         assert_eq!(refused.reserved(), 0);
         Ok(())
     }

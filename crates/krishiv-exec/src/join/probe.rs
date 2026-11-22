@@ -708,12 +708,15 @@ impl ProbeOp {
                     Direct::of(&level0.tables, built.spilled, &s.keys, memory).map(|d| {
                         // A payload that fails to decode here fails the same
                         // way per pair, on the path that does not use it.
-                        let payload = DirectPayload::of(&level0.tables, |pairs| {
-                            s.build_columns(g.hashing.rows(), pairs, |p| {
-                                arena_of(&level0.tables, p)
+                        let d = d.with_payload_of(|| {
+                            DirectPayload::of(&level0.tables, |pairs| {
+                                s.build_columns(g.hashing.rows(), pairs, |p| {
+                                    arena_of(&level0.tables, p)
+                                })
                             })
+                            .ok()
+                            .flatten()
                         });
-                        let d = d.with_payload(payload.ok().flatten());
                         if let Some(p) = d.payload() {
                             s.counters.add(Counter::DirectPayloadRows, p.rows() as u64);
                         }
