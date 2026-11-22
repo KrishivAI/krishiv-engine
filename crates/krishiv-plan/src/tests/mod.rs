@@ -25,6 +25,7 @@ mod nested_literals;
 mod nodes;
 mod observe;
 mod pivot;
+mod prefetch;
 mod prefix_cache;
 mod props;
 mod python_relation_analysis;

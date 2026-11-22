@@ -122,7 +122,10 @@ mod view_schema;
 mod view_session_refs;
 mod window;
 
-pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};
+pub use access::{
+    IntersectionPolicy, PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo,
+    SystemOnlyPolicy,
+};
 pub use admin_view::{QueryInfo, SessionInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};

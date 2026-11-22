@@ -3,7 +3,7 @@
 //! (`krishiv.access.provider`) and the outbound-address policy (`krishiv.io.egress.*`). All are
 //! fixed when the server starts.
 
-use crate::config::{ConfigEntry, Scope, SettableBy, ValueType};
+use crate::config::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
 
 /// `krishiv.access.provider`.
 pub static ACCESS_PROVIDER: ConfigEntry = ConfigEntry {
@@ -15,12 +15,73 @@ pub static ACCESS_PROVIDER: ConfigEntry = ConfigEntry {
           `GRANT`/`REVOKE` decide them, and the role matrix keeps deciding the server's own \
           objects; an admin passes every data check. `roles`: the role matrix decides \
           everything. Unset: `grants` when authentication is configured, otherwise `roles`. \
-          `catalog`, `external` and provider lists are refused until they are available. Path \
+          `external`: the policy service of `krishiv.access.external.endpoint` decides them \
+          (`krishiv.access.v1`, ADR 0049) and the role matrix keeps only the server's own objects, \
+          so a viewer may write when the service allows it; `roles+external` keeps the role \
+          matrix on data too. A `+`-separated list (`grants+external`) is an \
+          intersection: every listed provider that decides a securable must allow it, and one no \
+          listed provider decides is refused. `catalog` is refused until it is available. Path \
           confinement (`krishiv.io.local.allowedRoots`, `krishiv.io.objectStore.allowedPrefixes`) \
           applies first under every provider.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// `krishiv.access.external.endpoint` (ADR 0049 §3).
+pub static ACCESS_EXTERNAL_ENDPOINT: ConfigEntry = ConfigEntry {
+    key: "krishiv.access.external.endpoint",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Server mode, provider `external`: the `krishiv.access.v1` policy service. An \
+          `https://` URI, a Unix socket `unix:/path`, or `http://` to a loopback address only. \
+          Required when `krishiv.access.provider` lists `external`.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// `krishiv.access.external.timeout` (ADR 0049 §3).
+pub static ACCESS_EXTERNAL_TIMEOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.access.external.timeout",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(std::time::Duration::from_millis(200))),
+    doc: "Server mode, provider `external`: the deadline of one call to the policy service. \
+          Past it, every pair the call carried is refused (fail closed).",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// `krishiv.access.external.token` (ADR 0049 §3).
+pub static ACCESS_EXTERNAL_TOKEN: ConfigEntry = ConfigEntry {
+    key: "krishiv.access.external.token",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Server mode, provider `external`: the bearer token sent to the policy service, as a \
+          secret reference (`env:NAME` or `file:/path`, as `krishiv.auth.tokens.*`), never a \
+          literal. Unset: no `authorization` header.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// `krishiv.access.external.securables` (ADR 0049 §3).
+pub static ACCESS_EXTERNAL_SECURABLES: ConfigEntry = ConfigEntry {
+    key: "krishiv.access.external.securables",
+    value_type: ValueType::String,
+    default: Some(ConfigValue::String(std::borrow::Cow::Borrowed("data"))),
+    doc: "Server mode, provider `external`: what the policy service decides, a comma-separated \
+          list. `data`: tables, views, columns, namespaces, functions, paths, secrets and \
+          connections. `system` (the server's own objects, `System(..)`) is refused until the \
+          admin API and UI guards ask the service too; the role matrix decides them.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
     spark_alias: None,
 };
 

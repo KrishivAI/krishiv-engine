@@ -89,6 +89,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("krishiv.write.idempotencyKey", &WRITE_IDEMPOTENCY_KEY),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
+    ("krishiv.access.external.token", &ACCESS_EXTERNAL_TOKEN),
     ("krishiv.exec.agg.outputFilter", &EXEC_AGG_OUTPUT_FILTER),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
     ("krishiv.io.coalesceWasteBytes", &IO_COALESCE_WASTE_BYTES),
@@ -117,6 +118,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.query.maxExecutionTime", &QUERY_MAX_EXECUTION_TIME),
     ("krishiv.server.shutdownTimeout", &SERVER_SHUTDOWN_TIMEOUT),
     ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
+    ("krishiv.access.external.timeout", &ACCESS_EXTERNAL_TIMEOUT),
     (
         "krishiv.delta.maxCommitAttempts",
         &DELTA_MAX_COMMIT_ATTEMPTS,
@@ -136,6 +138,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.files.minPartitionNum", &FILES_MIN_PARTITION_NUM),
     ("spark.sql.files.openCostInBytes", &FILES_OPEN_COST_IN_BYTES),
     ("spark.sql.storeAssignmentPolicy", &STORE_ASSIGNMENT_POLICY),
+    (
+        "krishiv.access.external.endpoint",
+        &ACCESS_EXTERNAL_ENDPOINT,
+    ),
     (
         "krishiv.advisor.spill.minPercent",
         &ADVISOR_SPILL_MIN_PERCENT,
@@ -286,6 +292,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.unionOutputPartitioning",
         &UNION_OUTPUT_PARTITIONING,
+    ),
+    (
+        "krishiv.access.external.securables",
+        &ACCESS_EXTERNAL_SECURABLES,
     ),
     (
         "krishiv.advisor.memoryWait.minTime",
