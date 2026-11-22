@@ -43,8 +43,11 @@
 //!    Parquet stores no distinct counts for strings, so while the rule is on the
 //!    session samples the group keys the rule could code before optimizing (when
 //!    `krishiv.optimizer.ndvSampling.enabled` is on and its time budget lasts).
-//! 6. Exactly one input of the aggregate qualifies, and no key is already a
-//!    code: a second optimization then finds nothing new.
+//! 6. No key is already a code. Every input that qualifies is coded in the
+//!    same pass (TPC-DS q47's `item` and `store`): the first as drawn above,
+//!    each next one on the aggregate the step before made, whose decode join
+//!    then sits under the earlier ones. A second optimization finds only codes
+//!    and changes nothing.
 //!
 //! The fence: `D_c` is a `Shift` (offset 0, so every column above keeps its id),
 //! which join ordering treats as one input, so `D` and `dict` are never folded
@@ -256,21 +259,97 @@ impl<'a> Shape<'a> {
         if coded {
             return Err("a key is already a code".to_owned());
         }
-        if found.len() > 1 {
-            return Err(format!(
-                "{} dimensions qualify (one per aggregate)",
-                found.len()
-            ));
-        }
-        let Some(c) = found.pop() else {
+        let mut found = found.into_iter();
+        let Some(c) = found.next() else {
             return match refusals.into_iter().next() {
                 Some(why) => Err(why),
                 None => Ok(None),
             };
         };
-        let note = c.note.clone();
-        let plan = self.build(&c, next, row_number)?;
-        Ok(Some((plan, note)))
+        let mut notes = vec![c.note.clone()];
+        let mut plan = self.build(&c, next, row_number)?;
+        // Every further dimension that qualified is coded in this pass, on the
+        // aggregate the last step made (condition 6): its other leaves are as
+        // they were, so each still qualifies unless the estimates moved, and a
+        // second optimization sees only codes.
+        for _ in found {
+            let Some(stacked) = self.code_next(&plan, est, next, row_number, force)? else {
+                break;
+            };
+            notes.push(stacked.1);
+            plan = stacked.0;
+        }
+        Ok(Some((plan, notes.join("; "))))
+    }
+
+    /// Codes one more dimension of the aggregate under `coded`'s decode join
+    /// (the shape [`Self::build`] returns), `None` when none qualifies there.
+    fn code_next(
+        &self,
+        coded: &Arc<LogicalPlan>,
+        est: &mut Estimator<'_>,
+        next: &mut u64,
+        row_number: &FunctionId,
+        force: bool,
+    ) -> Result<Option<(Arc<LogicalPlan>, String)>, String> {
+        let PlanNode::Project {
+            input: decode,
+            exprs,
+        } = &coded.node
+        else {
+            return Ok(None);
+        };
+        let PlanNode::Join {
+            left: aggregate,
+            right,
+            kind,
+            condition,
+        } = &decode.node
+        else {
+            return Ok(None);
+        };
+        let Some(inner) = Shape::of(aggregate) else {
+            return Ok(None);
+        };
+        let mut leaves = Vec::new();
+        walk(inner.input, true, &mut Vec::new(), &mut leaves);
+        let mut found = None;
+        for leaf in leaves {
+            if is_code(&leaf.plan) {
+                continue;
+            }
+            let out = leaf.plan.resolved_output().unwrap_or_default();
+            let keys: Vec<BoundColumn> = inner
+                .keys
+                .iter()
+                .filter(|k| out.iter().any(|c| c.id == k.id))
+                .cloned()
+                .collect();
+            if keys.is_empty() {
+                continue;
+            }
+            if let Ok(c) = inner.qualify(leaf, keys, est, force) {
+                found = Some(c);
+                break;
+            }
+        }
+        let Some(c) = found else {
+            return Ok(None);
+        };
+        let below = inner.build(&c, next, row_number)?;
+        let decode = LogicalPlan::new(PlanNode::Join {
+            left: below,
+            right: Arc::clone(right),
+            kind: *kind,
+            condition: condition.clone(),
+        })
+        .with_origin(decode.origin);
+        let top = LogicalPlan::new(PlanNode::Project {
+            input: Arc::new(decode),
+            exprs: exprs.clone(),
+        })
+        .with_origin(coded.origin);
+        Ok(Some((Arc::new(top), c.note)))
     }
 
     /// Whether `leaf` qualifies as the dimension of `keys` (conditions 1-5).

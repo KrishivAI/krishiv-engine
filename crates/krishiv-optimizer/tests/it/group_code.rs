@@ -438,13 +438,8 @@ fn refusals_say_why() {
         ),
         (
             "SELECT g3, count(*) FROM f JOIN d ON fk = dk GROUP BY g3",
-            base.clone(),
-            "4 bytes wide",
-        ),
-        (
-            "SELECT g1, g2, h1, h2, count(*) FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek GROUP BY g1, g2, h1, h2",
             base,
-            "2 dimensions qualify",
+            "4 bytes wide",
         ),
     ];
     for (sql, stats, why) in cases {
@@ -454,6 +449,33 @@ fn refusals_say_why() {
             notes.iter().any(|n| n.contains(why)),
             "{sql}: want {why:?} in {notes:?}"
         );
+    }
+}
+
+/// Two dimensions that qualify are both coded in one pass (TPC-DS q47's
+/// `item` and `store`): the aggregate groups by the two codes (and a key of
+/// the fact beside them), each decoded by its own join above it; the plan is
+/// a fixed point and returns the same rows (`run`).
+#[test]
+fn two_dimensions_are_coded_in_one_pass() {
+    for sql in [
+        "SELECT g1, g2, h1, h2, count(*) AS n FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek \
+         GROUP BY g1, g2, h1, h2",
+        "SELECT h2, g1, k2, g2, h1, sum(x) AS s FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek \
+         GROUP BY g1, g2, h1, h2, k2 ORDER BY s",
+    ] {
+        let (text, notes) = run(sql, &Stats::new());
+        assert_eq!(notes.len(), 1, "{sql}: {notes:?}");
+        assert!(
+            notes[0].starts_with("coded [") && notes[0].matches("coded [").count() == 2,
+            "{sql}: {notes:?}"
+        );
+        let agg = text
+            .lines()
+            .find(|l| l.contains("Aggregate [krishiv_group_code"))
+            .unwrap_or_else(|| panic!("{sql}\n{text}"));
+        assert!(agg.matches("krishiv_group_code#").count() >= 2, "{agg}");
+        assert!(!agg.contains("g1#") && !agg.contains("h1#"), "{agg}");
     }
 }
 
