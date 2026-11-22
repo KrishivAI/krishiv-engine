@@ -168,6 +168,7 @@ pub use catalog::{
 };
 pub use catalog_write::{CatalogWrite, CreateMode, NamespaceInfo, TableInfo};
 pub use char_varchar::DeclaredType;
+pub use coerce::cast_always_refused;
 pub use input_file::bind_input_files;
 pub use metric_view::{is_unplannable, refuse_unplannable};
 pub use sqlfn::{SqlFunction, SqlParam};

@@ -149,6 +149,11 @@ mod tests;
 pub mod udtf;
 mod walk;
 
+/// The option key under which a table reference's time-travel clause (`VERSION AS OF`, `@v1`, ...)
+/// rides on its read: no table reads an older version yet, so the session refuses it when the
+/// relation resolves.
+pub const TIME_TRAVEL_OPTION: &str = "__krishiv.timeTravel";
+
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash, semantic_plan_hash};
 pub use display::Annotated;
 #[doc(hidden)]

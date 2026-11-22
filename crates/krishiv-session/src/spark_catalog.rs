@@ -652,22 +652,22 @@ impl Catalog<'_> {
             && let Some(stored) = self.session.state.catalog.store.table(ns, &table.name)
             && self.session.hidden(&Session::relation_securable(&stored))
         {
-            return Err(Self::table_not_found(name));
+            return Err(self.table_not_found(name));
         }
         Ok(table)
     }
 
     /// `TABLE_OR_VIEW_NOT_FOUND` for `name`.
-    fn table_not_found(name: &str) -> KrishivError {
+    fn table_not_found(&self, name: &str) -> KrishivError {
         krishiv_common::error::TableOrViewNotFound {
             relation_name: quoted(name),
-            search_path: crate::catalog::search_path(),
+            search_path: self.session.search_path(),
         }
         .into()
     }
 
     fn lookup_table(&self, name: &str) -> Result<Table, KrishivError> {
-        let not_found = || Self::table_not_found(name);
+        let not_found = || self.table_not_found(name);
         let catalog = &self.session.state.catalog;
         let cs = self.case_sensitive();
         let p = parts(name);
@@ -770,7 +770,7 @@ impl Catalog<'_> {
             .ok_or_else(|| -> KrishivError {
                 krishiv_common::error::TableOrViewNotFound {
                     relation_name: quoted(name),
-                    search_path: crate::catalog::search_path(),
+                    search_path: self.session.search_path(),
                 }
                 .into()
             })?;
@@ -933,7 +933,7 @@ impl Catalog<'_> {
         let not_found = || -> KrishivError {
             krishiv_common::error::UnresolvedRoutine {
                 routine_name: quoted(name),
-                search_path: crate::catalog::search_path(),
+                search_path: self.session.search_path(),
             }
             .into()
         };

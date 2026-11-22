@@ -826,6 +826,14 @@ pub enum AlterTableAction {
     SetTblProperties(Vec<TableOption>),
     /// `COMMENT ON TABLE name IS 'comment'` (`None` for `IS NULL`).
     SetComment(Option<String>),
+    /// `COMMENT ON COLUMN table.column IS 'comment'` or `COMMENT ON TABLE name COLUMN (c IS
+    /// 'comment', ...)`: each column with its comment (`None` for `IS NULL`: the comment is removed).
+    CommentOnColumns {
+        /// Each column with its comment.
+        columns: Vec<(ColumnName, Option<String>)>,
+        /// Written as `COMMENT ON TABLE name COLUMN (...)` (Spark names that command in a view's error).
+        list_form: bool,
+    },
     /// `UNSET TBLPROPERTIES [IF EXISTS] (...)`.
     UnsetTblProperties {
         /// `IF EXISTS`.
@@ -1085,6 +1093,8 @@ pub struct InsertClause {
 pub struct Delete {
     /// The table to delete from.
     pub table: DdlName,
+    /// `WITH (...)` target options.
+    pub options: Vec<TableOption>,
     /// Its alias, if written.
     pub alias: Option<Ident>,
     /// `WHERE ...`.
@@ -1109,6 +1119,8 @@ pub struct UpdateAssignment {
 pub struct Update {
     /// The table to update.
     pub table: DdlName,
+    /// `WITH (...)` target options.
+    pub options: Vec<TableOption>,
     /// Its alias, if written.
     pub alias: Option<Ident>,
     /// The `SET` assignments.
@@ -1124,6 +1136,8 @@ pub struct Update {
 pub struct Merge {
     /// The target table.
     pub target: DdlName,
+    /// `WITH (...)` target options.
+    pub options: Vec<TableOption>,
     /// Its alias, if written.
     pub target_alias: Option<Ident>,
     /// The source.
@@ -1145,6 +1159,8 @@ pub enum MergeSource {
     Table {
         /// The table name.
         name: DdlName,
+        /// Its `WITH (...)` options (before the alias).
+        options: Vec<TableOption>,
         /// Its alias, if written.
         alias: Option<Ident>,
         /// Source text.

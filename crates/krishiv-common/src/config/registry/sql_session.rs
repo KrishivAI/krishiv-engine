@@ -60,6 +60,22 @@ pub static SCHEMA_LEVEL_COLLATIONS_ENABLED: ConfigEntry = ConfigEntry {
     spark_alias: Some("spark.sql.collation.schemaLevel.enabled"),
 };
 
+/// Whether a table name may carry a time travel suffix (`name@v123`, `name@20240101000000000`).
+pub static TIME_TRAVEL_AT_SYNTAX_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.timeTravel.atSyntax.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether a table name in a query can carry a time travel suffix: `name@v123` (a version) or \
+          `name@20240101000000000` (yyyyMMddHHmmssSSS). This setting only enables parsing the \
+          suffix: reading an older version or timestamp is not supported yet, so a read with a \
+          suffix is `UNSUPPORTED_FEATURE.TIME_TRAVEL`. Off, `@` in a table name is \
+          `UNSUPPORTED_FEATURE.TIME_TRAVEL_AT_SYNTAX` at parse time (Spark 4.3).",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.timeTravel.atSyntax.enabled"),
+};
+
 /// What `DEFAULT_PATH` expands to.
 pub static SQL_DEFAULT_PATH: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.defaultPath",
