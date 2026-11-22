@@ -136,3 +136,71 @@ fn a_filter_below_an_outer_join_is_not_followed() {
     let on = run(&sql, true);
     assert_eq!(sums(on.root()), 2, "{}", on.root());
 }
+
+/// Both copies read every output (`b.m` reads `ss_item_sk` through `max`):
+/// the definition is the unfiltered aggregate itself, the filtered copy reads
+/// it under its filter with no projection.
+#[test]
+fn equal_outputs_share_the_unfiltered_aggregate() {
+    let sql = format!(
+        "SELECT a.ss_store_sk, a.revenue, i_brand, b.m \
+         FROM {REVENUE} a JOIN item ON i_item_sk = a.ss_item_sk \
+         JOIN (SELECT ss_store_sk, avg(revenue) AS ave, max(ss_item_sk) AS m FROM {REVENUE} x \
+         GROUP BY ss_store_sk) b \
+         ON a.ss_store_sk = b.ss_store_sk WHERE a.revenue <= 0.1 * b.ave"
+    );
+    let text = shared_once(&run(&sql, true));
+    assert!(
+        text.contains("Filter isnotnull(ss_item_sk#2)\n            :  +- CteRef __shared_0"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Project [ss_store_sk#7, ss_item_sk#2, revenue#23]\n"),
+        "{text}"
+    );
+}
+
+/// A group key that is not a bare column (`ss_quantity % 2`) is grouped
+/// by and output, and the copies still share.
+#[test]
+fn a_computed_group_key_still_shares() {
+    let keyed = "(SELECT ss_store_sk, ss_item_sk, ss_quantity % 2 AS q, sum(ss_sales_price) AS revenue \
+                 FROM store_sales GROUP BY ss_store_sk, ss_item_sk, ss_quantity % 2)";
+    let sql = format!(
+        "SELECT a.ss_store_sk, a.revenue, a.q, i_brand \
+         FROM {keyed} a JOIN item ON i_item_sk = a.ss_item_sk \
+         JOIN (SELECT ss_store_sk, avg(revenue) AS ave FROM {keyed} x GROUP BY ss_store_sk) b \
+         ON a.ss_store_sk = b.ss_store_sk WHERE a.revenue <= 0.1 * b.ave"
+    );
+    let text = shared_once(&run(&sql, true));
+    assert!(text.contains("(ss_quantity#10 % 2) AS q#23"), "{text}");
+}
+
+/// The derived table written four times (twice in each `UNION ALL` branch):
+/// the two direct copies and the `Shift` body share one definition.
+#[test]
+fn a_derived_table_written_more_than_twice_is_computed_once() {
+    let branch = |call: &str, cmp: &str| {
+        format!(
+            "SELECT a.ss_store_sk, a.revenue, i_brand \
+             FROM {REVENUE} a JOIN item ON i_item_sk = a.ss_item_sk \
+             JOIN (SELECT ss_store_sk, {call}(revenue) AS ave FROM {REVENUE} x GROUP BY ss_store_sk) b \
+             ON a.ss_store_sk = b.ss_store_sk WHERE a.revenue {cmp} b.ave"
+        )
+    };
+    let sql = format!(
+        "{} UNION ALL {}",
+        branch("avg", "<= 0.1 *"),
+        branch("max", ">= 0.9 *")
+    );
+    let off = run(&sql, false);
+    assert_eq!(sums(off.root()), 3, "{}", off.root());
+    let on = run(&sql, true);
+    let text = on.root().to_string();
+    assert_eq!(sums(on.root()), 1, "{text}");
+    assert_eq!(text.matches("CteRef __shared_0").count(), 3, "{text}");
+    Plan::try_new(Arc::clone(on.root())).unwrap();
+    let again = optimize_with_udfs(&on, &fixture(), &UdfLibrary::new(), &config(true)).unwrap();
+    let third = optimize_with_udfs(&again, &fixture(), &UdfLibrary::new(), &config(true)).unwrap();
+    assert!(third.structurally_eq(&again), "{}", third.root());
+}

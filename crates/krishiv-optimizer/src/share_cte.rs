@@ -40,9 +40,9 @@
 //! physical planner, which keeps the copies when a runtime filter reaches
 //! one of them.
 //!
-//! Also under `direct`, two `GROUP BY` aggregates with equal grouping whose
-//! inputs differ only by filter conjuncts on group keys, and whose outputs
-//! differ only by which columns they keep (a derived table written twice
+//! Also under `direct`, two or more `GROUP BY` aggregates with equal grouping
+//! whose inputs differ only by filter conjuncts on group keys, and whose
+//! outputs differ only by which columns they keep (a derived table written more than once
 //! that pruning and inferred join filters changed differently, TPC-DS q65),
 //! share one aggregate (`derived`).
 
@@ -83,7 +83,7 @@ pub(crate) fn share(
     direct: bool,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let members = shifts(&root, direct);
-    // One instance alone forms no group, but may pair with a direct
+    // One instance alone forms no group, but may share with a direct
     // aggregate (`derived`).
     if members.is_empty() || (!direct && members.iter().map(|m| m.uses).sum::<u64>() < 2) {
         return Ok(root);
@@ -91,13 +91,13 @@ pub(crate) fn share(
     let groups = groups(&members);
     // With `direct`, an aggregate a `Shift` and another place compute with
     // different outputs or key filters is shared too (`derived`, q65).
-    let pairs = if direct {
+    let shares = if direct {
         let grouped: HashSet<usize> = groups.iter().flatten().copied().collect();
-        derived::pairs(&root, &members, &grouped)
+        derived::shared(&root, &members, &grouped)
     } else {
         Vec::new()
     };
-    if groups.is_empty() && pairs.is_empty() {
+    if groups.is_empty() && shares.is_empty() {
         return Ok(root);
     }
     let mut replace: HashMap<*const LogicalPlan, Arc<LogicalPlan>> = HashMap::new();
@@ -162,20 +162,18 @@ pub(crate) fn share(
             );
         }
     }
-    for pair in pairs {
-        let Some(output) = pair.def.resolved_output() else {
-            continue;
-        };
+    for shared in shares {
+        let output = shared.out;
         if !keys.insert(output.iter().map(|c| c.id).collect()) {
             continue;
         }
         let name = format!("{SHARED_PREFIX}{}", bodies.len());
-        let refs: Vec<_> = pair
+        let refs: Vec<_> = shared
             .uses
             .iter()
             .map(|u| (Arc::as_ptr(&u.at), derived::reference(&name, &output, u)))
             .collect();
-        bodies.push((name, pair.def));
+        bodies.push((name, shared.def));
         replace.extend(refs);
     }
     if replace.is_empty() {

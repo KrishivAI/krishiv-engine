@@ -9,23 +9,23 @@
 //! revenue]` with `isnotnull(ss_item_sk)` from the join with `item` added to
 //! its `store_sales` filter. Neither is equal to the other, so no group forms.
 //!
-//! A pair forms from two `GROUP BY` aggregates of the plan with equal
-//! grouping, ids included (a derived table written twice: the `Shift` member
-//! or an aggregate inside its body, in the body's ids, and the direct copy),
-//! when
-//! - the outputs both hold are equal expressions, ids included (written in
-//!   the same ids, they compute the same column), so the definition may
-//!   output both lists;
-//! - one's input equals the other's except for extra filter conjuncts (in a
-//!   filter of its own or added to one), found only through filters,
+//! A share forms from two or more `GROUP BY` aggregates of the plan with
+//! equal grouping, ids included (a derived table written more than once: the
+//! `Shift` member or an aggregate inside its body, in the body's ids, and the
+//! direct copies), when
+//! - the outputs two of them hold are equal expressions, ids included
+//!   (written in the same ids, they compute the same column), so the
+//!   definition may output every list;
+//! - each one's input equals one weakest input except for extra filter
+//!   conjuncts (in a filter of its own or added to one), found only through filters,
 //!   projections and inner joins, which pass each row's columns up
 //!   unchanged; each extra reads only bare group-key columns of the
 //!   aggregate, in the wider output list, and runs on any row (deterministic,
 //!   raises on no row, no subquery).
 //!
 //! A filter of group-key columns commutes with the aggregate: dropping a row
-//! drops its whole group. So the definition is the aggregate over the weaker
-//! input with both output lists, and each place reads it through a
+//! drops its whole group. So the definition is the aggregate over the weakest
+//! input with every output list, and each place reads it through a
 //! `CteRef`, under its extra conjuncts and, when narrower, a column
 //! projection to its own outputs.
 
@@ -40,7 +40,7 @@ use krishiv_plan::{
 use super::{Member, walk, worth_sharing};
 use crate::expr::{Attrs, and_all, conjuncts, references};
 
-/// One place that reads a pair's definition.
+/// One place that reads a shared definition.
 pub(super) struct Use {
     /// The aggregate it replaces.
     pub(super) at: Arc<LogicalPlan>,
@@ -50,142 +50,155 @@ pub(super) struct Use {
     extras: Vec<Arc<Expr>>,
 }
 
-/// A definition and the two places that read it.
-pub(super) struct Pair {
+/// A definition, its outputs and the places that read it (two or more).
+pub(super) struct Shared {
     pub(super) def: Arc<LogicalPlan>,
-    pub(super) uses: [Use; 2],
+    pub(super) out: Vec<BoundColumn>,
+    pub(super) uses: Vec<Use>,
 }
 
-/// The pairs of `root`'s aggregates, each in at most one, none of them the
-/// body of a member in a group (`grouped`).
-pub(super) fn pairs(
+/// The aggregates (indices into the candidates) that extend one input, each
+/// with the conjuncts it filters by beyond it.
+type Over = Vec<(usize, Vec<Arc<Expr>>)>;
+
+/// A `GROUP BY` aggregate of the plan, its parts.
+struct Agg {
+    plan: Arc<LogicalPlan>,
+    input: Arc<LogicalPlan>,
+    grouping: Grouping,
+    keys: Vec<Arc<Expr>>,
+    aggregates: Vec<Arc<Expr>>,
+}
+
+/// The shared aggregates of `root`, each aggregate in at most one, none of
+/// them inside the body of a member in a group (`grouped`). In walk order,
+/// each aggregate not yet taken shares with every later one that computes it
+/// (a derived table written three times shares all three).
+pub(super) fn shared(
     root: &Arc<LogicalPlan>,
     members: &[Member],
     grouped: &HashSet<usize>,
-) -> Vec<Pair> {
-    let excluded: HashSet<*const LogicalPlan> = grouped
-        .iter()
-        .filter_map(|&i| members.get(i))
-        .map(|m| Arc::as_ptr(&m.body))
-        .collect();
-    let mut aggs: Vec<Arc<LogicalPlan>> = Vec::new();
+) -> Vec<Shared> {
+    let mut excluded: HashSet<*const LogicalPlan> = HashSet::new();
+    for m in grouped.iter().filter_map(|&i| members.get(i)) {
+        walk(&m.body, &mut |p| {
+            excluded.insert(Arc::as_ptr(p));
+        });
+    }
+    let mut rest: Vec<Agg> = Vec::new();
     walk(root, &mut |p| {
-        if matches!(
-            p.node,
-            PlanNode::Aggregate {
-                grouping: Grouping::GroupBy(_),
-                ..
-            }
-        ) && !excluded.contains(&Arc::as_ptr(p))
+        if let PlanNode::Aggregate {
+            input,
+            grouping: grouping @ Grouping::GroupBy(keys),
+            aggregates,
+        } = &p.node
+            && !excluded.contains(&Arc::as_ptr(p))
         {
-            aggs.push(Arc::clone(p));
+            rest.push(Agg {
+                plan: Arc::clone(p),
+                input: Arc::clone(input),
+                grouping: grouping.clone(),
+                keys: keys.clone(),
+                aggregates: aggregates.clone(),
+            });
         }
     });
-    let mut taken = vec![false; aggs.len()];
     let mut out = Vec::new();
-    for i in 0..aggs.len() {
-        for j in i + 1..aggs.len() {
-            if taken[i] {
-                break;
+    let mut i = 0;
+    while i < rest.len() {
+        if let Some((taken, p)) = share(&rest, i) {
+            for &j in taken.iter().rev() {
+                rest.remove(j);
             }
-            if taken[j] {
-                continue;
-            }
-            if let Some(pair) = pair(&aggs[i], &aggs[j]) {
-                taken[i] = true;
-                taken[j] = true;
-                out.push(pair);
-            }
+            out.push(p);
+        } else {
+            i += 1;
         }
     }
     out
 }
 
-/// The pair of the aggregates `b` and `d`, if they compute one aggregate up
-/// to outputs and key filters. Their grouping is equal, ids included, only
-/// when the analysis wrote both in the same ids (a derived table written
-/// twice); two references to one `Arc` are not a pair.
-fn pair(b: &Arc<LogicalPlan>, d: &Arc<LogicalPlan>) -> Option<Pair> {
-    let PlanNode::Aggregate {
-        input: bi,
-        grouping: bg @ Grouping::GroupBy(keys),
-        aggregates: ba,
-    } = &b.node
-    else {
-        return None;
-    };
-    let PlanNode::Aggregate {
-        input: di,
-        grouping: dg,
-        aggregates: da,
-    } = &d.node
-    else {
-        return None;
-    };
-    if Arc::ptr_eq(b, d) || dg != bg {
-        return None;
+/// The aggregate `rest[i]` shared with the later ones that compute it up to
+/// outputs and key filters, and their indices (ascending), if any does.
+/// Their grouping is equal, ids included, only when the analysis wrote them
+/// in the same ids (a derived table written more than once); two references
+/// to one `Arc` are one aggregate. The definition reads the weakest input:
+/// the one among them that most of them extend, `rest[i]`'s included.
+fn share(rest: &[Agg], i: usize) -> Option<(Vec<usize>, Shared)> {
+    let a = &rest[i];
+    let same: Vec<usize> =
+        std::iter::once(i)
+            .chain((i + 1..rest.len()).filter(|&j| {
+                rest[j].grouping == a.grouping && !Arc::ptr_eq(&rest[j].plan, &a.plan)
+            }))
+            .collect();
+    let mut best: Option<(usize, Over)> = None;
+    for &w in &same {
+        let over: Over = same
+            .iter()
+            .filter_map(|&x| extras(&rest[w].input, &rest[x].input).map(|e| (x, e)))
+            .collect();
+        if over.first().is_some_and(|(x, _)| *x == i)
+            && over.len() >= 2
+            && best.as_ref().is_none_or(|(_, b)| over.len() > b.len())
+        {
+            best = Some((w, over));
+        }
     }
-    let (b_extra, d_extra, weak) = if let Some(x) = extras(di, bi) {
-        (x, Vec::new(), di)
-    } else {
-        (Vec::new(), extras(bi, di)?, bi)
-    };
-    // Both output lists: the weaker side's, then the other's it lacks.
-    let (first, second) = if Arc::ptr_eq(weak, di) {
-        (da, ba)
-    } else {
-        (ba, da)
-    };
-    // In the order of the list holding the other, if one does.
-    let wide = if first.iter().all(|e| second.contains(e)) {
-        second.clone()
-    } else {
-        let mut w = first.clone();
-        w.extend(second.iter().filter(|e| !first.contains(e)).cloned());
-        w
-    };
-    let key_ids: Attrs = keys
+    let (w, over) = best?;
+    let weak = &rest[w];
+    // Every output list in one: the weak side's, widened by each other's in
+    // turn (in the order of a list that holds the one so far).
+    let mut wide = weak.aggregates.clone();
+    for (x, _) in &over {
+        let list = &rest[*x].aggregates;
+        if wide.iter().all(|e| list.contains(e)) {
+            wide.clone_from(list);
+        } else {
+            let more: Vec<_> = list.iter().filter(|e| !wide.contains(e)).cloned().collect();
+            wide.extend(more);
+        }
+    }
+    let key_ids: Attrs = a
+        .keys
         .iter()
         .filter_map(|k| match &k.node {
             ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
             _ => None,
         })
         .collect();
-    let def = if wide == *first {
-        Arc::clone(if Arc::ptr_eq(weak, di) { d } else { b })
+    let def = if wide == weak.aggregates {
+        Arc::clone(&weak.plan)
     } else {
         Arc::new(LogicalPlan::new(PlanNode::Aggregate {
-            input: Arc::clone(weak),
-            grouping: bg.clone(),
+            input: Arc::clone(&weak.input),
+            grouping: a.grouping.clone(),
             aggregates: wide,
         }))
     };
-    let def_out = def.resolved_output()?;
-    let def_ids: HashSet<AttrId> = def_out.iter().map(|c| c.id).collect();
+    let out = def.resolved_output()?;
+    let def_ids: HashSet<AttrId> = out.iter().map(|c| c.id).collect();
     let fits = |e: &Arc<Expr>| {
         runs_on_any_row(e, true)
             && references(e)
                 .iter()
                 .all(|id| key_ids.contains(id) && def_ids.contains(id))
     };
-    if !b_extra.iter().chain(&d_extra).all(fits) || !worth_sharing(&def) {
+    if !over.iter().flat_map(|(_, e)| e).all(fits) || !worth_sharing(&def) {
         return None;
     }
-    Some(Pair {
-        uses: [
-            Use {
-                at: Arc::clone(b),
-                output: b.resolved_output()?,
-                extras: b_extra,
-            },
-            Use {
-                at: Arc::clone(d),
-                output: d.resolved_output()?,
-                extras: d_extra,
-            },
-        ],
-        def,
-    })
+    let mut taken = Vec::with_capacity(over.len());
+    let mut uses = Vec::with_capacity(over.len());
+    for (x, extras) in over {
+        let at = &rest[x].plan;
+        uses.push(Use {
+            at: Arc::clone(at),
+            output: at.resolved_output()?,
+            extras,
+        });
+        taken.push(x);
+    }
+    Some((taken, Shared { def, out, uses }))
 }
 
 /// The conjuncts `strong` filters by beyond `weak`, when the two are equal
@@ -303,3 +316,6 @@ pub(super) fn reference(name: &str, def_out: &[BoundColumn], u: &Use) -> Arc<Log
     }
     node
 }
+
+#[cfg(test)]
+mod tests;
