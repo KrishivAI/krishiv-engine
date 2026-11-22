@@ -885,6 +885,53 @@ mod tests {
         assert!(panicked.is_err());
     }
 
+    /// A cancel ends a call that is still running user code: the caller gets `OPERATION_CANCELED`
+    /// at once, the thread runs on to its end and frees its permit then.
+    #[test]
+    fn a_cancel_ends_a_blocked_source_call_at_once() {
+        use crate::action::Actions;
+        use crate::cancel::CancelReason;
+        use std::sync::mpsc;
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let actions = Arc::new(Actions::default());
+        let guard = actions.begin(1, Some("op"));
+        let hold = Arc::new(std::sync::Mutex::new(()));
+        let held = hold.lock().expect("lock");
+        let (started_tx, started_rx) = mpsc::channel();
+        let call_hold = Arc::clone(&hold);
+        let canceller = {
+            let actions = Arc::clone(&actions);
+            std::thread::spawn(move || {
+                started_rx.recv().expect("the call started");
+                actions.cancel_where(CancelReason::User, &|_, _| true);
+            })
+        };
+        let began = std::time::Instant::now();
+        let out: Result<(), KrishivError> = rt.block_on(guard.run(async move {
+            // The statement's executor task: the call blocks in `block_in_place`, as at plan time.
+            tokio::spawn(async move {
+                run_python_source_call(move || {
+                    let _ = started_tx.send(());
+                    drop(call_hold.lock());
+                    Ok(())
+                })
+            })
+            .await
+            .expect("join")
+        }));
+        canceller.join().expect("canceller");
+        assert!(out.is_err(), "the cancel ends the call");
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(5),
+            "the caller did not wait for the user code"
+        );
+        drop(held);
+    }
+
     /// Calls beyond the bound wait for a permit: with every permit held by blocked calls, one more
     /// call does not run until a permit returns.
     #[test]
