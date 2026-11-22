@@ -60,8 +60,8 @@ impl Session {
         )?;
         self.stamp_row(&row);
         // The script's row is the statement's listed run: a failed script gets no refused row beside it.
-        if let Some(s) = &script {
-            *s.row
+        if let Some(slot) = script.as_ref().and_then(|s| s.row.as_ref()) {
+            *slot
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(row.clone());
         }

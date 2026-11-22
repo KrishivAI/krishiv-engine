@@ -7,6 +7,8 @@ use super::*;
 tokio::task_local! {
     /// The command this task is running, while it runs.
     static COMMAND: Arc<Command>;
+    /// Set while the task runs a query that evaluates an expression of its command (a variable's value).
+    static EVALUATION: ();
 }
 
 /// A statement that is not a query, for the queries it runs itself (an `INSERT`'s write): they are begun with
@@ -27,8 +29,10 @@ struct Command {
 pub(crate) struct Listing {
     pub(crate) text: Arc<str>,
     pub(crate) class: &'static str,
-    /// Where the id of the query's row goes: the query is the statement's listed run.
-    pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
+    /// Where the id of the query's row goes: the query is the statement's listed run. `None` for a query
+    /// that evaluates an expression of the command: the command may still fail after it finished, so it
+    /// becomes the listed run only by failing ([`evaluation_failed`]).
+    pub(crate) row: Option<Arc<std::sync::Mutex<Option<String>>>>,
 }
 
 /// `work` under the command the calling task is running, if any: a task the command starts for a query of
@@ -40,17 +44,42 @@ pub(super) fn in_running_command<F: Future>(work: F) -> impl Future<Output = F::
     }
 }
 
-/// The command the calling task is running, for a query begun with no text of its own (`has_text` false) or
-/// begun by a statement of a script.
+/// `work`, a query a command runs to evaluate one of its own expressions (the value of `SET VAR`, a
+/// `DECLARE` default, the string of `EXECUTE IMMEDIATE`): the query carries a `SELECT` put together for
+/// it, and is listed in `system.queries` under the command's text and class, as the command's run.
+pub(crate) fn as_evaluation<F: Future>(work: F) -> impl Future<Output = F::Output> {
+    EVALUATION.scope((), work)
+}
+
+/// A query run [`as_evaluation`] failed: its row (the one `slot` names) is the failed run of the command
+/// the calling task is running, which gets no refused row beside it.
+pub(crate) fn evaluation_failed(slot: &std::sync::Mutex<Option<String>>) {
+    let id = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(id) = id {
+        // No command: nothing to tell.
+        let _ = COMMAND.try_with(|c| {
+            *c.row
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id);
+        });
+    }
+}
+
+/// The command the calling task is running, for a query begun with no text of its own (`has_text` false),
+/// begun by a statement of a script, or run to evaluate an expression of the command.
 pub(crate) fn command_statement(has_text: bool) -> Option<Listing> {
+    let evaluation = EVALUATION.try_with(|()| ()).is_ok();
     COMMAND
         .try_with(|c| {
-            (!has_text || c.of_script).then(|| {
+            (!has_text || c.of_script || evaluation).then(|| {
                 c.listed.store(true, Ordering::Relaxed);
                 Listing {
                     text: Arc::clone(&c.text),
                     class: c.class,
-                    row: Arc::clone(&c.row),
+                    row: (!evaluation).then(|| Arc::clone(&c.row)),
                 }
             })
         })

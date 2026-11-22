@@ -783,8 +783,8 @@ impl Session {
         self.stamp_row(&log_id);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         // The command's listed run: a failure of it is this row, and the statement gets no refused row.
-        if let Some(c) = &command {
-            *c.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        if let Some(row) = command.as_ref().and_then(|c| c.row.as_ref()) {
+            *row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         }
         let permit = self.admit(&log_id, env, exempt, fallback).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))

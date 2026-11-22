@@ -1767,13 +1767,19 @@ impl Session {
         &self,
         analysis: &Arc<crate::dataframe::Analysis>,
     ) -> Result<Vec<RecordBatch>, KrishivError> {
-        let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
-        let mut stream = self.run(&physical, &analysis.env).await?;
-        let mut out = Vec::new();
-        while let Some(batch) = stream.next().await {
-            out.push(batch?);
-        }
-        Ok(out)
+        // The query is listed under the command it is evaluated for, when there is one.
+        let run = async {
+            let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
+            let mut stream = self.run(&physical, &analysis.env).await?;
+            let mut out = Vec::new();
+            while let Some(batch) = stream.next().await {
+                out.push(batch?);
+            }
+            Ok(out)
+        };
+        crate::session::as_evaluation(run)
+            .await
+            .inspect_err(|_| crate::session::evaluation_failed(&analysis.env.row))
     }
 
     /// The value of `sql` (a synthesized one-row `SELECT`): its single
