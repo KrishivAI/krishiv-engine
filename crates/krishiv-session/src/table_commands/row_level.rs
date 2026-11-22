@@ -145,9 +145,10 @@ impl Session {
         let Some(table) = provider.row_level(op) else {
             return Ok(None);
         };
-        // Refused here, before any scan or path split and for merge-on-read tables alike (E34).
+        // A table whose commit records the key takes it; any other refuses it here, before any scan or
+        // path split (E34).
         let caps = table.capabilities();
-        if !caps.idempotent_commit || caps.merge_on_read {
+        if !caps.idempotent_commit {
             refuse_idempotency_key(&probe.env.config)?;
         }
         // A Delta table's root as delta-spark's errors name it (`file:/..`), for a table by path
@@ -379,7 +380,6 @@ impl Session {
                 .options
                 .insert(CONDITION_OPTION.to_owned(), c.to_owned());
         }
-        #[cfg(feature = "delta")]
         if table.capabilities().idempotent_commit {
             apply_idempotency_key(&analysis.env.config, &mut request.options)?;
         }
@@ -468,7 +468,6 @@ impl Session {
         let mut request =
             RowLevelWrite::new(op, quoted, Arc::clone(physical.schema()), Vec::new(), None);
         request.write_id = Some(crate::session::job_uuid());
-        #[cfg(feature = "delta")]
         if table.capabilities().idempotent_commit {
             apply_idempotency_key(&analysis.env.config, &mut request.options)?;
         }
@@ -796,7 +795,6 @@ pub(super) fn refuse_idempotency_key(
 ///
 /// # Errors
 /// `INVALID_CONF_VALUE` for an empty key.
-#[cfg(feature = "delta")]
 pub(super) fn apply_idempotency_key(
     config: &krishiv_common::config::Config,
     options: &mut std::collections::BTreeMap<String, String>,
