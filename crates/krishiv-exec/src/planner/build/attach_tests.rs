@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Tests that runtime filters reach the scans of every root of a plan.
 
+use crate::planner::probe_select::attach_runtime_filters;
 use std::collections::BTreeMap;
 
 use arrow_schema::DataType;

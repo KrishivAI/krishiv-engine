@@ -175,12 +175,18 @@ impl Session {
         // Planning recurses on a `krishiv-deep` thread this worker joins, and a data source's
         // `decide` may run user code there: tell the runtime the worker is blocked so its core
         // goes to another task (a one-thread executor would otherwise stall every other query).
+        let plan = || self.state.planner.plan(&optimized, &cx);
+        // `krishiv-deep` threads lose the action's task-local: hand its cancellation handle on.
+        let plan = || match crate::action::cancel_handle() {
+            Some(handle) => krishiv_common::stack::with_inherited(handle, plan),
+            None => plan(),
+        };
         let physical = if tokio::runtime::Handle::try_current()
             .is_ok_and(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
         {
-            tokio::task::block_in_place(|| self.state.planner.plan(&optimized, &cx))?
+            tokio::task::block_in_place(plan)?
         } else {
-            self.state.planner.plan(&optimized, &cx)?
+            plan()?
         };
         // The admission request's estimate, only for a controller that reads it.
         if !withheld && self.state.admission.uses_estimate() {

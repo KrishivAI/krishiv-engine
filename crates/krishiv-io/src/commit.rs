@@ -510,6 +510,18 @@ impl DirectoryWrite {
                 );
                 self.delete_orphans(io, &std::collections::HashSet::new())
                     .await?;
+                if self.overwrite {
+                    // This attempt removed the marker the winner wrote (overlapping same-key writes):
+                    // the data is complete, so put it back.
+                    let marker = io
+                        .put_object(
+                            &self.store,
+                            &self.dir.clone().join(SUCCESS_MARKER),
+                            Bytes::new(),
+                        )
+                        .await;
+                    after_publish(true, "restoring the success marker", marker)?;
+                }
                 return Ok(Vec::new());
             }
         }
