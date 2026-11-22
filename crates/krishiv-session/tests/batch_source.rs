@@ -356,4 +356,88 @@ mod planned {
             "{err}"
         );
     }
+
+    /// A planner whose user code blocks does not hold the executor: with one compute thread, another
+    /// query of the session finishes while the first is still waiting for the source's `plan`.
+    struct Blocks {
+        started: std::sync::mpsc::Sender<()>,
+        release: Arc<Mutex<()>>,
+        schema: Arc<Schema>,
+    }
+
+    impl SourcePlanner for Blocks {
+        fn plan(&self, filters: &[SourceFilter]) -> Result<PlannedRead, KrishivError> {
+            let started = self.started.clone();
+            let release = Arc::clone(&self.release);
+            krishiv_session::run_python_source_call(move || {
+                let _ = started.send(());
+                drop(release.lock());
+                Ok(())
+            })?;
+            let schema = Arc::clone(&self.schema);
+            Ok(PlannedRead {
+                pushed: vec![false; filters.len()],
+                read: Arc::new(move || {
+                    Ok(vec![
+                        RecordBatch::try_new(
+                            Arc::clone(&schema),
+                            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+                        )
+                        .unwrap(),
+                    ])
+                }),
+            })
+        }
+    }
+
+    #[test]
+    fn deciding_plan_leaves_the_executor_free() {
+        use krishiv_exec::{ExecutorConfig, TokioExecutor};
+        let executor = TokioExecutor::new(&ExecutorConfig {
+            compute_threads: 1,
+            io_threads: 1,
+            blocking_threads: 2,
+            io_blocking_threads: 2,
+        })
+        .unwrap();
+        let session = Session::builder().executor(executor).build().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, true)]));
+        let plain_schema = Arc::clone(&schema);
+        let plain: BatchSource = Arc::new(move || {
+            Ok(vec![
+                RecordBatch::try_new(
+                    Arc::clone(&plain_schema),
+                    vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+                )
+                .unwrap(),
+            ])
+        });
+        let release = Arc::new(Mutex::new(()));
+        let held = release.lock().unwrap();
+        let (started, started_rx) = std::sync::mpsc::channel();
+        session
+            .register_planned_source(
+                "p",
+                "p",
+                Arc::clone(&schema),
+                plain,
+                Some(Arc::new(Blocks {
+                    started,
+                    release: Arc::clone(&release),
+                    schema,
+                })),
+            )
+            .unwrap();
+        let blocked = {
+            let session = session.clone_session().unwrap();
+            std::thread::spawn(move || count(&session, "SELECT count(*) FROM p WHERE k > 1"))
+        };
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the planner's user code started");
+        // The first query is parked in user code; a second one still gets the one compute thread.
+        assert_eq!(count(&session, "SELECT count(*) FROM range(3)"), 3);
+        drop(held);
+        assert_eq!(blocked.join().unwrap(), 2);
+    }
 }

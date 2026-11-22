@@ -172,7 +172,16 @@ impl Session {
             .with_udfs(Arc::clone(&self.state.udfs))
             .with_inspection(inspected)
             .with_decisions(decisions);
-        let physical = self.state.planner.plan(&optimized, &cx)?;
+        // Planning recurses on a `krishiv-deep` thread this worker joins, and a data source's
+        // `decide` may run user code there: tell the runtime the worker is blocked so its core
+        // goes to another task (a one-thread executor would otherwise stall every other query).
+        let physical = if tokio::runtime::Handle::try_current()
+            .is_ok_and(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+        {
+            tokio::task::block_in_place(|| self.state.planner.plan(&optimized, &cx))?
+        } else {
+            self.state.planner.plan(&optimized, &cx)?
+        };
         // The admission request's estimate, only for a controller that reads it.
         if !withheld && self.state.admission.uses_estimate() {
             env.catalog.set_estimate(crate::explain::estimate_of(
