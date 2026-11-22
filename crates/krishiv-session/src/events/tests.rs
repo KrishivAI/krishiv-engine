@@ -192,6 +192,38 @@ fn a_sink_may_filter_kinds() {
 }
 
 #[test]
+fn a_panicking_filter_never_reaches_emit_and_a_failed_write_counts_as_lost() {
+    struct Boom;
+    impl EventSink for Boom {
+        fn name(&self) -> &str {
+            "boom"
+        }
+        fn accept(&self, _kind: EventKindTag) -> bool {
+            panic!("filter panic");
+        }
+        fn deliver(&self, _batch: &[Arc<EngineEvent>]) {}
+    }
+    let bus = EventBus::new("c".into(), 100, 10);
+    bus.register(Arc::new(Boom));
+    bus.emit(finished(0));
+    bus.shutdown(Duration::from_secs(5));
+    assert_eq!(bus.dropped_total(), 1);
+
+    // A path under a regular file cannot be opened: the events are lost, and counted.
+    let dir = std::env::temp_dir().join(format!("krishiv-ev-lost-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let blocker = dir.join("f");
+    std::fs::write(&blocker, b"x").unwrap();
+    let bus = EventBus::new("c".into(), 100, 10);
+    bus.register(Arc::new(JsonLinesSink::new(blocker.join("ev"), 1 << 20, 2)));
+    bus.emit(finished(0));
+    bus.emit(finished(1));
+    bus.shutdown(Duration::from_secs(5));
+    assert_eq!(bus.dropped_total(), 2);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn json_has_the_v1_shape_for_every_kind() {
     let kinds = [
         QueryEventKind::Submitted {

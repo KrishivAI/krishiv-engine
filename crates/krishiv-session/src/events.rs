@@ -394,6 +394,11 @@ pub trait EventSink: Send + Sync + 'static {
 
     /// Writes out anything buffered.
     fn flush(&self) {}
+
+    /// Events this sink accepted but could not deliver (a failed write); counted with the drops.
+    fn lost(&self) -> u64 {
+        0
+    }
 }
 
 /// Counted drops of one sink, by kind.
@@ -524,7 +529,14 @@ impl SinkHandle {
                     };
                     // A panicking sink loses its batch, never the thread's queue or a query.
                     let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        worker_sink.deliver(&batch);
+                        let wanted: Vec<Arc<EngineEvent>> = batch
+                            .iter()
+                            .filter(|e| worker_sink.accept(e.tag()))
+                            .cloned()
+                            .collect();
+                        if !wanted.is_empty() {
+                            worker_sink.deliver(&wanted);
+                        }
                     }));
                     if delivered.is_err() {
                         for e in &batch {
@@ -608,6 +620,7 @@ pub struct EventBus {
     compute_id: String,
     text_max: usize,
     capacity: usize,
+    next_seq: AtomicU64,
 }
 
 impl fmt::Debug for EventBus {
@@ -646,6 +659,7 @@ impl EventBus {
             compute_id,
             text_max,
             capacity,
+            next_seq: AtomicU64::new(0),
         }
     }
 
@@ -673,7 +687,6 @@ impl EventBus {
 
     /// Hands `event` to every sink that accepts its kind. Never blocks on a sink, never fails.
     pub fn emit(&self, event: EngineEvent) {
-        let tag = event.tag();
         let event = Arc::new(event);
         for h in self
             .sinks
@@ -681,9 +694,8 @@ impl EventBus {
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
         {
-            if h.sink.accept(tag) {
-                h.queue.push(&event);
-            }
+            // The sink's filter runs on its own thread, never here (this may hold the history lock).
+            h.queue.push(&event);
         }
     }
 
@@ -707,10 +719,11 @@ impl EventBus {
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(|h| {
-                EventKindTag::ALL
-                    .iter()
-                    .map(|k| h.queue.drops.get(*k))
-                    .sum::<u64>()
+                h.sink.lost()
+                    + EventKindTag::ALL
+                        .iter()
+                        .map(|k| h.queue.drops.get(*k))
+                        .sum::<u64>()
             })
             .sum()
     }
@@ -740,8 +753,9 @@ impl EventBus {
 
     /// The event of `row` for the transition `kind` of query `row`, with its next `seq`.
     pub(crate) fn make(&self, row: &mut QueryRow, kind: Transition) -> EngineEvent {
-        let seq = row.event_seq;
-        row.event_seq += 1;
+        // One counter for the bus: an operation id reused by a later execution never repeats a `seq`.
+        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+        row.event_seq = seq + 1;
         let query = QueryRef {
             query_id: row.id.clone(),
             session_id: row.session_id.clone(),
@@ -899,6 +913,8 @@ pub struct JsonLinesSink {
 struct JsonState {
     file: Option<std::io::BufWriter<std::fs::File>>,
     written: u64,
+    /// Bytes of the open segment known to hold only whole lines (flushed).
+    committed: u64,
     segment: u64,
 }
 
@@ -915,7 +931,7 @@ impl JsonLinesSink {
         }
     }
 
-    /// Writes that failed.
+    /// Events lost to failed writes.
     #[must_use]
     pub fn failures(&self) -> u64 {
         self.failures.load(Ordering::Relaxed)
@@ -974,6 +990,7 @@ impl JsonLinesSink {
             .open(self.segment_path(next))?;
         state.segment = next;
         state.written = file.metadata().map_or(0, |m| m.len());
+        state.committed = state.written;
         state.file = Some(std::io::BufWriter::new(file));
         // Keep the newest `max_files` segments, whatever gaps or a lower limit leave behind.
         let keep = self.max_files.saturating_sub(1);
@@ -989,8 +1006,19 @@ impl JsonLinesSink {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let result = self.write_locked(&mut state, batch);
         if result.is_err() {
-            // A failed write may leave a partial line: never append to that segment again.
-            state.file = None;
+            // A failed write may leave a partial line: never append to that segment again, and cut it
+            // back to the last flushed whole line.
+            if let Some(f) = state.file.take() {
+                drop(f.into_parts().0);
+                let path = self.segment_path(state.segment);
+                let cut = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .and_then(|f| f.set_len(state.committed));
+                if let Err(e) = cut {
+                    tracing::warn!(error = %e, "event file tail could not be repaired");
+                }
+            }
         }
         result
     }
@@ -1015,6 +1043,7 @@ impl JsonLinesSink {
         if let Some(f) = state.file.as_mut() {
             f.flush()?;
         }
+        state.committed = state.written;
         Ok(())
     }
 }
@@ -1026,9 +1055,14 @@ impl EventSink for JsonLinesSink {
 
     fn deliver(&self, batch: &[Arc<EngineEvent>]) {
         if let Err(e) = self.write(batch) {
-            self.failures.fetch_add(1, Ordering::Relaxed);
+            self.failures
+                .fetch_add(batch.len() as u64, Ordering::Relaxed);
             tracing::warn!(error = %e, "event file write failed");
         }
+    }
+
+    fn lost(&self) -> u64 {
+        self.failures()
     }
 
     fn flush(&self) {
