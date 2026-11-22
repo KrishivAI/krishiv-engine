@@ -110,7 +110,7 @@ pub fn like_fold_pattern<O: OffsetSizeTrait>(
         };
         let mut pieces: Vec<char> = Vec::with_capacity(s.len());
         for c in s.chars() {
-            if full && Some(c) != esc {
+            if full {
                 pieces.extend(c.to_lowercase());
             } else {
                 pieces.push(c);
@@ -119,14 +119,20 @@ pub fn like_fold_pattern<O: OffsetSizeTrait>(
         let mut it = pieces.into_iter();
         while let Some(p) = it.next() {
             if Some(p) == esc {
-                out.push(p);
                 if let Some(next) = it.next() {
-                    // An escaped escape stays as written: folding it would leave an invalid pair.
-                    out.push(if Some(next) == esc {
-                        next
+                    if Some(next) == esc {
+                        // An escaped escape is the folded literal; it needs no escape unless it still is the escape.
+                        let f = java_fold(next);
+                        if Some(f) == esc {
+                            out.push(f);
+                        }
+                        out.push(f);
                     } else {
-                        java_fold(next)
-                    });
+                        out.push(p);
+                        out.push(java_fold(next));
+                    }
+                } else {
+                    out.push(p);
                 }
                 continue;
             }
@@ -549,6 +555,9 @@ mod like_fold_tests {
         assert_eq!(fold(0, "AE%", "E"), "aE%");
         // A character folding to the escape is written escaped, so it stays literal.
         assert_eq!(fold(0, "E%", "e"), "ee%");
+        // An escaped escape is the folded literal, with no escape left in front of it.
+        assert_eq!(fold(0, "EE", "E"), "e");
+        assert_eq!(fold(0, "ee", "e"), "ee");
         // `ILIKE` lower-cases first, so an upper-case escape never occurs in the pattern.
         assert_eq!(fold(1, "E%", "E"), "e%");
     }
