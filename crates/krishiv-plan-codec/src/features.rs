@@ -1014,7 +1014,16 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
                     .map(|f| &f.predicate),
             );
         }
-        PhysNode::SortMergeJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::SortMergeJoin(j) => {
+            roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts));
+            // The as-of distance is an expression too: it may carry an `EvalMode`.
+            roots.extend(
+                j.as_of
+                    .iter()
+                    .flat_map(|a| a.distance.iter())
+                    .flat_map(|d| &d.conjuncts),
+            );
+        }
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::TableWrite { request, .. } => match request {
             TableWriteRequest::Write(w) => {
