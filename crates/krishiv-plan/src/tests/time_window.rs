@@ -336,6 +336,21 @@ fn nested_windows_and_window_time() {
         vec![c("window"), count_star()],
     );
     assert_eq!(class(&run(nested_bare)), "MISSING_AGGREGATION");
+    // An aggregate over it is the remedy the error names: `any_value(window)` is accepted.
+    let nested_any_value = LogicalPlan::table(["t"]).aggregate(
+        vec![f(
+            "window",
+            vec![window("ts", &["1 minute"]), s("5 minutes")],
+        )],
+        vec![f("any_value", vec![c("window")]), count_star()],
+    );
+    let r = run(nested_any_value);
+    assert_ne!(
+        class(&r),
+        "MISSING_AGGREGATION",
+        "{:?}",
+        r.as_ref().err().map(|e| &e.error)
+    );
     // `window_time` over a grouped window is neither a key nor an aggregate.
     let grouped_time = LogicalPlan::table(["t"]).aggregate(
         vec![window("ts", &["5 minutes"])],
@@ -389,6 +404,31 @@ fn a_window_over_a_window_column_of_a_derived_table_reads_its_window_time() {
     );
     let r = run(outer);
     assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    // `window.start` is a timestamp and `sum(cnt)` a long.
+    assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
+    // The qualified form, `window(q.inner_window, ..)`, reads the same column; another qualifier is refused.
+    let qualified = |q: &str| {
+        run(LogicalPlan::table(["t"])
+            .aggregate(
+                vec![window("ts", &["1 minute"])],
+                vec![
+                    window("ts", &["1 minute"]).alias("inner_window"),
+                    count_star().alias("cnt"),
+                ],
+            )
+            .alias("q")
+            .aggregate(
+                vec![f(
+                    "window",
+                    vec![c(&format!("{q}.inner_window")), s("5 minutes")],
+                )],
+                vec![c("window.start"), f("sum", vec![c("cnt")])],
+            ))
+    };
+    let r = qualified("q");
+    assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
+    assert_ne!(class(&qualified("other")), "OK");
     // A struct that no `window(..)` made is not a window column.
     let plain = LogicalPlan::table(["t"])
         .project(vec![

@@ -911,7 +911,10 @@ impl Session {
                 ("Table".to_owned(), name.clone()),
                 ("Created Time".to_owned(), created_time(0)),
                 ("Last Access".to_owned(), "UNKNOWN".to_owned()),
-                ("Created By".to_owned(), "Spark 4.2.0".to_owned()),
+                (
+                    "Created By".to_owned(),
+                    created_by(self.state.profile).to_owned(),
+                ),
                 ("Type".to_owned(), "VIEW".to_owned()),
             ];
             if let Some(text) = text {
@@ -1162,7 +1165,7 @@ impl Session {
                     }
                     self.require_current_profile("DESCRIBE EXTENDED")?;
                     let t = self.stored_relation(&name).await?;
-                    let json = describe_json(&t, described.as_ref())?;
+                    let json = describe_json(&t, described.as_ref(), self.state.profile)?;
                     return self
                         .ordered_frame(cols::DESCRIBE_JSON, &[], vec![vec![s(json)]])
                         .await;
@@ -1451,7 +1454,10 @@ impl Session {
             ("Table".to_owned(), t.name.clone()),
             ("Created Time".to_owned(), created_time(t.created_ms)),
             ("Last Access".to_owned(), "UNKNOWN".to_owned()),
-            ("Created By".to_owned(), "Spark 4.2.0".to_owned()),
+            (
+                "Created By".to_owned(),
+                created_by(self.state.profile).to_owned(),
+            ),
         ];
         if let Some(view) = t.view.as_ref().filter(|v| v.is_metric()) {
             // `CatalogTable.toLinkedHashMap` for `METRIC_VIEW`: the YAML as `View Text` and a
@@ -1598,7 +1604,20 @@ fn json_type(t: &DataType) -> Result<String, KrishivError> {
 /// `DESCRIBE EXTENDED [... PARTITION] ... AS JSON` of a stored table: one JSON object whose keys come in
 /// the order Spark's `DescribeTableJsonCommand` writes them (a partition's differ: its values and location
 /// come first, its statistics follow `last_access`, and the bucket keys sit after `provider`, before the comment).
-fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<String, KrishivError> {
+/// The release `Created By` names: the one the session's profile follows (Spark prints its own version).
+fn created_by(profile: krishiv_plan::analyzer::SparkProfile) -> &'static str {
+    if profile >= krishiv_plan::analyzer::SparkProfile::V4_3 {
+        "Spark 4.3.0"
+    } else {
+        "Spark 4.2.0"
+    }
+}
+
+fn describe_json(
+    t: &CatalogTable,
+    p: Option<&CatalogPartition>,
+    profile: krishiv_plan::analyzer::SparkProfile,
+) -> Result<String, KrishivError> {
     if t.view.is_some() {
         return Err(unsupported("DESCRIBE ... AS JSON of a view"));
     }
@@ -1687,7 +1706,7 @@ fn describe_json(t: &CatalogTable, p: Option<&CatalogPartition>) -> Result<Strin
             json_str(&crate::partitions::stats_text(stats))
         ));
     }
-    f.push(format!(r#""created_by":{}"#, json_str("Spark 4.2.0")));
+    f.push(format!(r#""created_by":{}"#, json_str(created_by(profile))));
     f.push(format!(
         r#""type":"{}""#,
         if t.managed { "MANAGED" } else { "EXTERNAL" }

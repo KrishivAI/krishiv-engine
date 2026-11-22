@@ -372,7 +372,11 @@ impl Session {
                     } else {
                         // Store assignment is ANSI whatever `spark.sql.ansi.enabled` says, and non-ANSI under
                         // `storeAssignmentPolicy=LEGACY`.
-                        if legacy_store {
+                        // A map target keeps the ANSI cast: Spark converts its keys and values one by one
+                        // (`TableOutputResolver.resolveMapType`), which a whole-value legacy cast refuses for a
+                        // nullable key conversion.
+                        let nested = matches!(column.data_type, krishiv_types::DataType::Map(_));
+                        if legacy_store && !nested {
                             value.cast_legacy(column.data_type.clone())
                         } else {
                             value.cast_ansi(column.data_type.clone())

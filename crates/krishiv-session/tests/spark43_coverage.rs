@@ -25,7 +25,6 @@ use serde_json::Value;
 const PENDING: &[(&str, &str)] = &[
     ("fn_localtime", "UNRESOLVED_ROUTINE"),
     ("fn_localtime_precision_error", "UNRESOLVED_ROUTINE"),
-    ("fn_time_disabled", "UNSUPPORTED_TIME_TYPE"),
     ("fn_time_precision_9_disabled", "UNSUPPORTED_TIME_PRECISION"),
     (
         "fn_timestamp_nanos_disabled",
@@ -48,22 +47,9 @@ const PENDING: &[(&str, &str)] = &[
         "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
     ),
     ("fn_localtime_9", "UNRESOLVED_ROUTINE"),
-    ("syn_comment_on_column", "PARSE_SYNTAX_ERROR"),
-    (
-        "syn_comment_on_column_describe",
-        "setup: PARSE_SYNTAX_ERROR",
-    ),
-    ("syn_comment_on_column_missing", "PARSE_SYNTAX_ERROR"),
     ("syn_show_tables_as_json", "PARSE_SYNTAX_ERROR"),
     ("syn_show_table_extended_as_json", "PARSE_SYNTAX_ERROR"),
     ("syn_show_partitions_as_json", "PARSE_SYNTAX_ERROR"),
-    ("syn_time_travel_at_version", "PARSE_SYNTAX_ERROR"),
-    ("syn_time_travel_at_timestamp", "PARSE_SYNTAX_ERROR"),
-    ("syn_time_travel_clause_and_at", "PARSE_SYNTAX_ERROR"),
-    ("syn_insert_replace_where_columns", "PARSE_SYNTAX_ERROR"),
-    ("syn_update_with_options", "PARSE_SYNTAX_ERROR"),
-    ("syn_delete_with_options", "PARSE_SYNTAX_ERROR"),
-    ("syn_merge_with_options", "PARSE_SYNTAX_ERROR"),
 ];
 
 fn fixture() -> Value {

@@ -166,6 +166,14 @@ fn every_vector_function_matches_spark_bit_for_bit() {
                 "SELECT vector_normalize(a, CAST('inf' AS FLOAT)) FROM t",
             ),
         ] {
+            // The engine's default is Spark 4.3, which differs from these 4.2.0 goldens in exactly these
+            // cells: its infinity norm propagates a NaN element and its normalizer divides by a subnormal
+            // norm. The 4.3 behaviour is pinned by the unit tests in `krishiv-functions` and the 4.3 goldens.
+            if matches!(cell, "norminf" | "normalizeinf") && name.starts_with("nan-")
+                || name == "denormal-pair" && matches!(cell, "normalize1" | "normalizeinf")
+            {
+                continue;
+            }
             check(&name, cell, &run(&s, sql), &case["result"][cell], &mut bad);
             compared += 1;
         }
@@ -177,4 +185,24 @@ fn every_vector_function_matches_spark_bit_for_bit() {
         bad.len(),
         bad.join("\n")
     );
+}
+
+/// Spark 4.3 rejects only a zero norm (`VectorFunctionImplUtils`): a subnormal norm divides, so the smallest
+/// subnormal float under the infinity norm normalizes to `[1.0]`. A zero vector is still NULL.
+#[test]
+fn vector_normalize_on_4_3_divides_by_a_subnormal_norm() {
+    let s = Session::new().unwrap();
+    let got = run(
+        &s,
+        "SELECT vector_normalize(array(CAST(1.4E-45 AS FLOAT)), CAST('inf' AS FLOAT))",
+    );
+    assert!(
+        matches!(got, Got::BitsList(ref b) if *b == vec![1.0_f32.to_bits()]),
+        "a subnormal norm divides on 4.3"
+    );
+    let zero = run(
+        &s,
+        "SELECT vector_normalize(array(CAST(0.0 AS FLOAT)), CAST('inf' AS FLOAT))",
+    );
+    assert!(matches!(zero, Got::Null));
 }

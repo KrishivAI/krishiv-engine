@@ -120,10 +120,18 @@ pub(super) fn assign(
         }
     }
     for (column, from) in table.columns.iter().zip(&out) {
-        // `spark.sql.storeAssignmentPolicy=LEGACY` stores through any cast Spark can run: no ANSI check.
+        // `spark.sql.storeAssignmentPolicy=LEGACY` stores through any cast Spark can run: no ANSI check, but
+        // a cast Spark refuses in every mode (an `ARRAY` into an `INT`) is refused here, before a first
+        // clause commits.
         if let Source::Position(i) = from
-            && !legacy_store
-            && !can_store(&output[*i].data_type, &column.data_type)
+            && !(if legacy_store {
+                !krishiv_plan::analyzer::cast_always_refused(
+                    &output[*i].data_type,
+                    &column.data_type,
+                )
+            } else {
+                can_store(&output[*i].data_type, &column.data_type)
+            })
         {
             return Err(IncompatibleDataForTableCannotSafelyCast {
                 table_name,

@@ -352,20 +352,23 @@ impl Resolver<'_> {
                 origin,
             ));
         }
-        // The slot of each value (its last index among equal values) and
-        // the value each slot holds.
-        let last: Vec<usize> = (0..keys.len())
-            .map(|k| {
-                (k..keys.len())
-                    .rev()
-                    .find(|&j| keys[j].same(&keys[k]))
-                    .unwrap_or(k)
-            })
-            .collect();
         // Spark 4.3 fixed the slot map: every output reads the slot of its own value, so equal
         // values give equal cells and no output is past the slots (spark43-coverage
         // `fix_pivot_duplicate_values`: `IN ('a','b','a')` gives `3, 3, 3`, 4.2 raises).
         let fixed = profile >= super::SparkProfile::V4_3;
+        // The slot of each value (its last index among equal values): only the earlier profiles read it.
+        let last: Vec<usize> = if fixed {
+            Vec::new()
+        } else {
+            (0..keys.len())
+                .map(|k| {
+                    (k..keys.len())
+                        .rev()
+                        .find(|&j| keys[j].same(&keys[k]))
+                        .unwrap_or(k)
+                })
+                .collect()
+        };
         let slots = if fixed {
             keys.len()
         } else {

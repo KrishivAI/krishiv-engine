@@ -208,8 +208,8 @@ fn row_norm(
     )))
 }
 
-/// The row's vector divided by its norm: NULL for a norm below
-/// `Float.MIN_NORMAL`.
+/// The row's vector divided by its norm: NULL for a norm below `Float.MIN_NORMAL` (4.2 and earlier) or
+/// zero (4.3, `nan`).
 fn row_normalized(
     v: &ArrayRef,
     d: &Float32Array,
@@ -231,7 +231,14 @@ fn row_normalized(
         return Ok(Some(Vec::new()));
     }
     let norm = norm_of(values, degree, nan);
-    if !krishiv_kernels::vector::is_normalizable(norm) {
+    // Spark 4.3 rejects only a zero norm (a subnormal one divides); 4.2 and earlier reject below
+    // `Float.MIN_NORMAL` (`VectorFunctionImplUtils`).
+    let normalizable = if nan {
+        norm.is_nan() || norm != 0.0
+    } else {
+        krishiv_kernels::vector::is_normalizable(norm)
+    };
+    if !normalizable {
         return Ok(None);
     }
     Ok(Some(values.iter().map(|x| x / norm).collect()))

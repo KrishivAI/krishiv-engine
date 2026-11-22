@@ -253,6 +253,23 @@ fn calls_window_time(e: &Arc<Expr>) -> bool {
     }
 }
 
+/// Whether `e` names the inner window's `window` column outside any aggregate call: an aggregate's
+/// arguments are covered (`count(window)`, `any_value(window)`), as in `calls_window_time`.
+fn bare_window(e: &Arc<Expr>) -> bool {
+    if let ExprNode::Function(f) = &e.node
+        && f.qualifier.is_empty()
+        && super::BuiltinFunctions::is_aggregate(&f.name)
+    {
+        return false;
+    }
+    if matches!(&e.node, ExprNode::Column(c) if c.name.first().is_some_and(|n| n == WINDOW)) {
+        return true;
+    }
+    let mut any = false;
+    e.for_each_child(&mut |c| any = any || bare_window(c));
+    any
+}
+
 /// The distinct window calls of `found` that are not the time column of another: the operator's windows.
 fn outermost(
     found: &[Arc<Expr>],
@@ -388,25 +405,15 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
     if let PlanNode::Aggregate { aggregates, .. } = &p.node
         && call_of(&call, WINDOW)
             .is_some_and(|w| w.args.first().is_some_and(|a| call_of(a, WINDOW).is_some()))
+        && aggregates.iter().any(bare_window)
     {
-        let mut bare = false;
-        for a in aggregates {
-            Arc::clone(a).transform_up(&mut |x| {
-                if matches!(&x.node, ExprNode::Column(c) if c.name.first().is_some_and(|n| n == WINDOW)) {
-                    bare = true;
-                }
-                Ok::<_, AnalysisError>(x)
-            })?;
-        }
-        if bare {
-            return Err(AnalysisError::new(
-                MissingAggregation {
-                    expression: "\"window\"".to_owned(),
-                    expression_any_value: "\"any_value(window)\"".to_owned(),
-                },
-                origin,
-            ));
-        }
+        return Err(AnalysisError::new(
+            MissingAggregation {
+                expression: "\"window\"".to_owned(),
+                expression_any_value: "\"any_value(window)\"".to_owned(),
+            },
+            origin,
+        ));
     }
     let Some(project) = qualify else {
         let with_input = p.map_children(|_| Ok::<_, AnalysisError>(Arc::clone(&input)))?;
@@ -555,7 +562,7 @@ fn time_window_input(
     // `window(w, ..)` where `w` is a column a derived table took from an inner `window(..)`: Spark reads the
     // window's `window_time`, as for the nested call above.
     if let ExprNode::Column(c) = &f.args[0].node
-        && let [name] = c.name.as_slice()
+        && let Some(name) = derived_column_name(base, &c.name)
         && is_window_column(base, name)
     {
         // The column is read under the name the `window_time` check accepts for a window column.
@@ -563,7 +570,7 @@ fn time_window_input(
             Arc::clone(base),
             vec![
                 star(origin),
-                alias(Expr::column([name.as_str()]), "__tw_inner", origin),
+                alias(Expr::column([name]), "__tw_inner", origin),
             ],
             origin,
         );
@@ -571,6 +578,17 @@ fn time_window_input(
         return single_window(&renamed, f, WINDOW, time, origin);
     }
     single_window(base, f, WINDOW, (*f.args[0]).clone(), origin)
+}
+
+/// The column name of a one-part reference, or of a two-part one whose qualifier is the derived table's alias.
+fn derived_column_name<'a>(base: &Arc<LogicalPlan>, parts: &'a [String]) -> Option<&'a str> {
+    match parts {
+        [name] => Some(name),
+        [qualifier, name] if matches!(&base.node, PlanNode::SubqueryAlias { alias, .. } if alias.eq_ignore_ascii_case(qualifier)) => {
+            Some(name)
+        }
+        _ => None,
+    }
 }
 
 /// Whether the output column `name` of `p` is the window column an inner `window(..)` added: an alias of
