@@ -60,6 +60,7 @@ DataFrame.def col(self, name: str) -> Column
 DataFrame.def count(self) -> int
 DataFrame.def create_global_temp_view(self, name: str, replace: bool) -> None
 DataFrame.def create_or_replace_temp_view(self, name: str) -> None
+DataFrame.def create_temp_view(self, name: str) -> None
 DataFrame.def cube(self, cols: list[Column]) -> GroupedData
 DataFrame.def distinct(self) -> DataFrame
 DataFrame.def except_all(self, other: DataFrame) -> DataFrame
