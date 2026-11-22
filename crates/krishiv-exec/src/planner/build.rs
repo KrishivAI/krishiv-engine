@@ -1472,11 +1472,18 @@ impl<'a> Planner<'a> {
                 subqueries.push(c);
                 continue;
             }
-            offered.push(OfferedConjunct {
-                filter: scan_filter(table, &layout, c, scan, &self.env)?,
-                source: super::source_filter::classify(c, &scan.output),
-            });
-            exprs.push(c.clone());
+            let filter = scan_filter(table, &layout, c, scan, &self.env)?;
+            let sources = match super::source_filter::split_like(c, &scan.output) {
+                Some(two) => two.to_vec(),
+                None => vec![super::source_filter::classify(c, &scan.output)],
+            };
+            for source in sources {
+                offered.push(OfferedConjunct {
+                    filter: filter.clone(),
+                    source,
+                });
+                exprs.push(c.clone());
+            }
         }
         let decision = factory.decide(&offered, projection)?;
         if decision.pushed.len() != offered.len() {
@@ -1486,9 +1493,17 @@ impl<'a> Planner<'a> {
         }
         let id = self.cx.tables.bind_scan(Arc::clone(&decision.bound))?;
         let taken = |i: usize| decision.pushed.get(i).copied().unwrap_or(false);
-        let (mut kept, mut untranslated) = (Vec::new(), Vec::new());
+        let (mut kept, mut untranslated): (Vec<&Expr>, Vec<&Expr>) = (Vec::new(), Vec::new());
         for (i, (o, e)) in offered.iter().zip(&exprs).enumerate() {
             if taken(i) {
+                continue;
+            }
+            // A split `LIKE` is offered twice; it stays once.
+            if kept
+                .iter()
+                .chain(&untranslated)
+                .any(|k| k.to_string() == e.to_string())
+            {
                 continue;
             }
             match o.source {

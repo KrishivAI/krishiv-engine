@@ -19,6 +19,32 @@ pub(crate) fn classify(e: &Expr, scan: &[BoundColumn]) -> SourceConjunct {
     }
 }
 
+/// `x LIKE 'a%b'` (a prefix and a suffix, no other wildcard): Spark's `LikeSimplification` rewrites it
+/// to `StartsWith(x, 'a') AND EndsWith(x, 'b')`, two conjuncts before pushdown.
+pub(crate) fn split_like(e: &Expr, scan: &[BoundColumn]) -> Option<[SourceConjunct; 2]> {
+    let (Builtin::Like, args) = builtin(e)? else {
+        return None;
+    };
+    let [x, p] = args.as_slice() else {
+        return None;
+    };
+    let ExprNode::Literal(Literal::String(p)) = &p.node else {
+        return None;
+    };
+    let (head, tail) = p.split_once('%')?;
+    let plain = |s: &str| !s.is_empty() && !s.contains(['%', '_', '\\']);
+    if !plain(head) || !plain(tail) {
+        return None;
+    }
+    let Some(Attr::Plain(c, _)) = attribute(x, scan) else {
+        return None;
+    };
+    Some([
+        SourceConjunct::Serializable(SourceFilter::StringStartsWith(c.clone(), head.to_owned())),
+        SourceConjunct::Serializable(SourceFilter::StringEndsWith(c, tail.to_owned())),
+    ])
+}
+
 /// `parts` joined by `AND`, left-deep, in the order given; `None` for no parts.
 pub(crate) fn and_all(parts: Vec<&Expr>) -> Option<Expr> {
     parts.into_iter().cloned().reduce(|l, r| {
@@ -43,17 +69,16 @@ pub(crate) fn and_all(parts: Vec<&Expr>) -> Option<Expr> {
 /// a chain of null-intolerant expressions (comparisons, `LIKE`, arithmetic, casts), not `<=>`,
 /// `IS NULL`, `IN`, `AND` or `OR`. First-appearance order.
 pub(crate) fn inferred_not_null(e: &Expr, scan: &[BoundColumn]) -> Vec<Expr> {
-    let mut found: Vec<&BoundColumn> = Vec::new();
+    let mut found: Vec<&Expr> = Vec::new();
     null_rejected(e, scan, &mut found);
     found
         .into_iter()
-        .map(|b| {
-            let column = Expr::new(ExprNode::Resolved(ResolvedExpr::Column(b.clone())));
+        .map(|column| {
             Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
                 krishiv_plan::ResolvedFunction {
                     id: krishiv_plan::FunctionId::Builtin(Builtin::IsNotNull),
                     kind: krishiv_plan::FunctionKind::Scalar,
-                    args: vec![std::sync::Arc::new(column)],
+                    args: vec![std::sync::Arc::new(column.clone())],
                     distinct: false,
                     filter: None,
                     within_group: Vec::new(),
@@ -66,15 +91,21 @@ pub(crate) fn inferred_not_null(e: &Expr, scan: &[BoundColumn]) -> Vec<Expr> {
         .collect()
 }
 
-/// Collects the nullable scan columns `e` is NULL without (Spark's `scanNullIntolerantAttribute`).
-fn null_rejected<'a>(e: &Expr, scan: &'a [BoundColumn], out: &mut Vec<&'a BoundColumn>) {
+/// Collects the nullable scan columns and struct fields `e` is NULL without (Spark's
+/// `scanNullIntolerantAttribute` / `scanNullIntolerantField`).
+fn null_rejected<'a>(e: &'a Expr, scan: &[BoundColumn], out: &mut Vec<&'a Expr>) {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {
             if let Some(b) = scan.iter().find(|s| s.id == c.id)
                 && b.nullable
-                && !out.iter().any(|o| o.id == b.id)
+                && !out.iter().any(|o| same_path(o, e))
             {
-                out.push(b);
+                out.push(e);
+            }
+        }
+        ExprNode::Resolved(ResolvedExpr::Field { nullable, .. }) => {
+            if *nullable && field_path(e, scan).is_some() && !out.iter().any(|o| same_path(o, e)) {
+                out.push(e);
             }
         }
         ExprNode::Cast { expr, .. } | ExprNode::Collate { expr, .. } => {
@@ -275,16 +306,45 @@ enum Attr<'a> {
     Collated,
 }
 
-/// The scan column `e` names, if it is one.
+/// The scan column, or struct field of one, `e` names: the root column and the path from it.
+fn field_path<'a>(e: &Expr, scan: &'a [BoundColumn]) -> Option<(&'a BoundColumn, Vec<String>)> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+            let b = scan.iter().find(|s| s.id == c.id)?;
+            Some((b, vec![b.name.clone()]))
+        }
+        ExprNode::Resolved(ResolvedExpr::Field { base, name, .. }) => {
+            let (b, mut path) = field_path(base, scan)?;
+            path.push(name.clone());
+            Some((b, path))
+        }
+        _ => None,
+    }
+}
+
+/// Whether two expressions name the same column or field path.
+fn same_path(a: &Expr, b: &Expr) -> bool {
+    fn key(e: &Expr) -> Option<(u64, Vec<String>)> {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some((c.id.0, vec![])),
+            ExprNode::Resolved(ResolvedExpr::Field { base, name, .. }) => {
+                let (id, mut p) = key(base)?;
+                p.push(name.clone());
+                Some((id, p))
+            }
+            _ => None,
+        }
+    }
+    key(a).is_some() && key(a) == key(b)
+}
+
+/// The scan column (or field of one) `e` names, if it is one.
 fn attribute<'a>(e: &Expr, scan: &'a [BoundColumn]) -> Option<Attr<'a>> {
-    let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node else {
-        return None;
-    };
-    let b = scan.iter().find(|s| s.id == c.id)?;
+    let (b, path) = field_path(e, scan)?;
     Some(if b.data_type.contains_collation() {
         Attr::Collated
     } else {
-        Attr::Plain(ColumnPath::new(b.name.clone()), b)
+        Attr::Plain(ColumnPath::nested(path), b)
     })
 }
 
@@ -397,6 +457,55 @@ mod tests {
             SourceConjunct::Serializable(SourceFilter::StringContains(path, "a".into()))
         );
         assert_eq!(like("a_b"), SourceConjunct::Untranslated);
+    }
+
+    #[test]
+    fn a_prefix_and_suffix_like_splits_and_a_struct_field_keeps_its_path() {
+        let t = col(2, "t", DataType::String);
+        let scan = [t.clone()];
+        let split = split_like(&call(Builtin::Like, vec![c(&t), s("a%b")]), &scan);
+        let path = ColumnPath::new("t");
+        assert_eq!(
+            split,
+            Some([
+                SourceConjunct::Serializable(SourceFilter::StringStartsWith(
+                    path.clone(),
+                    "a".into()
+                )),
+                SourceConjunct::Serializable(SourceFilter::StringEndsWith(path, "b".into())),
+            ])
+        );
+        for p in ["a%", "%a", "a_b%c", "a%b%c", "%"] {
+            assert_eq!(
+                split_like(&call(Builtin::Like, vec![c(&t), s(p)]), &scan),
+                None
+            );
+        }
+        assert_eq!(split_like(&c(&t), &scan), None);
+
+        let st = col(3, "st", DataType::Integer);
+        let field = Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+            base: Arc::new(c(&st)),
+            ordinal: 0,
+            name: "y".into(),
+            data_type: DataType::Integer,
+            nullable: true,
+        }));
+        let scan = [st];
+        let eq = call(Builtin::Eq, vec![field.clone(), int(1)]);
+        assert_eq!(
+            classify(&eq, &scan),
+            SourceConjunct::Serializable(SourceFilter::EqualTo(
+                ColumnPath::nested(["st", "y"]),
+                ScalarValue::Int32(1)
+            ))
+        );
+        let inferred = inferred_not_null(&eq, &scan);
+        assert_eq!(inferred.len(), 1);
+        assert_eq!(
+            inferred[0].to_string(),
+            call(Builtin::IsNotNull, vec![field]).to_string()
+        );
     }
 
     #[test]
