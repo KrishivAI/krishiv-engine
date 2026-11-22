@@ -1013,6 +1013,25 @@ fn eager_aggregation_defaults_on_and_parses() {
 }
 
 #[test]
+fn pre_aggregate_expand_defaults_on_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&PRE_AGGREGATE_EXPAND).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    c.set("krishiv.optimizer.preAggregateExpand", "false")
+        .unwrap();
+    assert_eq!(
+        c.get(&PRE_AGGREGATE_EXPAND).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(
+        c.set("krishiv.optimizer.preAggregateExpand", "maybe")
+            .is_err()
+    );
+}
+
+#[test]
 fn share_cte_instances_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(
