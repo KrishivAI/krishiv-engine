@@ -892,6 +892,31 @@ async fn cancel_ends_only_the_named_sessions_query_and_refuses_an_id_two_session
 }
 
 #[tokio::test]
+async fn a_session_qualifier_that_is_empty_or_does_not_decode_is_refused_not_dropped() {
+    let (addr, fake) = start_dup().await;
+    // `%FF` is no UTF-8 text. Dropping the qualifier would end, show or compare the first query of that id.
+    for (method, path) in [
+        ("POST", "/api/internal/queries/q-solo/cancel?session=%FF"),
+        ("POST", "/api/internal/queries/q-solo/cancel?session="),
+        ("GET", "/api/internal/queries/q-dup?session=%FF"),
+        ("GET", "/api/internal/queries/q-dup?session="),
+        (
+            "GET",
+            "/api/internal/compare?a=q-dup&a_session=%FF&b=q-solo",
+        ),
+        (
+            "GET",
+            "/api/internal/compare?a=q-dup&b=q-solo&b_session=%zz",
+        ),
+    ] {
+        let (status, _, body) = request(addr, method, path, true).await;
+        assert_eq!(status, 400, "{path}: {body}");
+        assert_eq!(body["error"], "bad_request", "{path}");
+    }
+    assert!(fake.cancelled.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn a_failing_source_fails_a_cancel_as_json_with_or_without_a_session() {
     let (addr, fake) = start(true).await;
     // Without a session the running queries are read first, and that read fails.

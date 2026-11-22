@@ -1059,13 +1059,18 @@ def advisor_checks() -> list[str]:
         ):
             problems.append(f"queries: the query's page read {server.query_reads}")
         # A row with no session (a profile stored before a restart) links the id alone, as before.
-        del server.query_reads[:]
-        page.evaluate(f"window.location.hash = '#/queries/{QID}'")
-        page.wait_for_timeout(500)
+        try:
+            with page.expect_response(
+                lambda r: r.url.endswith(f"/api/internal/queries/{QID}"), timeout=5000
+            ) as unqualified:
+                page.evaluate(f"window.location.hash = '#/queries/{QID}'")
+            read = unqualified.value.ok
+        except PlaywrightTimeout:
+            read = False
         if (
-            not shows(page, ["Operators"], "main")
-            or any("?" in r for r in server.query_reads)
-            or not server.query_reads
+            not read
+            or not shows(page, ["Operators"], "main")
+            or "?" in server.query_reads[-1]
         ):
             problems.append(
                 f"queries: a link without a session read {server.query_reads}"

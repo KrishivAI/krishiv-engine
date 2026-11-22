@@ -10,6 +10,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use krishiv_server::embedded::EmbeddedSource;
 use krishiv_server::internal::{Row, SystemTable, UiSource};
 use krishiv_server::session_source::SessionSource;
 use krishiv_session::{EngineRuntime, QueryOptions, Session};
@@ -101,10 +102,18 @@ async fn the_advice_of_a_history_with_a_planted_filter_column_is_listed_and_none
     assert_eq!(of_ev[0]["column_queries"], 10);
     assert_eq!(of_ev[0]["table_queries"], 12);
     assert_eq!(of_ev[0]["partitions"], 365);
+    // The optimizer's estimate: the share of the table's queries that filter on the column (10 of 12) times
+    // the share of partitions such a query skips (all but one of 365).
     let pruned = of_ev[0]["pruned_fraction"].as_f64().unwrap();
-    assert!(pruned > 0.8 && pruned < 1.0, "{pruned}");
+    let expected = (10.0 / 12.0) * (1.0 - 1.0 / 365.0);
+    assert!((pruned - expected).abs() < 1e-9, "{pruned} != {expected}");
     assert_eq!(of_ev[1]["column_name"], "c");
     assert_eq!(of_ev[1]["rank"], 2);
+
+    // The console of one session lists none of it, even the session whose queries the advice is folded from.
+    let embedded = EmbeddedSource::new(&client).unwrap();
+    let rows = embedded.rows(SystemTable::PartitionAdvice).await.unwrap();
+    assert!(rows.is_empty(), "{rows:?}");
 }
 
 #[tokio::test]

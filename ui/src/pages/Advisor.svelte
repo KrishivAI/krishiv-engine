@@ -12,6 +12,7 @@
     queryKey: ["advice"],
     queryFn: () => api("/api/internal/advice"),
     refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   }));
 
   let filter = $state("");

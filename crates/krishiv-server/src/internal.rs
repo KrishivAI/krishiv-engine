@@ -426,6 +426,23 @@ fn filter_param(uri: &Uri, name: &str) -> Option<String> {
     percent_decode(&param(uri, name)?.replace('+', " ")).filter(|v| !v.is_empty())
 }
 
+/// The session a request names for a query (`name` is `session`, `a_session` or `b_session`): `None` when the
+/// request names none. A qualifier that is there but empty or does not decode is refused (400): dropping it
+/// would act on whichever session's query comes first.
+fn session_param(uri: &Uri, name: &str) -> Result<Option<String>, Box<Response>> {
+    if param(uri, name).is_none() {
+        return Ok(None);
+    }
+    match filter_param(uri, name) {
+        Some(session) => Ok(Some(session)),
+        None => Err(Box::new(error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "the session named for the query is empty or not valid text",
+        ))),
+    }
+}
+
 /// Whether a `system.queries` row carries `tag`: a tag's key, or `key=value`. A request tag (Spark Connect's
 /// `addTag`) is a key with an empty value.
 fn has_tag(row: &Row, tag: &str) -> bool {
@@ -884,7 +901,10 @@ fn hot_operator(operators: &[Row]) -> Value {
 /// (a client chooses its operation ids), so a list's link names the row's session; without one the first
 /// query of that id answers.
 async fn query_detail(State(s): State<UiState>, Path(id): Path<String>, uri: Uri) -> Response {
-    detail(&s, &id, filter_param(&uri, "session").as_deref()).await
+    match session_param(&uri, "session") {
+        Ok(session) => detail(&s, &id, session.as_deref()).await,
+        Err(e) => *e,
+    }
 }
 
 /// Whether a `system.queries` row is query `id`, of session `session` when one is named.
@@ -1080,7 +1100,10 @@ async fn cancel(
     Path(id): Path<String>,
     uri: Uri,
 ) -> Response {
-    let session = filter_param(&uri, "session");
+    let session = match session_param(&uri, "session") {
+        Ok(session) => session,
+        Err(e) => return *e,
+    };
     let done = match &session {
         Some(session) => s.source.cancel_in_session(&id, session).await,
         None => {
@@ -1180,6 +1203,13 @@ async fn compare(State(s): State<UiState>, uri: Uri) -> Response {
             "compare needs ?a=<query_id>&b=<query_id>",
         );
     };
+    let (of_a, of_b) = match (
+        session_param(&uri, "a_session"),
+        session_param(&uri, "b_session"),
+    ) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => return *e,
+    };
     let rows = match table(&s, SystemTable::Queries).await {
         Ok(r) => r,
         Err(e) => return *e,
@@ -1187,10 +1217,7 @@ async fn compare(State(s): State<UiState>, uri: Uri) -> Response {
     let find = |id: &str, session: Option<String>| {
         rows.iter().find(|r| is_query(r, id, session.as_deref()))
     };
-    let (Some(ra), Some(rb)) = (
-        find(&a, filter_param(&uri, "a_session")),
-        find(&b, filter_param(&uri, "b_session")),
-    ) else {
+    let (Some(ra), Some(rb)) = (find(&a, of_a), find(&b, of_b)) else {
         return error(
             StatusCode::NOT_FOUND,
             "no_such_query",
