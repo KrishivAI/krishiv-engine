@@ -385,7 +385,8 @@ pub trait EventSink: Send + Sync + 'static {
     /// The sink's name, a label of its metrics.
     fn name(&self) -> &str;
 
-    /// Whether the sink wants events of `kind` (asked before queueing: keep it cheap).
+    /// Whether the sink wants events of `kind`. It is asked on the sink's own thread after an event is dequeued, so a
+    /// queue holds (and its drops count) events the sink would reject; keep it cheap, a panic here costs the batch.
     fn accept(&self, _kind: EventKindTag) -> bool {
         true
     }

@@ -38,7 +38,7 @@ The figures are the `system.queries` row's.
 
 Each sink has a bounded queue (`krishiv.events.queueCapacity`) and its own thread; emitting never blocks and never
 fails a query. A full queue drops `progress` events first, then the oldest non-terminal event, and a terminal event
-only when nothing else can go; drops are counted (`krishiv.events.dropped`, gauge `krishiv.events.queue_depth`).
+only when nothing else can go; drops are counted (`krishiv.events.dropped`, gauge `krishiv.events.queue_depth`). A sink's `accept` filter runs on its own thread after dequeue, so the queue and these counts include kinds the sink would reject.
 `krishiv.events.dropped` counts queue drops (a full queue, a queue closed because its thread did not start, a queue not drained at shutdown). A sink's reported write failures are counted there too (`EventSink::lost`: the JSON-lines sink counts the events of a batch it could not write, less those already flushed); a failed write cuts the segment back to its last flushed whole line and moves the sink to a new segment. The contract is: never blocks a query, every queue loss is counted, the final usage is recoverable from
 `system.queries` while the row is held. Dropping a runtime waits up to 5 s per sink for its queue to drain.
 
