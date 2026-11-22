@@ -600,6 +600,10 @@ fn a_detached_engine_reserves_nothing_from_the_statement() {
         !std::ptr::addr_eq(Arc::as_ptr(&statement), Arc::as_ptr(&root)),
         "the detached engine shares the statement's pool"
     );
+    assert!(
+        std::ptr::addr_eq(Arc::as_ptr(&env.process_pool), Arc::as_ptr(&root)),
+        "the detached engine reserves from a pool other than the runtime root"
+    );
 }
 
 /// No write into an oracle table, of any mode, raises `INTERNAL_ERROR` (design section 3.7:

@@ -1861,7 +1861,7 @@ impl Session {
                 query: Arc::clone(&query),
                 state: Arc::clone(&self.state),
                 start: QueryStart::capture(&self.state, &env.io),
-                _io_memory: env.io.bind_query_memory(Arc::clone(query.pool())),
+                _io_memory: Some(env.io.bind_query_memory(Arc::clone(query.pool()))),
                 metrics_on,
                 log_id,
                 _permit: permit,

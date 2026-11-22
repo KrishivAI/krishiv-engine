@@ -28,7 +28,7 @@ use krishiv_common::error::{KrishivError, KrishivInvalidProfileDocument};
 use crate::metrics::QueryMetrics;
 use crate::physical::{PhysNode, PhysicalPlan, SHARED_PLAN, WITH_SHARED};
 use crate::planner::{ExplainNode, NodeFacts};
-pub use ids::dense_ids;
+pub use ids::{dense_ids, dense_ids_all};
 use std::sync::Arc;
 
 pub use scans::{ProfileScan, ScanColumn, profile_scans};
@@ -113,20 +113,13 @@ impl ProfileNode {
     /// Renumbers the planner's high expression ids across every node's
     /// detail, as `EXPLAIN` does (one numbering for the whole tree).
     fn dense_ids(&mut self) {
-        const SEP: char = '\u{1}';
-        let mut joined = String::new();
-        self.walk(&mut |n| {
-            joined.push_str(&n.detail);
-            joined.push(SEP);
-        });
-        let dense = dense_ids(&joined);
-        if dense == joined {
-            return;
-        }
-        let mut parts = dense.split(SEP);
+        let mut details = Vec::new();
+        self.walk(&mut |n| details.push(n.detail.clone()));
+        let refs: Vec<&str> = details.iter().map(String::as_str).collect();
+        let mut dense = dense_ids_all(&refs).into_iter();
         self.walk_mut(&mut |n| {
-            if let Some(d) = parts.next() {
-                d.clone_into(&mut n.detail);
+            if let Some(d) = dense.next() {
+                n.detail = d;
             }
         });
     }

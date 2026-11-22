@@ -34,12 +34,17 @@ fn explain_analyze_prints_the_same_ids_as_explain() -> R {
     let text = profile.to_json();
     assert!(!text.contains("4611686018427387"), "{text}");
     let explain = block_on(df.explain(ExplainMode::Simple))?;
-    let ids = |t: &str| -> std::collections::BTreeSet<String> {
-        t.split('#')
-            .skip(1)
-            .map(|r| r.chars().take_while(char::is_ascii_digit).collect())
-            .collect()
+    // The aggregate's id association (`sum(v#a)#b AS revenue#c`) is the same in both texts.
+    let assoc = |t: &str| -> String {
+        let start = t.find("sum(v#").expect("the aggregate's text");
+        let tail = &t[start..];
+        let end = tail.find("revenue#").expect("the alias") + "revenue#".len();
+        let digits: String = tail[end..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        tail[..end + digits.len()].to_owned()
     };
-    assert!(ids(&explain).is_subset(&ids(&text)), "{explain}\n{text}");
+    assert_eq!(assoc(&explain), assoc(&text), "{explain}\n{text}");
     Ok(())
 }
