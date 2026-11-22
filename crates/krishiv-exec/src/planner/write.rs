@@ -47,6 +47,18 @@ impl WriteMode {
     }
 }
 
+/// The option that carries a write's idempotency key (the config key of the same name).
+pub const IDEMPOTENCY_KEY_OPTION: &str = "krishiv.write.idempotencyKey";
+
+/// The idempotency key among write `options` (key matched ASCII case-insensitively).
+#[must_use]
+pub fn idempotency_key_option(options: &BTreeMap<String, String>) -> Option<String> {
+    options
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(IDEMPOTENCY_KEY_OPTION))
+        .map(|(_, v)| v.clone())
+}
+
 /// What one write asks of a table: everything a format's writer needs, so the
 /// trait does not change when the Iceberg and Delta writes arrive.
 #[derive(Debug, Clone, PartialEq)]
@@ -78,6 +90,15 @@ impl WriteRequest {
             options: BTreeMap::new(),
             write_id: None,
         }
+    }
+
+    /// The caller's `krishiv.write.idempotencyKey` (E34), carried in the options (the session puts
+    /// the setting there when the write names none): unlike `write_id` it is chosen by the caller
+    /// and survives a whole-statement retry; a table that already has a commit with the key
+    /// writes nothing and succeeds.
+    #[must_use]
+    pub fn idempotency_key(&self) -> Option<String> {
+        idempotency_key_option(&self.options)
     }
 
     /// The filter of an [`WriteMode::OverwriteByFilter`] write as the typed

@@ -1107,6 +1107,9 @@ impl DataFrame {
         }
         let plan = self.plan_with_checkpoints().await?;
         let (analyzed, through_views) = self.session.analyze_in(&plan, &env, text).await?;
+        // Analysis-only paths (DESCRIBE QUERY, `schema`) never reach `open_files`: refuse a
+        // time-travel clause they would otherwise describe as the current table.
+        env.catalog.check_reference_options(analyzed.plan.root())?;
         let mut env = env;
         // A trial's analysis is kept as an ordinary one: later checks are audited and told to
         // the policy.

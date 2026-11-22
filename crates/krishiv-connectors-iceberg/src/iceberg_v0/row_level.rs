@@ -251,12 +251,15 @@ impl RowLevelTable for IcebergRowLevel {
             validation,
             lineage: self.lineage,
         };
-        Ok(Arc::new(IcebergWriteSink::try_rewrite(
-            target,
-            &request.input_schema,
-            &request.table_name,
-            request.write_id.clone(),
-            overwrite,
-        )?))
+        Ok(Arc::new(
+            IcebergWriteSink::try_rewrite(
+                target,
+                &request.input_schema,
+                &request.table_name,
+                request.write_id.clone(),
+                overwrite,
+            )?
+            .with_idempotency_key(request.idempotency_key()),
+        ))
     }
 }
