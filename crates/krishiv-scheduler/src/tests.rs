@@ -397,6 +397,7 @@ fn streaming_scans_follow_every_join_kind_to_its_probe() {
         null_safe: vec![false],
         residual: None,
         single_match: false,
+        as_of: None,
     });
     let ids: Vec<ScanId> = crate::streaming_scans(&merge)
         .iter()

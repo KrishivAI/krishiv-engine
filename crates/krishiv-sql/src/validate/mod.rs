@@ -1391,6 +1391,9 @@ impl Checker<'_> {
     }
 
     fn join(&self, j: &Join) -> R {
+        if let JoinConstraint::AsOf(c) = &j.constraint {
+            return self.asof_join(j, c);
+        }
         if let JoinConstraint::NearestBy(n) = &j.constraint {
             self.nearest_by(j, n)?;
         }
