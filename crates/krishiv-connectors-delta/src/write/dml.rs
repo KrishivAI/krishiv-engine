@@ -187,7 +187,11 @@ fn touched_paths(table: &DeltaTable, files: &[Vec<u8>]) -> Result<HashSet<String
 
 impl RowLevelTable for DeltaRowLevel {
     fn capabilities(&self) -> RowLevelCapabilities {
-        RowLevelCapabilities::copy_on_write(CardinalityRule::DeltaWithUnconditionalDeleteExemption)
+        let mut c = RowLevelCapabilities::copy_on_write(
+            CardinalityRule::DeltaWithUnconditionalDeleteExemption,
+        );
+        c.idempotent_commit = true;
+        c
     }
 
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {

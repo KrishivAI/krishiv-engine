@@ -146,7 +146,10 @@ impl Session {
             return Ok(None);
         };
         // Refused here, before any scan or path split and for merge-on-read tables alike (E34).
-        refuse_idempotency_key(&probe.env.config)?;
+        let caps = table.capabilities();
+        if !caps.idempotent_commit || caps.merge_on_read {
+            refuse_idempotency_key(&probe.env.config)?;
+        }
         // A Delta table's root as delta-spark's errors name it (`file:/..`), for a table by path
         // and for a catalog table over a Delta location alike (its scan keeps the table's name).
         #[cfg(feature = "delta")]
@@ -376,6 +379,10 @@ impl Session {
                 .options
                 .insert(CONDITION_OPTION.to_owned(), c.to_owned());
         }
+        #[cfg(feature = "delta")]
+        if table.capabilities().idempotent_commit {
+            apply_idempotency_key(&analysis.env.config, &mut request.options)?;
+        }
         let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
         let written = async {
             let mut stream = self.run(&plan, &analysis.env).await?;
@@ -461,6 +468,10 @@ impl Session {
         let mut request =
             RowLevelWrite::new(op, quoted, Arc::clone(physical.schema()), Vec::new(), None);
         request.write_id = Some(crate::session::job_uuid());
+        #[cfg(feature = "delta")]
+        if table.capabilities().idempotent_commit {
+            apply_idempotency_key(&analysis.env.config, &mut request.options)?;
+        }
         let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
         let mut stream = self.run(&plan, &analysis.env).await?;
         while let Some(batch) = stream.next().await {

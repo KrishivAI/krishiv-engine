@@ -933,6 +933,49 @@ fn a_retried_insert_with_the_same_idempotency_key_appends_once() {
     );
 }
 
+/// E34: a retried `UPDATE` or `DELETE` under the same `krishiv.write.idempotencyKey` changes the
+/// table once, even when the statement is not idempotent (`a = a + 1`); a new key applies again.
+#[test]
+fn a_retried_update_and_delete_with_the_same_idempotency_key_apply_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("k");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE k (a INT) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO k VALUES (1), (2), (3)").unwrap();
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "upd-1")
+        .unwrap();
+    run(&s, "UPDATE k SET a = a + 10").unwrap();
+    let after_first = versions(&dir);
+    run(&s, "UPDATE k SET a = a + 10").unwrap();
+    assert_eq!(versions(&dir), after_first, "the retry committed nothing");
+    assert_eq!(
+        query(&s, "SELECT a FROM k ORDER BY a"),
+        serde_json::json!([[11], [12], [13]])
+    );
+    assert!(
+        last_commit(&dir)
+            .iter()
+            .any(|a| a["txn"]["appId"] == "krishiv.idempotency:upd-1")
+    );
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "del-1")
+        .unwrap();
+    run(&s, "DELETE FROM k WHERE a = 11").unwrap();
+    let after_delete = versions(&dir);
+    run(&s, "DELETE FROM k WHERE a = 12").unwrap();
+    assert_eq!(versions(&dir), after_delete, "the retried key is a no-op");
+    assert_eq!(
+        query(&s, "SELECT a FROM k ORDER BY a"),
+        serde_json::json!([[12], [13]])
+    );
+}
+
 /// E34: a keyed `save` whose key the table records succeeds under `errorifexists` and `overwrite`
 /// and writes nothing (as a directory write does); without the key the path still exists.
 #[test]
