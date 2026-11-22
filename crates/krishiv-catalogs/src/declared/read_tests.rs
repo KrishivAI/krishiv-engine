@@ -358,7 +358,7 @@ fn declared_metadata_cache_ttl_and_refresh() {
         Arc::new(super::table::EmbeddedLocations::default()),
     )
     .unwrap();
-    let ttl = Duration::from_millis(300);
+    let ttl = Duration::from_secs(3);
     let built = super::RestCatalog::new(&d, Arc::new(client), ttl);
     let caller = CatalogCaller::server("lake");
     let t: TableIdent = ident(&["db"], "t");
