@@ -43,8 +43,9 @@ Paths are relative to this crate.
   a control message, the result capped at `MAX_ANALYZE_RESULT` on both sides (the analyze class); the worker
   converts each constant as Spark does (internal value, then `fromInternal`). A UDTF task's call data goes in a
   memfd too (`udtf_len`)
-- `src/validate.rs` Spark 4.1+'s result-schema check of the map kinds under
-  `spark.sql.execution.arrow.pyspark.validateSchema.enabled` (`ARROW_TYPE_MISMATCH`, compatible nullability)
+- Spark 4.1+'s result-schema check of the map kinds under
+  `spark.sql.execution.arrow.pyspark.validateSchema.enabled` lives in `krishiv-exec`
+  `src/python_relation/schema_check.rs` (`ARROW_TYPE_MISMATCH`, compatible nullability), shared by both runtimes
 - `src/calls.rs` `CallThreads`: the bounded call threads (at most `maxTotal` threads, at most `maxPerSession`
   running calls per owner; the rest wait in a FIFO queue, not on a thread), and the relation task slots: at most
   `min(maxPerSession, maxTotal) - 1` per owner (all of them when that is 1) and `maxTotal - 1` in all (the threads

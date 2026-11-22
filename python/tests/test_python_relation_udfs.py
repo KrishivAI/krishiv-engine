@@ -440,3 +440,45 @@ except Exception:
 """,
     )
     assert out == "error"
+
+
+_VALIDATE_KEYS = [
+    "spark.sql.execution.arrow.pyspark.validateSchema.enabled",
+    "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled",
+]
+
+
+def _spark_validating(key: str, value: str = "true") -> SparkSession:
+    config = [("krishiv.python.udf.threads", "1"), (key, value)]
+    return SparkSession(_native.Session(config), config)
+
+
+def _misnamed(batches):
+    for b in batches:
+        yield pa.RecordBatch.from_pydict({"wrong": b.column("id").to_pylist()})
+
+
+@pytest.mark.parametrize("key", _VALIDATE_KEYS)
+def test_map_in_arrow_with_validate_schema_refuses_a_misnamed_result(key: str) -> None:
+    df = _spark_validating(key).range(3).mapInArrow(_misnamed, "id long")
+    with pytest.raises(Exception, match=r"ARROW_TYPE_MISMATCH") as info:
+        df.collect()
+    assert "SQL_MAP_ARROW_ITER_UDF" in str(info.value)
+
+
+def test_map_in_arrow_without_validate_schema_relabels_a_misnamed_result() -> None:
+    df = _spark().range(3).mapInArrow(_misnamed, "id long")
+    assert _rows(df) == [(0,), (1,), (2,)]
+    off = _spark_validating(_VALIDATE_KEYS[0], "false").range(3).mapInArrow(_misnamed, "id long")
+    assert _rows(off) == [(0,), (1,), (2,)]
+
+
+def test_a_windowed_grouped_aggregate_pandas_udf_in_sql_is_refused() -> None:
+    from krishiv.sql.functions import pandas_udf
+
+    spark = _spark()
+    total = pandas_udf(lambda v: v.sum(), "long", 202)  # SQL_GROUPED_AGG_PANDAS_UDF
+    spark.udf.register("total_udf", total)
+    spark.range(4).createOrReplaceTempView("t")
+    with pytest.raises(Exception, match=r"(?i)NOT_IMPLEMENTED|not implemented|window"):
+        spark.sql("SELECT total_udf(id) OVER (PARTITION BY id % 2) FROM t").collect()
