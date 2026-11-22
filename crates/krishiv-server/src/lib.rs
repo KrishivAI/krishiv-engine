@@ -29,6 +29,7 @@ pub mod access_external;
 pub mod admin;
 #[cfg(feature = "admin-api")]
 pub mod admin_v1;
+mod advice;
 pub mod drain;
 pub mod embed;
 pub mod guard;

@@ -60,6 +60,7 @@ DEEP_LINKS = (
     "history",
     "sessions",
     "workload",
+    "advisor",
     "resources",
     "catalog",
     "sql",
@@ -205,6 +206,63 @@ def group(group_id: str, parent: str | None, **over: object) -> dict:
         "scan_window_resets_at": None,
     } | over
 
+
+# A server's partition advice (`/api/internal/advice`): one entry a table, its suggestions by rank.
+ADVICE = [
+    {
+        "table_name": "spark_catalog.default.events",
+        "table_queries": 120,
+        "columns": [
+            {
+                "rank": 1,
+                "column_name": "event_date",
+                "column_queries": 100,
+                "partitions": 365,
+                "pruned_fraction": 0.8310502283105022,
+            },
+            {
+                "rank": 2,
+                "column_name": "region",
+                "column_queries": 20,
+                "partitions": 3,
+                "pruned_fraction": 0.1111111111111111,
+            },
+        ],
+    },
+    {
+        "table_name": "spark_catalog.sales.orders",
+        "table_queries": 2140,
+        "columns": [
+            {
+                "rank": 1,
+                "column_name": "o_orderstatus",
+                "column_queries": 1070,
+                "partitions": 3,
+                "pruned_fraction": 0.3333333333333333,
+            },
+            {
+                "rank": 2,
+                "column_name": XSS,
+                "column_queries": 4,
+                "partitions": 2,
+                "pruned_fraction": 0.0009345794392523364,
+            },
+        ],
+    },
+    {
+        "table_name": "iceberg.web.page_views_by_country_and_device_class",
+        "table_queries": 7,
+        "columns": [
+            {
+                "rank": 1,
+                "column_name": "country",
+                "column_queries": 7,
+                "partitions": 190,
+                "pruned_fraction": 0.9947368421052631,
+            }
+        ],
+    },
+]
 
 GROUPS = [
     group(
@@ -377,16 +435,20 @@ def route(
     query: str = "",
     sessions: list[dict] | None = None,
     groups: list[dict] | None = None,
+    advice: list[dict] | None = None,
 ) -> object | None:
     d = DATA
     parts = path.split("/")
     if mode == "profiles" and not path.startswith(PROFILES_ROUTES):
         return None
-    # Every client's sessions and the resource groups are a server's: the other consoles have neither page.
+    # Every client's sessions, the resource groups and the partition advice are a server's: the other consoles
+    # have none of those pages.
     if path == "/api/internal/sessions" and mode == "server":
         return {"sessions": sessions or [], "truncated": False}
     if path == "/api/internal/groups" and mode == "server":
         return {"groups": groups or []}
+    if path == "/api/internal/advice" and mode == "server":
+        return {"tables": advice or [], "truncated": False}
     if path == "/api/internal/environment":
         return ENVIRONMENT if role == "admin" else None
     if path == "/api/internal/catalog/catalogs":
@@ -491,6 +553,8 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 )
             self.server.asked.append(url.path)  # type: ignore[attr-defined]
+            if url.path.startswith("/api/internal/queries/"):
+                self.server.query_reads.append(self.path)  # type: ignore[attr-defined]
             if url.path == "/api/internal/health" and self.server.health_failures > 0:  # type: ignore[attr-defined]
                 self.server.health_failures -= 1  # type: ignore[attr-defined]
                 return self.send_json(
@@ -530,6 +594,7 @@ class Handler(BaseHTTPRequestHandler):
                 url.query,
                 self.server.sessions,  # type: ignore[attr-defined]
                 self.server.groups,  # type: ignore[attr-defined]
+                self.server.advice,  # type: ignore[attr-defined]
             )
             return (
                 self.send_json(200, body)
@@ -649,6 +714,8 @@ class Handler(BaseHTTPRequestHandler):
                 RUNS[run_id] = {"state": "cancelled", "error": "cancelled"}
                 return self.send_json(200, {"cancelled": True})
             return self.send_json(404, {"error": "not_running"})
+        if path.startswith("/api/internal/queries/") and path.endswith("/cancel"):
+            self.server.cancels.append(self.path)  # type: ignore[attr-defined]
         self.send_json(200, {"cancelled": True})
 
 
@@ -658,12 +725,14 @@ def serve(
     role: str = "admin",
     health_failures: int = 0,
     groups: bool = True,
+    advice: bool = True,
 ) -> ThreadingHTTPServer:
     """The fixture server as a console of `mode` for a caller of `role` (the settings are the administrator's);
     `asked` collects the `/api/internal/*` paths pages requested. The first `health_failures` requests for the
     health answer 503, as a console that is let in before its server can answer. Each server has its own
     sessions (`closed` collects the ids of the ones a page ended); without `groups` it is a server started
-    with no resource-group file."""
+    with no resource-group file, without `advice` one whose history has none. `query_reads` and `cancels`
+    collect the addresses, parameters included, a page read a query's detail from and cancelled a query at."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
@@ -674,6 +743,9 @@ def serve(
     server.sessions = fresh_sessions()  # type: ignore[attr-defined]
     server.closed = []  # type: ignore[attr-defined]
     server.groups = GROUPS if groups else []  # type: ignore[attr-defined]
+    server.advice = ADVICE if advice else []  # type: ignore[attr-defined]
+    server.query_reads = []  # type: ignore[attr-defined]
+    server.cancels = []  # type: ignore[attr-defined]
     return server
 
 
