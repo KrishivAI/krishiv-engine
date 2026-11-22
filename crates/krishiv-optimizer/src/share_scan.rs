@@ -36,7 +36,12 @@
 //!   nondeterministic or hold a subquery; and none reads an outer reference;
 //! - statistics say it pays: the scan's estimate comes from statistics, is at
 //!   least [`MIN_ROWS`] rows, and the disjunction keeps at most [`MAX_KEPT`] of its rows (the buffer
-//!   replaces scans, it should be small next to them).
+//!   replaces scans, it should be small next to them);
+//! - no reader sits inside a security barrier: the candidate walk visits each
+//!   scan per (address, inside a barrier) and counts a read from inside one as
+//!   a non-filter parent, so a scan read inside a barrier is never shared, and
+//!   then not for the readers outside it either (conservative: nothing computed
+//!   inside a barrier is shared with anything outside, G2).
 //!
 //! Runs once, after `ShareCte`, only with a session configuration and
 //! `krishiv.optimizer.shareFilteredScans` on. The scan is then read by one

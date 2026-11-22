@@ -32,6 +32,17 @@ impl PolicyRef {
     }
 }
 
+/// By hand: a path securable holds an `OptionValue`, which has no `Hash` (it may carry a
+/// secret). The securable is hashed by its `Display` form, a function of its value, so equal
+/// references hash equally.
+impl std::hash::Hash for PolicyRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.securable.to_string().hash(state);
+        self.principal.hash(state);
+        self.version.hash(state);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -95,6 +106,16 @@ mod tests {
             normalized_subtree_hash(&barrier("ana", 1)),
             normalized_subtree_hash(&Arc::new(scan()))
         );
+    }
+
+    #[test]
+    fn equal_references_hash_equally() {
+        use std::hash::{BuildHasher, RandomState};
+        let state = RandomState::new();
+        let h = |r: &PolicyRef| state.hash_one(r);
+        assert_eq!(h(&policy("ana", 1)), h(&policy("ana", 1)));
+        assert_ne!(h(&policy("ana", 1)), h(&policy("bob", 1)));
+        assert_ne!(h(&policy("ana", 1)), h(&policy("ana", 2)));
     }
 
     #[test]

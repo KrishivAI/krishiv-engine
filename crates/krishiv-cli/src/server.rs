@@ -56,8 +56,9 @@ use tokio::sync::watch;
 
 /// Each authenticated caller's session factory: the role matrix, joined by the `external`
 /// provider when `krishiv.access.provider` lists it (ADR 0049 §1: `external`, `roles+external`).
-/// Lists without `external` keep the role matrix alone, as before. `grants` is not wired into the
-/// server yet, so a list naming it with `external` is refused rather than run without the grants.
+/// Unset, the role matrix alone (the server's caller sessions carry no grants). `grants` is not
+/// wired into the server yet, so any list naming it is refused at startup rather than run without
+/// the grants it asks for.
 fn caller_sessions(
     base: Session,
     config: &Config,
@@ -65,16 +66,18 @@ fn caller_sessions(
 ) -> Result<Box<SessionFactory>, String> {
     use krishiv_server::access_external::{ExternalAccess, ExternalConfig};
     use krishiv_session::grants::{AccessProvider, access_providers};
-    let providers = access_providers(config, true).map_err(|e| e.to_string())?;
-    if !providers.contains(&AccessProvider::External) {
-        return provider_sessions(base, config, denials, None).map_err(|e| e.to_string());
-    }
+    // Unset is `roles` here (not the authenticated default `grants`): that is what the sessions
+    // below enforce.
+    let providers = access_providers(config, false).map_err(|e| e.to_string())?;
     if providers.contains(&AccessProvider::Grants) {
         return Err(
             "krishiv.access.provider: the grants provider is not available in `krishiv server` yet, so \
-             a list naming grants and external is refused; use `external` or `roles+external`"
+             a list naming grants is refused; use `roles`, `external` or `roles+external`"
                 .to_owned(),
         );
+    }
+    if !providers.contains(&AccessProvider::External) {
+        return provider_sessions(base, config, denials, None).map_err(|e| e.to_string());
     }
     // One provider per engine runtime: the Connect sessions and the UI editor of one server share
     // its channel, version and counts (review m8). The configuration is read and checked on every

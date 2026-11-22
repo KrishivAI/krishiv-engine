@@ -158,7 +158,13 @@ fn one_denial_or_error_refuses_and_stops() {
         let c = Arc::new(Member::new(allow));
         let p = list(vec![Arc::clone(&a), Arc::clone(&b), Arc::clone(&c)]);
         let d = run(p.check(&principal(), &table("t"), Privilege::Modify));
-        assert!(!matches!(d, Ok(AccessDecision::Allow)), "{d:?}");
+        match d {
+            Ok(AccessDecision::Deny { reason }) => assert_eq!(reason, "no"),
+            Err(e) => assert!(e.to_string().contains("down"), "{e}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(a.asked(), vec![(table("t"), Privilege::Modify)]);
+        assert_eq!(b.asked(), vec![(table("t"), Privilege::Modify)]);
         assert!(c.asked().is_empty(), "asking stops at the refusal");
     }
 }
@@ -166,13 +172,34 @@ fn one_denial_or_error_refuses_and_stops() {
 #[test]
 fn adding_a_member_never_widens() {
     // A deny-all list member keeps every answer a denial, whatever the others say.
-    for others in [allow as fn(&Securable, Privilege) -> _, deny, fail] {
-        let p = list(vec![
-            Arc::new(Member::new(others)),
-            Arc::new(Member::new(deny)),
-        ]);
+    for (name, others) in [
+        ("allow", allow as fn(&Securable, Privilege) -> _),
+        ("deny", deny),
+        ("fail", fail),
+    ] {
+        let first = Arc::new(Member::new(others));
+        let last = Arc::new(Member::new(deny));
+        let p = list(vec![Arc::clone(&first), Arc::clone(&last)]);
         let d = run(p.check(&principal(), &table("t"), Privilege::Select));
-        assert!(!matches!(d, Ok(AccessDecision::Allow)));
+        let asked = vec![(table("t"), Privilege::Select)];
+        assert_eq!(first.asked(), asked);
+        match d {
+            // The first allowed: the deny-all member was asked and refused.
+            Ok(AccessDecision::Deny { reason }) if name == "allow" => {
+                assert_eq!(reason, "no");
+                assert_eq!(last.asked(), asked);
+            }
+            // The first refused: the refusal is its own and the deny-all member stays unasked.
+            Ok(AccessDecision::Deny { reason }) => {
+                assert_eq!(reason, "no");
+                assert!(last.asked().is_empty());
+            }
+            Err(e) => {
+                assert!(e.to_string().contains("down"), "{e}");
+                assert!(last.asked().is_empty());
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }
 
@@ -238,12 +265,14 @@ fn a_table_level_member_is_asked_about_the_relation_of_a_column() {
     // Bind asks `Browse` on the view first, so its kind is known.
     let view = Securable::View(ident("v"));
     run(p.check(&principal(), &view, Privilege::Browse)).unwrap();
+    run(p.check(&principal(), &table("t"), Privilege::Browse)).unwrap();
     run(p.check(&principal(), &column("v", "a"), Privilege::Select)).unwrap();
     run(p.check(&principal(), &column("t", "a"), Privilege::Select)).unwrap();
     assert_eq!(
         grants.asked(),
         vec![
             (view.clone(), Privilege::Browse),
+            (table("t"), Privilege::Browse),
             (column("v", "a"), Privilege::Select),
             (column("t", "a"), Privilege::Select),
         ]
@@ -252,10 +281,100 @@ fn a_table_level_member_is_asked_about_the_relation_of_a_column() {
         external.asked(),
         vec![
             (view.clone(), Privilege::Browse),
+            (table("t"), Privilege::Browse),
             (view, Privilege::Select),
             (table("t"), Privilege::Select),
         ]
     );
+}
+
+fn grants_and_external() -> (Arc<Member>, Arc<Member>, IntersectionPolicy) {
+    let mut grants = Member::new(allow);
+    grants.column_level = true;
+    let grants = Arc::new(grants);
+    let external = Arc::new(Member::new(allow));
+    let p = list(vec![Arc::clone(&grants), Arc::clone(&external)]);
+    (grants, external, p)
+}
+
+#[test]
+fn a_column_of_a_relation_never_asked_about_is_refused() {
+    // Its kind (table or view) is unknown, e.g. forgotten past the memory's bound: the
+    // table-level member cannot be asked the right question, so the read is refused.
+    let (grants, external, p) = grants_and_external();
+    let d = run(p.check(&principal(), &column("v", "a"), Privilege::Select)).unwrap();
+    assert_eq!(
+        d,
+        AccessDecision::Deny {
+            reason: "the column's relation was not checked before its columns".to_owned()
+        }
+    );
+    assert_eq!(grants.asked(), vec![(column("v", "a"), Privilege::Select)]);
+    assert!(external.asked().is_empty());
+    // Past the bound the memory is cleared: a relation noted before is unknown again.
+    let view = Securable::View(ident("v"));
+    run(p.check(&principal(), &view, Privilege::Browse)).unwrap();
+    for i in 0..REMEMBERED {
+        p.note_kind(&table(&format!("t{i}")));
+    }
+    let d = run(p.check(&principal(), &column("v", "a"), Privilege::Select)).unwrap();
+    assert!(matches!(d, AccessDecision::Deny { .. }), "{d:?}");
+}
+
+#[test]
+fn a_later_table_hint_never_turns_a_view_column_into_a_table_question() {
+    // One analysis browses view `v`; another session stage's prefetch names `v` as a table; the
+    // first analysis's column read is still asked of the view (and, as both kinds were seen, of
+    // the table too: every question must be allowed).
+    let (_grants, external, p) = grants_and_external();
+    let view = Securable::View(ident("v"));
+    run(p.check(&principal(), &view, Privilege::Browse)).unwrap();
+    run(p.prefetch(&principal(), &[(table("v"), Privilege::Select)]));
+    run(p.check(&principal(), &column("v", "a"), Privilege::Select)).unwrap();
+    assert_eq!(
+        external.asked(),
+        vec![
+            (view.clone(), Privilege::Browse),
+            (table("v"), Privilege::Select),
+            (view, Privilege::Select),
+        ]
+    );
+    // A member that refuses the view refuses the column, whatever the table answer is.
+    fn deny_views(s: &Securable, _: Privilege) -> Result<AccessDecision, KrishivError> {
+        if matches!(s, Securable::View(_)) {
+            deny(s, Privilege::Select)
+        } else {
+            allow(s, Privilege::Select)
+        }
+    }
+    let mut grants = Member::new(allow);
+    grants.column_level = true;
+    let p = list(vec![Arc::new(grants), Arc::new(Member::new(deny_views))]);
+    p.note_kind(&Securable::View(ident("v")));
+    p.note_kind(&table("v"));
+    let d = run(p.check(&principal(), &column("v", "a"), Privilege::Select)).unwrap();
+    assert!(matches!(d, AccessDecision::Deny { .. }), "{d:?}");
+}
+
+#[test]
+fn a_member_deciding_relations_only_is_asked_about_a_column_read() {
+    // It does not decide `Column(..)` itself, but a column read is a question about its relation.
+    let mut grants = Member::new(allow);
+    grants.column_level = true;
+    let grants = Arc::new(grants);
+    let mut tables = Member::new(deny);
+    tables.decides = |s| matches!(s, Securable::Table(_) | Securable::View(_));
+    let tables = Arc::new(tables);
+    let p = list(vec![Arc::clone(&grants), Arc::clone(&tables)]);
+    p.note_kind(&table("t"));
+    let d = run(p.check(&principal(), &column("t", "a"), Privilege::Select)).unwrap();
+    assert_eq!(
+        d,
+        AccessDecision::Deny {
+            reason: "no".to_owned()
+        }
+    );
+    assert_eq!(tables.asked(), vec![(table("t"), Privilege::Select)]);
 }
 
 #[test]

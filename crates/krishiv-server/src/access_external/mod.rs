@@ -21,6 +21,10 @@
 //! decisions than items, or any value but `DECISION_ALLOW` is a denial. The service's answer
 //! never reaches a user (ADR 0036): a denial reads as any other 42501.
 
+// The generated file's `#[allow(..)]`s are tonic-build's own output, as in `admin_v1`'s
+// `admin.v1.pb.rs`: the one exemption to "`#[expect]`, never `#[allow]`". They are not rewritten
+// (an `#[expect]` on a lint that does not fire is itself an error, and `--check` regenerates the
+// file); the `allow_attributes` expectations below make the exemption explicit and scoped.
 #[expect(
     unreachable_pub,
     clippy::allow_attributes,
@@ -97,6 +101,8 @@ pub struct ExternalAccess {
     untrusted: AtomicU64,
     version_asked: Mutex<Option<Instant>>,
     version_in_flight: AtomicBool,
+    /// Woken each time a background version call has finished (its answer recorded, or none).
+    version_done: tokio::sync::Notify,
     denials: AtomicU64,
     calls: AtomicU64,
 }
@@ -146,6 +152,7 @@ impl ExternalAccess {
             untrusted: AtomicU64::new(0),
             version_asked: Mutex::new(None),
             version_in_flight: AtomicBool::new(false),
+            version_done: tokio::sync::Notify::new(),
             denials: AtomicU64::new(0),
             calls: AtomicU64::new(0),
         })
@@ -157,6 +164,7 @@ impl ExternalAccess {
         ExternalPolicy {
             access: Arc::clone(self),
             memo: Mutex::new(HashMap::new()),
+            stage: AtomicU64::new(0),
         }
     }
 
@@ -358,6 +366,7 @@ impl ExternalAccess {
                 Ok(Ok(response)) => this.note(seq, Some(response.into_inner().policy_version)),
                 _ => this.note(seq, None),
             }
+            this.version_done.notify_waiters();
         });
     }
 }
@@ -384,6 +393,9 @@ pub struct ExternalPolicy {
     access: Arc<ExternalAccess>,
     /// Prefetched decisions, each answering one `check` within [`PREFETCH_LIFETIME`].
     memo: Mutex<HashMap<MemoKey, (bool, Instant)>>,
+    /// The latest prefetch's number, read and written under the `memo` lock: a prefetch stores
+    /// its answers only if no later one started while it waited for the service.
+    stage: AtomicU64,
 }
 
 impl std::fmt::Debug for ExternalPolicy {
@@ -470,8 +482,13 @@ impl AccessPolicy for ExternalPolicy {
     ) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             // Each prefetch replaces what an earlier stage left: an answer never outlives the stage
-            // that fetched it (review m2).
-            self.memo().clear();
+            // that fetched it (review m2), and a prefetch that a later one overtook while it
+            // waited for the service stores nothing.
+            let stage = {
+                let mut memo = self.memo();
+                memo.clear();
+                self.stage.fetch_add(1, Ordering::Relaxed) + 1
+            };
             if !convert::known_principal(principal) {
                 return;
             }
@@ -487,6 +504,9 @@ impl AccessPolicy for ExternalPolicy {
             let id = principal_key(principal);
             let now = Instant::now();
             let mut memo = self.memo();
+            if self.stage.load(Ordering::Relaxed) != stage {
+                return;
+            }
             memo.clear();
             for ((securable, privilege), allow) in asked.into_iter().zip(answers).take(MEMO_LIMIT) {
                 memo.insert(memo_key(&id, &securable, privilege), (allow, now));

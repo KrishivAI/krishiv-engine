@@ -139,9 +139,10 @@ struct Interp<'a> {
     /// Whether the node being run may return tagged rows (its parent carries the tag).
     accept: bool,
     ctes: HashMap<Vec<AttrId>, Rel>,
-    /// Subquery results by plan address and the values of its outer
+    /// Subquery results by plan address, whether it ran inside a barrier (a guarded run tags
+    /// and checks its scans' rows, an unguarded one does not) and the values of its outer
     /// references.
-    cache: HashMap<(*const LogicalPlan, Vec<V>), Rel>,
+    cache: HashMap<(*const LogicalPlan, bool, Vec<V>), Rel>,
 }
 
 /// Where each attribute sits in a row.
@@ -223,9 +224,14 @@ impl Interp<'_> {
                              the tag: {:?}",
                             p.node
                         );
-                        r.push(V::Bool(rejected));
+                        if accept {
+                            r.push(V::Bool(rejected));
+                        }
                     }
-                    rel.cols.push(TAG);
+                    // A parent that does not carry the tag gets the scan's own row shape.
+                    if accept {
+                        rel.cols.push(TAG);
+                    }
                 }
                 rel
             }
@@ -931,7 +937,11 @@ impl Interp<'_> {
                 let values = refs
                     .iter()
                     .map(|id| env.get(id).cloned().unwrap_or(V::Null));
-                let key = (std::ptr::from_ref(&**plan), values.collect());
+                let key = (
+                    std::ptr::from_ref(&**plan),
+                    self.depth > 0,
+                    values.collect(),
+                );
                 if !self.cache.contains_key(&key) {
                     let rel = self.plan(plan, &env);
                     self.cache.insert(key.clone(), rel);

@@ -34,6 +34,8 @@ enum Mode {
     Rule,
     /// Answer after the deadline.
     Slow,
+    /// Fail every check with a `PermissionDenied` status whose message is `CANARY`.
+    Canary,
 }
 
 struct Service {
@@ -57,8 +59,10 @@ impl AccessPolicyService for Service {
         &self,
         request: tonic::Request<proto::CheckRequest>,
     ) -> Result<tonic::Response<proto::CheckResponse>, tonic::Status> {
-        if self.mode == Mode::Slow {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+        match self.mode {
+            Mode::Slow => tokio::time::sleep(Duration::from_secs(2)).await,
+            Mode::Canary => return Err(tonic::Status::permission_denied(CANARY)),
+            Mode::Rule => {}
         }
         let message = request.into_inner();
         let decisions = message
@@ -84,8 +88,9 @@ impl AccessPolicyService for Service {
         &self,
         _: tonic::Request<proto::VersionRequest>,
     ) -> Result<tonic::Response<proto::VersionResponse>, tonic::Status> {
-        // A reason a user must never see goes nowhere: the protocol has no field for it.
-        let _ = CANARY;
+        if self.mode == Mode::Canary {
+            return Err(tonic::Status::permission_denied(CANARY));
+        }
         Ok(tonic::Response::new(proto::VersionResponse {
             policy_version: 9,
         }))
@@ -211,6 +216,25 @@ impl World {
             Ok(batches.iter().map(arrow_array::RecordBatch::num_rows).sum())
         })
     }
+
+    /// The `(a, b)` rows of `sql`, whose two columns are INT.
+    fn pairs(&self, s: &Session, sql: &str) -> Vec<(i32, i32)> {
+        use arrow_array::Array as _;
+        use arrow_array::cast::AsArray as _;
+        use arrow_array::types::Int32Type;
+        let batches = self
+            .tokio
+            .block_on(async { s.sql(sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let mut out = Vec::new();
+        for b in &batches {
+            let a = b.column(0).as_primitive::<Int32Type>();
+            let c = b.column(1).as_primitive::<Int32Type>();
+            assert_eq!(a.null_count() + c.null_count(), 0, "{sql}");
+            out.extend(a.values().iter().copied().zip(c.values().iter().copied()));
+        }
+        out
+    }
 }
 
 fn refused(r: Result<usize, KrishivError>, sql: &str) {
@@ -268,6 +292,10 @@ fn the_service_decides_reads_writes_and_views() {
     // With `external` alone the role matrix keeps only `System(..)`: an operator may write where
     // the service allows it.
     w.run(&ana, "INSERT INTO t VALUES (5, 6)").unwrap();
+    assert_eq!(
+        w.pairs(&ana, "SELECT a, b FROM t ORDER BY a"),
+        vec![(1, 2), (5, 6)]
+    );
 }
 
 #[test]
@@ -285,6 +313,20 @@ fn roles_and_external_both_decide_data() {
         w.run(&operator, "INSERT INTO t VALUES (7, 8)"),
         "operator write",
     );
+}
+
+#[test]
+fn a_service_error_refuses_without_its_message() {
+    let w = World::new();
+    let (ana, _) = w.ana(Mode::Canary, Role::Admin, false);
+    // `refused` checks the class is exactly the public denial and that `CANARY` is absent.
+    for sql in [
+        "SELECT * FROM t",
+        "SELECT * FROM v",
+        "INSERT INTO t VALUES (9, 9)",
+    ] {
+        refused(w.run(&ana, sql), sql);
+    }
 }
 
 #[test]

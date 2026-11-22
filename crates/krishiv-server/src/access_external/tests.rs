@@ -13,7 +13,7 @@ use super::*;
 type Seen = Arc<Mutex<Vec<(pb::CheckRequest, Option<String>)>>>;
 
 /// How the fake service answers.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     /// Allow every table whose name does not start with `secret`, deny the rest.
     Rule,
@@ -195,6 +195,39 @@ async fn the_service_decides_each_pair() {
 }
 
 #[tokio::test]
+async fn a_prefetch_overtaken_by_a_later_one_stores_nothing() {
+    use futures::FutureExt as _;
+    let s = serve(Mode::Rule, None).await;
+    let policy = s.access.policy();
+    let p = ana();
+    let first = [(table("a"), Privilege::Select)];
+    let second = [(table("b"), Privilege::Select)];
+    // The first prefetch starts its call and waits for the service ...
+    let mut early = policy.prefetch(&p, &first);
+    assert!(
+        (&mut early).now_or_never().is_none(),
+        "the call is in flight"
+    );
+    // ... a later stage's prefetch starts and finishes meanwhile ...
+    policy.prefetch(&p, &second).await;
+    // ... and the first one's answers, arriving last, are dropped.
+    early.await;
+    assert_eq!(s.access.calls(), 2);
+    let b = policy
+        .check(&p, &table("b"), Privilege::Select)
+        .await
+        .unwrap();
+    assert!(matches!(b, AccessDecision::Allow), "{b:?}");
+    assert_eq!(s.access.calls(), 2, "the later stage's answer is kept");
+    let a = policy
+        .check(&p, &table("a"), Privilege::Select)
+        .await
+        .unwrap();
+    assert!(matches!(a, AccessDecision::Allow), "{a:?}");
+    assert_eq!(s.access.calls(), 3, "the overtaken answer was not stored");
+}
+
+#[tokio::test]
 async fn a_prefetch_is_one_call_and_answers_each_pair_once() {
     let s = serve(Mode::Rule, None).await;
     let policy = s.access.policy();
@@ -270,7 +303,7 @@ async fn every_failure_is_a_denial() {
             .check(&p, &table("t"), Privilege::Select)
             .await
             .unwrap();
-        assert!(!allowed(&d));
+        assert!(matches!(d, AccessDecision::Deny { .. }), "{mode:?}: {d:?}");
         policy
             .prefetch(
                 &p,
@@ -285,7 +318,10 @@ async fn every_failure_is_a_denial() {
                 .check(&p, &table(name), Privilege::Select)
                 .await
                 .unwrap();
-            assert!(!allowed(&d));
+            assert!(
+                matches!(d, AccessDecision::Deny { .. }),
+                "{mode:?} prefetched {name}: {d:?}"
+            );
         }
     }
 }
@@ -465,14 +501,16 @@ async fn a_prefetched_answer_is_for_the_principal_it_was_asked_for() {
 async fn the_version_is_refreshed_in_the_background() {
     let s = serve(Mode::Rule, None).await;
     let policy = s.access.policy();
+    let done = s.access.version_done.notified();
+    tokio::pin!(done);
+    done.as_mut().enable();
+    // The first read starts the background call and has no answer yet.
     assert_ne!(policy.version(), PolicyVersion(42));
-    for _ in 0..50 {
-        if policy.version() == PolicyVersion(42) {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("the version never refreshed");
+    // Woken when the call has recorded its answer; the bound only stops a hung test.
+    tokio::time::timeout(Duration::from_secs(30), done)
+        .await
+        .expect("the background call finished");
+    assert_eq!(policy.version(), PolicyVersion(42));
 }
 
 #[test]
@@ -501,7 +539,6 @@ fn endpoints_are_checked() {
         "https://policy.example.com",
         "https://policy.example.com:8443/",
         "http://127.0.0.1:9000",
-        "http://localhost:9000",
         "http://[::1]:9000",
         "unix:/run/krishiv/policy.sock",
     ] {
@@ -510,6 +547,11 @@ fn endpoints_are_checked() {
     for bad in [
         "http://policy.example.com",
         "http://10.0.0.1:9000",
+        // A name is resolved when the channel connects: not provably loopback.
+        "http://localhost:9000",
+        // No host, a token in the query: the error still echoes nothing.
+        "https://?token=Canary-7f3a9c",
+        "https:///Canary-7f3a9c",
         "https://u:Canary-7f3a9c@policy.example.com",
         "https://policy.example.com/?token=Canary-7f3a9c",
         "ftp://policy.example.com",
@@ -609,11 +651,12 @@ fn every_securable_and_privilege_has_a_wire_form() {
             assert!(convert::known(s, p), "{s} {p:?}");
         }
     }
-    let wire: std::collections::BTreeSet<i32> = privileges
+    // Each privilege goes out as its own number in `access.proto` (`PRIVILEGE_SELECT = 1` ...).
+    let wire: Vec<i32> = privileges
         .iter()
         .map(|p| i32::from(convert::privilege(*p)))
         .collect();
-    assert_eq!(wire.len(), privileges.len(), "one value each");
+    assert_eq!(wire, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], "{privileges:?}");
 }
 
 #[test]

@@ -979,7 +979,19 @@ impl Encoder {
             }
             PlanNode::SecurityBarrier { input, policy } => {
                 self.tag("SecurityBarrier");
-                self.text(&policy.securable.to_string());
+                // A path as its option value, as the canonical encoding does:
+                // its display redacts secrets, so two paths that differ only
+                // in a credential would print (and key) the same.
+                match &policy.securable {
+                    crate::analyzer::Securable::Path(v) => {
+                        self.tag("path");
+                        self.option_value(v);
+                    }
+                    other => {
+                        self.tag("named");
+                        self.text(&other.to_string());
+                    }
+                }
                 self.text(&policy.principal.to_string());
                 self.num(policy.version);
                 self.plan(input, bias);

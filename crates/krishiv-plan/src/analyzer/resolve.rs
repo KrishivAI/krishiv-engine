@@ -1212,9 +1212,10 @@ impl Resolver<'_> {
                     input: Arc::clone(&c.plan),
                     policy: policy.clone(),
                 };
-                let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
-                r.widen = Some(Arc::new(Widen::Through { child: c }));
-                Ok(r)
+                // No widen: a parent sees only the barrier's output, never a
+                // column its input's projection dropped (sorting by a hidden
+                // column would reveal it through the row order).
+                Ok(self.make(o, node, c.out.to_vec(), &[&c]))
             }
             PlanNode::JoinHint { input, strategy } => {
                 let c = self.child(input, env)?;

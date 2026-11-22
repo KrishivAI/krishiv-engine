@@ -9,8 +9,9 @@
 //!
 //! Reads per column: the list [decides columns](AccessPolicy::column_level) when any member does.
 //! A member that decides whole tables only is then asked as it would be alone: a column read is
-//! asked as `Select` on the column's table or view (the kind the list last saw that table asked
-//! as, else a table), once per table and privilege within one analysis stage.
+//! asked as `Select` on the column's relation, as every kind (table, view) the list has seen that
+//! name asked as. Kinds only accumulate, so a later hint never turns a view's question into a
+//! table's; a column whose relation was never asked about (or was forgotten) is refused.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -22,8 +23,14 @@ use krishiv_plan::analyzer::{
 };
 
 /// The most table kinds and refusals the list remembers; past it, the memory is cleared (a
-/// forgotten kind is asked as a table, a forgotten refusal is told to every deciding member).
+/// column of a forgotten relation is refused, a forgotten refusal is told to every deciding
+/// member).
 const REMEMBERED: usize = 4096;
+
+/// A name asked about as a table.
+const AS_TABLE: u8 = 1;
+/// A name asked about as a view.
+const AS_VIEW: u8 = 2;
 
 /// The most refusals waiting for [`AccessPolicy::denied`]; the oldest goes first.
 const REFUSALS: usize = 64;
@@ -37,8 +44,8 @@ pub struct IntersectionPolicy {
 
 #[derive(Default)]
 struct State {
-    /// Whether a table name was last asked about as a view.
-    views: HashMap<TableIdent, bool>,
+    /// The kinds a table name was asked about as ([`AS_TABLE`] | [`AS_VIEW`]).
+    views: HashMap<TableIdent, u8>,
     /// The member that refused a (securable, privilege), until [`AccessPolicy::denied`] is told
     /// (the newest last; `Securable` is not `Hash`, and the analyzer reports a refusal at once).
     refused_by: Vec<(Securable, Privilege, usize)>,
@@ -80,33 +87,84 @@ impl IntersectionPolicy {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The securable `member` is asked about for `securable`: unchanged, except a column
-    /// read for a member that decides whole tables, which is asked about the column's relation.
-    fn question(&self, member: &dyn AccessPolicy, securable: &Securable) -> Securable {
+    /// The securables `member` is asked about for `securable`: itself, except a column read for
+    /// a member that decides whole tables, which is asked about the column's relation as each
+    /// kind seen. `None`: the relation's kind is unknown, a refusal.
+    fn question(&self, member: &dyn AccessPolicy, securable: &Securable) -> Option<Vec<Securable>> {
         if let Securable::Column { table, .. } = securable
             && !member.column_level()
         {
-            let view = self.state().views.get(table).copied().unwrap_or(false);
-            return if view {
-                Securable::View(table.clone())
-            } else {
-                Securable::Table(table.clone())
-            };
+            let kinds = self.state().views.get(table).copied()?;
+            let mut asked = Vec::with_capacity(2);
+            if kinds & AS_TABLE != 0 {
+                asked.push(Securable::Table(table.clone()));
+            }
+            if kinds & AS_VIEW != 0 {
+                asked.push(Securable::View(table.clone()));
+            }
+            return Some(asked);
         }
-        securable.clone()
+        Some(vec![securable.clone()])
+    }
+
+    /// Whether `member` has a say on `securable`: it decides it, or (a column read it would be
+    /// asked as its relation) it decides the relation.
+    fn asks(member: &dyn AccessPolicy, securable: &Securable) -> bool {
+        if member.decides(securable) {
+            return true;
+        }
+        match securable {
+            Securable::Column { table, .. } if !member.column_level() => {
+                member.decides(&Securable::Table(table.clone()))
+                    || member.decides(&Securable::View(table.clone()))
+            }
+            _ => false,
+        }
+    }
+
+    /// What `member` says about `securable`: every question it is asked must be allowed.
+    async fn ask(
+        &self,
+        member: &dyn AccessPolicy,
+        principal: &Principal,
+        securable: &Securable,
+        privilege: Privilege,
+    ) -> Result<AccessDecision, KrishivError> {
+        let Some(questions) = self.question(member, securable) else {
+            return Ok(AccessDecision::Deny {
+                reason: "the column's relation was not checked before its columns".to_owned(),
+            });
+        };
+        let mut with = None;
+        for asked in &questions {
+            match member.check(principal, asked, privilege).await? {
+                AccessDecision::Allow => {}
+                AccessDecision::AllowWith(policy) => {
+                    with.get_or_insert(policy);
+                }
+                deny @ AccessDecision::Deny { .. } => return Ok(deny),
+                // A decision this build does not know is a refusal (fail closed).
+                _ => {
+                    return Ok(AccessDecision::Deny {
+                        reason: "an access provider gave an unknown decision".to_owned(),
+                    });
+                }
+            }
+        }
+        Ok(with.map_or(AccessDecision::Allow, AccessDecision::AllowWith))
     }
 
     fn note_kind(&self, securable: &Securable) {
-        let (table, view) = match securable {
-            Securable::Table(t) => (t, false),
-            Securable::View(t) => (t, true),
+        let (table, kind) = match securable {
+            Securable::Table(t) => (t, AS_TABLE),
+            Securable::View(t) => (t, AS_VIEW),
             _ => return,
         };
         let mut state = self.state();
         if state.views.len() >= REMEMBERED && !state.views.contains_key(table) {
             state.views.clear();
         }
-        state.views.insert(table.clone(), view);
+        *state.views.entry(table.clone()).or_default() |= kind;
     }
 
     fn note_refusal(&self, securable: &Securable, privilege: Privilege, member: usize) {
@@ -119,6 +177,23 @@ impl IntersectionPolicy {
         state
             .refused_by
             .push((securable.clone(), privilege, member));
+    }
+
+    /// Tells `member` of a refusal of `securable`, as the questions it was asked (the column
+    /// itself when its relation's kind is not known).
+    fn tell(
+        &self,
+        member: &dyn AccessPolicy,
+        principal: &Principal,
+        securable: &Securable,
+        privilege: Privilege,
+    ) {
+        let questions = self
+            .question(member, securable)
+            .unwrap_or_else(|| vec![securable.clone()]);
+        for asked in &questions {
+            member.denied(principal, asked, privilege);
+        }
     }
 
     fn take_refusal(&self, securable: &Securable, privilege: Privilege) -> Option<usize> {
@@ -160,30 +235,22 @@ impl AccessPolicy for IntersectionPolicy {
             let mut decided = false;
             let mut with = None;
             for (i, member) in self.members.iter().enumerate() {
-                if !member.decides(securable) {
+                if !Self::asks(&**member, securable) {
                     continue;
                 }
                 decided = true;
-                let asked = self.question(&**member, securable);
-                match member.check(principal, &asked, privilege).await {
+                match self.ask(&**member, principal, securable, privilege).await {
                     Ok(AccessDecision::Allow) => {}
                     Ok(AccessDecision::AllowWith(policy)) => {
                         with.get_or_insert(policy);
                     }
-                    Ok(deny @ AccessDecision::Deny { .. }) => {
+                    Ok(deny) => {
                         self.note_refusal(securable, privilege, i);
                         return Ok(deny);
                     }
                     Err(e) => {
                         self.note_refusal(securable, privilege, i);
                         return Err(e);
-                    }
-                    // A decision this build does not know is a refusal (fail closed).
-                    Ok(_) => {
-                        self.note_refusal(securable, privilege, i);
-                        return Ok(AccessDecision::Deny {
-                            reason: "an access provider gave an unknown decision".to_owned(),
-                        });
                     }
                 }
             }
@@ -206,15 +273,11 @@ impl AccessPolicy for IntersectionPolicy {
             .take_refusal(securable, privilege)
             .and_then(|i| self.members.get(i))
         {
-            Some(member) => {
-                let asked = self.question(&**member, securable);
-                member.denied(principal, &asked, privilege);
-            }
+            Some(member) => self.tell(&**member, principal, securable, privilege),
             // Refused for want of a deciding member, or forgotten: told to every decider.
             None => {
-                for member in self.members.iter().filter(|m| m.decides(securable)) {
-                    let asked = self.question(&**member, securable);
-                    member.denied(principal, &asked, privilege);
+                for member in self.members.iter().filter(|m| Self::asks(&***m, securable)) {
+                    self.tell(&**member, principal, securable, privilege);
                 }
             }
         }
@@ -235,12 +298,14 @@ impl AccessPolicy for IntersectionPolicy {
                 let mut seen = HashSet::new();
                 let mut asked: Vec<(Securable, Privilege)> = Vec::new();
                 for (securable, privilege) in items {
-                    if !member.decides(securable) {
+                    if !Self::asks(&**member, securable) {
                         continue;
                     }
-                    let item = (self.question(&**member, securable), *privilege);
-                    if seen.insert(format!("{item:?}")) {
-                        asked.push(item);
+                    for question in self.question(&**member, securable).unwrap_or_default() {
+                        let item = (question, *privilege);
+                        if seen.insert(format!("{item:?}")) {
+                            asked.push(item);
+                        }
                     }
                 }
                 if !asked.is_empty() {

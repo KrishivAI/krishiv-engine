@@ -18,9 +18,10 @@ pub static ACCESS_PROVIDER: ConfigEntry = ConfigEntry {
           `external`: the policy service of `krishiv.access.external.endpoint` decides them \
           (`krishiv.access.v1`, ADR 0049) and the role matrix keeps only the server's own objects, \
           so a viewer may write when the service allows it; `roles+external` keeps the role \
-          matrix on data too. A `+`-separated list (`grants+external`) is an \
+          matrix on data too. A `+`-separated list (`roles+external`) is an \
           intersection: every listed provider that decides a securable must allow it, and one no \
-          listed provider decides is refused. `catalog` is refused until it is available. Path \
+          listed provider decides is refused. `krishiv server` does not apply `grants` yet: there \
+          the unset default is `roles` and a list naming `grants` is refused at startup. `catalog` is refused until it is available. Path \
           confinement (`krishiv.io.local.allowedRoots`, `krishiv.io.objectStore.allowedPrefixes`) \
           applies first under every provider.",
     scope: Scope::Cluster,
@@ -35,7 +36,7 @@ pub static ACCESS_EXTERNAL_ENDPOINT: ConfigEntry = ConfigEntry {
     value_type: ValueType::String,
     default: None,
     doc: "Server mode, provider `external`: the `krishiv.access.v1` policy service. An \
-          `https://` URI, a Unix socket `unix:/path`, or `http://` to a loopback address only. \
+          `https://` URI, a Unix socket `unix:/path`, or `http://` to a loopback IP address only (`127.0.0.1`, `[::1]`; not a name). \
           Required when `krishiv.access.provider` lists `external`.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,

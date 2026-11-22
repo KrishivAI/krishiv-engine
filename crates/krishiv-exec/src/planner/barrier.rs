@@ -15,16 +15,31 @@ use crate::physical::ScanId;
 impl Planner<'_> {
     /// The planned input of a barrier over `input`.
     pub(super) fn barrier(&mut self, input: &Arc<LogicalPlan>) -> Result<Planned> {
-        let first = self.next_scan;
-        let mut planned = self.plan(input)?;
-        // Every scan numbered while planning the input is one of its scans (a shared definition
-        // planned from inside counts too: over-marking only hides more). The reverse, a `CteRef`
-        // inside a barrier whose definition was planned from outside and so is not marked, cannot
-        // arise: no optimization places a `CteRef` inside a barrier (`ShareCte` and
-        // `ShareFilteredScan` find no candidate there, `InlineCTE` does not run inside), and the
-        // optimizer's barrier tests assert that no `CteRef` sits inside one.
-        self.guarded.extend((first..self.next_scan).map(ScanId));
+        let (planned, scans) = self.planned_with_scans(input);
+        let mut planned = planned?;
+        // Every scan the input reads: those numbered while planning it (a shared definition
+        // planned from inside counts too: over-marking only hides more) and those of a shared
+        // plan an earlier reference outside the barrier planned first.
+        self.guarded.extend(scans);
         planned.sites.clear();
         Ok(planned)
+    }
+
+    /// `input` planned, with every scan it reads: the ids numbered while planning it and the
+    /// scans of the shared plans it reads that were planned before. They are also counted for
+    /// the enclosing barrier or shared plan, if any.
+    pub(super) fn planned_with_scans(
+        &mut self,
+        input: &Arc<LogicalPlan>,
+    ) -> (Result<Planned>, Vec<ScanId>) {
+        let first = self.next_scan;
+        self.scan_reads.push(Vec::new());
+        let planned = self.plan(input);
+        let mut scans = self.scan_reads.pop().unwrap_or_default();
+        scans.extend((first..self.next_scan).map(ScanId));
+        if let Some(parent) = self.scan_reads.last_mut() {
+            parent.extend(scans.iter().copied());
+        }
+        (planned, scans)
     }
 }

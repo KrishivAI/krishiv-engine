@@ -1028,7 +1028,7 @@ fn a_restarted_server_lists_the_stored_history() {
 }
 
 /// ADR 0049: the `external` access provider's startup refusals (no authentication, no endpoint,
-/// a list with `grants`, which `krishiv server` does not wire yet) stop the server before it binds.
+/// any list with `grants`, which `krishiv server` does not wire yet) stop the server before it binds.
 #[cfg(unix)]
 #[test]
 fn the_external_access_provider_is_checked_at_startup() {
@@ -1063,6 +1063,17 @@ fn the_external_access_provider_is_checked_at_startup() {
         err.contains("not available in `krishiv server` yet"),
         "{err}"
     );
+    // Any list naming `grants` is refused, with or without `external`.
+    for list in [
+        "krishiv.access.provider=grants",
+        "krishiv.access.provider=roles+grants",
+    ] {
+        let err = with(&[list]);
+        assert!(
+            err.contains("a list naming grants is refused"),
+            "{list}: {err}"
+        );
+    }
     let err = with(&[
         "krishiv.access.provider=external",
         "krishiv.access.external.endpoint=http://policy.example.com",

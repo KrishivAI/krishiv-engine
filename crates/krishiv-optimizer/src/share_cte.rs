@@ -364,7 +364,7 @@ pub(crate) fn worth_sharing(body: &Arc<LogicalPlan>) -> bool {
 
 pub(crate) fn has_unseeded_sample(plan: &Arc<LogicalPlan>) -> bool {
     let mut found = false;
-    walk(plan, &mut |p| {
+    walk_all(plan, &mut |p| {
         found |= matches!(p.node, PlanNode::Sample { seed: None, .. });
     });
     found
@@ -372,7 +372,7 @@ pub(crate) fn has_unseeded_sample(plan: &Arc<LogicalPlan>) -> bool {
 
 fn has_outer(plan: &Arc<LogicalPlan>) -> bool {
     let mut found = false;
-    walk(plan, &mut |p| {
+    walk_all(plan, &mut |p| {
         p.for_each_expr(&mut |e| found |= has_outer_reference(e));
     });
     found
@@ -396,8 +396,19 @@ fn has_breaker(plan: &Arc<LogicalPlan>) -> bool {
 }
 
 /// Calls `f` on every relation under `plan` (subquery plans included), once
-/// each.
+/// each, stopping at a security barrier (candidate discovery: nothing inside
+/// one is shared).
 fn walk(plan: &Arc<LogicalPlan>, f: &mut impl FnMut(&Arc<LogicalPlan>)) {
+    walk_fenced(plan, true, f);
+}
+
+/// [`walk`] through security barriers too: what makes a body unsafe to share
+/// (an unseeded sample, an outer reference) counts wherever it sits.
+fn walk_all(plan: &Arc<LogicalPlan>, f: &mut impl FnMut(&Arc<LogicalPlan>)) {
+    walk_fenced(plan, false, f);
+}
+
+fn walk_fenced(plan: &Arc<LogicalPlan>, fence: bool, f: &mut impl FnMut(&Arc<LogicalPlan>)) {
     let mut seen = HashSet::new();
     let mut stack = vec![Arc::clone(plan)];
     while let Some(p) = stack.pop() {
@@ -405,7 +416,7 @@ fn walk(plan: &Arc<LogicalPlan>, f: &mut impl FnMut(&Arc<LogicalPlan>)) {
             continue;
         }
         f(&p);
-        if matches!(p.node, PlanNode::SecurityBarrier { .. }) {
+        if fence && matches!(p.node, PlanNode::SecurityBarrier { .. }) {
             continue;
         }
         p.for_each_expr(&mut |e| stack.extend(subquery_plans(e)));

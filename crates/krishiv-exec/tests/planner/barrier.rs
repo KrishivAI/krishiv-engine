@@ -187,9 +187,16 @@ fn a_guarded_table_lists_no_compared_column() {
             .unwrap_or_else(|| panic!("{table} in {plan}"))
     };
     // The comparison moves into the barrier, beside the scan.
+    let names = |plan: &PhysicalPlan| -> Vec<String> {
+        entry(plan, "lineitem")
+            .equality
+            .into_iter()
+            .map(|c| c.name)
+            .collect()
+    };
     let sql = "SELECT count(*) FROM lineitem WHERE l_returnflag = 'R'";
     let plain = planned(&tpch, sql, "lineitem", 0);
-    assert!(!entry(&plain, "lineitem").equality.is_empty(), "{plain}");
+    assert_eq!(names(&plain), ["l_returnflag"], "{plain}");
     let guarded = planned(&tpch, sql, "lineitem", usize::MAX);
     assert!(entry(&guarded, "lineitem").equality.is_empty(), "{guarded}");
     // The comparison stays above the barrier on a column it passes through: no filter crosses the
@@ -198,7 +205,7 @@ fn a_guarded_table_lists_no_compared_column() {
                WHERE l_returnflag = 'R'";
     let sample = |p: &LogicalPlan| matches!(p.node, PlanNode::Sample { .. });
     let plain = planned_at(&tpch, sql, "lineitem", 0, &sample);
-    assert!(!entry(&plain, "lineitem").equality.is_empty(), "{plain}");
+    assert_eq!(names(&plain), ["l_returnflag"], "{plain}");
     let guarded = planned_at(&tpch, sql, "lineitem", usize::MAX, &sample);
     assert!(!guarded.guarded().is_empty(), "{guarded}");
     assert!(entry(&guarded, "lineitem").equality.is_empty(), "{guarded}");
@@ -210,6 +217,58 @@ fn a_guarded_table_lists_no_compared_column() {
     let plan = planned_at(&tpch, both, "lineitem", 1, &first);
     assert_eq!(plan.guarded().len(), 1, "{plan}");
     assert!(entry(&plan, "lineitem").equality.is_empty(), "{plan}");
+}
+
+/// A CTE read twice that stays a `CteRef` (its body is not deterministic), one side of the join
+/// over it (`k` = 1 the left, 2 the right) behind a barrier, placed after optimizing: whichever
+/// reference the planner reaches first plans the shared body, and the barrier must guard its
+/// scans either way. The two references can be one shared node, so the barrier goes on a side.
+fn shared_with_one_guarded(tpch: &Tpch, k: usize) -> Runnable {
+    let sql = "WITH s AS (SELECT l_orderkey, rand(1) AS r FROM lineitem WHERE l_returnflag = 'R') \
+               SELECT count(*) FROM s x JOIN s y ON x.l_orderkey = y.l_orderkey";
+    let plan = tpch.analyzed(sql).unwrap();
+    let stats = ProviderStatistics(Arc::clone(&tpch.tables) as _);
+    let optimized = krishiv_optimizer::optimize_with(&plan, &stats).unwrap();
+    let mut joins = 0;
+    let root = Arc::clone(optimized.root())
+        .transform_up(&mut |p| {
+            let mut plan = LogicalPlan::clone(&p);
+            if let PlanNode::Join { left, right, .. } = &mut plan.node {
+                joins += 1;
+                let side = if k == 1 { left } else { right };
+                *side = Arc::new(LogicalPlan::clone(side).security_barrier(policy("lineitem")));
+                return Ok::<_, std::convert::Infallible>(Arc::new(plan));
+            }
+            Ok(p)
+        })
+        .unwrap_or_else(|e| match e {});
+    assert_eq!(joins, 1, "one join over the two references\n{optimized}");
+    let refs = optimized.to_string().matches("CteRef s").count();
+    assert_eq!(refs, 1, "the references stay a CteRef\n{optimized}");
+    tpch.runnable(&Plan::try_new(root).unwrap()).unwrap()
+}
+
+#[test]
+fn a_barrier_over_a_shared_body_guards_its_scans_whichever_reference_plans_it() {
+    let (tpch, _rt) = tpch();
+    for k in 1..=2 {
+        let plan = shared_with_one_guarded(&tpch, k);
+        let ids: Vec<ScanId> = all_scans(&plan)
+            .iter()
+            .filter(|(_, t, _)| t.ends_with("lineitem"))
+            .map(|(id, _, _)| *id)
+            .collect();
+        assert!(!ids.is_empty(), "{plan}");
+        let mut sorted = ids;
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(plan.guarded(), sorted.as_slice(), "reference {k}\n{plan}");
+        let entry = profile_scans(&plan, &|_| None)
+            .into_iter()
+            .find(|s| s.table.ends_with("lineitem"))
+            .unwrap_or_else(|| panic!("lineitem in {plan}"));
+        assert!(entry.equality.is_empty(), "reference {k}\n{plan}");
+    }
 }
 
 #[test]

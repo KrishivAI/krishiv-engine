@@ -80,72 +80,106 @@ fn policy() -> PolicyRef {
 /// Every table goes behind a barrier when `all`, its policy over its `c` or first column. With
 /// `plant`, each barrier sits under a `Filter(isnotnull(leak(key)))` (the key unmasked), a leak
 /// that keeps every row and must stay above the barrier.
+/// Subquery plans are entered: their scans are guarded and their `abs(..)` calls become leaks
+/// too (the walks below enter them as well).
 fn guarded_tables(plan: &Plan, masked: &[&str], all: bool, plant: bool) -> Arc<LogicalPlan> {
     let mut next = 1_000_000_u64;
-    Arc::clone(plan.root())
-        .transform_up(&mut |p| {
-            let p = leaks(p)?;
-            let PlanNode::Scan(scan) = &p.node else {
-                return Ok(p);
-            };
-            if !matches!(&scan.source, ReadSource::Table { name, .. }
-                if all || name.last().is_some_and(|n| n == "t"))
-            {
-                return Ok(p);
-            }
-            let mut inner = scan.clone();
-            let mut items = Vec::new();
-            for c in &mut inner.output {
-                if masked.contains(&c.name.as_str()) {
-                    let outer = c.clone();
-                    next += 1;
-                    c.id = AttrId(next);
-                    items.push(Arc::new(Expr::new(ExprNode::Resolved(
-                        ResolvedExpr::Alias {
-                            expr: udf("mask", vec![col(c)], c.data_type.clone()),
-                            output: outer,
-                        },
-                    ))));
-                } else {
-                    items.push(col(c));
+    guard(Arc::clone(plan.root()), masked, all, plant, &mut next)
+}
+
+/// `p`'s expressions with every subquery plan in them rewritten by `f`.
+fn map_subplans(
+    p: Arc<LogicalPlan>,
+    f: &mut dyn FnMut(Arc<LogicalPlan>) -> Arc<LogicalPlan>,
+) -> Arc<LogicalPlan> {
+    p.map_expressions(|e| {
+        e.transform_up(&mut |x| {
+            Ok::<_, std::convert::Infallible>(match &x.node {
+                ExprNode::Subquery { plan, .. } => {
+                    let mut out = Expr::clone(&x);
+                    if let ExprNode::Subquery { plan: slot, .. } = &mut out.node {
+                        *slot = f(Arc::clone(plan));
+                    }
+                    Arc::new(out)
                 }
-            }
-            let Some(key) = inner
-                .output
-                .iter()
-                .find(|c| c.name == "c")
-                .or_else(|| inner.output.first())
-                .cloned()
-            else {
-                return Ok(p);
-            };
-            let scan = LogicalPlan::new(PlanNode::Scan(inner));
-            let filtered = scan.filter(udf("policy", vec![col(&key)], DataType::Boolean));
-            let masked_key = masked.contains(&key.name.as_str());
-            let masked = LogicalPlan::new(PlanNode::Project {
-                input: Arc::new(filtered),
-                exprs: items,
-            });
-            let barrier = masked.security_barrier(policy());
-            if !plant || masked_key {
-                return Ok(Arc::new(barrier));
-            }
-            let leak = udf("leak", vec![col(&key)], key.data_type.clone());
-            Ok::<_, std::convert::Infallible>(Arc::new(barrier.filter(Arc::new(Expr::new(
-                ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
-                    id: FunctionId::Builtin(Builtin::IsNotNull),
-                    kind: FunctionKind::Scalar,
-                    args: vec![leak],
-                    distinct: false,
-                    filter: None,
-                    within_group: Vec::new(),
-                    data_type: DataType::Boolean,
-                    nullable: false,
-                    deterministic: true,
-                })),
-            )))))
+                _ => x,
+            })
         })
-        .unwrap_or_else(|e| match e {})
+    })
+    .unwrap_or_else(|e| match e {})
+}
+
+fn guard(
+    plan: Arc<LogicalPlan>,
+    masked: &[&str],
+    all: bool,
+    plant: bool,
+    next: &mut u64,
+) -> Arc<LogicalPlan> {
+    plan.transform_up(&mut |p| {
+        let p = leaks(p)?;
+        let p = map_subplans(p, &mut |sub| guard(sub, masked, all, plant, next));
+        let PlanNode::Scan(scan) = &p.node else {
+            return Ok(p);
+        };
+        if !matches!(&scan.source, ReadSource::Table { name, .. }
+                if all || name.last().is_some_and(|n| n == "t"))
+        {
+            return Ok(p);
+        }
+        let mut inner = scan.clone();
+        let mut items = Vec::new();
+        for c in &mut inner.output {
+            if masked.contains(&c.name.as_str()) {
+                let outer = c.clone();
+                *next += 1;
+                c.id = AttrId(*next);
+                items.push(Arc::new(Expr::new(ExprNode::Resolved(
+                    ResolvedExpr::Alias {
+                        expr: udf("mask", vec![col(c)], c.data_type.clone()),
+                        output: outer,
+                    },
+                ))));
+            } else {
+                items.push(col(c));
+            }
+        }
+        let Some(key) = inner
+            .output
+            .iter()
+            .find(|c| c.name == "c")
+            .or_else(|| inner.output.first())
+            .cloned()
+        else {
+            return Ok(p);
+        };
+        let scan = LogicalPlan::new(PlanNode::Scan(inner));
+        let filtered = scan.filter(udf("policy", vec![col(&key)], DataType::Boolean));
+        let masked_key = masked.contains(&key.name.as_str());
+        let masked = LogicalPlan::new(PlanNode::Project {
+            input: Arc::new(filtered),
+            exprs: items,
+        });
+        let barrier = masked.security_barrier(policy());
+        if !plant || masked_key {
+            return Ok(Arc::new(barrier));
+        }
+        let leak = udf("leak", vec![col(&key)], key.data_type.clone());
+        Ok::<_, std::convert::Infallible>(Arc::new(barrier.filter(Arc::new(Expr::new(
+            ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+                id: FunctionId::Builtin(Builtin::IsNotNull),
+                kind: FunctionKind::Scalar,
+                args: vec![leak],
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                data_type: DataType::Boolean,
+                nullable: false,
+                deterministic: true,
+            })),
+        )))))
+    })
+    .unwrap_or_else(|e| match e {})
 }
 
 /// `p`'s own `abs(..)` calls as `leak(..)`.
@@ -164,13 +198,19 @@ fn leaks(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, std::convert::Infallib
     })
 }
 
+/// `p` with every `abs(..)` call as `leak(..)`, subquery plans included.
+fn all_leaks(p: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    p.transform_up(&mut |n| {
+        Ok::<_, std::convert::Infallible>(map_subplans(leaks(n)?, &mut all_leaks))
+    })
+    .unwrap_or_else(|e| match e {})
+}
+
 /// The whole of `sql`'s plan behind a barrier, as a definer view's body would be: its own
 /// filters, leaks included, start inside. Optimized to its fixed point and once more.
 fn definer(sql: &str) -> Arc<LogicalPlan> {
     let plan = support::resolve(sql, &support::ctx());
-    let body = Arc::clone(plan.root())
-        .transform_up(&mut leaks)
-        .unwrap_or_else(|e| match e {});
+    let body = all_leaks(Arc::clone(plan.root()));
     let root = Plan::try_new(LogicalPlan::clone(&body).security_barrier(policy())).unwrap();
     let once = optimize(&root).unwrap();
     let twice = optimize(&once).unwrap();
@@ -213,18 +253,60 @@ fn filter_texts(p: &Arc<LogicalPlan>) -> Vec<String> {
         .collect()
 }
 
-/// Every barrier input under `p`.
+/// Calls `f` on the children of `p` and on the subquery plans in its expressions.
+fn for_each_input(p: &LogicalPlan, f: &mut dyn FnMut(&Arc<LogicalPlan>)) {
+    fn in_expr(e: &Expr, f: &mut dyn FnMut(&Arc<LogicalPlan>)) {
+        if let ExprNode::Subquery { plan, .. } = &e.node {
+            f(plan);
+        }
+        e.for_each_child(&mut |c| in_expr(c, f));
+    }
+    p.for_each_child(&mut |c| f(c));
+    p.for_each_expr(&mut |e| in_expr(e, f));
+}
+
+/// Every barrier input under `p`, subquery plans included.
 fn barriers(p: &Arc<LogicalPlan>, out: &mut Vec<Arc<LogicalPlan>>) {
     if let PlanNode::SecurityBarrier { input, .. } = &p.node {
         out.push(Arc::clone(input));
     }
-    p.for_each_child(&mut |c| barriers(c, out));
+    for_each_input(p, &mut |c| barriers(c, out));
 }
 
-/// Every node under `p`, `p` included.
+/// Every node under `p`, `p` and subquery plans included.
 fn nodes(p: &Arc<LogicalPlan>, out: &mut Vec<Arc<LogicalPlan>>) {
     out.push(Arc::clone(p));
-    p.for_each_child(&mut |c| nodes(c, out));
+    for_each_input(p, &mut |c| nodes(c, out));
+}
+
+/// The table scans under `p`, subquery plans included.
+fn table_scans(p: &Arc<LogicalPlan>) -> usize {
+    let mut all = Vec::new();
+    nodes(p, &mut all);
+    all.iter()
+        .filter(|n| matches!(&n.node, PlanNode::Scan(s) if matches!(s.source, ReadSource::Table { .. })))
+        .count()
+}
+
+/// With `all`, the fixture left no table scan outside a barrier (subqueries included).
+fn assert_all_guarded(root: &Arc<LogicalPlan>, what: &str) {
+    let mut inputs = Vec::new();
+    barriers(root, &mut inputs);
+    let inside: usize = inputs.iter().map(table_scans).sum();
+    assert_eq!(
+        table_scans(root),
+        inside,
+        "{what}: a table scan is unguarded\n{root}"
+    );
+}
+
+/// The expressions of every node under `p` that is not inside a barrier, subqueries included.
+fn outside_exprs(p: &Arc<LogicalPlan>, out: &mut Vec<Arc<Expr>>) {
+    if matches!(p.node, PlanNode::SecurityBarrier { .. }) {
+        return;
+    }
+    p.for_each_expr(&mut |e| out.push(Arc::clone(e)));
+    for_each_input(p, &mut |c| outside_exprs(c, out));
 }
 
 fn conjuncts(e: &Expr) -> Vec<&Expr> {
@@ -241,6 +323,10 @@ fn check_inside(input: &Arc<LogicalPlan>, sql: &str) -> Vec<String> {
         n.for_each_expr(&mut |e| {
             assert!(!calls(e, "leak"), "{sql}: leak inside a barrier: {e}");
         });
+        // Only a conjunct in a `Filter` directly over a scan counts as moved in (the pushdown
+        // contract); any other leakproof conjunct inside is checked but not counted.
+        let over_scan = matches!(&n.node, PlanNode::Filter { input, .. }
+            if matches!(input.node, PlanNode::Scan(_)));
         let preds: Vec<&Expr> = match &n.node {
             PlanNode::Filter { predicate, .. } => conjuncts(predicate),
             PlanNode::Join {
@@ -258,7 +344,9 @@ fn check_inside(input: &Arc<LogicalPlan>, sql: &str) -> Vec<String> {
                 leakproof(c, true),
                 "{sql}: a conjunct that is not leakproof inside a barrier: {c}"
             );
-            texts.push(c.to_string());
+            if over_scan {
+                texts.push(c.to_string());
+            }
         }
     }
     let Some(policy_filter) = policy_filter else {
@@ -311,6 +399,9 @@ fn run_in(
 ) -> (Arc<LogicalPlan>, Vec<String>) {
     let plan = support::resolve(sql, ctx);
     let guarded = Plan::try_new(guarded_tables(&plan, masked, all, false)).unwrap();
+    if all {
+        assert_all_guarded(guarded.root(), sql);
+    }
     let plain = |p: &Plan| optimize(p).unwrap();
     let configured =
         |p: &Plan| optimize_with_udfs(p, stats, &UdfLibrary::new(), &Config::new()).unwrap();
@@ -349,7 +440,7 @@ fn check_g2(root: &Arc<LogicalPlan>, what: &str) {
         if matches!(p.node, PlanNode::SecurityBarrier { .. }) || !seen.insert(Arc::as_ptr(p)) {
             return;
         }
-        p.for_each_child(&mut |c| outside(c, seen));
+        for_each_input(p, &mut |c| outside(c, seen));
     }
     let mut out = HashSet::new();
     outside(root, &mut out);
@@ -383,8 +474,31 @@ fn leaks_above_a_barrier_stay_above_it() {
         "SELECT a FROM (SELECT a FROM t UNION ALL SELECT a FROM t) WHERE abs(a) = 1",
         "SELECT a FROM t WHERE a IN (SELECT a FROM u WHERE abs(a) = 1)",
     ] {
-        run(sql, &["b"]);
+        let (root, _) = run(sql, &["b"]);
+        // The planted expression is still computed, outside every barrier.
+        let mut outside = Vec::new();
+        outside_exprs(&root, &mut outside);
+        let kept = if sql.contains("abs(") {
+            outside.iter().any(|e| calls(e, "leak"))
+        } else {
+            outside.iter().any(|e| e.to_string().contains(" / "))
+        };
+        assert!(kept, "{sql}: the planted expression is gone\n{root}");
     }
+}
+
+/// A leak inside a subquery over a guarded table stays above that table's barrier (the fixture
+/// guards subquery scans too).
+#[test]
+fn a_leak_in_a_subquery_stays_above_its_barrier() {
+    let sql = "SELECT a FROM u WHERE a IN (SELECT a FROM t WHERE abs(a) = 1)";
+    let (root, _) = run_over(sql, &["b"], true);
+    let mut inputs = Vec::new();
+    barriers(&root, &mut inputs);
+    assert_eq!(inputs.len(), 2, "u's and the subquery's t\n{root}");
+    let mut outside = Vec::new();
+    outside_exprs(&root, &mut outside);
+    assert!(outside.iter().any(|e| calls(e, "leak")), "{root}");
 }
 
 #[test]
@@ -451,6 +565,10 @@ fn a_leak_inside_a_barrier_stays_above_a_union() {
         .collect();
     assert_eq!(unions.len(), 1);
     assert!(!subtree_calls(unions[0], "leak"), "{:?}", unions[0]);
+    assert!(
+        subtree_calls(&input, "leak"),
+        "the leak is kept above the union\n{input}"
+    );
     let mut below = Vec::new();
     unions[0].for_each_child(&mut |c| below.extend(filter_texts(c)));
     assert_eq!(
@@ -465,16 +583,29 @@ fn a_one_sided_leak_in_a_join_condition_inside_a_barrier_stays_there() {
     let input = definer("SELECT t.a FROM t JOIN u ON t.a = u.a AND abs(t.c) = 1 AND t.b = 'y'");
     let mut all = Vec::new();
     nodes(&input, &mut all);
-    for n in &all {
-        if let PlanNode::Join { left, right, .. } = &n.node {
-            assert!(!subtree_calls(left, "leak") && !subtree_calls(right, "leak"));
-            assert!(subtree_calls(n, "leak"), "the leak stays in the condition");
-            assert!(
-                filter_texts(left).iter().any(|c| c.contains('y')),
-                "the twin moved"
-            );
-        }
-    }
+    let joins: Vec<_> = all
+        .iter()
+        .filter_map(|n| match &n.node {
+            PlanNode::Join {
+                left,
+                right,
+                condition,
+                ..
+            } => Some((left, right, condition)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(joins.len(), 1, "the join is kept\n{input}");
+    let (left, right, condition) = joins[0];
+    let JoinCondition::On(on) = condition else {
+        panic!("an ON condition: {condition:?}");
+    };
+    assert!(calls(on, "leak"), "the leak stays in the condition: {on}");
+    assert!(!subtree_calls(left, "leak") && !subtree_calls(right, "leak"));
+    assert!(
+        filter_texts(left).iter().any(|c| c.contains('y')),
+        "the twin moved"
+    );
 }
 
 #[test]
@@ -565,6 +696,38 @@ fn share_cte_shares_equal_barriers_whole() {
         "the barrier is whole inside a definition\n{on}"
     );
     check_g2(on.root(), SHARED_TWICE);
+}
+
+/// An unseeded `TABLESAMPLE` keeps a body from being shared even inside a barrier: each reference
+/// samples with its own seed (as Spark plans one `SampleExec` per reference), so `ShareCte`'s
+/// safety checks read through barriers, while its candidate walk stops at them.
+#[test]
+fn share_cte_sees_an_unseeded_sample_inside_a_barrier() {
+    let sql = "WITH s AS (SELECT a, count(*) AS n FROM t TABLESAMPLE (50 PERCENT) GROUP BY a) \
+               SELECT * FROM s x JOIN s y ON x.a = y.a";
+    let plan = support::resolve(sql, &support::ctx());
+    let guarded = Arc::clone(plan.root())
+        .transform_up(&mut |n| {
+            Ok::<_, std::convert::Infallible>(match n.node {
+                PlanNode::Sample { .. } => {
+                    Arc::new(LogicalPlan::clone(&n).security_barrier(policy()))
+                }
+                _ => n,
+            })
+        })
+        .unwrap_or_else(|e| match e {});
+    let guarded = Plan::try_new(guarded).unwrap();
+    assert!(
+        holds_a_barrier(guarded.root()),
+        "the fixture wraps the sample"
+    );
+    let stats = qerror::stats_of(&data::small(3));
+    let on = optimize_with_udfs(&guarded, &stats, &UdfLibrary::new(), &Config::new()).unwrap();
+    assert_eq!(
+        cte_refs(on.root()),
+        0,
+        "two references read one unseeded sample\n{on}"
+    );
 }
 
 /// Every node of `p` again, in new `Arc`s: an equal plan that shares no relation with `p`.
@@ -669,20 +832,21 @@ fn every_tpch_query_returns_the_barrier_rows_under_a_rejecting_policy() {
         let want = eval::rows_guarded(&db, guarded.root(), &keys);
         compared += 1;
         nonempty += usize::from(!want.is_empty());
-        let plain = optimize(&guarded).unwrap();
-        let with_stats = optimize_with_options(&guarded, &stats, &Options::default()).unwrap();
+        let plain = |p: &Plan| optimize(p).unwrap();
+        let with_stats = |p: &Plan| optimize_with_options(p, &stats, &Options::default()).unwrap();
         let configured =
-            optimize_with_udfs(&guarded, &stats, &UdfLibrary::new(), &Config::new()).unwrap();
-        for (arm, once) in [
-            ("plain", plain),
-            ("statistics", with_stats),
-            ("configured", configured),
+            |p: &Plan| optimize_with_udfs(p, &stats, &UdfLibrary::new(), &Config::new()).unwrap();
+        for (arm, opt) in [
+            ("plain", &plain as &dyn Fn(&Plan) -> Plan),
+            ("statistics", &with_stats),
+            ("configured", &configured),
         ] {
-            let twice = if arm == "configured" {
-                optimize_with_udfs(&once, &stats, &UdfLibrary::new(), &Config::new()).unwrap()
-            } else {
-                optimize_with_options(&once, &stats, &Options::default()).unwrap()
-            };
+            let once = opt(&guarded);
+            let twice = opt(&once);
+            assert!(
+                once.structurally_eq(&twice),
+                "q{q} {arm}: not a fixed point\n{once}\n{twice}"
+            );
             check_g2(twice.root(), &format!("q{q} {arm}"));
             for p in [&once, &twice] {
                 let got = eval::rows_guarded(&db, p.root(), &keys);

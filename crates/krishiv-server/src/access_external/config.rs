@@ -34,8 +34,9 @@ impl Endpoint {
     /// too (a credential belongs in `krishiv.access.external.token`).
     pub fn parse(raw: &str) -> Result<Self, KrishivError> {
         let raw = raw.trim();
-        // A value with `@` may hold a credential in any position: never echoed (review m5).
-        let raw_shown = if raw.contains('@') { "<redacted>" } else { raw };
+        // An endpoint may hold a credential in any position (user info, a query, a path): never
+        // echoed in an error, which names the key and the reason only (review m5).
+        let raw_shown = "<redacted>";
         if let Some(path) = raw.strip_prefix("unix:") {
             let path = PathBuf::from(path);
             if !path.is_absolute() {
@@ -132,15 +133,17 @@ impl Endpoint {
     }
 }
 
-/// Whether `authority` (`host[:port]`) names a loopback host.
+/// Whether `authority` (`host[:port]`) is a loopback IP literal.
 fn is_loopback(authority: &str) -> bool {
     let host = if let Some(inner) = authority.strip_prefix('[') {
         inner.split(']').next().unwrap_or_default()
     } else {
         authority.rsplit_once(':').map_or(authority, |(h, _)| h)
     };
-    host.eq_ignore_ascii_case("localhost")
-        || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    // An IP literal only: a name such as `localhost` is resolved when the channel connects, and a
+    // resolver may answer an address off this host, where the plaintext call and its token would
+    // go.
+    host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The `external` provider's settings.
@@ -215,7 +218,7 @@ impl ExternalConfig {
                     return Err(invalid(
                         &ACCESS_EXTERNAL_SECURABLES,
                         &classes,
-                        "expected a comma-separated list of data and system",
+                        "expected `data` (the one class available)",
                     ));
                 }
             }

@@ -306,6 +306,12 @@ pub(crate) struct Planner<'a> {
     pub(super) next_scan: u64,
     /// The scans planned under a security barrier.
     pub(super) guarded: HashSet<ScanId>,
+    /// Per shared plan, every scan it reads (its own and those of the shared plans it reads), so
+    /// a barrier that reads a shared plan planned earlier from outside still guards them.
+    pub(super) shared_scans: HashMap<SharedId, Vec<ScanId>>,
+    /// One entry per barrier or shared plan being planned: the scans of already planned shared
+    /// plans read inside it (scans numbered inside it are its id range).
+    pub(super) scan_reads: Vec<Vec<ScanId>>,
     /// The next subquery's id.
     next_subquery: u64,
     /// The next exchange's id.
@@ -369,6 +375,8 @@ impl<'a> Planner<'a> {
             next_filter: 1,
             next_scan: 0,
             guarded: HashSet::new(),
+            shared_scans: HashMap::new(),
+            scan_reads: Vec::new(),
             next_subquery: next_id.saturating_add(SUBQUERY_GAP),
             next_exchange: 0,
             scan_filters: HashMap::new(),
@@ -857,6 +865,11 @@ impl<'a> Planner<'a> {
     /// planned on first use (so inner shared plans come first).
     fn shared_plan(&mut self, source: &[AttrId], name: &str) -> Result<(SharedId, SchemaRef)> {
         if let Some(&id) = self.shared_ids.get(source) {
+            if let (Some(top), Some(scans)) =
+                (self.scan_reads.last_mut(), self.shared_scans.get(&id))
+            {
+                top.extend(scans.iter().copied());
+            }
             let schema = self
                 .shared
                 .iter()
@@ -879,7 +892,7 @@ impl<'a> Planner<'a> {
         // such reads reach it, the nodes are stripped afterwards (`SharedReads::strip_dead`).
         let outer = std::mem::take(&mut self.unobserved);
         self.shared_reads.begin();
-        let planned = self.plan(&def);
+        let (planned, scans) = self.planned_with_scans(&def);
         self.unobserved = outer;
         let reads = self.shared_reads.finish();
         let planned = planned?;
@@ -898,6 +911,7 @@ impl<'a> Planner<'a> {
             ordered,
         });
         self.shared_reads.record(id, reads);
+        self.shared_scans.insert(id, scans);
         self.shared_ids.insert(source.to_vec(), id);
         self.shared_schemas.insert(id, Arc::clone(&schema));
         Ok((id, schema))
