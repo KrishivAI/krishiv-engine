@@ -30,7 +30,7 @@ Consumers ignore unknown members and unknown kinds: minor versions only add.
 event schema is experimental until the design note's review findings are settled; do not treat `record_id` as a
 billing-grade key yet. Members: `kind` (`final`), `fidelity` (`exact`), `principal`, `delegated_by`, `session_id`,
 `compute_id`, `workload_class`, `resource_group`, `statement_class`, `window_start_ms`, `window_end_ms`,
-`wall_ns` (queue excluded), `queued_ns`, `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`,
+`wall_ns` (queue time excluded for a query that started; a query cancelled before it started reports the time since its submission), `queued_ns`, `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`,
 `rows_written`, `files_written`, `spill_bytes`, `spill_files`, `peak_memory_bytes`, `result_cache_hit`.
 The figures are the `system.queries` row's.
 
@@ -39,7 +39,7 @@ The figures are the `system.queries` row's.
 Each sink has a bounded queue (`krishiv.events.queueCapacity`) and its own thread; emitting never blocks and never
 fails a query. A full queue drops `progress` events first, then the oldest non-terminal event, and a terminal event
 only when nothing else can go; drops are counted (`krishiv.events.dropped`, gauge `krishiv.events.queue_depth`).
-The contract is: never blocks a query, every loss is counted, the final usage is recoverable from
+`krishiv.events.dropped` counts queue drops (a full queue, a queue closed because its thread did not start, a queue not drained at shutdown). A sink's own write failures are not counted there: the JSON-lines sink logs them and counts them itself, and a failed write moves it to a new segment, so the failed one may end in a partial line. The contract is: never blocks a query, every queue loss is counted, the final usage is recoverable from
 `system.queries` while the row is held. Dropping a runtime waits up to 5 s per sink for its queue to drain.
 
 Not built yet: `progress` samples, audit events, an OTLP logs sink.

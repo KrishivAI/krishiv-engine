@@ -79,9 +79,7 @@ fn a_finished_query_yields_submitted_started_finished() {
     let events = sink.wait_for_end();
     assert_gap_free(&events);
     let kinds: Vec<_> = events.iter().map(|e| e.kind.tag().name()).collect();
-    assert_eq!(kinds.first(), Some(&"submitted"), "{kinds:?}");
-    assert_eq!(kinds.last(), Some(&"finished"), "{kinds:?}");
-    assert!(kinds.contains(&"started"), "{kinds:?}");
+    assert_eq!(kinds, ["submitted", "started", "finished"]);
     let QueryEventKind::Finished(f) = &events.last().unwrap().kind else {
         panic!("not finished");
     };
@@ -167,8 +165,8 @@ fn no_sink_means_an_inactive_bus() {
 
 #[test]
 fn the_json_file_sink_writes_one_document_per_event() {
-    let dir = std::env::temp_dir().join(format!("krishiv-ev-it-{}", std::process::id()));
-    std::fs::remove_dir_all(&dir).ok();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let prefix = dir.join("ev");
     let rt = EngineRuntime::builder()
         .config("krishiv.events.file.path", prefix.to_str().unwrap())
@@ -189,18 +187,19 @@ fn the_json_file_sink_writes_one_document_per_event() {
         }
         std::thread::sleep(Duration::from_millis(10));
     };
-    assert!(text.lines().count() >= 2, "{text}");
+    let mut kinds = Vec::new();
     for line in text.lines() {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
         assert_eq!(v["schema"], "krishiv.event.v1");
+        kinds.push(v["kind"].as_str().unwrap().to_owned());
     }
-    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(kinds, ["submitted", "started", "finished"], "{text}");
 }
 
 #[test]
 fn the_event_config_keys_shape_the_file_sink_and_the_usage_record() {
-    let dir = std::env::temp_dir().join(format!("krishiv-ev-cfg-{}", std::process::id()));
-    std::fs::remove_dir_all(&dir).ok();
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path().to_path_buf();
     let prefix = dir.join("ev");
     let rt = EngineRuntime::builder()
         .config("krishiv.events.file.path", prefix.to_str().unwrap())
@@ -235,5 +234,4 @@ fn the_event_config_keys_shape_the_file_sink_and_the_usage_record() {
     };
     assert!(text.contains("cfg-compute"), "{text}");
     assert!(files <= 2, "kept {files} segments");
-    std::fs::remove_dir_all(&dir).ok();
 }

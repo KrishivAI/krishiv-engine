@@ -104,7 +104,7 @@ pub enum QueryEventKind {
     /// Usage so far (not emitted yet: design §6).
     Progress(UsageRecord),
     /// The query ended: finished, failed or denied. A query that failed after its stream (a write whose
-    /// commit failed) gets a second `Finished` with a higher `seq`: a consumer keeps the highest.
+    /// commit failed) gets a second `Finished` with a higher `seq` when its history row is still there (a row evicted meanwhile gets none); a consumer keeps the highest.
     Finished(Box<FinishedEvent>),
     /// The query was cancelled.
     Cancelled {
@@ -459,7 +459,7 @@ impl Queue {
                     self.drops.add(tag, 1);
                     tracing::warn!(
                         kind = tag.name(),
-                        "event queue full: terminal event dropped"
+                        "event queue full of terminal events: the incoming event was dropped"
                     );
                     return;
                 }
@@ -502,7 +502,7 @@ impl SinkHandle {
         let worker_queue = Arc::clone(&queue);
         let worker_sink = Arc::clone(&sink);
         let spawned = std::thread::Builder::new()
-            .name(format!("krishiv-events-{}", sink.name()))
+            .name(format!("krishiv-events-{}", sink.name().replace('\0', "")))
             .spawn(move || {
                 loop {
                     let batch: Vec<Arc<EngineEvent>> = {
@@ -927,10 +927,11 @@ impl JsonLinesSink {
         PathBuf::from(name)
     }
 
-    /// The highest segment number already on disk under the prefix, 0 if none.
-    fn highest_existing_segment(&self) -> u64 {
+    /// The segment numbers on disk under the prefix, ascending. A directory that cannot be listed is an
+    /// error, not an empty list. Names are matched lossily so a non-UTF-8 prefix still finds its segments.
+    fn existing_segments(&self) -> std::io::Result<Vec<u64>> {
         let (Some(dir), Some(stem)) = (self.prefix.parent(), self.prefix.file_name()) else {
-            return 0;
+            return Ok(Vec::new());
         };
         let dir = if dir.as_os_str().is_empty() {
             std::path::Path::new(".")
@@ -938,19 +939,19 @@ impl JsonLinesSink {
             dir
         };
         let head = format!("{}.", stem.to_string_lossy());
-        std::fs::read_dir(dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().into_string().ok()?;
-                name.strip_prefix(&head)?
-                    .strip_suffix(".jsonl")?
-                    .parse::<u64>()
-                    .ok()
-            })
-            .max()
-            .unwrap_or(0)
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            let name = entry?.file_name().to_string_lossy().into_owned();
+            if let Some(n) = name
+                .strip_prefix(&head)
+                .and_then(|r| r.strip_suffix(".jsonl"))
+                .and_then(|r| r.parse::<u64>().ok())
+            {
+                found.push(n);
+            }
+        }
+        found.sort_unstable();
+        Ok(found)
     }
 
     fn open_next(&self, state: &mut JsonState) -> std::io::Result<()> {
@@ -960,31 +961,48 @@ impl JsonLinesSink {
         if let Some(dir) = self.prefix.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir)?;
         }
-        if state.segment == 0 {
-            // A restart continues after the highest segment a previous run left, so name order stays time order.
-            state.segment = self.highest_existing_segment();
-        }
-        state.segment += 1;
+        let existing = self.existing_segments()?;
+        // The next number follows the highest on disk (a restart continues after the previous run, so name
+        // order stays time order); it is committed to the state only once the file is open.
+        let highest = existing.last().copied().unwrap_or(0).max(state.segment);
+        let next = highest
+            .checked_add(1)
+            .ok_or_else(|| std::io::Error::other("event file segment numbers are exhausted"))?;
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(self.segment_path(state.segment))?;
+            .open(self.segment_path(next))?;
+        state.segment = next;
         state.written = file.metadata().map_or(0, |m| m.len());
         state.file = Some(std::io::BufWriter::new(file));
-        // Keep the newest `max_files` segments.
-        if let Some(oldest) = state.segment.checked_sub(self.max_files as u64)
-            && oldest > 0
-        {
-            std::fs::remove_file(self.segment_path(oldest)).ok();
+        // Keep the newest `max_files` segments, whatever gaps or a lower limit leave behind.
+        let keep = self.max_files.saturating_sub(1);
+        let old: Vec<u64> = existing.into_iter().filter(|n| *n != next).collect();
+        let excess = old.len().saturating_sub(keep);
+        for n in &old[..excess] {
+            std::fs::remove_file(self.segment_path(*n)).ok();
         }
         Ok(())
     }
 
     fn write(&self, batch: &[Arc<EngineEvent>]) -> std::io::Result<()> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let result = self.write_locked(&mut state, batch);
+        if result.is_err() {
+            // A failed write may leave a partial line: never append to that segment again.
+            state.file = None;
+        }
+        result
+    }
+
+    fn write_locked(
+        &self,
+        state: &mut JsonState,
+        batch: &[Arc<EngineEvent>],
+    ) -> std::io::Result<()> {
         for event in batch {
             if state.file.is_none() || state.written >= self.max_bytes {
-                self.open_next(&mut state)?;
+                self.open_next(state)?;
             }
             let mut line = event.to_json().to_string();
             line.push('\n');

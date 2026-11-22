@@ -2,7 +2,7 @@
 //! Tests of the query event stream.
 
 use super::*;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 fn event(kind: QueryEventKind, seq: u64) -> EngineEvent {
     EngineEvent::Query(QueryEvent {
@@ -69,6 +69,7 @@ struct Gate {
     open: Mutex<bool>,
     wake: Condvar,
     seen: Mutex<Vec<EventKindTag>>,
+    entered: AtomicBool,
 }
 
 impl Gate {
@@ -77,7 +78,17 @@ impl Gate {
             open: Mutex::new(false),
             wake: Condvar::new(),
             seen: Mutex::new(Vec::new()),
+            entered: AtomicBool::new(false),
         })
+    }
+
+    /// Blocks until the sink thread is inside `deliver`.
+    fn wait_entered(&self) {
+        let until = std::time::Instant::now() + Duration::from_secs(20);
+        while !self.entered.load(Ordering::SeqCst) {
+            assert!(std::time::Instant::now() < until, "deliver never entered");
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 
     fn release(&self) {
@@ -92,6 +103,7 @@ impl EventSink for Gate {
     }
 
     fn deliver(&self, batch: &[Arc<EngineEvent>]) {
+        self.entered.store(true, Ordering::SeqCst);
         let mut open = self.open.lock().unwrap();
         while !*open {
             open = self.wake.wait(open).unwrap();
@@ -110,12 +122,7 @@ fn a_blocked_sink_never_blocks_emit_and_drops_progress_first() {
     bus.register(Arc::clone(&gate) as Arc<dyn EventSink>);
     // The thread takes the first event and blocks inside `deliver`; the queue then holds 4.
     bus.emit(event(QueryEventKind::Queued, 0));
-    for _ in 0..200 {
-        if bus.queue_depth() == 0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    gate.wait_entered();
     for i in 0..3 {
         bus.emit(event(QueryEventKind::Progress(usage(i)), i));
     }
@@ -143,18 +150,13 @@ fn a_sink_that_never_returns_is_left_behind_at_shutdown() {
     bus.register(Arc::clone(&gate) as Arc<dyn EventSink>);
     // The thread takes this one and blocks in `deliver`; what is queued after it is left over.
     bus.emit(event(QueryEventKind::Queued, 0));
-    for _ in 0..400 {
-        if bus.queue_depth() == 0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    gate.wait_entered();
     bus.emit(event(QueryEventKind::Queued, 1));
     bus.emit(event(QueryEventKind::Queued, 2));
     let began = std::time::Instant::now();
     bus.shutdown(Duration::from_millis(100));
     assert!(began.elapsed() < Duration::from_secs(3));
-    assert!(bus.dropped("gate", EventKindTag::Queued) >= 1);
+    assert_eq!(bus.dropped("gate", EventKindTag::Queued), 2);
     gate.release();
 }
 
@@ -201,7 +203,10 @@ fn json_has_the_v1_shape_for_every_kind() {
             resource_group: Some("g".into()),
             queued_ns: 7,
         },
-        QueryEventKind::Progress(usage(1)),
+        QueryEventKind::Progress(UsageRecord {
+            kind: UsageKind::Progress,
+            ..usage(1)
+        }),
         QueryEventKind::Cancelled {
             reason: Some("timeout".into()),
             usage: usage(2),
@@ -222,7 +227,10 @@ fn json_has_the_v1_shape_for_every_kind() {
     }
     assert_eq!(docs[0]["text"], "SELECT ?");
     assert_eq!(docs[2]["queued_ns"], 7);
-    assert_eq!(docs[3]["usage"]["fidelity"], "exact");
+    assert_eq!(docs[3]["usage"]["kind"], "progress");
+    assert_eq!(docs[3]["usage"]["fidelity"], "sampled");
+    assert_eq!(docs[5]["usage"]["kind"], "final");
+    assert_eq!(docs[5]["usage"]["fidelity"], "exact");
     assert_eq!(docs[4]["reason"], "timeout");
     assert_eq!(docs[5]["usage"]["record_id"]["seq"], 9);
     // No error message member exists on any kind.
@@ -251,13 +259,20 @@ fn the_json_sink_rotates_and_keeps_the_newest_segments() {
         .collect();
     names.sort();
     assert_eq!(names.len(), 2, "{names:?}");
-    // Every line of every kept segment is one complete document.
+    // Every line of every kept segment is one complete document; the newest event is in the last one.
+    let mut seqs = Vec::new();
     for n in &names {
         for line in std::fs::read_to_string(dir.join(n)).unwrap().lines() {
             let v: Value = serde_json::from_str(line).unwrap();
             assert_eq!(v["schema"], SCHEMA_NAME);
+            seqs.push(v["seq"].as_u64().unwrap());
         }
     }
+    assert!(
+        !seqs.is_empty() && seqs.windows(2).all(|w| w[0] + 1 == w[1]),
+        "{seqs:?}"
+    );
+    assert_eq!(seqs.last(), Some(&29));
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -270,11 +285,50 @@ fn a_restarted_json_sink_continues_after_the_highest_segment() {
     let sink = JsonLinesSink::new(dir.join("ev"), 1_000_000, 5);
     sink.deliver(&[Arc::new(finished(0))]);
     sink.flush();
-    assert!(dir.join("ev.000008.jsonl").exists());
+    let doc: Value = serde_json::from_str(
+        std::fs::read_to_string(dir.join("ev.000008.jsonl"))
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    assert_eq!(doc["seq"], 0);
     assert_eq!(
         std::fs::read_to_string(dir.join("ev.000007.jsonl")).unwrap(),
         "old\n"
     );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_smaller_limit_prunes_every_old_segment_including_gaps() {
+    let dir = std::env::temp_dir().join(format!("krishiv-events-prune-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    for n in [1, 2, 3, 5, 8] {
+        std::fs::write(dir.join(format!("ev.{n:06}.jsonl")), "old\n").unwrap();
+    }
+    let sink = JsonLinesSink::new(dir.join("ev"), 1_000_000, 2);
+    sink.deliver(&[Arc::new(finished(0))]);
+    sink.flush();
+    let mut names: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["ev.000008.jsonl", "ev.000009.jsonl"]);
+    assert_eq!(sink.failures(), 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_exhausted_segment_number_is_a_failure_not_a_wrap() {
+    let dir = std::env::temp_dir().join(format!("krishiv-events-max-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("ev.{}.jsonl", u64::MAX)), "old\n").unwrap();
+    let sink = JsonLinesSink::new(dir.join("ev"), 1_000_000, 2);
+    sink.deliver(&[Arc::new(finished(0))]);
+    assert_eq!(sink.failures(), 1);
     std::fs::remove_dir_all(&dir).ok();
 }
 

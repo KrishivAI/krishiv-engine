@@ -1099,7 +1099,7 @@ pub fn krishiv_session::events::QueryEventKind::eq(&self, &krishiv_session::even
 impl core::fmt::Debug for krishiv_session::events::QueryEventKind
 pub fn krishiv_session::events::QueryEventKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::events::QueryEventKind
-pub enum krishiv_session::events::UsageKind
+#[non_exhaustive] pub enum krishiv_session::events::UsageKind
 pub krishiv_session::events::UsageKind::Final
 pub krishiv_session::events::UsageKind::Progress
 impl core::clone::Clone for krishiv_session::events::UsageKind
@@ -1128,7 +1128,7 @@ impl core::fmt::Debug for krishiv_session::events::EventBus
 pub fn krishiv_session::events::EventBus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::ops::drop::Drop for krishiv_session::events::EventBus
 pub fn krishiv_session::events::EventBus::drop(&mut self)
-pub struct krishiv_session::events::FinishedEvent
+#[non_exhaustive] pub struct krishiv_session::events::FinishedEvent
 pub krishiv_session::events::FinishedEvent::error_class: core::option::Option<alloc::string::String>
 pub krishiv_session::events::FinishedEvent::result_cache_hit: bool
 pub krishiv_session::events::FinishedEvent::state: alloc::string::String
@@ -1167,7 +1167,7 @@ pub fn krishiv_session::events::QueryEvent::eq(&self, &krishiv_session::events::
 impl core::fmt::Debug for krishiv_session::events::QueryEvent
 pub fn krishiv_session::events::QueryEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::events::QueryEvent
-pub struct krishiv_session::events::QueryRef
+#[non_exhaustive] pub struct krishiv_session::events::QueryRef
 pub krishiv_session::events::QueryRef::compute_id: alloc::string::String
 pub krishiv_session::events::QueryRef::delegated_by: core::option::Option<alloc::string::String>
 pub krishiv_session::events::QueryRef::principal: alloc::string::String
@@ -1183,7 +1183,7 @@ pub fn krishiv_session::events::QueryRef::eq(&self, &krishiv_session::events::Qu
 impl core::fmt::Debug for krishiv_session::events::QueryRef
 pub fn krishiv_session::events::QueryRef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::events::QueryRef
-pub struct krishiv_session::events::SchemaVersion
+#[non_exhaustive] pub struct krishiv_session::events::SchemaVersion
 pub krishiv_session::events::SchemaVersion::major: u32
 pub krishiv_session::events::SchemaVersion::minor: u32
 impl core::clone::Clone for krishiv_session::events::SchemaVersion
@@ -1207,7 +1207,7 @@ pub krishiv_session::events::UsageRecord::kind: krishiv_session::events::UsageKi
 pub krishiv_session::events::UsageRecord::peak_memory_bytes: core::option::Option<i64>
 pub krishiv_session::events::UsageRecord::principal: alloc::string::String
 pub krishiv_session::events::UsageRecord::queued_ns: core::option::Option<i64>
-pub krishiv_session::events::UsageRecord::record_id: (alloc::string::String, u64)
+pub krishiv_session::events::UsageRecord::record_id: (alloc::string::String, alloc::string::String, u64)
 pub krishiv_session::events::UsageRecord::resource_group: core::option::Option<alloc::string::String>
 pub krishiv_session::events::UsageRecord::result_cache_hit: bool
 pub krishiv_session::events::UsageRecord::rows_read: core::option::Option<i64>

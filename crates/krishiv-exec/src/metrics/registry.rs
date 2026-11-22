@@ -429,7 +429,8 @@ pub const CATALOGUE: &[MetricDef] = &[
         unit: "{event}",
         labels: &[],
         description: "Query events the event sinks dropped since the engine started because a \
-                      sink's queue was full or it did not drain at shutdown (`krishiv.events.*`). \
+                      sink's queue was full, was closed (its thread did not start), or did not drain at shutdown \
+                      (`krishiv.events.*`). \
                       Always 0 when no sink is registered.",
         since: "0.3.0",
         source: MetricSource::Scrape,
