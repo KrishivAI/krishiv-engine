@@ -14,11 +14,15 @@ description: "`RuntimeConfig`: `spark.conf`."
 class RuntimeConfig
 ```
 
+`spark.conf`: get, set and unset the session's configuration.
+
 ### `get`
 
 ```python
 def get(self, key: str, default: object=_UNSET) -> str | None
 ```
+
+The value of `key`, or `default` when it is unset (fails when there is no default).
 
 ### `getAll`
 
@@ -44,8 +48,12 @@ Whether the configuration `key` is a known setting that can be changed at run ti
 def set(self, key: str, value: str | int | bool) -> None
 ```
 
+Sets the configuration `key` for this session.
+
 ### `unset`
 
 ```python
 def unset(self, key: str) -> None
 ```
+
+Resets `key` to its default.

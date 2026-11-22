@@ -36,6 +36,24 @@ def clearCache(self) -> None
 
 Drops every cached relation: later actions run uncached.
 
+### `createExternalTable`
+
+```python
+def createExternalTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, **options: str) -> DataFrame
+```
+
+Deprecated alias of `createTable` (deprecated since Spark 2.2).
+
+### `createTable`
+
+```python
+def createTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, description: str | None=None, **options: str) -> DataFrame
+```
+
+Creates a table over the data at `path` (an external table) or, with no `path`, an empty managed
+one, and returns it as a DataFrame. `source` defaults to `spark.sql.sources.default`; `schema`
+gives the columns, else the source infers them. An existing table fails as `CREATE TABLE` does.
+
 ### `currentCatalog`
 
 ```python
@@ -59,6 +77,14 @@ def databaseExists(self, dbName: str) -> bool
 ```
 
 Whether the database `dbName` exists.
+
+### `dropGlobalTempView`
+
+```python
+def dropGlobalTempView(self, viewName: str) -> bool
+```
+
+Drops the global temporary view `viewName` (of `global_temp`); whether it existed.
 
 ### `dropTempView`
 
@@ -155,6 +181,14 @@ The tables and views of `dbName` (default: the current database), filtered by `p
 
 Local temporary views are included in the current database, as in Spark; the tables that hold
 `createDataFrame` data are not.
+
+### `recoverPartitions`
+
+```python
+def recoverPartitions(self, tableName: str) -> None
+```
+
+Recovers all the partitions of the table found in its location (`MSCK REPAIR TABLE`).
 
 ### `refreshByPath`
 

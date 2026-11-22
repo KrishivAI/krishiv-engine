@@ -19,17 +19,25 @@ string through unchanged.
 class DataFrameReader
 ```
 
+Reads files and tables into DataFrames.
+
+`spark.read.format(...).option(...).load(path)`, or the `csv`, `json` and `parquet` shorthands.
+
 ### `csv`
 
 ```python
 def csv(self, path: str | list[str], **options: object) -> DataFrame
 ```
 
+Reads CSV file(s) at `path`.
+
 ### `format`
 
 ```python
 def format(self, source: str) -> DataFrameReader
 ```
+
+Sets the data source format (`parquet`, `csv`, `json` ...).
 
 ### `jdbc`
 
@@ -45,11 +53,15 @@ Not supported: there is no JDBC (`KRISHIV_UNSUPPORTED_FEATURE`).
 def json(self, path: str | list[str], **options: object) -> DataFrame
 ```
 
+Reads JSON-lines file(s) at `path`.
+
 ### `load`
 
 ```python
 def load(self, path: str | list[str] | None=None, format: str | None=None, **options: object) -> DataFrame
 ```
+
+Reads `path` in the configured format.
 
 ### `option`
 
@@ -57,11 +69,15 @@ def load(self, path: str | list[str] | None=None, format: str | None=None, **opt
 def option(self, key: str, value: object) -> DataFrameReader
 ```
 
+Adds one reader option.
+
 ### `options`
 
 ```python
 def options(self, **options: object) -> DataFrameReader
 ```
+
+Adds several reader options.
 
 ### `orc`
 
@@ -76,6 +92,8 @@ Not supported: the engine reads no ORC (`KRISHIV_UNSUPPORTED_FEATURE`).
 ```python
 def parquet(self, *paths: str) -> DataFrame
 ```
+
+Reads Parquet file(s) at `paths`.
 
 ### `schema`
 

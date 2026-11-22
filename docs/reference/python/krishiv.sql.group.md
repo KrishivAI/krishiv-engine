@@ -18,6 +18,10 @@ equivalents build. `pivot` builds the plan node SQL's `PIVOT` lowers to.
 class GroupedData
 ```
 
+The result of `DataFrame.groupBy`, `DataFrame.rollup` or `DataFrame.cube`.
+
+Apply aggregates with `agg` or the shorthands (`count`, `sum`, `avg` ...).
+
 ### `agg`
 
 ```python

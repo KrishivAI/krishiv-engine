@@ -25,11 +25,21 @@ A query over a session's data. Transformations return a new DataFrame.
 def agg(self, *exprs: Column) -> DataFrame
 ```
 
+Aggregates the whole DataFrame as one group (shorthand for `df.groupBy().agg(...)`).
+
+**Examples**
+
+```python
+>>> df.agg(F.max("age"))
+```
+
 ### `alias`
 
 ```python
 def alias(self, alias: str) -> DataFrame
 ```
+
+Returns this DataFrame under the name `alias`, for qualifying columns in a join.
 
 ### `approxQuantile`
 
@@ -194,6 +204,8 @@ Registers this DataFrame as the temporary view `name`; fails with
 ```python
 def crossJoin(self, other: DataFrame) -> DataFrame
 ```
+
+The Cartesian product of this DataFrame and `other`.
 
 ### `crosstab`
 
@@ -694,6 +706,8 @@ Rows where `condition` is true; a string parses as a SQL expression, as PySpark'
 def first(self) -> Row | None
 ```
 
+The first row, or `None` when the DataFrame is empty.
+
 ### `foreach`
 
 ```python
@@ -725,6 +739,15 @@ The frequent items of columns, possibly with false positives (see
 def groupBy(self, *cols: ColumnsOrNames) -> GroupedData
 ```
 
+Groups the DataFrame by `cols` (names or Columns) so aggregates can be applied; with no columns the
+whole DataFrame is one group.
+
+**Examples**
+
+```python
+>>> df.groupBy("dept").agg(F.avg("salary"))
+```
+
 ### `groupingSets`
 
 ```python
@@ -739,6 +762,8 @@ are the grouping columns of the result.
 ```python
 def head(self, n: int | None=None) -> Row | list[Row] | None
 ```
+
+The first `n` rows: a single `Row` (or `None`) when `n` is omitted, else a list.
 
 ### `hint`
 
@@ -877,11 +902,22 @@ Whether this frame's plan is cached now.
 def join(self, other: DataFrame, on: str | list[str] | Column | list[Column] | None=None, how: str | None=None) -> DataFrame
 ```
 
+Joins this DataFrame with `other` on `on` (a column name, a list of names or a condition) using the
+join type `how` (`inner` by default).
+
+**Examples**
+
+```python
+>>> df.join(other, on="id", how="left")
+```
+
 ### `limit`
 
 ```python
 def limit(self, num: int) -> DataFrame
 ```
+
+Keeps the first `num` rows.
 
 ### `localCheckpoint`
 
@@ -992,6 +1028,14 @@ num : int
 
 ```python
 def orderBy(self, *cols: ColumnsOrNames, ascending: bool | list[bool]=True) -> DataFrame
+```
+
+Sorts by `cols` (names or Columns); `ascending` is a bool or one bool per column.
+
+**Examples**
+
+```python
+>>> df.orderBy(F.col("age").desc())
 ```
 
 ### `persist`
@@ -1323,6 +1367,14 @@ The result schema, by analysis.
 def select(self, *cols: ColumnsOrNames) -> DataFrame
 ```
 
+Projects `cols` (names, Columns or `"*"`) into a new DataFrame.
+
+**Examples**
+
+```python
+>>> df.select("name", (F.col("age") + 1).alias("next_age"))
+```
+
 ### `selectExpr`
 
 ```python
@@ -1479,6 +1531,8 @@ list
 ```python
 def take(self, num: int) -> list[Row]
 ```
+
+The first `num` rows as a list.
 
 ### `to`
 
@@ -1814,6 +1868,14 @@ DataFrame.melt
 
 ```python
 def withColumn(self, colName: str, col: Column) -> DataFrame
+```
+
+Adds the column `colName` computed by `col`, or replaces the one of that name.
+
+**Examples**
+
+```python
+>>> df.withColumn("age2", F.col("age") * 2)
 ```
 
 ### `withColumnRenamed`

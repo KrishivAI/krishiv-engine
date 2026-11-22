@@ -292,6 +292,8 @@ Not available: table UDFs (UDTF) are not implemented.
 def asc(col: ColumnOrName) -> Column
 ```
 
+A sort expression ordering `col` ascending, NULLs first.
+
 ### `asc_nulls_first`
 
 ```python
@@ -690,6 +692,8 @@ Calls the registry function `collect_union`.
 def concat(*cols: ColumnOrName) -> Column
 ```
 
+Concatenates the string (or binary, or array) columns `cols`; the result is NULL if any input is NULL.
+
 ### `concat_ws`
 
 ```python
@@ -769,6 +773,8 @@ The number of rows where `col` is not null (`count("*")`: all rows).
 ```python
 def count_distinct(col: ColumnOrName, *cols: ColumnOrName) -> Column
 ```
+
+The number of distinct non-NULL values of `col` (of the combination of `cols` when several).
 
 ### `count_if`
 
@@ -1079,6 +1085,8 @@ Calls the registry function `dense_rank`.
 ```python
 def desc(col: ColumnOrName) -> Column
 ```
+
+A sort expression ordering `col` descending, NULLs last.
 
 ### `desc_nulls_first`
 
