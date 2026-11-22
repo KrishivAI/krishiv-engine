@@ -1,11 +1,11 @@
 ---
-description: "UPDATE and DELETE on Delta tables: what runs, what it costs, and what is refused (MERGE INTO, deletion vectors, change data feed)."
+description: "UPDATE, DELETE and MERGE INTO on Delta tables: how to run them, what they cost, and what is refused."
 ---
 
 # Changing rows in a Delta table
 
-A Delta table takes `UPDATE` and `DELETE FROM` from SQL. Each statement is one Delta commit, and Spark and other Delta
-readers see the result. `MERGE INTO` is not available in 0.3.
+A Delta table takes `UPDATE`, `DELETE FROM` and `MERGE INTO` from SQL. Each statement is one Delta commit, and Spark
+and other Delta readers see the result.
 
 ## Run a statement
 
@@ -29,6 +29,35 @@ Each statement returns `num_affected_rows`. The statements work on a table named
 path, ``UPDATE delta.`/data/trips` SET ...``; a path needs the modify privilege on the path when
 [access control](access-control.md) is on.
 
+## Merge a batch of changes
+
+`MERGE INTO` applies a source (a table, a view or a query) to the target in one commit. It takes `WHEN MATCHED`
+(`UPDATE` or `DELETE`), `WHEN NOT MATCHED` (`INSERT`) and `WHEN NOT MATCHED BY SOURCE` clauses:
+
+```sql
+CREATE TEMPORARY VIEW updates AS SELECT * FROM VALUES
+  (1, 'east', 99.0), (2, 'west', NULL), (4, 'north', 5.0) AS updates(id, region, amount);
+
+MERGE INTO trips t USING updates s ON t.id = s.id
+  WHEN MATCHED AND s.amount IS NULL THEN DELETE
+  WHEN MATCHED THEN UPDATE SET t.amount = s.amount
+  WHEN NOT MATCHED THEN INSERT (id, region, amount) VALUES (s.id, s.region, s.amount)
+  WHEN NOT MATCHED BY SOURCE THEN UPDATE SET t.amount = 0;
+```
+
+On the three rows above the statement returns the four counts, and the table holds the rows `(1, east, 99.0)`,
+`(3, east, 0.0)` and `(4, north, 5.0)`:
+
+```text
+num_affected_rows,num_updated_rows,num_deleted_rows,num_inserted_rows
+4,2,1,1
+```
+
+A target row that matches more than one source row fails the statement with Delta's cardinality error
+(SQLSTATE `21506`), as delta-spark does. A `MERGE` by path needs the modify privilege on the path. A source that is
+not a bare scan of a Delta table is copied to a spill file first, so a large source costs disk. The
+[known differences](../concepts/known-differences.md) page lists where the recorded commit differs from delta-spark's.
+
 ## How it runs
 
 The write is copy-on-write: a data file that holds a changed row is rewritten without that row (or with the new
@@ -43,10 +72,7 @@ all the attempts of one commit.
 
 | You write | What happens |
 |---|---|
-| `MERGE INTO` a Delta table | `UNSUPPORTED_FEATURE.TABLE_OPERATION` |
-| `UPDATE` or `DELETE` while `krishiv.write.idempotencyKey` is set | `KRISHIV_UNSUPPORTED_FEATURE`; unset the key for the statement. See [make a retried write safe](lakehouse-tables.md#make-a-retried-write-safe) |
-| `UPDATE` or `DELETE` on a table with the change data feed on | refused |
-
-Put the new rows of a merge in a staging table and run an `UPDATE` and an `INSERT` for now.
+| `UPDATE`, `DELETE` or `MERGE` while `krishiv.write.idempotencyKey` is set | `KRISHIV_UNSUPPORTED_FEATURE`; unset the key for the statement. See [make a retried write safe](lakehouse-tables.md#make-a-retried-write-safe) |
+| A change to a table with the change data feed on | refused |
 
 See [Iceberg and Delta tables, and catalogs](lakehouse-tables.md) for the rest of what a Delta table supports.

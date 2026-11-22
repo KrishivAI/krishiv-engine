@@ -22,5 +22,8 @@
   "metric-views": "Metric views",
   "time-types": "The TIME type",
   "python-data-sources": "Python data sources",
-  "delta-dml": "Changing rows in a Delta table"
+  "delta-dml": "Changing rows in a Delta table",
+  "asof-join": "As-of joins",
+  "query-events": "Query events",
+  "python-udf-tenants": "Python UDFs per tenant"
 }
