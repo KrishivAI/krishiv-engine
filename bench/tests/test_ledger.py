@@ -531,3 +531,12 @@ def test_an_unreadable_previous_ledger_does_not_lose_the_run(tmp_path: Path, cap
     ok = tmp_path / "ok.json"
     ok.write_text('{"a": 1}')
     assert ledger._read_previous(ok) == {"a": 1}
+
+
+def test_wall_split_refuses_samples_without_krishiv_symbols():
+    """A stripped runner shows only addresses or libc frames: the ledger must fail, not book everything to `other`."""
+    stripped = [(10.01, ["0x55d0c1a2b3c4", "0x55d0c1a2b400"]), (10.02, ["__memmove_avx_unaligned_erms"])]
+    with pytest.raises(ledger.SymbolsMissingError, match="stripped"):
+        ledger.wall_split(stripped, 10.0, 10.04, wall_s=0.04)
+    ok = [(10.01, ["krishiv_exec::aggregate::x"])]
+    assert ledger.wall_split(ok, 10.0, 10.04, wall_s=0.04)["aggregate"] > 0
