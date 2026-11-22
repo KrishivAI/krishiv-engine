@@ -23,12 +23,16 @@ check compares one engine's record (JSON files in `OUT`, never committed) with t
    `identity(x)`).
 2. `roundtrip_tests::krishiv_meets_spark_tables`: Krishiv reads each table as Spark did, then appends (two drivers,
    a NULL id), runs a copy-on-write `DELETE` of a row in a Spark file carrying Spark's deletes, an `UPDATE` of a
-   Spark row in another Spark file carrying deletes and of a Krishiv row, and appends again; its last metadata becomes the Hadoop catalog's next version.
+   Spark row in another Spark file carrying deletes and of a Krishiv row, then on `mor2`/`mor3` a merge-on-read
+   `DELETE` of a Spark row and a Krishiv row (position delete files on v2, DVs on v3) and on `mor2` a merge-on-read
+   `UPDATE`, and appends again; each step records its rows and live delete files; its last metadata becomes the
+   Hadoop catalog's next version.
 3. `gen_iceberg_roundtrip.py readback`: Spark reads Krishiv's result and snapshots, time travels to each Krishiv
-   snapshot, then runs merge-on-read `DELETE`, `UPDATE`, `MERGE` (position deletes and DVs on Krishiv's files) and an
+   snapshot (Krishiv's merge-on-read ones included), then runs merge-on-read `DELETE`, `UPDATE`, `MERGE` (position deletes and DVs on Krishiv's files) and an
    append.
 4. `roundtrip_tests::krishiv_reads_spark_on_top`: Spark read what Krishiv read at every snapshot; Spark's history is
-   Spark's snapshots then Krishiv's, with the same parents and counts; the rewritten files' v3 DVs are gone (v2 position
+   Spark's snapshots then Krishiv's, with the same parents and counts; Spark's `delete_files` lists exactly Krishiv's
+   last snapshot's (content, format, record count); the rewritten files' v3 DVs are gone (v2 position
    delete files stay, as Java keeps them); v3 row
    ids survive Krishiv's rewrite; Krishiv reads Spark's last metadata and time travels back to its own snapshots.
 
@@ -54,7 +58,7 @@ check compares one engine's record (JSON files in `OUT`, never committed) with t
 
 | Case | Blocked on |
 |---|---|
-| Iceberg merge-on-read writes by Krishiv (position deletes, DVs, equality deletes) | no Krishiv merge-on-read writer (PR-36b units 3-4) |
+| Iceberg equality deletes written by Krishiv; a merge-on-read `UPDATE` of a v3 table | Krishiv writes no equality deletes; the session does not select the lineage columns (v3 `UPDATE` refused) |
 | Iceberg `MERGE` through Krishiv's SQL | PR-37c (the round trip drives the row-level table as the session's planner does) |
 | Delta data files from Krishiv's writer (statistics, column mapping) in the round trip | PR-37a part 2 (#892); its own Spark readback is in `tests/fixtures/delta-4.4.1/krishiv-written/` |
 | Delta `UPDATE`, `MERGE`, row-level `DELETE` and DVs written by Krishiv | PR-37 |

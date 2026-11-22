@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Spark and Krishiv on the same Iceberg tables (P3-T028b, PR-53b, round trip): Spark 4.1.0 +
-//! iceberg-spark-runtime 1.12.0 makes the tables, Krishiv appends and runs copy-on-write `DELETE` and `UPDATE` on
-//! them, Spark reads that and runs merge-on-read DML on top, Krishiv reads Spark's result.
+//! iceberg-spark-runtime 1.12.0 makes the tables, Krishiv appends and runs copy-on-write and merge-on-read `DELETE`
+//! and `UPDATE` on them, Spark reads that and runs merge-on-read DML on top, Krishiv reads Spark's result.
 //!
 //! Four steps, run in order by `tests/scripts/iceberg_roundtrip.sh` (Docker, so both Rust steps are `#[ignore]`d):
 //!
@@ -9,13 +9,14 @@
 //!    vector) and `evolved` (`int` id promoted to `bigint`, a renamed column, unpartitioned then `identity(x)`)
 //!    into `$KRISHIV_ICEBERG_RT_OUT/wh` and records its reads in `SPARK-CREATE.json`;
 //! 2. [`krishiv_meets_spark_tables`] reads each table (it must read what Spark read), appends, deletes a row of a
-//!    Spark file that carries Spark's deletes, and updates one row of Spark's and one of its own; after each commit
-//!    it records the snapshot and its own read in `KRISHIV-RT.json`, and leaves its last metadata as the Hadoop
+//!    Spark file that carries Spark's deletes, and updates one row of Spark's and one of its own (copy-on-write),
+//!    then on `mor2`/`mor3` deletes (and on `mor2` updates) through merge-on-read; after each commit it records the
+//!    snapshot, its own read and the live delete files in `KRISHIV-RT.json`, and leaves its last metadata as the Hadoop
 //!    catalog's next version;
 //! 3. `gen_iceberg_roundtrip.py readback` (Spark) reads Krishiv's result, time travels to each Krishiv snapshot,
 //!    then runs merge-on-read `DELETE`, `UPDATE` and `MERGE` on top and appends (`SPARK-READBACK.json`);
 //! 4. [`krishiv_reads_spark_on_top`] compares: Spark read what Krishiv read at every snapshot, Krishiv's snapshots
-//!    are Spark's history, v3 row ids survived Krishiv's rewrite, and Krishiv reads Spark's last metadata (its
+//!    are Spark's history, Spark lists Krishiv's delete files, v3 row ids survived Krishiv's rewrite, and Krishiv reads Spark's last metadata (its
 //!    deletes against Krishiv's files included) and time travels back to its own snapshots.
 //!
 //! Every expected value is the other engine's record, never a literal here.
@@ -23,14 +24,18 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use iceberg::spec::TableMetadata;
+use iceberg::spec::{
+    DataContentType, DataFileFormat, Manifest, ManifestContentType, ManifestStatus, TableMetadata,
+};
 use krishiv_exec::planner::{RowLevelOperation, TableProvider as _};
 use krishiv_exec::testing::Batches;
 use krishiv_types::batch::Batch;
 use serde_json::{Value, json};
 
+use super::append_tests::MAX;
 use super::cow_tests::Dml;
 use super::provider_tests::{Env, env_in};
+use super::scan::read_manifest_files;
 use super::sink_tests::{Catalog, input_schema, local_path, provider, range, request, rows, run};
 use super::write_conformance_tests::{krishiv_rows, snapshot_json, spark_rows, text};
 use crate::plan::VersionSpec;
@@ -85,17 +90,71 @@ fn publish_to_hadoop_catalog(name: &str, location: &str) -> String {
     format!("file:{}", next.display())
 }
 
-/// One Krishiv step's record: the snapshot it committed and Krishiv's read after it.
+/// The live delete files of `m`'s current snapshot as Spark's `delete_files` table lists them (one row per entry, so
+/// one per DV of a Puffin file): `content`, `file_format`, `record_count`, sorted.
+fn delete_files(env: &Env, m: &TableMetadata) -> Vec<Value> {
+    let Some(s) = m.current_snapshot() else {
+        return Vec::new();
+    };
+    let io = env.reg.file_io();
+    let list = env
+        .rt
+        .block_on(read_manifest_files(
+            &io,
+            s.manifest_list(),
+            m.format_version() as u8,
+            MAX,
+        ))
+        .unwrap();
+    let mut out = Vec::new();
+    for mf in list
+        .iter()
+        .filter(|mf| mf.content == ManifestContentType::Deletes)
+    {
+        let bytes = env
+            .rt
+            .block_on(async { io.new_input(&mf.manifest_path).unwrap().read().await })
+            .unwrap();
+        let (entries, _) = Manifest::parse_avro(&bytes).unwrap().into_parts();
+        for e in entries
+            .iter()
+            .filter(|e| e.status() != ManifestStatus::Deleted)
+        {
+            let f = e.data_file();
+            let content = match f.content_type() {
+                DataContentType::PositionDeletes => 1,
+                DataContentType::EqualityDeletes => 2,
+                DataContentType::Data => unreachable!("a data file in a delete manifest"),
+            };
+            let format = match f.file_format() {
+                DataFileFormat::Puffin => "PUFFIN",
+                DataFileFormat::Parquet => "PARQUET",
+                other => panic!("delete file format {other:?}"),
+            };
+            out.push(json!({"content": content, "file_format": format, "record_count": f.record_count()}));
+        }
+    }
+    sorted_values(out)
+}
+
+fn sorted_values(mut v: Vec<Value>) -> Vec<Value> {
+    v.sort_by_key(Value::to_string);
+    v
+}
+
+/// One Krishiv step's record: the snapshot it committed, Krishiv's read after it and the live delete files.
 fn step(env: &Env, catalog: &Catalog, name: &str, what: &str) -> Value {
     let m = catalog.metadata();
     json!({
         "what": what,
         "snapshot_id": m.current_snapshot().unwrap().snapshot_id(),
         "rows": krishiv_rows(env, &catalog.location(), name, &VersionSpec::Current),
+        "delete_files": delete_files(env, &m),
     })
 }
 
-/// Step 2: Krishiv reads Spark's tables, appends, and runs copy-on-write `DELETE` and `UPDATE` on them.
+/// Step 2: Krishiv reads Spark's tables, appends, runs copy-on-write `DELETE` and `UPDATE` on them, then
+/// merge-on-read `DELETE` (and on v2 `UPDATE`) on the merge-on-read ones.
 #[test]
 #[ignore = "step 2 of tests/scripts/iceberg_roundtrip.sh (needs SPARK-CREATE.json from Spark)"]
 fn krishiv_meets_spark_tables() {
@@ -140,6 +199,24 @@ fn krishiv_meets_spark_tables() {
             .update("id IN (8, 101)", "'k'")
             .unwrap();
         steps.push(step(&env, &catalog, name, "update"));
+
+        // Merge-on-read on the tables Spark made merge-on-read (`write.*.mode`): a DELETE of a row in a Spark file
+        // without deletes (id 3, x = 0) and of one in a Krishiv file (105), a position delete file per data file on
+        // v2 and a DV per data file on v3; then, on v2, an UPDATE of a Spark row and a Krishiv one (a v3 UPDATE
+        // through merge-on-read is refused until the session selects the lineage columns). Spark's DML in step 3
+        // touches other ids.
+        if name != "evolved" {
+            Dml::open(&env, &catalog, RowLevelOperation::Delete)
+                .mor_delete("id IN (3, 105)")
+                .unwrap();
+            steps.push(step(&env, &catalog, name, "mor-delete"));
+            if name == "mor2" {
+                Dml::open(&env, &catalog, RowLevelOperation::Update)
+                    .mor_update("id IN (6, 100)", "'r'")
+                    .unwrap();
+                steps.push(step(&env, &catalog, name, "mor-update"));
+            }
+        }
 
         // A second plain append on top of the rewrites.
         let p = provider(&env, &catalog.location(), &catalog);
@@ -240,18 +317,62 @@ fn krishiv_reads_spark_on_top() {
             spark_created.len() + steps.len(),
             "{name}: one snapshot per Krishiv step on top of Spark's"
         );
-        // Krishiv's DELETE and UPDATE each replaced a Spark file that had deletes: on v3 each file's DV goes with it
-        // (`removeDanglingDeletesFor`); on v2 the partitions' position delete files stay live, as Java keeps them.
+        // Spark lists exactly the delete files Krishiv's last snapshot holds: Krishiv's own merge-on-read deletes
+        // (position delete files on v2, DVs on v3) and the Spark deletes it kept.
+        let spark_deletes =
+            |v: &Value| sorted_values(v["delete_files"].as_array().unwrap().clone());
+        assert_eq!(
+            spark_deletes(&s["before"]),
+            sorted_values(last["delete_files"].as_array().unwrap().clone()),
+            "{name}: Spark's delete files are Krishiv's"
+        );
         if name != "evolved" {
-            let deletes = |v: &Value| v["delete_files"].as_array().unwrap().len();
-            let (now, was) = (deletes(&s["before"]), deletes(&created[name]["spark"]));
-            if name == "mor3" {
-                assert_eq!(now, was - 2, "{name}: the rewritten files' DVs are gone");
-            } else {
-                assert_eq!(now, was, "{name}: position delete files stay");
-            }
+            let count = |what: &str| -> usize {
+                let i = steps.iter().position(|st| st["what"] == what).unwrap();
+                steps[i]["delete_files"].as_array().unwrap().len()
+            };
+            let was = spark_deletes(&created[name]["spark"]).len();
+            let pos = |what: &str| steps.iter().position(|st| st["what"] == what).unwrap();
+            // Krishiv's copy-on-write DELETE and UPDATE each replaced a Spark file that had deletes: on v3 each
+            // file's DV goes with it (`removeDanglingDeletesFor`); on v2 the partitions' position delete files stay
+            // live, as Java keeps them.
+            let gone = usize::from(name == "mor3");
+            assert_eq!(
+                count("append"),
+                was,
+                "{name}: an append adds no delete file"
+            );
+            assert_eq!(count("delete"), was - gone, "{name}: copy-on-write DELETE");
+            assert_eq!(
+                count("update"),
+                was - 2 * gone,
+                "{name}: copy-on-write UPDATE"
+            );
+            // The merge-on-read DELETE adds one delete file (v2) or DV (v3) for each of the two data files it hits.
+            assert_eq!(
+                count("mor-delete"),
+                count("update") + 2,
+                "{name}: merge-on-read DELETE"
+            );
             assert!(
-                deletes(&s["after"]) > deletes(&s["before"]),
+                steps[pos("mor-delete")]["delete_files"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(
+                        |d| d["file_format"] == if name == "mor3" { "PUFFIN" } else { "PARQUET" }
+                    )
+                    .count()
+                    >= 2,
+                "{name}: Krishiv's deletes are {}",
+                if name == "mor3" {
+                    "DVs"
+                } else {
+                    "position delete files"
+                }
+            );
+            assert!(
+                spark_deletes(&s["after"]).len() > spark_deletes(&s["before"]).len(),
                 "{name}: Spark's merge-on-read DML wrote deletes on top"
             );
         }

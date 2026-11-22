@@ -208,8 +208,8 @@ checked by `iceberg_v0/type_golden_tests.rs`; column defaults are a documented r
 Spark 4.1.0 + Iceberg 1.12.0 (`gen_iceberg_write_readback.py`) reads and appends on top, Krishiv compares and reads Spark's
 result. `roundtrip_tests.rs`: two `#[ignore]`d steps of `tests/scripts/iceberg_roundtrip.sh` (nightly `iceberg-roundtrip`):
 Spark makes `mor2`/`mor3`/`evolved` (position deletes, a DV, a promoted and a renamed column, a spec added), Krishiv
-reads them, appends and runs copy-on-write DELETE/UPDATE (`cow_tests`' `Dml`, over `sink_tests`' `Catalog::with_metadata` on
-Spark's metadata), Spark time travels to Krishiv's snapshots and runs merge-on-read DML on top, Krishiv reads the
+reads them, appends, runs copy-on-write DELETE/UPDATE and, on `mor2`/`mor3`, merge-on-read DELETE (v2 also UPDATE) (`cow_tests`' `Dml`, over `sink_tests`' `Catalog::with_metadata` on
+Spark's metadata), Spark lists Krishiv's delete files and time travels to Krishiv's snapshots and runs merge-on-read DML on top, Krishiv reads the
 result. Pending, not stubbed: MERGE through SQL. See
 `tests/scripts/iceberg_write_conformance.README.md`.
 
