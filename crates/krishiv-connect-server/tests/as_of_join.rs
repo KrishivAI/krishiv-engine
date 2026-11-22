@@ -373,7 +373,7 @@ async fn as_of_join_distances_overflow_where_sparks_do() {
 }
 
 /// Sets `spark.sql.ansi.enabled=false` on the test session, and the session zone as in the Spark
-/// runs, whatever the host's (a zone with daylight saving refuses a Connect as-of join on
+/// runs, whatever the host's (a zone whose offset ever decreases refuses a Connect as-of join on
 /// `TIMESTAMP` values).
 async fn ansi_off(s: &Running) {
     set_conf(
@@ -511,11 +511,20 @@ async fn a_connect_timestamp_as_of_join_across_daylight_saving_is_refused() {
         );
     }
     set_conf(&s, &[("spark.sql.session.timeZone", "UTC")]).await;
-    assert!(
-        execute(&s.channel, keyless_as_of(&left, &right, "forward"))
-            .await
-            .is_ok()
-    );
+    // In UTC the nearer value is also the nearer distance: forward takes 05:45Z.
+    let text = |name: &str| {
+        expr(ExprType::Cast(Box::new(expression::Cast {
+            expr: Some(Box::new(attr(name))),
+            eval_mode: 0,
+            cast_to_type: Some(expression::cast::CastToType::TypeStr("string".to_owned())),
+        })))
+    };
+    let rel = relation(RelType::Project(Box::new(pb::Project {
+        input: Some(Box::new(keyless_as_of(&left, &right, "forward"))),
+        expressions: vec![text("lt"), text("rt")],
+    })));
+    let got = execute(&s.channel, rel).await.expect("forward in UTC runs");
+    assert_eq!(rows(&got), ["2026-11-01 04:30:00|2026-11-01 05:45:00"]);
 }
 
 /// A value type, its left and right rows, and Spark's rows backward and forward.

@@ -133,3 +133,48 @@ def test_run_suite_has_a_default_dataset():
     from krishiv_bench.runner import SUITE_DATASET
 
     assert SUITE_DATASET["asof"] == ABBA_DATASET["asof"] == "asof"
+
+
+def test_rows_of_refuses_a_non_positive_scale():
+    assert asof_data.rows_of(2) == {"trades": 2 * asof_data.TRADES_PER_SF, "quotes": 2 * asof_data.QUOTES_PER_SF}
+    with pytest.raises(ValueError, match="positive"):
+        asof_data.rows_of(0)
+
+
+def test_verify_names_a_row_count_or_digest_the_manifest_disagrees_with(tiny, tmp_path):
+    import shutil
+
+    d = tmp_path / "copy"
+    shutil.copytree(tiny, d)
+    path = d / asof_data.MANIFEST
+    man = json.loads(path.read_text())
+    man["tables"]["trades"]["rows"] += 1
+    man["tables"]["quotes"]["content_sha256"] = "0" * 64
+    path.write_text(json.dumps(man))
+    problems = asof_data.verify(d)
+    assert any(p.startswith("trades:") and "rows" in p for p in problems), problems
+    assert "quotes: content digest differs from the manifest" in problems
+
+
+def test_cli_generates_verifies_and_refuses(tmp_path, monkeypatch, capsys):
+    from krishiv_bench import datasets
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
+    real = asof_data.rows_of
+    monkeypatch.setattr(asof_data, "rows_of", lambda sf: TINY if sf > 0 else real(sf))
+    datasets.main(["asof", "--sf", "1"])
+    d = asof_data.asof_dir(1)
+    assert d == tmp_path / "asof" / "sf1"
+    assert "manifest:" in capsys.readouterr().out
+    datasets.main(["asof-verify", str(d)])
+    assert "verified" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        datasets.main(["asof", "--sf", "1"])  # an existing dataset is never overwritten
+    with pytest.raises(SystemExit):
+        datasets.main(["asof", "--sf", "0"])
+    path = d / asof_data.MANIFEST
+    man = json.loads(path.read_text())
+    man["tables"]["trades"]["content_sha256"] = "0" * 64
+    path.write_text(json.dumps(man))
+    with pytest.raises(SystemExit, match="trades: content digest"):
+        datasets.main(["asof-verify", str(d)])

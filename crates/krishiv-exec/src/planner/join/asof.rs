@@ -148,9 +148,9 @@ impl Planner<'_> {
             && !self.env.zone_rules()?.local_time_is_monotonic()
         {
             return Err(unsupported(if as_of.distance_on_every_pair {
-                "a Connect as-of join on TIMESTAMP values in a session time zone with daylight saving"
+                "a Connect as-of join on TIMESTAMP values in a session time zone whose UTC offset ever decreases (a fixed offset such as UTC, or TIMESTAMP_NTZ values, run)"
             } else {
-                "a forward as-of join on TIMESTAMP values in a session time zone with daylight saving"
+                "a forward as-of join on TIMESTAMP values in a session time zone whose UTC offset ever decreases (a backward join, a fixed offset such as UTC, or TIMESTAMP_NTZ values, run)"
             }));
         }
         // Only a distance that can raise is evaluated: its value is never used.
