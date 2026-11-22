@@ -18,5 +18,8 @@
   "migrating-jvm-udfs": "Migrating JVM UDFs",
   "lakehouse-tables": "Iceberg and Delta tables, and catalogs",
   "access-control": "Access control with grants",
-  "flight-sql": "Arrow Flight SQL"
+  "flight-sql": "Arrow Flight SQL",
+  "metric-views": "Metric views",
+  "time-types": "The TIME type",
+  "python-data-sources": "Python data sources"
 }
