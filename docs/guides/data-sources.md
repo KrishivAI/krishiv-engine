@@ -35,8 +35,16 @@ print(sorted(tuple(r) for r in spark.read.parquet("summary/").collect()))
 The output above is for a `trips.csv` of `region,amount` followed by the rows `east,10.0`, `west,20.0` and `east,5.5`.
 
 `spark.read.json` and `spark.read.parquet` work the same way, and `df.write` has `parquet`, `csv`
-and `json`, with `.mode("overwrite")` or `"append"` and `.option(key, value)` such as `.option("header", True)` for
-CSV.
+and `json`, with `.mode(...)` and `.option(key, value)` such as `.option("header", True)` for CSV.
+
+The save modes are Spark's:
+
+| Mode | When the path already exists |
+|---|---|
+| `error`, `errorifexists` (the default) | the write fails with `PATH_ALREADY_EXISTS` |
+| `ignore` | nothing is written and no error is raised |
+| `append` | new files are added next to the existing ones |
+| `overwrite` | everything under the path is replaced; a failed overwrite keeps the old data |
 
 A write creates a directory, not a single file: `part-*` data files, a `_SUCCESS` marker and a `_krishiv_log/`
 directory that records each commit (see [known differences](../concepts/known-differences.md#writers-leave-a-_krishiv_log-directory)).
