@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Plan-building helpers: carrier casts, projections, naming and error constructors.
+//! Plan-building helpers: carrier casts, projections, naming, sampling and error constructors.
 
 use super::*;
 
@@ -411,4 +411,46 @@ pub(super) fn narrow_scan(
         output,
         ..scan.clone()
     })
+}
+
+/// `TABLESAMPLE` over `input` (Spark's `SampleExec`) with its resolved
+/// seed. Rows still pass in order, but which ones depends on every row below
+/// reaching the sample: no runtime filter or top-N bound reaches through it.
+pub(super) fn sample(input: Planned, lower: f64, upper: f64, seed: i64) -> Planned {
+    let schema = Arc::clone(&input.schema);
+    let layout = input.layout.clone();
+    let mut planned = input.wrap(
+        |input| PhysNode::Sample {
+            input,
+            lower,
+            upper,
+            seed,
+        },
+        schema,
+        layout,
+        ("Sample", format!("{lower:?}, {upper:?}, false, {seed}")),
+    );
+    planned.sites.clear();
+    planned
+}
+
+/// The seed of the `n`th unseeded sample, in `0..1000` as Spark's
+/// `(math.random * 1000).toLong`: from the query's sample salt
+/// ([`PlanningContext::sample_salt`](crate::planner::PlanningContext::sample_salt)),
+/// so every plan of one DataFrame draws the same seeds, as Spark's executed
+/// plan of one Dataset does; without a salt, from the process's random
+/// hasher keys.
+pub(super) fn unseeded_sample_seed(salt: Option<u64>, n: u64) -> i64 {
+    use std::hash::BuildHasher as _;
+    let draw = match salt {
+        // SplitMix64's finalizer of the salt and the sample's number.
+        Some(salt) => {
+            let mut z = salt ^ n.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        }
+        None => std::collections::hash_map::RandomState::new().hash_one(n),
+    };
+    (draw % 1000).cast_signed()
 }

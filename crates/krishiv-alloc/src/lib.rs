@@ -328,11 +328,12 @@ static BOUNDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 
 /// Whether the process started under a limit below [`GENEROUS_MIN`], so
 /// mimalloc runs with [`LIMITED_OPTIONS`] and returns freed memory within
-/// milliseconds. Then the binary also installs the resident-set guard's
-/// probe (`krishiv_memory::set_resident_probe`): the resident set tracks
-/// the memory pools closely enough for the guard to act on it. With
-/// mimalloc's defaults (a generous limit) freed memory stays resident for a
-/// second, and the guard would spill for memory about to be returned.
+/// milliseconds, and the resident set tracks the memory pools closely. The
+/// bench runner installs the resident-set guard's probe
+/// (`krishiv_memory::set_resident_probe`) only then; the `krishiv` CLI
+/// installs it at every limit, since with mimalloc's defaults (a generous
+/// limit) freed memory stays resident for a second and the guard then cuts
+/// for memory about to be returned, which costs spills, not a kill.
 pub fn bounded() -> bool {
     BOUNDED.load(std::sync::atomic::Ordering::Relaxed)
 }
