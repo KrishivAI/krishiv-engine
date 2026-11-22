@@ -196,3 +196,44 @@ fn the_json_file_sink_writes_one_document_per_event() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn the_event_config_keys_shape_the_file_sink_and_the_usage_record() {
+    let dir = std::env::temp_dir().join(format!("krishiv-ev-cfg-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    let prefix = dir.join("ev");
+    let rt = EngineRuntime::builder()
+        .config("krishiv.events.file.path", prefix.to_str().unwrap())
+        .config("krishiv.events.file.maxBytes", "1KB")
+        .config("krishiv.events.file.maxFiles", "2")
+        .config("krishiv.events.queueCapacity", "1000")
+        .config("krishiv.compute.id", "cfg-compute")
+        .build()
+        .unwrap();
+    let s = session(&rt);
+    for _ in 0..8 {
+        block_on(block_on(s.sql("SELECT 1")).unwrap().collect()).unwrap();
+    }
+    let until = Instant::now() + Duration::from_secs(20);
+    let (text, files) = loop {
+        let paths: Vec<_> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        let text = paths
+            .iter()
+            .filter_map(|p| std::fs::read_to_string(p).ok())
+            .collect::<String>();
+        if text.contains("cfg-compute") && text.contains("\"kind\":\"finished\"")
+            || Instant::now() > until
+        {
+            break (text, paths.len());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(text.contains("cfg-compute"), "{text}");
+    assert!(files <= 2, "kept {files} segments");
+    std::fs::remove_dir_all(&dir).ok();
+}
