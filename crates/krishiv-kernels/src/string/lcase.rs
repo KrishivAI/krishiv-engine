@@ -108,14 +108,12 @@ pub fn like_fold_pattern<O: OffsetSizeTrait>(
             (Some(e), None) => Some(e),
             _ => None,
         };
-        let mut pieces: Vec<char> = Vec::with_capacity(s.len());
-        for c in s.chars() {
-            if full {
-                pieces.extend(c.to_lowercase());
-            } else {
-                pieces.push(c);
-            }
-        }
+        // ILIKE lower-cases the whole pattern (Java's `toLowerCase`, final-sigma rule included), as Spark does.
+        let pieces: Vec<char> = if full {
+            s.to_lowercase().chars().collect()
+        } else {
+            s.chars().collect()
+        };
         let mut it = pieces.into_iter();
         while let Some(p) = it.next() {
             if Some(p) == esc {
@@ -563,6 +561,8 @@ mod like_fold_tests {
         assert_eq!(fold(0, "eE", "e"), "eE");
         // `ILIKE` lower-cases first, so an upper-case escape never occurs in the pattern.
         assert_eq!(fold(1, "E%", "E"), "e%");
+        // Final sigma: the whole pattern lower-cases at once, so `ΟΣ%` becomes `ος%` and `ς` escapes the `%`.
+        assert_eq!(fold(1, "\u{39f}\u{3a3}%", "\u{3c2}"), "\u{3bf}\u{3c2}%");
     }
 
     #[test]
