@@ -57,6 +57,16 @@ def _is_numeric(dtype: str) -> bool:
     return dtype in _NUMERIC or dtype.startswith("decimal")
 
 
+def _is_string(dtype: str) -> bool:
+    """A string column, collated (``string collate UTF8_LCASE``) or not."""
+    return dtype == "string" or dtype.startswith("string ")
+
+
+def _is_orderable(dtype: str) -> bool:
+    """Whether a column of this type may be a sort key: no map, variant or calendar interval at any depth."""
+    return not any(bad in dtype for bad in ("map<", "variant", "calendar")) and dtype not in ("interval", "map")
+
+
 def _spark_type(dtype: str) -> str:
     return _SPARK_TYPE.get(dtype, dtype)
 
@@ -108,7 +118,7 @@ def _unrecognized(statistic: str) -> IllegalArgumentException:
     )
 
 
-def _check_statistics(statistics: tuple[str, ...]) -> None:
+def _check_statistics(statistics: tuple[str, ...], last_win: bool = False) -> None:
     percentiles = [p for s in statistics if (p := _percentile(s)) is not None]
     if not all(0.0 <= p <= 1.0 for p in percentiles):
         raise _require("Percentiles must be in the range [0, 1]")
@@ -116,7 +126,7 @@ def _check_statistics(statistics: tuple[str, ...]) -> None:
         if _percentile(s) is None and s.lower() not in _NAMED:
             raise _unrecognized(s)
     for i, s in enumerate(statistics):
-        if s in statistics[:i]:
+        if not last_win and s in statistics[:i]:
             raise SparkRuntimeException(
                 f"[DUPLICATED_MAP_KEY] Duplicate map key {s} was found, please check the input data.\n"
                 'If you want to remove the duplicated keys, you can set "spark.sql.mapKeyDedupPolicy" to '
@@ -131,12 +141,12 @@ def _statistic_column(statistic: str, name: str, dtype: str) -> Column:
     """The aggregate of ``statistic`` over column ``name`` of type ``dtype``, as a string. As Spark, the moments
     and percentiles of a string column read it as a double that is NULL where it is not a number."""
     column = F.col(_quote(name))
-    as_double = column.try_cast("double") if dtype == "string" else column
+    as_double = column.try_cast("double") if _is_string(dtype) else column
     lowered = statistic.lower()
     fraction = _percentile(statistic)
     if fraction is not None:
         base = column if _is_numeric(dtype) else column.cast("double")
-        if dtype == "string":
+        if _is_string(dtype):
             base = as_double
         agg = F.percentile_approx(base, fraction, 10000)
     elif lowered == "count":
@@ -161,8 +171,12 @@ def summary_frame(df: DataFrame, statistics: tuple[str, ...]) -> DataFrame:
     numeric or string column, evaluated now (one engine aggregate) into a local frame."""
     from krishiv.sql.types import StringType, StructField, StructType
 
-    _check_statistics(statistics)
-    dtypes = [(n, t) for n, t in df.dtypes if _is_numeric(t) or t == "string"]
+    policy = df.sparkSession.conf.get("spark.sql.mapKeyDedupPolicy", "EXCEPTION") or "EXCEPTION"
+    last_win = policy.upper() == "LAST_WIN"
+    _check_statistics(statistics, last_win=last_win)
+    if last_win:
+        statistics = tuple(dict.fromkeys(statistics))
+    dtypes = [(n, t) for n, t in df.dtypes if _is_numeric(t) or _is_string(t)]
     schema = StructType(
         [StructField("summary", StringType(), True)] + [StructField(n, StringType(), True) for n, _ in dtypes]
     )
@@ -422,7 +436,7 @@ def stratified_sample(df: DataFrame, strata: Column, fractions: list[tuple[Any, 
     # Spark looks the stratum up in a typed map: a string column matches only string keys, any other only
     # numbers (SQL's `=` would coerce `'1'` and `1`).
     kind = df.select(strata.alias("__krishiv_stratum")).dtypes[0][1]
-    fractions = [(k, f) for k, f in fractions if isinstance(k, str) == (kind == "string")]
+    fractions = [(k, f) for k, f in fractions if isinstance(k, str) == _is_string(kind)]
     for stratum, wanted in fractions:
         hit = strata == F.lit(stratum)
         fraction = F.when(hit, F.lit(wanted)) if fraction is None else fraction.when(hit, F.lit(wanted))
@@ -443,7 +457,7 @@ def random_split(df: DataFrame, weights: list[float], seed: int) -> list[DataFra
     bounds = [0.0]
     for w in weights:
         bounds.append(bounds[-1] + w / total)
-    sortable = [n for n, t in df.dtypes if "map<" not in t and not t.startswith("map") and t != "variant"]
+    sortable = [n for n, t in df.dtypes if _is_orderable(t)]
     # Spark sorts within each partition (no exchange); a column list of none is cached instead.
     ordered = (
         df._new(df._df.sort_within_partitions([F.col(_quote(n))._c for n in sortable])) if sortable else df.cache()

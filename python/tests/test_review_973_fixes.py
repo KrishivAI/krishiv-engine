@@ -82,3 +82,19 @@ def test_to_turns_a_null_typed_column_into_a_typed_null(spark: SparkSession) -> 
     out = spark.sql("SELECT NULL AS x").to(T.StructType([T.StructField("x", T.IntegerType(), True)]))
     assert out.schema["x"].dataType == T.IntegerType()
     assert out.collect() == [Row(x=None)]
+
+
+def test_summary_with_a_repeated_statistic_under_last_win(spark: SparkSession) -> None:
+    frame = spark.createDataFrame([(1,), (2,)], "a int")
+    with pytest.raises(Exception, match="DUPLICATED_MAP_KEY"):
+        frame.summary("count", "count")
+    spark.conf.set("spark.sql.mapKeyDedupPolicy", "LAST_WIN")
+    try:
+        assert [r[0] for r in frame.summary("count", "count").collect()] == ["count"]
+    finally:
+        spark.conf.unset("spark.sql.mapKeyDedupPolicy")
+
+
+def test_random_split_keeps_array_and_struct_columns_in_the_sort_key(spark: SparkSession) -> None:
+    frame = spark.createDataFrame([([1], (1,)), ([2], (2,))], "a array<int>, s struct<x:int>")
+    assert sum(part.count() for part in frame.randomSplit([1.0, 1.0], 7)) == 2
