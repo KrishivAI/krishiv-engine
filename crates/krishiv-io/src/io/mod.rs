@@ -620,7 +620,7 @@ impl IoScheduler {
 
     /// Accounts the metadata cache in a child of `pool` (see
     /// [`MetadataCache::attach_pool`]).
-    /// The first pool attached is also the runtime's memory root ([`Self::runtime_memory`]).
+    /// The first pool attached is also the runtime's memory root ([`IoContext::runtime_memory`]).
     pub fn attach_memory(&self, pool: &Arc<dyn MemoryPool>) {
         // A second attach keeps the first root: the caches below follow the latest pool.
         let _ = self.memory.set(Arc::clone(pool));
