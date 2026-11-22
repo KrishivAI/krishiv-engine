@@ -501,6 +501,18 @@ impl QueryCatalog {
             .any(|t| matches!(&**t, TempTable::Files { .. }))
     }
 
+    /// Whether a physical plan decided a scan against this catalog. Each
+    /// plan binds its own scans and the list is never trimmed, so an
+    /// analysis that holds some is not reused: a repeated action would
+    /// grow the list for the life of the frame.
+    pub(crate) fn has_bound_scans(&self) -> bool {
+        !self
+            .bound_scans
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    }
+
     /// Every file table opened for the query, in opening order.
     fn opened_tables(&self) -> Vec<(FilesKey, Arc<FileTable>)> {
         self.opened

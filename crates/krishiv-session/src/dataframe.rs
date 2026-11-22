@@ -1046,6 +1046,7 @@ impl DataFrame {
         if let Some(a) = cached
             && !a.analyzed.reads_files
             && !a.env.catalog.loaded_file_views()
+            && !a.env.catalog.has_bound_scans()
             && a.env.conf_version == env.conf_version
             && a.env.catalog_epoch == env.catalog_epoch
             && a.env.variables_version == env.variables_version
