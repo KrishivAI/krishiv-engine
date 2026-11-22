@@ -693,9 +693,9 @@ impl Expander<'_> {
 
     /// A read of the metric view `entry` (Spark's `MetricViewPlaceholder`, design note
     /// `P3-metric-views.md` §4): its YAML read again under the parse options captured with it, the
-    /// source with its filter expanded in the reader's context (Spark analyzes the source with no
-    /// view context: the reader's namespace, path and temporary views), and the dimensions and
-    /// measures parsed, left for the analyzer's rule.
+    /// source with its filter expanded in the reader's context (the reader's namespace, path and
+    /// temporary views; inside an ordinary view, that view's namespace and path, as Spark 4.2.1),
+    /// and the dimensions and measures parsed, left for the analyzer's rule.
     #[expect(
         clippy::too_many_arguments,
         reason = "the parts of the read inline_stored already took apart"

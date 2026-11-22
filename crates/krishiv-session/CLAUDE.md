@@ -108,7 +108,7 @@ YAML, never a query. Rule: a site that parses `view.sql` as SQL or reads a SQL v
 the kind; every other `.view` read treats it as a view. Branches (4.2.1/4.3.0 goldens, `tests/metric_views.rs`):
 | Site | Metric view |
 |---|---|
-| `catalog/expand.rs` `inline_metric` | A `PlanNode::MetricViewRead`: the YAML read again under the captured parse options, the source with its filter lowered as `SELECT * FROM source [WHERE filter]` and expanded in the reader's context (no view namespace, path or `in_stored_view`), each dimension and measure lowered alone with its stored name, type and nullability; never parsed as SQL. `session/planning.rs` `physical_with` calls `krishiv_plan::analyzer::refuse_unplannable` first. |
+| `catalog/expand.rs` `inline_metric` | A `PlanNode::MetricViewRead`: the YAML read again under the captured parse options, the source with its filter lowered as `SELECT * FROM source [WHERE filter]` and expanded in the reader's context, which inside an ordinary view is that view's namespace and path (Spark 4.2.1 run: `a.v` over `a.mv` read from `b` gives `a.t`'s rows), each dimension and measure lowered alone with its stored name, type and nullability; never parsed as SQL. `session/planning.rs` `physical_with` calls `krishiv_plan::analyzer::refuse_unplannable` first. |
 | `introspection.rs` `table_information` (DESCRIBE EXTENDED, SHOW TABLE EXTENDED) | `Type METRIC_VIEW`, `Comment`, `View Text` = YAML, `Language YAML`; no binding rows. |
 | `introspection.rs` SHOW CREATE TABLE | `UNSUPPORTED_SHOW_CREATE_TABLE.ON_METRIC_VIEW`; `AS SERDE` Spark's internal error. |
 | `introspection.rs` SHOW PARTITIONS | `EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE`. |
