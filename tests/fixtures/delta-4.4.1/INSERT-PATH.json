@@ -1,0 +1,1013 @@
+{
+ "delta_spark": "4.4.1",
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py",
+ "refused": [
+  {
+   "created_log": false,
+   "error": {
+    "condition": "PATH_NOT_FOUND",
+    "message": "[PATH_NOT_FOUND] Path does not exist: <path>. SQLSTATE: 42K03;",
+    "parameters": {
+     "path": "<path>"
+    },
+    "sqlstate": "42K03"
+   },
+   "sql": "INSERT INTO delta.`<missing>` VALUES (1)",
+   "step": "missing"
+  },
+  {
+   "created_log": false,
+   "error": {
+    "condition": "DELTA_TABLE_NOT_FOUND",
+    "message": "[DELTA_TABLE_NOT_FOUND] Delta table `<path>` doesn't exist.;",
+    "parameters": {
+     "tableName": "`<path>`"
+    },
+    "sqlstate": null
+   },
+   "sql": "INSERT INTO delta.`<missing>` VALUES (1)",
+   "step": "empty_directory"
+  },
+  {
+   "created_log": false,
+   "error": {
+    "condition": "DELTA_TABLE_NOT_FOUND",
+    "message": "[DELTA_TABLE_NOT_FOUND] Delta table `<path>` doesn't exist.;",
+    "parameters": {
+     "tableName": "`<path>`"
+    },
+    "sqlstate": null
+   },
+   "sql": "INSERT INTO delta.`<missing>` VALUES (1)",
+   "step": "parquet_directory"
+  },
+  {
+   "error": {
+    "condition": "TABLE_OR_VIEW_NOT_FOUND",
+    "message": "[TABLE_OR_VIEW_NOT_FOUND] The table or view `delta`.`<path>` cannot be found. Verify the spelling and correctness of the schema and catalog.",
+    "parameters": {
+     "relationName": "`delta`.`<path>`",
+     "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+    },
+    "sqlstate": "42P01"
+   },
+   "sql": "INSERT INTO delta.`<path>` VALUES (1)",
+   "step": "no_slash"
+  }
+ ],
+ "spark": "4.2.0",
+ "steps": [
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-6e7a9245-82d0-46d0-809e-ca9a35c4da8d.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 2,
+         "v": "b"
+        },
+        "minValues": {
+         "id": 2,
+         "v": "b"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "900",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 1
+     },
+     "removes": [],
+     "version": 2
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` VALUES (2, 'b', 'y')",
+   "step": "values"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-282e0408-20c6-4a61-8535-7eaae0a93eed.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 3,
+         "v": "c"
+        },
+        "minValues": {
+         "id": 3,
+         "v": "c"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "900",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 2
+     },
+     "removes": [],
+     "version": 3
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ],
+    [
+     3,
+     "c",
+     "x"
+    ]
+   ],
+   "sql": "INSERT INTO TABLE delta.`<path>` VALUES (3, 'c', 'x')",
+   "step": "table_keyword"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-e9990a35-7b20-497b-bd19-830507121a5d.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 4,
+         "v": "d"
+        },
+        "minValues": {
+         "id": 4,
+         "v": "d"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "900",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 3
+     },
+     "removes": [],
+     "version": 4
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ],
+    [
+     3,
+     "c",
+     "x"
+    ],
+    [
+     4,
+     "d",
+     "y"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` (id, p, v) VALUES (4, 'y', 'd')",
+   "step": "column_list"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-4450ce22-386b-4c8d-b763-5b6f76a3a842.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 5
+        },
+        "minValues": {
+         "id": 5
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 1
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "881",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 4
+     },
+     "removes": [],
+     "version": 5
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ],
+    [
+     3,
+     "c",
+     "x"
+    ],
+    [
+     4,
+     "d",
+     "y"
+    ],
+    [
+     5,
+     null,
+     "x"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` (id, p) VALUES (5, 'x')",
+   "step": "column_list_partial"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-bf952c5b-bf46-40a7-9daf-1f1d16ec8e93.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 6,
+         "v": "e"
+        },
+        "minValues": {
+         "id": 6,
+         "v": "e"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "900",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 5
+     },
+     "removes": [],
+     "version": 6
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ],
+    [
+     3,
+     "c",
+     "x"
+    ],
+    [
+     4,
+     "d",
+     "y"
+    ],
+    [
+     5,
+     null,
+     "x"
+    ],
+    [
+     6,
+     "e",
+     "y"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` BY NAME SELECT 'e' AS v, CAST(6 AS BIGINT) AS id, 'y' AS p",
+   "step": "by_name"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "z"
+       },
+       "path": "p=z/part-00000-538e8a79-ed9f-414e-bc3e-1e0254fd461a.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 7,
+         "v": "f"
+        },
+        "minValues": {
+         "id": 7,
+         "v": "f"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "900",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 6
+     },
+     "removes": [],
+     "version": 7
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ],
+    [
+     3,
+     "c",
+     "x"
+    ],
+    [
+     4,
+     "d",
+     "y"
+    ],
+    [
+     5,
+     null,
+     "x"
+    ],
+    [
+     6,
+     "e",
+     "y"
+    ],
+    [
+     7,
+     "f",
+     "z"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` PARTITION (p = 'z') VALUES (7, 'f')",
+   "step": "static_partition"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-81de8861-db03-4ac9-9b83-4eb9db70c1ea.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 8,
+         "v": "g"
+        },
+        "minValues": {
+         "id": 8,
+         "v": "g"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "900",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 7
+     },
+     "removes": [],
+     "version": 8
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ],
+    [
+     3,
+     "c",
+     "x"
+    ],
+    [
+     4,
+     "d",
+     "y"
+    ],
+    [
+     5,
+     null,
+     "x"
+    ],
+    [
+     6,
+     "e",
+     "y"
+    ],
+    [
+     7,
+     "f",
+     "z"
+    ],
+    [
+     8,
+     "g",
+     "x"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>/` VALUES (8, 'g', 'x')",
+   "step": "trailing_slash"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-eda925bc-09b5-40b7-9b21-ed3e5e64b2e6.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 9,
+         "v": "h"
+        },
+        "minValues": {
+         "id": 9,
+         "v": "h"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": true,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "900",
+       "numOutputRows": "1"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 8
+     },
+     "removes": [],
+     "version": 9
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ],
+    [
+     3,
+     "c",
+     "x"
+    ],
+    [
+     4,
+     "d",
+     "y"
+    ],
+    [
+     5,
+     null,
+     "x"
+    ],
+    [
+     6,
+     "e",
+     "y"
+    ],
+    [
+     7,
+     "f",
+     "z"
+    ],
+    [
+     8,
+     "g",
+     "x"
+    ],
+    [
+     9,
+     "h",
+     "y"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`file:<path>` VALUES (9, 'h', 'y')",
+   "step": "file_uri"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-86262c29-5af9-4555-a975-614b08a003aa.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 101,
+         "v": "a"
+        },
+        "minValues": {
+         "id": 101,
+         "v": "a"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      },
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-0635d8b0-a096-4774-b748-4a9c893decdc.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 102,
+         "v": "b"
+        },
+        "minValues": {
+         "id": 102,
+         "v": "b"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "2",
+       "numOutputBytes": "1800",
+       "numOutputRows": "2"
+      },
+      "operationParameters": {
+       "mode": "Append",
+       "partitionBy": "[]"
+      },
+      "readVersion": 9
+     },
+     "removes": [],
+     "version": 10
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ],
+    [
+     3,
+     "c",
+     "x"
+    ],
+    [
+     4,
+     "d",
+     "y"
+    ],
+    [
+     5,
+     null,
+     "x"
+    ],
+    [
+     6,
+     "e",
+     "y"
+    ],
+    [
+     7,
+     "f",
+     "z"
+    ],
+    [
+     8,
+     "g",
+     "x"
+    ],
+    [
+     9,
+     "h",
+     "y"
+    ],
+    [
+     101,
+     "a",
+     "x"
+    ],
+    [
+     102,
+     "b",
+     "y"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` SELECT id + 100, v, p FROM delta.`<path>` WHERE id < 3",
+   "step": "reads_itself"
+  },
+  {
+   "commits": [],
+   "error": {
+    "condition": "DELTA_INSERT_COLUMN_ARITY_MISMATCH",
+    "message": "[DELTA_INSERT_COLUMN_ARITY_MISMATCH] Cannot write to 'delta.`file:<path>`', not enough data columns; target table has 3 column(s) but the inserted data has 2 column(s)",
+    "parameters": {
+     "columnName": "not enough data columns",
+     "insertColumns": "2",
+     "numColumns": "3",
+     "tableName": "delta.`file:<path>`"
+    },
+    "sqlstate": "42802"
+   },
+   "rows": [
+    [
+     1,
+     "a",
+     "x"
+    ],
+    [
+     2,
+     "b",
+     "y"
+    ],
+    [
+     3,
+     "c",
+     "x"
+    ],
+    [
+     4,
+     "d",
+     "y"
+    ],
+    [
+     5,
+     null,
+     "x"
+    ],
+    [
+     6,
+     "e",
+     "y"
+    ],
+    [
+     7,
+     "f",
+     "z"
+    ],
+    [
+     8,
+     "g",
+     "x"
+    ],
+    [
+     9,
+     "h",
+     "y"
+    ],
+    [
+     101,
+     "a",
+     "x"
+    ],
+    [
+     102,
+     "b",
+     "y"
+    ]
+   ],
+   "sql": "INSERT INTO delta.`<path>` VALUES (10, 'i')",
+   "step": "arity"
+  },
+  {
+   "commits": [
+    {
+     "adds": [
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-a5d2b28a-cc36-4bc4-8a68-088a7b1b6a12.c000.snappy.parquet",
+       "stats": {
+        "maxValues": {
+         "id": 11,
+         "v": "j"
+        },
+        "minValues": {
+         "id": 11,
+         "v": "j"
+        },
+        "nullCount": {
+         "id": 0,
+         "v": 0
+        },
+        "numRecords": 1
+       }
+      }
+     ],
+     "commitInfo": {
+      "isBlindAppend": false,
+      "isolationLevel": "Serializable",
+      "operation": "WRITE",
+      "operationMetrics": {
+       "numFiles": "1",
+       "numOutputBytes": "900",
+       "numOutputRows": "1",
+       "numRemovedBytes": "9881",
+       "numRemovedFiles": "11"
+      },
+      "operationParameters": {
+       "mode": "Overwrite",
+       "partitionBy": "[]"
+      },
+      "readVersion": 10
+     },
+     "removes": [
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-bf952c5b-bf46-40a7-9daf-1f1d16ec8e93.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-4450ce22-386b-4c8d-b763-5b6f76a3a842.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-81de8861-db03-4ac9-9b83-4eb9db70c1ea.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "z"
+       },
+       "path": "p=z/part-00000-538e8a79-ed9f-414e-bc3e-1e0254fd461a.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-282e0408-20c6-4a61-8535-7eaae0a93eed.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-6e7a9245-82d0-46d0-809e-ca9a35c4da8d.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-86262c29-5af9-4555-a975-614b08a003aa.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-eda925bc-09b5-40b7-9b21-ed3e5e64b2e6.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "x"
+       },
+       "path": "p=x/part-00000-fc7c041f-f9cd-46c8-a700-13c7d6d36984.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-e9990a35-7b20-497b-bd19-830507121a5d.c000.snappy.parquet"
+      },
+      {
+       "partitionValues": {
+        "p": "y"
+       },
+       "path": "p=y/part-00000-0635d8b0-a096-4774-b748-4a9c893decdc.c000.snappy.parquet"
+      }
+     ],
+     "version": 11
+    }
+   ],
+   "error": null,
+   "rows": [
+    [
+     11,
+     "j",
+     "x"
+    ]
+   ],
+   "sql": "INSERT OVERWRITE delta.`<path>` VALUES (11, 'j', 'x')",
+   "step": "overwrite"
+  }
+ ]
+}

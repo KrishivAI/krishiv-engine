@@ -1777,6 +1777,13 @@ struct InsertTarget<'a> {
         expect(dead_code, reason = "read by the Delta write path only")
     )]
     options: Option<&'a BTreeMap<String, OptionValue>>,
+    /// The name delta-spark's errors give a Delta table written by path (`` delta.`file:/p` ``);
+    /// `None` for a catalog table.
+    #[cfg_attr(
+        not(feature = "delta"),
+        expect(dead_code, reason = "read by the Delta write path only")
+    )]
+    delta_name: Option<&'a str>,
 }
 
 /// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as

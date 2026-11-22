@@ -102,6 +102,24 @@ impl Session {
         Err(name.not_found(path))
     }
 
+    /// The table an `INSERT` into `written` (resolved as `name`) writes: a Delta table by path
+    /// (`` delta.`/p` ``, with the name delta-spark's errors give it), else the permanent table
+    /// [`Self::table_for_write`] allows.
+    async fn insert_target(
+        &self,
+        written: &krishiv_sql::ast::DdlName,
+        name: &TableName,
+        env: &QueryEnv,
+    ) -> Result<(Arc<CatalogTable>, Option<String>), KrishivError> {
+        #[cfg(feature = "delta")]
+        if let Some((table, shown)) = self.delta_path_table(written, name, env).await? {
+            return Ok((table, Some(shown)));
+        }
+        #[cfg(not(feature = "delta"))]
+        let _ = written;
+        Ok((self.table_for_write(name, "INSERT", env)?, None))
+    }
+
     /// `INSERT INTO|OVERWRITE [TABLE] name [(columns)] [BY NAME] query`, or the multi-table
     /// `FROM source INSERT ... SELECT ... [INSERT ... SELECT ...]`.
     ///
@@ -133,7 +151,7 @@ impl Session {
                 {
                     self.refuse_replace_into_view(&name, &env)?;
                 }
-                self.table_for_write(&name, "INSERT", &env)?;
+                self.insert_target(&clause.name, &name, &env).await?;
             }
             for clause in &clauses {
                 self.insert_clause(clause, original, ids, true).await?;
@@ -182,7 +200,7 @@ impl Session {
         if replace {
             self.refuse_replace_into_view(&name, &env)?;
         }
-        let table = self.table_for_write(&name, "INSERT", &env)?;
+        let (table, delta_name) = self.insert_target(&c.name, &name, &env).await?;
         if replace {
             // A session-catalog table has no replace-by-condition write (Spark: the table lacks the capability).
             let operation = if c.replace_where.is_some() {
@@ -261,6 +279,7 @@ impl Session {
                 statics: &statics,
                 dry,
                 options: None,
+                delta_name: delta_name.as_deref(),
             },
         )
         .await
@@ -296,6 +315,23 @@ impl Session {
             &name.name,
             crate::catalog::NAMESPACE,
         );
+        // A Delta target is also read by any spelling of its root (`delta.`/t``, `/t/`,
+        // `file:/t`, a catalog table over it); an unresolvable root counts as a read.
+        #[cfg(feature = "delta")]
+        let reads_target = reads_target
+            || (delta
+                && analysis
+                    .env
+                    .catalog
+                    .delta
+                    .hadoop_root(&crate::catalog::table_source(table))
+                    .map_or(true, |root| {
+                        crate::catalog::reads_delta_root(
+                            analysis.analyzed.plan.root(),
+                            &root,
+                            &analysis.env.catalog,
+                        )
+                    }));
         // delta-spark overwrites a table the query reads (it reads the snapshot it commits on).
         if overwrite
             && !delta
@@ -332,6 +368,26 @@ impl Session {
                 .retain(|c| !statics.iter().any(|(k, _)| *k == c.name));
             t
         };
+        // delta-spark's arity check of an insert by position (`DeltaAnalysis`), before Spark's.
+        #[cfg(feature = "delta")]
+        if delta && listed.is_empty() && !by_name && statics.is_empty() {
+            let shown = target.delta_name.map_or_else(
+                || {
+                    format!(
+                        "{}.{}.{}",
+                        crate::catalog::CATALOG,
+                        table.namespace,
+                        table.name
+                    )
+                },
+                str::to_owned,
+            );
+            if let Some(refusal) =
+                super::delta_writes::delta_insert_arity(&shown, table.columns.len(), output.len())
+            {
+                return Err(refusal);
+            }
+        }
         let assignment = assign(
             &assigned,
             listed,
@@ -910,6 +966,7 @@ impl Session {
             statics: &[],
             dry: false,
             options: Some(options),
+            delta_name: None,
         };
         self.insert_rows(&name, &found, df, &target).await
     }
@@ -944,6 +1001,7 @@ impl Session {
                     statics: &[],
                     dry: false,
                     options: Some(&spec.options),
+                    delta_name: None,
                 };
                 return self.insert_rows(&name, &table, df, &target).await;
             }

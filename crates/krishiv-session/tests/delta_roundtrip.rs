@@ -2,8 +2,7 @@
 //! Krishiv's SQL in the Delta round trip (P3-T028b, PR-53b rest part 2; feature `delta`): on the
 //! `sql_plain`, `sql_part` (partitioned by `x`) and `sql_dv` (deletion vectors) tables that Spark
 //! 4.2.0 with delta-spark 4.4.1 makes (`tests/scripts/gen_delta_roundtrip.py create`), Krishiv runs
-//! an `INSERT` (data files and statistics from its Delta writer, through a catalog table over the
-//! location: ``INSERT INTO delta.`<path>` `` is not supported yet), a copy-on-write `DELETE` and
+//! an `INSERT` by path (data files and statistics from its Delta writer), a copy-on-write `DELETE` and
 //! `UPDATE` that rewrite Spark's files and its own (on `sql_dv` a Spark file with a deletion
 //! vector), on `sql_part` a whole-file `DELETE` of a partition, and a second `INSERT`
 //! ([`krishiv_sql_on_spark_tables`], `KRISHIV-SQL.json`); Spark reads every version back, with
@@ -151,17 +150,6 @@ fn krishiv_sql_on_spark_tables() {
     for (name, partitioned) in TABLES {
         let created = &spark[name];
         let t = table(name);
-        // Known gap: `INSERT INTO delta.`<path>`` is refused (`TABLE_OR_VIEW_NOT_FOUND`;
-        // delta-spark writes it), so the inserts go through a catalog table over the same
-        // location (no commit); `DELETE` and `UPDATE` run by path.
-        let catalog = format!("rt_{name}");
-        sql(
-            &s,
-            &format!(
-                "CREATE TABLE {catalog} USING delta LOCATION '{}'",
-                table_dir(name).display()
-            ),
-        );
         let read = krishiv_read(&s, name);
         assert_eq!(
             sorted(read.clone()),
@@ -174,10 +162,7 @@ fn krishiv_sql_on_spark_tables() {
         let mut statements = vec![
             (
                 "insert",
-                format!(
-                    "INSERT INTO {catalog} (id, x, name) VALUES {}",
-                    values(&first)
-                ),
+                format!("INSERT INTO {t} (id, x, name) VALUES {}", values(&first)),
             ),
             // A row of Spark's first file (on `sql_dv` the file with Spark's deletion vector) and
             // one of Krishiv's.
@@ -194,7 +179,7 @@ fn krishiv_sql_on_spark_tables() {
         statements.push((
             "insert",
             format!(
-                "INSERT INTO {catalog} (id, x, name) VALUES {}",
+                "INSERT INTO {t} (id, x, name) VALUES {}",
                 values(&[Some(110), Some(111)])
             ),
         ));

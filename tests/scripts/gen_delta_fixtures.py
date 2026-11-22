@@ -26,6 +26,9 @@ consuming test checks what the oracle wrote, never a hand-written value.
 ``... /out dml`` writes the DML oracle (``dml_cases``): per scenario a ``before`` table and
 ``dml/DML.json`` with each ``DELETE``/``UPDATE`` step's output, commits, rows and history.
 
+``... /out insert-path`` writes ``INSERT-PATH.json`` (``insert_by_path``): ``INSERT INTO
+delta.`<path>``` in each form, its arity refusals and its refused targets.
+
 ``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
 (``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
 
@@ -882,6 +885,66 @@ def write_modes(spark: SparkSession, out: str) -> None:
         f.write("\n")
 
 
+def insert_by_path(spark: SparkSession, out: str) -> None:
+    """``INSERT-PATH.json``: ``INSERT INTO delta.`<path>``` beside ``WRITES.json`` (which
+    replays its path steps through a catalog table): the forms of the statement on an existing
+    table (column list, ``BY NAME``, ``TABLE``, a static partition, a trailing slash, a ``file:``
+    URI), then each refusal: a missing path, an empty directory, a Parquet directory, a name
+    without a ``/``, an arity mismatch. Each step records the oracle's error or its commit and
+    rows; a refused target's path is elided as ``<missing>``."""
+    path = os.path.join(out, "insert-path")
+    t = f"delta.`{path}`"
+    spark.sql(f"CREATE TABLE {t} (id BIGINT, v STRING, p STRING) USING delta PARTITIONED BY (p)")
+    spark.sql(f"INSERT INTO {t} VALUES (1, 'a', 'x')")
+    steps: list[tuple[str, Any]] = [
+        ("values", f"INSERT INTO {t} VALUES (2, 'b', 'y')"),
+        ("table_keyword", f"INSERT INTO TABLE {t} VALUES (3, 'c', 'x')"),
+        ("column_list", f"INSERT INTO {t} (id, p, v) VALUES (4, 'y', 'd')"),
+        ("column_list_partial", f"INSERT INTO {t} (id, p) VALUES (5, 'x')"),
+        ("by_name", f"INSERT INTO {t} BY NAME SELECT 'e' AS v, CAST(6 AS BIGINT) AS id, 'y' AS p"),
+        ("static_partition", f"INSERT INTO {t} PARTITION (p = 'z') VALUES (7, 'f')"),
+        ("trailing_slash", f"INSERT INTO delta.`{path}/` VALUES (8, 'g', 'x')"),
+        ("file_uri", f"INSERT INTO delta.`file:{path}` VALUES (9, 'h', 'y')"),
+        ("reads_itself", f"INSERT INTO {t} SELECT id + 100, v, p FROM {t} WHERE id < 3"),
+        ("arity", f"INSERT INTO {t} VALUES (10, 'i')"),
+        ("arity_too_many", f"INSERT INTO {t} VALUES (10, 'i', 'x', 1)"),
+        ("arity_column_list", f"INSERT INTO {t} (id, v) VALUES (10, 'i', 'x')"),
+        ("catalog_create", f"CREATE TABLE insert_path_cat USING delta LOCATION '{path}'"),
+        ("catalog_arity", "INSERT INTO insert_path_cat VALUES (10, 'i')"),
+        ("catalog_arity_too_many", "INSERT INTO insert_path_cat VALUES (10, 'i', 'x', 1)"),
+        ("catalog_drop", "DROP TABLE insert_path_cat"),
+        ("overwrite", f"INSERT OVERWRITE {t} VALUES (11, 'j', 'x')"),
+    ]
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "steps": run_steps(spark, path, steps),
+    }
+    missing = os.path.join(out, "insert-missing")
+    empty = os.path.join(out, "insert-empty")
+    os.makedirs(empty)
+    parquet = os.path.join(out, "insert-parquet")
+    spark.sql("SELECT CAST(1 AS BIGINT) AS id").write.parquet(parquet)
+    refused = []
+    for name, target in (("missing", missing), ("empty_directory", empty), ("parquet_directory", parquet)):
+        step = outcome(spark, f"INSERT INTO delta.`{target}` VALUES (1)", target)
+        step["sql"] = step["sql"].replace("<path>", "<missing>")
+        step["step"] = name
+        step["created_log"] = os.path.isdir(os.path.join(target, "_delta_log"))
+        refused.append(step)
+    no_slash = outcome(spark, "INSERT INTO delta.`krishiv_no_slash` VALUES (1)", "krishiv_no_slash")
+    no_slash["step"] = "no_slash"
+    refused.append(no_slash)
+    record["refused"] = refused
+    for d in (path, missing, empty, parquet):
+        shutil.rmtree(d, ignore_errors=True)
+    with open(os.path.join(out, "INSERT-PATH.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
 def write_edges(spark: SparkSession, out: str) -> None:
     """``WRITE-EDGES.json``: write edge cases next to ``WRITES.json`` (review of PR-37a part 2):
     an empty-string partition value (stored as null) under a dynamic overwrite, an append and
@@ -1511,6 +1574,10 @@ def main(out: str, which: str = "checkpoint", src: str = "") -> None:
         write_modes(spark, out)
         write_feature_tables(spark, out)
         drop_hadoop_crc(out)
+        spark.stop()
+        return
+    if which == "insert-path":
+        insert_by_path(spark, out)
         spark.stop()
         return
     if which == "edges":

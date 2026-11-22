@@ -77,8 +77,7 @@ commit read, also after a retry, as delta-spark's transaction keeps its snapshot
 Krishiv's SQL takes the direct commits' place on three more tables Spark makes in step 1 (`sql_plain`, `sql_part`,
 `sql_dv`, as `plain`, `part` and `dv`), in krishiv-session `tests/delta_roundtrip.rs` (feature `delta`):
 
-- 2b. `krishiv_sql_on_spark_tables`: `INSERT` (files and statistics from Krishiv's Delta writer; through a catalog table
-  over the location, since `INSERT INTO delta.`<path>`` is not supported yet),
+- 2b. `krishiv_sql_on_spark_tables`: `INSERT INTO delta.`<path>`` (files and statistics from Krishiv's Delta writer),
   a copy-on-write `DELETE` and `UPDATE` of a row in Spark's first file (on `sql_dv` the one carrying Spark's DV) and
   one in Krishiv's, on `sql_part` a whole-file `DELETE WHERE x = 2`, and a second `INSERT`; one commit each, the
   command output and the read after it recorded (`KRISHIV-SQL.json`). Step 3 reads these tables as the others.

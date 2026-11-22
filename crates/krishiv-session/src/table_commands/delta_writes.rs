@@ -499,13 +499,135 @@ impl Session {
             df,
             DeltaTarget::Existing {
                 source: crate::catalog::table_source(table),
-                name: Some(format!("{}.{}", table.namespace, table.name)),
+                // A table by path is named by its root, in the Hadoop form.
+                name: target
+                    .delta_name
+                    .is_none()
+                    .then(|| format!("{}.{}", table.namespace, table.name)),
             },
             mode,
             options,
             &name.quoted(),
         )
         .await
+    }
+}
+
+impl Session {
+    /// The Delta table an `INSERT` into `delta.`<path>`` writes, when `written` names one: two
+    /// parts, `delta` and a path with a `/`, and no catalog table or temporary view of that name.
+    /// Returned as a catalog entry built from the log (columns, partitioning, the qualified root
+    /// as its location), never stored, beside the name delta-spark's errors give it
+    /// (`` delta.`file:/p` ``). `Modify` is asked on the root before the log is read, as a
+    /// `DELETE` by path asks it.
+    ///
+    /// # Errors
+    /// The access refusal; `PATH_NOT_FOUND` for a local root that does not exist and
+    /// `DELTA_TABLE_NOT_FOUND` for a root without a Delta log (delta-spark 4.4.1,
+    /// `INSERT-PATH.json` `refused`); the log's read errors.
+    pub(super) async fn delta_path_table(
+        &self,
+        written: &krishiv_sql::ast::DdlName,
+        name: &super::TableName,
+        env: &crate::session::QueryEnv,
+    ) -> Result<Option<(Arc<crate::store::CatalogTable>, String)>, KrishivError> {
+        use crate::store::CatalogStore as _;
+        let parts = crate::access::ddl_parts(written, env)?;
+        let [format, path] = parts.as_slice() else {
+            return Ok(None);
+        };
+        if !format.eq_ignore_ascii_case(DELTA)
+            || !path.contains('/')
+            || self
+                .state
+                .catalog
+                .store
+                .table(&name.namespace, &name.name)
+                .is_some()
+            || self.temp_entry_of(name, env)
+        {
+            return Ok(None);
+        }
+        let qualified = self.qualify_path(path)?;
+        self.authorize_qualified_root(
+            &qualified,
+            &[krishiv_plan::analyzer::Privilege::Modify],
+            krishiv_sql::StatementClass::Write,
+        )
+        .await?;
+        if let Some(local) = qualified.strip_prefix("file:")
+            && !std::path::Path::new(local).exists()
+        {
+            return Err(krishiv_common::error::PathNotFound { path: path.clone() }.into());
+        }
+        let source = delta_source(&qualified);
+        let shape = env.catalog.delta.shape(&source, qualified.clone()).await?;
+        if !shape.existing {
+            return Err(krishiv_common::error::DeltaTableNotFound {
+                table_name: format!("`{path}`"),
+            }
+            .into());
+        }
+        let table = crate::store::CatalogTable {
+            namespace: name.namespace.clone(),
+            name: name.name.clone(),
+            managed: false,
+            provider: DELTA.to_owned(),
+            provider_written: DELTA.to_owned(),
+            location: std::path::PathBuf::from(&qualified),
+            columns: shape
+                .columns
+                .iter()
+                .map(|c| {
+                    crate::store::StoreColumn::plain(
+                        c.name.clone(),
+                        c.data_type.clone(),
+                        c.nullable,
+                    )
+                })
+                .collect(),
+            options: BTreeMap::new(),
+            properties: BTreeMap::new(),
+            comment: None,
+            created_ms: 0,
+            root: std::path::PathBuf::new(),
+            view: None,
+            layout: crate::store::TableLayout {
+                partition_columns: shape.partition_columns,
+                ..crate::store::TableLayout::default()
+            },
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
+            stamp: 0,
+        };
+        Ok(Some((Arc::new(table), format!("delta.`{}`", shape.path))))
+    }
+}
+
+/// delta-spark's refusal of an `INSERT` by position whose query has another column count than
+/// the Delta table `table` (named `shown`): too few is `DELTA_INSERT_COLUMN_ARITY_MISMATCH`, too
+/// many `DELTA_METADATA_MISMATCH` (its schema-evolution check), for a table by path and a catalog
+/// table alike (`INSERT-PATH.json` `arity`, `arity_too_many`, `catalog_arity*`). A column list
+/// keeps Spark's own arity errors (`arity_column_list`).
+pub(super) fn delta_insert_arity(
+    shown: &str,
+    table_columns: usize,
+    data_columns: usize,
+) -> Option<KrishivError> {
+    use std::cmp::Ordering;
+    match data_columns.cmp(&table_columns) {
+        Ordering::Equal => None,
+        Ordering::Less => Some(
+            krishiv_common::error::DeltaInsertColumnArityMismatch {
+                table_name: shown.to_owned(),
+                column_name: "not enough data columns".to_owned(),
+                num_columns: table_columns.to_string(),
+                insert_columns: data_columns.to_string(),
+            }
+            .into(),
+        ),
+        Ordering::Greater => Some(DeltaMetadataMismatch {}.into()),
     }
 }
 
