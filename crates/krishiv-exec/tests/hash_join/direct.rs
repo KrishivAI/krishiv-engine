@@ -484,6 +484,63 @@ async fn the_one_pass_inner_probe_needs_unique_build_keys() {
     }
 }
 
+/// A weighted probe batch or build side keeps the general path (each pair
+/// multiplies the weights there); unweighted ones take the one pass, whose
+/// output rows weigh one.
+#[tokio::test]
+async fn weighted_inputs_keep_the_general_inner_probe() {
+    let probe = [
+        r(Some(1), None, 1),
+        r(Some(2), None, 2),
+        r(Some(9), None, 3),
+    ];
+    let build = [r(Some(1), None, 3), r(Some(2), None, 4)];
+    let plain = |rows: &[Row]| vec![Batch::new(data(rows))];
+    let weighted = |rows: &[Row], w: Weights| vec![Batch::with_weights(data(rows), w).unwrap()];
+    let cases = [
+        (
+            plain(&probe),
+            plain(&build),
+            vec!["1|∅|1|1|∅|3", "2|∅|2|2|∅|4"],
+            true,
+        ),
+        (
+            weighted(&probe, Weights::Column(Int64Array::from(vec![-2, 5, 7]))),
+            plain(&build),
+            vec!["1|∅|1|1|∅|3|*-2", "2|∅|2|2|∅|4|*5"],
+            false,
+        ),
+        (
+            plain(&probe),
+            weighted(&build, Weights::Const(3)),
+            vec!["1|∅|1|1|∅|3|*3", "2|∅|2|2|∅|4|*3"],
+            false,
+        ),
+    ];
+    for (probe_side, build_side, expect, one_pass) in cases {
+        let root = root(64 * MIB);
+        let config = ExecConfig {
+            join_row_layout: true,
+            join_direct_index: true,
+            ..ExecConfig::default()
+        };
+        let q = query(&root, 1, config);
+        let mut c = case(JoinType::Inner, 1, false, false);
+        c.row_layout = true;
+        let plan = join(
+            c.spec(None),
+            scan(&schema(), build_side),
+            scan(&schema(), probe_side),
+        );
+        let out = run(&runner(2), plan, &q).await.unwrap();
+        assert_eq!(render(&out), expect, "one pass {one_pass}");
+        assert!(metric(&q, "HashJoinProbe", "direct_probe_rows") > 0);
+        let inner = metric(&q, "HashJoinProbe", "direct_inner_rows");
+        assert_eq!(inner, if one_pass { 2 } else { 0 }, "one pass {one_pass}");
+        assert_released(&root);
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
     /// Random one-key joins over small key spans (so the index applies):

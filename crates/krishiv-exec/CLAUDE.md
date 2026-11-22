@@ -40,9 +40,9 @@ sink (also the runtime filter producer, P2-T163: per-driver partials, published 
 `direct.rs` (perf lever J1, `krishiv.exec.join.directIndex`) the direct index of a tiny build: at most 4,096 rows, one
 non-null-safe `Int32`/`Int64` row-layout key spanning at most four slots a row; the first probe driver builds it from the
 level-0 tables (none spilled) into `build.rs` `Level0::direct`, shared by every driver and dropped with the tables; with lever
-P3 a build whose tables hold at most 256 KiB also has its payload decoded once (`DirectPayload`, unreserved, one copy per
+P3 a build whose tables hold at most 256 KiB also has its payload decoded once (`DirectPayload`, reserved for the index's life, one copy per
 build; probes `take` build columns from it, sparse view columns `gc`'d; `direct_payload_rows`), and `Cursor::new` then finds each row's partition and newest row by `key - min`
-(no encode, no hash; null-aware anti, grace partitions and detailed metrics keep the hashed probe; `direct_probe_rows`) ·
+(no encode, no hash; null-aware anti, grace partitions and detailed metrics keep the hashed probe; `direct_probe_rows`); lever C: an unweighted inner join without a filter or single-match check over unique build keys and a decoded payload emits its pairs in one pass (`Cursor::next_direct_inner`: no chain walk, no match state; `direct_inner_rows`) ·
 `probe.rs` probe operator + match cursor (its first read of the build, `BuildGlobal::built`, ends the build's idle
 window: until then a finished build's tables are an `OutputSpill` written partition by partition, largest first, and
 idle after `krishiv.exec.join.idleSpillAfter`, so the arbitrator asks them before a running consumer self-spills; study
