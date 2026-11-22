@@ -1094,7 +1094,11 @@ impl DeltaWriteSink {
             return match staged {
                 Some(mut staged) => {
                     staged.idempotency_key.clone_from(&self.idempotency_key);
-                    self.commit_staged(g, table, staged, orphans).await
+                    if self.commit_staged(g, table, staged, orphans).await? {
+                        // An earlier attempt made the change: this one claims no rows.
+                        plan.deduplicated();
+                    }
+                    Ok(())
                 }
                 None => {
                     // Nothing changed: no commit, as delta-spark's `commitIfNeeded`.
@@ -1202,18 +1206,21 @@ impl DeltaWriteSink {
             removes,
             read_set,
         };
-        self.commit_staged(g, table, staged, written_paths).await
+        self.commit_staged(g, table, staged, written_paths)
+            .await
+            .map(|_| ())
     }
 
     /// Commits `staged` on the snapshot the statement read, then starts a checkpoint when one
     /// is due. The writers are let go first: from here their files stay (the commit may land).
+    /// Returns whether the commit was deduplicated (an earlier attempt of the statement landed).
     async fn commit_staged(
         &self,
         g: &WriteGlobal,
         table: &DeltaTable,
         staged: StagedCommit,
         orphans: Vec<object_store::path::Path>,
-    ) -> Result<(), Failure> {
+    ) -> Result<bool, Failure> {
         let engine = &g.engine;
         let name = table.name().to_owned();
         let snapshot = Arc::clone(table.snapshot());
@@ -1224,7 +1231,7 @@ impl DeltaWriteSink {
         if committed.deduplicated {
             // An earlier attempt of this statement committed: this one's files are orphans.
             delete_files(engine, &orphans).await;
-            return Ok(());
+            return Ok(true);
         }
         let interval = table
             .snapshot()
@@ -1239,7 +1246,7 @@ impl DeltaWriteSink {
             // cancellation and its end), so it can never turn a landed write into a failure.
             spawn_checkpoint(engine, committed.version, name);
         }
-        Ok(())
+        Ok(false)
     }
 }
 

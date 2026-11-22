@@ -341,6 +341,16 @@ pub(crate) struct RowLevelPlan {
 }
 
 impl RowLevelPlan {
+    /// The commit was deduplicated (E34: an earlier attempt of the statement made the change): the
+    /// result row reports 0 rows, not this attempt's scan count, which describes a change that was
+    /// not made now.
+    pub(crate) fn deduplicated(&self) {
+        *self.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(Outcome {
+            removed_files: 0,
+            rows: Some(0),
+        });
+    }
+
     /// The refusal of a written row, before it is written.
     pub(crate) fn check_rows(&self) -> Result<(), KrishivError> {
         match &self.refuse_rows {

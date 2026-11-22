@@ -300,7 +300,7 @@ impl MergeOnReadWrite {
         let t = &self.target;
         let base = &t.base;
         // E34: the statement committed before (a retry opens the table anew): nothing is committed
-        // and `written` stays armed, so the caller deletes this attempt's files.
+        // and this attempt's files are orphans, deleted here (not left to `Written`'s best-effort drop).
         if let Some(key) = &self.idempotency_key
             && base.snapshots().any(|s| {
                 s.summary()
@@ -309,6 +309,7 @@ impl MergeOnReadWrite {
                     .is_some_and(|v| v == key)
             })
         {
+            written.delete().await;
             return Ok(base.clone());
         }
         let snapshot_id = snapshot_id(base);

@@ -511,6 +511,34 @@ impl Session {
         TableName::resolve(&parts, &self.namespace_for_stored(&parts, env)?, env)
     }
 
+    /// Whether this keyed `saveAsTable` is the retry of a write the managed file table's commit log
+    /// already holds: it then writes nothing, as a path `save` with the same key does (an overwrite
+    /// must not drop what a later write added, an `errorifexists` retry must not fail on the table the
+    /// first try created).
+    async fn keyed_retry_is_done(
+        &self,
+        name: &TableName,
+        spec: &V2WriteSpec,
+        env: &QueryEnv,
+    ) -> Result<bool, KrishivError> {
+        let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name) else {
+            return Ok(false);
+        };
+        if !table.managed {
+            return Ok(false);
+        }
+        let checked =
+            self.locate_write_path(&table.location.display().to_string(), &spec.options, env)?;
+        crate::session::writes::key_already_committed(
+            &env.config,
+            &spec.options,
+            &env.io,
+            &checked.at.store,
+            &checked.at,
+        )
+        .await
+    }
+
     /// `DataFrameWriter.saveAsTable`: Spark's V1 save modes over a table. The
     /// table is created from the DataFrame's schema (an existing one in
     /// `errorifexists` mode fails with `TABLE_OR_VIEW_ALREADY_EXISTS`),
@@ -537,6 +565,15 @@ impl Session {
             .store
             .table(&name.namespace, &name.name)
             .is_some();
+        // A keyed retry of a write the table's commit log already holds writes nothing.
+        if exists
+            && matches!(mode, SaveMode::Overwrite | SaveMode::ErrorIfExists)
+            && !self.temp_entry_of(&name, &env)
+            && self.keyed_retry_is_done(&name, &spec, &env).await?
+        {
+            self.authorize_table_write(&name, true, &env).await?;
+            return Ok(());
+        }
         match (mode, exists) {
             (SaveMode::Ignore, true) => {
                 // A no-op create is still authorized, as the SQL path does, so a denial

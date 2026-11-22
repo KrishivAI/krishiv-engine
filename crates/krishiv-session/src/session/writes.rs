@@ -94,7 +94,7 @@ pub(super) fn unlogged_key(display: &str) -> KrishivError {
 ///
 /// # Errors
 /// An invalid key, or the log's read errors.
-pub(super) async fn key_already_committed(
+pub(crate) async fn key_already_committed(
     config: &Config,
     options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
     io: &krishiv_io::IoContext,
@@ -167,6 +167,9 @@ pub(super) async fn refuse_unlogged_key_early(
 /// What [`refuse_unlogged_key_early`] decides for a write to a directory that does not exist yet
 /// (`errorifexists`), from the configuration and the store's cached probe alone: no I/O, so an
 /// overwrite can ask it before it drops the table it replaces.
+///
+/// Only a store already probed is known to lack put-if-absent; for one not probed yet the refusal
+/// still comes after the drop. Not reachable while managed tables live in the local warehouse.
 ///
 /// # Errors
 /// An invalid key; `KRISHIV_UNSUPPORTED_FEATURE` for a key on `commitProtocol=NONE` or on a store

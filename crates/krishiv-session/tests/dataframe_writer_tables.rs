@@ -302,6 +302,32 @@ fn a_usable_key_on_an_overwrite_replaces_the_table() {
     assert_eq!(count(&s, "replaced"), n);
 }
 
+/// E34 (review of #966): a retried keyed overwrite or `errorifexists` create writes nothing, so it
+/// cannot drop what a later write added.
+#[test]
+fn a_retried_keyed_save_as_table_does_not_undo_a_later_append() {
+    let s = session();
+    let n = count(&s, "people");
+    let write = |mode: &str, key: &str| {
+        block_on(
+            s.table("people")
+                .write()
+                .mode(mode)
+                .option("krishiv.write.idempotencyKey", key)
+                .save_as_table("retried"),
+        )
+    };
+    write("overwrite", "k1").unwrap();
+    write("append", "k2").unwrap();
+    assert_eq!(count(&s, "retried"), 2 * n);
+    // The retry of the overwrite: nothing is dropped.
+    write("overwrite", "k1").unwrap();
+    assert_eq!(count(&s, "retried"), 2 * n);
+    // The retry of a creating write does not fail on the table the first try made.
+    write("errorifexists", "k1").unwrap();
+    assert_eq!(count(&s, "retried"), 2 * n);
+}
+
 /// E34 (review of #966): strict option checking accepts the forwarded key.
 #[test]
 fn strict_options_accept_the_idempotency_key_on_a_file_table() {

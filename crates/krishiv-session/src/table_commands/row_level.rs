@@ -148,7 +148,10 @@ impl Session {
         // A table whose commit records the key takes it; any other refuses it here, before any scan or
         // path split (E34).
         let caps = table.capabilities();
-        if !caps.idempotent_commit {
+        if caps.idempotent_commit {
+            // An empty key is refused here, before the find scan.
+            apply_idempotency_key(&probe.env.config, &mut std::collections::BTreeMap::new())?;
+        } else {
             refuse_idempotency_key(&probe.env.config)?;
         }
         // A Delta table's root as delta-spark's errors name it (`file:/..`), for a table by path
@@ -769,8 +772,9 @@ fn the_delta_connector_reads_the_same_option_keys() {
 #[cfg(test)]
 mod tests;
 
-/// Row-level (DML) writes do not take `krishiv.write.idempotencyKey` yet (E34): a set key is refused
-/// instead of deduplicating on some table formats only.
+/// A table whose commit records no key (`idempotent_commit` false) does not take
+/// `krishiv.write.idempotencyKey` (E34): a set key is refused instead of deduplicating on some table
+/// formats only.
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` when the session setting names a key.

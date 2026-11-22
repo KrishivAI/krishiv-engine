@@ -966,9 +966,16 @@ fn a_retried_update_and_delete_with_the_same_idempotency_key_apply_once() {
     s.conf()
         .set("krishiv.write.idempotencyKey", "del-1")
         .unwrap();
-    run(&s, "DELETE FROM k WHERE a = 11").unwrap();
+    assert_eq!(
+        query(&s, "DELETE FROM k WHERE a = 11"),
+        serde_json::json!([[1]])
+    );
     let after_delete = versions(&dir);
-    run(&s, "DELETE FROM k WHERE a = 12").unwrap();
+    // The retry changed nothing: its result row claims no rows (not the scan's count of 1).
+    assert_eq!(
+        query(&s, "DELETE FROM k WHERE a = 12"),
+        serde_json::json!([[0]])
+    );
     assert_eq!(versions(&dir), after_delete, "the retried key is a no-op");
     assert_eq!(
         query(&s, "SELECT a FROM k ORDER BY a"),
