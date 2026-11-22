@@ -228,6 +228,8 @@ enum Wire {
     LostAfterApply,
     /// Answered with this status without landing.
     Status(u16),
+    /// Landed, but the answer is this 2xx status with an empty body (a proxy's 202 or 204).
+    LandedWith(u16),
     /// Delivered twice: the first copy landed, the client sees the second's answer.
     Duplicated,
     /// Refused before it left (the egress policy).
@@ -325,6 +327,10 @@ impl RestCommitTransport for Server {
                 return Err(TransportFailure::new(true, "the connection was reset"));
             }
             Wire::Status(s) => (s, String::new()),
+            Wire::LandedWith(s) => {
+                let _ = self.land(&request);
+                (s, String::new())
+            }
             Wire::Duplicated => {
                 let _ = self.land(&request);
                 self.land(&request)
@@ -465,6 +471,25 @@ fn a_lost_200_is_found_by_the_snapshots_all_probe() {
     assert_eq!(*server.loads.lock().unwrap(), [true]);
     assert!(exists(&c.list(1)) && exists(&c.data()));
     check(&c, &server, &[INIT, MINE]);
+}
+
+/// A 2xx that is not a 200 with the result (202, 204, 201) says the request was accepted, so
+/// it is unknown, never a sure failure: the probe finds the landed snapshot and no file of the
+/// write is removed.
+#[test]
+fn an_accepted_non_200_answer_is_unknown_and_found_by_the_probe() {
+    for status in [201, 202, 204] {
+        let o = map(reply(status, ""));
+        assert!(matches!(o, CommitOutcome::Unknown(_)), "{status}: {o:?}");
+        let mut c = case();
+        let server = wire(&mut c, &[Wire::LandedWith(status)]);
+        let m = run(&mut c, &server).unwrap();
+        assert!(m.snapshot_by_id(OURS).is_some(), "{status}");
+        assert_eq!(*server.posts.lock().unwrap(), 1);
+        assert_eq!(*server.loads.lock().unwrap(), [true]);
+        assert!(exists(&c.list(1)) && exists(&c.data()), "{status}");
+        check(&c, &server, &[INIT, MINE]);
+    }
 }
 
 /// A request delivered twice: the second copy's duplicate-id 400 is "probably committed", the

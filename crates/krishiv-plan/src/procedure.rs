@@ -30,6 +30,8 @@ pub enum ProcedureType {
     StringMap,
     /// `ARRAY<BIGINT>`.
     LongArray,
+    /// `ARRAY<STRING>`.
+    StringArray,
 }
 
 impl ProcedureType {
@@ -44,6 +46,7 @@ impl ProcedureType {
             Self::Timestamp => "TIMESTAMP",
             Self::StringMap => "MAP<STRING, STRING>",
             Self::LongArray => "ARRAY<BIGINT>",
+            Self::StringArray => "ARRAY<STRING>",
         }
     }
 }
@@ -77,6 +80,8 @@ pub enum ProcedureValue {
     StringMap(Vec<(String, String)>),
     /// An array of longs.
     LongArray(Vec<i64>),
+    /// An array of strings.
+    StringArray(Vec<String>),
 }
 
 /// Who runs a procedure, for the table rights and the commit identity.

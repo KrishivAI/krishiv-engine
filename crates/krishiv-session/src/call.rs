@@ -64,8 +64,9 @@ impl Session {
         let (built, caller) = built?;
         let shown = quote_all(&[catalog.clone(), namespace.clone(), procedure.clone()]);
         let loaded = if namespace.eq_ignore_ascii_case("system") {
+            let inputs = self.procedure_inputs();
             built
-                .load_procedure(&caller, &procedure.to_lowercase())
+                .load_procedure(&caller, inputs, &procedure.to_lowercase())
                 .await?
         } else {
             None
@@ -195,6 +196,12 @@ fn value_of(batch: &RecordBatch, ty: ProcedureType) -> Result<ProcedureValue, Kr
             let items = list.value(0);
             let longs = items.as_primitive_opt::<Int64Type>().ok_or_else(bad)?;
             ProcedureValue::LongArray(longs.iter().flatten().collect())
+        }
+        ProcedureType::StringArray => {
+            let list = col.as_list_opt::<i32>().ok_or_else(bad)?;
+            let items = list.value(0);
+            let strings = items.as_string_opt::<i32>().ok_or_else(bad)?;
+            ProcedureValue::StringArray(strings.iter().flatten().map(str::to_owned).collect())
         }
         _ => return Err(bad()),
     })

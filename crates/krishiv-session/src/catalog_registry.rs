@@ -278,10 +278,11 @@ pub trait CallerCatalog: fmt::Debug + Send + Sync {
     fn load_procedure<'a>(
         &'a self,
         caller: &'a CatalogCaller,
+        inputs: ScanInputs,
         name: &'a str,
     ) -> BoxFuture<'a, Result<Option<Arc<dyn krishiv_plan::procedure::Procedure>>, KrishivError>>
     {
-        let _ = (caller, name);
+        let _ = (caller, inputs, name);
         Box::pin(async move {
             Err(krishiv_common::error::MissingCatalogAbilityProcedures {
                 plugin: "this catalog".to_owned(),

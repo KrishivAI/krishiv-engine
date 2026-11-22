@@ -36,18 +36,21 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 
 use krishiv_common::error::{
-    KrishivCatalogTableUnsupported, KrishivError, KrishivUnsupportedFeature,
+    KrishivCatalogTableUnsupported, KrishivError, KrishivIcebergProcedureTableNotFound,
+    KrishivUnsupportedFeature,
 };
 use krishiv_connectors_iceberg::plan::VersionSpec;
+use krishiv_connectors_iceberg::procedure as maintenance_procedure;
 use krishiv_connectors_iceberg::{
-    IcebergMetadata, IcebergTable, IcebergTableProvider, RestCommitTransport, StorageRegistration,
-    TransportFailure, TransportReply,
+    IcebergMetadata, IcebergTable, IcebergTableProvider, ProcedureTables, RestCommitTransport,
+    StorageRegistration, TransportFailure, TransportReply,
 };
 use krishiv_exec::planner::TableProvider;
 use krishiv_plan::TableVersion;
 use krishiv_plan::analyzer::{
     BoxFuture, FileMetadata, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
 };
+use krishiv_plan::procedure::Procedure;
 use krishiv_session::catalog_decl::{CatalogAuth, CatalogDecl, CatalogStorage};
 use krishiv_session::catalog_registry::{
     CallerCatalog, CatalogCaller, DeclaredTable, IdentityKey, LoadedDeclared, ScanInputs,
@@ -106,7 +109,7 @@ type Key = (IdentityKey, Vec<String>, String);
 type SharedCache = Arc<Mutex<HashMap<Key, (Instant, Arc<Loaded>)>>>;
 
 /// A declared Iceberg REST catalog (module docs).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct RestCatalog {
     name: String,
     client: Arc<RestClient>,
@@ -403,6 +406,21 @@ impl CallerCatalog for RestCatalog {
         })
     }
 
+    fn load_procedure<'a>(
+        &'a self,
+        caller: &'a CatalogCaller,
+        inputs: ScanInputs,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn Procedure>>, KrishivError>> {
+        let tables = Arc::new(RestProcedureTables {
+            catalog: self.clone(),
+            caller: caller.clone(),
+            inputs,
+            registrations: Mutex::new(Vec::new()),
+        });
+        Box::pin(async move { Ok(maintenance_procedure(name, tables)) })
+    }
+
     fn refresh<'a>(
         &'a self,
         caller: &'a CatalogCaller,
@@ -449,6 +467,90 @@ impl CallerCatalog for RestCatalog {
                 .blocking(move |c| c.list_tables_as(&who, &namespace))
                 .await?
                 .map(|ids| ids.into_iter().map(|t| t.name).collect()))
+        })
+    }
+}
+
+/// The tables a maintenance procedure of a declared REST catalog works on (design P3-T027
+/// PR-36e §2): each opened at its current version with the catalog's commit endpoint, for the
+/// caller that made the call.
+struct RestProcedureTables {
+    catalog: RestCatalog,
+    caller: CatalogCaller,
+    inputs: ScanInputs,
+    /// Kept while the procedure runs: the storage registrations its files are read through.
+    registrations: Mutex<Vec<StorageRegistration>>,
+}
+
+impl std::fmt::Debug for RestProcedureTables {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RestProcedureTables")
+            .field("catalog", &self.catalog.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProcedureTables for RestProcedureTables {
+    fn open<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<IcebergTable, KrishivError>> {
+        Box::pin(async move {
+            let catalog = &self.catalog;
+            let mut parts: Vec<String> = name.split('.').map(str::to_owned).collect();
+            // `cat.ns.t` names the catalog the call runs in; any other first part is a namespace.
+            if parts.len() > 2 && parts[0].eq_ignore_ascii_case(&catalog.name) {
+                parts.remove(0);
+            }
+            let not_found = || -> KrishivError {
+                KrishivIcebergProcedureTableNotFound {
+                    table: format!("'{name}'"),
+                    catalog: format!("'{}'", catalog.name),
+                }
+                .into()
+            };
+            let Some(table) = parts.pop().filter(|_| !parts.is_empty()) else {
+                return Err(not_found());
+            };
+            let namespace = parts;
+            let Some(loaded) = catalog.loaded(&self.caller, &namespace, &table).await? else {
+                return Err(not_found());
+            };
+            if !catalog.writes {
+                return Err(unsupported(format!(
+                    "an Iceberg procedure on the table {} (the catalog is declared read-only:                      set option.write = true)",
+                    catalog.relation(&namespace, &table)
+                )));
+            }
+            if catalog.storage == CatalogStorage::Vended || loaded.signing {
+                return Err(unsupported(format!(
+                    "an Iceberg procedure on the REST table {} with vended credentials or \
+                     remote signing",
+                    catalog.relation(&namespace, &table)
+                )));
+            }
+            let committer = Arc::new(RestCommitter {
+                client: Arc::clone(&catalog.client),
+                caller: rest_caller(&self.caller),
+                namespace: namespace.clone(),
+                table: table.clone(),
+                relation: catalog.relation(&namespace, &table),
+                cache: Arc::clone(&catalog.cache),
+                epoch: Arc::clone(&catalog.epoch),
+            });
+            let registration =
+                StorageRegistration::new(self.inputs.io.clone(), Arc::clone(&self.inputs.paths));
+            let built = IcebergTable::from_metadata(
+                &registration,
+                &loaded.metadata,
+                &loaded.metadata_location,
+                &namespace,
+                &table,
+                &self.inputs.config,
+            )?
+            .with_rest_commit(committer as Arc<dyn RestCommitTransport>);
+            self.registrations
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(registration);
+            Ok(built)
         })
     }
 }

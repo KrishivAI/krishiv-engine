@@ -13,6 +13,7 @@
 //! | other 409 (`CommitFailedException`) | `Conflict { stale: false }` |
 //! | 500, 502, 503, 504; no answer after the request may have left | `Unknown` (a `Retry-After` named in the reason) |
 //! | no answer and the request provably never left (egress refusal, no token, no connection) | `Failed` |
+//! | any other 2xx (201, 202, 204, ...): the request was accepted | `Unknown`: it may have landed |
 //! | 401, 403 (the transport has refreshed the token once), 404, 422, any other status | `Failed` |
 //!
 //! A `Failed` answer is `KRISHIV_ICEBERG_COMMIT_FAILED` naming the status (never the server's
@@ -165,6 +166,13 @@ pub(crate) fn outcome(
             Ok(m) => CommitOutcome::Committed(Box::new(m)),
             Err(e) => CommitOutcome::Unknown(format!("a 200 answer whose {e}")),
         };
+    }
+    // A 2xx other than a parsable 200 (a 202 or 204 from a proxy or an odd catalog) says the
+    // request was accepted: the snapshot may be in the table, so it is never a sure failure.
+    if (200..300).contains(&status) {
+        return CommitOutcome::Unknown(format!(
+            "an HTTP {status} answer that is not the commit's result"
+        ));
     }
     let (kind, message) = error_model(&reply.body);
     let message = message.unwrap_or_default();
