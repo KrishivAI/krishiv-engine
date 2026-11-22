@@ -644,6 +644,65 @@ fn merge_on_read_update_deletes_old_rows_and_adds_new_ones() {
     assert_eq!(files.commits.load(Ordering::Relaxed), 1);
 }
 
+/// Under `spark.sql.ansi.doubleQuotedIdentifiers` a double-quoted name in the condition and in a
+/// value is the column, in the rewrite as in the analysis: the texts are read again under the
+/// statement's parser options, for a copy-on-write and a merge-on-read table alike (#962's
+/// CodeRabbit finding on MERGE, here for DELETE and UPDATE).
+#[test]
+fn a_double_quoted_name_reads_the_column_under_ansi_identifiers() {
+    let strings = |batches: &[RecordBatch]| -> Vec<String> {
+        let mut out: Vec<(i64, String)> = batches
+            .iter()
+            .flat_map(|b| {
+                let ids = b.column(0).as_primitive::<Int64Type>().clone();
+                let s = b.column(1).as_string_view().clone();
+                (0..b.num_rows())
+                    .map(|i| (ids.value(i), s.value(i).to_owned()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        out.sort();
+        out.into_iter().map(|(_, s)| s).collect()
+    };
+    for mor in [false, true] {
+        let files = Files::new();
+        files.mor.store(mor, Ordering::Relaxed);
+        let (session, name) = session(&files);
+        session
+            .conf()
+            .set("spark.sql.ansi.doubleQuotedIdentifiers", "true")
+            .unwrap();
+        run(
+            &session,
+            &name,
+            RowLevelOperation::Update,
+            Some("\"id\" IN (2, 8)"),
+            vec![set("s", "concat(\"s\", '!')")],
+        );
+        let batches: Vec<RecordBatch> = files.lock().iter().map(|(_, b)| b.clone()).collect();
+        if mor {
+            // The new rows only: the old ones are deleted by position.
+            assert_eq!(strings(&batches[3..]), ["s2!", "s8!"]);
+        } else {
+            let want: Vec<String> = (1..=9)
+                .map(|i| match i {
+                    2 | 8 => format!("s{i}!"),
+                    _ => format!("s{i}"),
+                })
+                .collect();
+            assert_eq!(strings(&batches), want);
+            run(
+                &session,
+                &name,
+                RowLevelOperation::Delete,
+                Some("\"id\" = 5"),
+                vec![],
+            );
+            assert_eq!(files.ids(), [1, 2, 3, 4, 6, 7, 8, 9]);
+        }
+    }
+}
+
 /// `has_subquery` finds a subquery at any depth of a condition, and only then.
 #[test]
 fn a_condition_holds_a_subquery_only_when_one_is_written() {
