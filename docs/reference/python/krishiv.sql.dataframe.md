@@ -123,9 +123,10 @@ def colRegex(self, colName: str) -> Column
 ```
 
 The columns whose names match the regular expression `colName` (in backquotes,
-optionally qualified; the qualifier is ignored), for `select`: ``df.select(df.colRegex("`^a.*`"))`. It is
-only meaningful as a `select` argument (anywhere else it stands for its first match). Matching is
-case-insensitive unless `spark.sql.caseSensitive`` is true.
+optionally qualified by a DataFrame alias, which then selects the columns of that alias), for
+`select`: ``df.select(df.colRegex("`^a.*`"))`. It is only meaningful as a `select` argument
+(anywhere else it stands for its first match). Matching is case-insensitive unless
+`spark.sql.caseSensitive`` is true.
 
 ### `collect`
 

@@ -190,8 +190,8 @@ Pivots a column of the DataFrame and performs the specified aggregation, as
 pivot_col : str
     Name of the column to pivot.
 values : list, optional
-    List of values that will be translated to columns in the output DataFrame. When omitted (or
-    empty) the distinct values are read from the DataFrame first, sorted ascending with NULL first
+    List of values that will be translated to columns in the output DataFrame. When omitted
+    the distinct values are read from the DataFrame first, sorted ascending with NULL first
     (at most `spark.sql.pivotMaxValues`, default 10000).
 
 **Notes**

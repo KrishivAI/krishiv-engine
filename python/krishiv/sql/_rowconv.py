@@ -347,7 +347,7 @@ def normalize_arrow_table(
         return table
     # Nanosecond times lose their sub-microsecond part (Spark has no finer type); other casts stay checked.
     cast = [
-        c if c.type.equals(f.type) else pc.cast(c, options=pc.CastOptions(target_type=f.type, allow_time_truncate=True))  # ty: ignore[unresolved-attribute]
+        c if c.type.equals(f.type) else pc.cast(c, options=pc.CastOptions(target_type=f.type, allow_time_truncate=True))
         for c, f in zip(table.columns, schema, strict=True)
     ]
     return pa.table(cast, schema=schema)
