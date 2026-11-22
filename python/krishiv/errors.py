@@ -25,6 +25,32 @@ _TEMPLATES = {
     "_LEGACY_ERROR_TEMP_1312": "'<operation>' does not support bucketBy right now.",
     "_LEGACY_ERROR_TEMP_1313": "'<operation>' does not support bucketBy and sortBy right now.",
     "SORT_BY_WITHOUT_BUCKETING": "sortBy must be used together with bucketBy.",
+    "CANNOT_INFER_TYPE_FOR_FIELD": "Unable to infer the type of the field `<field_name>`.",
+    "CANNOT_INFER_SCHEMA_FOR_TYPE": "Can not infer schema for type: `<data_type>`.",
+    "FIELD_DATA_TYPE_UNACCEPTABLE": "<data_type> can not accept object <obj> in type <obj_type>.",
+    "FIELD_DATA_TYPE_UNACCEPTABLE_WITH_NAME": (
+        "<field_name>: <data_type> can not accept object <obj> in type <obj_type>."
+    ),
+    "FIELD_NOT_NULLABLE": "Field is not nullable, but got None.",
+    "FIELD_NOT_NULLABLE_WITH_NAME": "<field_name>: This field is not nullable, but got None.",
+    "FIELD_STRUCT_LENGTH_MISMATCH": (
+        "Length of object (<object_length>) does not match with length of fields (<field_length>)."
+    ),
+    "FIELD_STRUCT_LENGTH_MISMATCH_WITH_NAME": (
+        "<field_name>: Length of object (<object_length>) does not match with length of fields (<field_length>)."
+    ),
+    "VALUE_OUT_OF_BOUNDS": (
+        "Value for `<arg_name>` must be between <lower_bound> and <upper_bound> (inclusive), got <actual>"
+    ),
+    "STRUCT_ARRAY_LENGTH_MISMATCH": (
+        "Input row doesn't have expected number of values required by the schema. "
+        "<expected> fields are required while <actual> values are provided."
+    ),
+    "NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION": (
+        " The <roundedValue> rounded half up from <originalValue> cannot be represented as "
+        "Decimal(<precision>, <scale>)."
+    ),
+    "UNSUPPORTED_TIME_TYPE": "The data type TIME is not supported.",
     "NOT_IMPLEMENTED": "<feature> is not implemented.",
     "CONTEXT_ONLY_VALID_ON_DRIVER": (
         "It appears that you are attempting to reference SparkContext from a broadcast variable, action, or "

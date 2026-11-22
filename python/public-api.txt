@@ -17,6 +17,7 @@ ArrowStream.def names(self) -> list[str]
 ArrowStream.def use_placeholder_names(self) -> None
 Column.def add(self, other: Column) -> Column
 Column.def alias(self, name: str) -> Column
+Column.def alias_all(self, names: list[str]) -> Column
 Column.def and_(self, other: Column) -> Column
 Column.def between(self, low: Column, high: Column) -> Column
 Column.def cast(self, to: str) -> Column

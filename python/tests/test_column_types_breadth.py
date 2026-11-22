@@ -607,7 +607,7 @@ def test_create_verify_schema(spark: SparkSession) -> None:
     with pytest.raises(errors.PySparkTypeError, match="can not accept"):
         spark.createDataFrame([("Alice", "x")], schema)
     strict = T.StructType([T.StructField("name", T.StringType(), False), T.StructField("age", T.IntegerType(), True)])
-    with pytest.raises(errors.PySparkTypeError, match="not nullable"):
+    with pytest.raises(errors.PySparkValueError, match="not nullable"):
         spark.createDataFrame([(None, 1)], strict)
     # Without verification the Arrow conversion decides (a datetime truncates to a date).
     assert spark.createDataFrame(
@@ -618,14 +618,13 @@ def test_create_verify_schema(spark: SparkSession) -> None:
     assert spark.createDataFrame([("Alice", 1)]).columns == ["_1", "_2"]
     with pytest.raises(TypeError):
         spark.createDataFrame(spark.range(1))
-    with pytest.raises(errors.PySparkNotImplementedError):
-        spark.createDataFrame(pa.table({"a": [1]}), schema="a int")
+    # An Arrow table takes a schema: its columns are cast.
+    assert spark.createDataFrame(pa.table({"a": [1]}), schema="a int").dtypes == [("a", "int")]
 
 
-def test_create_nested_schema_is_engine_unsupported(spark: SparkSession) -> None:
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        spark.createDataFrame([([1, 2],)], T.StructType([T.StructField("a", T.ArrayType(T.IntegerType()))]))
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+def test_create_nested_schema(spark: SparkSession) -> None:
+    df = spark.createDataFrame([([1, 2],)], T.StructType([T.StructField("a", T.ArrayType(T.IntegerType()))]))
+    assert df.collect() == [Row(a=[1, 2])]
     with pytest.raises(errors.UnsupportedOperationException):
         spark.createDataFrame([("x",)], "a char(3)")
 
