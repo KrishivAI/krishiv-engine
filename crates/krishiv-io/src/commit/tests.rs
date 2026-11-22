@@ -1763,6 +1763,73 @@ fn a_logged_overwrite_leaves_the_uncommitted_files_of_a_concurrent_append() {
     assert_eq!(env.visible("t").len(), 1);
 }
 
+/// An append that wrote its files long ago and has not committed, then an overwrite that sweeps
+/// unlogged files (grace zero here for one hour there): the append must not publish files that are
+/// gone. Its commit is refused (`KRISHIV_CONCURRENT_COMMIT`) or the files are still on the store.
+#[test]
+fn an_append_whose_files_an_overwrite_swept_never_publishes_missing_files() {
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let write_files = |w: &DirectoryWrite, rows: i32| {
+        env.rt.block_on(async {
+            let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+            let id = pool.register("write", None);
+            let mut writer = FileWriter::new(
+                &env.io,
+                Arc::clone(&format),
+                &schema(),
+                o.clone(),
+                w.write_options(0),
+                krishiv_memory::Reservation::new(pool, id),
+            )
+            .unwrap();
+            writer.write(&batch(rows)).await.unwrap();
+            writer.finish().await.unwrap()
+        })
+    };
+    // The append writes its files and waits.
+    let append = env.begin("t", SaveMode::Append, "job-2").unwrap().unwrap();
+    let append = env.rt.block_on(append.logged(&env.io)).unwrap();
+    let append_files = write_files(&append, 3);
+    // The overwrite starts later, sweeps every unlogged file (its grace is zero) and commits.
+    let over = env
+        .begin("t", SaveMode::Overwrite, "job-3")
+        .unwrap()
+        .unwrap();
+    let over = env
+        .rt
+        .block_on(over.with_grace(chrono::Duration::zero()).logged(&env.io))
+        .unwrap();
+    let over_files = write_files(&over, 2);
+    env.rt
+        .block_on(over.commit(&env.io, format.as_ref(), schema(), &o, over_files))
+        .unwrap();
+    assert!(
+        !env.names("t").iter().any(|n| n.contains("job-2")),
+        "the overwrite swept the append's files"
+    );
+    // Now the append commits.
+    let committed =
+        env.rt
+            .block_on(append.commit(&env.io, format.as_ref(), schema(), &o, append_files));
+    let visible = env.visible("t");
+    let on_store = env.names("t");
+    match committed {
+        Err(e) => assert_eq!(e.error_class(), ErrorClass::KrishivConcurrentCommit, "{e}"),
+        Ok(_) => {
+            for v in &visible {
+                assert!(
+                    on_store.iter().any(|n| n.ends_with(v.as_str())),
+                    "{v} is visible but gone: {on_store:?}"
+                );
+            }
+        }
+    }
+}
+
 /// Adoption uses the reads' hidden-name rule: a copy in progress is not data.
 #[test]
 fn adoption_skips_copy_in_progress_files() {

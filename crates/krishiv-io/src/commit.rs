@@ -274,6 +274,35 @@ impl DirectoryWrite {
         self
     }
 
+    /// An append that another writer's commit overtook publishes only files that are still there: an
+    /// overwrite sweeps unlogged files older than its grace, and an append that stayed uncommitted
+    /// that long would otherwise list files that are gone. A file that vanishes after this check
+    /// needs the sweep to run inside the window between the check and the publish.
+    async fn refuse_if_files_swept(
+        &self,
+        io: &IoContext,
+        state: &LogState,
+        add: &[AddedFile],
+    ) -> Result<()> {
+        let now = self.commit_log(io).snapshot().await?;
+        if now.version == state.base {
+            return Ok(());
+        }
+        for f in add {
+            let path = Path::from(format!("{}/{}", self.dir, f.path));
+            if !matches!(io.head(&self.store, &path).await, Ok(Some(_))) {
+                return Err(krishiv_common::error::KrishivConcurrentCommit {
+                    root: format!("{}/{}", self.store, self.dir),
+                    version: now
+                        .version
+                        .map_or_else(|| "0".to_owned(), |v| v.to_string()),
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
     fn commit_log<'a>(&self, io: &'a IoContext) -> CommitLog<'a> {
         CommitLog::new(
             io,
@@ -386,7 +415,8 @@ impl DirectoryWrite {
             self.replaced.clone()
         };
         // A logged overwrite replaces only what its base snapshot shows: another writer's task files
-        // (written, not yet committed) are never in it, so a concurrent append's files survive it.
+        // (written, not yet committed) are never in it, so a concurrent append's files survive it. The unlogged-file sweep can still take an append's files older than
+        // its grace; that append's commit is then refused (`refuse_if_files_swept`).
         let replaced: Vec<Path> = match &self.log {
             Some(state) => {
                 let visible: std::collections::HashSet<&str> =
@@ -443,6 +473,9 @@ impl DirectoryWrite {
                 add,
                 remove,
             };
+            if !self.overwrite {
+                self.refuse_if_files_swept(io, state, &entry.add).await?;
+            }
             self.commit_log(io).commit(state.base, &entry).await?;
         }
         // The (lazy) delete futures are built first: a stream mapping
