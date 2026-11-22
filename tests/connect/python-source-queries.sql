@@ -10,7 +10,7 @@ SELECT count(DISTINCT grp) FROM {t}
 SELECT id, v * 2 AS w FROM {t} WHERE v IS NOT NULL
 SELECT id FROM {t} WHERE v IS NULL
 SELECT id, name FROM {t} ORDER BY name DESC, id LIMIT 7
-SELECT grp, collect_list(id) FROM (SELECT * FROM {t} ORDER BY id) GROUP BY grp
+SELECT grp, array_sort(collect_list(id)) FROM {t} GROUP BY grp
 SELECT a.id, b.name FROM {t} a JOIN {t} b ON a.id = b.id + 1
 SELECT a.grp, count(*) FROM {t} a LEFT JOIN {t} b ON a.id = b.id * 2 GROUP BY a.grp
 SELECT id, row_number() OVER (PARTITION BY grp ORDER BY id) FROM {t}

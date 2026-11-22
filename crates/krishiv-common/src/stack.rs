@@ -19,10 +19,16 @@ thread_local! {
 /// under it sees too (a caller's task-local state, such as a cancellation handle, does not cross to
 /// the new thread by itself).
 pub fn with_inherited<T>(value: Inherited, f: impl FnOnce() -> T) -> T {
-    let previous = INHERITED.with(|c| c.replace(Some(value)));
-    let out = f();
-    INHERITED.with(|c| *c.borrow_mut() = previous);
-    out
+    /// Puts the previous value back when the scope ends, also when `f` unwinds.
+    struct Restore(Option<Inherited>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            INHERITED.with(|c| *c.borrow_mut() = previous);
+        }
+    }
+    let _restore = Restore(INHERITED.with(|c| c.replace(Some(value))));
+    f()
 }
 
 /// The value [`with_inherited`] set on this thread or on the thread that started it.

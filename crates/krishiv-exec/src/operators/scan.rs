@@ -187,7 +187,8 @@ pub trait ScanPushdown: Send + Sync {
     fn decides_once(&self) -> bool {
         false
     }
-    /// Decides every conjunct at once, once per physical plan, even with no filter (an empty `conjuncts`).
+    /// Decides every conjunct at once, once per physical plan, and only when the query has a filter over the scan (the planner
+    /// does not call it otherwise: Spark's `explain()` of an unfiltered scan calls nothing).
     /// May run user code; never reads rows.
     ///
     /// # Errors

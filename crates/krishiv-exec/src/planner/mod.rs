@@ -124,8 +124,9 @@ pub struct PlanningContext {
     /// executes, such as `QUERY_ONLY_CORRUPT_RECORD_COLUMN` (raised by the file format's reader), are
     /// skipped.
     pub inspect: bool,
-    /// Whether a scan that decides once (`ScanPushdown::decides_once`) is asked to decide. Off for plans
-    /// made only to be looked at or probed: no user code runs, and such a plan cannot run.
+    /// Whether a scan that decides once (`ScanPushdown::decides_once`) is asked to decide. On for plans that
+    /// run and for inspected plans (`EXPLAIN` asks the source once, as Spark's does); off only for
+    /// `physical_counted` and `physical_probe`, which run no user code.
     pub decisions: bool,
 }
 
