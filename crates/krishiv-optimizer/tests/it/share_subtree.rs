@@ -114,3 +114,183 @@ fn q15_computes_the_revenue_body_once() {
         "{text}"
     );
 }
+
+/// How many times `table` is scanned when the plan runs: paths from the root, with each `WITH`
+/// definition counted once (a `CteRef` computes nothing). q47 and q57 hold no subquery.
+fn scans(plan: &std::sync::Arc<krishiv_plan::LogicalPlan>, table: &str) -> usize {
+    use krishiv_plan::PlanNode;
+    let mut n = 0;
+    if let PlanNode::Scan(_) = &plan.node
+        && plan.to_string().starts_with(&format!("Scan {table} "))
+    {
+        n += 1;
+    }
+    plan.for_each_child(&mut |c| n += scans(c, table));
+    n
+}
+
+fn tpcds(q: usize) -> Plan {
+    let plan = support::resolve(
+        &crate::tpcds::sql(q),
+        &support::ctx_over(crate::tpcds::catalog()),
+    );
+    optimize_with_udfs(
+        &plan,
+        &krishiv_optimizer::NoStatistics,
+        &UdfLibrary::new(),
+        &Config::new(),
+    )
+    .unwrap()
+}
+
+/// TPC-DS q47 and q57 read `v1` three times; the main instance has the outer filter pushed in
+/// above the windows, so its body is not equal to the lag/lead instances'. The windowed
+/// aggregate below that filter is the same, and it is computed once (TPC-DS q47, q57).
+#[test]
+fn an_instance_with_its_own_filter_shares_the_common_subtree() {
+    for (q, fact) in [(47, "store_sales"), (57, "catalog_sales")] {
+        let plan = tpcds(q);
+        let table = format!("spark_catalog.default.{fact}");
+        assert_eq!(scans(plan.root(), &table), 1, "q{q}:\n{}", plan.root());
+        assert_eq!(
+            plan.root().resolved_output(),
+            support::resolve(
+                &crate::tpcds::sql(q),
+                &support::ctx_over(crate::tpcds::catalog())
+            )
+            .root()
+            .resolved_output()
+        );
+        Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
+        let again = optimize_with_udfs(
+            &plan,
+            &krishiv_optimizer::NoStatistics,
+            &UdfLibrary::new(),
+            &Config::new(),
+        )
+        .unwrap();
+        assert!(
+            again.structurally_eq(&plan),
+            "q{q} is a fixed point:\n{}",
+            again.root()
+        );
+    }
+}
+
+/// The same shape over TPC-H: one instance keeps a filter on a window column, the other reads
+/// the CTE whole. The window over the aggregate is one definition, and the plan is a fixed point.
+#[test]
+fn a_filtered_instance_reads_the_shared_window() {
+    let sql = "WITH v AS (SELECT o_custkey, o_orderstatus, sum(o_totalprice) AS s, \
+                 avg(sum(o_totalprice)) OVER (PARTITION BY o_custkey) AS a \
+                 FROM orders GROUP BY o_custkey, o_orderstatus) \
+               SELECT x.o_custkey, x.s, y.s FROM v x JOIN v y \
+                 ON x.o_custkey = y.o_custkey AND x.o_orderstatus = y.o_orderstatus WHERE x.a > 10";
+    let plan = run(sql, false);
+    assert_eq!(
+        scans(plan.root(), "spark_catalog.default.orders"),
+        1,
+        "{}",
+        plan.root()
+    );
+    Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
+    assert!(run(sql, false).structurally_eq(&plan));
+    let again = optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &Config::new()).unwrap();
+    assert!(
+        again.structurally_eq(&plan),
+        "a fixed point:\n{}",
+        again.root()
+    );
+    // Off, both instances compute the window.
+    let mut off = Config::new();
+    off.set("krishiv.sql.optimizer.shareCteInstances", "false")
+        .unwrap();
+    let unshared = optimize_with_udfs(
+        &support::resolve(sql, &support::ctx()),
+        &fixture(),
+        &UdfLibrary::new(),
+        &off,
+    )
+    .unwrap();
+    assert_eq!(scans(unshared.root(), "spark_catalog.default.orders"), 2);
+}
+
+/// Equal bodies whose filter above the shared aggregate is nondeterministic do not share that
+/// filter: the aggregate is one definition and each instance evaluates its own `rand()`, as the
+/// copies do (`ShareCte` never shares a nondeterministic part).
+#[test]
+fn a_nondeterministic_chain_over_a_shared_core_stays_per_instance() {
+    let sql = "WITH a AS (SELECT o_custkey k, count(*) n FROM orders GROUP BY o_custkey \
+                 HAVING rand() < 0.5), b AS (SELECT k, n FROM a) \
+               SELECT x.k, x.n, y.n FROM b x JOIN b y ON x.k = y.k";
+    let plan = run(sql, false);
+    let text = plan.root().to_string();
+    assert_eq!(
+        scans(plan.root(), "spark_catalog.default.orders"),
+        1,
+        "{text}"
+    );
+    // The definition is the aggregate alone; the `rand()` filter stays above its `CteRef` in
+    // the instances (the physical planner plans each instance's path apart).
+    let krishiv_plan::PlanNode::WithCte { ctes, .. } = &plan.root().node else {
+        panic!("the aggregate is shared:\n{text}");
+    };
+    assert_eq!(ctes.len(), 1, "{text}");
+    let def = ctes[0].plan.to_string();
+    assert!(def.starts_with("Aggregate"), "{def}");
+    assert!(!def.contains("rand("), "{def}");
+    assert!(text.contains("rand() < 0.5D"), "{text}");
+    Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
+    let again = optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &Config::new()).unwrap();
+    assert!(
+        again.structurally_eq(&plan),
+        "a fixed point:\n{}",
+        again.root()
+    );
+}
+
+/// A mixed group where one instance's body is the shared core itself (a CTE that ends in its
+/// aggregate) and the other keeps a filter above it: the core is the definition, the bare
+/// instance reads it as a shifted `CteRef` in place of its `Shift`, and only the filtered one
+/// keeps its `Shift` (`share_cte.rs`, the `equal(&m.body, &def)` arm of a mixed group).
+#[test]
+fn an_instance_equal_to_the_core_reads_it_without_its_shift() {
+    let sql = "WITH a AS (SELECT o_custkey, count(*) AS n FROM orders GROUP BY o_custkey) \
+               SELECT x.o_custkey, x.n, y.n FROM a x \
+                 JOIN (SELECT o_custkey, n FROM a WHERE n > 3) y ON x.o_custkey = y.o_custkey";
+    let plan = run(sql, false);
+    let text = plan.root().to_string();
+    assert_eq!(
+        scans(plan.root(), "spark_catalog.default.orders"),
+        1,
+        "{text}"
+    );
+    let krishiv_plan::PlanNode::WithCte { ctes, .. } = &plan.root().node else {
+        panic!("the aggregate is shared:\n{text}");
+    };
+    assert_eq!(ctes.len(), 1, "{text}");
+    assert!(ctes[0].plan.to_string().starts_with("Aggregate"), "{text}");
+    assert_eq!(text.matches("CteRef").count(), 2, "{text}");
+    // The filtered member reads the core in its body's own ids under its `Shift`; the bare one
+    // reads it in shifted ids, with no `Shift` of its own (the `Shift +` left is the subquery
+    // alias's, above the filtered member).
+    let lines: Vec<&str> = text.lines().collect();
+    let under: Vec<&str> = (1..lines.len())
+        .filter(|&i| lines[i].contains("CteRef"))
+        .map(|i| lines[i - 1].trim_start_matches([' ', ':', '+', '-']))
+        .collect();
+    assert_eq!(under.len(), 2, "{text}");
+    assert!(under.iter().all(|l| !l.starts_with("Shift")), "{text}");
+    assert_eq!(
+        under.iter().filter(|l| l.starts_with("Filter")).count(),
+        1,
+        "{text}"
+    );
+    Plan::try_new(std::sync::Arc::clone(plan.root())).unwrap();
+    let again = optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &Config::new()).unwrap();
+    assert!(
+        again.structurally_eq(&plan),
+        "a fixed point:\n{}",
+        again.root()
+    );
+}

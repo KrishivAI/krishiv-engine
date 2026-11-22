@@ -502,6 +502,13 @@ impl Session {
         };
         #[cfg(feature = "delta")]
         if is_delta_table(&table) {
+            // A Delta table has no bucketing: refuse before anything is created.
+            if table.layout.bucket.is_some() {
+                return Err(super::delta::delta_write_refused(
+                    quoted(&table.namespace, &table.name),
+                    "bucketBy",
+                ));
+            }
             // Version 0 of a new Delta table with the rows (design section 4.1, "CTAS").
             drop(pre.take());
             let source =
@@ -547,6 +554,11 @@ impl Session {
             if let Some(owned) = owned {
                 owned.keep();
             }
+            // The idempotency key belongs to this one write, never to the table: stored, it would
+            // deduplicate every later write of the table.
+            table.options.retain(|k, _| {
+                !k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION)
+            });
             self.add_table(table, mode, true).await?;
             return Ok(());
         }
@@ -559,6 +571,11 @@ impl Session {
         if let Some(owned) = owned {
             owned.keep();
         }
+        // The idempotency key belongs to this one write, never to the table: stored, it would
+        // deduplicate every later write of the table.
+        table
+            .options
+            .retain(|k, _| !k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION));
         self.add_table(table, mode, true).await?;
         // `RepairTableCommand`: the partitions written, with their file statistics.
         self.register_partitions(&name, &dirs, true);
@@ -633,7 +650,7 @@ impl Session {
                 None,
             )
         } else {
-            return Err(source.not_found());
+            return Err(source.not_found(self.search_path()));
         };
         let (provider, provider_written) = match &t.using {
             Some(u) => {
@@ -734,7 +751,7 @@ impl Session {
                 remove_dir(&dir)?;
             }
         } else if !if_exists {
-            return Err(name.not_found());
+            return Err(name.not_found(self.search_path()));
         }
         Ok(())
     }
@@ -911,10 +928,20 @@ impl Session {
         let quoted = match by_path {
             Some(q) => q,
             None => {
-                self.table_for_write(&name, operation, &env)?;
+                if let Err(refusal) = self.table_for_write(&name, operation, &env) {
+                    // Spark analyzes the subqueries before it finds the target cannot change: a time
+                    // travel clause in one is the error then. A target that does not exist is reported first.
+                    if refusal.error_class().name() != "TABLE_OR_VIEW_NOT_FOUND" {
+                        self.refuse_time_travel_in_subqueries(changes, original)
+                            .await?;
+                    }
+                    return Err(refusal);
+                }
                 name.quoted()
             }
         };
+        self.refuse_time_travel_in_subqueries(changes, original)
+            .await?;
         // Spark analyzes the condition and the new values against the table before it finds that the
         // table cannot change: an unknown column is the error then.
         // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own
@@ -955,11 +982,20 @@ impl Session {
         }
         // Spark 4.2 does not resolve a running script's local variables in these statements (the
         // record shows `UNRESOLVED_COLUMN` for one), so the analysis does not see them either.
-        self.with_locals(Vec::new())
+        let analysis = self
+            .with_locals(Vec::new())
             .analyze_variable_query(&sql)
             .await?;
+        // A time travel clause in the condition or a value's subquery is refused where the relation resolves.
+        analysis
+            .env
+            .catalog
+            .check_reference_options(analysis.analyzed.plan.root())?;
         // A table whose provider offers a row-level table runs the statement (PR-DML).
+        // The target's `WITH (...)` options reach the table's scan builder, and no table of the
+        // session catalog takes them: the statement is refused as Spark refuses it for such a table.
         let op = match operation {
+            _ if !changes.options.is_empty() => None,
             "DELETE" => Some(krishiv_exec::planner::RowLevelOperation::Delete),
             "UPDATE TABLE" => Some(krishiv_exec::planner::RowLevelOperation::Update),
             _ => None,
@@ -1003,6 +1039,42 @@ impl Session {
             operation: operation.to_owned(),
         }
         .into())
+    }
+
+    /// Analyzes each subquery of a `DELETE`, `UPDATE` or `MERGE` on its own and refuses a time travel clause
+    /// in it. Any other failure (a correlated column does not resolve alone) is left to the statement's own
+    /// analysis.
+    async fn refuse_time_travel_in_subqueries(
+        &self,
+        changes: &RowChanges<'_>,
+        original: &str,
+    ) -> Result<(), KrishivError> {
+        let mut queries: Vec<&krishiv_sql::ast::Query> = changes.sources.to_vec();
+        for e in changes
+            .condition
+            .into_iter()
+            .chain(changes.values.iter().copied())
+            .chain(changes.more.iter().copied())
+        {
+            super::all_subqueries(e, &mut queries);
+        }
+        let plain = self.with_locals(Vec::new());
+        for q in queries {
+            let Some(text) = original.get(q.span.start..q.span.end) else {
+                continue;
+            };
+            match plain.analyze_variable_query(text).await {
+                Ok(analysis) => analysis
+                    .env
+                    .catalog
+                    .check_reference_options(analysis.analyzed.plan.root())?,
+                Err(e) if e.error_class().name() == "UNSUPPORTED_FEATURE.TIME_TRAVEL" => {
+                    return Err(e);
+                }
+                Err(_) => {}
+            }
+        }
+        Ok(())
     }
 
     /// Drops the cached relations that read the permanent table `name`: its data or existence changed.

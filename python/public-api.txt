@@ -1,6 +1,6 @@
 ## __init__.py
 __all__
-__all__ = ['LocalConnect', 'ProfileView', 'SparkConf', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
+__all__ = ['Console', 'LocalConnect', 'ProfileView', 'SparkConf', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
 def build_info() -> dict[str, str]
 def metrics() -> list[dict[str, Any]]
 def session() -> SparkSession
@@ -44,6 +44,13 @@ Column.def sort_order(self, ascending: bool, nulls_first: bool) -> Column
 Column.def sub(self, other: Column) -> Column
 Column.def try_cast(self, to: str) -> Column
 Column.def with_field(self, name: str, value: Column) -> Column
+Console.@property def port(self) -> int
+Console.@property def session_id(self) -> str
+Console.@property def token(self) -> str
+Console.@property def url(self) -> str
+Console.def __new__(cls, session: Session, port: int=...) -> Console
+Console.def is_running(self) -> bool
+Console.def stop(self) -> None
 DataFrame.def agg(self, cols: list[Column]) -> DataFrame
 DataFrame.def alias(self, alias: str) -> DataFrame
 DataFrame.def cache(self) -> DataFrame
@@ -143,10 +150,11 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
-__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'LocalConnectServer', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__commit__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'Console', 'DataFrame', 'GroupedData', 'LocalConnectServer', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__commit__', '__ui__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
 class AnonymousPythonUdf()
 class ArrowStream()
 class Column()
+class Console()
 class DataFrame()
 class GroupedData()
 class LocalConnectServer()

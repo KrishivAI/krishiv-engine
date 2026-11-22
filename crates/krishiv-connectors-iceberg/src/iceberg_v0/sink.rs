@@ -163,6 +163,8 @@ pub(crate) struct IcebergWriteSink {
     has_required: bool,
     /// The commit's idempotency key, also the files' operation id.
     write_id: String,
+    /// The caller's `krishiv.write.idempotencyKey` (E34).
+    idempotency_key: Option<String>,
     clock: Arc<dyn CommitClock>,
     /// The columns sketched, when the write has statistics (PR-54b).
     sketch_columns: Option<Arc<[SketchColumn]>>,
@@ -296,6 +298,15 @@ impl IcebergWriteSink {
             request.write_id.clone(),
             None,
         )
+        .map(|s| s.with_idempotency_key(request.idempotency_key()))
+    }
+
+    /// Records the caller's idempotency key in the snapshot's summary; a table that already has a
+    /// snapshot with it gets no commit (E34).
+    #[must_use]
+    pub(crate) fn with_idempotency_key(mut self, key: Option<String>) -> Self {
+        self.idempotency_key = key;
+        self
     }
 
     /// The sink of a copy-on-write rewrite into `target`'s table: the rows
@@ -357,6 +368,7 @@ impl IcebergWriteSink {
             table,
             has_required,
             write_id,
+            idempotency_key: None,
             clock: Arc::new(IoClock { handle }),
             sketch_columns,
             overwrite,
@@ -368,18 +380,7 @@ impl IcebergWriteSink {
         if !self.has_required {
             return Ok(());
         }
-        let mut path = Vec::new();
-        for (column, field) in batch.columns().iter().zip(self.table.fields()) {
-            path.push(field.name().clone());
-            if null_in_required(column, field, None, &mut path) {
-                return Err(NotNullAssertViolation {
-                    walked_type_path: format!("\n{}\n", path.join("\n")),
-                }
-                .into());
-            }
-            path.pop();
-        }
-        Ok(())
+        check_required(&self.table, batch)
     }
 
     /// Finishes every combined writer, then commits (module docs).
@@ -451,6 +452,19 @@ impl IcebergWriteSink {
                 return Err(e);
             }
         }
+        // E34: the statement committed before (a retry opens the table anew, so its base has the
+        // earlier snapshot): this attempt's files are orphans and nothing is committed.
+        if let Some(key) = &self.idempotency_key
+            && t.base.snapshots().any(|s| {
+                s.summary()
+                    .additional_properties
+                    .get(super::append::IDEMPOTENCY_KEY_PROP)
+                    .is_some_and(|v| v == key)
+            })
+        {
+            written.delete().await;
+            return Ok(());
+        }
         let snapshot_id = snapshot_id(&t.base);
         let commit_uuid = random_uuid();
         let mut new = match write_new_manifests(
@@ -487,6 +501,7 @@ impl IcebergWriteSink {
             branch: BRANCH,
             write_id: &self.write_id,
             query_id: Some(&query_id),
+            idempotency_key: self.idempotency_key.as_deref(),
         };
         match &overwrite {
             None => commit_append(t.committer.as_ref(), cx, &t.base, &mut new, ids)
@@ -824,6 +839,22 @@ fn has_required(field: &Field) -> bool {
         DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => has_required(f),
         _ => false,
     }
+}
+
+/// Fails on a NULL in a required position of `batch`, whose columns follow `table`'s fields.
+pub(super) fn check_required(table: &SchemaRef, batch: &RecordBatch) -> Result<(), KrishivError> {
+    let mut path = Vec::new();
+    for (column, field) in batch.columns().iter().zip(table.fields()) {
+        path.push(field.name().clone());
+        if null_in_required(column, field, None, &mut path) {
+            return Err(NotNullAssertViolation {
+                walked_type_path: format!("\n{}\n", path.join("\n")),
+            }
+            .into());
+        }
+        path.pop();
+    }
+    Ok(())
 }
 
 /// Whether `array` (of the table field `field`) holds a NULL in a required

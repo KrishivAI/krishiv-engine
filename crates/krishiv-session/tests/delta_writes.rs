@@ -314,6 +314,43 @@ fn write_modes_match_oracle() {
 }
 
 #[test]
+fn delta_save_as_table_append_infers_partitioning_and_overwrite_refuses_bucketing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("t").to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    let df = |sql: &str| block_on(s.sql(sql)).unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE inf USING delta PARTITIONED BY (p) LOCATION '{path}' AS \
+             SELECT CAST(1 AS BIGINT) AS id, 'a' AS v, 'x' AS p"
+        ),
+    )
+    .unwrap();
+    // An append that leaves partitioning unspecified takes the table's own.
+    block_on(
+        df("SELECT CAST(2 AS BIGINT) AS id, 'b' AS v, 'y' AS p")
+            .write()
+            .format("delta")
+            .mode("append")
+            .save_as_table("inf"),
+    )
+    .unwrap();
+    assert_eq!(block_on(s.table("inf").count()).unwrap(), 2);
+    // An overwrite that asks for bucketing is refused and leaves the rows.
+    let r = block_on(
+        df("SELECT CAST(3 AS BIGINT) AS id, 'c' AS v, 'z' AS p")
+            .write()
+            .format("delta")
+            .bucket_by(4, ["id"])
+            .mode("overwrite")
+            .save_as_table("inf"),
+    );
+    assert!(r.is_err());
+    assert_eq!(block_on(s.table("inf").count()).unwrap(), 2);
+}
+
+#[test]
 fn delta_v1_save_as_table_overwrite() {
     let oracle = oracle();
     let steps = oracle["save_as_table"].as_array().unwrap();
@@ -855,6 +892,144 @@ fn max_records_per_file_reaches_a_catalog_append() {
         "{e}"
     );
     assert_eq!(rows(), 15);
+}
+
+/// E34: a retried `INSERT` under the same `krishiv.write.idempotencyKey` appends once (a `txn`
+/// action in the first commit); the next key appends again.
+#[test]
+fn a_retried_insert_with_the_same_idempotency_key_appends_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("k");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE k (a INT) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "job-1")
+        .unwrap();
+    run(&s, "INSERT INTO k VALUES (1), (2)").unwrap();
+    let after_first = versions(&dir);
+    run(&s, "INSERT INTO k VALUES (1), (2)").unwrap();
+    assert_eq!(versions(&dir), after_first, "the retry committed nothing");
+    assert_eq!(
+        query(&s, "SELECT a FROM k ORDER BY a"),
+        serde_json::json!([[1], [2]])
+    );
+    assert!(
+        last_commit(&dir)
+            .iter()
+            .any(|a| a["txn"]["appId"] == "krishiv.idempotency:job-1")
+    );
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "job-2")
+        .unwrap();
+    run(&s, "INSERT INTO k VALUES (3)").unwrap();
+    assert_eq!(
+        query(&s, "SELECT a FROM k ORDER BY a"),
+        serde_json::json!([[1], [2], [3]])
+    );
+}
+
+/// E34: a keyed `save` whose key the table records succeeds under `errorifexists` and `overwrite`
+/// and writes nothing (as a directory write does); without the key the path still exists.
+#[test]
+fn a_keyed_save_retry_succeeds_under_errorifexists_and_overwrite() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("k");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    let mut after_first = 0;
+    for mode in ["errorifexists", "errorifexists", "overwrite"] {
+        block_on(
+            block_on(s.sql("SELECT CAST(1 AS INT) AS a UNION ALL SELECT 2"))
+                .unwrap()
+                .write()
+                .format("delta")
+                .mode(mode)
+                .option("krishiv.write.idempotencyKey", "job-1")
+                .save(&path),
+        )
+        .unwrap();
+        if after_first == 0 {
+            after_first = versions(&dir);
+        }
+        assert_eq!(versions(&dir), after_first, "{mode} committed again");
+    }
+    let e = block_on(
+        block_on(s.sql("SELECT 1 AS a"))
+            .unwrap()
+            .write()
+            .format("delta")
+            .mode("errorifexists")
+            .save(&path),
+    )
+    .unwrap_err();
+    assert!(
+        e.message().contains(&path) || e.message().contains("exists"),
+        "{e}"
+    );
+}
+
+/// E34: `saveAsTable` that creates a Delta table records its explicit key in version 0, so the same
+/// append retried writes nothing; the key is not kept in the table's options.
+#[test]
+fn a_keyed_save_as_table_creation_is_retried_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    for _ in 0..2 {
+        block_on(
+            block_on(s.sql("SELECT CAST(1 AS INT) AS a"))
+                .unwrap()
+                .write()
+                .format("delta")
+                .mode("append")
+                .option("krishiv.write.idempotencyKey", "job-1")
+                .option("path", tmp.path().join("t").to_string_lossy().as_ref())
+                .save_as_table("keyed_t"),
+        )
+        .unwrap();
+    }
+    assert_eq!(query(&s, "SELECT a FROM keyed_t"), serde_json::json!([[1]]));
+    // The key is not kept in the table's options: a later append without a key writes.
+    block_on(
+        block_on(s.sql("SELECT CAST(2 AS INT) AS a"))
+            .unwrap()
+            .write()
+            .format("delta")
+            .mode("append")
+            .save_as_table("keyed_t"),
+    )
+    .unwrap();
+    assert_eq!(
+        query(&s, "SELECT a FROM keyed_t ORDER BY a"),
+        serde_json::json!([[1], [2]])
+    );
+}
+
+#[test]
+fn a_bucketed_save_as_table_of_delta_is_refused_before_the_table_exists() {
+    let s = Session::new().unwrap();
+    let e = block_on(
+        block_on(s.sql("SELECT CAST(1 AS BIGINT) AS id"))
+            .unwrap()
+            .write()
+            .format("delta")
+            .bucket_by(4, ["id"])
+            .save_as_table("bt"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::UnsupportedFeatureTableOperation,
+        "{e}"
+    );
+    assert!(
+        block_on(s.sql("SELECT * FROM bt")).is_err(),
+        "no table was registered"
+    );
 }
 
 /// `insertInto` overwrite of a partitioned Delta catalog table ignores a

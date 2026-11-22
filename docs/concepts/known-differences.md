@@ -370,6 +370,13 @@ unless the server was started with one. Krishiv accepts the setting per session 
 at server start) because a client with no `SparkContext` has no other route; code that relies on Spark's
 refusal is the only code that sees a difference.
 
+## A second catalog, `system`, next to `spark_catalog`
+
+`SHOW CATALOGS` lists `spark_catalog` and `system`. `system` is Krishiv's own catalog of introspection tables
+(`system.capabilities`, `system.caches`, `system.queries`, `system.metrics`, among others); Spark has no such catalog and
+lists only `spark_catalog`. A declared catalog (`krishiv.catalog.<name>.*`, or Spark's `spark.sql.catalog.<name>`) appears in the list as well. The names
+`spark_catalog`, `system`, `delegation` and `vended` cannot be used for a declared catalog.
+
 ## `remote("local")` is not supported
 
 In Spark 4.3, `SparkSession.builder.remote("local")` starts a JVM `SparkContext` with the Connect plugin and

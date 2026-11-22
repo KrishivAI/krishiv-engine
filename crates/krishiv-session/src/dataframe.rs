@@ -35,6 +35,7 @@ mod observe;
 mod python_relations;
 pub use observe::ObservedSink;
 pub(crate) use observe::{Observers, PendingObservations, deliver};
+mod boxed;
 mod count;
 mod metadata;
 mod traced;
@@ -1107,6 +1108,9 @@ impl DataFrame {
         }
         let plan = self.plan_with_checkpoints().await?;
         let (analyzed, through_views) = self.session.analyze_in(&plan, &env, text).await?;
+        // Analysis-only paths (DESCRIBE QUERY, `schema`) never reach `open_files`: refuse a
+        // time-travel clause they would otherwise describe as the current table.
+        env.catalog.check_reference_options(analyzed.plan.root())?;
         let mut env = env;
         // A trial's analysis is kept as an ordinary one: later checks are audited and told to
         // the policy.
@@ -1595,6 +1599,7 @@ impl DataFrame {
             partition_by: Vec::new(),
             bucket_by: None,
             sort_by: None,
+            bucket_table: false,
             format_set: false,
         }
     }
