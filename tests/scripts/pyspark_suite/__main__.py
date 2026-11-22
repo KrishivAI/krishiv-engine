@@ -92,14 +92,13 @@ def cmd_ratchet(a: argparse.Namespace) -> None:
         raise SystemExit(f"ratchet: {a.current} is for {current['version']}, not {a.version}")
     if current.get("source") != "run":
         raise SystemExit("ratchet: the current summary is not from a `run`")
-    if (
-        a.min_rate is not None
-        and not current.get("denominator", {}).get("conditional_skips")
-        and current.get("counts", {}).get("skip", 0) > 0
-    ):
+    if a.min_rate is not None and current.get("counts", {}).get("skip", 0) > 0:
+        # `conditional_skips` (excluded by the oracle) and `counts.skip` (left in the run) describe different tests, so
+        # a nonzero exclusion does not show that no JVM-only skip is left. Until the oracle's per-id list is checked
+        # against the run's skips (with the denominator freeze), a floor is refused while any skip remains.
         raise SystemExit(
-            "ratchet: --min-rate needs a denominator that excludes conditional (JVM-only) skips; "
-            "pass --oracle-junit to `run` first"
+            "ratchet: --min-rate is refused while the run still has skipped tests: a JVM-only skip left in the "
+            "denominator would lower the rate; exclude them through `run --oracle-junit` first"
         )
     lost = ratchet_regressions(previous, current)
     print(

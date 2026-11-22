@@ -276,7 +276,7 @@ def test_run_fails_when_every_file_fails_to_run(tmp_path, monkeypatch):
         cli.cmd_run(a)
 
 
-def test_ratchet_refuses_min_rate_while_conditional_skips_are_in_the_denominator(tmp_path, monkeypatch):
+def test_ratchet_refuses_min_rate_while_any_skip_is_in_the_run(tmp_path, monkeypatch):
     import argparse
     import json
 
@@ -287,8 +287,12 @@ def test_ratchet_refuses_min_rate_while_conditional_skips_are_in_the_denominator
     f = tmp_path / "cur.json"
     f.write_text(json.dumps(cur))
     a = argparse.Namespace(version="4.0.5", current=f, min_rate=75.0, report_only=False)
-    with pytest.raises(SystemExit, match="conditional"):
+    with pytest.raises(SystemExit, match="skipped tests"):
         cli.cmd_ratchet(a)
-    cur["denominator"] = {"conditional_skips": 3}
+    cur["denominator"] = {"conditional_skips": 3}  # an oracle exclusion elsewhere does not clear a skip left in the run
     f.write_text(json.dumps(cur))
-    cli.cmd_ratchet(a)  # excluded from the denominator: the floor applies normally
+    with pytest.raises(SystemExit, match="skipped tests"):
+        cli.cmd_ratchet(a)
+    cur["counts"] = {"skip": 0}
+    f.write_text(json.dumps(cur))
+    cli.cmd_ratchet(a)  # nothing skipped: the floor applies normally
