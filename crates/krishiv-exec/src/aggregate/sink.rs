@@ -597,8 +597,15 @@ impl Spiller {
                                 "stopped: another spill writer failed".to_owned(),
                             ));
                         }
-                        if let Err(e) = w.write(&Batch::new(t.state_batch(ids)?)) {
-                            return Ok(Err(e));
+                        // Cut by bytes too: large sketch states must keep the `binary` offsets under 2 GiB.
+                        let mut rest = ids;
+                        while !rest.is_empty() {
+                            let n = t.state_cut(rest).clamp(1, rest.len());
+                            let (now, later) = rest.split_at(n);
+                            if let Err(e) = w.write(&Batch::new(t.state_batch(now)?)) {
+                                return Ok(Err(e));
+                            }
+                            rest = later;
                         }
                     }
                 }

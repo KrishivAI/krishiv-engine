@@ -596,6 +596,20 @@ impl Table {
         }
     }
 
+    /// How many of `ids`, from the front, one batch of partial states takes ([`state_ids`](Self::state_ids)'s
+    /// byte bound): at least one when `ids` is not empty.
+    pub(crate) fn state_cut(&self, ids: &[u32]) -> usize {
+        match self {
+            Self::Keys(t) => super::accumulator::state_prefix(
+                &t.accs,
+                ids,
+                &mut 0,
+                super::accumulator::STATE_BATCH_BYTES,
+            ),
+            Self::Rows(t) => t.state_cut(ids),
+        }
+    }
+
     pub(crate) fn state_batch(&self, ids: &[u32]) -> Result<RecordBatch> {
         match self {
             Self::Keys(t) => t.state_batch(ids),

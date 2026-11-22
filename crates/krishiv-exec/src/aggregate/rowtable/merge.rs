@@ -7,8 +7,16 @@ impl RowTable {
     /// The references of the rows at positions `range` (see [`ids`](Self::ids)), cut where their partial states
     /// pass [`STATE_BATCH_BYTES`](super::super::accumulator::STATE_BATCH_BYTES): at least one row.
     pub(crate) fn state_ids(&self, range: Range<usize>) -> Vec<u32> {
-        use super::super::accumulator::{STATE_BATCH_BYTES, state_prefix};
         let mut ids = self.ids(range);
+        let n = self.state_cut(&ids);
+        ids.truncate(n);
+        ids
+    }
+
+    /// How many of the row references `ids`, from the front, one batch of partial states takes, cut by
+    /// [`STATE_BATCH_BYTES`](super::super::accumulator::STATE_BATCH_BYTES): at least one when `ids` is not empty.
+    pub(crate) fn state_cut(&self, ids: &[u32]) -> usize {
+        use super::super::accumulator::{STATE_BATCH_BYTES, state_prefix};
         let (mut used, mut taken) = (0, 0);
         while let Some(&first) = ids.get(taken) {
             let p = self.refs.part(first);
@@ -19,7 +27,7 @@ impl RowTable {
                 .unwrap_or(rest.len());
             // A missing partition is the state batch's error to raise.
             let Some(part) = self.parts.get(p) else {
-                return ids;
+                return ids.len();
             };
             let local: Vec<u32> = rest[..run].iter().map(|&r| self.refs.row(r)).collect();
             let n = state_prefix(&part.accs, &local, &mut used, STATE_BATCH_BYTES);
@@ -28,8 +36,7 @@ impl RowTable {
                 break;
             }
         }
-        ids.truncate(taken);
-        ids
+        taken
     }
 
     /// How many rows of partition `p` from `rows.start` (at most `rows`) one batch of partial states takes, cut by

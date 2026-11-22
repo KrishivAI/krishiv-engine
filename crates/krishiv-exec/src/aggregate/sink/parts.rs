@@ -369,8 +369,15 @@ impl Spiller {
     ) -> Result<std::result::Result<SpillFile, SpillError>> {
         for c in chunks(ids, chunk, table) {
             self.query.check_cancelled()?;
-            if let Err(e) = w.write(&Batch::new(state(c)?)) {
-                return Ok(Err(e));
+            // A chunk of large sketch states is cut by bytes, so its `binary` column stays under the offset limit.
+            let mut rest = c;
+            while !rest.is_empty() {
+                let n = table.state_cut(rest).clamp(1, rest.len());
+                let (now, later) = rest.split_at(n);
+                if let Err(e) = w.write(&Batch::new(state(now)?)) {
+                    return Ok(Err(e));
+                }
+                rest = later;
             }
         }
         Ok(Ok(self.finish(w)?))
