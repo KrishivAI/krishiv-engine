@@ -683,9 +683,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
         }
     }
 
-    /// An option value or path: a plain value as itself, a reference as its
-    /// (scope, key), an inline secret (alone or inside a URL) as its keyed
-    /// fingerprint, never its plaintext (ADR 0038).
     /// A barrier's policy reference: the securable (a path as its option value, so a secret
     /// never enters in plaintext), the principal key and the version.
     fn policy(&mut self, p: &crate::PolicyRef) {
@@ -703,6 +700,9 @@ impl<'k, 'a> Encoder<'k, 'a> {
         self.put(&p.version.to_le_bytes());
     }
 
+    /// An option value or path: a plain value as itself, a reference as its
+    /// (scope, key), an inline secret (alone or inside a URL) as its keyed
+    /// fingerprint, never its plaintext (ADR 0038).
     fn option_value(&mut self, v: &OptionValue) {
         match v {
             OptionValue::Plain(s) => {

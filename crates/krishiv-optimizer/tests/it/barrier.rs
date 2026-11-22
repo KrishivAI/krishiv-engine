@@ -10,17 +10,20 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use krishiv_common::config::Config;
 use krishiv_common::{Principal, PrincipalKey, PrincipalKind};
-use krishiv_optimizer::{Options, optimize, optimize_with_options};
-use krishiv_plan::analyzer::{Securable, TableIdent};
+use krishiv_optimizer::{Options, Statistics, optimize, optimize_with_options, optimize_with_udfs};
+use krishiv_plan::analyzer::{AnalysisContext, Securable, TableIdent};
 use krishiv_plan::{
-    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, LogicalPlan, Plan,
-    PlanNode, PolicyRef, ReadSource, ResolvedExpr, ResolvedFunction, leakproof,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, JoinCondition,
+    JoinKind, LogicalPlan, Plan, PlanNode, PolicyRef, ReadSource, ResolvedExpr, ResolvedFunction,
+    leakproof,
 };
 use krishiv_types::DataType;
+use krishiv_udf_sdk::UdfLibrary;
 
-use crate::qerror;
 use crate::support::{self, data, eval};
+use crate::{qerror, tpcds};
 
 fn udf(name: &str, args: Vec<Arc<Expr>>, data_type: DataType) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
@@ -258,7 +261,17 @@ fn check_inside(input: &Arc<LogicalPlan>, sql: &str) -> Vec<String> {
             texts.push(c.to_string());
         }
     }
-    let policy_filter = policy_filter.unwrap_or_else(|| panic!("{sql}: the policy filter is gone"));
+    let Some(policy_filter) = policy_filter else {
+        // A contradiction that moved in folds `policy(..) AND false` to `false`: the barrier
+        // returns no row, so nothing runs on a row the policy would reject.
+        assert!(
+            all.iter()
+                .any(|n| matches!(&n.node, PlanNode::Filter { predicate, .. }
+                if predicate.to_string() == "false")),
+            "{sql}: the policy filter is gone\n{input}"
+        );
+        return texts;
+    };
     // The mask projection stays above the policy filter.
     let mut below = Vec::new();
     nodes(&policy_filter, &mut below);
@@ -275,20 +288,87 @@ fn run(sql: &str, masked: &[&str]) -> (Arc<LogicalPlan>, Vec<String>) {
 }
 
 fn run_over(sql: &str, masked: &[&str], all: bool) -> (Arc<LogicalPlan>, Vec<String>) {
-    let plan = support::resolve(sql, &support::ctx());
+    run_in(
+        sql,
+        &support::ctx(),
+        &qerror::stats_of(&data::small(3)),
+        masked,
+        all,
+    )
+}
+
+/// [`run_over`] over the tables of `ctx`, in two arms: `optimize` (no session configuration) and
+/// `optimize_with_udfs` with `stats` and a default session configuration, where the rules that
+/// need one (`ShareCte`, `ShareFilteredScan`, `SubqueryAsWindow`, `DerivedKeysAbove`,
+/// `PayloadAboveAggregate`) run too. Both arms are checked; the first arm's root and moved
+/// conjuncts are returned.
+fn run_in(
+    sql: &str,
+    ctx: &AnalysisContext,
+    stats: &dyn Statistics,
+    masked: &[&str],
+    all: bool,
+) -> (Arc<LogicalPlan>, Vec<String>) {
+    let plan = support::resolve(sql, ctx);
     let guarded = Plan::try_new(guarded_tables(&plan, masked, all, false)).unwrap();
-    let once = optimize(&guarded).unwrap();
-    let twice = optimize(&once).unwrap();
-    assert!(
-        once.structurally_eq(&twice),
-        "{sql}: not a fixed point\n{once}\n{twice}"
-    );
-    let root = Arc::clone(twice.root());
+    let plain = |p: &Plan| optimize(p).unwrap();
+    let configured =
+        |p: &Plan| optimize_with_udfs(p, stats, &UdfLibrary::new(), &Config::new()).unwrap();
+    let mut first = None;
+    for (arm, opt) in [
+        ("plain", &plain as &dyn Fn(&Plan) -> Plan),
+        ("configured", &configured),
+    ] {
+        let once = opt(&guarded);
+        let twice = opt(&once);
+        assert!(
+            once.structurally_eq(&twice),
+            "{sql} ({arm}): not a fixed point\n{once}\n{twice}"
+        );
+        let root = Arc::clone(twice.root());
+        let mut inputs = Vec::new();
+        barriers(&root, &mut inputs);
+        assert!(
+            !inputs.is_empty(),
+            "{sql} ({arm}): the barrier is gone\n{twice}"
+        );
+        check_g2(&root, &format!("{sql} ({arm})"));
+        let what = format!("{sql} ({arm})");
+        let moved: Vec<String> = inputs.iter().flat_map(|i| check_inside(i, &what)).collect();
+        first.get_or_insert((root, moved));
+    }
+    first.unwrap()
+}
+
+/// G2 (design §2): nothing computed inside a barrier is shared with anything outside it. No
+/// relation (`Arc`) is reachable both through a barrier and without crossing one (a `WITH`
+/// definition, a `Shift` body or a shared scan read from both sides), and no `CteRef` sits inside
+/// a barrier (its definition is computed outside). A whole barrier shared by a `CteRef` is fine.
+fn check_g2(root: &Arc<LogicalPlan>, what: &str) {
+    fn outside(p: &Arc<LogicalPlan>, seen: &mut HashSet<*const LogicalPlan>) {
+        if matches!(p.node, PlanNode::SecurityBarrier { .. }) || !seen.insert(Arc::as_ptr(p)) {
+            return;
+        }
+        p.for_each_child(&mut |c| outside(c, seen));
+    }
+    let mut out = HashSet::new();
+    outside(root, &mut out);
     let mut inputs = Vec::new();
-    barriers(&root, &mut inputs);
-    assert!(!inputs.is_empty(), "{sql}: the barrier is gone\n{twice}");
-    let moved = inputs.iter().flat_map(|i| check_inside(i, sql)).collect();
-    (root, moved)
+    barriers(root, &mut inputs);
+    for input in &inputs {
+        let mut inside = Vec::new();
+        nodes(input, &mut inside);
+        for n in &inside {
+            assert!(
+                !out.contains(&Arc::as_ptr(n)),
+                "{what}: a relation inside a barrier is also read outside it:\n{n}\n{root}"
+            );
+            assert!(
+                !matches!(n.node, PlanNode::CteRef(_)),
+                "{what}: a CteRef inside a barrier:\n{root}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -421,6 +501,129 @@ fn every_tpch_query_keeps_its_barriers_whole() {
     assert!(moved > 20, "{moved}");
 }
 
+/// The structural half of §7.3 over TPC-DS: every query with every table behind a barrier, in
+/// both arms of [`run_in`] (the configured one with the q-error report's TPC-DS statistics, where
+/// `ShareCte` and `ShareFilteredScan` find their q04/q11/q28-style candidates).
+#[test]
+fn every_tpcds_query_keeps_its_barriers_whole() {
+    let schemas = qerror::tpcds_schemas();
+    let db = qerror::synthetic_tpcds(&schemas, 11, 2 * qerror::scale());
+    let stats = qerror::stats_of(&db);
+    let ctx = support::ctx_over(tpcds::catalog());
+    let (mut moved, mut swept) = (0, 0);
+    for q in 1..=99 {
+        let sql = tpcds::sql(q);
+        // As the rule differential: a query the test analyzer cannot resolve is left out.
+        if support::try_resolve(&sql, &ctx).is_none() {
+            continue;
+        }
+        let (_, m) = run_in(&sql, &ctx, &stats, &["i_item_desc", "c_last_name"], true);
+        moved += m.len();
+        swept += 1;
+    }
+    assert!(swept >= 90, "{swept} of 99 TPC-DS queries swept");
+    assert!(moved > 99, "{moved}");
+}
+
+/// A grouped CTE read twice: `ShareCte` shares its two instances (the control of the tests below).
+const SHARED_TWICE: &str = "WITH s AS (SELECT a, count(*) AS n FROM t GROUP BY a) \
+     SELECT * FROM s x JOIN s y ON x.a = y.a";
+
+/// Whether a node under `p` (`p` included) is a security barrier.
+fn holds_a_barrier(p: &Arc<LogicalPlan>) -> bool {
+    let mut all = Vec::new();
+    nodes(p, &mut all);
+    all.iter()
+        .any(|n| matches!(n.node, PlanNode::SecurityBarrier { .. }))
+}
+
+/// The `CteRef`s under `p`.
+fn cte_refs(p: &Arc<LogicalPlan>) -> usize {
+    let mut all = Vec::new();
+    nodes(p, &mut all);
+    all.iter()
+        .filter(|n| matches!(n.node, PlanNode::CteRef(_)))
+        .count()
+}
+
+/// `ShareCte` may share two equal instances whose barrier is inside them (the whole barrier is
+/// in the one definition), and does: the two reads of `s` become `CteRef`s of one definition
+/// that holds the barrier, and G2 holds.
+#[test]
+fn share_cte_shares_equal_barriers_whole() {
+    run(SHARED_TWICE, &["b"]);
+    let plan = support::resolve(SHARED_TWICE, &support::ctx());
+    let guarded = Plan::try_new(guarded_tables(&plan, &["b"], false, false)).unwrap();
+    let stats = qerror::stats_of(&data::small(3));
+    let on = optimize_with_udfs(&guarded, &stats, &UdfLibrary::new(), &Config::new()).unwrap();
+    assert!(cte_refs(on.root()) >= 2, "the two reads are shared\n{on}");
+    let PlanNode::WithCte { ctes, .. } = &on.root().node else {
+        panic!("no WITH definition\n{on}");
+    };
+    assert!(
+        ctes.iter().any(|c| holds_a_barrier(&c.plan)),
+        "the barrier is whole inside a definition\n{on}"
+    );
+    check_g2(on.root(), SHARED_TWICE);
+}
+
+/// Every node of `p` again, in new `Arc`s: an equal plan that shares no relation with `p`.
+fn deep_copy(p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    Arc::clone(p)
+        .transform_up(&mut |n| Ok::<_, std::convert::Infallible>(Arc::new(LogicalPlan::clone(&n))))
+        .unwrap_or_else(|e| match e {})
+}
+
+/// Two instances of one grouped body, `Shift +0` of a copy (behind a barrier when `guard`) and
+/// `Shift +4` of the original, joined on their key. The copy is a separate relation, so the
+/// input holds no relation both inside and outside a barrier (G2's input side).
+fn two_instances(guard: bool) -> Plan {
+    let plan = support::resolve("SELECT a, count(*) AS n FROM t GROUP BY a", &support::ctx());
+    let body = Arc::clone(plan.root());
+    let shift = |input: Arc<LogicalPlan>, offset| {
+        Arc::new(LogicalPlan::new(PlanNode::Shift { input, offset }))
+    };
+    let mut left = shift(deep_copy(&body), 0);
+    if guard {
+        left = Arc::new(LogicalPlan::clone(&left).security_barrier(policy()));
+    }
+    let right = shift(body, 4);
+    let first = |p: &Arc<LogicalPlan>| p.resolved_output().unwrap()[0].clone();
+    let (l, r) = (first(&left), first(&right));
+    let condition = builtin(Builtin::Eq, vec![col(&l), col(&r)], false);
+    Plan::try_new(Arc::new(LogicalPlan::new(PlanNode::Join {
+        left,
+        right,
+        kind: JoinKind::Inner,
+        condition: JoinCondition::On(condition),
+    })))
+    .unwrap()
+}
+
+/// An instance inside a barrier equal to one outside it is not shared (G2): `ShareCte` takes no
+/// member under a barrier, so the guarded aggregate and the open one stay two computations; the
+/// same two instances with no barrier are shared (control).
+#[test]
+fn share_cte_does_not_share_a_subtree_inside_a_barrier_with_one_outside() {
+    let stats = qerror::stats_of(&data::small(3));
+    let opt = |p: &Plan| optimize_with_udfs(p, &stats, &UdfLibrary::new(), &Config::new()).unwrap();
+    let guarded = two_instances(true);
+    check_g2(guarded.root(), "input");
+    let on = opt(&guarded);
+    assert!(on.structurally_eq(&opt(&on)), "not a fixed point\n{on}");
+    assert_eq!(
+        cte_refs(on.root()),
+        0,
+        "an aggregate inside the barrier was shared with the one outside\n{on}"
+    );
+    check_g2(on.root(), "inside and outside");
+    let open = opt(&two_instances(false));
+    assert!(
+        cte_refs(open.root()) >= 2,
+        "control: the open instances are shared\n{open}"
+    );
+}
+
 /// The key columns of every policy call under `p` (the guarded scans' keys).
 fn policy_keys(p: &Arc<LogicalPlan>) -> HashSet<AttrId> {
     let mut all = Vec::new();
@@ -468,8 +671,19 @@ fn every_tpch_query_returns_the_barrier_rows_under_a_rejecting_policy() {
         nonempty += usize::from(!want.is_empty());
         let plain = optimize(&guarded).unwrap();
         let with_stats = optimize_with_options(&guarded, &stats, &Options::default()).unwrap();
-        for (arm, once) in [("plain", plain), ("statistics", with_stats)] {
-            let twice = optimize_with_options(&once, &stats, &Options::default()).unwrap();
+        let configured =
+            optimize_with_udfs(&guarded, &stats, &UdfLibrary::new(), &Config::new()).unwrap();
+        for (arm, once) in [
+            ("plain", plain),
+            ("statistics", with_stats),
+            ("configured", configured),
+        ] {
+            let twice = if arm == "configured" {
+                optimize_with_udfs(&once, &stats, &UdfLibrary::new(), &Config::new()).unwrap()
+            } else {
+                optimize_with_options(&once, &stats, &Options::default()).unwrap()
+            };
+            check_g2(twice.root(), &format!("q{q} {arm}"));
             for p in [&once, &twice] {
                 let got = eval::rows_guarded(&db, p.root(), &keys);
                 assert_eq!(got.len(), want.len(), "q{q} {arm}\n{p}");

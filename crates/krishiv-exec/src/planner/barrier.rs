@@ -18,7 +18,11 @@ impl Planner<'_> {
         let first = self.next_scan;
         let mut planned = self.plan(input)?;
         // Every scan numbered while planning the input is one of its scans (a shared definition
-        // planned from inside counts too: over-marking only hides more).
+        // planned from inside counts too: over-marking only hides more). The reverse, a `CteRef`
+        // inside a barrier whose definition was planned from outside and so is not marked, cannot
+        // arise: no optimization places a `CteRef` inside a barrier (`ShareCte` and
+        // `ShareFilteredScan` find no candidate there, `InlineCTE` does not run inside), and the
+        // optimizer's barrier tests assert that no `CteRef` sits inside one.
         self.guarded.extend((first..self.next_scan).map(ScanId));
         planned.sites.clear();
         Ok(planned)

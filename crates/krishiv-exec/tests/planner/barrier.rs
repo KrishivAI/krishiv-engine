@@ -56,6 +56,18 @@ fn planned_at(
     guard: usize,
     at: &dyn Fn(&LogicalPlan) -> bool,
 ) -> Runnable {
+    placed_at(tpch, sql, table, guard, at).0
+}
+
+/// [`planned_at`] with the number of barriers placed: a barrier has no physical node, so a
+/// barrier over a relation with no scan (a `VALUES` list) leaves the physical plan unchanged.
+fn placed_at(
+    tpch: &Tpch,
+    sql: &str,
+    table: &str,
+    guard: usize,
+    at: &dyn Fn(&LogicalPlan) -> bool,
+) -> (Runnable, usize) {
     let plan = tpch.analyzed(sql).unwrap();
     let mut left = guard;
     let root = Arc::clone(plan.root())
@@ -71,7 +83,7 @@ fn planned_at(
     let plan = Plan::try_new(root).unwrap();
     let stats = ProviderStatistics(Arc::clone(&tpch.tables) as _);
     let optimized = krishiv_optimizer::optimize_with(&plan, &stats).unwrap();
-    tpch.runnable(&optimized).unwrap()
+    (tpch.runnable(&optimized).unwrap(), guard - left)
 }
 
 fn scans(n: &PhysNode, out: &mut Vec<(ScanId, String, usize)>) {
@@ -460,4 +472,123 @@ fn every_tpch_query_runs_the_barrier_rows_under_a_rejecting_policy() {
         e.to_string().contains("ran on a row the policy rejects"),
         "{e}"
     );
+}
+
+/// `plan` with every scan of `table` behind a barrier (no policy filter: the barrier alone).
+pub(super) fn behind_barrier(plan: &Plan, table: &str) -> Plan {
+    let root = Arc::clone(plan.root())
+        .transform_up(&mut |p| {
+            let guarded = matches!(&p.node, PlanNode::Scan(s)
+                if matches!(&s.source, ReadSource::Table { name, .. }
+                    if name.last().is_some_and(|n| n == table)));
+            Ok::<_, std::convert::Infallible>(if guarded {
+                Arc::new(LogicalPlan::clone(&p).security_barrier(policy(table)))
+            } else {
+                p
+            })
+        })
+        .unwrap_or_else(|e| match e {});
+    Plan::try_new(root).unwrap()
+}
+
+/// Whether each table scan under `n` has a pushed filter.
+fn scan_filters(n: &PhysNode, out: &mut Vec<bool>) {
+    if let PhysNode::Scan(s) = n {
+        out.push(s.filter.is_some());
+    }
+    for c in n.children() {
+        scan_filters(c, out);
+    }
+}
+
+/// §6: the physical planner does not push a filter above a barrier into the scan below it (the
+/// optimizer alone decides what moves in; here it does not run). The control, the same filter
+/// directly over the scan, is pushed.
+#[test]
+fn a_filter_above_a_barrier_is_not_pushed_into_the_scan_below() {
+    let (tpch, _rt) = tpch();
+    let plan = tpch
+        .analyzed("SELECT l_orderkey FROM lineitem WHERE l_quantity < 10")
+        .unwrap();
+    let filters = |p: &PhysicalPlan| {
+        let mut out = Vec::new();
+        for r in p.roots() {
+            scan_filters(r, &mut out);
+        }
+        out
+    };
+    let plain = tpch.runnable(&plan).unwrap();
+    assert_eq!(filters(&plain), [true], "{plain}");
+    let guarded = tpch.runnable(&behind_barrier(&plan, "lineitem")).unwrap();
+    assert!(!guarded.guarded().is_empty(), "{guarded}");
+    assert_eq!(filters(&guarded), [false], "{guarded}");
+    assert_eq!(result(&guarded), result(&plain));
+}
+
+/// §6: a join side's strategy hint is not read through a barrier (`side_hint` stops there). Plain,
+/// `MERGE(part)` plans a sort-merge join; with the hinted side behind a barrier it does not.
+#[test]
+fn a_join_hint_is_not_read_through_a_barrier() {
+    let (tpch, _rt) = tpch();
+    let sql = "SELECT /*+ MERGE(part) */ l_orderkey, p_brand FROM lineitem \
+               JOIN part ON l_partkey = p_partkey WHERE p_size < 3";
+    let hint = |p: &LogicalPlan| matches!(p.node, PlanNode::JoinHint { .. });
+    let plain = planned_at(&tpch, sql, "part", 0, &hint);
+    assert!(plain.to_string().contains("SortMergeJoin"), "{plain}");
+    let guarded = planned_at(&tpch, sql, "part", usize::MAX, &hint);
+    assert!(!guarded.guarded().is_empty(), "{guarded}");
+    assert!(!guarded.to_string().contains("SortMergeJoin"), "{guarded}");
+    assert_eq!(result(&guarded), result(&plain));
+}
+
+/// §7.2: collation keys are lowered inside a barrier (`collation_keys`, the one lowering): the
+/// rows of a barrier over the inline table equal the barrier-free rows for a group, a sort, a
+/// window and a `count(DISTINCT)` under `UTF8_LCASE`, where `'a'` and `'A'` are one value.
+#[test]
+fn collation_keys_inside_a_barrier_give_the_barrier_free_rows() {
+    let (tpch, _rt) = tpch();
+    let leaf = |p: &LogicalPlan| {
+        let mut children = 0;
+        p.for_each_child(&mut |_| children += 1);
+        children == 0
+    };
+    const V: &str = "VALUES ('a', 1), ('A', 2), ('b', 3), ('B', 4), ('a', 5) AS v(k, n)";
+    for (sql, rows) in [
+        (
+            format!(
+                "SELECT lower(k COLLATE UTF8_LCASE) AS g, count(*) FROM {V} GROUP BY k COLLATE UTF8_LCASE"
+            ),
+            2,
+        ),
+        (
+            format!("SELECT k, n FROM {V} ORDER BY k COLLATE UTF8_LCASE, n"),
+            5,
+        ),
+        (
+            format!(
+                "SELECT n, row_number() OVER (PARTITION BY k COLLATE UTF8_LCASE ORDER BY n) AS r FROM {V}"
+            ),
+            5,
+        ),
+        (
+            format!("SELECT count(DISTINCT k COLLATE UTF8_LCASE) FROM {V}"),
+            1,
+        ),
+    ] {
+        let plain = planned_at(&tpch, &sql, "v", 0, &leaf);
+        let (guarded, placed) = placed_at(&tpch, &sql, "v", 1, &leaf);
+        assert_eq!(placed, 1, "{sql}: the barrier was placed");
+        let want = result(&plain);
+        assert_eq!(want.len(), rows, "{sql}: {want:?}");
+        assert_eq!(result(&guarded), want, "{sql}\n{guarded}");
+    }
+    // The grouped and distinct answers: two groups of `a`/`A` (3 rows) and `b`/`B` (2 rows).
+    let sql = format!(
+        "SELECT lower(k COLLATE UTF8_LCASE) AS g, count(*) FROM {V} GROUP BY k COLLATE UTF8_LCASE"
+    );
+    let got = result(&planned_at(&tpch, &sql, "v", 1, &leaf));
+    assert_eq!(got.len(), 2, "{got:?}");
+    let sql = format!("SELECT count(DISTINCT k COLLATE UTF8_LCASE) FROM {V}");
+    let got = result(&planned_at(&tpch, &sql, "v", 1, &leaf));
+    assert_eq!(got, ["2"], "{got:?}");
 }

@@ -238,9 +238,12 @@ fn guarded(guard: &[&str]) -> Plan {
                     deterministic: true,
                 },
             ))));
-            let barrier = LogicalPlan::clone(input)
-                .filter(policy_expr)
-                .security_barrier(policy.clone());
+            // Over the same scan node the other filters read.
+            let barrier = LogicalPlan::new(PlanNode::Filter {
+                input: Arc::clone(input),
+                predicate: policy_expr,
+            })
+            .security_barrier(policy.clone());
             Ok(Arc::new(barrier.filter(Arc::clone(predicate))))
         })
         .unwrap_or_else(|e| match e {});
@@ -280,7 +283,7 @@ fn guarded_scans(p: &Arc<LogicalPlan>, inside: bool, out: &mut usize) {
 /// reader outside it nor with another barrier: the guarded scan stays inside, under its policy.
 #[test]
 fn a_scan_read_inside_a_barrier_is_not_shared() {
-    for guard in [&["1 AND 5"][..], &["1 AND 5", "96 AND 100"][..]] {
+    for guard in [&[">= 1)"][..], &[">= 1)", ">= 96)"][..]] {
         let out = guarded(guard);
         let text = out.root().to_string();
         let mut inside = Vec::new();

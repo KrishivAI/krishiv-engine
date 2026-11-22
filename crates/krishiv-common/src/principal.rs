@@ -177,6 +177,7 @@ impl std::fmt::Display for PrincipalKey {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
     fn a_principal_key_leaves_groups_and_the_definer_reader_out() {
@@ -193,7 +194,6 @@ mod tests {
         let other = Principal::new("ana", PrincipalKind::Service);
         assert_ne!(PrincipalKey::of(&a), PrincipalKey::of(&other));
     }
-    use super::*;
 
     #[test]
     fn no_tenant_and_an_empty_tenant_have_different_ids() {

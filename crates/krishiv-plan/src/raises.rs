@@ -878,19 +878,65 @@ mod tests {
 
     #[test]
     fn every_declared_operator_is_leakproof_for_some_arguments() {
-        // A declaration that never takes effect would be a mistake: each declared operator
-        // runs on any row over integer operands with ANSI off.
+        // A declaration that never takes effect would be a mistake (design §4): each declared
+        // operator is leakproof, ANSI off, over well-typed operands (integers; booleans for the
+        // connectives; `CASE WHEN b THEN k ELSE 1 END`).
         let k = col("k", DataType::Integer);
-        for b in Builtin::ALL.into_iter().filter(|b| b.leakproof()) {
-            let args = match b {
-                Builtin::Not | Builtin::IsNull | Builtin::IsNotNull | Builtin::Negative => {
-                    vec![k.clone()]
-                }
-                Builtin::Between => vec![k.clone(), k.clone(), k.clone()],
-                _ => vec![k.clone(), lit(Literal::Integer(1))],
+        let b = col("b", DataType::Boolean);
+        for o in Builtin::ALL.into_iter().filter(|o| o.leakproof()) {
+            let (args, t) = match o {
+                Builtin::And | Builtin::Or => (vec![b.clone(), b.clone()], DataType::Boolean),
+                Builtin::Not => (vec![b.clone()], DataType::Boolean),
+                Builtin::When => (
+                    vec![b.clone(), k.clone(), lit(Literal::Integer(1))],
+                    DataType::Integer,
+                ),
+                Builtin::IsNull | Builtin::IsNotNull => (vec![k.clone()], DataType::Boolean),
+                Builtin::Negative => (vec![k.clone()], DataType::Integer),
+                Builtin::Between => (vec![k.clone(), k.clone(), k.clone()], DataType::Boolean),
+                Builtin::In => (
+                    vec![
+                        k.clone(),
+                        lit(Literal::Integer(1)),
+                        lit(Literal::Integer(2)),
+                    ],
+                    DataType::Boolean,
+                ),
+                Builtin::Eq
+                | Builtin::EqNullSafe
+                | Builtin::Lt
+                | Builtin::LtEq
+                | Builtin::Gt
+                | Builtin::GtEq => (vec![k.clone(), lit(Literal::Integer(1))], DataType::Boolean),
+                _ => (vec![k.clone(), lit(Literal::Integer(1))], DataType::Integer),
             };
-            let e = op(b, args, DataType::Integer);
-            assert!(every_call_declared(&e), "{b:?}");
+            let e = op(o, args, t);
+            assert!(leakproof(&e, false), "{o:?}: {e}");
+        }
+    }
+
+    #[test]
+    fn every_declared_registry_function_is_leakproof_for_some_arguments() {
+        // The same for the registry's declarations (`registry/leakproof.rs`): every declared
+        // name, over two integer arguments, is leakproof with ANSI off and on (each one never
+        // raises: `coalesce`, and the `try_` arithmetic gives NULL where the operator raises).
+        let k = col("k", DataType::Integer);
+        let declared: Vec<&str> = krishiv_functions::registry::builtins()
+            .functions()
+            .into_iter()
+            .filter(|d| d.leakproof)
+            .map(|d| d.name)
+            .collect();
+        assert!(declared.len() >= 6, "{declared:?}");
+        for name in declared {
+            let e = gt0(named(
+                name,
+                vec![k.clone(), lit(Literal::Integer(1))],
+                DataType::Integer,
+            ));
+            for ansi in [false, true] {
+                assert!(leakproof(&e, ansi), "{name} (ansi {ansi}): {e}");
+            }
         }
     }
 }
