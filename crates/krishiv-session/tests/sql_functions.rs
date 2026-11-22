@@ -1706,3 +1706,38 @@ fn a_call_is_checked_by_its_inputs_never_its_body() {
         ["C"]
     );
 }
+
+/// A call's inputs are its arguments as written, before the cast to the parameter type
+/// (Spark's `SQLFunctionExpression.inputs`; the cast comes later, in `makeSQLFunctionPlan`):
+/// `fs(id)` with `id INT` is not grouped by `CAST(id AS STRING)` (Spark 4.3.0 probe, review of
+/// 1c2627c64).
+#[test]
+fn a_call_s_inputs_are_its_arguments_before_the_parameter_cast() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION fs(a STRING) RETURNS STRING RETURN a",
+    );
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION fl(a BIGINT) RETURNS BIGINT RETURN a",
+    );
+    for q in [
+        "SELECT fs(id) FROM people GROUP BY CAST(id AS STRING)",
+        "SELECT fs(id) FROM people GROUP BY fs(CAST(id AS STRING))",
+        "SELECT fl(id) FROM people GROUP BY fl(CAST(id AS BIGINT))",
+    ] {
+        let e = fails(&s, q);
+        let (class, params) = class_and_params(&e);
+        assert_eq!(class, "MISSING_AGGREGATION", "{q}");
+        assert_eq!(params["expression"], "\"id\"", "{q}");
+    }
+    assert_eq!(
+        ok(&s, "SELECT fl(id) FROM people GROUP BY id ORDER BY 1"),
+        ["1", "2", "3"]
+    );
+    assert_eq!(
+        ok(&s, "SELECT fs(id) FROM people GROUP BY fs(id) ORDER BY 1"),
+        ["1", "2", "3"]
+    );
+}

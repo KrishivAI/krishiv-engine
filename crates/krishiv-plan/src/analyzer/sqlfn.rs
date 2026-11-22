@@ -297,9 +297,9 @@ impl Resolver<'_> {
         self.fn_path.push(def.path_key());
         let hop = self.fn_path.len().is_multiple_of(STEP);
         let body = match self.arguments(def, e, call, &kids[..n]) {
-            Ok(args) if hop => on_big_stack(|| self.inline(def, e, args))
+            Ok((args, inputs)) if hop => on_big_stack(|| self.inline(def, e, args, inputs))
                 .unwrap_or_else(|| Err(AnalysisError::new(FailedToParseTooComplex {}, e.origin))),
-            Ok(args) => self.inline(def, e, args),
+            Ok((args, inputs)) => self.inline(def, e, args, inputs),
             Err(error) => Err(error),
         };
         self.fn_path.pop();
@@ -341,12 +341,14 @@ impl Resolver<'_> {
     }
 
     /// The body of `def` resolved with `args` bound to its parameters, cast
-    /// to the declared return type.
+    /// to the declared return type. `inputs` are the call's arguments as the caller wrote
+    /// them (see [`Resolver::arguments`]), recorded for the aggregation check.
     fn inline(
         &mut self,
         def: &Arc<SqlFunction>,
         e: &Arc<Expr>,
         args: Vec<Bound>,
+        inputs: Vec<Arc<Expr>>,
     ) -> Result<Bound, AnalysisError> {
         // The body resolves under the ANSI mode captured at creation.
         let flip = def.ansi.is_some_and(|a| a != self.ctx.conf.ansi);
@@ -390,15 +392,12 @@ impl Resolver<'_> {
         // Spark keeps the call (`SQLFunctionExpression`) through the aggregation check: its
         // inputs are its children and it is grouped only as the whole call. The call gets a node
         // of its own (a body that needs no cast is shared by every call of the function, or is
-        // the caller's argument itself), recorded with its name and its arguments.
+        // the caller's argument itself), recorded with its name and its inputs: the arguments
+        // as the caller bound them, before the cast to the parameter type and the ANSI pin
+        // (Spark adds that cast later, in `makeSQLFunctionPlan`).
         body.expr = Arc::new((*body.expr).clone());
-        let args: Vec<Arc<Expr>> = frame
-            .params
-            .iter()
-            .map(|fp| Arc::clone(&fp.arg.expr))
-            .collect();
         self.inlined_calls
-            .push((Arc::clone(&body.expr), def.qualified_name(), args));
+            .push((Arc::clone(&body.expr), def.qualified_name(), inputs));
         Ok(body)
     }
 
@@ -534,7 +533,7 @@ impl Resolver<'_> {
             filter: None,
         };
         let e = Arc::new(Expr::new(ExprNode::Function(call.clone())).with_origin(o));
-        let bound = self.arguments(def, &e, &call, &kids)?;
+        let (bound, _) = self.arguments(def, &e, &call, &kids)?;
         // The arguments are the caller's expressions: they keep the caller's ANSI mode in a
         // body created under the other one (T184).
         let caller_ansi = self.ctx.conf.ansi;
@@ -679,14 +678,17 @@ impl Resolver<'_> {
     }
 
     /// The argument of every parameter of `def` for the call `call` with
-    /// bound arguments `kids`, each cast to its parameter's type.
+    /// bound arguments `kids`, each cast to its parameter's type, and the call's inputs as
+    /// Spark's `SQLFunctionExpression` holds them (`rearrangeArguments`, SessionCatalog
+    /// v4.3.0): uncast, in parameter order; a call with no named argument has only the
+    /// arguments it gives, one with a named argument also has the defaults filled in.
     fn arguments(
         &mut self,
         def: &Arc<SqlFunction>,
         e: &Arc<Expr>,
         call: &FunctionCall,
         kids: &[Bound],
-    ) -> Result<Vec<Bound>, AnalysisError> {
+    ) -> Result<(Vec<Bound>, Vec<Arc<Expr>>), AnalysisError> {
         let routine = def.routine_name();
         let total = def.params.len();
         let named: Vec<Option<&str>> = (0..call.args.len())
@@ -768,12 +770,23 @@ impl Resolver<'_> {
             }
             slots[p] = Some(kids[i].clone());
         }
+        let any_named = named.iter().any(Option::is_some);
         let mut out = Vec::with_capacity(total);
+        let mut inputs = Vec::with_capacity(total);
         for (i, (slot, p)) in slots.into_iter().zip(&def.params).enumerate() {
             let arg = match slot {
-                Some(arg) => arg,
+                Some(arg) => {
+                    inputs.push(Arc::clone(&arg.expr));
+                    arg
+                }
                 None => match &p.default {
-                    Some(default) => self.default_value(default)?,
+                    Some(default) => {
+                        let value = self.default_value(default)?;
+                        if any_named {
+                            inputs.push(Arc::clone(&value.expr));
+                        }
+                        value
+                    }
                     None => {
                         return Err(AnalysisError::new(
                             RequiredParameterNotFound {
@@ -788,7 +801,7 @@ impl Resolver<'_> {
             };
             out.push(self.cast_arg(&arg, &p.data_type, e.origin)?);
         }
-        Ok(out)
+        Ok((out, inputs))
     }
 
     /// A parameter's default, resolved in a scope with no columns and no
