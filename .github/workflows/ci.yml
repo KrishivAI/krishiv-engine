@@ -51,13 +51,19 @@ jobs:
   # Decides whether the Rust jobs run. Docs/bench/plan-only PRs skip them.
   changes:
     # A draft pull request skips every heavy job below (they need this one, or carry the same test);
-    # marking it ready starts the full run (`ready_for_review`). A skipped job satisfies a required check.
-    if: github.event.pull_request.draft != true
+    # marking it ready starts the full run (`ready_for_review`). A skipped job satisfies a required check,
+    # so a draft's green skips are NOT a pass: on a draft this job fails at once, which keeps the PR red
+    # (a draft cannot merge) until `ready_for_review` re-runs it.
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       python: ${{ steps.python.outputs.python }}
     steps:
+      - name: Refuse a draft
+        if: github.event.pull_request.draft == true
+        run: |
+          echo "::error::draft: mark the pull request ready for review to run CI"
+          exit 1
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:

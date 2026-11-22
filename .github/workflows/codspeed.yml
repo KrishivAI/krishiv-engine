@@ -31,7 +31,8 @@ on:
 
 concurrency:
   group: codspeed-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # An unrelated label cannot cancel a run in progress.
+  cancel-in-progress: ${{ github.event.action != 'labeled' || github.event.label.name == 'perf' }}
 
 permissions:
   contents: read
@@ -48,7 +49,7 @@ jobs:
   # duplicate variation).
   plan:
     name: Plan the benchmark shards
-    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft != true && (contains(github.event.pull_request.labels.*.name, 'perf') || startsWith(github.event.pull_request.head.ref, 'p3/perf') || startsWith(github.event.pull_request.head.ref, 'fix/perf'))) }}
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft != true && (github.event.action != 'labeled' || github.event.label.name == 'perf') && (contains(github.event.pull_request.labels.*.name, 'perf') || startsWith(github.event.pull_request.head.ref, 'p3/perf') || startsWith(github.event.pull_request.head.ref, 'fix/perf'))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -132,7 +133,7 @@ jobs:
   benchmarks:
     name: Benchmarks
     needs: [plan, shards]
-    if: ${{ always() && (github.event_name != 'pull_request' || (github.event.pull_request.draft != true && (contains(github.event.pull_request.labels.*.name, 'perf') || startsWith(github.event.pull_request.head.ref, 'p3/perf') || startsWith(github.event.pull_request.head.ref, 'fix/perf')))) }}
+    if: ${{ always() && (github.event_name != 'pull_request' || (github.event.pull_request.draft != true && (github.event.action != 'labeled' || github.event.label.name == 'perf') && (contains(github.event.pull_request.labels.*.name, 'perf') || startsWith(github.event.pull_request.head.ref, 'p3/perf') || startsWith(github.event.pull_request.head.ref, 'fix/perf')))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
