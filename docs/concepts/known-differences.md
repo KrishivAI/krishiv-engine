@@ -667,6 +667,26 @@ They differ in:
   are refused (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written: Krishiv writes no
   change data files yet. A `DELETE` of whole partitions commits. `MERGE` is refused by name.
 
+## Spark 4.3's nanosecond timestamps and nanosecond clocks
+
+Spark 4.3.0 previews `TIMESTAMP_NTZ(7..9)` and `TIMESTAMP_LTZ(7..9)` behind the internal
+`spark.sql.timestampNanosTypes.enabled` (off). With the key off Krishiv answers as Spark does:
+`FEATURE_NOT_ENABLED` for a precision of 7 to 9 (also `current_timestamp(p)`, `now(p)`,
+`localtimestamp(p)`), `INVALID_TIMESTAMP_PRECISION` for any precision but 6. Krishiv has no
+nanosecond timestamp type yet (planned for 0.3.1), so:
+
+- With `spark.sql.timestampNanosTypes.enabled=true`, a `TIMESTAMP*(7..9)` type is
+  `KRISHIV_UNSUPPORTED_FEATURE` where Spark builds the type. `SET` and `RESET` of the key work under
+  every profile; under the Spark 4.2 profile it changes nothing, as in Spark 4.2.
+- A schema in Spark's JSON form naming `timestamp_ntz(p)` or `timestamp_ltz(p)` is
+  `KRISHIV_UNSUPPORTED_FEATURE` (Spark's `DataType.fromJson` builds the type with the key off too).
+- Spark Connect's `timestamp_ntz_nanos` and `timestamp_ltz_nanos` types and literals are refused
+  as every arm Krishiv does not translate (`CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED`).
+
+`TIME(p)` takes `p` up to 9 under the Spark 4.3 profile and keeps nanoseconds, but the query clock
+is in microseconds: `current_time(7..9)` and `LOCALTIME(7..9)` have zero digits below the
+microsecond, where Spark 4.3 reads a nanosecond clock.
+
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 
 `hll_sketch_agg` returns the sketch in the compact serialized form; Spark returns the updatable one

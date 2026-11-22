@@ -218,7 +218,7 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                     return Err(at(InvalidSqlSyntaxVariableTypeOrDefaultRequired {}, v.span));
                 }
                 if let Some(t) = &v.data_type {
-                    data_type(t)?;
+                    data_type(t, opts)?;
                 }
                 if let Some(e) = &v.default {
                     Checker { sql, opts }.expr(e)?;
@@ -264,8 +264,10 @@ pub(crate) fn query(q: &Query, sql: &str, opts: ParserOptions) -> R {
 }
 
 /// Checks the column types of a table schema.
-pub(crate) fn columns(columns: &[StructField]) -> R {
-    columns.iter().try_for_each(|c| data_type(&c.data_type))
+pub(crate) fn columns(columns: &[StructField], opts: ParserOptions) -> R {
+    columns
+        .iter()
+        .try_for_each(|c| data_type(&c.data_type, opts))
 }
 
 /// Checks one named-expression string (`F.expr`, `selectExpr` once per
@@ -314,9 +316,11 @@ impl Checker<'_> {
             }
         }
         match f.returns.as_ref().map(|r| &r.kind) {
-            Some(FunctionReturnsKind::Type(t)) => data_type(t)?,
+            Some(FunctionReturnsKind::Type(t)) => data_type(t, self.opts)?,
             Some(FunctionReturnsKind::Table(Some(columns))) => {
-                columns.iter().try_for_each(|c| data_type(&c.data_type))?;
+                columns
+                    .iter()
+                    .try_for_each(|c| data_type(&c.data_type, self.opts))?;
             }
             _ => {}
         }
@@ -371,7 +375,7 @@ impl Checker<'_> {
             match &field.kind {
                 PartitionFieldKind::Column(c) => {
                     self.column_name(&c.name)?;
-                    data_type(&c.data_type)?;
+                    data_type(&c.data_type, self.opts)?;
                 }
                 PartitionFieldKind::Transform(f) => {
                     self.ddl_name(&f.name)?;
@@ -635,7 +639,7 @@ impl Checker<'_> {
         for c in &v.columns {
             self.column_name(&c.name)?;
             if let Some(t) = &c.data_type {
-                data_type(t)?;
+                data_type(t, self.opts)?;
             }
         }
         if v.query.is_none() {
@@ -714,7 +718,7 @@ impl Checker<'_> {
             AlterTableAction::ChangeColumn { name, action, .. } => {
                 self.column_name(name)?;
                 match action {
-                    ChangeColumnAction::Type(t) => data_type(t),
+                    ChangeColumnAction::Type(t) => data_type(t, self.opts),
                     ChangeColumnAction::After(c) => self.column_name(c),
                     _ => Ok(()),
                 }
@@ -1159,7 +1163,7 @@ impl Checker<'_> {
     /// its default, generation and constraint expressions.
     fn column_def(&self, c: &ColumnDef, statement: Span) -> R {
         self.column_name(&c.name)?;
-        data_type(&c.data_type)?;
+        data_type(&c.data_type, self.opts)?;
         if let Some(option) = c.duplicate_descriptor {
             return Err(at(
                 CreateTableColumnDescriptorDuplicate {
@@ -1483,7 +1487,7 @@ impl Checker<'_> {
                     crate::ast::JsonTableColumnKind::Ordinality => Ok(()),
                     crate::ast::JsonTableColumnKind::Value { data_type: ty, .. }
                     | crate::ast::JsonTableColumnKind::Exists { data_type: ty, .. } => {
-                        data_type(ty)
+                        data_type(ty, self.opts)
                     }
                 })
             }
@@ -1758,7 +1762,7 @@ impl Checker<'_> {
             ExprKind::Cast {
                 expr, data_type: t, ..
             } => {
-                data_type(t)?;
+                data_type(t, self.opts)?;
                 self.expr(expr)
             }
             ExprKind::Case {
@@ -1935,7 +1939,7 @@ fn script(c: &crate::ast::Compound, sql: &str, opts: ParserOptions) -> R {
                     return Err(at(InvalidSqlSyntaxVariableTypeOrDefaultRequired {}, d.span));
                 }
                 if let Some(t) = &d.data_type {
-                    data_type(t)?;
+                    data_type(t, opts)?;
                 }
                 d.default.as_ref().map_or(Ok(()), |e| checker.expr(e))
             }

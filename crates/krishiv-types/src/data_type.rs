@@ -327,7 +327,7 @@ impl DataType {
     pub const MAX_TO_STRING_FIELDS: usize = 25;
 
     /// Spark's `TimeType.MAX_PRECISION`.
-    pub const TIME_MAX_PRECISION: u8 = 6;
+    pub const TIME_MAX_PRECISION: u8 = 9;
     /// Spark's default precision of `TIME` (`TimeType.DEFAULT_PRECISION`).
     pub const TIME_DEFAULT_PRECISION: u8 = 6;
 
@@ -498,7 +498,8 @@ impl DataType {
     /// `TIME(precision)`.
     ///
     /// # Errors
-    /// `UNSUPPORTED_TIME_PRECISION` when `precision > 6`.
+    /// `UNSUPPORTED_TIME_PRECISION` when `precision > 9` (Spark 4.3's `TimeType.MAX_PRECISION`;
+    /// the front ends refuse 7..=9 under an older profile).
     pub fn time(precision: u32) -> Result<Self> {
         match u8::try_from(precision) {
             Ok(p) if p <= Self::TIME_MAX_PRECISION => Ok(Self::Time { precision: p }),

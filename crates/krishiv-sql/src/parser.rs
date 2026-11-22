@@ -372,8 +372,8 @@ impl TopRule for DataTypeRule {
         p.single_data_type()
     }
 
-    fn validate(out: &Self::Out, _src: &str, _opts: ParserOptions) -> Result<(), ParseError> {
-        validate::data_type(out)
+    fn validate(out: &Self::Out, _src: &str, opts: ParserOptions) -> Result<(), ParseError> {
+        validate::data_type(out, opts)
     }
 }
 
@@ -388,8 +388,8 @@ impl TopRule for TableSchemaRule {
         p.single_table_schema()
     }
 
-    fn validate(out: &Self::Out, _src: &str, _opts: ParserOptions) -> Result<(), ParseError> {
-        validate::columns(out)
+    fn validate(out: &Self::Out, _src: &str, opts: ParserOptions) -> Result<(), ParseError> {
+        validate::columns(out, opts)
     }
 }
 

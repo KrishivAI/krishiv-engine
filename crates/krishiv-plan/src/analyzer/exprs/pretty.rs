@@ -85,9 +85,11 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
                 TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
                 TypedLiteralKind::Time => "TIME",
             };
-            // Spark names a time by its value, not by the text written.
+            // Spark names a time by its value, not by the text written (the
+            // analyzer's shown literal already holds the value at the
+            // profile's digits).
             if *kind == TypedLiteralKind::Time
-                && let Some(n) = krishiv_kernels::cast::parse_time(value)
+                && let Some(n) = krishiv_kernels::cast::parse_time_nanos(value)
             {
                 return format!("{keyword} '{}'", krishiv_kernels::cast::format_time(n));
             }

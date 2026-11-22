@@ -97,6 +97,75 @@ impl Resolver<'_> {
         )
     }
 
+    /// Spark 4.3's `current_timestamp(p)`, `now(p)` and `localtimestamp(p)`
+    /// (`CurrentTimestampPrecision.validate`, `datetimeExpressions.scala`): `true` when the call
+    /// is one with `p = 6`, the plain call. A non-integral argument is `UNEXPECTED_INPUT_TYPE`;
+    /// 7..=9 asks for the nanosecond types, which Spark keeps behind
+    /// `spark.sql.timestampNanosTypes.enabled` (off): `FEATURE_NOT_ENABLED`; any other value is
+    /// `INVALID_TIMESTAMP_PRECISION`. Before 4.3 (and for other calls) `false`: the arity check
+    /// refuses the argument.
+    fn timestamp_precision_call(
+        &self,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        arg: &Bound,
+    ) -> Result<bool, AnalysisError> {
+        let name = entry.id.name();
+        if self.ctx.profile < crate::analyzer::SparkProfile::V4_3
+            || !is_builtin_entry(entry)
+            || !matches!(name, "current_timestamp" | "now" | "localtimestamp")
+        {
+            return Ok(false);
+        }
+        let integral = matches!(
+            arg.ty.data_type,
+            Some(DataType::Byte | DataType::Short | DataType::Integer | DataType::Long)
+        );
+        if !integral {
+            let zone = self.ctx.conf.session_zone;
+            return Err(AnalysisError::new(
+                krishiv_common::error::UnexpectedInputType {
+                    param_index: "first".to_owned(),
+                    function_name: format!("`{name}`"),
+                    required_type: "\"INT\"".to_owned(),
+                    input_sql: format!("\"{}\"", pretty(&arg.shown(), zone)),
+                    input_type: arg
+                        .ty
+                        .data_type
+                        .as_ref()
+                        .map_or_else(|| "\"VOID\"".to_owned(), |t| format!("\"{}\"", t.sql())),
+                },
+                e.origin,
+            ));
+        }
+        let Some(Constant::Integral(p)) = self.fold(&arg.expr, self.ctx.conf.ansi) else {
+            return Ok(false);
+        };
+        match p {
+            6 => Ok(true),
+            7..=9 => Err(AnalysisError::new(
+                krishiv_common::error::FeatureNotEnabled {
+                    feature_name: "Nanosecond-precision timestamp types".to_owned(),
+                    config_key: "spark.sql.timestampNanosTypes.enabled".to_owned(),
+                    config_value: "true".to_owned(),
+                },
+                e.origin,
+            )),
+            _ => Err(AnalysisError::new(
+                krishiv_common::error::InvalidTimestampPrecision {
+                    precision: p.to_string(),
+                    r#type: if name == "localtimestamp" {
+                        "TIMESTAMP_NTZ"
+                    } else {
+                        "TIMESTAMP_LTZ"
+                    }
+                    .to_owned(),
+                },
+                e.origin,
+            )),
+        }
+    }
+
     /// A registry call's arguments after their implicit casts, and its
     /// result type: Spark's arity check, then the function's input types
     /// and result rule. Out of line: it keeps the recursive `expr` frame
@@ -109,6 +178,10 @@ impl Resolver<'_> {
         kids: &[Bound],
     ) -> Result<(Vec<Bound>, ArgType), AnalysisError> {
         let n = kids.len();
+        if n == 1 && self.timestamp_precision_call(entry, e, &kids[0])? {
+            // `current_timestamp(6)` is the call without its argument, and so named.
+            return self.typed_call(entry, e, &[]);
+        }
         if !entry.arity.accepts(n) {
             return Err(AnalysisError::new(
                 WrongNumArgsWithoutSuggestion {
@@ -173,6 +246,7 @@ impl Resolver<'_> {
             .with_literals(&literals)
             .with_sql(&sql)
             .with_ansi(ansi)
+            .with_profile(self.ctx.profile)
             .with_decimal_loss(loss)
             .with_case_sensitive(self.ctx.conf.case_sensitive)
             .with_concat_binary_as_string(self.ctx.conf.concat_binary_as_string);
@@ -194,6 +268,7 @@ impl Resolver<'_> {
             .with_sql(&sql)
             .with_bound_sql(&bound_sql)
             .with_ansi(ansi)
+            .with_profile(self.ctx.profile)
             .with_decimal_loss(loss)
             .with_case_sensitive(self.ctx.conf.case_sensitive)
             .with_concat_binary_as_string(self.ctx.conf.concat_binary_as_string);

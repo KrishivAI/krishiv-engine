@@ -83,8 +83,27 @@ impl Resolver<'_> {
                 }
                 // A time is a string cast to `TIME(6)` (design P2-T181): the
                 // value is checked again here, in case the plan came from a
-                // front end other than the SQL parser.
-                let Some(nanos) = krishiv_kernels::cast::parse_time(value) else {
+                // front end other than the SQL parser. Spark 4.3 keeps up to
+                // nine digits and types the literal `TIME(max(6, digits))`
+                // (more than nine: `INVALID_TIME_LITERAL_PRECISION`); Spark 4.2
+                // drops the digits past the sixth, in its name too.
+                let nanos_literal = self.ctx.profile >= crate::analyzer::SparkProfile::V4_3;
+                let digits = krishiv_kernels::cast::time_fraction_digits(value);
+                if nanos_literal && digits > usize::from(DataType::TIME_MAX_PRECISION) {
+                    return Err(AnalysisError::new(
+                        krishiv_common::error::InvalidTimeLiteralPrecision {
+                            value: format!("'{value}'"),
+                        },
+                        e.origin,
+                    ));
+                }
+                let (parsed, precision) = if nanos_literal {
+                    let p = u8::try_from(digits.max(6)).unwrap_or(DataType::TIME_MAX_PRECISION);
+                    (krishiv_kernels::cast::parse_time_nanos(value), p)
+                } else {
+                    (krishiv_kernels::cast::parse_time(value), 6)
+                };
+                let Some(nanos) = parsed else {
                     return Err(AnalysisError::new(
                         krishiv_common::error::InvalidTypedLiteral {
                             value: format!("'{value}'"),
@@ -94,19 +113,26 @@ impl Resolver<'_> {
                     ));
                 };
                 let text = krishiv_kernels::cast::format_time(nanos);
+                // Spark names a time by its value as read: the shown literal
+                // holds that text, so the name follows the profile's digits.
+                let shown = Expr::new(ExprNode::TypedLiteral {
+                    kind: TypedLiteralKind::Time,
+                    value: text.clone(),
+                })
+                .with_origin(e.origin);
                 let text = Arc::new(Expr::from(Literal::String(text)).with_origin(e.origin));
                 let cast = Expr::new(ExprNode::Cast {
                     expr: text,
-                    to: DataType::Time { precision: 6 },
+                    to: DataType::Time { precision },
                     mode: CastMode::Ansi,
                 })
                 .with_origin(e.origin);
                 Bound {
                     expr: Arc::new(cast),
-                    shown: Some(Arc::clone(e)),
+                    shown: Some(Arc::new(shown)),
                     ..keep(ArgType {
                         nullable: false,
-                        data_type: Some(DataType::Time { precision: 6 }),
+                        data_type: Some(DataType::Time { precision }),
                     })
                 }
             }
@@ -1399,6 +1425,17 @@ impl Resolver<'_> {
                         Expr::new(ExprNode::Literal(Literal::Boolean(true))).with_origin(e.origin),
                     ));
                 }
+                // `to_time(s)` keeps nine fraction digits from Spark 4.3 on and six before
+                // (`stringToTime`); the older grammar follows as a trailing `false`.
+                if is_builtin_entry(&entry)
+                    && matches!(entry.id.name(), "to_time" | "try_to_time")
+                    && n == 1
+                    && self.ctx.profile < crate::analyzer::SparkProfile::V4_3
+                {
+                    zip_names.push(Arc::new(
+                        Expr::new(ExprNode::Literal(Literal::Boolean(false))).with_origin(e.origin),
+                    ));
+                }
                 // `extract(SECOND FROM t)` reads a `time(p)` to `p` digits
                 // whatever digits the value holds (a string cast keeps all
                 // of them, and Arrow's `Time64` does not carry `p`): the
@@ -1407,7 +1444,7 @@ impl Resolver<'_> {
                     && matches!(entry.id.name(), "extract" | "date_part" | "datepart")
                     && n == 2
                     && let Some(DataType::Time { precision }) = &call_kids[1].ty.data_type
-                    && *precision < 6
+                    && *precision != 6
                 {
                     zip_names.push(Arc::new(
                         Expr::new(ExprNode::Literal(Literal::Integer(i32::from(*precision))))

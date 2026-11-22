@@ -416,6 +416,16 @@ fn atomic_from_name(name: &str) -> Option<Result<DataType>> {
     if let Some(t) = time_from_name(name) {
         return Some(t);
     }
+    // Spark 4.3's nanosecond timestamps (`DataType.fromJson` builds them whatever
+    // `spark.sql.timestampNanosTypes.enabled` says): Krishiv has no such type yet.
+    if ["timestamp_ntz(", "timestamp_ltz("]
+        .iter()
+        .any(|p| name.starts_with(p) && name.ends_with(')'))
+    {
+        return Some(Err(error::unsupported(format!(
+            "the nanosecond-precision timestamp type {name} (Krishiv 0.3.1)"
+        ))));
+    }
     if let Some(t) = geometry_from_name(name) {
         return Some(t);
     }

@@ -153,6 +153,7 @@ pub struct CallTypes<'a> {
     decimal_loss: bool,
     case_sensitive: bool,
     concat_binary_as_string: bool,
+    profile: SparkProfile,
 }
 
 impl fmt::Debug for CallTypes<'_> {
@@ -184,6 +185,7 @@ impl<'a> CallTypes<'a> {
             decimal_loss: true,
             case_sensitive: false,
             concat_binary_as_string: false,
+            profile: SparkProfile::V4_3,
         }
     }
 
@@ -211,6 +213,20 @@ impl<'a> CallTypes<'a> {
             .get(i)
             .copied()
             .unwrap_or_else(|| self.constant(i).is_some())
+    }
+
+    /// With the session's Spark profile (Spark 4.3 by default): a few rules differ by release
+    /// (`current_time(p)` takes `p` up to 6 before 4.3, up to 9 from it).
+    #[must_use]
+    pub const fn with_profile(mut self, profile: SparkProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    /// The session's Spark profile.
+    #[must_use]
+    pub const fn profile(&self) -> SparkProfile {
+        self.profile
     }
 
     /// With `spark.sql.ansi.enabled = ansi` (on by default): some legacy

@@ -147,6 +147,15 @@ pub struct ParserOptions {
     /// `DEFAULT COLLATION`; off, `ALTER SCHEMA .. DEFAULT COLLATION` is
     /// `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`.
     pub schema_level_collations: bool,
+    /// Spark 4.3's type grammar (the session's profile is Spark 4.3 or later; not a Spark
+    /// config): `TIME(p)` takes `p` up to 9, `TIMESTAMP[_NTZ|_LTZ](p)` is read (6 is the
+    /// microsecond type, 7..=9 the nanosecond types, refused as Spark's default refuses them),
+    /// and a `TIME` literal keeps up to 9 fractional digits. Off, the Spark 4.2 grammar.
+    pub spark_4_3: bool,
+    /// `spark.sql.timestampNanosTypes.enabled` (internal in Spark 4.3, off): Spark builds the
+    /// nanosecond timestamp types when on; Krishiv has none yet, so under [`Self::spark_4_3`]
+    /// a nanosecond type is `KRISHIV_UNSUPPORTED_FEATURE` instead of `FEATURE_NOT_ENABLED`.
+    pub timestamp_nanos_types: bool,
 }
 
 impl Default for ParserOptions {
@@ -194,6 +203,8 @@ impl ParserOptions {
                 false,
             ),
             schema_level_collations: on("spark.sql.collation.schemaLevel.enabled", false),
+            spark_4_3: false,
+            timestamp_nanos_types: on("spark.sql.timestampNanosTypes.enabled", false),
         }
     }
 }

@@ -7,18 +7,25 @@
 //! | `CHAR` / `VARCHAR` without a length | `DATATYPE_MISSING_SIZE` |
 //! | bare `ARRAY` / `MAP` / `STRUCT` | `INCOMPLETE_TYPE_DEFINITION.*` |
 //! | decimal bounds | `DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION`, `_LEGACY_ERROR_TEMP_1228` |
-//! | `TIME(p)` with `p > 6` | `UNSUPPORTED_TIME_PRECISION` |
+//! | `TIME(p)` with `p > 6` (`p > 9` under Spark 4.3) | `UNSUPPORTED_TIME_PRECISION` |
+//! | Spark 4.3: `TIMESTAMP[_NTZ|_LTZ](p)`, `p` not 6 or 7..=9 | `INVALID_TIMESTAMP_PRECISION` |
+//! | Spark 4.3: `TIMESTAMP[_NTZ|_LTZ](7..=9)` (the nanosecond types, off as in Spark) | `FEATURE_NOT_ENABLED` |
 
 use krishiv_common::error::{
-    DatatypeMissingSize, IncompleteTypeDefinitionArray, IncompleteTypeDefinitionMap,
-    IncompleteTypeDefinitionStruct, KrishivError, UnsupportedDatatype, UnsupportedTimePrecision,
+    DatatypeMissingSize, FeatureNotEnabled, IncompleteTypeDefinitionArray,
+    IncompleteTypeDefinitionMap, IncompleteTypeDefinitionStruct, InvalidTimestampPrecision,
+    KrishivError, KrishivUnsupportedFeature, UnsupportedDatatype, UnsupportedTimePrecision,
 };
 
+use crate::ParserOptions;
 use crate::ast::{DataTypeKind, DataTypeSpec, Span};
 use crate::error::ParseError;
 
-/// The largest `TIME` precision.
+/// The largest `TIME` precision before Spark 4.3.
 const MAX_TIME_PRECISION: u32 = 6;
+
+/// The largest `TIME` precision from Spark 4.3 (`TimeType.NANOS_PRECISION`).
+const MAX_TIME_PRECISION_4_3: u32 = 9;
 
 /// Type names that take no arguments.
 const PLAIN_TYPES: &[&str] = &[
@@ -54,10 +61,12 @@ fn at(error: impl Into<KrishivError>, span: Span) -> ParseError {
 }
 
 /// Checks a data type as `AstBuilder` does; the first error in tree order.
+/// `opts` gives the profile's grammar ([`ParserOptions::spark_4_3`]).
 ///
 /// # Errors
 /// The error classes in the module table, at the offending type.
-pub(crate) fn data_type(t: &DataTypeSpec) -> Result<(), ParseError> {
+pub(crate) fn data_type(t: &DataTypeSpec, opts: ParserOptions) -> Result<(), ParseError> {
+    let data_type = |t: &DataTypeSpec| data_type(t, opts);
     match &t.kind {
         DataTypeKind::Array(None) => Err(at(
             IncompleteTypeDefinitionArray {
@@ -76,11 +85,17 @@ pub(crate) fn data_type(t: &DataTypeSpec) -> Result<(), ParseError> {
             fields.iter().try_for_each(|f| data_type(&f.data_type))
         }
         DataTypeKind::Quoted { name, args } => Err(unsupported(name, args, t.span)),
-        DataTypeKind::Primitive { name, args } => primitive(name, args, t.span),
+        DataTypeKind::Primitive { name, args } => primitive(name, args, t.span, opts),
     }
 }
 
-fn primitive(name: &str, args: &[String], span: Span) -> Result<(), ParseError> {
+fn primitive(
+    name: &str,
+    args: &[String],
+    span: Span,
+    opts: ParserOptions,
+) -> Result<(), ParseError> {
+    let spark_4_3 = opts.spark_4_3;
     // Multi-word names (`interval day to second`, `timestamp with local
     // time zone`) never carry arguments after their last word.
     let head = name.split(' ').next().unwrap_or(name);
@@ -123,9 +138,12 @@ fn primitive(name: &str, args: &[String], span: Span) -> Result<(), ParseError> 
         "char" | "character" | "varchar" | "geometry" | "geography" if args.len() == 1 => Ok(()),
         "time" if args.is_empty() => Ok(()),
         "time" if args.len() == 1 => {
-            let fits = args[0]
-                .parse::<u32>()
-                .is_ok_and(|p| p <= MAX_TIME_PRECISION);
+            let max = if spark_4_3 {
+                MAX_TIME_PRECISION_4_3
+            } else {
+                MAX_TIME_PRECISION
+            };
+            let fits = args[0].parse::<u32>().is_ok_and(|p| p <= max);
             if fits {
                 Ok(())
             } else {
@@ -137,8 +155,60 @@ fn primitive(name: &str, args: &[String], span: Span) -> Result<(), ParseError> 
                 ))
             }
         }
+        "timestamp" | "timestamp_ntz" | "timestamp_ltz" if spark_4_3 && args.len() == 1 => {
+            timestamp_precision(name, &args[0], span, opts)
+        }
         _ if args.is_empty() && (name != head || PLAIN_TYPES.contains(&head)) => Ok(()),
         _ => Err(unsupported(name, args, span)),
+    }
+}
+
+/// Spark 4.3's `TIMESTAMP[_NTZ|_LTZ](p)` (`AstBuilder.visitPrimitiveDataType`): 6 is the
+/// microsecond type; 7..=9 are the nanosecond types, which Krishiv has not built yet and Spark
+/// 4.3.0 keeps behind `spark.sql.timestampNanosTypes.enabled` (internal, off): `FEATURE_NOT_ENABLED`,
+/// as Spark's default; any other precision is `INVALID_TIMESTAMP_PRECISION`, naming
+/// `TIMESTAMP_NTZ` for `_NTZ` and `WITHOUT TIME ZONE`, `TIMESTAMP_LTZ` for `_LTZ` and `WITH LOCAL TIME
+/// ZONE`, and for a bare `TIMESTAMP` the type `spark.sql.timestampType` names. With the key on, Spark
+/// would build the type; Krishiv has none yet (`KRISHIV_UNSUPPORTED_FEATURE`, an explicit divergence).
+fn timestamp_precision(
+    name: &str,
+    arg: &str,
+    span: Span,
+    opts: ParserOptions,
+) -> Result<(), ParseError> {
+    let ntz = match name {
+        "timestamp_ntz" => true,
+        "timestamp" => opts.timestamp_ntz,
+        n => n.ends_with("without time zone"),
+    };
+    match arg.parse::<u32>() {
+        Ok(6) => Ok(()),
+        Ok(7..=9) if opts.timestamp_nanos_types => Err(at(
+            KrishivUnsupportedFeature {
+                feature: "nanosecond-precision timestamp types (Krishiv 0.3.1)".to_owned(),
+            },
+            span,
+        )),
+        Ok(7..=9) => Err(at(
+            FeatureNotEnabled {
+                feature_name: "Nanosecond-precision timestamp types".to_owned(),
+                config_key: "spark.sql.timestampNanosTypes.enabled".to_owned(),
+                config_value: "true".to_owned(),
+            },
+            span,
+        )),
+        _ => Err(at(
+            InvalidTimestampPrecision {
+                precision: arg.to_owned(),
+                r#type: if ntz {
+                    "TIMESTAMP_NTZ"
+                } else {
+                    "TIMESTAMP_LTZ"
+                }
+                .to_owned(),
+            },
+            span,
+        )),
     }
 }
 

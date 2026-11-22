@@ -453,7 +453,7 @@ fn fold_on_stack(
 /// below `time(6)`.
 fn has_narrow_time(t: &DataType) -> bool {
     match t {
-        DataType::Time { precision } => *precision < 6,
+        DataType::Time { precision } => *precision < DataType::TIME_MAX_PRECISION,
         DataType::Array(a) => has_narrow_time(a.element_type()),
         DataType::Map(m) => has_narrow_time(m.key_type()) || has_narrow_time(m.value_type()),
         DataType::Struct(s) => s.fields().iter().any(|f| has_narrow_time(f.data_type())),
@@ -478,7 +478,7 @@ fn fold_cast(
     if inner.null_count() > 0 || inner.data_type() == &ArrowType::Null {
         return Some(Ok(new_null_array(&fold_type(to), 1)));
     }
-    // A cast to `time(p)` drops the digits below `p`, but every `TIME` has
+    // A cast to `time(p)` (p < 9) drops the digits below `p`, but every `TIME` has
     // the same Arrow carrier, so the shortcut below would keep them: the
     // executor truncates, so a cast to a narrower time stays unfolded.
     if has_narrow_time(to) {

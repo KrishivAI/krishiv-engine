@@ -919,7 +919,19 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             let fail = name == "to_time";
             Binding::new(
                 DataType::Time64(TimeUnit::Nanosecond),
-                move |x: &Inputs<'_>| Ok(Arc::new(to_time(&x.strings(0)?, None, fail)?) as ArrayRef),
+                move |x: &Inputs<'_>| {
+                    Ok(Arc::new(to_time(&x.strings(0)?, None, fail, true)?) as ArrayRef)
+                },
+            )
+        }
+        // Before Spark 4.3 (the analyzer's trailing `false`): six fraction digits.
+        ("to_time" | "try_to_time", [s, DataType::Boolean]) if is_string(s) => {
+            let fail = name == "to_time";
+            Binding::new(
+                DataType::Time64(TimeUnit::Nanosecond),
+                move |x: &Inputs<'_>| {
+                    Ok(Arc::new(to_time(&x.strings(0)?, None, fail, false)?) as ArrayRef)
+                },
             )
         }
         ("to_time" | "try_to_time", [s, f]) if is_string(s) && is_string(f) => {
@@ -928,7 +940,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 DataType::Time64(TimeUnit::Nanosecond),
                 move |x: &Inputs<'_>| {
                     let formats = x.strings(1)?;
-                    Ok(Arc::new(to_time(&x.strings(0)?, Some(&formats), fail)?) as ArrayRef)
+                    Ok(Arc::new(to_time(&x.strings(0)?, Some(&formats), fail, true)?) as ArrayRef)
                 },
             )
         }
@@ -1365,8 +1377,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             | [f, DataType::Time64(TimeUnit::Nanosecond), DataType::Int32],
         ) if is_string(f) => {
             // A third argument is the declared precision of a `time(p)`
-            // below 6, a literal the analyzer appends; it cuts the seconds'
-            // fraction.
+            // other than 6, a literal the analyzer appends: below 6 it cuts the
+            // seconds' fraction; 7..=9 (Spark 4.3) reads `p` digits into a
+            // `decimal(p + 2, p)`.
             let precision = match args.get(2) {
                 None => None,
                 Some(BindArg::Literal(a)) => {
@@ -1374,7 +1387,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                         .as_primitive_opt::<Int32Type>()
                         .filter(|p| p.len() == 1 && p.is_valid(0))
                     {
-                        Some(p) => Some(p.value(0).clamp(0, 6).unsigned_abs()),
+                        Some(p) => Some(p.value(0).clamp(0, 9).unsigned_abs()),
                         None => {
                             return Some((
                                 listed,
@@ -1399,6 +1412,26 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(None) => Binding::new(DataType::Float64, |x: &Inputs<'_>| {
                     Ok(arrow_array::new_null_array(&DataType::Float64, x.rows()))
                 }),
+                Ok(Some(DatePart::Second)) if precision.is_some_and(|p| p > 6) => {
+                    let p = precision.unwrap_or(9);
+                    let scale = i8::try_from(p).unwrap_or(9);
+                    let digits = u8::try_from(p).unwrap_or(9) + 2;
+                    let unit = 10_i64.pow(9 - p);
+                    Binding::new(
+                        DataType::Decimal128(digits, scale),
+                        move |x: &Inputs<'_>| {
+                            let times = x.array::<Time64NanosecondType>(1)?;
+                            // Nanoseconds within the minute, cut to `p` digits.
+                            let v = times.unary::<_, Decimal128Type>(|n| {
+                                i128::from(n.rem_euclid(60_000_000_000) / unit)
+                            });
+                            Ok(Arc::new(
+                                v.with_precision_and_scale(digits, scale)
+                                    .map_err(|e| internal(e.to_string()))?,
+                            ) as ArrayRef)
+                        },
+                    )
+                }
                 Ok(Some(part @ (DatePart::Hour | DatePart::Minute | DatePart::Second))) => {
                     Binding::new(part.result_type(), move |x: &Inputs<'_>| {
                         let times = x.array::<Time64NanosecondType>(1)?;

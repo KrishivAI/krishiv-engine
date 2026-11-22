@@ -230,12 +230,12 @@ impl Precision {
         if p.is_empty() { Self::None } else { p }
     }
 
-    /// Whether no `time(p)` target needs truncating (none, or only `time(6)` and wider: a time is whole
-    /// microseconds already).
+    /// Whether no `time(p)` target needs truncating (none, or only `time(9)`: since Spark 4.3 a time may
+    /// hold nanoseconds, so `time(6)` truncates too).
     pub(super) fn is_empty(&self) -> bool {
         match self {
             Self::None => true,
-            Self::Time(unit) => *unit <= 1_000,
+            Self::Time(unit) => *unit <= 1,
             Self::List(e) => e.is_empty(),
             Self::Map(k, v) => k.is_empty() && v.is_empty(),
             Self::Struct(f) => f.iter().all(Self::is_empty),
