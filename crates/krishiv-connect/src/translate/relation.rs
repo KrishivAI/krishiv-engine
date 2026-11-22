@@ -58,7 +58,6 @@ impl Translator<'_> {
                 predicate: self.required_expression(f.condition.as_ref())?,
             },
             RelType::Join(j) => self.join(j)?,
-            RelType::LateralJoin(j) => self.lateral_join(j)?,
             RelType::Sort(s) => {
                 if s.order.is_empty() {
                     return Err(assertion("'order' must be present and contain elements."));
@@ -95,6 +94,18 @@ impl Translator<'_> {
             RelType::WithColumns(w) => self.with_columns(w)?,
             RelType::Range(r) => self.range(r)?,
             RelType::SetOp(s) => self.set_op(s, origin_of(rel))?,
+            // The rest in a function of its own: a frame per arm here is a frame per level of
+            // a deep `Filter`/`Project` chain (`deep_relations_translate_on_a_small_stack`).
+            other => self.relation_more(other)?,
+        };
+        Ok(Arc::new(LogicalPlan::new(node).with_origin(origin_of(rel))))
+    }
+
+    /// The relations [`Self::relation_inner`] does not dispatch itself.
+    #[inline(never)]
+    fn relation_more(&mut self, kind: &RelType) -> Result<PlanNode> {
+        Ok(match kind {
+            RelType::LateralJoin(j) => self.lateral_join(j)?,
             RelType::MapPartitions(m) => self.map_partitions(m)?,
             RelType::GroupMap(g) => self.group_map(g)?,
             RelType::CoGroupMap(g) => self.cogroup_map(g)?,
@@ -199,8 +210,7 @@ impl Translator<'_> {
                     other.variant(),
                 ));
             }
-        };
-        Ok(Arc::new(LogicalPlan::new(node).with_origin(origin_of(rel))))
+        })
     }
 
     /// `Sample`, as Spark's `transformSample`: Bernoulli sampling without replacement, the seed
