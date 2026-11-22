@@ -16,16 +16,17 @@
 //! as in the hashed path. Null-safe (`<=>`) keys and null-aware anti joins
 //! keep the hashed path. `krishiv.exec.join.directIndex` switches it off.
 //!
-//! Memory: the slot array is at most [`MAX_SLOTS`] `u64`s (128 KiB) per
-//! probe driver and the build-time vectors at most [`MAX_ROWS`] entries
-//! each, small and bounded, so they are not reserved from the pool. The
-//! span limit is four slots a row with a floor of 64 slots (a build of
+//! Memory: the slot array (at most [`MAX_SLOTS`] `u64`s, 128 KiB per probe
+//! driver) is reserved from the driver's consumer for the index's life, and
+//! the build-time vectors (at most [`MAX_ROWS`] entries each) while it is
+//! built; a refused reservation keeps the hashed path. The span limit is four slots a row with a floor of 64 slots (a build of
 //! fewer than 16 rows may span 64 values).
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Int32Type, Int64Type};
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType;
+use krishiv_memory::Reservation;
 
 use super::keys::KeyCodec;
 use super::table::{JoinTable, NONE};
@@ -44,18 +45,30 @@ pub(crate) const MAX_SLOTS: usize = 16 * 1024;
 /// An empty slot.
 const EMPTY: u64 = u64::MAX;
 
+/// The bytes a build row takes while the index is built: its partition and
+/// row, its key bytes' slice, its decoded key and value.
+const BUILD_BYTES_PER_ROW: usize = 64;
+
 /// The direct index of one build: for key `k`, slot `k - min` holds
 /// `partition << 32 | row`, or [`EMPTY`].
 #[derive(Debug)]
 pub(crate) struct Direct {
     min: i64,
     slots: Vec<u64>,
+    /// The slot array's bytes, released when the index drops.
+    _memory: Reservation,
 }
 
 impl Direct {
     /// The direct index of `tables` (the level-0 partitions; `spilled` the
-    /// mask of those spilled), when the build qualifies (module docs).
-    pub(crate) fn of(tables: &[Option<JoinTable>], spilled: u64, codec: &KeyCodec) -> Option<Self> {
+    /// mask of those spilled), when the build qualifies (module docs) and
+    /// `memory` grants its bytes.
+    pub(crate) fn of(
+        tables: &[Option<JoinTable>],
+        spilled: u64,
+        codec: &KeyCodec,
+        mut memory: Reservation,
+    ) -> Option<Self> {
         if spilled != 0 || codec.null_safe().iter().any(|&s| s) {
             return None;
         }
@@ -64,6 +77,8 @@ impl Direct {
         if rows == 0 || rows > MAX_ROWS {
             return None;
         }
+        let building = rows.saturating_mul(BUILD_BYTES_PER_ROW);
+        memory.try_grow(building).ok()?;
         // Every indexed row's key bytes, with its partition and row.
         let mut at: Vec<(u32, u32)> = Vec::with_capacity(rows);
         let mut keys: Vec<&[u8]> = Vec::with_capacity(rows);
@@ -101,6 +116,8 @@ impl Direct {
         if span > MAX_SLOTS || span > SPAN_PER_ROW.saturating_mul(rows.max(16)) {
             return None;
         }
+        let slot_bytes = span.saturating_mul(std::mem::size_of::<u64>());
+        memory.try_grow(slot_bytes).ok()?;
         let mut slots = vec![EMPTY; span];
         // Rows in table order and, within a table, in row order: the last
         // row written to a slot is the newest of its key (a key lives in one
@@ -110,7 +127,13 @@ impl Direct {
             let i = usize::try_from(v - min).ok()?;
             *slots.get_mut(i)? = (u64::from(*p) << 32) | u64::from(*r);
         }
-        Some(Self { min, slots })
+        drop((at, keys, values, cols));
+        memory.shrink(building);
+        Some(Self {
+            min,
+            slots,
+            _memory: memory,
+        })
     }
 
     /// For each row of `col` (the probe's key column, in the build key's

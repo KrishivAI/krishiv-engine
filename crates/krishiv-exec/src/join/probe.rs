@@ -10,7 +10,7 @@ use std::time::Instant;
 use arrow_array::{Array, ArrayRef, BooleanArray, Int64Array, UInt32Array, new_null_array};
 use futures::future::BoxFuture;
 use krishiv_common::error::{ArithmeticOverflow, KrishivError, ScalarSubqueryTooManyRows};
-use krishiv_memory::SpillSignal;
+use krishiv_memory::{Reservation, SpillSignal};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::build::{BuildGlobal, Built, Level0, nanos};
@@ -556,6 +556,9 @@ struct ProbeLocal {
     /// `Some(None)` from the start when `krishiv.exec.join.directIndex` is
     /// off or detailed metrics count probe lengths.
     direct: Option<Option<Direct>>,
+    /// The reservation the direct index takes its bytes from, until it is
+    /// built.
+    direct_memory: Option<Reservation>,
     cursor: Option<Cursor>,
     /// Rows of spilled partitions.
     parts: Vec<Part>,
@@ -691,7 +694,11 @@ impl ProbeOp {
         let tables = Tables::Level0(&level0.tables, built.spilled);
         let direct = l
             .direct
-            .get_or_insert_with(|| Direct::of(&level0.tables, built.spilled, &s.keys))
+            .get_or_insert_with(|| {
+                l.direct_memory
+                    .take()
+                    .and_then(|m| Direct::of(&level0.tables, built.spilled, &s.keys, m))
+            })
             .as_ref();
         if l.cursor.is_none() {
             if input.num_rows() == 0 {
@@ -814,6 +821,7 @@ impl Operator for ProbeOp {
             direct: (!ctx.query().config().join_direct_index
                 || ctx.query().config().detailed_metrics)
                 .then_some(None),
+            direct_memory: Some(memory.reservation()),
             cursor: None,
             parts: (0..fanout)
                 .map(|_| Part::with_memory(memory.reservation()))
