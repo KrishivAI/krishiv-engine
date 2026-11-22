@@ -128,8 +128,9 @@ pub fn like_fold_pattern<O: OffsetSizeTrait>(
                         }
                         out.push(f);
                     } else {
+                        // Not an escaped escape: keep it as written so the matcher still refuses an invalid pair.
                         out.push(p);
-                        out.push(java_fold(next));
+                        out.push(next);
                     }
                 } else {
                     out.push(p);
@@ -558,6 +559,8 @@ mod like_fold_tests {
         // An escaped escape is the folded literal, with no escape left in front of it.
         assert_eq!(fold(0, "EE", "E"), "e");
         assert_eq!(fold(0, "ee", "e"), "ee");
+        // An invalid pair stays invalid: `e` then `E` must not fold into the valid `ee`.
+        assert_eq!(fold(0, "eE", "e"), "eE");
         // `ILIKE` lower-cases first, so an upper-case escape never occurs in the pattern.
         assert_eq!(fold(1, "E%", "E"), "e%");
     }
