@@ -153,8 +153,9 @@ def test_static_refuses_missing_checkout(tmp_path: Path) -> None:
 
     from pyspark_suite.__main__ import cmd_static
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as failed:
         cmd_static(argparse.Namespace(version="9.9.9", checkout=tmp_path / "nope"))
+    assert failed.value.code not in (0, None)
 
 
 def test_collection_error_is_a_file_failure() -> None:
@@ -218,8 +219,9 @@ def test_ratchet_cli_fails_on_lost_pass_or_low_rate(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as low:
         run({}, min_rate=90.0)  # under the floor
     assert low.value.code == 1
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as failed:
         run({"source": "static"})  # not a run
+    assert failed.value.code not in (0, None)
 
 
 def test_ratchet_with_no_committed_summary_and_report_only_with_min_rate(tmp_path, monkeypatch):
@@ -235,13 +237,15 @@ def test_ratchet_with_no_committed_summary_and_report_only_with_min_rate(tmp_pat
     ns = argparse.Namespace(version="3.5.7", current=f, min_rate=None, report_only=False)
     cli.cmd_ratchet(ns)  # an empty baseline loses nothing
     ns.min_rate = 50.0
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as failed:
         cli.cmd_ratchet(ns)
+    assert failed.value.code not in (0, None)
     ns.report_only = True
     cli.cmd_ratchet(ns)  # report-only silences the floor too
     ns.version = "4.0.5"
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as failed:
         cli.cmd_ratchet(ns)  # the file is for another version
+    assert failed.value.code not in (0, None)
 
 
 def test_run_fails_when_every_file_fails_to_run(tmp_path, monkeypatch):
