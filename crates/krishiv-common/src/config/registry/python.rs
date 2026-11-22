@@ -79,7 +79,9 @@ pub static PYTHON_UDF_THREADS: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Int(0)),
     doc: "Threads of the embedded Python UDF pool, fixed when the pool starts (the first query \
           calling a Python UDF). 0 picks one: the executor's thread count on a free-threaded \
-          Python, else 1 (with the GIL more threads only contend).",
+          Python, else 1 (with the GIL more threads only contend). With two or more threads, one \
+          stays free for scalar UDFs, so a grouped-aggregate or map UDF relation can use at most \
+          threads - 1.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,

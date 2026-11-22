@@ -237,7 +237,7 @@ print("rows", len(res.collect()))
     assert out == "rows 1000"
 
 
-@pytest.mark.parametrize("threads", [1, 2])
+@pytest.mark.parametrize("threads", [1, 2, 3])
 def test_two_grouped_aggregate_udfs_in_one_agg_finish_or_name_the_limit(threads: int) -> None:
     out = _run_isolated(
         threads,
@@ -249,11 +249,13 @@ try:
     res = df.groupBy("id").agg(s(df["id"]).alias("s"), m(df["id"]).alias("m"))
     print("rows", len(res.collect()))
 except Exception as e:
-    print("error", "krishiv.python.udf.threads" in str(e) and "KRISHIV_PYTHON_WORKER_LIMIT" in str(e))
-""",
+    msg = str(e)
+    print("error", "KRISHIV_PYTHON_WORKER_LIMIT" in msg, msg.count('"krishiv.python.udf.threads" is %d' % THREADS))
+""".replace("THREADS", str(threads)),
     )
-    # Two lanes need two slots: a pool of one refuses by naming the setting, a pool of two runs it.
-    assert out == ("error True" if threads == 1 else "rows 200")
+    # Two lanes need two slots. A pool of one has one slot and a pool of two keeps one thread for scalar UDFs,
+    # so both refuse; the message reports the configured setting, not the slot count. A pool of three runs it.
+    assert out == ("rows 200" if threads == 3 else "error True 1")
 
 
 @pytest.mark.parametrize("threads", [1, 2])
@@ -419,3 +421,22 @@ def test_a_cogroup_owns_its_right_sides_lazy_checkpoint() -> None:
     out = left.groupBy("id").cogroup(right.groupBy("id")).applyInPandas(_count_cogroup, "nl long, nr long")
     del right
     assert _rows(out) == [(1, 1)]
+
+
+def test_a_map_after_the_pool_stopped_fails_instead_of_returning_a_short_partition() -> None:
+    # A task whose job the stopped pool dropped unrun closes its result channel without `finished`: that is an
+    # error, never an empty rest of the partition (InProcessTask::next).
+    out = _run_isolated(
+        1,
+        """
+df = spark.range(5)
+print("first", len(df.mapInPandas(lambda it: it, "id long").collect()))
+from krishiv import _native
+_native._udf_pool_shutdown()
+try:
+    print("rows", len(df.mapInPandas(lambda it: it, "id long").collect()))
+except Exception:
+    print("error")
+""",
+    )
+    assert out == "error"

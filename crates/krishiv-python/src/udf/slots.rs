@@ -3,8 +3,9 @@
 //!
 //! A relation task holds one pool thread for its whole life, so a driver whose tasks outnumber the pool's
 //! threads would wait forever for the last of them while the first ones wait for its frames. The pool
-//! therefore has as many **slots** as threads, less one thread kept for scalar UDF jobs when it has two or more. A driver takes the slots of all its lanes together, or waits
-//! for them in arrival order, holding none; a driver that needs more than the pool has is refused at once with
+//! therefore has as many **slots** as threads, less one thread kept for scalar UDF jobs when it has two or
+//! more. A driver takes the slots of all its lanes together, or waits for them in arrival order, holding
+//! none; a driver that needs more than the pool has is refused at once with
 //! `KRISHIV_PYTHON_WORKER_LIMIT` naming `krishiv.python.udf.threads`. A slot is freed when its task ends.
 
 use std::collections::VecDeque;
@@ -77,7 +78,11 @@ impl Drop for Held {
 /// The pool's slots as the operator sees them (a local type, for the trait). A pool makes one and hands out
 /// clones of its `Arc`: the operator groups a driver's lanes by that pointer, so every call site of the pool
 /// must return the same one.
-pub(crate) struct SlotHandle(pub(crate) Arc<Slots>);
+pub(crate) struct SlotHandle {
+    pub(crate) slots: Arc<Slots>,
+    /// The configured `krishiv.python.udf.threads`, which a refusal reports (the slot limit may be one less).
+    threads: usize,
+}
 
 impl SlotHandle {
     /// The slots of a pool of `threads` threads: all of them, but with two or more one thread stays free for
@@ -85,13 +90,16 @@ impl SlotHandle {
     /// A one-thread pool has nothing to spare, so its one slot is the thread itself.
     pub(crate) fn new(threads: usize) -> Arc<Self> {
         let limit = if threads >= 2 { threads - 1 } else { threads };
-        Arc::new(Self(Slots::new(limit)))
+        Arc::new(Self {
+            slots: Slots::new(limit),
+            threads: threads.max(1),
+        })
     }
 }
 
 impl RelationSlots for SlotHandle {
     fn limit(&self) -> usize {
-        self.0.limit
+        self.slots.limit
     }
 
     fn poll_take(
@@ -100,14 +108,14 @@ impl RelationSlots for SlotHandle {
         ticket: &mut Option<RelationTicket>,
         cx: &mut Context<'_>,
     ) -> Poll<krishiv_exec::Result<Vec<RelationSlot>>> {
-        if n > self.0.limit {
+        if n > self.slots.limit {
             return Poll::Ready(Err(KrishivError::from(KrishivPythonWorkerLimit {
                 operation: "A Python UDF relation operator (one task per UDF of a driver)"
                     .to_owned(),
                 needed: n.to_string(),
-                available: self.0.limit.to_string(),
+                available: self.slots.limit.to_string(),
                 setting: "krishiv.python.udf.threads".to_owned(),
-                value: self.0.limit.to_string(),
+                value: self.threads.to_string(),
             })));
         }
         // The caller's own ticket, moved out of the box and back (never dropped while it waits).
@@ -115,7 +123,7 @@ impl RelationSlots for SlotHandle {
             .take()
             .and_then(|t| t.into_inner().downcast::<Ticket>().ok())
             .map(|t| *t);
-        let mut state = self.0.lock();
+        let mut state = self.slots.lock();
         let id = match &own {
             Some(t) => t.id,
             None => {
@@ -137,7 +145,7 @@ impl RelationSlots for SlotHandle {
             // The grant is made: the ticket (already out of the queue) drops here.
             drop(own);
             let slots = (0..n)
-                .map(|_| RelationSlot::new(Held(Arc::clone(&self.0))))
+                .map(|_| RelationSlot::new(Held(Arc::clone(&self.slots))))
                 .collect();
             return Poll::Ready(Ok(slots));
         }
@@ -147,7 +155,7 @@ impl RelationSlots for SlotHandle {
         }
         drop(state);
         let ticket_out = own.unwrap_or_else(|| Ticket {
-            slots: Arc::clone(&self.0),
+            slots: Arc::clone(&self.slots),
             id,
         });
         *ticket = Some(RelationTicket::new(ticket_out));
