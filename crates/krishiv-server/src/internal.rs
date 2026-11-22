@@ -931,15 +931,20 @@ async fn detail(s: &UiState, id: &str, session: Option<&str>) -> Response {
             "no query with that id",
         );
     };
+    // Operator rows and stored plans are kept by query id alone. When another session ran a query under this
+    // id they would be both runs', and a signed link is for one session's query: neither run's are given.
+    let shared = queries
+        .iter()
+        .any(|r| text(r, "query_id") == id && text(r, "session_id") != text(query, "session_id"));
     let mut ops: Vec<Row> = operators
         .into_iter()
-        .filter(|r| text(r, "query_id") == id)
+        .filter(|r| !shared && text(r, "query_id") == id)
         .collect();
     ops.sort_by_key(|r| int(r, "operator_id"));
     // A source with no plan for the query leaves the page its flat operator list. A query that has not ended
     // has no stored plan, and its page asks again every second: the store is not searched for it.
     let ended = !matches!(text(query, "state"), "running" | "queued");
-    let plan = if !ended {
+    let plan = if !ended || shared {
         None
     } else {
         s.source
@@ -959,6 +964,7 @@ async fn detail(s: &UiState, id: &str, session: Option<&str>) -> Response {
             // A query with no operator rows (one refused before it ran) has nothing to draw a plan over: no wait.
             "plan_pending": ended && plan.is_none() && !ops.is_empty() && s.source.plan_pending(query),
             "plan": plan,
+            "operators_withheld": shared,
         }),
     )
 }

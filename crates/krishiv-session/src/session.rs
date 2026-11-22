@@ -1216,6 +1216,7 @@ impl Session {
             self.tagging(),
         );
         let reason = action.reason();
+        let work = ran::in_running_command(work);
         let task = self.state.runtime.executor.spawn(
             WorkloadClass::Interactive,
             Box::pin(async move {

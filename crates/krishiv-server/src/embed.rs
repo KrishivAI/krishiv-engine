@@ -4,8 +4,9 @@
 //!
 //! Threat model (P3 security notes, T-W3): a signed link has a bounded life and one scope (one query, read-only);
 //! it is an HMAC-SHA256 over the query id, the session when the link names one, and the expiry, with a key made at
-//! start-up, so it ends with the process and cannot be forged from another query's link. Only the embeddable views are ever framable, and only by the
-//! origins the operator lists (`frame-ancestors`; the default is `'none'`).
+//! start-up, so it ends with the process and cannot be forged from another query's link. Only the embeddable
+//! views are ever framable, and only by the origins the operator lists (`frame-ancestors`; the default is
+//! `'none'`).
 
 use std::time::Duration;
 

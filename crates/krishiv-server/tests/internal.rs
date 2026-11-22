@@ -64,6 +64,14 @@ impl UiSource for Fake {
                     {"query_id": "q-old", "state": "running", "principal": "cy", "submitted_at": 40, "session_id": "s-c"}
                 ])));
             }
+            if dup && table == SystemTable::Operators {
+                // No session on an operator row: the two `q-dup` runs' rows cannot be told apart.
+                return Ok(rows(json!([
+                    {"query_id": "q-dup", "operator_id": 1, "name": "ScanOfAnn", "drivers": 1, "compute_ns": 5},
+                    {"query_id": "q-dup", "operator_id": 1, "name": "ScanOfBob", "drivers": 1, "compute_ns": 900},
+                    {"query_id": "q-solo", "operator_id": 1, "name": "Scan", "drivers": 1, "compute_ns": 7}
+                ])));
+            }
             Ok(match table {
                 SystemTable::Queries => rows(json!([
                     {"query_id": "q-run", "state": "running", "principal": "ann", "submitted_at": 2_000, "session_id": "s-busy",
@@ -1013,6 +1021,13 @@ async fn a_signed_link_opens_the_query_of_the_session_it_names() {
         let (status, _, body) = open(query.clone()).await;
         assert_eq!(status, 200, "{body}");
         assert_eq!(body["query"]["principal"], principal, "{body}");
+        // Operator rows name no session, so the other session's run of the id is not read through the link.
+        assert_eq!(body["operators"], json!([]), "{body}");
+        assert_eq!(body["hot_operator"], Value::Null, "{body}");
+        assert_eq!(body["plan"], Value::Null, "{body}");
+        assert_eq!(body["plan_pending"], false, "{body}");
+        assert_eq!(body["operators_withheld"], true, "{body}");
+        assert!(!body.to_string().contains("ScanOf"), "{body}");
         // The same signature under another session, or under none, is not a link.
         let other = if session == "s-a" { "s-b" } else { "s-a" };
         let swapped = query.replace(&format!("session={session}"), &format!("session={other}"));

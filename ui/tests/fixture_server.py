@@ -331,6 +331,8 @@ Q9_ID = "01932a40-1a00-7a01-8001-000000000009"
 # A query whose plan arrives with the third answer; the count of answers so far.
 LATE_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000b"
 LATE_PLAN_ASKED = [0]
+# A query another session also ran under the same id: the fixture answers with no operators and no plan.
+SHARED_ID = "01932a40-1a00-7a01-8001-00000000000c"
 # A query the fixture answers with no plan tree.
 NO_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000a"
 NO_PLAN_ASKED = [0]
@@ -527,6 +529,14 @@ def route(
         # trimmed out of it): the page is told not to wait.
         NO_PLAN_ASKED[0] += 1
         return d["detail"] | {"plan": None, "plan_pending": False}
+    if path == f"/api/internal/queries/{SHARED_ID}":
+        return d["detail"] | {
+            "operators": [],
+            "hot_operator": None,
+            "plan": None,
+            "plan_pending": False,
+            "operators_withheld": True,
+        }
     if path == f"/api/internal/queries/{LATE_PLAN_ID}":
         # A query that has just ended: its profile is written a moment later, so the first answers carry no
         # plan and a later one does.

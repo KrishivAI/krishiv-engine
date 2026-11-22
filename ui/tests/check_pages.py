@@ -1509,6 +1509,12 @@ def heatmap_checks(origin: str) -> list[str]:
         problems += [f"operator table: no row for {name}" for name in want_cells]
         if page.get_by_test_id("no-plan").count():
             problems.append("heatmap: a query with a plan says it has none")
+        # An id two sessions ran a query under: no operators are given, and the page says why.
+        page.goto(f"{origin}/?token=fixture#/queries/{fixture_server.SHARED_ID}")
+        if not shows(page, ["Another session ran a query under this id"], "main"):
+            problems.append("query detail: withheld operators are not explained")
+        if shows(page, ["No operator metrics recorded"], "main", timeout=500):
+            problems.append("query detail: withheld operators read as none recorded")
         # No plan tree: the operators in id order, at one depth, and a sentence that says why.
         page.goto(f"{origin}/?token=fixture#/queries/{fixture_server.NO_PLAN_ID}")
         page.get_by_test_id("no-plan").wait_for(timeout=10000)

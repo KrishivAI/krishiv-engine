@@ -135,3 +135,68 @@ fn a_chain_of_derived_frames_keeps_the_text_on_every_run() {
         "{got:?}"
     );
 }
+
+/// The text and class of every run that carries the request tag `tag`, the runs with a text first.
+fn tagged(s: &Session, tag: &str) -> Vec<Option<String>> {
+    let text = strings(
+        s,
+        &format!(
+            "SELECT CAST(query_text AS STRING) FROM system.queries WHERE tags['{tag}'] IS NOT NULL"
+        ),
+    );
+    let class = strings(
+        s,
+        &format!(
+            "SELECT CAST(statement_class AS STRING) FROM system.queries WHERE tags['{tag}'] IS NOT NULL"
+        ),
+    );
+    let mut rows: Vec<Option<String>> = text
+        .into_iter()
+        .zip(class)
+        .map(|(t, c)| {
+            assert_eq!(t.is_some(), c.is_some(), "a text and a class come together");
+            Some(format!("{} | {}", t?, c?))
+        })
+        .collect();
+    rows.sort_by_key(Option::is_none);
+    rows
+}
+
+/// The editor's sequence over a write: the run that wrote is the one listed with the statement's text and
+/// class. The capped read of the write's empty result is a run of its own and carries neither.
+#[test]
+fn a_write_run_through_a_row_cap_is_listed_once_with_its_text_on_the_write() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE TABLE zt (a INT) USING parquet")).unwrap();
+    let df = block_on(s.sql_with(
+        "INSERT INTO zt VALUES (1), (2)",
+        krishiv_session::QueryOptions::new().tags(["ui-run-9"]),
+    ))
+    .unwrap();
+    let write = Some("INSERT INTO zt VALUES (1), (2) | WRITE".to_owned());
+    assert_eq!(
+        tagged(&s, "ui-run-9"),
+        std::slice::from_ref(&write),
+        "the write's own row"
+    );
+    let capped = df.limit(10);
+    assert_eq!(block_on(capped.schema()).unwrap().fields().len(), 0);
+    block_on(capped.collect()).unwrap();
+    assert_eq!(tagged(&s, "ui-run-9"), [write.clone(), None]);
+    // A plain collect of the statement's frame is the same trivial read.
+    block_on(df.collect()).unwrap();
+    assert_eq!(tagged(&s, "ui-run-9"), [write, None, None]);
+    // A command that runs no query keeps its text on the read of its result, as before.
+    let ddl = block_on(s.sql_with(
+        "CREATE TABLE zu (a INT) USING parquet",
+        krishiv_session::QueryOptions::new().tags(["ui-run-10"]),
+    ))
+    .unwrap();
+    block_on(ddl.limit(10).collect()).unwrap();
+    assert_eq!(
+        tagged(&s, "ui-run-10"),
+        [Some(
+            "CREATE TABLE zu (a INT) USING parquet | DDL".to_owned()
+        )]
+    );
+}

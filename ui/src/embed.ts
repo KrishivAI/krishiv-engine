@@ -1,6 +1,7 @@
-// The embedded view (P3-T071): `?embed=1&exp=..&sig=..[&session=..][&theme=..]` on `/queries/{id}/profile`. The signed link is
-// the only credential (one query, of the session it names if any, read-only, bounded life); the page keeps no session. An embedding console may
-// theme it with a `theme` parameter or a `postMessage` from an allowed origin; both pass `validateTheme`, which
+// The embedded view (P3-T071): `?embed=1&exp=..&sig=..[&session=..][&theme=..]` on `/queries/{id}/profile`. The
+// signed link is the only credential (one query, of the session it names if any, read-only, bounded life); the
+// page keeps no session. An embedding console may theme it with a `theme` parameter or a `postMessage` from an
+// allowed origin; both pass `validateTheme`, which
 // mirrors krishiv-server's `embed::validate_theme`: colours, font names and radii only, never a URL or CSS text.
 
 const COLOURS = [

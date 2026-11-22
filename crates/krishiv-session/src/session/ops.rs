@@ -741,10 +741,19 @@ impl Session {
         exempt: bool,
     ) -> Result<Admitted, KrishivError> {
         // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
+        // A query a command runs for itself (an `INSERT`'s write) has no statement: it is the command's.
+        let command = match env.text {
+            None => super::ran::command_statement(),
+            Some(_) => None,
+        };
+        let (text, class) = match &command {
+            Some((text, class)) => (Some(&**text), Some(*class)),
+            None => (env.text.as_deref(), env.statement_class),
+        };
         let log_id = self.state.queries.begin_as(
             crate::system::TextPolicy::from_config(&env.config),
-            env.text.as_deref(),
-            env.statement_class,
+            text,
+            class,
             self.operation_id(),
         )?;
         crate::action::note_row(&log_id);

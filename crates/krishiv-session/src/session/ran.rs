@@ -4,6 +4,39 @@
 
 use super::*;
 
+tokio::task_local! {
+    /// The command this task is running, while it runs.
+    static COMMAND: Arc<Command>;
+}
+
+/// A statement that is not a query, for the queries it runs itself (an `INSERT`'s write): they are begun with
+/// no statement of their own, and `system.queries` lists them under the command's text and class.
+struct Command {
+    text: Arc<str>,
+    class: &'static str,
+    /// Whether a query took the text: the command has its row.
+    listed: std::sync::atomic::AtomicBool,
+}
+
+/// `work` under the command the calling task is running, if any: a task the command starts for a query of
+/// its own (`on_executor`) is still the command's.
+pub(super) fn in_running_command<F: Future>(work: F) -> impl Future<Output = F::Output> {
+    match COMMAND.try_with(Arc::clone) {
+        Ok(command) => futures::future::Either::Left(COMMAND.scope(command, work)),
+        Err(_) => futures::future::Either::Right(work),
+    }
+}
+
+/// The text and class of the command the calling task is running, for a query begun with no text of its own.
+pub(super) fn command_statement() -> Option<(Arc<str>, &'static str)> {
+    COMMAND
+        .try_with(|c| {
+            c.listed.store(true, Ordering::Relaxed);
+            (Arc::clone(&c.text), c.class)
+        })
+        .ok()
+}
+
 /// What [`Session::sql_here_marked`] did with a statement.
 #[expect(
     clippy::large_enum_variant,
@@ -100,11 +133,26 @@ impl Session {
         env.statement_class = Some(class.name());
         self.refuse_changes_while_draining(class, &redacted, &env)?;
         let command = !matches!(statement, Statement::Query(_));
-        let df = self.run_statement(statement, env, query, &redacted).await?;
-        // Whatever frame the statement returns (a command's result too) shows the statement's
-        // text and class when it runs.
-        df.with_statement(&redacted, class.name());
-        Ok(Ran::Frame(df, command))
+        if !command {
+            let df = self.run_statement(statement, env, query, &redacted).await?;
+            df.with_statement(&redacted, class.name());
+            return Ok(Ran::Frame(df, false));
+        }
+        let running = Arc::new(Command {
+            text: Arc::from(redacted.as_str()),
+            class: class.name(),
+            listed: std::sync::atomic::AtomicBool::new(false),
+        });
+        // Boxed, as `sql_here_marked`'s future is: the scope is one more nested future level.
+        let run = Box::pin(self.run_statement(statement, env, query, &redacted));
+        let df = COMMAND.scope(Arc::clone(&running), run).await?;
+        // A command that ran no query (`CREATE TABLE`, `SET`, `SHOW`) is listed when its result frame is
+        // read, with the statement's text and class. One that ran a query has its row already: a read of
+        // its (empty) result is not the statement again.
+        if !running.listed.load(Ordering::Relaxed) {
+            df.with_statement(&redacted, class.name());
+        }
+        Ok(Ran::Frame(df, true))
     }
 }
 
