@@ -65,7 +65,7 @@ class GroupedData:
         from krishiv.sql.pandas.functions import pandas_udf
         from krishiv.sql.udf import PythonEvalType
 
-        eval_type = None
+        eval_type: int | None = None
         try:
             eval_type = infer_group_pandas_eval_type_from_func(func)
         except Exception as e:
@@ -82,7 +82,7 @@ class GroupedData:
         from krishiv.sql.pandas.functions import pandas_udf
         from krishiv.sql.udf import PythonEvalType
 
-        eval_type = None
+        eval_type: int | None = None
         try:
             eval_type = infer_group_arrow_eval_type_from_func(func)
         except Exception:
