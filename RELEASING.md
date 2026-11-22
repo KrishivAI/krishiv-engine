@@ -25,9 +25,9 @@ steps below.
 Enabling a release is therefore always a reviewed change that edits those
 guards, made by the maintainer.
 
-## Current state: `0.2.1`
+## Current state: `0.3.0`
 
-- The version is `[workspace.package] version = "0.2.1"` in `Cargo.toml`,
+- The version is `[workspace.package] version = "0.3.0"` in `Cargo.toml`,
   inherited by every crate. Python gets the same version from
   maturin.
 - `CHANGELOG.md` holds the notes. Later entries come from

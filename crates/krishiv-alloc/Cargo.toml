@@ -15,7 +15,7 @@ publish = true
 workspace = true
 
 [dependencies]
-krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-common = { path = "../krishiv-common", version = "=0.3.0" }
 libmimalloc-sys = { workspace = true, features = ["extended"] }
 
 [features]

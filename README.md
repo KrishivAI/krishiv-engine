@@ -117,7 +117,7 @@ The full list is in the [0.2.1 release notes](https://github.com/KrishivAI/krish
 
 ## Status and roadmap at a glance
 
-Krishiv is at **`0.2.1`**. The embedded core (in-process batch SQL and DataFrames over Arrow, from Python) runs;
+Krishiv is at **`0.3.0`**. The embedded core (in-process batch SQL and DataFrames over Arrow, from Python) runs;
 streaming, incremental views, Spark Connect and distributed execution are still being built.
 
 | Milestone | Focus | Status |

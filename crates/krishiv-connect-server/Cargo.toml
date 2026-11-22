@@ -20,14 +20,14 @@ arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
-krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
-krishiv-connect = { path = "../krishiv-connect", version = "=0.2.1" }
-krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
-krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
-krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1" }
-krishiv-session = { path = "../krishiv-session", version = "=0.2.1", features = ["unstable-ir", "tls"] }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
-krishiv-udf-pool = { path = "../krishiv-udf-pool", version = "=0.2.1" }
+krishiv-common = { path = "../krishiv-common", version = "=0.3.0" }
+krishiv-connect = { path = "../krishiv-connect", version = "=0.3.0" }
+krishiv-exec = { path = "../krishiv-exec", version = "=0.3.0" }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.3.0" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.3.0" }
+krishiv-session = { path = "../krishiv-session", version = "=0.3.0", features = ["unstable-ir", "tls"] }
+krishiv-types = { path = "../krishiv-types", version = "=0.3.0" }
+krishiv-udf-pool = { path = "../krishiv-udf-pool", version = "=0.3.0" }
 getrandom.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }
 prost-types = { workspace = true, features = ["std"] }
@@ -45,7 +45,7 @@ zstd.workspace = true
 # The declared Iceberg REST catalog of `tests/delegated_catalog.rs` (P3-T067 §3.3).
 krishiv-catalogs = { path = "../krishiv-catalogs", features = ["session"] }
 # The local Iceberg table `tests/delegated_catalog.rs` reads rows of (`testing::write_table`).
-krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", features = ["testing"] }
+krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.3.0", features = ["testing"] }
 # Signs act-as assertions in `tests/impersonation.rs` (feature `oidc`).
 aws-lc-rs.workspace = true
 hyper-util = { workspace = true, features = ["tokio"] }
