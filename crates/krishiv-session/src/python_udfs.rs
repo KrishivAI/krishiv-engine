@@ -555,7 +555,7 @@ fn wait_for_analysis(
 pub const MAX_PYTHON_SOURCE_CALLS: usize = 32;
 
 /// Runs `call` (user Python that plans a data source's read) on a thread of its own, named
-/// `krishiv-pysrc`, and waits for its result like [`wait_for_analysis`]: ending with the statement's cancel,
+/// `krishiv-pysrc`, and waits for its result like `wait_for_analysis`: ending with the statement's cancel,
 /// leaving the executor thread to its other tasks, and holding no engine pool thread (not the executor's
 /// blocking pool, not the I/O runtime's). A cancelled call returns its error at once; its thread runs
 /// to its end, then drops its result and frees its permit.
