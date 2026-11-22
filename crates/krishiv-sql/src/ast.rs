@@ -112,6 +112,9 @@ pub enum Statement {
     CreateFunction(Box<CreateFunction>),
     /// `DROP [TEMPORARY] FUNCTION [IF EXISTS] name`.
     DropFunction(DropFunction),
+    /// `CREATE [OR REPLACE] FUNCTION name AS 'python' USING PYTHON 'registered'`: keeps a
+    /// Python UDF the session registered (P3-T072d, a Krishiv extension).
+    CreatePersistedFunction(CreatePersistedFunction),
     /// `CREATE [OR REPLACE] [TEMPORARY] [EXTERNAL] TABLE ...`.
     CreateTable(Box<CreateTable>),
     /// `CREATE TABLE ... LIKE ...`.
@@ -201,6 +204,7 @@ impl Statement {
             Self::DropView(v) => v.span,
             Self::CreateFunction(f) => f.span,
             Self::DropFunction(f) => f.span,
+            Self::CreatePersistedFunction(f) => f.span,
             Self::CreateTable(t) => t.span,
             Self::CreateTableLike(t) => t.span,
             Self::DropTable(t) => t.span,
@@ -537,6 +541,22 @@ pub enum FunctionBodyKind {
     /// `RETURN query`: a table function's body (a scalar function's is a
     /// scalar subquery).
     Query(Box<Query>),
+}
+
+/// `CREATE [OR REPLACE] FUNCTION [IF NOT EXISTS] name AS 'python' USING PYTHON 'registered'`:
+/// the persisted form of a Python UDF the session registered under `registered`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreatePersistedFunction {
+    /// `OR REPLACE`.
+    pub or_replace: bool,
+    /// `IF NOT EXISTS`.
+    pub if_not_exists: bool,
+    /// The stored function's name.
+    pub name: ObjectName,
+    /// The name the session registered the Python UDF under.
+    pub registered: String,
+    /// Source text, from `CREATE` to the end of the statement.
+    pub span: Span,
 }
 
 /// `DROP [TEMPORARY] FUNCTION [IF EXISTS] name`.

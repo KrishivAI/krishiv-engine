@@ -18,6 +18,7 @@
 //! name, so SQL cannot reach it by its display name. Its version has the top
 //! bit set ([`ANONYMOUS_VERSION_BIT`]), so it never equals a registration's.
 
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
@@ -674,6 +675,64 @@ impl crate::Session {
             Some(runtime) => worker.with_python_udfs(runtime),
             None => worker,
         }
+    }
+}
+
+/// Where `CREATE FUNCTION ... AS 'python' USING PYTHON 'name'` and `DROP FUNCTION` keep and remove
+/// the persisted Python UDFs of a server (P3-T072d): the Connect server's per-tenant function
+/// catalog. A session built alone has none, and both statements are refused there.
+pub trait PersistedFunctions: Send + Sync {
+    /// Keeps the session's registered Python UDF `registered` as the stored function `name`
+    /// (stored under the registered name: the catalog keys a function by it).
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` when the session registered no such UDF; the catalog's failure.
+    fn persist<'a>(
+        &'a self,
+        session: &'a crate::Session,
+        registered: &'a str,
+    ) -> BoxFuture<'a, Result<(), KrishivError>>;
+
+    /// Whether a function `name` is stored for the session's tenant.
+    ///
+    /// # Errors
+    /// The catalog's failure.
+    fn exists<'a>(
+        &'a self,
+        session: &'a crate::Session,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<bool, KrishivError>>;
+
+    /// Removes the stored function `name`.
+    ///
+    /// # Errors
+    /// The catalog's failure; a refusal when another principal stored it.
+    fn remove<'a>(
+        &'a self,
+        session: &'a crate::Session,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<(), KrishivError>>;
+}
+
+impl crate::Session {
+    /// Sets where this session's `CREATE FUNCTION ... USING PYTHON` and `DROP FUNCTION` keep
+    /// persisted Python UDFs.
+    #[cfg(feature = "unstable-ir")]
+    pub fn set_persisted_functions(&self, hook: std::sync::Arc<dyn PersistedFunctions>) {
+        *self
+            .state
+            .persisted_functions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hook);
+    }
+
+    /// The hook for persisted Python UDFs, if the session has one.
+    pub(crate) fn persisted_functions(&self) -> Option<Arc<dyn PersistedFunctions>> {
+        self.state
+            .persisted_functions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 

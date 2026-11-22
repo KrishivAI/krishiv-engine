@@ -160,6 +160,8 @@ pub use krishiv_udf_sdk::{
 pub use memory_table::BatchSource;
 pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
+#[cfg(feature = "unstable-ir")]
+pub use python_udfs::PersistedFunctions;
 pub use python_udfs::{
     ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary, PythonUdtfDef,
     PythonUdtfEntry,

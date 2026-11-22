@@ -5,9 +5,9 @@
 
 use super::{Close, Fail, PR, Parser, QUERY_START};
 use crate::ast::{
-    CreateFunction, DropFunction, FunctionBody, FunctionBodyKind, FunctionReturns,
-    FunctionReturnsKind, ObjectName, ReturnColumn, RoutineCharacteristics, Span, SqlDataAccess,
-    SqlSecurity, Statement,
+    CreateFunction, CreatePersistedFunction, DropFunction, FunctionBody, FunctionBodyKind,
+    FunctionReturns, FunctionReturnsKind, ObjectName, ReturnColumn, RoutineCharacteristics, Span,
+    SqlDataAccess, SqlSecurity, Statement,
 };
 use crate::error;
 use crate::lexer::Sym;
@@ -40,19 +40,36 @@ impl Parser<'_> {
             if p.kw_at(0, "AS") {
                 p.pos += 1;
                 let class_name = p.string_lit().ok_or(Fail::Syntax)?;
+                let mut registered = None;
                 if p.eat_kw("USING") {
-                    loop {
-                        if !(p.eat_kw("JAR") || p.eat_kw("FILE") || p.eat_kw("ARCHIVE")) {
-                            return p.fail();
-                        }
-                        p.string_lit().ok_or(Fail::Syntax)?;
-                        if !p.eat_sym(Sym::Comma) {
-                            break;
+                    // `USING PYTHON 'name'` (with the class `python`): a persisted Python UDF.
+                    if class_name.eq_ignore_ascii_case("python") && p.eat_kw("PYTHON") {
+                        registered = Some(p.string_lit().ok_or(Fail::Syntax)?);
+                    } else {
+                        loop {
+                            if !(p.eat_kw("JAR") || p.eat_kw("FILE") || p.eat_kw("ARCHIVE")) {
+                                return p.fail();
+                            }
+                            p.string_lit().ok_or(Fail::Syntax)?;
+                            if !p.eat_sym(Sym::Comma) {
+                                break;
+                            }
                         }
                     }
                 }
                 let span = p.span_from(start);
                 p.command_end()?;
+                if let (Some(registered), false) = (registered, temporary) {
+                    return Ok(Statement::CreatePersistedFunction(
+                        CreatePersistedFunction {
+                            or_replace,
+                            if_not_exists,
+                            name,
+                            registered,
+                            span,
+                        },
+                    ));
+                }
                 if temporary {
                     p.temp_function_qualifier(&name, span)?;
                 }

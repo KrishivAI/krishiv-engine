@@ -231,6 +231,7 @@ fn class_of(
             }
         }
         Statement::CreateTableLike(_)
+        | Statement::CreatePersistedFunction(_)
         | Statement::CreatePipelineDataset(_)
         | Statement::CreateFlow(_)
         | Statement::DropTable(_)
@@ -411,6 +412,7 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         | Statement::Reset(_)
         | Statement::DropView(_)
         | Statement::CreateFunction(_)
+        | Statement::CreatePersistedFunction(_)
         | Statement::DropFunction(_)
         | Statement::CreateTableLike(_)
         | Statement::DropTable(_)
@@ -547,6 +549,13 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
         // also `DROP` on it), dropping it `DROP` on it.
         Statement::CreateFunction(f) if f.temporary => Vec::new(),
         Statement::CreateFunction(f) => {
+            let mut out = vec![t(O::ParentOfFunction(&f.name), Create)];
+            if f.or_replace {
+                out.push(t(O::Function(&f.name), Drop));
+            }
+            out
+        }
+        Statement::CreatePersistedFunction(f) => {
             let mut out = vec![t(O::ParentOfFunction(&f.name), Create)];
             if f.or_replace {
                 out.push(t(O::Function(&f.name), Drop));

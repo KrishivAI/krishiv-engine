@@ -172,6 +172,8 @@ pub(crate) struct SessionState {
     /// The runtime that evaluates them in this process (set by the Python
     /// facade); without one a plan calling a Python UDF fails to run.
     pub(crate) python_runtime: Mutex<Option<Arc<dyn krishiv_exec::python_eval::UdfRuntime>>>,
+    /// Where persisted Python UDFs are kept (a Connect server's catalog); none for a session alone.
+    pub(crate) persisted_functions: Mutex<Option<Arc<dyn crate::python_udfs::PersistedFunctions>>>,
     /// The SQL-bodied functions the session defines.
     pub(crate) sql_functions: SqlFunctions,
     /// The process-wide part of the engine this session runs on.
@@ -611,6 +613,7 @@ impl Session {
                 self.exec_create_function(&f, redacted, &env.identifier_spans)
                     .await
             }
+            Statement::CreatePersistedFunction(f) => self.exec_create_persisted_function(&f).await,
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => {
                 Box::pin(self.exec_create_table(&t, query, &env.identifier_spans))
