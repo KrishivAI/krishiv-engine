@@ -56,7 +56,7 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   call, a paged listing included; page/entry caps, a repeated or over-4-KiB token stops it; empty/`.`/`..` names and any path
   the URL parser rewrites refused; a 404 is "absent" only with a `NoSuch*` error model; credential prefixes as full URL,
   bucket or bare scheme; `load_table` checks every returned location and refuses read restrictions and server-side planning;
-  `load_credentials` only when advertised), `http_test_server.rs` (crate level, aliased as `test_server` here) a fake HTTP/1.1 server (tests only).
+  `load_credentials` only when advertised; `load_table_snapshots_as` sends `snapshots=all|refs`; `commit_table_as` (PR-36c part 2) one JSON `POST .../tables/{t}` with the same token, egress client and `X-Iceberg-Access-Delegation` as `load_table`, resent once only after a 401 with a renewable token, never after a 5xx or a timeout, body capped at `max_response_bytes` before sending, a 200's locations checked (a refused one is a failure after sending), `CommitReply` (status, `Retry-After`, body) or `CommitFailure { sent }` from `transport.rs`'s `call_tracked` (unsent only for an egress refusal, a request never built or connected, no token); `commit_tests.rs`), `http_test_server.rs` (crate level, aliased as `test_server` here) a fake HTTP/1.1 server (tests only).
 - `src/sqlite/` (feature `sqlite`; PB-07, ADR 0014 item 6, ADR 0037 `per_query`; `rusqlite` with the bundled C amalgamation, default features off) the embedded catalog:
   `mod.rs` `SqliteCatalog` (`Catalog` + `CatalogWrite`, `open` / `open_in_memory`, `table_details`, `list_namespaces`, `list_tables`; one connection behind a
   mutex, WAL, `synchronous=FULL`, a 10 s busy timeout; one `BEGIN IMMEDIATE` transaction per change, which bumps the epoch only when it changes
@@ -82,8 +82,8 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   `IcebergTableProvider::open` on a blocking thread, with the query's I/O and paths (the session confines them in server
   mode, ADR 0046 §3a); `storage = vended` and a response asking for remote signing are refused at open; table `config`
   (token, signer, refresh-endpoint keys) is dropped, never followed or sent anywhere), `EmbeddedLocations` (embedded use
-  also accepts absolute `file:` locations). Tests: `declared/tests.rs` (names, auth), `declared/read_tests.rs` (a table the
-  connector's `testing::write_table` wrote, served by the fake REST server).
+  also accepts absolute `file:` locations). Writes (PR-36c part 2): `option.write = true` (default `false`, read-only; anything but true/false refused at startup) gives a table loaded at its current version a `RestCommitter` (the connector's `RestCommitTransport` over `commit_table_as` and an uncached `snapshots=all|refs` load, for the caller that loaded it, on the blocking pool), so its provider writes; the session does not route `INSERT`/DML to declared tables yet. Tests: `declared/tests.rs` (names, auth), `declared/read_tests.rs` (a table the
+  connector's `testing::write_table` wrote, served by the fake REST server), `declared/write_tests.rs` (appends over loopback HTTP into a fake catalog applying requests: committed and read back by SQL, a lost 200 probed, a 409 rebased, read-only by default).
 - Not here yet: vended credentials (unit 3), distributed reads of declared tables (refused by the session), a fuzz
   target for the Unity Catalog response parsers (§5.6; the REST one is `fuzz/fuzz_targets/iceberg_rest_response.rs` over `iceberg_rest/fuzz_entry.rs`, seeds `fuzz/seeds/iceberg_rest_response/`), the T021 decision on `MANAGED` Delta tables of a UC server (they may be catalog-managed: UC-ratified commits not yet in `_delta_log`, so a by-path read can be stale; `UnityTable` says so), the write half of the
   Hive catalog, the Docker acceptance against a real metastore and a real Unity Catalog server

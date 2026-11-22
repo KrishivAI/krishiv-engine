@@ -1,0 +1,10 @@
+---
+source: crates/krishiv-optimizer/tests/it/preserved_side.rs
+assertion_line: 176
+expression: changed
+---
+[
+    40,
+    78,
+    80,
+]

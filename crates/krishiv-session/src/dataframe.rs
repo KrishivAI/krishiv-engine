@@ -1777,7 +1777,7 @@ impl DataFrame {
             writer = writer.sort_by(cols);
         }
         if insert_into {
-            writer.insert_into(table).await
+            Box::pin(writer.insert_into(table)).await
         } else {
             writer.save_as_table(table).await
         }

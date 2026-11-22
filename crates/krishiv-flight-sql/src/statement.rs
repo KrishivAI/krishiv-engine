@@ -35,7 +35,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tonic::metadata::MetadataMap;
 use tonic::{Response, Status};
 
-use crate::call::{CallSession, shutting_down};
+use crate::call::{CallSession, shutting_down, traced};
 use crate::cookies::{SessionCookie, session_cookie};
 use crate::encode::{RESPONSE_CONSUMER, encode_results};
 use crate::handles::HandleId;
@@ -409,7 +409,7 @@ impl FlightSqlServer {
         // A session this call created is released when the call ends, by an error or a dropped
         // future, unless the answer naming it goes out (`kept`, review M4).
         let mut call = self.call_session(metadata, caller)?;
-        let (schema, mut slot) = self.run_statement(&mut call, sql).await?;
+        let (schema, mut slot) = self.run_statement(&mut call, sql, metadata).await?;
         let mut response = Response::new(flight_info(&schema, &slot.id, descriptor)?);
         call.cookie_on(&mut response);
         call.kept();
@@ -422,6 +422,7 @@ impl FlightSqlServer {
         &self,
         call: &mut CallSession,
         sql: Arc<str>,
+        metadata: &MetadataMap,
     ) -> Result<(SchemaRef, SlotGuard), Status> {
         let inner = &self.inner;
         let cap = call.owner.cap_key();
@@ -479,9 +480,12 @@ impl FlightSqlServer {
                     // §16 m2), even when storing its result fails.
                     call.mark_changed();
                 }
-                let options = QueryOptions::new()
-                    .operation_id(op.id())
-                    .query_start(query_start);
+                let options = traced(
+                    QueryOptions::new()
+                        .operation_id(op.id())
+                        .query_start(query_start),
+                    metadata,
+                );
                 session
                     .sql_command_with(&sql, options)
                     .await
@@ -664,12 +668,15 @@ impl FlightSqlServer {
         ) = match &payload.kind {
             Kind::Query(announced) => {
                 let gate = entry.shared().await;
-                let options = QueryOptions::new()
-                    .operation_id(op.id())
-                    .query_start(payload.query_start_micros)
-                    // The ticket was issued before any drain (a drain refuses new statements): a
-                    // fetch is work the server accepted, which a drain lets finish (T066 §5.1).
-                    .admitted_before_drain();
+                let options = traced(
+                    QueryOptions::new()
+                        .operation_id(op.id())
+                        .query_start(payload.query_start_micros)
+                        // The ticket was issued before any drain (a drain refuses new statements): a
+                        // fetch is work the server accepted, which a drain lets finish (T066 §5.1).
+                        .admitted_before_drain(),
+                    metadata,
+                );
                 let df = session
                     .sql_query_with(&payload.sql, options)
                     .await
