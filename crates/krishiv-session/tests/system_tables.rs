@@ -185,6 +185,13 @@ fn operators_lists_what_a_finished_query_ran() {
          WHERE q.query_text LIKE '%GROUP BY%'",
     );
     assert_eq!(rows, ["1000"], "{rows:?}");
+    // Each operator row carries the session of its query.
+    let same = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.operators o JOIN system.queries q \
+         ON o.query_id = q.query_id AND o.session_id = q.session_id",
+    );
+    assert_eq!(same, n, "{same:?} vs {n:?}");
     let roles = strings_in(
         &s,
         "SELECT DISTINCT role FROM system.operators ORDER BY role",
