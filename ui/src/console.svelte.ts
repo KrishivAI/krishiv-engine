@@ -8,7 +8,8 @@ export type Mode = "server" | "embedded" | "profiles";
 
 const ALL = ["health", "queries", "history", "resources", "catalog", "sql", "environment"];
 const PAGES: Record<Mode, string[]> = {
-  server: ALL,
+  // Every client's sessions and the groups queries are admitted through are a server's.
+  server: ["health", "queries", "history", "sessions", "workload", "resources", "catalog", "sql", "environment"],
   embedded: ALL,
   // Stored profiles: nothing runs, so there is no live list, no memory, no catalog, no editor, no settings.
   profiles: ["history"],
