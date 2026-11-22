@@ -528,7 +528,26 @@ impl DirectoryWrite {
         // The (lazy) delete futures are built first: a stream mapping
         // through a borrowing closure makes this future unprovably `Send`
         // for callers that spawn it.
-        let swept: &[Path] = self.log.as_ref().map_or(&[], |l| l.stale.as_slice());
+        // An append past the grace may have committed between the sweep's listing and now: the log
+        // is read again and a stale file it lists is kept (this narrows the window to the deletes
+        // themselves; the grace is what makes the remainder rare).
+        let committed_since: std::collections::HashSet<String> = match &self.log {
+            Some(l) if !l.stale.is_empty() => self
+                .commit_log(io)
+                .snapshot()
+                .await?
+                .files
+                .into_keys()
+                .collect(),
+            _ => std::collections::HashSet::new(),
+        };
+        let swept: Vec<&Path> = self
+            .log
+            .as_ref()
+            .map_or(&[][..], |l| l.stale.as_slice())
+            .iter()
+            .filter(|p| !committed_since.contains(&self.relative(p)))
+            .collect();
         let deletes: Vec<_> = replaced
             .iter()
             .chain(swept)

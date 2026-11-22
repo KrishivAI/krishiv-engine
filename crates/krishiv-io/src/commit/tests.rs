@@ -1823,6 +1823,61 @@ fn an_append_whose_files_an_overwrite_swept_never_publishes_missing_files() {
     );
 }
 
+/// An overwrite listed an old uncommitted append's files as stale; the append then commits first.
+/// The overwrite re-reads the log before deleting and keeps every file the log lists.
+#[test]
+fn an_overwrite_keeps_a_stale_file_an_append_committed_meanwhile() {
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let write_files = |w: &DirectoryWrite, rows: i32| {
+        env.rt.block_on(async {
+            let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+            let id = pool.register("write", None);
+            let mut writer = FileWriter::new(
+                &env.io,
+                Arc::clone(&format),
+                &schema(),
+                o.clone(),
+                w.write_options(0),
+                krishiv_memory::Reservation::new(pool, id),
+            )
+            .unwrap();
+            writer.write(&batch(rows)).await.unwrap();
+            writer.finish().await.unwrap()
+        })
+    };
+    let append = env.begin("t", SaveMode::Append, "job-2").unwrap().unwrap();
+    let append = env.rt.block_on(append.logged(&env.io)).unwrap();
+    let append_files = write_files(&append, 3);
+    let over = env
+        .begin("t", SaveMode::Overwrite, "job-3")
+        .unwrap()
+        .unwrap();
+    let over = env
+        .rt
+        .block_on(over.with_grace(chrono::Duration::zero()).logged(&env.io))
+        .unwrap();
+    let over_files = write_files(&over, 2);
+    // The append commits between the overwrite's sweep listing and its commit.
+    env.rt
+        .block_on(append.commit(&env.io, format.as_ref(), schema(), &o, append_files))
+        .unwrap();
+    let _ = env
+        .rt
+        .block_on(over.commit(&env.io, format.as_ref(), schema(), &o, over_files));
+    let visible = env.visible("t");
+    let on_store = env.names("t");
+    for f in visible.iter().filter(|f| f.contains("job-2")) {
+        assert!(
+            on_store.iter().any(|n| n.ends_with(f.as_str())),
+            "{f} is in the log but gone: {on_store:?}"
+        );
+    }
+}
+
 /// Adoption uses the reads' hidden-name rule: a copy in progress is not data.
 #[test]
 fn adoption_skips_copy_in_progress_files() {
