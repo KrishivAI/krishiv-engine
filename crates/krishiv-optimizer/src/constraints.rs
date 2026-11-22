@@ -49,7 +49,7 @@ use crate::expr::{
     Attrs, Classes, builtin, call_builtin, column, conjuncts, equality, has_aggregate,
     has_subquery, is_deterministic, references, same, substitute, unshift,
 };
-use crate::pushdown::{alias_map, into_side_new, rebuild_join};
+use crate::pushdown::{alias_map, cse_defs, into_side_new, rebuild_join};
 use crate::restrict::subquery_plans;
 
 /// The rule at a `Join` (see the module docs).
@@ -679,7 +679,23 @@ impl Memo {
             |e: &Arc<Expr>| conjuncts(e).into_iter().filter(|c| is_deterministic(c));
         let out: Vec<Arc<Expr>> = match &plan.node {
             PlanNode::Filter { input, predicate } => {
-                let mut out: Vec<_> = deterministic(predicate).collect();
+                // A filter over a common-subexpression projection reads its `cse_*` columns
+                // as the expressions they name: CSE runs last, so a second optimization must
+                // see the conjuncts the first one saw (`(c + 1) = c` is no column equality,
+                // though `cse_0 = c` would be one).
+                let defs = match &input.node {
+                    PlanNode::Project { exprs, .. } => cse_defs(exprs),
+                    _ => HashMap::new(),
+                };
+                let mut out: Vec<_> = deterministic(predicate)
+                    .map(|c| {
+                        if defs.is_empty() {
+                            c
+                        } else {
+                            substitute(&c, &defs)
+                        }
+                    })
+                    .collect();
                 out.extend(self.constraints(input).iter().cloned());
                 out
             }
