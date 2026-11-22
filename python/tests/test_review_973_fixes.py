@@ -8,7 +8,7 @@ import datetime
 
 import pytest
 
-from krishiv.sql import SparkSession
+from krishiv.sql import Row, SparkSession
 from krishiv.sql import types as T
 
 
@@ -76,3 +76,9 @@ def test_pivot_with_an_explicit_empty_list_does_not_discover(spark: SparkSession
         frame.groupBy("g").pivot("p", []).count()
     finally:
         spark.conf.unset("spark.sql.pivotMaxValues")
+
+
+def test_to_turns_a_null_typed_column_into_a_typed_null(spark: SparkSession) -> None:
+    out = spark.sql("SELECT NULL AS x").to(T.StructType([T.StructField("x", T.IntegerType(), True)]))
+    assert out.schema["x"].dataType == T.IntegerType()
+    assert out.collect() == [Row(x=None)]

@@ -26,6 +26,7 @@ from krishiv.sql.types import (
     DateType,
     DecimalType,
     MapType,
+    NullType,
     NumericType,
     StringType,
     StructType,
@@ -80,7 +81,7 @@ def _bad_type(path: list[str], have: DataType, want: DataType) -> AnalysisExcept
 
 def _assignable(have: DataType, want: DataType) -> bool:
     """Whether a value of ``have`` may be stored as ``want`` (non-struct types; Spark's store assignment)."""
-    if have == want:
+    if have == want or isinstance(have, NullType):
         return True
     if isinstance(have, NumericType) and isinstance(want, NumericType):
         return True
