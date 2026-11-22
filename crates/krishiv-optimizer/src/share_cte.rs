@@ -57,13 +57,13 @@ use crate::restrict::subquery_plans;
 pub(crate) const SHARED_PREFIX: &str = "__shared_";
 
 /// One instance: the `Shift` node, its body and offset.
-struct Member {
-    shift: Arc<LogicalPlan>,
-    body: Arc<LogicalPlan>,
-    offset: u64,
+pub(crate) struct Member {
+    pub(crate) shift: Arc<LogicalPlan>,
+    pub(crate) body: Arc<LogicalPlan>,
+    pub(crate) offset: u64,
     /// How many paths from the root reach it: a `Shift` shared through
     /// `Arc` (both sides of a `UNION ALL` of one CTE) is read that many times.
-    uses: u64,
+    pub(crate) uses: u64,
 }
 
 /// `root` with its groups of equal instances shared. With `direct`, the
@@ -222,7 +222,7 @@ fn dependencies_first(ctes: Vec<Cte>) -> Vec<Cte> {
 /// number of paths that reach it; with `direct`, also one member per shifted
 /// body that is reached other than through a `Shift` (offset 0, `shift` is
 /// the body itself).
-fn shifts(root: &Arc<LogicalPlan>, direct: bool) -> Vec<Member> {
+pub(crate) fn shifts(root: &Arc<LogicalPlan>, direct: bool) -> Vec<Member> {
     // The relations in post-order (children before parents), each with its
     // children, then path counts from the root down.
     let mut order: Vec<Arc<LogicalPlan>> = Vec::new();

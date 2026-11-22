@@ -562,6 +562,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PAYLOAD_ABOVE_AGGREGATE,
     ),
     (
+        "krishiv.optimizer.shareLiteralInstances",
+        &SHARE_LITERAL_INSTANCES,
+    ),
+    (
         "krishiv.optimizer.shareRepeatedSubtrees",
         &SHARE_REPEATED_SUBTREES,
     ),
