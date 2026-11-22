@@ -404,12 +404,15 @@ impl Member {
     /// The `runtime_filter` microbenchmark's per-row times at x86-64-v3
     /// (the shipped build), rounded up: range 0.4, small set 3.0, hash set
     /// 5.0, Bloom 4.3 ns (the baseline x86-64 build: 1.2, 5.4, 6.8, 10.5).
+    /// A bit set (`probe_dense1028_256k_i64`, baseline build, 2026-11-22):
+    /// 1.15 ns a row, against 2.9 for the small set and 4.4 for the hash
+    /// set in the same run.
     pub(crate) fn row_cost_ns(&self) -> f64 {
         match self {
             Self::Range => 0.5,
             Self::Small(_) => 3.0,
             Self::Bloom(_) => 4.5,
-            Self::Exact(Exact::Dense(_)) => 1.0,
+            Self::Exact(Exact::Dense(_)) => 1.2,
             Self::Exact(_) => 5.0,
         }
     }
