@@ -443,7 +443,10 @@ impl Session {
         // Admitted by the caller already (it changed something before this write), else here.
         let mut admitted = Some(match pre.take() {
             Some(admitted) => admitted,
-            None => self.admit_query(env, false).await?,
+            None => {
+                self.admit_query(env, false, krishiv_sql::StatementClass::Write)
+                    .await?
+            }
         });
         // The query's profile waits here for the commit below.
         let hold: Arc<crate::profile_history::HistoryHold> = Arc::default();
@@ -684,6 +687,14 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// The class `StatementClass::name` returned, for the admission request.
+fn statement_class_named(name: &str) -> Option<krishiv_sql::StatementClass> {
+    use krishiv_sql::StatementClass as C;
+    [C::Read, C::Write, C::Ddl, C::Session, C::Admin]
+        .into_iter()
+        .find(|c| c.name() == name)
+}
+
 impl Session {
     /// Asks the admission controller for a permit for the query whose
     /// `system.queries` row is `log_id`. A controller that answers at once
@@ -695,6 +706,7 @@ impl Session {
         log_id: &str,
         env: &QueryEnv,
         exempt: bool,
+        fallback: krishiv_sql::StatementClass,
     ) -> Result<crate::admission::Permit, KrishivError> {
         // A query that reads only `system.*` is never queued behind the load it inspects.
         if exempt {
@@ -705,8 +717,15 @@ impl Session {
             principal: Arc::clone(&self.state.principal),
             tags: self.effective_tags(),
             class: WorkloadClass::Interactive,
-            source: None,
-            statement_class: None,
+            source: self.state.activity.client_type(),
+            // A query no SQL statement started (DataFrame, Spark Connect plan) has no class on
+            // its env, and one a `SELECT` started (`spark.sql("select ..").write...`) carries
+            // `READ` into the write it ends in: the entry point that admits the query names the
+            // class then. A class a statement set itself (CTAS: `WRITE`, DDL) stays.
+            statement_class: match env.statement_class.and_then(statement_class_named) {
+                Some(krishiv_sql::StatementClass::Read) | None => Some(fallback),
+                other => other,
+            },
             estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);
@@ -720,6 +739,9 @@ impl Session {
             Poll::Ready(done) => done,
             Poll::Pending => {
                 self.state.queries.set_state(log_id, "queued");
+                if let Some(group) = controller.queued_group(&request) {
+                    self.state.queries.set_group(log_id, &group);
+                }
                 let done = admit.await;
                 if done.is_ok() {
                     self.state.queries.set_state(log_id, "running");
@@ -747,11 +769,13 @@ impl Session {
 
     /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
     /// that is about to change something (a write replacing files) takes the permit first and
-    /// passes it on, so a refused or cancelled query has changed nothing.
+    /// passes it on, so a refused or cancelled query has changed nothing. `fallback` is the class the
+    /// admission request gets when the env has none (a DataFrame or Connect plan, not SQL text).
     pub(crate) async fn admit_query(
         &self,
         env: &QueryEnv,
         exempt: bool,
+        fallback: krishiv_sql::StatementClass,
     ) -> Result<Admitted, KrishivError> {
         // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
         let log_id = self.state.queries.begin_as(
@@ -764,7 +788,7 @@ impl Session {
         // The request tags join the row's tags at once, so a queued query shows them too.
         self.stamp_row(&log_id);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
-        let permit = self.admit(&log_id, env, exempt).await?;
+        let permit = self.admit(&log_id, env, exempt, fallback).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 }
