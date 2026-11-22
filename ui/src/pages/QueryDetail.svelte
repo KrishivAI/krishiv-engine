@@ -13,17 +13,18 @@
   import type { EmbedLink } from "../embed";
 
   // `embed`: the embedded view reads through its signed link (no session) and shows no navigation.
-  let { id, embed = null }: { id: string; embed?: EmbedLink | null } = $props();
+  // `session`: the session of the row the page was opened from, when two sessions may share the id.
+  let { id, embed = null, session = undefined }: { id: string; embed?: EmbedLink | null; session?: string } = $props();
 
   const ended = (d: QueryDetail) => !["running", "queued"].includes(d.query.state ?? "");
 
   const q = createQuery<QueryDetail>(() => ({
-    queryKey: ["query", id],
+    queryKey: ["query", id, session ?? ""],
     queryFn: () =>
       api<QueryDetail>(
         embed
           ? `/api/internal/embed/queries/${encodeURIComponent(id)}?exp=${encodeURIComponent(embed.exp)}&sig=${encodeURIComponent(embed.sig)}`
-          : `/api/internal/queries/${encodeURIComponent(id)}`,
+          : `/api/internal/queries/${encodeURIComponent(id)}${session ? `?session=${encodeURIComponent(session)}` : ""}`,
       ),
     refetchInterval: (query) => {
       const d = query.state.data;
