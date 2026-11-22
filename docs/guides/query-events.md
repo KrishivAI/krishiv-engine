@@ -69,5 +69,3 @@ know: later versions only add.
 - The final usage of a query can still be read from `system.queries` while the row is held.
 - Progress samples, audit events and an OTLP sink are not available yet. The event schema is experimental: do not
   treat `record_id` as a billing key.
-
-The full schema is in the [event reference](../reference/events.md).
