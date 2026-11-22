@@ -388,7 +388,8 @@ class SparkSession:
         from krishiv.sql import _convert
 
         pa = _convert.require_pyarrow("createDataFrame")
-        if data.shape[0] == 0 or data.shape[1] == 0:
+        explicit = schema is not None and not isinstance(schema, list | tuple)
+        if (data.shape[0] == 0 and not explicit) or data.shape[1] == 0:
             raise PySparkValueError(errorClass="CANNOT_INFER_EMPTY_SCHEMA")
         table = pa.Table.from_pandas(data, preserve_index=False)
         # Column labels that are not strings (``0``, ``1``) are named by their text.
@@ -412,6 +413,8 @@ class SparkSession:
                 raise not_expected_type("schema", "list of str", schema)
             return DataFrame(self._native.create_dataframe(table.rename_columns(list(schema))), self)
         struct = self._explicit_schema(schema)
+        if len(struct.fields) == table.num_columns:
+            table = table.rename_columns([f.name for f in struct.fields])
         try:
             return DataFrame(self._native.create_dataframe(table.cast(_pa_schema(struct, pa))), self)
         except pa.ArrowNotImplementedError:

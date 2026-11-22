@@ -142,7 +142,8 @@ def merge_type(a: DataType, b: DataType) -> DataType:
     ):
         return StringType()
     if isinstance(a, TimestampType | TimestampNTZType) and isinstance(b, TimestampType | TimestampNTZType):
-        return a
+        # Spark's tightest common type of the two is the zoned one, whichever row came first.
+        return a if isinstance(a, TimestampType) else b
     if type(a) is not type(b):
         raise PySparkTypeError(
             errorClass="CANNOT_MERGE_TYPE",

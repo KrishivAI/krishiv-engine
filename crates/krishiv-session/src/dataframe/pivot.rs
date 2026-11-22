@@ -109,6 +109,13 @@ impl GroupedData {
             .into();
             return DataFrame::invalid(self.df.session.clone(), Arc::clone(&self.df.plan), error);
         }
+        if read
+            .iter()
+            .any(|r| matches!(&r.node, ExprNode::Column(c) if c.name.len() > 1))
+        {
+            // Narrowing the input by a dotted name would flatten `s.x` and drop the struct `s`.
+            return self.refuse("a pivot aggregate that reads a nested field or qualified column");
+        }
         let read_names: Vec<String> = read
             .iter()
             .filter_map(output_name)

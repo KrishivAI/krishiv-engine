@@ -144,7 +144,7 @@ class GroupedData:
         |  Bob|    1|
         +-----+-----+
         """
-        return self.agg(F.count("*").alias("count"))
+        return self.agg(F.count(F.lit(1)).alias("count"))
 
     def _shortcut(self, func: Any, cols: tuple[str, ...]) -> DataFrame:
         for c in cols:
