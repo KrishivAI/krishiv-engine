@@ -54,14 +54,27 @@ check compares one engine's record (JSON files in `OUT`, never committed) with t
    `numUpdatedRows`, MERGE's deleted and inserted rows, `numDeletionVectorsAdded` on `dv` and `cdf`); Krishiv reads
    Spark's last version and its own versions again.
 
+Krishiv's SQL takes the direct commits' place on three more tables Spark makes in step 1 (`sql_plain`, `sql_part`,
+`sql_dv`, as `plain`, `part` and `dv`), in krishiv-session `tests/delta_roundtrip.rs` (feature `delta`):
+
+- 2b. `krishiv_sql_on_spark_tables`: `INSERT` (files and statistics from Krishiv's Delta writer; through a catalog table
+  over the location, since `INSERT INTO delta.`<path>`` is not supported yet),
+  a copy-on-write `DELETE` and `UPDATE` of a row in Spark's first file (on `sql_dv` the one carrying Spark's DV) and
+  one in Krishiv's, on `sql_part` a whole-file `DELETE WHERE x = 2`, and a second `INSERT`; one commit each, the
+  command output and the read after it recorded (`KRISHIV-SQL.json`). Step 3 reads these tables as the others.
+- 4b. `krishiv_reads_spark_sql_on_top`: Spark's time travel to each version equals Krishiv's read; Spark's history
+  names `WRITE`/`DELETE`/`UPDATE` with `readVersion`, `Serializable`, and metrics equal to the rows Krishiv's reads
+  show changed (`numOutputRows`, `numDeletedRows`, `numUpdatedRows`, and Krishiv's own `num_affected_rows`); every
+  Krishiv-written file has `minValues`/`maxValues`/`nullCount`; Spark's DML on top did work and Krishiv reads it.
+
 ## Pending (not written, not stubbed)
 
 | Case | Blocked on |
 |---|---|
 | Iceberg equality deletes written by Krishiv; a merge-on-read `UPDATE` of a v3 table | Krishiv writes no equality deletes; the session does not select the lineage columns (v3 `UPDATE` refused) |
 | Iceberg `MERGE` through Krishiv's SQL | PR-37c (the round trip drives the row-level table as the session's planner does) |
-| Delta data files from Krishiv's writer (statistics, column mapping) in the round trip | PR-37a part 2 (#892); its own Spark readback is in `tests/fixtures/delta-4.4.1/krishiv-written/` |
-| Delta `UPDATE`, `MERGE`, row-level `DELETE` and DVs written by Krishiv | PR-37 |
+| Column mapping on Krishiv-written files in the round trip | follow-up (its own Spark readback is in `tests/fixtures/delta-4.4.1/krishiv-written/`) |
+| Delta `MERGE` and DVs written by Krishiv (merge-on-read) | PR-37c, PR-37d |
 | Krishiv's change feed read (`table_changes`) | PR-37e |
 | `isBlindAppend: false` on Krishiv's non-append Delta commits (Spark's history shows NULL; the check pins it) | delta_kernel writes the field only when true and replaces a connector's value |
 | Krishiv-written tables with non-primitive or wide column types, other `write.*` properties | follow-up |

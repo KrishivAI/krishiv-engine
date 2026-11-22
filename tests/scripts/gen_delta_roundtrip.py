@@ -17,6 +17,13 @@ Spark starts each table and has the last word; Krishiv commits in between:
    those commits (``SPARK-READBACK.json``).
 4. Krishiv (``roundtrip_tests::krishiv_reads_spark_on_top``) reads Spark's last version and its own versions again.
 
+The ``sql_*`` tables (``sql_plain``, ``sql_part``, ``sql_dv``, made like ``plain``, ``part`` and ``dv``) take Krishiv's
+SQL instead of direct commits (krishiv-session ``tests/delta_roundtrip.rs``, between steps 2 and 3, and after step 4):
+an ``INSERT`` through Krishiv's Delta writer (its data files and statistics), a copy-on-write ``DELETE`` and
+``UPDATE`` of rows in Spark's and Krishiv's files (on ``sql_dv`` a Spark file with a deletion vector), on
+``sql_part`` a whole-file ``DELETE`` of a partition, and a second ``INSERT``, recorded in ``KRISHIV-SQL.json``. Step
+3 reads them as it reads the others, with each Krishiv commit's ``operationMetrics``.
+
 No expected value is written by hand: every comparison is between the two engines' records. Run through
 ``tests/scripts/delta_roundtrip.sh`` (it mounts ``<out>`` at the same path).
 """
@@ -34,6 +41,10 @@ TABLES = {
     "part": ("PARTITIONED BY (x)", ""),
     "dv": ("", DV),
     "cdf": ("", f"{DV}, 'delta.enableChangeDataFeed' = 'true'"),
+    # Krishiv's SQL on these (krishiv-session ``tests/delta_roundtrip.rs``).
+    "sql_plain": ("", ""),
+    "sql_part": ("PARTITIONED BY (x)", ""),
+    "sql_dv": ("", DV),
 }
 
 
@@ -101,8 +112,10 @@ def create(spark, out_dir):
 
 
 def readback(spark, out_dir):
-    with open(os.path.join(out_dir, "KRISHIV-RT.json")) as f:
-        krishiv = json.load(f)
+    krishiv = {}
+    for record in ("KRISHIV-RT.json", "KRISHIV-SQL.json"):
+        with open(os.path.join(out_dir, record)) as f:
+            krishiv.update(json.load(f))
     result = {}
     for name in TABLES:
         t = ref(out_dir, name)
@@ -116,6 +129,7 @@ def readback(spark, out_dir):
                 "isolationLevel": h["isolationLevel"],
                 "isBlindAppend": h["isBlindAppend"],
                 "operationParameters": dict(h["operationParameters"] or {}),
+                "operationMetrics": dict(h["operationMetrics"] or {}),
             }
             for h in history
             if h["version"] in versions
