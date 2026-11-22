@@ -371,3 +371,45 @@ print("rows", len(ok))
 """,
     )
     assert out == "rows 5"
+
+
+def test_a_zero_column_frame_keeps_its_row_count_into_a_map() -> None:
+    spark = _spark()
+    df = spark.range(5).select()
+
+    def count_pandas(batches):
+        import pandas as pd
+
+        total = sum(len(pdf) for pdf in batches)
+        yield pd.DataFrame({"n": [total]})
+
+    def count_arrow(batches):
+        total = sum(b.num_rows for b in batches)
+        yield pa.RecordBatch.from_pydict({"n": [total]})
+
+    assert _rows(df.mapInPandas(count_pandas, "n long")) == [(5,)]
+    assert _rows(df.mapInArrow(count_arrow, "n long")) == [(5,)]
+
+
+def _count_cogroup(lpdf, rpdf):
+    import pandas as pd
+
+    return pd.DataFrame({"nl": [len(lpdf)], "nr": [len(rpdf)]})
+
+
+def test_a_cogroup_with_a_missing_right_table_raises_the_right_sides_error() -> None:
+    spark = _spark()
+    left = spark.createDataFrame([(1, 1)], ["id", "v"])
+    right = spark.table("no_such_table")
+    out = left.groupBy("id").cogroup(right.groupBy("id")).applyInPandas(_count_cogroup, "nl long, nr long")
+    with pytest.raises(Exception, match="TABLE_OR_VIEW_NOT_FOUND"):
+        out.collect()
+
+
+def test_a_cogroup_owns_its_right_sides_lazy_checkpoint() -> None:
+    spark = _spark()
+    left = spark.createDataFrame([(1, 1)], ["id", "v"])
+    right = spark.createDataFrame([(1, 2)], ["id", "v"]).localCheckpoint(eager=False)
+    out = left.groupBy("id").cogroup(right.groupBy("id")).applyInPandas(_count_cogroup, "nl long, nr long")
+    del right
+    assert _rows(out) == [(1, 1)]
