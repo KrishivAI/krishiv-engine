@@ -35,12 +35,20 @@ print(sorted(tuple(r) for r in spark.read.parquet("summary/").collect()))
 The output above is for a `trips.csv` of `region,amount` followed by the rows `east,10.0`, `west,20.0` and `east,5.5`.
 
 `spark.read.json` and `spark.read.parquet` work the same way, and `df.write` has `parquet`, `csv`
-and `json`, with `.mode("overwrite")` or `"append"` and `.option(key, value)` such as `.option("header", True)` for
-CSV.
+and `json`, with `.mode(...)` and `.option(key, value)` such as `.option("header", True)` for CSV.
+
+The save modes are Spark's:
+
+| Mode | When the path already exists |
+|---|---|
+| `error`, `errorifexists` (the default) | the write fails with `PATH_ALREADY_EXISTS` |
+| `ignore` | nothing is written and no error is raised |
+| `append` | new files are added to an existing directory; an existing file at the path fails with `PATH_ALREADY_EXISTS` |
+| `overwrite` | everything under the path is replaced; where the commit log is active, a write that fails before the commit keeps the old data. Without it (`commitProtocol` `NONE`, or a store that cannot create a file only if absent, where the default `AUTO` falls back to the plain commit with a warning) a failed write can leave old files already deleted; an existing file at the path is deleted before the write starts under either protocol, and a failed write does not restore it |
 
 A write creates a directory, not a single file: `part-*` data files, a `_SUCCESS` marker and a `_krishiv_log/`
 directory that records each commit (see [known differences](../concepts/known-differences.md#writers-leave-a-_krishiv_log-directory)).
-To write a new directory without it, set `krishiv.sql.files.commitProtocol` to `NONE` on the session
+Without the log (`commitProtocol` `NONE`) a failed overwrite can leave the old files partly deleted. To write a new directory without it, set `krishiv.sql.files.commitProtocol` to `NONE` on the session
 (`spark.conf.set("krishiv.sql.files.commitProtocol", "NONE")`); the data reads back the same. A directory that already
 has a `_krishiv_log/` keeps using it.
 
