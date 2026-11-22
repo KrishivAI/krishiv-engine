@@ -126,12 +126,14 @@ fn delete_files(env: &Env, m: &TableMetadata) -> Vec<Value> {
             let content = match f.content_type() {
                 DataContentType::PositionDeletes => 1,
                 DataContentType::EqualityDeletes => 2,
-                DataContentType::Data => unreachable!("a data file in a delete manifest"),
+                DataContentType::Data => {
+                    unreachable!("a data file in delete manifest {}", mf.manifest_path)
+                }
             };
             let format = match f.file_format() {
                 DataFileFormat::Puffin => "PUFFIN",
                 DataFileFormat::Parquet => "PARQUET",
-                other => panic!("delete file format {other:?}"),
+                other => panic!("delete file format {other:?} in {}", mf.manifest_path),
             };
             out.push(json!({"content": content, "file_format": format, "record_count": f.record_count()}));
         }
@@ -397,6 +399,36 @@ fn check_races(env: &Env, created: &Value, krishiv: &Value, spark: &Value) {
             }
             rows = now;
         }
+        // Each landed commit's parent is the previous landed snapshot (the second race_k append
+        // rebased onto the first), the first one's the current snapshot of the metadata the
+        // catalog held: Spark's last snapshot (race_s: its DELETE; race_k: the created table).
+        let parents: std::collections::HashMap<String, String> = k["snapshots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|ks| (text(&ks["snapshot_id"]), text(&ks["parent_id"])))
+            .collect();
+        let created_snapshots = created[name]["spark"]["snapshots"].as_array().unwrap();
+        let mut previous = text(&created_snapshots.last().unwrap()["snapshot_id"]);
+        let mut landed = 0;
+        for e in events {
+            if let Some(id) = e.get("snapshot_id") {
+                let id = text(id);
+                assert_eq!(
+                    parents[&id], previous,
+                    "{name}: parent of {} {id}",
+                    e["what"]
+                );
+                previous = id;
+                landed += 1;
+            }
+        }
+        // A conflict adds no snapshot.
+        assert_eq!(
+            parents.len(),
+            created_snapshots.len() + landed,
+            "{name}: snapshots after the races"
+        );
         // Spark's history holds Krishiv's landed snapshots with Krishiv's parents.
         let spark_snapshots = s["before"]["snapshots"].as_array().unwrap();
         for ks in k["snapshots"].as_array().unwrap() {

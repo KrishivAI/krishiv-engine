@@ -470,8 +470,35 @@ fn open_at(env: &Env, version: Option<u64>) -> DeltaTable {
     .unwrap()
 }
 
+/// The file actions of the rows `removes` selected.
+fn file_actions(staged: &[StagedRemoves]) -> Vec<crate::commit::winner::FileAction> {
+    let mut out = Vec::new();
+    for s in staged {
+        let paths = s.scan_rows.column_by_name("path").unwrap();
+        for (i, keep) in s.selection.iter().enumerate() {
+            if *keep {
+                let path = match paths.data_type() {
+                    ArrowType::Utf8View => paths.as_string_view().value(i).to_owned(),
+                    _ => paths.as_string::<i32>().value(i).to_owned(),
+                };
+                out.push(crate::commit::winner::FileAction {
+                    path,
+                    partition_values: crate::write::dml::partition_values_of(&s.scan_rows, i)
+                        .unwrap(),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// A whole-file `DELETE` of the files `pick` accepts in `table`'s snapshot, reading partition
-/// `x = read` (the condition's partition conjunct).
+/// `x = read` (the condition's partition conjunct). Its read set has the shape the product
+/// `DELETE` gives it (`write/dml.rs`: the removed files plus every live file the read predicate
+/// selects) and delta-spark's transaction too (its `readFiles` are the candidate files), so a
+/// losing `DELETE` meets delete-read before delete-delete, as `ConflictChecker.checkConflicts`
+/// orders them (`ConflictChecker.scala:280-319`: `checkForDeletedFilesAgainstCurrentTxnReadFiles`
+/// before `checkForDeletedFilesAgainstCurrentTxnDeletedFiles`).
 fn delete_files(
     env: &Env,
     name: &str,
@@ -481,6 +508,19 @@ fn delete_files(
 ) -> StagedCommit {
     let (r, _) = removes(env, table, pick);
     assert!(!r.is_empty(), "{name}: files to remove");
+    let candidates: fn(&str) -> bool = match read {
+        0 => |p| p.starts_with("x=0/"),
+        1 => |p| p.starts_with("x=1/"),
+        2 => |p| p.starts_with("x=2/"),
+        other => panic!("{name}: no candidate files for x = {other}"),
+    };
+    let (c, _) = removes(env, table, candidates);
+    let mut read_files = file_actions(&r);
+    for f in file_actions(&c) {
+        if !read_files.iter().any(|g| g.path == f.path) {
+            read_files.push(f);
+        }
+    }
     let predicate = format!("[\"(x = {read})\"]");
     let mut s = staged(
         name,
@@ -490,6 +530,7 @@ fn delete_files(
         r,
     );
     s.read_set = reads_x(read);
+    s.read_set.files = read_files;
     s
 }
 
@@ -632,12 +673,18 @@ fn check_races(created: &Value, krishiv: &Value, spark: &Value) {
                 // `readVersion` is the transaction's snapshot, `OptimisticTransaction.scala`).
                 assert_eq!(h["readVersion"], e["from"], "{name}: readVersion of {v}");
             } else {
+                // Each conflict is a DELETE of x = 0 that read the files a winner removed: on
+                // race_k Krishiv's first DELETE, on race_s Spark's. Delete-read comes before
+                // delete-delete in the checker's order (see `delete_files`).
                 let class = e["class"].as_str().unwrap();
-                // delta-spark's `ConcurrentModificationException` family.
+                let message = e["message"].as_str().unwrap();
+                assert_eq!(
+                    class, "DELTA_CONCURRENT_DELETE_READ.WITH_PARTITION_HINT",
+                    "{name}: conflict class: {message}"
+                );
                 assert!(
-                    class.starts_with("DELTA_CONCURRENT_"),
-                    "{name}: conflict class {class}: {}",
-                    e["message"]
+                    message.contains("[x=0]"),
+                    "{name}: the hint names partition x = 0: {message}"
                 );
                 assert_eq!(
                     sorted(e["rows"].as_array().unwrap().clone()),

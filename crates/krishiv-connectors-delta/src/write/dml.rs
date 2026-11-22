@@ -655,7 +655,7 @@ fn internal(message: &str) -> KrishivError {
 }
 
 /// The partition values of scan metadata row `i`, by physical name.
-fn partition_values_of(
+pub(crate) fn partition_values_of(
     batch: &RecordBatch,
     i: usize,
 ) -> Result<crate::commit::PartitionValues, KrishivError> {
