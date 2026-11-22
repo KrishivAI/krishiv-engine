@@ -24,7 +24,7 @@ def test_the_module_installs_the_allocator_policy():
 
 
 def test_the_pressure_epoch_is_readable():
-    # A count for measurements: how often the guard asked threads to return freed memory.
+    # A count for measurements: all pressure epochs (pool refusals and the resident-set guard).
     from krishiv import _native
 
     epoch = _native._pressure_epoch()

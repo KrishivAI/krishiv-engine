@@ -73,8 +73,10 @@ fn allocator_policy() -> String {
         .join(",")
 }
 
-/// The resident-set guard's pressure epochs since the process started: how often threads were
-/// asked to return freed memory. For measurements (`krishiv_memory::pressure_epoch`).
+/// All pressure epochs since the process started (`krishiv_memory::pressure_epoch`): how often
+/// threads were asked to return freed memory. Both a limited pool's refused grant (at most one a
+/// millisecond, no back-off) and the resident-set guard's excess (with its back-off) start one, so
+/// the guard's own count shows only in a run whose pools are never refused. For measurements.
 #[pyfunction]
 fn _pressure_epoch() -> u64 {
     krishiv_memory::pressure_epoch()

@@ -218,8 +218,7 @@ mod tests {
     fn the_allocator_policy_installs_the_guard_at_a_generous_limit() {
         assert!(
             !krishiv_alloc::bounded(),
-            "this test needs a process started without a limit below 4 GiB: unset \
-             KRISHIV_MEMORY_LIMIT and run outside a cgroup smaller than that"
+            "this test needs a process started without KRISHIV_MEMORY_LIMIT below 4 GiB: unset it"
         );
         super::install_allocator_policy();
         assert!(krishiv_memory::release_hook_installed());
