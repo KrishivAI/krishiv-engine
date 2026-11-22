@@ -64,7 +64,8 @@
       "submitted_at": 1793990000000000,
       "rows_read": 41200000,
       "bytes_read": 3865470566,
-      "peak_memory_bytes": 1610612736
+      "peak_memory_bytes": 1610612736,
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000a1"
     },
     {
       "query_id": "01932a4e-9b44-7e02-8a10-5d7a3c9e2f02",
@@ -75,7 +76,8 @@
       "submitted_at": 1793990012000000,
       "rows_read": 9800000,
       "bytes_read": 905969664,
-      "peak_memory_bytes": 2415919104
+      "peak_memory_bytes": 2415919104,
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000b2"
     },
     {
       "query_id": "01932a4f-0011-7c33-b2aa-71e4f0d3a903",
@@ -83,7 +85,8 @@
       "principal": "ann",
       "statement_class": "query",
       "query_text": "SELECT * FROM events WHERE ts > now() - INTERVAL 1 DAY",
-      "submitted_at": 1793990020000000
+      "submitted_at": 1793990020000000,
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000a1"
     }
   ],
   "history": [
@@ -103,7 +106,8 @@
       "tags": {
         "team": "risk",
         "nightly": ""
-      }
+      },
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000a1"
     },
     {
       "query_id": "01932a40-1a00-7a01-8001-aaaaaaaaaa02",
@@ -120,7 +124,8 @@
       "client_type": "krishiv-cli/0.2.1",
       "tags": {
         "team": "ads"
-      }
+      },
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000a1"
     },
     {
       "query_id": "01932a40-1a00-7a01-8001-aaaaaaaaaa03",
@@ -146,7 +151,8 @@
       "client_type": "ADBC Flight SQL",
       "tags": {
         "team": "risk"
-      }
+      },
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000c3"
     }
   ],
   "detail": {
