@@ -159,6 +159,9 @@ pub(crate) struct Level0 {
     /// payload (P3): made by the first probe driver that asks, shared by
     /// the others, dropped with the tables (`direct.rs`).
     pub(crate) direct: OnceLock<Option<Direct>>,
+    /// The reservation, from the build's consumer, that the direct index
+    /// takes its bytes from; taken by the driver that makes it.
+    pub(crate) direct_memory: Mutex<Option<Reservation>>,
     /// Held only to go back with the tables.
     _memory: Vec<Reservation>,
 }
@@ -1105,6 +1108,7 @@ impl BuildGlobal {
             level0: Mutex::new(Some(Arc::new(Level0 {
                 tables: Vec::new(),
                 direct: OnceLock::new(),
+                direct_memory: Mutex::new(None),
                 _memory: Vec::new(),
             }))),
             spilled: 0,
@@ -1620,6 +1624,7 @@ impl Sink for BuildSink {
                 level0: Mutex::new(Some(Arc::new(Level0 {
                     tables: all,
                     direct: OnceLock::new(),
+                    direct_memory: Mutex::new(Some(ctx.consumer().reservation())),
                     _memory: memory,
                 }))),
                 spilled,

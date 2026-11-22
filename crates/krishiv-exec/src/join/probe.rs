@@ -704,7 +704,8 @@ impl ProbeOp {
             level0
                 .direct
                 .get_or_init(|| {
-                    Direct::of(&level0.tables, built.spilled, &s.keys).map(|d| {
+                    let memory = lock(&level0.direct_memory).take()?;
+                    Direct::of(&level0.tables, built.spilled, &s.keys, memory).map(|d| {
                         // A payload that fails to decode here fails the same
                         // way per pair, on the path that does not use it.
                         let payload = DirectPayload::of(&level0.tables, |pairs| {
@@ -712,11 +713,11 @@ impl ProbeOp {
                                 arena_of(&level0.tables, p)
                             })
                         });
-                        let payload = payload.ok().flatten();
-                        if let Some(p) = &payload {
+                        let d = d.with_payload(payload.ok().flatten());
+                        if let Some(p) = d.payload() {
                             s.counters.add(Counter::DirectPayloadRows, p.rows() as u64);
                         }
-                        d.with_payload(payload)
+                        d
                     })
                 })
                 .as_ref()

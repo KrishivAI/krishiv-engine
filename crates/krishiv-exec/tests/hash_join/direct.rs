@@ -365,7 +365,9 @@ async fn a_fused_probe_selection_matches_the_oracle_with_the_direct_index() {
             let want = want(&c, &probe, &build, run_as);
             assert_eq!(on, want, "{join_type:?} int32 {int32}");
             assert_eq!(off, want, "{join_type:?} int32 {int32}");
-            assert!(direct > 0, "{join_type:?} int32 {int32}: the index ran");
+            // The index reads exactly the rows the fused filter keeps.
+            let kept = probe.iter().filter(|r| r.v % 3 != 0).count() as u64;
+            assert_eq!(direct, kept, "{join_type:?} int32 {int32}: the index ran");
         }
     }
 }
@@ -432,7 +434,9 @@ async fn the_payload_cap_keeps_the_direct_index_either_way() {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
     /// Random one-key joins over small key spans (so the index applies):
-    /// the oracle's answer either way.
+    /// the oracle's answer, every probe row through the index when the build
+    /// qualifies (a non-NULL key, not a null-aware anti join) and none
+    /// otherwise.
     #[test]
     fn random_direct_joins_match_the_oracle(
         t in 0usize..TYPES.len(),
@@ -444,7 +448,9 @@ proptest! {
         let mut c = case(join_type, 1, false, filter && join_type != JoinType::NullAwareAnti);
         c.row_layout = true;
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let (got, _) = rt.block_on(run_direct(&c, &probe, &build, Run { on: true, ..Run::default() }));
+        let (got, direct) = rt.block_on(run_direct(&c, &probe, &build, Run { on: true, ..Run::default() }));
         prop_assert_eq!(got, c.oracle(&probe, &build));
+        let qualifies = join_type != JoinType::NullAwareAnti && build.iter().any(|r| r.k1.is_some());
+        prop_assert_eq!(direct, if qualifies { probe.len() as u64 } else { 0 });
     }
 }

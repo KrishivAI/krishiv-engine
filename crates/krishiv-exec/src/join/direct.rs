@@ -17,10 +17,11 @@
 //! as in the hashed path. Null-safe (`<=>`) keys and null-aware anti joins
 //! keep the hashed path. `krishiv.exec.join.directIndex` switches it off.
 //!
-//! Memory: the slot array is at most [`MAX_SLOTS`] `u64`s (128 KiB) per
-//! build and the build-time vectors at most [`MAX_ROWS`] entries
-//! each, small and bounded, so they are not reserved from the pool. The
-//! span limit is four slots a row with a floor of 64 slots (a build of
+//! Memory: the slot array (at most [`MAX_SLOTS`] `u64`s, 128 KiB per
+//! build) is reserved from the build's consumer for the index's life
+//! (`Level0::direct_memory`), and the build-time vectors (at most
+//! [`MAX_ROWS`] entries each) while it is built; a refused reservation keeps
+//! the hashed path. The span limit is four slots a row with a floor of 64 slots (a build of
 //! fewer than 16 rows may span 64 values).
 //!
 //! Build payload (perf lever P3): a direct build whose level-0 tables hold
@@ -33,9 +34,10 @@
 //! shares the buffers). A taken view column whose buffers hold more than
 //! 16 times the bytes its views use is compacted (`gc`), as the probe
 //! side's selections are (`compact_sparse_views`), so a small output batch
-//! is not charged downstream for the whole payload. The columns are of at
-//! most 4,096 rows and the bytes are capped (one copy per build, at most
-//! 256 KiB plus builder slack), so they are not reserved either.
+//! is not charged downstream for the whole payload. The columns (one copy
+//! per build, at most 4,096 rows and 256 KiB plus builder slack) are
+//! reserved from the index's reservation for its life; a refused
+//! reservation probes without them, decoding per pair.
 
 use std::sync::Arc;
 
@@ -43,6 +45,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Int32Type, Int64Type};
 use arrow_array::{Array, ArrayRef, UInt32Array};
 use arrow_schema::DataType;
+use krishiv_memory::Reservation;
 
 use super::keys::KeyCodec;
 use super::table::{JoinTable, NONE, RowArena};
@@ -66,6 +69,10 @@ pub(crate) const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
 /// An empty slot.
 const EMPTY: u64 = u64::MAX;
 
+/// The bytes a build row takes while the index is built: its partition and
+/// row, its key bytes' slice, its decoded key and value.
+const BUILD_BYTES_PER_ROW: usize = 64;
+
 /// The direct index of one build: for key `k`, slot `k - min` holds
 /// `partition << 32 | row`, or [`EMPTY`].
 #[derive(Debug)]
@@ -74,12 +81,21 @@ pub(crate) struct Direct {
     slots: Vec<u64>,
     /// The build columns decoded once, when the tables are small enough.
     payload: Option<Arc<DirectPayload>>,
+    /// The slot array's and the payload's bytes, released when the index
+    /// drops.
+    memory: Reservation,
 }
 
 impl Direct {
     /// The direct index of `tables` (the level-0 partitions; `spilled` the
-    /// mask of those spilled), when the build qualifies (module docs).
-    pub(crate) fn of(tables: &[Option<JoinTable>], spilled: u64, codec: &KeyCodec) -> Option<Self> {
+    /// mask of those spilled), when the build qualifies (module docs) and
+    /// `memory` grants its bytes.
+    pub(crate) fn of(
+        tables: &[Option<JoinTable>],
+        spilled: u64,
+        codec: &KeyCodec,
+        mut memory: Reservation,
+    ) -> Option<Self> {
         if spilled != 0 || codec.null_safe().iter().any(|&s| s) {
             return None;
         }
@@ -88,6 +104,8 @@ impl Direct {
         if rows == 0 || rows > MAX_ROWS {
             return None;
         }
+        let building = rows.saturating_mul(BUILD_BYTES_PER_ROW);
+        memory.try_grow(building).ok()?;
         // Every indexed row's key bytes, with its partition and row.
         let mut at: Vec<(u32, u32)> = Vec::with_capacity(rows);
         let mut keys: Vec<&[u8]> = Vec::with_capacity(rows);
@@ -125,6 +143,8 @@ impl Direct {
         if span > MAX_SLOTS || span > SPAN_PER_ROW.saturating_mul(rows.max(16)) {
             return None;
         }
+        let slot_bytes = span.saturating_mul(std::mem::size_of::<u64>());
+        memory.try_grow(slot_bytes).ok()?;
         let mut slots = vec![EMPTY; span];
         // Rows in table order and, within a table, in row order: the last
         // row written to a slot is the newest of its key (a key lives in one
@@ -134,17 +154,30 @@ impl Direct {
             let i = usize::try_from(v - min).ok()?;
             *slots.get_mut(i)? = (u64::from(*p) << 32) | u64::from(*r);
         }
+        drop((at, keys, values, cols));
+        memory.shrink(building);
         Some(Self {
             min,
             slots,
             payload: None,
+            memory,
         })
     }
 
-    /// This index with the build's payload decoded once (`payload`).
+    /// This index with the build's payload decoded once (`payload`), when
+    /// its reservation grants the payload's bytes.
     pub(crate) fn with_payload(mut self, payload: Option<DirectPayload>) -> Self {
-        self.payload = payload.map(Arc::new);
+        let memory = &mut self.memory;
+        self.payload = payload
+            .filter(|p| memory.try_grow(p.memory_size()).is_ok())
+            .map(Arc::new);
         self
+    }
+
+    /// The bytes this index holds in its reservation.
+    #[cfg(test)]
+    pub(crate) fn reserved(&self) -> usize {
+        self.memory.size()
     }
 
     /// The build's decoded payload, when it was decoded.
@@ -278,6 +311,14 @@ impl DirectPayload {
     pub(crate) fn rows(&self) -> usize {
         self.columns.first().map_or(0, Array::len)
     }
+
+    /// The bytes the decoded columns and the partition offsets hold.
+    pub(crate) fn memory_size(&self) -> usize {
+        let columns: usize = self.columns.iter().map(Array::get_array_memory_size).sum();
+        columns
+            + self.base.capacity() * std::mem::size_of::<Option<u32>>()
+            + self.len.capacity() * std::mem::size_of::<u32>()
+    }
 }
 
 /// `col` compacted (`gc`) when it is a view column whose data buffers hold
@@ -348,7 +389,9 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::{ArrayRef, Int64Array, StringViewArray};
 
-    use super::{DirectPayload, MAX_PAYLOAD_BYTES, compact_sparse};
+    use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
+
+    use super::{Direct, DirectPayload, MAX_PAYLOAD_BYTES, compact_sparse};
     use crate::error::Result;
 
     /// Column 0: the pair's partition * 100 + row; column 1: a view of
@@ -488,5 +531,42 @@ mod tests {
                 .sum::<usize>()
                 <= 64
         );
+    }
+
+    /// An empty index holding a reservation of a pool limited to `limit`.
+    fn index(limit: Option<usize>) -> Direct {
+        let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        let query = root.child("q", limit);
+        let id = query.register("direct", None);
+        Direct {
+            min: 0,
+            slots: Vec::new(),
+            payload: None,
+            memory: Reservation::new(query, id),
+        }
+    }
+
+    #[test]
+    fn the_payload_is_reserved_for_the_index_life_or_left_out() -> Result<()> {
+        let lens = [Some(40), Some(24)];
+        let Some(payload) = DirectPayload::of_lens(0, &lens, decode)? else {
+            panic!("a payload under the cap is decoded");
+        };
+        let bytes = payload.memory_size();
+        assert!(bytes > 64 * 40, "the payload holds its strings: {bytes}");
+        let kept = index(None).with_payload(Some(payload));
+        assert!(kept.payload().is_some());
+        assert_eq!(kept.reserved(), bytes);
+
+        let Some(payload) = DirectPayload::of_lens(0, &lens, decode)? else {
+            panic!("a payload under the cap is decoded");
+        };
+        let refused = index(Some(bytes - 1)).with_payload(Some(payload));
+        assert!(
+            refused.payload().is_none(),
+            "a refused reservation probes per pair"
+        );
+        assert_eq!(refused.reserved(), 0);
+        Ok(())
     }
 }
