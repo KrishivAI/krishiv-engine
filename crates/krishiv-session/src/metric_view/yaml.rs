@@ -16,6 +16,7 @@
 //!
 //! A malformed document gives the event parser's message, not SnakeYAML's (design §2).
 
+use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
 use krishiv_sql::{ParserOptions, parse_multipart_identifier, parse_query};
 use saphyr_parser::{Event, Parser, ScalarStyle, Span};
 
@@ -574,7 +575,7 @@ fn read_v01(events: &mut Events, options: &ParserOptions) -> Result<MetricViewSp
         return Err(Fail::Invalid(String::from("Source cannot be empty")));
     } else if parse_multipart_identifier(&source, options).is_ok() {
         MetricViewSource::Asset(source)
-    } else if !source.trim_end().ends_with(';') && parse_query(&source, options).is_ok() {
+    } else if !ends_in_terminator(&source) && parse_query(&source, options).is_ok() {
         // A statement terminator is no part of a query source (Spark 4.2.1 run, 2026-11-21:
         // `Invalid source: SELECT * FROM t;`); wrapped as a derived table it would not parse.
         MetricViewSource::Sql(source)
@@ -587,4 +588,16 @@ fn read_v01(events: &mut Events, options: &ParserOptions) -> Result<MetricViewSp
         dimensions,
         measures,
     })
+}
+
+/// Whether the last token of `source` other than a comment is `;`. Spark's `Source.apply` reads a
+/// query source with `parseQuery` (`singleQuery: query EOF`), which takes no terminator, while
+/// Krishiv's `parse_query` takes `query ;* EOF`; deciding on tokens keeps a `;` inside a comment
+/// (`SELECT * FROM t -- latest;`) a query and refuses one before a comment (`SELECT * FROM t; -- x`).
+fn ends_in_terminator(source: &str) -> bool {
+    tokenize(source)
+        .iter()
+        .rev()
+        .find(|t| !t.kind.is_trivia())
+        .is_some_and(|t| t.kind == TokenKind::Sym(Sym::Semi))
 }

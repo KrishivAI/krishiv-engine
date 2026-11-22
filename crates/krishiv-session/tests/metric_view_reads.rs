@@ -747,6 +747,33 @@ fn a_query_source_ending_in_a_semicolon_is_invalid() {
     );
 }
 
+/// The terminator is decided on tokens, as Spark's `parseQuery` decides (review of 515b0f345): a
+/// `;` after the query, before a comment or doubled, is no source; a `;` inside a trailing comment
+/// leaves a query source.
+#[test]
+fn a_query_source_terminator_is_read_from_tokens() {
+    let (s, _dir) = session();
+    let create = |name: &str, source: &str| {
+        run(
+            &s,
+            &format!(
+                "CREATE VIEW {name} WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\nsource: {source}\ndimensions:\n  - name: region\n    expr: region\nmeasures:\n  - name: total\n    expr: sum(n)\n$$"
+            ),
+        )
+    };
+    for source in ["SELECT * FROM src; -- note", "SELECT * FROM src;;"] {
+        let e = create("mv_bad", source).unwrap_err();
+        assert_eq!(class(&e), "INVALID_METRIC_VIEW_YAML", "{source}: {e}");
+        assert!(
+            e.to_string().contains(&format!("Invalid source: {source}")),
+            "{source}: {e}"
+        );
+    }
+    create("mv_comment", "SELECT * FROM src -- latest;").unwrap();
+    let rows = run(&s, "SELECT measure(total) FROM mv_comment").unwrap();
+    assert_eq!(longs(&rows, 0), [8]);
+}
+
 /// `HAVING` on a grouping key the output does not show, then `ORDER BY measure(..)`: Spark 4.2.1
 /// cannot resolve the measure column in the sort (run 2026-11-21).
 #[test]
