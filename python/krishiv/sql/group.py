@@ -12,7 +12,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from krishiv import _native
-from krishiv.errors import not_expected_type, not_implemented
+from krishiv.errors import UnsupportedOperationException, not_expected_type, not_implemented
 from krishiv.sql import functions as F
 from krishiv.sql.column import Column
 
@@ -50,6 +50,7 @@ class GroupedData:
         self._grouped = native
         self._source = df
         self._pivoted = False
+        self._multi_grouping = False  # rollup, cube or groupingSets: pivot is refused after it
 
     def agg(self, *exprs: Column | dict[str, str]) -> DataFrame:
         """Computes aggregates and returns the result as a :class:`DataFrame`.
@@ -254,6 +255,14 @@ class GroupedData:
         """
         from krishiv.errors import AnalysisException
 
+        if self._multi_grouping:
+            raise UnsupportedOperationException(
+                "[UNSUPPORTED_FEATURE.PIVOT_AFTER_GROUP_BY] The feature is not supported: PIVOT clause following a "
+                "GROUP BY clause. Consider pushing the GROUP BY into a subquery. SQLSTATE: 0A000",
+                errorClass="UNSUPPORTED_FEATURE.PIVOT_AFTER_GROUP_BY",
+                messageParameters={},
+                sqlState="0A000",
+            )
         if not isinstance(pivot_col, str):
             raise not_expected_type("pivot_col", "str", pivot_col)
         if values is not None:

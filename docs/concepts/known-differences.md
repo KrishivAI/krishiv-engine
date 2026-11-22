@@ -308,9 +308,7 @@ repeated values raise `INVALID_ARRAY_INDEX` with ANSI on and leave NULL cells wi
   node: the Python layer filters on `rand`), and a Spark Connect `Sample` is not served yet.
 - `GroupedData.pivot`: `count("*")` raises `INVALID_USAGE_OF_STAR_OR_REGEX` as Spark's DataFrame pivot does (SQL's
   `PIVOT` clause accepts it). A grouping key that is not a plain or aliased column cannot be pivoted beside an
-  aggregate that reads a key of the same name (`KRISHIV_UNSUPPORTED_FEATURE`). A pivot after `rollup`, `cube` or
-  grouping sets (reachable only from Rust) fails with `KRISHIV_UNSUPPORTED_FEATURE` when the aggregate is applied, not
-  `UNSUPPORTED_FEATURE.PIVOT_AFTER_GROUP_BY` when `pivot` is called. A pivot's aggregate errors are raised by `agg`.
+  aggregate that reads a key of the same name (`KRISHIV_UNSUPPORTED_FEATURE`). A pivot's aggregate errors are raised by `agg`.
   `values=[]` computes the values (as Spark Connect), where classic PySpark gives no pivot columns.
 
 ## Inferred join filters differ from Spark's

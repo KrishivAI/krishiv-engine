@@ -2130,11 +2130,15 @@ class DataFrame:
 
     def rollup(self, *cols: ColumnsOrNames) -> GroupedData:
         """Groups by ``cols`` and their prefixes (a key a row is rolled up over reads ``NULL``)."""
-        return GroupedData(self._df.rollup([_named(c) for c in _flatten(cols)]), self)
+        grouped = GroupedData(self._df.rollup([_named(c) for c in _flatten(cols)]), self)
+        grouped._multi_grouping = True
+        return grouped
 
     def cube(self, *cols: ColumnsOrNames) -> GroupedData:
         """Groups by every subset of ``cols`` (a key a row is rolled up over reads ``NULL``)."""
-        return GroupedData(self._df.cube([_named(c) for c in _flatten(cols)]), self)
+        grouped = GroupedData(self._df.cube([_named(c) for c in _flatten(cols)]), self)
+        grouped._multi_grouping = True
+        return grouped
 
     def groupingSets(self, groupingSets: Sequence[Sequence[ColumnOrName]], *cols: ColumnOrName) -> GroupedData:
         """Groups by each of ``groupingSets`` (a key a set does not group by reads ``NULL``); ``cols``
@@ -2142,7 +2146,9 @@ class DataFrame:
         if not isinstance(groupingSets, list | tuple) or not all(isinstance(g, list | tuple) for g in groupingSets):
             raise not_expected_type("groupingSets", "list of lists of Column or str", groupingSets)
         sets = [[_named(c) for c in g] for g in groupingSets]
-        return GroupedData(self._df.grouping_sets(sets, [_named(c) for c in _flatten(cols)]), self)
+        grouped = GroupedData(self._df.grouping_sets(sets, [_named(c) for c in _flatten(cols)]), self)
+        grouped._multi_grouping = True
+        return grouped
 
     def withColumns(self, colsMap: dict[str, Column | str]) -> DataFrame:
         """Adds or replaces columns by name (a replaced column keeps its place); every expression

@@ -539,3 +539,15 @@ def test_sample_by_matches_strata_by_type(spark: SparkSession) -> None:
         match=r"requirement failed: Fractions must be in \[0, 1\], but got Map\(a -> 1.5\).",
     ):
         df.sampleBy("k", {"a": 1.5}, 1)
+
+
+def test_pivot_after_rollup_cube_or_grouping_sets_is_refused_when_pivot_is_called(earnings: DataFrame) -> None:
+    from krishiv.errors import UnsupportedOperationException
+
+    for grouped in (
+        earnings.rollup("year"),
+        earnings.cube("year"),
+        earnings.groupingSets([["year"], []], "year"),
+    ):
+        with pytest.raises(UnsupportedOperationException, match="PIVOT_AFTER_GROUP_BY"):
+            grouped.pivot("course")
