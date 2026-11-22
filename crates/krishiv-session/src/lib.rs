@@ -71,6 +71,7 @@ pub mod grants;
 mod history;
 mod identifier_clause;
 mod introspection;
+mod introspection_functions;
 #[cfg(test)]
 mod lineage_tests;
 #[cfg(feature = "unstable-ir")]
@@ -79,6 +80,7 @@ mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;
 mod memory_table;
+mod metric_view;
 mod monitor;
 mod nested_value;
 mod observation;

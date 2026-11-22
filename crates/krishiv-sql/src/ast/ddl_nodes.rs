@@ -633,6 +633,42 @@ pub struct Use {
     pub span: Span,
 }
 
+/// `CREATE [OR REPLACE] VIEW [IF NOT EXISTS] name [(columns)] {WITH METRICS
+/// | LANGUAGE name | COMMENT '...' | TBLPROPERTIES (...)}* AS $$body$$`
+/// (Spark 4.2 `createMetricView`). The clauses are recorded as written:
+/// Spark checks duplicates, the missing clauses and the language after
+/// parsing (`SparkSqlParser.visitCreateMetricView`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateMetricView {
+    /// `OR REPLACE`.
+    pub or_replace: bool,
+    /// `IF NOT EXISTS`.
+    pub if_not_exists: bool,
+    /// The view name.
+    pub name: DdlName,
+    /// The declared column aliases (`name [COMMENT '...']`); empty for none.
+    pub columns: Vec<PermanentViewColumn>,
+    /// The first `COMMENT '...'`.
+    pub comment: Option<String>,
+    /// The first `TBLPROPERTIES (...)`.
+    pub tblproperties: Vec<TableOption>,
+    /// The first `LANGUAGE name` (`SQL` included), as written.
+    pub language: Option<Ident>,
+    /// The `WITH` and `METRICS` tokens of the first `WITH METRICS`.
+    pub with_metrics: Option<[Span; 2]>,
+    /// The first `LANGUAGE` keyword (a release before 4.2 fails there when it comes first).
+    pub language_keyword: Option<Span>,
+    /// The first clause written twice, by Spark's check order (`COMMENT`,
+    /// `TBLPROPERTIES`, `LANGUAGE`, `WITH METRICS`), if any.
+    pub duplicate_clause: Option<&'static str>,
+    /// The text between the dollar-quote tags.
+    pub body: String,
+    /// The dollar-quoted literal, tags included.
+    pub body_span: Span,
+    /// Source text, from `CREATE` to the end of the statement.
+    pub span: Span,
+}
+
 /// `CREATE [OR REPLACE] [GLOBAL] [TEMPORARY] VIEW [IF NOT EXISTS] name
 /// [(columns)] [USING provider] [OPTIONS (...)] [COMMENT '...']
 /// [TBLPROPERTIES (...)] [WITH SCHEMA ...] [AS query]`: every view shape
@@ -790,6 +826,14 @@ pub enum AlterTableAction {
     SetTblProperties(Vec<TableOption>),
     /// `COMMENT ON TABLE name IS 'comment'` (`None` for `IS NULL`).
     SetComment(Option<String>),
+    /// `COMMENT ON COLUMN table.column IS 'comment'` or `COMMENT ON TABLE name COLUMN (c IS
+    /// 'comment', ...)`: each column with its comment (`None` for `IS NULL`: the comment is removed).
+    CommentOnColumns {
+        /// Each column with its comment.
+        columns: Vec<(ColumnName, Option<String>)>,
+        /// Written as `COMMENT ON TABLE name COLUMN (...)` (Spark names that command in a view's error).
+        list_form: bool,
+    },
     /// `UNSET TBLPROPERTIES [IF EXISTS] (...)`.
     UnsetTblProperties {
         /// `IF EXISTS`.
@@ -1049,6 +1093,8 @@ pub struct InsertClause {
 pub struct Delete {
     /// The table to delete from.
     pub table: DdlName,
+    /// `WITH (...)` target options.
+    pub options: Vec<TableOption>,
     /// Its alias, if written.
     pub alias: Option<Ident>,
     /// `WHERE ...`.
@@ -1073,6 +1119,8 @@ pub struct UpdateAssignment {
 pub struct Update {
     /// The table to update.
     pub table: DdlName,
+    /// `WITH (...)` target options.
+    pub options: Vec<TableOption>,
     /// Its alias, if written.
     pub alias: Option<Ident>,
     /// The `SET` assignments.
@@ -1088,6 +1136,8 @@ pub struct Update {
 pub struct Merge {
     /// The target table.
     pub target: DdlName,
+    /// `WITH (...)` target options.
+    pub options: Vec<TableOption>,
     /// Its alias, if written.
     pub target_alias: Option<Ident>,
     /// The source.
@@ -1109,6 +1159,8 @@ pub enum MergeSource {
     Table {
         /// The table name.
         name: DdlName,
+        /// Its `WITH (...)` options (before the alias).
+        options: Vec<TableOption>,
         /// Its alias, if written.
         alias: Option<Ident>,
         /// Source text.

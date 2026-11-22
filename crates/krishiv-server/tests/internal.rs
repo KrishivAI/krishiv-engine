@@ -31,14 +31,17 @@ fn rows(v: Value) -> Vec<Row> {
 
 struct Fake {
     cancelled: Mutex<Vec<String>>,
+    closed: Mutex<Vec<String>>,
     fail: bool,
+    /// Two sessions each run a query under the id `q-dup`.
+    dup: bool,
     /// How many times the live-query table was read.
     reads: std::sync::atomic::AtomicUsize,
 }
 
 impl UiSource for Fake {
     fn rows(&self, table: SystemTable) -> UiFuture<'_, Vec<Row>> {
-        let fail = self.fail;
+        let (fail, dup) = (self.fail, self.dup);
         Box::pin(async move {
             if table == SystemTable::Queries {
                 self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -50,18 +53,31 @@ impl UiSource for Fake {
                     Some("XX000"),
                 ));
             }
+            if dup && table == SystemTable::Queries {
+                return Ok(rows(json!([
+                    {"query_id": "q-dup", "state": "running", "principal": "ann", "submitted_at": 10, "session_id": "s-a",
+                     "query_text": "SELECT a FROM t"},
+                    {"query_id": "q-dup", "state": "running", "principal": "bob", "submitted_at": 20, "session_id": "s-b",
+                     "query_text": "SELECT b FROM t"},
+                    {"query_id": "q-solo", "state": "running", "principal": "bob", "submitted_at": 30, "session_id": "s-b"},
+                    {"query_id": "q-old", "state": "finished", "principal": "ann", "submitted_at": 1, "session_id": "s-a"},
+                    {"query_id": "q-old", "state": "running", "principal": "cy", "submitted_at": 40, "session_id": "s-c"}
+                ])));
+            }
             Ok(match table {
                 SystemTable::Queries => rows(json!([
-                    {"query_id": "q-run", "state": "running", "principal": "ann", "submitted_at": 2_000,
+                    {"query_id": "q-run", "state": "running", "principal": "ann", "submitted_at": 2_000, "session_id": "s-busy",
                      "query_text": "SELECT 1 FROM t WHERE pw = 's3cr3t-canary'", "secret_option": "hunter2", "workers": 1},
                     {"query_id": "q-wait", "state": "queued", "principal": "bob", "submitted_at": 1_000},
-                    {"query_id": "q-a", "state": "finished", "principal": "ann", "submitted_at": 100,
+                    {"query_id": "q-a", "state": "finished", "principal": "ann", "submitted_at": 100, "session_id": "s-old",
+                     "client_type": "_SPARK_CONNECT_PYTHON spark/4.2.0", "tags": {"team": "risk", "nightly": ""},
                      "wall_ns": 1_000, "peak_memory_bytes": 10, "rows_produced": 5, "spill_bytes": 0},
-                    {"query_id": "q-b", "state": "finished", "principal": "ann", "submitted_at": 200,
+                    {"query_id": "q-b", "state": "finished", "principal": "ann", "submitted_at": 200, "session_id": "s-old",
+                     "client_type": "krishiv-cli", "tags": {"team": "ads", "krishiv-ui-run-7": ""},
                      "wall_ns": 1_500, "peak_memory_bytes": 30, "rows_produced": 5, "spill_bytes": 7,
                      "hints": [{"code": "SPILL", "node_id": 2, "operator_id": 2, "message": "HashJoin spilled 4.0 KiB"}]},
-                    {"query_id": "q-bad", "state": "failed", "principal": "bob", "submitted_at": 300,
-                     "error_class": "DIVIDE_BY_ZERO"},
+                    {"query_id": "q-bad", "state": "failed", "principal": "bob@example.com", "submitted_at": 300,
+                     "client_type": null, "tags": {}, "error_class": "DIVIDE_BY_ZERO"},
                     {"query_id": "q-min", "state": "finished", "principal": "cy", "submitted_at": 50, "wall_ns": -9_223_372_036_854_775_807_i64},
                     {"query_id": "q-max", "state": "finished", "principal": "cy", "submitted_at": 60, "wall_ns": 9_223_372_036_854_775_807_i64}
                 ])),
@@ -89,22 +105,97 @@ impl UiSource for Fake {
                     {"worker_id": "local", "cache": "block", "entries": 0, "bytes": 0, "hits": 0, "misses": 0},
                     {"worker_id": "local", "cache": "huge", "entries": 1, "bytes": 1, "hits": 9_223_372_036_854_775_807_i64, "misses": 5}
                 ])),
+                SystemTable::Sessions => rows(json!([
+                    {"session_id": "s-old", "principal": "ann", "state": "closed", "transport": "connect",
+                     "created_at": 10, "last_active_at": 900, "closed_at": 950, "close_reason": "release_session",
+                     "tags": {}, "queries_running": 0, "queries_started": 4},
+                    {"session_id": "s-idle", "principal": "bob", "state": "active", "transport": "connect",
+                     "client_type": "krishiv-cli", "created_at": 20, "last_active_at": 100,
+                     "tags": {"team": "risk", "krishiv-ui-run-3": ""}, "queries_running": 0, "queries_started": 1,
+                     "current_catalog": "spark_catalog", "current_namespace": "default", "secret_option": "hunter2"},
+                    {"session_id": "s-busy", "principal": "ann", "state": "active", "transport": "flight_sql",
+                     "created_at": 30, "last_active_at": 800, "tags": {}, "queries_running": 2, "queries_started": 9},
+                    {"session_id": "s-gone", "principal": "cy", "state": "expired", "transport": "connect",
+                     "created_at": 5, "last_active_at": 990, "closed_at": 995, "tags": {}, "queries_running": 0,
+                     "queries_started": 0}
+                ])),
+                SystemTable::ResourceGroups => rows(json!([
+                    {"group_id": "root", "parent_id": null, "state": "active", "scheduling_policy": "weighted_fair",
+                     "scheduling_weight": 1, "priority": 0, "workload_class": "interactive",
+                     "hard_concurrency_limit": 8, "max_queued": 100, "soft_memory_limit_bytes": 1000,
+                     "running": 3, "queued": 1, "memory_reserved_bytes": 400, "internal_note": "hunter2"},
+                    {"group_id": "root.etl", "parent_id": "root", "state": "active",
+                     "scheduling_policy": "query_priority", "scheduling_weight": 2, "priority": 1,
+                     "workload_class": "batch", "hard_concurrency_limit": 2, "max_queued": 10,
+                     "running": 2, "queued": 1, "memory_reserved_bytes": 300},
+                    {"group_id": "root.adhoc", "parent_id": "root", "state": "removed",
+                     "scheduling_policy": "weighted_fair", "scheduling_weight": 1, "priority": 0,
+                     "workload_class": "interactive", "hard_concurrency_limit": 4, "max_queued": 10,
+                     "running": 1, "queued": 0, "memory_reserved_bytes": 100}
+                ])),
+                // As the table lists them: the best suggestion of each table first.
+                SystemTable::PartitionAdvice => rows(json!([
+                    {"table_name": "spark_catalog.default.ev", "rank": 1, "column_name": "d", "table_queries": 120,
+                     "column_queries": 100, "partitions": 365, "pruned_fraction": 0.9973, "internal_note": "hunter2"},
+                    {"table_name": "spark_catalog.sales.orders", "rank": 1, "column_name": "region",
+                     "table_queries": 40, "column_queries": 30, "partitions": 12, "pruned_fraction": 0.9167},
+                    {"table_name": "spark_catalog.default.ev", "rank": 2, "column_name": "c", "table_queries": 120,
+                     "column_queries": 20, "partitions": 3, "pruned_fraction": 0.6667}
+                ])),
             })
+        })
+    }
+
+    fn close_session<'a>(&'a self, session_id: &'a str) -> UiFuture<'a, Option<usize>> {
+        Box::pin(async move {
+            self.closed.lock().unwrap().push(session_id.to_owned());
+            if self.fail {
+                return Err(UiError::new("the engine is unavailable"));
+            }
+            Ok((session_id == "s-busy").then_some(2))
         })
     }
 
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool> {
         Box::pin(async move {
             self.cancelled.lock().unwrap().push(query_id.to_owned());
-            Ok(query_id == "q-run")
+            Ok(matches!(query_id, "q-run" | "q-solo" | "q-old"))
+        })
+    }
+
+    fn cancel_in_session<'a>(
+        &'a self,
+        query_id: &'a str,
+        session_id: &'a str,
+    ) -> UiFuture<'a, bool> {
+        Box::pin(async move {
+            self.cancelled
+                .lock()
+                .unwrap()
+                .push(format!("{query_id}@{session_id}"));
+            if self.fail {
+                return Err(UiError::new("the engine is unavailable"));
+            }
+            Ok(query_id == "q-dup" && matches!(session_id, "s-a" | "s-b"))
         })
     }
 }
 
 async fn start(fail: bool) -> (std::net::SocketAddr, Arc<Fake>) {
+    start_with(fail, false).await
+}
+
+/// A source where two sessions each run a query under one id.
+async fn start_dup() -> (std::net::SocketAddr, Arc<Fake>) {
+    start_with(false, true).await
+}
+
+async fn start_with(fail: bool, dup: bool) -> (std::net::SocketAddr, Arc<Fake>) {
     let fake = Arc::new(Fake {
         cancelled: Mutex::new(Vec::new()),
+        closed: Mutex::new(Vec::new()),
         fail,
+        dup,
         reads: std::sync::atomic::AtomicUsize::new(0),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -156,6 +247,9 @@ async fn every_internal_endpoint_needs_the_token() {
         "/api/internal/queries",
         "/api/internal/history",
         "/api/internal/events",
+        "/api/internal/sessions",
+        "/api/internal/groups",
+        "/api/internal/advice",
     ] {
         let (status, _, body) = request(addr, "GET", path, false).await;
         assert_eq!(status, 401, "{path}");
@@ -275,6 +369,60 @@ async fn history_lists_finished_queries_newest_first_with_filters_and_a_limit() 
     let ann = get(addr, "/api/internal/history?principal=ann&limit=1").await;
     assert_eq!(ann["queries"][0]["query_id"], "q-b");
     assert_eq!(ann["queries"].as_array().unwrap().len(), 1);
+}
+
+/// The server console's filters (ADR 0024): by user, by client type and by tag, as the page sends them.
+#[tokio::test]
+async fn history_filters_by_user_client_type_and_tag() {
+    let (addr, _) = start(false).await;
+    let ids = |path: &'static str| async move {
+        let body = get(addr, path).await;
+        body["queries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|q| q["query_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    // A name with a character the page escapes.
+    assert_eq!(
+        ids("/api/internal/history?principal=bob%40example.com").await,
+        ["q-bad"]
+    );
+    // Any part of the client's name, in either case; a query with no client type matches no client.
+    assert_eq!(ids("/api/internal/history?client=python").await, ["q-a"]);
+    assert_eq!(
+        ids("/api/internal/history?client=krishiv-CLI").await,
+        ["q-b"]
+    );
+    assert_eq!(
+        ids("/api/internal/history?client=spark+connect").await,
+        Vec::<String>::new(),
+        "a space is a space, not an underscore"
+    );
+    // A tag by its key, or by key and value; a request tag is a key with no value.
+    assert_eq!(ids("/api/internal/history?tag=team").await, ["q-b", "q-a"]);
+    assert_eq!(ids("/api/internal/history?tag=team%3Drisk").await, ["q-a"]);
+    assert_eq!(ids("/api/internal/history?tag=nightly").await, ["q-a"]);
+    assert_eq!(
+        ids("/api/internal/history?tag=team%3D").await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        ids("/api/internal/history?tag=team&client=cli&state=finished").await,
+        ["q-b"],
+        "filters combine"
+    );
+    // An empty filter is no filter, and a value that does not decode is none either.
+    assert_eq!(ids("/api/internal/history?tag=&client=").await.len(), 5);
+    assert_eq!(ids("/api/internal/history?tag=%zz").await.len(), 5);
+    // The row carries what was filtered on.
+    let row = &get(addr, "/api/internal/history?tag=nightly").await["queries"][0];
+    assert_eq!(row["client_type"], "_SPARK_CONNECT_PYTHON spark/4.2.0");
+    assert_eq!(row["tags"]["team"], "risk");
+    // The tag the editor gives its own run is not sent.
+    let from_editor = &get(addr, "/api/internal/history?client=cli").await["queries"][0];
+    assert_eq!(from_editor["tags"], json!({"team": "ads"}));
 }
 
 #[tokio::test]
@@ -425,6 +573,29 @@ async fn nothing_that_changes_state_accepts_a_token_in_the_address_or_a_cookie()
         fake.cancelled.lock().unwrap().is_empty(),
         "nothing was cancelled"
     );
+    for (name, extra, path) in [
+        ("no token", "", "/api/internal/sessions/s-busy/close"),
+        (
+            "token in the address",
+            "",
+            &format!("/api/internal/sessions/s-busy/close?token={TOKEN}"),
+        ),
+        (
+            "token in a cookie",
+            &format!("Cookie: krishiv_ui_token={TOKEN}\r\n"),
+            "/api/internal/sessions/s-busy/close",
+        ),
+    ] {
+        let mut s = TcpStream::connect(addr).await.unwrap();
+        s.write_all(format!("POST {path} HTTP/1.1\r\nHost: localhost\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).await.unwrap();
+        assert!(out.starts_with("HTTP/1.1 401"), "{name}: {out}");
+    }
+    assert!(
+        fake.closed.lock().unwrap().is_empty(),
+        "no session was ended"
+    );
 }
 
 async fn open_stream(addr: std::net::SocketAddr) -> TcpStream {
@@ -509,4 +680,272 @@ async fn several_open_tabs_share_one_read_of_the_live_queries_a_period() {
         reads <= 3,
         "6 tabs caused {reads} reads of the live queries; they should share one a period"
     );
+}
+
+#[tokio::test]
+async fn sessions_list_the_open_ones_first_by_last_activity_with_only_allowlisted_columns() {
+    let (addr, _) = start(false).await;
+    let body = get(addr, "/api/internal/sessions").await;
+    let ids: Vec<&str> = body["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["session_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        ["s-busy", "s-idle", "s-gone", "s-old"],
+        "open first, then ended; each part by its last activity, newest first"
+    );
+    assert_eq!(body["truncated"], false);
+    let idle = &body["sessions"][1];
+    assert_eq!(idle["client_type"], "krishiv-cli");
+    assert_eq!(idle["current_namespace"], "default");
+    assert_eq!(
+        idle["tags"],
+        json!({"team": "risk"}),
+        "the editor's own tag is the console's bookkeeping"
+    );
+    assert!(
+        idle.get("secret_option").is_none(),
+        "a column outside the allowlist does not reach the page"
+    );
+    assert!(!body.to_string().contains("hunter2"));
+    assert_eq!(body["sessions"][3]["close_reason"], "release_session");
+}
+
+#[tokio::test]
+async fn groups_keep_the_tables_order_and_only_allowlisted_columns() {
+    let (addr, _) = start(false).await;
+    let body = get(addr, "/api/internal/groups").await;
+    let groups = body["groups"].as_array().unwrap();
+    let ids: Vec<&str> = groups
+        .iter()
+        .map(|g| g["group_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        ["root", "root.etl", "root.adhoc"],
+        "a parent before its children, as the table lists them (not sorted by name)"
+    );
+    assert_eq!(groups[0]["hard_concurrency_limit"], 8);
+    assert_eq!(groups[0]["running"], 3);
+    assert_eq!(groups[1]["parent_id"], "root");
+    assert_eq!(groups[2]["state"], "removed");
+    assert!(!body.to_string().contains("hunter2"));
+}
+
+#[tokio::test]
+async fn closing_a_session_reaches_the_source_and_reports_what_was_cancelled() {
+    let (addr, fake) = start(false).await;
+    let (status, _, body) =
+        request(addr, "POST", "/api/internal/sessions/s-busy/close", true).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, json!({"closed": true, "queries_cancelled": 2}));
+    let (status, _, body) = request(addr, "POST", "/api/internal/sessions/s-old/close", true).await;
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(body["error"], "not_open");
+    assert_eq!(*fake.closed.lock().unwrap(), ["s-busy", "s-old"]);
+    // Reading is not closing.
+    let (status, ..) = request(addr, "GET", "/api/internal/sessions/s-busy/close", true).await;
+    assert_eq!(status, 405);
+    assert_eq!(fake.closed.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_failing_source_fails_the_session_and_group_routes_as_json() {
+    let (addr, _) = start(true).await;
+    for path in [
+        "/api/internal/sessions",
+        "/api/internal/groups",
+        "/api/internal/advice",
+    ] {
+        let (status, _, body) = request(addr, "GET", path, true).await;
+        assert_eq!(status, 500, "{path}");
+        assert_eq!(body["error"], "source_failed", "{path}");
+    }
+    let (status, _, body) =
+        request(addr, "POST", "/api/internal/sessions/s-busy/close", true).await;
+    assert_eq!(status, 500);
+    assert_eq!(body["error"], "source_failed");
+}
+
+#[tokio::test]
+async fn the_lists_name_a_session_and_history_filters_by_it_but_the_query_page_does_not() {
+    let (addr, _) = start(false).await;
+    let live = get(addr, "/api/internal/queries").await;
+    assert_eq!(live["queries"][1]["query_id"], "q-run");
+    assert_eq!(live["queries"][1]["session_id"], "s-busy");
+    let of = get(addr, "/api/internal/history?session=s-old").await;
+    let ids: Vec<&str> = of["queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| q["query_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["q-b", "q-a"]);
+    let none = get(addr, "/api/internal/history?session=nobody").await;
+    assert_eq!(none["queries"], json!([]));
+    // A signed embed link reads a query's page with no session: the id of the client's session stays out.
+    let detail = get(addr, "/api/internal/queries/q-b").await;
+    assert!(detail["query"].get("session_id").is_none(), "{detail}");
+}
+
+#[tokio::test]
+async fn advice_is_grouped_by_table_in_the_tables_order_with_only_allowlisted_columns() {
+    let (addr, _) = start(false).await;
+    let body = get(addr, "/api/internal/advice").await;
+    assert_eq!(body["truncated"], false);
+    let tables = body["tables"].as_array().unwrap();
+    let names: Vec<&str> = tables
+        .iter()
+        .map(|t| t["table_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["spark_catalog.default.ev", "spark_catalog.sales.orders"],
+        "one entry a table, in the order the table first names each"
+    );
+    assert_eq!(tables[0]["table_queries"], 120);
+    assert_eq!(
+        tables[0]["columns"],
+        json!([
+            {"rank": 1, "column_name": "d", "column_queries": 100, "partitions": 365, "pruned_fraction": 0.9973},
+            {"rank": 2, "column_name": "c", "column_queries": 20, "partitions": 3, "pruned_fraction": 0.6667}
+        ]),
+        "a table's suggestions by rank, however far apart the table lists them"
+    );
+    assert_eq!(tables[1]["columns"].as_array().unwrap().len(), 1);
+    assert!(!body.to_string().contains("hunter2"));
+    // Advice is read, never applied.
+    let (status, ..) = request(addr, "POST", "/api/internal/advice", true).await;
+    assert_eq!(status, 405);
+}
+
+#[tokio::test]
+async fn a_query_page_can_name_the_session_of_a_query_whose_id_two_sessions_share() {
+    let (addr, _) = start_dup().await;
+    let of_a = get(addr, "/api/internal/queries/q-dup?session=s-a").await;
+    assert_eq!(of_a["query"]["principal"], "ann", "{of_a}");
+    let of_b = get(addr, "/api/internal/queries/q-dup?session=s-b").await;
+    assert_eq!(of_b["query"]["principal"], "bob", "{of_b}");
+    assert_eq!(of_b["query"]["query_text"], "SELECT b FROM t");
+    // Without a session the first of that id answers, as before; a session that has no such query is a 404.
+    let first = get(addr, "/api/internal/queries/q-dup").await;
+    assert_eq!(first["query"]["principal"], "ann");
+    for path in [
+        "/api/internal/queries/q-dup?session=s-c",
+        "/api/internal/queries/q-solo?session=s-a",
+    ] {
+        let (status, _, body) = request(addr, "GET", path, true).await;
+        assert_eq!(status, 404, "{path}: {body}");
+        assert_eq!(body["error"], "no_such_query");
+    }
+}
+
+#[tokio::test]
+async fn compare_can_name_the_session_of_each_run() {
+    let (addr, _) = start_dup().await;
+    let path = "/api/internal/compare?a=q-dup&a_session=s-b&b=q-dup&b_session=s-a";
+    let body = get(addr, path).await;
+    assert_eq!(body["a"]["principal"], "bob", "{body}");
+    assert_eq!(body["b"]["principal"], "ann", "{body}");
+    // Without a session the first run of that id answers, as before.
+    let first = get(addr, "/api/internal/compare?a=q-dup&b=q-solo").await;
+    assert_eq!(first["a"]["principal"], "ann", "{first}");
+    // A session that has no such run is not in the history.
+    let path = "/api/internal/compare?a=q-dup&a_session=s-c&b=q-solo";
+    let (status, _, body) = request(addr, "GET", path, true).await;
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(body["error"], "no_such_query");
+}
+
+#[tokio::test]
+async fn cancel_ends_only_the_named_sessions_query_and_refuses_an_id_two_sessions_run() {
+    let (addr, fake) = start_dup().await;
+    // An id two sessions are running, with no session named: refused before the source is asked.
+    let (status, _, body) = request(addr, "POST", "/api/internal/queries/q-dup/cancel", true).await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"], "ambiguous_query");
+    assert!(fake.cancelled.lock().unwrap().is_empty());
+
+    let path = "/api/internal/queries/q-dup/cancel?session=s-b";
+    let (status, _, body) = request(addr, "POST", path, true).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, json!({"cancelled": true}));
+    let path = "/api/internal/queries/q-dup/cancel?session=s-c";
+    let (status, _, body) = request(addr, "POST", path, true).await;
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(body["error"], "not_running");
+
+    // An id only one session is running needs no session: an ended query of another session under the
+    // same id does not make it ambiguous.
+    for id in ["q-solo", "q-old"] {
+        let path = format!("/api/internal/queries/{id}/cancel");
+        let (status, _, body) = request(addr, "POST", &path, true).await;
+        assert_eq!(status, 200, "{id}: {body}");
+    }
+    assert_eq!(
+        *fake.cancelled.lock().unwrap(),
+        ["q-dup@s-b", "q-dup@s-c", "q-solo", "q-old"]
+    );
+}
+
+#[tokio::test]
+async fn a_session_qualifier_that_is_empty_or_does_not_decode_is_refused_not_dropped() {
+    let (addr, fake) = start_dup().await;
+    // `%FF` is no UTF-8 text. Dropping the qualifier would end, show or compare the first query of that id.
+    for (method, path) in [
+        ("POST", "/api/internal/queries/q-solo/cancel?session=%FF"),
+        ("POST", "/api/internal/queries/q-solo/cancel?session="),
+        ("GET", "/api/internal/queries/q-dup?session=%FF"),
+        ("GET", "/api/internal/queries/q-dup?session="),
+        (
+            "GET",
+            "/api/internal/compare?a=q-dup&a_session=%FF&b=q-solo",
+        ),
+        (
+            "GET",
+            "/api/internal/compare?a=q-dup&b=q-solo&b_session=%zz",
+        ),
+    ] {
+        let (status, _, body) = request(addr, method, path, true).await;
+        assert_eq!(status, 400, "{path}: {body}");
+        assert_eq!(body["error"], "bad_request", "{path}");
+    }
+    assert!(fake.cancelled.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_failing_source_fails_a_cancel_as_json_with_or_without_a_session() {
+    let (addr, fake) = start(true).await;
+    // Without a session the running queries are read first, and that read fails.
+    let (status, _, body) = request(addr, "POST", "/api/internal/queries/q-run/cancel", true).await;
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(body["error"], "source_failed");
+    assert!(fake.cancelled.lock().unwrap().is_empty());
+    let path = "/api/internal/queries/q-run/cancel?session=s-busy";
+    let (status, _, body) = request(addr, "POST", path, true).await;
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(body["error"], "source_failed");
+}
+
+/// A source that implements only what the trait requires.
+struct Plain;
+
+impl UiSource for Plain {
+    fn rows(&self, _table: SystemTable) -> UiFuture<'_, Vec<Row>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn cancel<'a>(&'a self, _query_id: &'a str) -> UiFuture<'a, bool> {
+        Box::pin(async { Ok(true) })
+    }
+}
+
+#[tokio::test]
+async fn a_source_that_does_not_tell_sessions_apart_cancels_nothing_in_a_named_session() {
+    // The default is not the unqualified cancel: that would end another session's query of the same id.
+    assert!(Plain.cancel("q").await.unwrap());
+    assert!(!Plain.cancel_in_session("q", "s").await.unwrap());
 }

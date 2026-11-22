@@ -38,9 +38,11 @@ use krishiv_exec::QueryMetrics;
 use krishiv_exec::planner::PhysicalPlan;
 use krishiv_exec::profile::{PROFILE_MINOR, PROFILE_VERSION, ProfileIdentity, QueryProfile};
 use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::{ParquetRecordBatchReaderBuilder, RowSelection, RowSelector};
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
+use parquet::file::statistics::Statistics;
 
 /// Entries the queue holds before [`ProfileHistory::record`] drops one (and counts it).
 const QUEUE: usize = 1024;
@@ -610,7 +612,52 @@ pub fn read_history(dir: &Path) -> Result<Vec<StoredProfile>, KrishivError> {
     Ok(out)
 }
 
-fn read_segment(path: &Path) -> Result<Vec<StoredProfile>, String> {
+/// The newest stored profile of `query_id` under `dir`, `None` when the store holds none. Segments are read
+/// newest first. A segment is named by its first finish time, so when several engines write to one directory an
+/// earlier-named segment can hold a later finish: after a match, an older segment is still a candidate, but only
+/// when its footer says it holds a finish later than the match, so a query that ended recently costs one segment
+/// and the footers of the others. Only the id and finish-time columns of a segment are read to find the row; the
+/// profile documents of a segment that does not name the query are never read, so a miss costs the two small
+/// columns of each segment. Of two profiles with one finish time, the one in the later-named segment is returned.
+/// A file that does not read is skipped, as in [`read_history`].
+///
+/// # Errors
+/// The directory cannot be read.
+pub(crate) fn read_stored(
+    dir: &Path,
+    query_id: &str,
+) -> Result<Option<StoredProfile>, KrishivError> {
+    let segments =
+        list_segments(dir).map_err(|e| internal(format!("history {}: {e}", dir.display())))?;
+    let mut newest: Option<StoredProfile> = None;
+    for (path, _) in segments.iter().rev() {
+        let after = newest.as_ref().map(|p| p.finished_at_ms);
+        if let Ok(Some(found)) = find_in_segment(path, query_id, after) {
+            newest = Some(found);
+        }
+    }
+    Ok(newest)
+}
+
+/// The latest finish time in a segment, from its footer statistics; `None` when a row group carries none.
+fn last_finish(builder: &ParquetRecordBatchReaderBuilder<File>) -> Option<i64> {
+    let mut last = None;
+    for group in builder.metadata().row_groups() {
+        let column = group
+            .columns()
+            .iter()
+            .find(|c| c.column_path().string() == "finished_at_ms")?;
+        let Some(Statistics::Int64(stats)) = column.statistics() else {
+            return None;
+        };
+        let max = *stats.max_opt()?;
+        last = Some(last.map_or(max, |l: i64| l.max(max)));
+    }
+    last
+}
+
+/// A reader of the segment at `path`, refused when a later major version wrote it.
+fn open_segment(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<File>, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| e.to_string())?;
     // A file without the key is the first v1; one of a later major version is not this build's to read.
@@ -626,51 +673,133 @@ fn read_segment(path: &Path) -> Result<Vec<StoredProfile>, String> {
             "history schema version {version} is newer than {SCHEMA_VERSION}"
         ));
     }
-    let reader = builder.build().map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
+    Ok(builder)
+}
+
+/// The row of `query_id` with the latest finish in the segment at `path`, `None` when that finish is not later
+/// than `after`. A segment whose footer says it ends at or before `after` is not read further. The first pass
+/// reads the `query_id` and `finished_at_ms` columns alone; the second reads that one row.
+fn find_in_segment(
+    path: &Path,
+    query_id: &str,
+    after: Option<i64>,
+) -> Result<Option<StoredProfile>, String> {
+    let builder = open_segment(path)?;
+    if let (Some(after), Some(last)) = (after, last_finish(&builder))
+        && last <= after
+    {
+        return Ok(None);
+    }
+    let ids = ProjectionMask::columns(builder.parquet_schema(), ["query_id", "finished_at_ms"]);
+    // The rows of each row group, to turn the row found into its group and its place there.
+    let group_rows: Vec<usize> = builder
+        .metadata()
+        .row_groups()
+        .iter()
+        .map(|g| usize::try_from(g.num_rows()).unwrap_or(0))
+        .collect();
+    let reader = builder
+        .with_projection(ids)
+        .build()
+        .map_err(|e| e.to_string())?;
+    // (finish time, row in the file) of the newest match; of two with one finish time, the later row.
+    let mut newest: Option<(i64, usize)> = None;
+    let mut seen = 0;
     for batch in reader {
         let batch = batch.map_err(|e| e.to_string())?;
-        let text = |name: &str| -> Option<&StringArray> {
-            batch.column_by_name(name)?.as_any().downcast_ref()
-        };
-        let int = |name: &str| -> Option<&Int64Array> {
-            batch.column_by_name(name)?.as_any().downcast_ref()
-        };
-        let (Some(id), Some(at), Some(state), Some(principal), Some(profile)) = (
-            text("query_id"),
-            int("finished_at_ms"),
-            text("state"),
-            text("principal"),
-            text("profile"),
+        let (Some(id), Some(at)) = (
+            batch
+                .column_by_name("query_id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>()),
+            batch
+                .column_by_name("finished_at_ms")
+                .and_then(|c| c.as_any().downcast_ref::<Int64Array>()),
         ) else {
             return Err("a required column is missing".to_owned());
         };
-        let (error_class, sql) = (text("error_class"), text("sql"));
-        let (duration, version, minor) = (
-            int("duration_ns"),
-            int("profile_version"),
-            int("profile_minor"),
-        );
-        let opt = |a: Option<&StringArray>, i: usize| {
-            a.filter(|a| a.is_valid(i)).map(|a| a.value(i).to_owned())
-        };
         for i in 0..batch.num_rows() {
-            out.push(StoredProfile {
-                query_id: id.value(i).to_owned(),
-                finished_at_ms: at.value(i),
-                state: state.value(i).to_owned(),
-                error_class: opt(error_class, i),
-                principal: principal.value(i).to_owned(),
-                sql: opt(sql, i),
-                duration_ns: duration.map_or(0, |a| a.value(i)),
-                // A file from before the minor column: the first v1.
-                profile_version: version.map_or(1, |a| a.value(i)),
-                profile_minor: minor.map_or(0, |a| a.value(i)),
-                profile: profile.value(i).to_owned(),
-            });
+            if id.value(i) == query_id && newest.is_none_or(|(best, _)| at.value(i) >= best) {
+                newest = Some((at.value(i), seen + i));
+            }
         }
+        seen += batch.num_rows();
+    }
+    let Some((at, mut row)) = newest else {
+        return Ok(None);
+    };
+    if after.is_some_and(|after| at <= after) {
+        return Ok(None);
+    }
+    let mut group = 0;
+    while group < group_rows.len() && row >= group_rows[group] {
+        row -= group_rows[group];
+        group += 1;
+    }
+    let reader = open_segment(path)?
+        .with_row_groups(vec![group])
+        .with_row_selection(RowSelection::from(vec![
+            RowSelector::skip(row),
+            RowSelector::select(1),
+        ]))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut found = Vec::new();
+    for batch in reader {
+        rows_of(&batch.map_err(|e| e.to_string())?, &mut found)?;
+    }
+    Ok(found.pop())
+}
+
+fn read_segment(path: &Path) -> Result<Vec<StoredProfile>, String> {
+    let reader = open_segment(path)?.build().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for batch in reader {
+        rows_of(&batch.map_err(|e| e.to_string())?, &mut out)?;
     }
     Ok(out)
+}
+
+/// Appends the stored profiles of `batch` (every column of a segment) to `out`.
+fn rows_of(batch: &RecordBatch, out: &mut Vec<StoredProfile>) -> Result<(), String> {
+    let text = |name: &str| -> Option<&StringArray> {
+        batch.column_by_name(name)?.as_any().downcast_ref()
+    };
+    let int =
+        |name: &str| -> Option<&Int64Array> { batch.column_by_name(name)?.as_any().downcast_ref() };
+    let (Some(id), Some(at), Some(state), Some(principal), Some(profile)) = (
+        text("query_id"),
+        int("finished_at_ms"),
+        text("state"),
+        text("principal"),
+        text("profile"),
+    ) else {
+        return Err("a required column is missing".to_owned());
+    };
+    let (error_class, sql) = (text("error_class"), text("sql"));
+    let (duration, version, minor) = (
+        int("duration_ns"),
+        int("profile_version"),
+        int("profile_minor"),
+    );
+    let opt = |a: Option<&StringArray>, i: usize| {
+        a.filter(|a| a.is_valid(i)).map(|a| a.value(i).to_owned())
+    };
+    for i in 0..batch.num_rows() {
+        out.push(StoredProfile {
+            query_id: id.value(i).to_owned(),
+            finished_at_ms: at.value(i),
+            state: state.value(i).to_owned(),
+            error_class: opt(error_class, i),
+            principal: principal.value(i).to_owned(),
+            sql: opt(sql, i),
+            duration_ns: duration.map_or(0, |a| a.value(i)),
+            // A file from before the minor column: the first v1.
+            profile_version: version.map_or(1, |a| a.value(i)),
+            profile_minor: minor.map_or(0, |a| a.value(i)),
+            profile: profile.value(i).to_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

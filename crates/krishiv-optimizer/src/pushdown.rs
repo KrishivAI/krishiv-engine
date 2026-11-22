@@ -667,6 +667,7 @@ pub(crate) fn collect_ids(plan: &LogicalPlan, out: &mut Attrs) -> bool {
         | PlanNode::Sort { input, .. }
         | PlanNode::Limit { input, .. }
         | PlanNode::Offset { input, .. }
+        | PlanNode::Tail { input, .. }
         | PlanNode::WithCte { input, .. }
         | PlanNode::JoinHint { input, .. }
         | PlanNode::Repartition { input, .. }
@@ -726,7 +727,7 @@ pub(crate) fn alias_map(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
 
 /// A common-subexpression projection's definitions: each `cse_*` output id
 /// and the expression it names.
-fn cse_defs(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
+pub(crate) fn cse_defs(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
     exprs
         .iter()
         .filter_map(|e| match &e.node {

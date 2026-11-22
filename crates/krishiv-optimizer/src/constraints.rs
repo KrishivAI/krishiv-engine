@@ -49,7 +49,7 @@ use crate::expr::{
     Attrs, Classes, builtin, call_builtin, column, conjuncts, equality, has_aggregate,
     has_subquery, is_deterministic, references, same, substitute, unshift,
 };
-use crate::pushdown::{alias_map, into_side_new, rebuild_join};
+use crate::pushdown::{alias_map, cse_defs, into_side_new, rebuild_join};
 use crate::restrict::subquery_plans;
 
 /// The rule at a `Join` (see the module docs).
@@ -671,6 +671,8 @@ impl Memo {
     /// through filters, inner joins, column-only projections and shifts (the
     /// walk of the implied filters of `pushdown`, plus self-join
     /// instances), in pre-order: a node's own, then its inputs' left first.
+    /// A filter right above a common-subexpression projection gives its
+    /// conjuncts with the `cse_*` columns replaced by what they name.
     fn constraints(&mut self, plan: &Arc<LogicalPlan>) -> Conjuncts {
         if let Some((_, c)) = self.constraints.get(&Arc::as_ptr(plan)) {
             return Arc::clone(c);
@@ -679,7 +681,23 @@ impl Memo {
             |e: &Arc<Expr>| conjuncts(e).into_iter().filter(|c| is_deterministic(c));
         let out: Vec<Arc<Expr>> = match &plan.node {
             PlanNode::Filter { input, predicate } => {
-                let mut out: Vec<_> = deterministic(predicate).collect();
+                // A filter over a common-subexpression projection reads its `cse_*` columns
+                // as the expressions they name: CSE runs last, so a second optimization must
+                // see the conjuncts the first one saw (`(c + 1) = c` is no column equality,
+                // though `cse_0 = c` would be one).
+                let defs = match &input.node {
+                    PlanNode::Project { exprs, .. } => cse_defs(exprs),
+                    _ => HashMap::new(),
+                };
+                let mut out: Vec<_> = deterministic(predicate)
+                    .map(|c| {
+                        if defs.is_empty() {
+                            c
+                        } else {
+                            substitute(&c, &defs)
+                        }
+                    })
+                    .collect();
                 out.extend(self.constraints(input).iter().cloned());
                 out
             }
@@ -737,6 +755,7 @@ impl Memo {
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
+            | PlanNode::Tail { input, .. }
             | PlanNode::WithCte { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Repartition { input, .. }

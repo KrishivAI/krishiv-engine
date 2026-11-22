@@ -597,6 +597,30 @@ async fn the_udtf_arrow_default_follows_the_spark_profile() {
         );
         let shown = rows(&s, &format!("SET {key}")).await.unwrap();
         assert_eq!(shown, [format!("{key}|{want}")], "{profile:?}");
+        // `SET -v` lists every entry (under its canonical name) with its release's default; `SET` lists only
+        // keys that were set.
+        let canonical = "krishiv.sql.execution.pythonUDTF.arrow.enabled";
+        let verbose = rows(&s, "SET -v").await.unwrap();
+        let line = verbose
+            .iter()
+            .find(|r| r.starts_with(&format!("{canonical}|")))
+            .unwrap_or_else(|| panic!("{canonical} is in SET -v"));
+        assert!(
+            line.starts_with(&format!("{canonical}|{want}|")),
+            "{profile:?}: {line}"
+        );
+        let listed = rows(&s, "SET").await.unwrap();
+        assert!(
+            listed.iter().all(|r| !r.contains("pythonUDTF")),
+            "{profile:?}: {listed:?}"
+        );
+        assert!(
+            s.conf()
+                .entries()
+                .iter()
+                .all(|(k, _)| !k.contains("pythonUDTF")),
+            "{profile:?}"
+        );
         s.conf().set(key, "true").unwrap();
         assert_eq!(s.conf().get(key).as_deref(), Some("true"), "{profile:?}");
     }
@@ -631,6 +655,60 @@ fn cancelling_a_statement_abandons_its_analyze() {
         dropped.load(std::sync::atomic::Ordering::SeqCst),
         "the analyze call was not dropped"
     );
+}
+
+/// Runs `f` on its own thread, failing the test when it does not finish within 30 s (a statement blocking the
+/// only thread of a current-thread runtime hangs; review R2-1).
+fn within_30s<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (done, ended) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(f());
+    });
+    ended
+        .recv_timeout(std::time::Duration::from_secs(30))
+        // A timeout: the analysis blocked the current-thread runtime.
+        .unwrap()
+}
+
+fn current_thread() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+}
+
+/// On a session whose executor is a current-thread runtime (the deterministic simulation's), the wait for
+/// `analyze` would block that runtime's only thread (nothing of it could cancel the wait, and a policy needing
+/// the runtime would hang), so the statement is refused with `KRISHIV_UNSUPPORTED_FEATURE` and runs no
+/// `analyze`; a UDTF with a declared result needs none and runs (review R2-1).
+#[test]
+fn analyze_on_a_current_thread_runtime_is_refused_not_hung() {
+    let (refused, analyzed, declared) = within_30s(|| {
+        current_thread().block_on(async {
+            let executor = krishiv_exec::TokioExecutor::deterministic(1).unwrap();
+            let session = Session::builder().executor(executor).build().unwrap();
+            let fake = Fake::default();
+            let seen = Arc::clone(&fake.seen);
+            session.set_python_udf_runtime(Arc::new(fake));
+            session
+                .register_python_udtf(udtf("describe", PythonEvalType::TableUdf, &[]))
+                .unwrap();
+            session
+                .register_python_udtf(udtf("known", PythonEvalType::TableUdf, &["a"]))
+                .unwrap();
+            let refused = session
+                .sql("SELECT * FROM describe(1)")
+                .await
+                .map(drop)
+                .map_err(|e| e.error_class());
+            let analyzed = seen.lock().unwrap().analyzed.len();
+            let declared = rows(&session, "SELECT * FROM known(1)").await.is_ok();
+            (refused, analyzed, declared)
+        })
+    });
+    assert_eq!(refused, Err(ErrorClass::KrishivUnsupportedFeature));
+    assert_eq!(analyzed, 0);
+    assert!(declared, "a UDTF with a declared result needs no analyze");
 }
 
 /// An inner `JOIN LATERAL f(..) ON cond` filters the call's rows by the condition, as Spark 4.2.0 runs it; a

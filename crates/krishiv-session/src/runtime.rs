@@ -283,6 +283,29 @@ impl EngineRuntime {
         }
     }
 
+    /// Whether this runtime writes finished queries' profiles to a history store (`krishiv.history.path`).
+    #[must_use]
+    pub fn keeps_profile_history(&self) -> bool {
+        self.profile_history.is_some()
+    }
+
+    /// The stored profile of a finished query, read from this runtime's history store (`krishiv.history.path`):
+    /// the newest one under that id. `None` when the runtime keeps no history, or the store does not hold the
+    /// query: one that is still running, one whose profile the writer has not reached yet (it writes off the
+    /// query's thread), or one trimmed away. Reads files, so an async caller runs it off its executor.
+    ///
+    /// # Errors
+    /// The store's directory cannot be read.
+    pub fn stored_profile(
+        &self,
+        query_id: &str,
+    ) -> Result<Option<crate::StoredProfile>, KrishivError> {
+        match &self.profile_history {
+            Some(store) => crate::profile_history::read_stored(store.dir(), query_id),
+            None => Ok(None),
+        }
+    }
+
     /// The declared catalogs (design P3-T067 §2.3): readiness checks read them (T066).
     #[must_use]
     pub fn catalogs(&self) -> &Arc<crate::catalog_registry::CatalogRegistry> {

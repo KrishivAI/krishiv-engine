@@ -120,7 +120,8 @@ fn table_rows(args: &[BindArg]) -> Result<Binding, KrishivError> {
 
 /// `__json_table_value(row, path)`: a column's value in a row text.
 fn table_value(args: &[BindArg]) -> Result<Binding, KrishivError> {
-    let [row, path] = args else {
+    // The third argument is the call's text for a cast error of the analyzer: not read.
+    let ([row, path] | [row, path, _]) = args else {
         return Err(bad_types("__json_table_value", args));
     };
     if !is_string(&row.data_type()) || !is_string(&path.data_type()) {
@@ -133,7 +134,8 @@ fn table_value(args: &[BindArg]) -> Result<Binding, KrishivError> {
 
 /// `__json_table_exists(row, path)`: whether a column's path exists in a row text.
 fn table_exists(args: &[BindArg]) -> Result<Binding, KrishivError> {
-    let [row, path] = args else {
+    // The third argument is the call's text for a cast error of the analyzer: not read.
+    let ([row, path] | [row, path, _]) = args else {
         return Err(bad_types("__json_table_exists", args));
     };
     if !is_string(&row.data_type()) || !is_string(&path.data_type()) {

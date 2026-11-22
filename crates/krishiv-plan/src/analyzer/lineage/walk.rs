@@ -437,6 +437,7 @@ impl<'a> Walker<'a> {
             }
             PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
+            | PlanNode::Tail { input, .. }
             | PlanNode::JoinHint { input, .. }
             // `TABLESAMPLE` keeps some input rows, by a draw that reads no column (`BUCKET .. ON col` is refused
             // before a `Sample` is built). Its fields are listed so a new one, a column above all, is decided here.
@@ -613,6 +614,13 @@ impl<'a> Walker<'a> {
                 let value = self.opaque(rows.iter().map(|(_, i)| i));
                 self.opaque_columns(output, &value, offset)
             }
+            // A metric-view read left in a plan (no aggregate over it) never runs: each output column is
+            // `opaque` over every source column.
+            PlanNode::MetricViewRead { input, output, .. } => {
+                let rows = self.plan(input, offset)?;
+                let value = self.opaque(rows.iter().map(|(_, i)| i));
+                self.opaque_columns(output, &value, offset)
+            }
             PlanNode::GroupMap {
                 input,
                 keys,
@@ -686,6 +694,7 @@ impl<'a> Walker<'a> {
             | PlanNode::Sql { .. }
             | PlanNode::WithColumns { .. }
             | PlanNode::Hint { .. }
+            | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::SetOp { .. }
             | PlanNode::Pivot { .. }
