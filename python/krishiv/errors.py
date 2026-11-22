@@ -264,6 +264,14 @@ def _context_from_native(raw: Any) -> QueryContext:
     )
 
 
+# The SQLSTATE PySpark's error reader gives these classes (error-conditions.json), used when a raise
+# site names none, so every raise of the class carries it.
+_SQL_STATE_OF_CLASS: dict[str, str] = {
+    "NOT_EXPECTED_TYPE": "42K09",
+    "ATTRIBUTE_NOT_SUPPORTED": "0A000",
+}
+
+
 class PySparkException(Exception):
     """Base of all Krishiv errors (``pyspark.errors.PySparkException``)."""
 
@@ -285,6 +293,8 @@ class PySparkException(Exception):
         self._error_class = errorClass
         self._message_parameters = messageParameters
         self._contexts = [c if isinstance(c, QueryContext) else _context_from_native(c) for c in contexts or []]
+        if sqlState is None and errorClass is not None:
+            sqlState = _SQL_STATE_OF_CLASS.get(errorClass)
         self._sql_state = sqlState
         self._rendered = rendered
 
@@ -484,7 +494,6 @@ def not_expected_type(arg_name: str, expected: str, value: object) -> PySparkTyp
     return PySparkTypeError(
         errorClass="NOT_EXPECTED_TYPE",
         messageParameters={"arg_name": arg_name, "expected_type": expected, "arg_type": type(value).__name__},
-        sqlState="42K09",
     )
 
 

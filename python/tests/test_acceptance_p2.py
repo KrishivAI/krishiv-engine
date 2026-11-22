@@ -53,3 +53,11 @@ def test_select_wrong_type_names_col_and_has_state(spark: SparkSession) -> None:
     assert e.value.getCondition() == "NOT_EXPECTED_TYPE"
     assert e.value.getSqlState() == "42K09"
     assert (e.value.getMessageParameters() or {})["arg_name"] == "col"
+
+
+def test_not_expected_type_state_comes_from_the_class(spark: SparkSession) -> None:
+    # A direct raise site (not the helper) still carries the class's SQLSTATE, as PySpark's error reader gives.
+    with pytest.raises(PySparkTypeError) as e:
+        spark.read.schema(5)  # ty: ignore[invalid-argument-type]
+    assert e.value.getCondition() == "NOT_EXPECTED_TYPE"
+    assert e.value.getSqlState() == "42K09"

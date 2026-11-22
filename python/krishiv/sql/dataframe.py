@@ -181,7 +181,6 @@ class DataFrame:
             raise PySparkAttributeError(
                 errorClass="ATTRIBUTE_NOT_SUPPORTED",
                 messageParameters={"attr_name": name},
-                sqlState="0A000",
             )
         return Column(self._df.col(name))
 
