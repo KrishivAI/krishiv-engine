@@ -84,9 +84,10 @@ def test_print_schema(df: DataFrame, capsys: pytest.CaptureFixture[str]) -> None
     df.printSchema()
     assert capsys.readouterr().out.splitlines() == [
         "root",
-        " |-- id: bigint (nullable = true)",
+        " |-- id: long (nullable = true)",
         " |-- name: string (nullable = true)",
         " |-- v: double (nullable = true)",
+        "",
     ]
 
 
@@ -296,7 +297,7 @@ def test_row() -> None:
     assert "a" not in positional
     with pytest.raises(errors.PySparkValueError):
         Row(1, a=2)
-    with pytest.raises(errors.PySparkValueError):
+    with pytest.raises(errors.PySparkTypeError, match="CANNOT_CONVERT_TYPE"):
         positional.asDict()
     with pytest.raises(KeyError):
         r["zz"]

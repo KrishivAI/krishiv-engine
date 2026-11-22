@@ -32,6 +32,13 @@ _TEMPLATES = {
         "information, see SPARK-5063."
     ),
     "CANNOT_SET_TOGETHER": "<arg_list> should not be set together.",
+    "JVM_ATTRIBUTE_NOT_SUPPORTED": "Attribute `<attr_name>` is not supported: Krishiv runs without a JVM.",
+    "CANNOT_BE_EMPTY": "At least one <item> must be specified.",
+    "CANNOT_CONVERT_TYPE": "Cannot convert <from_type> into <to_type>.",
+    "TOO_MANY_VALUES": "Expected <expected> values for `<item>`, got <actual>.",
+    "NO_ACTIVE_OR_DEFAULT_SESSION": (
+        "No active or default Spark session found. Please create a new Spark session before running the code."
+    ),
     "NOT_EXPECTED_TYPE": "Argument `<arg_name>` should be <expected_type>, got <arg_type>.",
     "CANNOT_CONVERT_COLUMN_INTO_BOOL": (
         "Cannot convert column into bool: please use '&' for 'and', '|' for 'or', "
@@ -436,6 +443,11 @@ class PySparkNotImplementedError(PySparkException, NotImplementedError):
     pass
 
 
+class PySparkNotImplementedAttributeError(PySparkNotImplementedError, AttributeError):
+    """``NOT_IMPLEMENTED`` for an attribute: also an ``AttributeError``, so ``hasattr`` and
+    ``getattr(obj, name, default)`` work on names the engine lacks (as PySpark Connect's JVM attributes)."""
+
+
 class PySparkImportError(PySparkException, ImportError):
     pass
 
@@ -556,6 +568,9 @@ def unsupported_attribute(feature: str) -> UnsupportedFeatureAttributeError:
 def unsupported_module(feature: str) -> UnsupportedFeatureImportError:
     """:func:`unsupported_feature` for a module (also an ``ImportError``)."""
     return UnsupportedFeatureImportError(_unsupported_text(feature), **_unsupported_args(feature))
+def not_implemented_attribute(feature: str) -> PySparkNotImplementedAttributeError:
+    """:func:`not_implemented` for a property: ``hasattr`` is ``False`` and the error still says ``NOT_IMPLEMENTED``."""
+    return PySparkNotImplementedAttributeError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": feature})
 
 
 def unsupported_feature(feature: str) -> UnsupportedOperationException:

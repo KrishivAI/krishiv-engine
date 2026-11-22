@@ -565,9 +565,10 @@ def test_to_local_iterator(people: DataFrame) -> None:
     ]
 
 
-def test_to_json_is_unsupported(people: DataFrame) -> None:
-    with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
-        people.toJSON()
+def test_to_json_is_a_dataframe_of_json_documents(spark: SparkSession) -> None:
+    out = spark.createDataFrame([(14, 1.5), (23, 2.5)], "age long, h double").sort("age").toJSON()
+    assert out.columns == ["value"]
+    assert [r.value for r in out.collect()] == ['{"age":14,"h":1.5}', '{"age":23,"h":2.5}']
 
 
 def test_drop_duplicates_on_every_column(spark: SparkSession) -> None:

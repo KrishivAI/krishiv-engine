@@ -54,6 +54,30 @@ expressions.
 +-----+--------+
 ```
 
+### `apply`
+
+```python
+def apply(self, udf: Any) -> DataFrame
+```
+
+Not available: the deprecated grouped-map `pandas_udf` form (`NOT_IMPLEMENTED`).
+
+### `applyInArrow`
+
+```python
+def applyInArrow(self, func: Any, schema: Any) -> DataFrame
+```
+
+Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
+
+### `applyInPandas`
+
+```python
+def applyInPandas(self, func: Any, schema: Any) -> DataFrame
+```
+
+Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
+
 ### `avg`
 
 ```python
@@ -75,6 +99,14 @@ The average per group of each numeric column, as `pyspark.sql.GroupedData.avg`.
 |  Bob|     5.0|
 +-----+--------+
 ```
+
+### `cogroup`
+
+```python
+def cogroup(self, other: GroupedData) -> Any
+```
+
+Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
 
 ### `count`
 

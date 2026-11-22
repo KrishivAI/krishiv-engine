@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from krishiv import _native
-from krishiv.errors import not_expected_type, unsupported_feature
+from krishiv.errors import not_expected_type, not_implemented, unsupported_feature
 from krishiv.sql import functions as F
 from krishiv.sql.column import Column
 
@@ -212,3 +212,19 @@ class GroupedData:
                 if not isinstance(v, bool | int | float | str):
                     raise not_expected_type("values", "list of bool, int, float or str", v)
         raise unsupported_feature("GroupedData.pivot")
+
+    def applyInPandas(self, func: Any, schema: Any) -> DataFrame:
+        """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("GroupedData.applyInPandas (needs the Python UDF worker pool, planned)")
+
+    def applyInArrow(self, func: Any, schema: Any) -> DataFrame:
+        """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("GroupedData.applyInArrow (needs the Python UDF worker pool, planned)")
+
+    def cogroup(self, other: GroupedData) -> Any:
+        """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("GroupedData.cogroup (needs the Python UDF worker pool, planned)")
+
+    def apply(self, udf: Any) -> DataFrame:
+        """Not available: the deprecated grouped-map ``pandas_udf`` form (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("GroupedData.apply (needs the Python UDF worker pool, planned)")
