@@ -670,8 +670,9 @@ impl Session {
             Statement::CreatePipelineDataset(c) => Self::exec_create_pipeline_dataset(&c),
             Statement::CreateFlow(f) => self.exec_create_flow(&f),
             Statement::LoadData(l) => self.exec_load_data(&l),
-            Statement::InsertDirectory(d) => {
-                Box::pin(self.exec_insert_directory(&d, query, &env.identifier_spans)).await
+            // The path write belongs to the session's write path: it has no plan node to lower to yet.
+            Statement::InsertDirectory(_) => {
+                Err(unsupported_statement("INSERT OVERWRITE DIRECTORY"))
             }
             Statement::AccessControl(a) => Box::pin(self.exec_access_control(&a, &env)).await,
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
