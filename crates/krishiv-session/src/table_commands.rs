@@ -1779,10 +1779,6 @@ struct InsertTarget<'a> {
     options: Option<&'a BTreeMap<String, OptionValue>>,
     /// The name delta-spark's errors give a Delta table written by path (`` delta.`file:/p` ``);
     /// `None` for a catalog table.
-    #[cfg_attr(
-        not(feature = "delta"),
-        expect(dead_code, reason = "read by the Delta write path only")
-    )]
     delta_name: Option<&'a str>,
 }
 

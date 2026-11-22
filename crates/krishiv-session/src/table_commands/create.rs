@@ -916,7 +916,7 @@ impl Session {
         let by_path = match crate::access::ddl_parts(table, &env)?.as_slice() {
             [format, path]
                 if format.eq_ignore_ascii_case("delta")
-                    && path.contains('/')
+                    && super::delta_writes::is_delta_path(path)
                     && self
                         .state
                         .catalog

@@ -67,6 +67,7 @@ impl Session {
             .collect();
         let Ok(assignment) = assign(
             &table,
+            None,
             &listed,
             c.by_name,
             &output,

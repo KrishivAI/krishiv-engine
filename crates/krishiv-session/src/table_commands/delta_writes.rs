@@ -537,7 +537,7 @@ impl Session {
             return Ok(None);
         };
         if !format.eq_ignore_ascii_case(DELTA)
-            || !path.contains('/')
+            || !is_delta_path(path)
             || self
                 .state
                 .catalog
@@ -605,11 +605,37 @@ impl Session {
     }
 }
 
+/// Whether the second part of `` delta.`<part>` `` names a table by path: delta-spark's
+/// `DeltaTableUtils.isValidPath`, Hadoop's `Path.isAbsolute` (the path after an optional
+/// `scheme:` and `//authority` starts with `/`). Anything else is a table name
+/// (`INSERT-PATH.json` `refused`: `no_slash`, `relative_path` are `TABLE_OR_VIEW_NOT_FOUND`).
+pub(super) fn is_delta_path(part: &str) -> bool {
+    let rest = match part.split_once(':') {
+        Some((scheme, rest))
+            if scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) =>
+        {
+            rest
+        }
+        _ => part,
+    };
+    let path = match rest.strip_prefix("//") {
+        Some(authority_and_path) => authority_and_path
+            .find('/')
+            .map_or("", |i| &authority_and_path[i..]),
+        None => rest,
+    };
+    path.starts_with('/')
+}
+
 /// delta-spark's refusal of an `INSERT` by position whose query has another column count than
 /// the Delta table `table` (named `shown`): too few is `DELTA_INSERT_COLUMN_ARITY_MISMATCH`, too
 /// many `DELTA_METADATA_MISMATCH` (its schema-evolution check), for a table by path and a catalog
-/// table alike (`INSERT-PATH.json` `arity`, `arity_too_many`, `catalog_arity*`). A column list
-/// keeps Spark's own arity errors (`arity_column_list`).
+/// table alike (`INSERT-PATH.json` `arity`, `arity_too_many`, `catalog_arity*`), a static
+/// partition's values counted as data columns (`static_partition_arity*`). A column list keeps
+/// Spark's own arity errors (`arity_column_list`).
 pub(super) fn delta_insert_arity(
     shown: &str,
     table_columns: usize,
@@ -735,4 +761,34 @@ fn arrow_schema(columns: &[TableColumn]) -> Result<arrow_schema::SchemaRef, Kris
         .map(|c| c.data_type.to_arrow_field(&c.name, c.nullable))
         .collect();
     Ok(Arc::new(arrow_schema::Schema::new(fields)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_delta_path;
+
+    #[test]
+    fn a_delta_path_is_absolute_as_hadoop_reads_it() {
+        for path in [
+            "/p",
+            "/p/",
+            "file:/p",
+            "file:///p",
+            "s3://bucket/k",
+            "abfss://c@a.host/k",
+        ] {
+            assert!(is_delta_path(path), "{path}");
+        }
+        for name in [
+            "t",
+            "a/b",
+            "rel/dir",
+            "file:rel/x",
+            "s3://bucket",
+            "1x:/p",
+            ":/p",
+        ] {
+            assert!(!is_delta_path(name), "{name}");
+        }
+    }
 }

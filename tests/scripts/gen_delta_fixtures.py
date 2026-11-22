@@ -890,8 +890,9 @@ def insert_by_path(spark: SparkSession, out: str) -> None:
     replays its path steps through a catalog table): the forms of the statement on an existing
     table (column list, ``BY NAME``, ``TABLE``, a static partition, a trailing slash, a ``file:``
     URI), then each refusal: a missing path, an empty directory, a Parquet directory, a name
-    without a ``/``, an arity mismatch. Each step records the oracle's error or its commit and
-    rows; a refused target's path is elided as ``<missing>``."""
+    without a ``/``, a relative path, an arity mismatch (also under a static partition). Each step
+    records the oracle's error or its commit and rows; a refused target's path is elided as
+    ``<missing>``."""
     path = os.path.join(out, "insert-path")
     t = f"delta.`{path}`"
     spark.sql(f"CREATE TABLE {t} (id BIGINT, v STRING, p STRING) USING delta PARTITIONED BY (p)")
@@ -913,6 +914,8 @@ def insert_by_path(spark: SparkSession, out: str) -> None:
         ("catalog_arity", "INSERT INTO insert_path_cat VALUES (10, 'i')"),
         ("catalog_arity_too_many", "INSERT INTO insert_path_cat VALUES (10, 'i', 'x', 1)"),
         ("catalog_drop", "DROP TABLE insert_path_cat"),
+        ("static_partition_arity", f"INSERT INTO {t} PARTITION (p = 'z') VALUES (7)"),
+        ("static_partition_arity_too_many", f"INSERT INTO {t} PARTITION (p = 'z') VALUES (7, 'f', 'x')"),
         ("overwrite", f"INSERT OVERWRITE {t} VALUES (11, 'j', 'x')"),
     ]
     record: dict = {
@@ -937,6 +940,10 @@ def insert_by_path(spark: SparkSession, out: str) -> None:
     no_slash = outcome(spark, "INSERT INTO delta.`krishiv_no_slash` VALUES (1)", "krishiv_no_slash")
     no_slash["step"] = "no_slash"
     refused.append(no_slash)
+    relative = outcome(spark, "INSERT INTO delta.`krishiv_rel/dir` VALUES (1)", "krishiv_rel/dir")
+    relative["step"] = "relative_path"
+    relative["created_log"] = os.path.isdir(os.path.join("krishiv_rel", "dir", "_delta_log"))
+    refused.append(relative)
     record["refused"] = refused
     for d in (path, missing, empty, parquet):
         shutil.rmtree(d, ignore_errors=True)

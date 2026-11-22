@@ -143,6 +143,7 @@ impl Session {
             // Spark resolves every target before any clause's columns: a missing table is the
             // error even when an earlier clause names an unknown column.
             let env = self.query_env();
+            let mut targets = Vec::with_capacity(clauses.len());
             for clause in &clauses {
                 let name = self.table_name(&clause.name, &env)?;
                 if clause.replace_where.is_some()
@@ -151,14 +152,17 @@ impl Session {
                 {
                     self.refuse_replace_into_view(&name, &env)?;
                 }
-                self.insert_target(&clause.name, &name, &env).await?;
+                targets.push(self.insert_target(&clause.name, &name, &env).await?);
             }
-            for clause in &clauses {
-                self.insert_clause(clause, original, ids, true).await?;
+            // The checks reuse those targets (one access check and one log read a clause); each
+            // write below resolves its own again, after the clauses written before it.
+            for (clause, target) in clauses.iter().zip(targets) {
+                self.insert_clause(clause, original, ids, Some(target))
+                    .await?;
             }
         }
         for clause in &clauses {
-            self.insert_clause(clause, original, ids, false).await?;
+            self.insert_clause(clause, original, ids, None).await?;
         }
         self.empty_frame().await
     }
@@ -185,14 +189,16 @@ impl Session {
         Ok(())
     }
 
-    /// `c` checked through to the rows it would write (`dry`), or written.
+    /// `c` checked through to the rows it would write (a dry run, given the target it resolved
+    /// to), or written (`target` `None`: resolved here).
     pub(super) async fn insert_clause(
         &self,
         c: &InsertClause,
         original: &str,
         ids: &[krishiv_sql::ast::Span],
-        dry: bool,
+        target: Option<(Arc<CatalogTable>, Option<String>)>,
     ) -> Result<(), KrishivError> {
+        let dry = target.is_some();
         let env = self.query_env();
         let replace =
             c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some();
@@ -200,7 +206,10 @@ impl Session {
         if replace {
             self.refuse_replace_into_view(&name, &env)?;
         }
-        let (table, delta_name) = self.insert_target(&c.name, &name, &env).await?;
+        let (table, delta_name) = match target {
+            Some(target) => target,
+            None => self.insert_target(&c.name, &name, &env).await?,
+        };
         if replace {
             // A session-catalog table has no replace-by-condition write (Spark: the table lacks the capability).
             let operation = if c.replace_where.is_some() {
@@ -370,7 +379,7 @@ impl Session {
         };
         // delta-spark's arity check of an insert by position (`DeltaAnalysis`), before Spark's.
         #[cfg(feature = "delta")]
-        if delta && listed.is_empty() && !by_name && statics.is_empty() {
+        if delta && listed.is_empty() && !by_name {
             let shown = target.delta_name.map_or_else(
                 || {
                     format!(
@@ -382,14 +391,25 @@ impl Session {
                 },
                 str::to_owned,
             );
-            if let Some(refusal) =
-                super::delta_writes::delta_insert_arity(&shown, table.columns.len(), output.len())
-            {
+            // Spark adds a static partition's values to the query before delta-spark's check, so
+            // they count as data columns (`INSERT-PATH.json` `static_partition_arity*`).
+            if let Some(refusal) = super::delta_writes::delta_insert_arity(
+                &shown,
+                table.columns.len(),
+                output.len() + statics.len(),
+            ) {
                 return Err(refusal);
             }
         }
+        // Spark's own errors name a Delta table by path as its v2 identifier, the two parts
+        // quoted (`INSERT-PATH.json` `arity_column_list`): `delta`.`file:/p`.
+        let spark_name = target
+            .delta_name
+            .and_then(|d| d.strip_prefix("delta.`")?.strip_suffix('`'))
+            .map(|root| format!("`delta`.`{}`", root.replace('`', "``")));
         let assignment = assign(
             &assigned,
+            spark_name.as_deref(),
             listed,
             by_name,
             &output,

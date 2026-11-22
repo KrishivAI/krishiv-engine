@@ -204,7 +204,7 @@ fn insert_by_path_refusals_match_spark() {
         let name = step["step"].as_str().unwrap();
         let target = tmp.path().join(name);
         match name {
-            "missing" | "no_slash" => {}
+            "missing" | "no_slash" | "relative_path" => {}
             "empty_directory" => std::fs::create_dir(&target).unwrap(),
             "parquet_directory" => block_on(async {
                 s.sql("SELECT CAST(1 AS BIGINT) AS id")
@@ -216,14 +216,17 @@ fn insert_by_path_refusals_match_spark() {
             .unwrap(),
             other => panic!("no setup for {other}"),
         }
-        let (sql, placeholder, path) = if name == "no_slash" {
+        // A name delta-spark reads as a table, not a path (no `/`, or a relative path).
+        let literal = match name {
+            "no_slash" => Some("krishiv_no_slash"),
+            "relative_path" => Some("krishiv_rel/dir"),
+            _ => None,
+        };
+        let (sql, placeholder, path) = if let Some(literal) = literal {
             (
-                step["sql"]
-                    .as_str()
-                    .unwrap()
-                    .replace("<path>", "krishiv_no_slash"),
+                step["sql"].as_str().unwrap().replace("<path>", literal),
                 "<path>",
-                "krishiv_no_slash".to_owned(),
+                literal.to_owned(),
             )
         } else {
             let path = target.to_string_lossy().into_owned();
