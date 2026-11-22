@@ -98,6 +98,29 @@ _RELATION_RUNNABLE = frozenset(
 )
 
 
+#: The grouped-aggregate kinds: they run in ``groupBy().agg``; over a window (PR-48b) they are not run yet.
+_AGG_EVAL_TYPES = frozenset(
+    {
+        PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF,
+        PythonEvalType.SQL_GROUPED_AGG_PANDAS_ITER_UDF,
+        PythonEvalType.SQL_GROUPED_AGG_ARROW_UDF,
+        PythonEvalType.SQL_GROUPED_AGG_ARROW_ITER_UDF,
+    }
+)
+
+
+class _AggregateCall(Column):
+    """A grouped-aggregate UDF's call: ``agg`` runs it, ``over`` refuses until window aggregates run (PR-48b)."""
+
+    __slots__ = ()
+
+    def over(self, window: Any) -> Column:
+        raise PySparkNotImplementedError(
+            errorClass="NOT_IMPLEMENTED",
+            messageParameters={"feature": "Python UDFs of eval type 203 (window aggregates)"},
+        )
+
+
 def _engine_ddl(dt: DataType) -> str:
     """``dt`` as a DDL string the engine parses (struct field names backquoted)."""
     if isinstance(dt, StructType):
@@ -336,7 +359,10 @@ class UserDefinedFunction:
                 errorClass="NOT_IMPLEMENTED",
                 messageParameters={"feature": "keyword arguments of Python UDFs"},
             )
-        return Column(self._handle_for_call().call([_named(arg, "col") for arg in args]))
+        call = self._handle_for_call().call([_named(arg, "col") for arg in args])
+        if self.evalType in _AGG_EVAL_TYPES:
+            return _AggregateCall(call)
+        return Column(call)
 
     def _handle_for_call(self) -> Any:
         """The handle a call uses: the plain one, or, when ``spark.sql.pyspark.udf.profiler`` is ``perf`` or
