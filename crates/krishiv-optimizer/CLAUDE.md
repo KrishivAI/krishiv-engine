@@ -79,6 +79,7 @@ Paths are relative to this crate.
   `Options::stats_propagation` switches the propagation off for the differential tests.
 - Per-rule and TPC-H plan snapshots live in `tests/it/snapshots/`; differential tests run optimised and
   unoptimised plans through the reference interpreter in `tests/it/support/eval.rs`.
+- An as-of join (`PlanNode::AsOfJoin`): a filter above it moves into its left input when it reads only left columns (inner and left outer); its `ON` conjuncts reading only the right input move into the right input (both kinds), those reading only the left input into the left one for inner only (`pushdown.rs` `push_as_of_condition`, rule `PushDownAsOfCondition`); nothing reading the right side moves above or across it, nor a join or runtime filter (it would change which row is nearest); pruning keeps its condition and match columns, estimates give it the left rows.
 - Never changes a user's explicit `repartition(n)`.
 - Rules are plan-snapshot tested; IVM pass satisfies Σ incremental == query(Σ inputs).
 - `#![forbid(unsafe_code)]`.
