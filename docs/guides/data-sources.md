@@ -44,7 +44,7 @@ The save modes are Spark's:
 | `error`, `errorifexists` (the default) | the write fails with `PATH_ALREADY_EXISTS` |
 | `ignore` | nothing is written and no error is raised |
 | `append` | new files are added to an existing directory; an existing file at the path fails with `PATH_ALREADY_EXISTS` |
-| `overwrite` | everything under the path is replaced; where the commit log is active, a write that fails before the commit keeps the old data. Without it (`commitProtocol` `NONE`, or a store that cannot create a file only if absent, where the default `AUTO` falls back to the plain commit with a warning) a failed write can leave old files already deleted |
+| `overwrite` | everything under the path is replaced; where the commit log is active, a write that fails before the commit keeps the old data. Without it (`commitProtocol` `NONE`, or a store that cannot create a file only if absent, where the default `AUTO` falls back to the plain commit with a warning) a failed write can leave old files already deleted; an existing file at the path is deleted before the write starts under either protocol, and a failed write does not restore it |
 
 A write creates a directory, not a single file: `part-*` data files, a `_SUCCESS` marker and a `_krishiv_log/`
 directory that records each commit (see [known differences](../concepts/known-differences.md#writers-leave-a-_krishiv_log-directory)).

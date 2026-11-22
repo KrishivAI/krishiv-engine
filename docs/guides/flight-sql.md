@@ -30,7 +30,11 @@ From Python with ADBC:
 ```python
 import adbc_driver_flightsql.dbapi as flight
 
-with flight.connect("grpc://localhost:15002", db_kwargs={"username": "<principal>", "password": "<token>"}) as conn:
+with flight.connect("grpc://localhost:15002", db_kwargs={
+        "username": "<principal>",
+        "password": "<token>",
+        "adbc.flight.sql.rpc.with_cookie_middleware": "true",  # keep the session cookie
+    }) as conn:
     with conn.cursor() as cur:
         cur.execute("SELECT 1 AS one")
         print(cur.fetch_arrow_table())
@@ -44,8 +48,8 @@ with flight.connect("grpc://localhost:15002", db_kwargs={"username": "<principal
 - **Metadata**: catalogs, schemas, tables (with schemas on request), table types, primary and foreign keys, SQL info,
   XDBC type info, and session options.
 - **Sessions**: a call with no session gets a short-lived one (`krishiv.flightSql.provisionalTtl`); a client that
-  keeps its session cookie keeps its session settings. The ADBC driver does not keep cookies unless you enable its cookie
-  middleware option, so session settings changed by one statement do not reach the next one without it.
+  keeps its session cookie keeps its session settings. The ADBC driver does not keep cookies unless its cookie
+  middleware option is on (as in the example below), so session settings changed by one statement do not reach the next one without it.
 
 ## Limits
 
