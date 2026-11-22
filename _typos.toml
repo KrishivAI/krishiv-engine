@@ -23,6 +23,8 @@ extend-exclude = [
     "python/krishiv/_udf/pandas_utils.py",
     "python/krishiv/_udf/typehints.py",
     "python/krishiv/_udf/loose_version.py",
+    # the same modules through the worker's `_udf` symlink (precheck's typos run follows it)
+    "crates/krishiv-udf-pool/worker/krishiv/_udf/**",
     # adapted PySpark 4.2.0 tests and their golden tables (NOTICE)
     "python/tests/pyspark_udf/test_udf.py",
     "python/tests/pyspark_udf/test_pandas_udf_scalar.py",
