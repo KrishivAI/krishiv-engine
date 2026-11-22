@@ -75,6 +75,45 @@ impl Column {
         Self::new(self.expr.alias(name))
     }
 
+    /// The aggregate call `self` restricted to the rows where `condition` holds
+    /// (`f(...) FILTER (WHERE condition)`), as `pivot` builds one column per value.
+    /// A call that already has a filter keeps it (both must hold); an alias around
+    /// the call is kept. Returns `None` when `self` is not a function call.
+    #[must_use]
+    pub fn filter_where(&self, condition: &Self) -> Option<Self> {
+        fn go(e: &Expr, cond: &Expr) -> Option<Expr> {
+            match &e.node {
+                ExprNode::Function(call) => {
+                    let mut call = call.clone();
+                    call.filter = Some(Arc::new(match call.filter.take() {
+                        None => cond.clone(),
+                        Some(old) => {
+                            Column::new((*old).clone())
+                                .and(Column::new(cond.clone()))
+                                .expr
+                        }
+                    }));
+                    Some(Expr {
+                        node: ExprNode::Function(call),
+                        origin: e.origin,
+                    })
+                }
+                ExprNode::Alias { expr, name } => {
+                    let inner = go(expr, cond)?;
+                    Some(Expr {
+                        node: ExprNode::Alias {
+                            expr: Arc::new(inner),
+                            name: name.clone(),
+                        },
+                        origin: e.origin,
+                    })
+                }
+                _ => None,
+            }
+        }
+        go(&self.expr, &condition.expr).map(Self::new)
+    }
+
     /// `CAST(self AS to)`.
     ///
     /// ```

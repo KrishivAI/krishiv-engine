@@ -3,8 +3,8 @@
 
 Aggregations reuse the group-by aggregation the engine already runs; the
 shortcuts and the dict form of ``agg`` build the same expressions the SQL
-equivalents build. The engine has no pivot, so ``pivot`` fails with the
-engine's own ``KRISHIV_UNSUPPORTED_FEATURE`` error instead of emulating it.
+equivalents build. ``pivot`` makes one column per pivot value: every aggregate becomes
+``agg(...) FILTER (WHERE pivot_col <=> value)``, named as Spark names it.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from krishiv import _native
-from krishiv.errors import not_expected_type, unsupported_feature
+from krishiv.errors import not_expected_type
 from krishiv.sql import functions as F
 from krishiv.sql.column import Column
 
@@ -49,6 +49,7 @@ class GroupedData:
     def __init__(self, native: _native.GroupedData, df: DataFrame) -> None:
         self._grouped = native
         self._source = df
+        self._pivot: tuple[str, list[Any] | None] | None = None
 
     def agg(self, *exprs: Column | dict[str, str]) -> DataFrame:
         """Computes aggregates and returns the result as a :class:`DataFrame`.
@@ -91,12 +92,16 @@ class GroupedData:
                     columns.append(F.count("*"))
                 else:
                     columns.append(F.call_function(func, F.col(key)))
+            if self._pivot is not None:
+                columns = self._pivoted(columns)
             return DataFrame(self._grouped.agg([c._c for c in columns]), self._source._session)
         checked: list[Column] = []
         for e in exprs:
             if not isinstance(e, Column):
                 raise not_expected_type("exprs", "Column", e)
             checked.append(e)
+        if self._pivot is not None:
+            checked = self._pivoted(checked)
         return DataFrame(self._grouped.agg([e._c for e in checked]), self._source._session)
 
     def count(self) -> DataFrame:
@@ -205,10 +210,38 @@ class GroupedData:
         """
         if not isinstance(pivot_col, str):
             raise not_expected_type("pivot_col", "str", pivot_col)
+        if self._pivot is not None:
+            from krishiv.errors import PySparkValueError
+
+            raise PySparkValueError("Repeated PIVOT operation is not supported")
         if values is not None:
             if not isinstance(values, list):
                 raise not_expected_type("values", "list", values)
             for v in values:
                 if not isinstance(v, bool | int | float | str):
                     raise not_expected_type("values", "list of bool, int, float or str", v)
-        raise unsupported_feature("GroupedData.pivot")
+        out = GroupedData(self._grouped, self._source)
+        out._pivot = (pivot_col, values)
+        return out
+
+    def _pivoted(self, columns: list[Column]) -> list[Column]:
+        """One filtered copy of each aggregate per pivot value, named as Spark names them."""
+        assert self._pivot is not None
+        pivot_col, values = self._pivot
+        if values is None:
+            rows = self._source.select(pivot_col).distinct().orderBy(pivot_col).collect()
+            values = [r[0] for r in rows]
+        single = len(columns) == 1
+        out: list[Column] = []
+        for value in values:
+            cond = F.col(pivot_col).eqNullSafe(F.lit(value))
+            label = "null" if value is None else str(value).lower() if isinstance(value, bool) else str(value)
+            for c in columns:
+                filtered = c._c.filter_where(cond._c)
+                if filtered is None:
+                    from krishiv.errors import PySparkValueError
+
+                    raise PySparkValueError("pivot needs aggregate expressions, such as sum(x)")
+                name = label if single else f"{label}_{self._source.agg(c).columns[0]}"
+                out.append(Column(filtered.alias(name)))
+        return out

@@ -175,6 +175,8 @@ class DataFrame:
         # would then hide the message.
         if name == "rdd":
             raise unsupported_attribute("DataFrame.rdd (RDDs; use the DataFrame API)")
+        if name == "writeStream":
+            raise unsupported_attribute("DataFrame.writeStream (streaming writes in an embedded session)")
         if name.startswith("_") or name not in self.columns:
             raise PySparkAttributeError(f"'DataFrame' object has no attribute '{name}'")
         return Column(self._df.col(name))
@@ -1539,6 +1541,89 @@ class DataFrame:
         if isinstance(numPartitions, int):
             _check_partitions(numPartitions)
         return self._new(self._df)
+
+    def repartitionByRange(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame:
+        """Partitions by ranges of the given expressions; as :meth:`repartition`, embedded Krishiv has
+        one partition set, so this checks its arguments and returns the same rows."""
+        return self.repartition(numPartitions, *cols)
+
+    def sortWithinPartitions(self, *cols: ColumnOrName, ascending: bool | list[bool] = True) -> DataFrame:
+        """Sorts each partition by the given columns. Any total order is a valid per-partition order,
+        so this sorts the whole result."""
+        return self.orderBy(*cols, ascending=ascending)
+
+    def rollup(self, *cols: ColumnsOrNames) -> GroupedData:
+        """Groups by ``cols`` and each prefix of them down to the grand total (``NULL`` for a rolled-up key)."""
+        return GroupedData(self._df.rollup([_named(c) for c in _flatten(cols)]), self)
+
+    def cube(self, *cols: ColumnsOrNames) -> GroupedData:
+        """Groups by every subset of ``cols`` (``NULL`` for a key a row is rolled up over)."""
+        return GroupedData(self._df.cube([_named(c) for c in _flatten(cols)]), self)
+
+    def groupingSets(self, groupingSets: Sequence[Sequence[ColumnOrName]], *cols: ColumnOrName) -> GroupedData:
+        """Groups by each of ``groupingSets``; the output has the columns ``cols``, ``NULL`` where a set omits one."""
+        sets = [[_named(c) for c in group] for group in groupingSets]
+        return GroupedData(self._df.grouping_sets(sets, [_named(c) for c in _flatten(cols)]), self)
+
+    def isEmpty(self) -> bool:
+        """Whether this :class:`DataFrame` has no rows."""
+        return len(self.limit(1).collect()) == 0
+
+    def isLocal(self) -> bool:
+        """Always ``True`` here: the query runs in this process, with no cluster."""
+        return True
+
+    def withColumns(self, colsMap: dict[str, Column]) -> DataFrame:
+        """Adds or replaces several columns; every expression sees the columns of this DataFrame, not the new ones."""
+        if not isinstance(colsMap, dict):
+            raise not_expected_type("colsMap", "dict", colsMap)
+        for name, c in colsMap.items():
+            if not isinstance(name, str):
+                raise not_expected_type("colsMap keys", "str", name)
+            if not isinstance(c, Column):
+                raise not_expected_type("colsMap values", "Column", c)
+        if not colsMap:
+            return self
+        out: list[Column] = [colsMap[n].alias(n) if n in colsMap else self[n] for n in self.columns]
+        out.extend(c.alias(n) for n, c in colsMap.items() if n not in self.columns)
+        return self.select(*out)
+
+    def colRegex(self, colName: str) -> Column:
+        """The columns whose names match the regular expression in backquotes, as ``select`` takes them."""
+        import re
+
+        if not isinstance(colName, str):
+            raise not_expected_type("colName", "str", colName)
+        m = re.fullmatch(r"`(.*)`", colName)
+        if m is None:
+            raise PySparkValueError(f"colRegex needs a backquoted regular expression, got {colName!r}")
+        names = [n for n in self.columns if re.fullmatch(m.group(1), n)]
+        if len(names) != 1:
+            raise unsupported_feature("DataFrame.colRegex matching other than exactly one column")
+        return self[names[0]]
+
+    def foreach(self, f: Any) -> None:
+        """Applies ``f`` to every :class:`Row`, on the driver."""
+        for row in self.toLocalIterator():
+            f(row)
+
+    def foreachPartition(self, f: Any) -> None:
+        """Applies ``f`` to an iterator of every row (one partition here)."""
+        f(iter(self.toLocalIterator()))
+
+    def createTempView(self, name: str) -> None:
+        """Registers this DataFrame as the temporary view ``name``; fails when it exists."""
+        if not isinstance(name, str):
+            raise not_expected_type("name", "str", name)
+        try:
+            _ = self._session.table(name).columns
+        except Exception:
+            pass
+        else:
+            raise PySparkValueError(
+                f"[TEMP_TABLE_OR_VIEW_ALREADY_EXISTS] Cannot create the temporary view `{name}`: it already exists."
+            )
+        self._df.create_or_replace_temp_view(name)
 
     def coalesce(self, numPartitions: int) -> DataFrame:
         """Returns a new :class:`DataFrame` with exactly ``numPartitions`` partitions.

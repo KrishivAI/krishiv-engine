@@ -27,6 +27,16 @@ class Row(tuple[Any, ...]):
             raise PySparkValueError("Cannot convert a Row class into dict")
         return dict(zip(self.__fields__, self, strict=True))
 
+    def __call__(self, *args: Any) -> Row:
+        """``Row("x", "y")("1", "2")``: a row class (field names only) builds a named row from values."""
+        if hasattr(self, "__fields__"):
+            raise TypeError("'Row' object is not callable")
+        if len(args) != len(self):
+            raise ValueError(
+                f"Can not create Row with fields {tuple(self)}, expected {len(self)} values but got {args}"
+            )
+        return _create_row([str(n) for n in self], list(args))
+
     def __contains__(self, item: object) -> bool:
         """Like PySpark: on a named row, ``in`` tests the field names."""
         if hasattr(self, "__fields__"):

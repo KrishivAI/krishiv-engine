@@ -31,6 +31,12 @@ impl PyColumn {
         Self::wrap(self.inner.clone().alias(name))
     }
 
+    /// The aggregate `self` over the rows where `condition` holds (`FILTER (WHERE ...)`), or `None`
+    /// when `self` is not an aggregate call (used by `GroupedData.pivot`).
+    fn filter_where(&self, condition: &Self) -> Option<Self> {
+        self.inner.filter_where(&condition.inner).map(Self::wrap)
+    }
+
     /// `CAST(self AS to)`, `to` a Spark type string (`int`, `decimal(10,2)`).
     fn cast(&self, py: Python<'_>, to: &str) -> PyResult<Self> {
         let data_type = to.parse::<DataType>().map_err(|e| to_py(py, &e))?;

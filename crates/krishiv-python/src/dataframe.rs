@@ -168,6 +168,32 @@ impl PyDataFrame {
         }
     }
 
+    /// Groups by `cols` and each prefix of them (`rollup`).
+    fn rollup(&self, cols: Vec<PyColumn>) -> PyGroupedData {
+        PyGroupedData {
+            inner: self.inner.rollup(columns(cols)),
+            owned: self.owned.clone(),
+        }
+    }
+
+    /// Groups by every subset of `cols` (`cube`).
+    fn cube(&self, cols: Vec<PyColumn>) -> PyGroupedData {
+        PyGroupedData {
+            inner: self.inner.cube(columns(cols)),
+            owned: self.owned.clone(),
+        }
+    }
+
+    /// Groups by each of `sets` over `cols` (`groupingSets`).
+    fn grouping_sets(&self, sets: Vec<Vec<PyColumn>>, cols: Vec<PyColumn>) -> PyGroupedData {
+        let sets: Vec<Vec<krishiv_session::Column>> =
+            sets.into_iter().map(|s| columns(s).collect()).collect();
+        PyGroupedData {
+            inner: self.inner.grouping_sets(sets, columns(cols)),
+            owned: self.owned.clone(),
+        }
+    }
+
     fn agg(&self, cols: Vec<PyColumn>) -> Self {
         self.derive(self.inner.agg(columns(cols)))
     }

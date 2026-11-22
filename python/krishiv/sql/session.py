@@ -217,6 +217,11 @@ class SparkSession:
         raise unsupported_attribute("SparkSession.sparkContext (SparkContext and RDDs; use the DataFrame API)")
 
     @property
+    def readStream(self) -> Any:
+        """Not supported: streaming reads are not part of embedded Krishiv sessions yet."""
+        raise unsupported_attribute("SparkSession.readStream (streaming reads in an embedded session)")
+
+    @property
     def conf(self) -> RuntimeConfig:
         return self._conf
 
