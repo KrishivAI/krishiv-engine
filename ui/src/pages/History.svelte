@@ -26,7 +26,11 @@
     }
   }
   let session = $state(sessionAsked());
-  let picked = $state<string[]>([]);
+  // A run is its id and its session: two sessions may each have run a query under one id.
+  type Pick = { id: string; session: string };
+  let picked = $state<Pick[]>([]);
+  const pickOf = (r: Query): Pick => ({ id: r.query_id, session: r.session_id ?? "" });
+  const isPicked = (r: Query) => picked.some((p) => p.id === r.query_id && p.session === (r.session_id ?? ""));
   let compared = $state<Compare | null>(null);
   let compareError = $state("");
 
@@ -45,15 +49,19 @@
     refetchInterval: consoleInfo.mode === "profiles" ? false : 5000,
   }));
 
-  function toggle(id: string) {
-    picked = picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id].slice(-2);
+  function toggle(r: Query) {
+    const pick = pickOf(r);
+    picked = isPicked(r) ? picked.filter((p) => p.id !== pick.id || p.session !== pick.session) : [...picked, pick].slice(-2);
     compared = null;
   }
 
   async function compare() {
     compareError = "";
     try {
-      compared = await api<Compare>(`/api/internal/compare?a=${encodeURIComponent(picked[0])}&b=${encodeURIComponent(picked[1])}`);
+      const p = new URLSearchParams({ a: picked[0].id, b: picked[1].id });
+      if (picked[0].session) p.set("a_session", picked[0].session);
+      if (picked[1].session) p.set("b_session", picked[1].session);
+      compared = await api<Compare>(`/api/internal/compare?${p}`);
     } catch (e) {
       compareError = (e as Error).message;
     }
@@ -157,7 +165,7 @@
     {#snippet cell(r, c)}
       {#if c.key === "query"}
         <label class="mr-2 inline-flex min-h-11 min-w-11 items-center justify-center align-middle">
-          <input class="size-5 accent-[var(--k-silver)]" type="checkbox" checked={picked.includes(r.query_id)} onchange={() => toggle(r.query_id)} aria-label={`Select ${oneLine(r.query_text, 40)} (${r.query_id.slice(-8)}) for comparison`} />
+          <input class="size-5 accent-[var(--k-silver)]" type="checkbox" checked={isPicked(r)} onchange={() => toggle(r)} aria-label={`Select ${oneLine(r.query_text, 40)} (${r.query_id.slice(-8)}) for comparison`} />
         </label>
         <a class="inline-flex min-h-11 min-w-11 items-center align-middle underline underline-offset-4" href={queryHref(r.query_id, r.session_id)}>{oneLine(r.query_text, 90)}</a>
         <div><Id id={r.query_id} /></div>

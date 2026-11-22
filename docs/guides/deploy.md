@@ -131,7 +131,7 @@ against its limits, its memory in use and its scan quota; a server started witho
 as it arrives, and the page says so.
 
 The Advisor page lists the partition advice of `system.partition_advice`: for each table the query history
-covers, the column its finished queries filter on by equality that would let them skip the most data, with how
+covers, the column its finished queries filter on by equality or `IN` that would let them skip the most data, with how
 many of the table's queries filter on it, how many partitions it would make and the share of bytes it is expected
 to save; other candidate columns follow in the same row. `EXPLAIN` prints the same advice for the tables a query
 reads. The advice comes from the stored history, so a server needs `krishiv.history.path` to have any, and the

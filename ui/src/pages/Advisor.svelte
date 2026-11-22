@@ -40,7 +40,7 @@
 {:else}
   <p class="mb-3 max-w-prose text-muted-foreground">
     Partition columns suggested by the query history: for each table, the column its finished queries filter on
-    by equality that would let them skip the most data. Nothing is changed here; to follow a suggestion, write
+    by equality or <code>IN</code> that would let them skip the most data. Nothing is changed here; to follow a suggestion, write
     the table again partitioned by the column. <code>EXPLAIN</code> prints the same advice for the tables a
     query reads.
   </p>
@@ -56,7 +56,7 @@
   {#if tables.length === 0}
     <p class="max-w-prose text-muted-foreground" data-no-advice>
       No advice yet. Advice comes from the finished queries a server keeps in its query history
-      (<code>krishiv.history.path</code>): a table is listed once queries filter it by equality on a column
+      (<code>krishiv.history.path</code>): a table is listed once queries filter it by equality or <code>IN</code> on a column
       that has between 2 and 10,000 distinct values and is not close to unique.
     </p>
   {:else}

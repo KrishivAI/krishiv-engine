@@ -844,6 +844,23 @@ async fn a_query_page_can_name_the_session_of_a_query_whose_id_two_sessions_shar
 }
 
 #[tokio::test]
+async fn compare_can_name_the_session_of_each_run() {
+    let (addr, _) = start_dup().await;
+    let path = "/api/internal/compare?a=q-dup&a_session=s-b&b=q-dup&b_session=s-a";
+    let body = get(addr, path).await;
+    assert_eq!(body["a"]["principal"], "bob", "{body}");
+    assert_eq!(body["b"]["principal"], "ann", "{body}");
+    // Without a session the first run of that id answers, as before.
+    let first = get(addr, "/api/internal/compare?a=q-dup&b=q-solo").await;
+    assert_eq!(first["a"]["principal"], "ann", "{first}");
+    // A session that has no such run is not in the history.
+    let path = "/api/internal/compare?a=q-dup&a_session=s-c&b=q-solo";
+    let (status, _, body) = request(addr, "GET", path, true).await;
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(body["error"], "no_such_query");
+}
+
+#[tokio::test]
 async fn cancel_ends_only_the_named_sessions_query_and_refuses_an_id_two_sessions_run() {
     let (addr, fake) = start_dup().await;
     // An id two sessions are running, with no session named: refused before the source is asked.

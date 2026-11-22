@@ -1169,9 +1169,11 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
     )
 }
 
-/// Two runs side by side with the change in each number (`b - a`).
+/// `GET /api/internal/compare?a=&b=[&a_session=&b_session=]`: two runs side by side with the change in each
+/// number (`b - a`). Two sessions may each have run a query under one id, so the page names each run's
+/// session; without one the first run of that id answers.
 async fn compare(State(s): State<UiState>, uri: Uri) -> Response {
-    let (Some(a), Some(b)) = (param(&uri, "a"), param(&uri, "b")) else {
+    let (Some(a), Some(b)) = (filter_param(&uri, "a"), filter_param(&uri, "b")) else {
         return error(
             StatusCode::BAD_REQUEST,
             "bad_request",
@@ -1182,8 +1184,13 @@ async fn compare(State(s): State<UiState>, uri: Uri) -> Response {
         Ok(r) => r,
         Err(e) => return *e,
     };
-    let find = |id: &str| rows.iter().find(|r| text(r, "query_id") == id);
-    let (Some(ra), Some(rb)) = (find(a), find(b)) else {
+    let find = |id: &str, session: Option<String>| {
+        rows.iter().find(|r| is_query(r, id, session.as_deref()))
+    };
+    let (Some(ra), Some(rb)) = (
+        find(&a, filter_param(&uri, "a_session")),
+        find(&b, filter_param(&uri, "b_session")),
+    ) else {
         return error(
             StatusCode::NOT_FOUND,
             "no_such_query",

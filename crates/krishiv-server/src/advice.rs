@@ -6,6 +6,8 @@
 //! one session and one over stored profiles list nothing. Reading it reads the history store, so the page
 //! asks once and on request, not on a timer. Nothing here changes a table.
 
+use std::collections::HashMap;
+
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -29,11 +31,16 @@ const COLUMN_COLUMNS: &[&str] = &[
 /// first), each table's by rank.
 fn by_table(rows: &[Row]) -> Vec<Value> {
     let mut tables: Vec<(&str, i64, Vec<&Row>)> = Vec::new();
+    // Where each table is in `tables`: a history may cover many thousands of tables.
+    let mut at: HashMap<&str, usize> = HashMap::new();
     for row in rows {
         let name = text(row, "table_name");
-        match tables.iter_mut().find(|(n, ..)| *n == name) {
+        match at.get(name).and_then(|i| tables.get_mut(*i)) {
             Some((.., columns)) => columns.push(row),
-            None => tables.push((name, int(row, "table_queries"), vec![row])),
+            None => {
+                at.insert(name, tables.len());
+                tables.push((name, int(row, "table_queries"), vec![row]));
+            }
         }
     }
     tables
