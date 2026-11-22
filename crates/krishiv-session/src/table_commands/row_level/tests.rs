@@ -1088,8 +1088,7 @@ mod merge {
         let rows = strings(&files);
         assert!(rows.contains(&(2, "u2".to_owned())), "{rows:?}");
         assert!(rows.contains(&(10, "n10!".to_owned())), "{rows:?}");
-        let nine = rows.iter().find(|(id, _)| *id == 9).map(|(_, s)| s.clone());
-        assert!(nine.is_some_and(|s| s.ends_with('?')), "{rows:?}");
+        assert!(rows.contains(&(9, "s9?".to_owned())), "{rows:?}");
         assert_eq!(session.memory_reserved(), 0);
     }
 
@@ -1346,10 +1345,7 @@ mod merge {
                 .unwrap()
         };
         let kept = read(SOURCE, "(SELECT max(x) FROM o)");
-        assert!(
-            kept.as_deref().is_some_and(|f| f.contains("id")),
-            "{kept:?}"
-        );
+        assert_eq!(kept.as_deref(), Some("(t.id == src.id)"));
         assert_eq!(read(SOURCE, "(SELECT max(s) FROM t)"), None);
         assert_eq!(read("SELECT id, s FROM t WHERE id = 2", "src.s"), None);
     }

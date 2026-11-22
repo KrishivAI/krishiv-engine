@@ -271,9 +271,10 @@ impl Session {
             }
             .into());
         }
-        let conf = self.state.conf.snapshot();
+        // The flags come from the statement's own snapshot, the one its probe analysis read.
+        let conf = &probe.env.config;
         let flag =
-            |key: &str| crate::conf::get(&conf, key).map(|v| v.trim().eq_ignore_ascii_case("true"));
+            |key: &str| crate::conf::get(conf, key).map(|v| v.trim().eq_ignore_ascii_case("true"));
         super::merge_checks::clause_order(&m.clauses)?;
         // Names resolve case-insensitively here: Spark's case-sensitive resolution is refused.
         if flag("spark.sql.caseSensitive") == Some(true) {
@@ -357,6 +358,7 @@ impl Session {
             source_columns: &source_columns,
             table: &table,
             evolve,
+            parser: &probe.env.parser,
         };
         let probe_join = checks.on(&empty_target, &probe_source, &m.on).await?;
         let (resolved, value_types) = checks
@@ -386,7 +388,7 @@ impl Session {
             0
         };
         let s = source_frame(&held.frame);
-        let on = expr(&m.on)?;
+        let on = crate::functions::expr_with(&m.on, &probe.env.parser)?;
         let tp = qualified(&m.target_alias, &target_present);
         let sp = qualified(&m.source_alias, &source_present);
         let guards: Vec<Column> = resolved
@@ -567,7 +569,7 @@ impl Session {
         let read_filter = if by_source || rereads_target {
             None
         } else {
-            Some(Arc::new(on_of(&m.on)?))
+            Some(Arc::new(on_of(&m.on, &probe.env.parser)?))
         };
         let mut request = RowLevelWrite::new(
             RowLevelOperation::Merge,
@@ -725,8 +727,11 @@ fn find_scan(node: &PhysNode, name: &str) -> Option<krishiv_plan::Scan> {
 }
 
 /// The `ON` condition as the table's conflict check takes it (parsed, unresolved).
-fn on_of(on: &str) -> Result<krishiv_plan::Expr, KrishivError> {
-    Ok(expr(on)?.expr)
+fn on_of(
+    on: &str,
+    parser: &krishiv_sql::ParserOptions,
+) -> Result<krishiv_plan::Expr, KrishivError> {
+    Ok(crate::functions::expr_with(on, parser)?.expr)
 }
 
 /// The find query's rows (`f`, `act`, `rows`, `touch`, `multiple`, `ins`) folded.

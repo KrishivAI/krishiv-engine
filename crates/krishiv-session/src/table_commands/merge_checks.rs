@@ -44,7 +44,7 @@ use krishiv_types::DataType;
 use super::merge::{ClauseAction, ClauseKind, MergeClause, Resolved};
 use super::row_level::{Assignment, ident};
 use crate::dataframe::{DataFrame, JoinType};
-use crate::functions::expr;
+use crate::functions::{expr, expr_with};
 
 /// delta-spark's `usageReference` of `DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE`.
 pub(super) const USAGE_REFERENCE: &str =
@@ -87,6 +87,8 @@ pub(super) struct Checks<'a> {
     pub(super) table: &'a Arc<dyn RowLevelTable>,
     /// Schema evolution is on (`spark.databricks.delta.schema.autoMerge.enabled`).
     pub(super) evolve: bool,
+    /// The statement's parser options: every text the statement wrote is read again under them.
+    pub(super) parser: &'a krishiv_sql::ParserOptions,
 }
 
 /// The new values' types per assigned column, for the store-assignment overflow error.
@@ -206,7 +208,7 @@ impl Checks<'_> {
                 "MERGE INTO with a non-deterministic condition",
             ));
         }
-        if has_subquery(&expr(text)?.expr) {
+        if has_subquery(&expr_with(text, self.parser)?.expr) {
             return Err(refuse(
                 RowLevelProblem::Subquery {
                     what,
@@ -227,7 +229,11 @@ impl Checks<'_> {
         if texts.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }
-        let probe = frame.select_expr(texts)?;
+        let columns = texts
+            .iter()
+            .map(|t| expr_with(t, self.parser))
+            .collect::<Result<Vec<_>, _>>()?;
+        let probe = frame.select(columns);
         let analysis = probe
             .action_analysis()
             .await
@@ -259,7 +265,7 @@ impl Checks<'_> {
         if let Some(e) = exprs.first() {
             self.condition(on, e, "search condition")?;
         }
-        Ok(target.join(source, expr(on)?, JoinType::Inner))
+        Ok(target.join(source, expr_with(on, self.parser)?, JoinType::Inner))
     }
 
     /// Each clause resolved: its condition checked, its values per target column.
@@ -409,7 +415,7 @@ impl Checks<'_> {
                 )),
             };
             let parse = |text: &str| -> Result<krishiv_plan::Expr, KrishivError> {
-                let e = Arc::new(expr(text)?.expr);
+                let e = Arc::new(expr_with(text, self.parser)?.expr);
                 Ok(match &side {
                     Some((alias, names)) => (*qualify(&e, alias, names)).clone(),
                     None => (*e).clone(),
