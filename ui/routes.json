@@ -8,6 +8,7 @@
     { "path": "/history", "embeddable": false },
     { "path": "/sessions", "embeddable": false },
     { "path": "/workload", "embeddable": false },
+    { "path": "/advisor", "embeddable": false },
     { "path": "/resources", "embeddable": false },
     { "path": "/catalog", "embeddable": false },
     { "path": "/sql", "embeddable": false },

@@ -244,6 +244,7 @@ impl StoreCatalog {
                 default: None,
                 comment: None,
                 char_varchar: c.char_varchar.clone(),
+                metric: None,
             })
             .collect();
         let table = TableName {
@@ -608,6 +609,7 @@ impl CatalogWrite for StoreCatalog {
                     default: altered.defaults.get(&c.name).cloned(),
                     comment: altered.comments.get(&c.name).cloned(),
                     char_varchar: c.char_varchar.clone(),
+                    metric: None,
                 })
                 .collect();
             for (key, value) in altered.properties {
@@ -1533,6 +1535,7 @@ mod tests {
             functions: None,
             revision: 0,
             author: String::new(),
+            kind: crate::store::ViewKind::Sql,
         });
         let current = c.store.table("db", "v").unwrap();
         assert!(c.store.replace_table(&current, view));
@@ -1888,6 +1891,7 @@ mod tests {
             functions: None,
             revision: 0,
             author: String::new(),
+            kind: crate::store::ViewKind::Sql,
         });
         assert!(c.store.replace_table(&current, view));
         let e = rename(c, "v", "w").unwrap_err();
