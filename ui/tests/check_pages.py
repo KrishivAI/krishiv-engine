@@ -21,7 +21,7 @@ import tempfile
 import threading
 from html import escape
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from playwright.sync_api import Page, expect, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -824,6 +824,159 @@ def filter_checks() -> list[str]:
     return problems
 
 
+def compare_checks() -> list[str]:
+    """History's comparison: two selected runs are compared, each named by its id and its session (two sessions
+    may have run a query under one id); a run stored without a session is named by its id alone; a number one
+    of the runs lacks has no change; a third selection replaces the older one and clears the table."""
+    problems: list[str] = []
+    runs = fixture_server.DATA["history"]
+    session = runs[0]["session_id"]
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        server = fixture_server.serve(mode="server")
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
+        page.locator("header nav a").first.wait_for(timeout=10000)
+        page.evaluate("window.location.hash = '#/history'")
+
+        def pick(run: dict) -> None:
+            # The layout for the other width is in the page too, hidden.
+            box = page.locator(
+                f"main input[type=checkbox][aria-label*='({run['query_id'][-8:]})']:visible"
+            )
+            box.first.wait_for(timeout=10000)
+            box.first.check()
+
+        button = page.get_by_role("button", name="Compare the two selected")
+        table = page.locator("main h2", has_text="Comparison")
+        pick(runs[0])
+        if not button.is_disabled():
+            problems.append("compare: the button is enabled with one run selected")
+        pick(runs[1])
+        button.click()
+        # (label, A, B, B - A) of the two runs of one session; the fixture's numbers.
+        want = ("Wall time", "1.8 s", "2.6 s", "+770 ms")
+        try:
+            table.wait_for(timeout=5000)
+            row = page.locator("main tr", has_text=want[0]).first.inner_text()
+            if [c.strip() for c in row.split("\t")] != list(want):
+                problems.append(f"compare: the wall time row is {row!r}")
+        except PlaywrightTimeout:
+            problems.append("compare: no comparison of two selected runs is shown")
+        asked = parse_qs(server.compares[-1]) if server.compares else {}
+        if asked != {
+            "a": [runs[0]["query_id"]],
+            "b": [runs[1]["query_id"]],
+            "a_session": [session],
+            "b_session": [session],
+        }:
+            problems.append(f"compare: two runs of a session were asked as {asked}")
+        # A third selection drops the oldest; the stored run without a session is named by its id alone, and
+        # it has no CPU time, so that row has no change.
+        pick(runs[2])
+        if table.count() != 0:
+            problems.append(
+                "compare: the old comparison stays after the selection changed"
+            )
+        button.click()
+        try:
+            table.wait_for(timeout=5000)
+            row = page.locator("main tr", has_text="CPU time").first.inner_text()
+            if [c.strip() for c in row.split("\t")][2:] != ["–", "–"]:
+                problems.append(f"compare: the CPU time row is {row!r}")
+            if (
+                "−2.6 s"
+                not in page.locator("main tr", has_text="Wall time").first.inner_text()
+            ):
+                problems.append("compare: a faster run B shows no negative change")
+        except PlaywrightTimeout:
+            problems.append("compare: no comparison with a run that has no session")
+        asked = parse_qs(server.compares[-1]) if server.compares else {}
+        if asked != {
+            "a": [runs[1]["query_id"]],
+            "b": [runs[2]["query_id"]],
+            "a_session": [session],
+        }:
+            problems.append(f"compare: a run without a session was asked as {asked}")
+        problems += [f"compare: page error: {e}" for e in errors]
+        page.close()
+        server.shutdown()
+        browser.close()
+    return problems
+
+
+def editor_colour_checks() -> list[str]:
+    """The SQL editor's syntax colours: a keyword, a string, a number and a comment each have their own colour,
+    and every piece of the statement has a contrast of at least 4.5 against the editor's background, in dark and
+    in light (CodeMirror's default colours are chosen for a white page)."""
+    problems: list[str] = []
+    statement = "SELECT 'a', 12 FROM t -- note"
+    read = """el => {
+        const rgb = c => (c.match(/[\\d.]+/g) || []).slice(0, 3).map(Number);
+        const lum = c => {
+            const [r, g, b] = rgb(c).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const back = getComputedStyle(el.closest('.cm-editor')).backgroundColor;
+        const ratio = c => { const a = lum(c), b = lum(back); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
+        const base = getComputedStyle(el).color;
+        const parts = [...el.querySelectorAll('.cm-line span')].map(s => {
+            const c = getComputedStyle(s).color;
+            return { text: s.textContent, colour: c, ratio: ratio(c) };
+        });
+        return { back, base, baseRatio: ratio(base), parts };
+    }"""
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        server = fixture_server.serve(mode="server")
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        for scheme in ("dark", "light"):
+            page = browser.new_page(
+                viewport={"width": 1440, "height": 900}, color_scheme=scheme
+            )
+            page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
+            page.locator("header nav a").first.wait_for(timeout=10000)
+            page.evaluate("window.location.hash = '#/sql'")
+            editor = page.locator(".cm-content")
+            editor.wait_for(timeout=10000)
+            editor.click()
+            page.keyboard.press("Control+A")
+            page.keyboard.type(statement)
+            found = editor.evaluate(read)
+            if found["baseRatio"] < 4.5:
+                problems.append(
+                    f"editor {scheme}: plain text {found['base']} on {found['back']} has contrast {found['baseRatio']:.2f}"
+                )
+            colours = {}
+            for part in found["parts"]:
+                colours[part["text"].strip()] = part["colour"]
+                if part["ratio"] < 4.5:
+                    problems.append(
+                        f"editor {scheme}: {part['text']!r} {part['colour']} on {found['back']} has contrast {part['ratio']:.2f}"
+                    )
+            wanted = ["SELECT", "'a'", "12", "-- note"]
+            missing = [w for w in wanted if w not in colours]
+            if missing:
+                problems.append(f"editor {scheme}: no coloured piece for {missing}")
+            else:
+                seen = [colours[w] for w in wanted]
+                if len(set(seen)) != len(seen) or found["base"] in seen:
+                    problems.append(
+                        f"editor {scheme}: keyword, string, number and comment colours are {seen}, plain text {found['base']}"
+                    )
+                if colours["SELECT"] != colours.get("FROM"):
+                    problems.append(
+                        f"editor {scheme}: SELECT and FROM differ in colour"
+                    )
+            page.close()
+        server.shutdown()
+        browser.close()
+    return problems
+
+
 def workload_checks() -> list[str]:
     """A server console's Sessions and Workload pages and the filter of the live list: the ended sessions are
     off the list until asked for, the filter narrows it, ending a session takes two presses and says what was
@@ -1534,6 +1687,8 @@ if __name__ == "__main__":
     found += role_checks()
     found += start_checks()
     found += filter_checks()
+    found += compare_checks()
+    found += editor_colour_checks()
     found += workload_checks()
     found += advisor_checks()
     found += heatmap_checks(f"http://127.0.0.1:{server.server_address[1]}")
@@ -1543,7 +1698,7 @@ if __name__ == "__main__":
         "\n".join(found)
         if found
         else "ui pages: ok (11 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, deep links, embed, "
-        "embedded and profiles consoles, operator, history filters, sessions and workload, the advisor and session links, the plan heatmap, "
+        "embedded and profiles consoles, operator, history filters and comparison, sessions and workload, the advisor and session links, the plan heatmap, "
         "TPC-H Q9's profile, "
         "responsive: 3 consoles x 13 screen sizes, touch targets, SQL editor on a phone, text size, motion)"
     )

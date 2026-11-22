@@ -377,6 +377,49 @@ def history(query: str) -> list[dict]:
     ]
 
 
+COMPARED = (
+    "wall_ns",
+    "cpu_ns",
+    "peak_memory_bytes",
+    "rows_produced",
+    "bytes_read",
+    "spill_bytes",
+)
+
+
+def compare(query: str) -> tuple[int, dict]:
+    """Two runs of the history side by side, as `krishiv_server::internal` answers `/api/internal/compare`: each
+    run is picked by its id and, when the request names one, its session; the change is listed for the numbers
+    both runs have. A session that is named but empty is refused, and a run that is not there is a 404."""
+    asked = parse_qs(query, keep_blank_values=True)
+    runs = []
+    for side in ("a", "b"):
+        session = asked.get(f"{side}_session")
+        if session == [""]:
+            return 400, {"error": "bad_request"}
+        run = next(
+            (
+                q
+                for q in DATA["history"]
+                if [q["query_id"]] == asked.get(side)
+                and (session is None or [q.get("session_id")] == session)
+            ),
+            None,
+        )
+        if run is None:
+            return 404, {
+                "error": "no_such_query",
+                "message": "one of the queries is not in the history",
+            }
+        runs.append(run)
+    delta = {
+        k: runs[1][k] - runs[0][k]
+        for k in COMPARED
+        if isinstance(runs[0].get(k), int) and isinstance(runs[1].get(k), int)
+    }
+    return 200, {"a": runs[0], "b": runs[1], "delta": delta}
+
+
 def stored_detail(query_id: str, profile: dict, sql: str) -> dict:
     """A query's page from its stored profile, as the console over stored profiles answers it: the profile's
     operators in id order (each with its plan node and role), the one with the most compute time and the
@@ -597,6 +640,9 @@ class Handler(BaseHTTPRequestHandler):
                         "message": "the principal's role does not allow this",
                     },
                 )
+            if url.path == "/api/internal/compare":
+                self.server.compares.append(url.query)  # type: ignore[attr-defined]
+                return self.send_json(*compare(url.query))
             body = route(
                 url.path,
                 self.mode,
@@ -741,7 +787,7 @@ def serve(
     `asked` collects the `/api/internal/*` paths pages requested. The first `health_failures` requests for the
     health answer 503, as a console that is let in before its server can answer. Each server has its own
     sessions (`closed` collects the ids of the ones a page ended); without `groups` it is a server started
-    with no resource-group file, without `advice` one whose history has none. `query_reads` and `cancels`
+    with no resource-group file, without `advice` one whose history has none. `query_reads`, `compares` and `cancels`
     collect the addresses, parameters included, a page read a query's detail from and cancelled a query at."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
@@ -755,6 +801,7 @@ def serve(
     server.groups = GROUPS if groups else []  # type: ignore[attr-defined]
     server.advice = ADVICE if advice else []  # type: ignore[attr-defined]
     server.query_reads = []  # type: ignore[attr-defined]
+    server.compares = []  # type: ignore[attr-defined]
     server.cancels = []  # type: ignore[attr-defined]
     return server
 
