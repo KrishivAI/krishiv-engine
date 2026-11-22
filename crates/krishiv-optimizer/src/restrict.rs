@@ -57,10 +57,43 @@
 //!   a foreign key, restrict nothing), and computing it scans no more
 //!   rows than the aggregate's input does.
 //!
+//! ## The preserved side of an outer join (perf lever K6)
+//!
+//! With `krishiv.optimizer.preservedSideSemiJoin` on, the walk down from
+//! the join may also stop at a `LEFT` or `RIGHT OUTER` join (never `FULL`)
+//! whose preserved input holds every key, through filters, projections and
+//! inner joins only:
+//!
+//! ```text
+//! Join(A, OuterJoin(P, N), k = o)
+//!   =>  Join(A, OuterJoin(P ⋉ Shift(π_o(D)), N), k = o)
+//! ```
+//!
+//! Sound because each row of `P` reaches the outer join's output with its
+//! own key values (matched or null-extended), and the null-supplying side
+//! `N` emits no row of its own: a row of `P` whose keys meet no value of
+//! `A` only feeds output rows the join above drops, matched or not. The
+//! semi join sits on `P`, never on `N`. Its gates, on top of the ones
+//! above for the path and the equalities: every node on the path is
+//! deterministic, the domain is `repeatable` (computed twice), the keys
+//! are columns or integral widenings of `P`'s columns, statistics say the
+//! semi join keeps at most a quarter of `P` and `N` estimates at least
+//! twice the reduced `P` (so the hash join can build `P`), and `P` does
+//! not already hold a semi join on the keys (`reduced`). `P` itself need
+//! not be deterministic: the semi join only drops rows of it after they
+//! were computed once, so a nondeterministic `P` keeps its values.
+//!
+//! ## Errors
+//!
 //! Like a runtime filter, the restriction may skip rows whose evaluation
 //! would have raised an ANSI error (a `sum` that overflows in a group no
-//! row asks for); it never changes a value. This is a documented
-//! divergence from Spark, which computes every group.
+//! row asks for); it never changes a value. On the preserved side the
+//! skipped work is wider: the outer join's condition and every filter and
+//! projection between it and the join above are no longer evaluated on the
+//! removed rows, so an error Spark raises there (a failing cast in a
+//! projection above the outer join, on a row the inner join later drops)
+//! is not raised. This is a documented divergence from Spark, which
+//! computes every group and every row.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -90,16 +123,29 @@ const DESCEND: f64 = 2.0;
 /// The largest attribute id a plan may hold (as the analyzer allows).
 pub(crate) const MAX_ID: u64 = 1 << 62;
 
-/// Restricts the aggregates below joins in `root` (see the module docs).
+/// The preserved side's estimated rows after the semi join must be at most
+/// `1 / PRESERVED_KEEP` of its rows before.
+const PRESERVED_KEEP: f64 = 4.0;
+
+/// The outer join's other input must estimate at least this many times the
+/// preserved side's rows after the semi join (the physical planner's
+/// `STATS_FACTOR`: only then can it build the preserved side).
+const PRESERVED_FLIP: f64 = 2.0;
+
+/// Restricts the aggregates below joins in `root` (see the module docs);
+/// with `preserved`, also the preserved sides of outer joins below them
+/// (`krishiv.optimizer.preservedSideSemiJoin`, module docs).
 pub(crate) fn restrict(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
+    preserved: bool,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let mut r = Restrict {
         est: Estimator::with_propagation(stats, propagate),
         root: Arc::clone(&root),
         next: None,
+        preserved,
     };
     dag::rewrite_up(root, &mut |p| Ok(r.join(p)))
 }
@@ -111,6 +157,8 @@ struct Restrict<'a> {
     /// One past every attribute id the plan holds, Shift ranges included:
     /// computed at the first restriction (most plans have none).
     next: Option<u64>,
+    /// Whether the preserved side of an outer join is a target too.
+    preserved: bool,
 }
 
 /// One restricting equality: `agg = other`, each over its own side.
@@ -218,6 +266,30 @@ impl Restrict<'_> {
             }
             match &at.node {
                 PlanNode::Aggregate { .. } => break,
+                // The preserved side of an outer join: every row of it reaches
+                // the join's output with its own values, so one whose keys
+                // meet no value of `other` only feeds rows the join above
+                // drops.
+                PlanNode::Join {
+                    left,
+                    right,
+                    kind: kind @ (JoinKind::LeftOuter | JoinKind::RightOuter),
+                    ..
+                } if self.preserved => {
+                    let (kept, nulls) = if matches!(kind, JoinKind::LeftOuter) {
+                        (left, right)
+                    } else {
+                        (right, left)
+                    };
+                    let within = output_ids(kept)
+                        .is_some_and(|o| keys.iter().all(|k| references(k).is_subset(&o)));
+                    if !within {
+                        return None;
+                    }
+                    let (kept, nulls) = (Arc::clone(kept), Arc::clone(nulls));
+                    path.push(at);
+                    return self.preserved_side(&path, &kept, &nulls, &pairs, &keys, other);
+                }
                 PlanNode::Filter { input, .. } => {
                     let next = Arc::clone(input);
                     path.push(at);
@@ -336,6 +408,97 @@ impl Restrict<'_> {
         {
             return None;
         }
+        let semi = self.semi(input, &kept, inner, domain, &want, &rename)?;
+        // The semi join may restrict an aggregate below it in turn (one
+        // pass, so the result is a fixed point).
+        let semi = self.join(semi);
+        let out = with_input(&at, semi);
+        Some(rebuild(&path, at, out))
+    }
+
+    /// The target of [`Self::side`] when its walk meets an outer join whose
+    /// preserved input `kept` holds the keys (`path` ends at that join):
+    /// `kept` semi-joined to `other`'s domain, when the reduction lets the
+    /// physical planner build `kept` instead of `nulls`, the outer join's
+    /// other input (TPC-DS q40, q80: a small filtered fact against all of
+    /// its returns).
+    fn preserved_side(
+        &mut self,
+        path: &[Arc<LogicalPlan>],
+        kept: &Arc<LogicalPlan>,
+        nulls: &Arc<LogicalPlan>,
+        pairs: &[Pair<'_>],
+        keys: &[Arc<Expr>],
+        other: &Arc<LogicalPlan>,
+    ) -> Option<Arc<LogicalPlan>> {
+        // `other`'s domain is computed twice, so it must agree with itself;
+        // `kept` need not be deterministic: the semi join sits above it and
+        // only drops rows computed once (module docs).
+        if !repeatable(other) {
+            return None;
+        }
+        // Each key is evaluated on every row of `kept` (the join above reads
+        // them all, as the outer join keeps them), the domain side on rows of
+        // the domain the join may never read: neither may raise.
+        let mut inner = Vec::new();
+        let mut kept_pairs = Vec::new();
+        for (pair, key) in pairs.iter().zip(keys) {
+            let typed = crate::expr::data_type(key).is_some_and(|t| key_type(&t));
+            if typed && cannot_raise(key) && cannot_raise(pair.other) {
+                inner.push(Arc::clone(key));
+                kept_pairs.push(pair);
+            }
+        }
+        if kept_pairs.is_empty() || reduced(kept, &inner) {
+            return None;
+        }
+        let mut want = Attrs::default();
+        for p in &kept_pairs {
+            want.extend(references(p.other));
+        }
+        let Domain {
+            plan: domain,
+            want,
+            rename,
+        } = self.domain(other, &want)?;
+        if !repeatable(&domain) {
+            return None;
+        }
+        // The domain drops most of what it reads (a whole table's keys
+        // restrict nothing) and reads no more than `kept` does.
+        let dom_est = self.est.plan(&domain);
+        let dom_scanned = self.scanned(&domain);
+        if dom_est.rows_for_costing() * LOPSIDED > dom_scanned || dom_scanned > self.scanned(kept) {
+            return None;
+        }
+        let next = self.next;
+        let semi = self.semi(kept, &kept_pairs, inner, domain, &want, &rename)?;
+        // Pays off: the semi join keeps at most a quarter of `kept`, and
+        // the outer join's other input is then at least twice as large, so the
+        // planner can build the reduced side.
+        let before = self.est.plan(kept).rows_for_costing();
+        let after = self.est.plan(&semi).rows_for_costing();
+        let nulls_rows = self.est.plan(nulls).rows_for_costing();
+        if after * PRESERVED_KEEP > before || nulls_rows < after * PRESERVED_FLIP {
+            // The ids taken for the refused instance are given back.
+            self.next = next;
+            return None;
+        }
+        let at = Arc::clone(kept);
+        Some(rebuild(path, at, semi))
+    }
+
+    /// `input ⋉ Shift(π_want(domain))` on the equalities of `kept`, each
+    /// pair's aggregate side as `inner` reads it over `input`.
+    fn semi(
+        &mut self,
+        input: &Arc<LogicalPlan>,
+        kept: &[&Pair<'_>],
+        inner: Vec<Arc<Expr>>,
+        domain: Arc<LogicalPlan>,
+        want: &Attrs,
+        rename: &HashMap<AttrId, Arc<Expr>>,
+    ) -> Option<Arc<LogicalPlan>> {
         // Fresh ids for the domain's instance.
         let offset = match self.next {
             Some(n) => n,
@@ -366,43 +529,15 @@ impl Restrict<'_> {
             recall(
                 p.eq,
                 Builtin::Eq,
-                vec![i, shift(&substitute(p.other, &rename), offset)],
+                vec![i, shift(&substitute(p.other, rename), offset)],
             )
         }))?;
-        let semi = Arc::new(LogicalPlan::new(PlanNode::Join {
+        Some(Arc::new(LogicalPlan::new(PlanNode::Join {
             left: Arc::clone(input),
             right: shifted,
             kind: JoinKind::LeftSemi,
             condition: JoinCondition::On(cond),
-        }));
-        // The semi join may restrict an aggregate below it in turn (one
-        // pass, so the result is a fixed point).
-        let semi = self.join(semi);
-        let mut out = with_input(&at, semi);
-        let mut below = at;
-        for node in path.iter().rev() {
-            let rebuilt = match &node.node {
-                PlanNode::Join { left, right, .. } => {
-                    let mut join = LogicalPlan::clone(node);
-                    if let PlanNode::Join {
-                        left: l, right: r, ..
-                    } = &mut join.node
-                    {
-                        if Arc::ptr_eq(left, &below) {
-                            *l = out;
-                        } else {
-                            debug_assert!(Arc::ptr_eq(right, &below));
-                            *r = out;
-                        }
-                    }
-                    Arc::new(join)
-                }
-                _ => with_input(node, out),
-            };
-            below = Arc::clone(node);
-            out = rebuilt;
-        }
-        Some(out)
+        })))
     }
 
     /// The deepest subtree of `p` that holds every value the attributes
@@ -528,6 +663,38 @@ impl Restrict<'_> {
     }
 }
 
+/// `path` (from the joined side down to the node above `below`) rebuilt over
+/// `out` in place of `below`.
+fn rebuild(
+    path: &[Arc<LogicalPlan>],
+    mut below: Arc<LogicalPlan>,
+    mut out: Arc<LogicalPlan>,
+) -> Arc<LogicalPlan> {
+    for node in path.iter().rev() {
+        let rebuilt = match &node.node {
+            PlanNode::Join { left, right, .. } => {
+                let mut join = LogicalPlan::clone(node);
+                if let PlanNode::Join {
+                    left: l, right: r, ..
+                } = &mut join.node
+                {
+                    if Arc::ptr_eq(left, &below) {
+                        *l = out;
+                    } else {
+                        debug_assert!(Arc::ptr_eq(right, &below));
+                        *r = out;
+                    }
+                }
+                Arc::new(join)
+            }
+            _ => with_input(node, out),
+        };
+        below = Arc::clone(node);
+        out = rebuilt;
+    }
+    out
+}
+
 /// The domain of a restriction: the subtree, the columns it holds the keys
 /// in, and the columns `other` reads that it holds as others (moved by
 /// join equalities, `w` to `y` of `w = y`).
@@ -620,6 +787,45 @@ fn restricted(input: &Arc<LogicalPlan>, keys: &[Arc<Expr>]) -> bool {
                     return true;
                 }
                 at = left;
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Whether the preserved input `kept` already holds a semi join on `keys`:
+/// [`restricted`], also through inner joins into the input holding the keys
+/// (where `LatePayloadJoin` leaves its key-only semi join), so neither rule
+/// adds a second one and the plan stays a fixed point.
+fn reduced(kept: &Arc<LogicalPlan>, keys: &[Arc<Expr>]) -> bool {
+    let mut at = kept;
+    loop {
+        if restricted(at, keys) {
+            return true;
+        }
+        match &at.node {
+            PlanNode::Filter { input, .. } | PlanNode::Project { input, .. } => at = input,
+            PlanNode::Join {
+                kind: JoinKind::LeftAnti | JoinKind::Existence(_) | JoinKind::LeftSemi,
+                left,
+                ..
+            } => at = left,
+            PlanNode::Join {
+                kind: JoinKind::Inner | JoinKind::Cross,
+                left,
+                right,
+                ..
+            } => {
+                let holds = |c: &Arc<LogicalPlan>| {
+                    output_ids(c).is_some_and(|o| keys.iter().all(|k| references(k).is_subset(&o)))
+                };
+                if holds(left) {
+                    at = left;
+                } else if holds(right) {
+                    at = right;
+                } else {
+                    return false;
+                }
             }
             _ => return false,
         }

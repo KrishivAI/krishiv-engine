@@ -64,7 +64,12 @@ Paths are relative to this crate.
   written.
 - Restriction (`restrict.rs`): an aggregate joined on its group keys may be reduced by a semi join with the other
   side's key domain; the domain follows inner-join `o = y` equalities (same type, never through an outer join) to the
-  subtree that scans fewest rows, so where join ordering puts the aggregate does not decide it.
+  subtree that scans fewest rows, so where join ordering puts the aggregate does not decide it. With statistics and
+  `krishiv.optimizer.preservedSideSemiJoin` (on; `Options::preserved_side_semi_join`, perf lever K6) the walk also stops at
+  the preserved input of a `LEFT`/`RIGHT OUTER` join holding the keys: a key-only semi join there when it keeps at most
+  a quarter of that input and the outer join's other input is at least twice the rest (TPC-DS q40/q80); a side already
+  holding a semi join on the keys (`reduced`, also through inner joins) gets none. Join ordering's loop orders again
+  after `SemiAntiOrder` sorted a stack (a stack's estimate depends on its order). Tests `tests/it/preserved_side.rs`.
 - Statistics propagation (`PlanStats`): a filter narrows `min`/`max` of the columns it reads and clears their null
   fraction when null-rejecting; `OR` takes the union of its branches' ranges, `NOT` and unknown predicates leave
   ranges alone, so a range only stays or widens (the proptest in `plan_stats.rs` holds it to that). An equality with

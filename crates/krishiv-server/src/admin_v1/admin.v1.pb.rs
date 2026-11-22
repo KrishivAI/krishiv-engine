@@ -265,6 +265,196 @@ pub struct ResumeServingResponse {
     #[prost(message, optional, tag = "1")]
     pub status: ::core::option::Option<DrainStatus>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResourceGroup {
+    /// Dotted path, `root.etl.nightly`.
+    #[prost(string, tag = "1")]
+    pub group_id: ::prost::alloc::string::String,
+    /// Empty for a root.
+    #[prost(string, tag = "2")]
+    pub parent_id: ::prost::alloc::string::String,
+    /// `active`, or `removed` (left by a reload, still holding queries).
+    #[prost(string, tag = "3")]
+    pub state: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub scheduling_policy: ::prost::alloc::string::String,
+    #[prost(int32, tag = "5")]
+    pub scheduling_weight: i32,
+    #[prost(int32, tag = "6")]
+    pub priority: i32,
+    #[prost(string, tag = "7")]
+    pub workload_class: ::prost::alloc::string::String,
+    #[prost(int32, tag = "8")]
+    pub hard_concurrency_limit: i32,
+    #[prost(int32, tag = "9")]
+    pub max_queued: i32,
+    /// The limits below are unset when the group has none.
+    #[prost(int64, optional, tag = "10")]
+    pub soft_memory_limit_bytes: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "11")]
+    pub per_query_memory_limit_bytes: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "12")]
+    pub scan_quota_bytes: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "13")]
+    pub scan_quota_period_s: ::core::option::Option<i64>,
+    /// The subtree counters are unset on an ancestor row of a caller without `Monitor`.
+    #[prost(int32, optional, tag = "14")]
+    pub running: ::core::option::Option<i32>,
+    #[prost(int32, optional, tag = "15")]
+    pub queued: ::core::option::Option<i32>,
+    #[prost(int64, optional, tag = "16")]
+    pub memory_reserved_bytes: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "17")]
+    pub scan_bytes_in_window: ::core::option::Option<i64>,
+    #[prost(message, optional, tag = "18")]
+    pub scan_window_resets_at: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(string, tag = "19")]
+    pub config_etag: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "20")]
+    pub loaded_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListResourceGroupsRequest {
+    #[prost(int32, tag = "1")]
+    pub page_size: i32,
+    #[prost(string, tag = "2")]
+    pub page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListResourceGroupsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub groups: ::prost::alloc::vec::Vec<ResourceGroup>,
+    #[prost(string, tag = "2")]
+    pub next_page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetResourceGroupConfigRequest {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetResourceGroupConfigResponse {
+    /// The canonical JSON; empty when no group file is configured.
+    #[prost(string, tag = "1")]
+    pub document: ::prost::alloc::string::String,
+    /// SHA-256 (hex) of the canonical JSON.
+    #[prost(string, tag = "2")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub loaded_at: ::core::option::Option<::prost_types::Timestamp>,
+    /// The etag of the file as it is on disk now; empty when it cannot be read.
+    #[prost(string, tag = "4")]
+    pub file_etag: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidateResourceGroupConfigRequest {
+    #[prost(string, tag = "1")]
+    pub document: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConfigProblem {
+    /// The error class of the refusal.
+    #[prost(string, tag = "1")]
+    pub error_class: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+    /// Where in the document, as `rootGroups\[1\].subGroups\[0\].name`; empty when it is the document.
+    #[prost(string, tag = "3")]
+    pub path: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateResourceGroupConfigResponse {
+    #[prost(bool, tag = "1")]
+    pub valid: bool,
+    #[prost(message, repeated, tag = "2")]
+    pub problems: ::prost::alloc::vec::Vec<ConfigProblem>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReplaceResourceGroupConfigRequest {
+    #[prost(string, tag = "1")]
+    pub document: ::prost::alloc::string::String,
+    /// The etag the caller read; a stale one is refused with `KRISHIV_ADMIN_PRECONDITION_FAILED`.
+    #[prost(string, tag = "2")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReplaceResourceGroupConfigResponse {
+    /// The etag and load time of the document now in force.
+    #[prost(string, tag = "1")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub loaded_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReloadResourceGroupConfigRequest {
+    #[prost(string, tag = "1")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReloadResourceGroupConfigResponse {
+    #[prost(string, tag = "1")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub loaded_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConfigEntry {
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
+    /// Unset when the key has no value or the value is withheld.
+    #[prost(string, optional, tag = "2")]
+    pub value: ::core::option::Option<::prost::alloc::string::String>,
+    /// `session` or `cluster`; empty for a startup key the registry does not know.
+    #[prost(string, tag = "3")]
+    pub scope: ::prost::alloc::string::String,
+    /// `startup`, `admin` or `user`; empty for a key the registry does not know.
+    #[prost(string, tag = "4")]
+    pub settable_by: ::prost::alloc::string::String,
+    /// `default`, `startup` or `admin`.
+    #[prost(string, tag = "5")]
+    pub source: ::prost::alloc::string::String,
+    /// The value is hidden because the caller may not see it.
+    #[prost(bool, tag = "6")]
+    pub withheld: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetConfigRequest {
+    /// Keeps the keys that start with this prefix.
+    #[prost(string, tag = "1")]
+    pub prefix: ::prost::alloc::string::String,
+    #[prost(int32, tag = "2")]
+    pub page_size: i32,
+    #[prost(string, tag = "3")]
+    pub page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetConfigResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub entries: ::prost::alloc::vec::Vec<ConfigEntry>,
+    #[prost(string, tag = "2")]
+    pub next_page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetConfigDefaultsRequest {
+    /// Key to value; applied to sessions created afterwards.
+    #[prost(btree_map = "string, string", tag = "1")]
+    pub set: ::prost::alloc::collections::BTreeMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+    /// Keys that return to their startup value.
+    #[prost(string, repeated, tag = "2")]
+    pub unset: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag = "3")]
+    pub request_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SetConfigDefaultsResponse {
+    /// The keys set and unset.
+    #[prost(int32, tag = "1")]
+    pub set_count: i32,
+    #[prost(int32, tag = "2")]
+    pub unset_count: i32,
+}
 /// Generated server implementations.
 pub mod admin_service_server {
     #![allow(
@@ -365,6 +555,67 @@ pub mod admin_service_server {
             request: tonic::Request<super::ResumeServingRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ResumeServingResponse>,
+            tonic::Status,
+        >;
+        /// The resource groups the caller may see (`system.resource_groups`): every group with
+        /// `Monitor`, else the caller's own groups and their ancestors with the subtree counters unset.
+        async fn list_resource_groups(
+            &self,
+            request: tonic::Request<super::ListResourceGroupsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListResourceGroupsResponse>,
+            tonic::Status,
+        >;
+        /// The loaded resource group document, its etag and the etag of the file on disk. Needs
+        /// `Monitor`.
+        async fn get_resource_group_config(
+            &self,
+            request: tonic::Request<super::GetResourceGroupConfigRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetResourceGroupConfigResponse>,
+            tonic::Status,
+        >;
+        /// Runs the group loader on a candidate document and changes nothing. Needs `Monitor`.
+        async fn validate_resource_group_config(
+            &self,
+            request: tonic::Request<super::ValidateResourceGroupConfigRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ValidateResourceGroupConfigResponse>,
+            tonic::Status,
+        >;
+        /// Writes the document over the group file and swaps the tree; refused for a stale etag, a file
+        /// edited since it was loaded, or a file that cannot be replaced. Needs `Manage` on the cluster.
+        async fn replace_resource_group_config(
+            &self,
+            request: tonic::Request<super::ReplaceResourceGroupConfigRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ReplaceResourceGroupConfigResponse>,
+            tonic::Status,
+        >;
+        /// Re-reads the group file; an invalid file is refused and the old tree stays. Needs `Manage` on
+        /// the cluster.
+        async fn reload_resource_group_config(
+            &self,
+            request: tonic::Request<super::ReloadResourceGroupConfigRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ReloadResourceGroupConfigResponse>,
+            tonic::Status,
+        >;
+        /// The configuration the server runs with: value, scope, who may set it, where it comes from.
+        /// Needs `Monitor`; values that say how to become an administrator are withheld.
+        async fn get_config(
+            &self,
+            request: tonic::Request<super::GetConfigRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetConfigResponse>,
+            tonic::Status,
+        >;
+        /// Changes the session defaults of new sessions, all or none. Needs `Manage` on the cluster.
+        async fn set_config_defaults(
+            &self,
+            request: tonic::Request<super::SetConfigDefaultsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SetConfigDefaultsResponse>,
             tonic::Status,
         >;
     }
@@ -924,6 +1175,348 @@ pub mod admin_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ResumeServingSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/ListResourceGroups" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListResourceGroupsSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::ListResourceGroupsRequest>
+                    for ListResourceGroupsSvc<T> {
+                        type Response = super::ListResourceGroupsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListResourceGroupsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::list_resource_groups(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListResourceGroupsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/GetResourceGroupConfig" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetResourceGroupConfigSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::GetResourceGroupConfigRequest>
+                    for GetResourceGroupConfigSvc<T> {
+                        type Response = super::GetResourceGroupConfigResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetResourceGroupConfigRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::get_resource_group_config(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetResourceGroupConfigSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/ValidateResourceGroupConfig" => {
+                    #[allow(non_camel_case_types)]
+                    struct ValidateResourceGroupConfigSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<
+                        super::ValidateResourceGroupConfigRequest,
+                    > for ValidateResourceGroupConfigSvc<T> {
+                        type Response = super::ValidateResourceGroupConfigResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ValidateResourceGroupConfigRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::validate_resource_group_config(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ValidateResourceGroupConfigSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/ReplaceResourceGroupConfig" => {
+                    #[allow(non_camel_case_types)]
+                    struct ReplaceResourceGroupConfigSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<
+                        super::ReplaceResourceGroupConfigRequest,
+                    > for ReplaceResourceGroupConfigSvc<T> {
+                        type Response = super::ReplaceResourceGroupConfigResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ReplaceResourceGroupConfigRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::replace_resource_group_config(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ReplaceResourceGroupConfigSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/ReloadResourceGroupConfig" => {
+                    #[allow(non_camel_case_types)]
+                    struct ReloadResourceGroupConfigSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<
+                        super::ReloadResourceGroupConfigRequest,
+                    > for ReloadResourceGroupConfigSvc<T> {
+                        type Response = super::ReloadResourceGroupConfigResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ReloadResourceGroupConfigRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::reload_resource_group_config(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ReloadResourceGroupConfigSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/GetConfig" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetConfigSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::GetConfigRequest>
+                    for GetConfigSvc<T> {
+                        type Response = super::GetConfigResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetConfigRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::get_config(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetConfigSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/krishiv.admin.v1.AdminService/SetConfigDefaults" => {
+                    #[allow(non_camel_case_types)]
+                    struct SetConfigDefaultsSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::SetConfigDefaultsRequest>
+                    for SetConfigDefaultsSvc<T> {
+                        type Response = super::SetConfigDefaultsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::SetConfigDefaultsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::set_config_defaults(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SetConfigDefaultsSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

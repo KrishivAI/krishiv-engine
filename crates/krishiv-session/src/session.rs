@@ -64,6 +64,7 @@ use crate::variables::SessionVariables;
 
 mod context;
 mod lifecycle;
+mod traits;
 #[cfg(feature = "unstable-ir")]
 pub use lifecycle::{SqlOutcome, SqlQuery};
 #[cfg(test)]
@@ -71,15 +72,6 @@ mod run_task;
 
 /// The store id of the local file system.
 pub(crate) const LOCAL_STORE: &str = "file";
-
-/// Now, as microseconds since the epoch.
-fn query_start_micros() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| i64::try_from(d.as_micros()).ok())
-        .unwrap_or_default()
-}
 
 /// A stream of result batches; dropping it cancels the query.
 pub type RecordBatchStream = BoxStream<'static, Result<RecordBatch, KrishivError>>;
@@ -131,15 +123,6 @@ pub struct Session {
     pub(crate) inbound_baggage: Arc<[(String, String)]>,
     /// The authentication of the request that started the statement, for delegated catalogs.
     pub(crate) request_inbound: Option<crate::catalog_registry::Inbound>,
-}
-
-impl fmt::Debug for Session {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Session")
-            .field("profile", &self.state.profile)
-            .field("principal", &self.state.principal.name)
-            .finish_non_exhaustive()
-    }
 }
 
 pub(crate) struct SessionState {
@@ -212,19 +195,6 @@ pub(crate) struct SessionState {
     pub(crate) inbound: Mutex<Option<crate::catalog_registry::Inbound>>,
 }
 
-impl Drop for SessionState {
-    fn drop(&mut self) {
-        self.runtime.sessions.retire(self.number, || {
-            crate::sessions::SessionRow::of(
-                self,
-                Some(crate::sessions::End::Closed("client_gone")),
-                0,
-            )
-        });
-        self.runtime.forget_session(self.number);
-    }
-}
-
 /// Builds a [`Session`].
 ///
 /// ```
@@ -248,6 +218,7 @@ pub struct SessionBuilder {
     functions: Option<Arc<dyn FunctionRegistry>>,
     runtime: Option<Arc<EngineRuntime>>,
     admission: Option<Arc<dyn AdmissionController>>,
+    source: Option<String>,
 }
 
 impl fmt::Debug for SessionBuilder {
@@ -295,6 +266,21 @@ impl SessionBuilder {
     /// ```
     pub fn principal(mut self, principal: Principal) -> Self {
         self.principal = Some(principal);
+        self
+    }
+
+    /// Who the session says its client is, shown as `system.sessions.client_type` and matched by
+    /// the `source` selector of a resource group (design P3-T003 §3; Python sets
+    /// `krishiv-python`). Client-asserted: a routing hint, never an identity. A front end that
+    /// reports its own client type later does not replace it. `new_session` does not inherit it
+    /// (a Connect manager's sessions take each client's own type).
+    ///
+    /// ```
+    /// let s = krishiv_session::Session::builder().source("etl-job").build()?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
         self
     }
 
@@ -437,7 +423,11 @@ impl SessionBuilder {
             functions: self.functions,
             admission: self.admission,
         };
-        Ok(Session::on_runtime(runtime, config, parts))
+        let session = Session::on_runtime(runtime, config, parts);
+        if let Some(source) = self.source.as_deref() {
+            session.state.activity.set_client(Some(source), None, None);
+        }
+        Ok(session)
     }
 }
 
@@ -479,6 +469,7 @@ impl Session {
             functions: None,
             runtime: None,
             admission: None,
+            source: None,
         }
     }
 
@@ -1821,7 +1812,11 @@ impl Session {
         let (log_id, permit) = match admitted {
             Some(admitted) => admitted.into_parts(),
             None => self
-                .admit_query(env, env.catalog.reads_only_system(physical))
+                .admit_query(
+                    env,
+                    env.catalog.reads_only_system(physical),
+                    krishiv_sql::StatementClass::Read,
+                )
                 .await?
                 .into_parts(),
         };
