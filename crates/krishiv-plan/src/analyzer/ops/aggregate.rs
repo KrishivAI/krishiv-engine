@@ -609,6 +609,7 @@ impl Resolver<'_> {
             return Ok(r);
         }
         let mut memo = HashMap::new();
+        let calls = self.call_keys(&mut memo);
         let gkeys: Vec<(u128, ArgType)> = group
             .iter()
             .map(|b| (semantic_key(&b.expr, &mut memo), b.ty.clone()))
@@ -621,7 +622,7 @@ impl Resolver<'_> {
             .filter(|b| b.lateral.is_empty() && b.win.is_none())
             .cloned()
             .collect();
-        self.check_aggregation(&base, &key_set, &mut memo, origin, global)?;
+        self.check_aggregation(&base, &key_set, &mut memo, &calls, origin, global)?;
         // Over grouping sets, the grouping attributes are the expansion's.
         let (keys, scope): (Vec<Attr>, Vec<Attr>) = match &analytics {
             Some(a) => (

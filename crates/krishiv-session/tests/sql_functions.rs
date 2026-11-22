@@ -1534,7 +1534,7 @@ fn a_stored_function_body_may_reference_no_object_of_the_session() {
 }
 
 /// Spark 4.2.1 (run 2026-11-22; `SQLFunctionExpression`'s children): an argument the body never
-/// reads is still checked against the GROUP BY.
+/// reads is still checked against the GROUP BY. Probe: `probe-sqlfn/p.py` (`out-4.2.1.txt`).
 #[test]
 fn an_unread_argument_is_still_checked_against_the_group_by() {
     let s = session();
@@ -1576,5 +1576,59 @@ fn an_unread_argument_is_still_checked_against_the_group_by() {
     assert!(
         e.error_class().name().starts_with("UNRESOLVED_COLUMN"),
         "{e:?}"
+    );
+}
+
+/// Spark 4.2.1 (run 2026-11-22, probe `probe-sqlfn/p2.py`, `out2-4.2.1.txt`): a call is grouped
+/// only as the whole call `f(a, b)`. A body shared by every call (no cast needed) or one that is
+/// the caller's argument itself does not stand in for the call, whatever the order of the calls.
+#[test]
+fn a_call_with_an_unread_argument_is_grouped_only_as_a_whole() {
+    let s = session();
+    for f in [
+        "CREATE TEMPORARY FUNCTION seven_i(x INT) RETURNS INT RETURN 7",
+        "CREATE TEMPORARY FUNCTION seven_n(x INT) RETURN 7",
+        "CREATE TEMPORARY FUNCTION first_s(a STRING, b INT) RETURNS STRING RETURN a",
+        "CREATE TEMPORARY FUNCTION first_of(a INT, b INT) RETURNS INT RETURN a",
+    ] {
+        ok(&s, f);
+    }
+    for q in [
+        "SELECT name, seven_i(id), seven_i(1) FROM people GROUP BY name",
+        "SELECT name, seven_i(1), seven_i(id) FROM people GROUP BY name",
+        "SELECT name, seven_n(id), seven_n(1) FROM people GROUP BY name",
+        "SELECT name, first_s(name, id) FROM people GROUP BY name",
+        "SELECT seven_i(id) FROM people GROUP BY seven_i(1)",
+        "SELECT seven_i(id) + 1 FROM people GROUP BY seven_i(1) + 1",
+    ] {
+        let e = fails(&s, q);
+        let (class, params) = class_and_params(&e);
+        assert_eq!(class, "MISSING_AGGREGATION", "{q}");
+        assert_eq!(params["expression"], "\"id\"", "{q}");
+    }
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT name, first_s(name, 1) FROM people GROUP BY name ORDER BY name"
+        ),
+        ["NULL\tNULL", "b\tb", "c\tc"]
+    );
+    assert_eq!(
+        ok(&s, "SELECT seven_i(id) FROM people GROUP BY seven_i(id)"),
+        ["7"]
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT seven_i(id) + 1 FROM people GROUP BY seven_i(id) + 1"
+        ),
+        ["8"]
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT first_of(id, id + 0) FROM people GROUP BY id ORDER BY 1"
+        ),
+        ["1", "2", "3"]
     );
 }

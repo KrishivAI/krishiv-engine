@@ -38,6 +38,7 @@
 //! `NOT DETERMINISTIC` and the data-access characteristics are not
 //! enforced: the body's own expressions say whether it is deterministic.
 
+use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -58,7 +59,8 @@ use super::bind::{same, unsupported};
 use super::catalog::quoted;
 use super::coerce;
 use super::exprs::{
-    Bound, Cx, SPARK_DOC_ROOT, WindowUse, arg_type, cast_error, pretty, unresolved_field,
+    Bound, Cx, SPARK_DOC_ROOT, WindowUse, arg_type, cast_error, pretty, semantic_key,
+    unresolved_field,
 };
 use super::resolve::{Attr, Rel, Resolver};
 use crate::walk::{Node, visit_distinct};
@@ -392,12 +394,37 @@ impl Resolver<'_> {
             .map(|fp| Arc::clone(&fp.arg.expr))
             .collect();
         if !unread.is_empty() {
-            self.unread_args.insert(
-                super::bind::addr(&*body.expr),
-                (Arc::clone(&body.expr), unread),
-            );
+            // A body that needs no cast is shared by every call of the function (or is the
+            // caller's argument itself): the call gets a node of its own.
+            body.expr = Arc::new((*body.expr).clone());
+            self.unread_args.push((Arc::clone(&body.expr), unread));
         }
         Ok(body)
+    }
+
+    /// The semantic keys of the inlined calls with unread arguments, seeded into `memo`:
+    /// such a call's key covers its unread arguments too, so it equals another expression
+    /// only when Spark's whole call `f(a, b)` would. Returns, by node address, the body's
+    /// own key and the unread arguments, for [`Resolver::check_aggregation`].
+    pub(in crate::analyzer) fn call_keys(
+        &self,
+        memo: &mut HashMap<usize, u128>,
+    ) -> HashMap<usize, (u128, Vec<Arc<Expr>>)> {
+        let mut out = HashMap::with_capacity(self.unread_args.len());
+        // Inlining order: an inner call is seeded before any key that contains it.
+        for (node, unread) in &self.unread_args {
+            let at = super::bind::addr(&**node);
+            let body = semantic_key(node, memo);
+            let mut b = Vec::with_capacity(16 * (unread.len() + 1) + 4);
+            b.extend_from_slice(b"sqlf");
+            b.extend_from_slice(&body.to_le_bytes());
+            for u in unread {
+                b.extend_from_slice(&semantic_key(u, memo).to_le_bytes());
+            }
+            memo.insert(at, twox_hash::XxHash3_128::oneshot(&b));
+            out.insert(at, (body, unread.clone()));
+        }
+        out
     }
 
     /// The frame of a call of `def`: its parameters standing for `args`.

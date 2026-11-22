@@ -738,12 +738,15 @@ impl Resolver<'_> {
     }
 
     /// Spark's `MISSING_AGGREGATION` / `MISSING_GROUP_BY`: outside
-    /// aggregate calls, an item may use only grouping expressions.
+    /// aggregate calls, an item may use only grouping expressions. `calls`
+    /// are the inlined SQL function calls with unread arguments
+    /// ([`Resolver::call_keys`], seeded into `memo`).
     pub(in crate::analyzer) fn check_aggregation(
         &self,
         items: &[Bound],
         keys: &HashSet<u128>,
         memo: &mut HashMap<usize, u128>,
+        calls: &HashMap<usize, (u128, Vec<Arc<Expr>>)>,
         origin: Origin,
         global: bool,
     ) -> Result<(), AnalysisError> {
@@ -766,10 +769,15 @@ impl Resolver<'_> {
                 {
                     continue;
                 }
-                // A SQL function's argument its body never reads is still the
-                // call's child in Spark's check.
-                if let Some((_, unread)) = self.unread_args.get(&super::super::bind::addr(&*x)) {
+                // A SQL function call that is not grouped as a whole: the
+                // arguments its body never reads are still its children in
+                // Spark's check, and the body is grouped if it equals a
+                // grouping expression on its own.
+                if let Some((body, unread)) = calls.get(&super::super::bind::addr(&*x)) {
                     stack.extend(unread.iter().cloned());
+                    if keys.contains(body) {
+                        continue;
+                    }
                 }
                 match &x.node {
                     ExprNode::Resolved(ResolvedExpr::Function(f))
