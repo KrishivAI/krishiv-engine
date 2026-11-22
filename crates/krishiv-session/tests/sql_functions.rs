@@ -1632,3 +1632,77 @@ fn a_call_with_an_unread_argument_is_grouped_only_as_a_whole() {
         ["1", "2", "3"]
     );
 }
+
+/// Spark 4.2.0 and 4.3.0 (review of 364760722, 2026-11-22; the outcomes are the asserts below):
+/// a call that is not grouped as a whole is checked by its inputs, never by its body, and a call
+/// is keyed by its function and its inputs (Spark's canonicalized `SQLFunctionExpression`), so a
+/// body equal to a grouping expression, or two functions with the same body, never match.
+#[test]
+fn a_call_is_checked_by_its_inputs_never_its_body() {
+    let s = session();
+    for f in [
+        "CREATE TEMPORARY FUNCTION up1(a STRING) RETURN upper(a)",
+        "CREATE TEMPORARY FUNCTION up2(a STRING, b INT) RETURN upper(a)",
+        "CREATE TEMPORARY FUNCTION first_s(a STRING, b INT) RETURNS STRING RETURN a",
+        "CREATE TEMPORARY FUNCTION plus1(a INT, b INT) RETURN a + 1",
+        "CREATE TEMPORARY FUNCTION inc_a(a INT) RETURN a + 1",
+        "CREATE TEMPORARY FUNCTION inc_b(a INT) RETURN a + 1",
+    ] {
+        ok(&s, f);
+    }
+    for (q, expression) in [
+        ("SELECT plus1(id, 1) FROM people GROUP BY id + 1", "\"id\""),
+        (
+            "SELECT up2(name, 1) FROM people GROUP BY upper(name)",
+            "\"name\"",
+        ),
+        (
+            "SELECT up1(name) FROM people GROUP BY upper(name)",
+            "\"name\"",
+        ),
+        (
+            "SELECT upper(name) FROM people GROUP BY up1(name)",
+            "\"name\"",
+        ),
+        (
+            "SELECT first_s(first_s(name, id), id) FROM people GROUP BY first_s(name, id)",
+            "\"id\"",
+        ),
+        ("SELECT inc_b(id) FROM people GROUP BY inc_a(id)", "\"id\""),
+    ] {
+        let e = fails(&s, q);
+        let (class, params) = class_and_params(&e);
+        assert_eq!(class, "MISSING_AGGREGATION", "{q}");
+        assert_eq!(params["expression"], expression, "{q}");
+    }
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT plus1(id + 0, 1) FROM people GROUP BY id + 0 ORDER BY 1"
+        ),
+        ["2", "3", "4"]
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT first_s(first_s(name, id), 1) FROM people \
+             GROUP BY first_s(name, id) ORDER BY 1"
+        ),
+        ["NULL", "b", "c"]
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT up1(name) FROM people GROUP BY up1(name) ORDER BY 1"
+        ),
+        ["NULL", "B", "C"]
+    );
+    // HAVING matches the call against the aggregate's outputs as before.
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT up1(name) FROM people GROUP BY up1(name) HAVING up1(name) > 'B'"
+        ),
+        ["C"]
+    );
+}

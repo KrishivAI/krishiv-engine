@@ -387,42 +387,43 @@ impl Resolver<'_> {
                 ));
             }
         }
-        let unread: Vec<Arc<Expr>> = frame
+        // Spark keeps the call (`SQLFunctionExpression`) through the aggregation check: its
+        // inputs are its children and it is grouped only as the whole call. The call gets a node
+        // of its own (a body that needs no cast is shared by every call of the function, or is
+        // the caller's argument itself), recorded with its name and its arguments.
+        body.expr = Arc::new((*body.expr).clone());
+        let args: Vec<Arc<Expr>> = frame
             .params
             .iter()
-            .filter(|fp| fp.reads.load(Ordering::Relaxed) == 0)
             .map(|fp| Arc::clone(&fp.arg.expr))
             .collect();
-        if !unread.is_empty() {
-            // A body that needs no cast is shared by every call of the function (or is the
-            // caller's argument itself): the call gets a node of its own.
-            body.expr = Arc::new((*body.expr).clone());
-            self.unread_args.push((Arc::clone(&body.expr), unread));
-        }
+        self.inlined_calls
+            .push((Arc::clone(&body.expr), def.qualified_name(), args));
         Ok(body)
     }
 
-    /// The semantic keys of the inlined calls with unread arguments, seeded into `memo`:
-    /// such a call's key covers its unread arguments too, so it equals another expression
-    /// only when Spark's whole call `f(a, b)` would. Returns, by node address, the body's
-    /// own key and the unread arguments, for [`Resolver::check_aggregation`].
+    /// The semantic keys of the inlined SQL function calls, seeded into `memo`: a call's key is
+    /// its function's qualified name and its arguments' keys (Spark's canonicalized call),
+    /// never its body's, so it equals another expression only when Spark's whole call `f(a, b)`
+    /// would. Returns, by node address, each call's arguments, for
+    /// [`Resolver::check_aggregation`].
     pub(in crate::analyzer) fn call_keys(
         &self,
         memo: &mut HashMap<usize, u128>,
-    ) -> HashMap<usize, (u128, Vec<Arc<Expr>>)> {
-        let mut out = HashMap::with_capacity(self.unread_args.len());
+    ) -> HashMap<usize, Vec<Arc<Expr>>> {
+        let mut out = HashMap::with_capacity(self.inlined_calls.len());
         // Inlining order: an inner call is seeded before any key that contains it.
-        for (node, unread) in &self.unread_args {
+        for (node, name, args) in &self.inlined_calls {
             let at = super::bind::addr(&**node);
-            let body = semantic_key(node, memo);
-            let mut b = Vec::with_capacity(16 * (unread.len() + 1) + 4);
+            let mut b = Vec::with_capacity(16 * args.len() + name.len() + 12);
             b.extend_from_slice(b"sqlf");
-            b.extend_from_slice(&body.to_le_bytes());
-            for u in unread {
-                b.extend_from_slice(&semantic_key(u, memo).to_le_bytes());
+            b.extend_from_slice(&(name.len() as u64).to_le_bytes());
+            b.extend_from_slice(name.as_bytes());
+            for a in args {
+                b.extend_from_slice(&semantic_key(a, memo).to_le_bytes());
             }
             memo.insert(at, twox_hash::XxHash3_128::oneshot(&b));
-            out.insert(at, (body, unread.clone()));
+            out.insert(at, args.clone());
         }
         out
     }
