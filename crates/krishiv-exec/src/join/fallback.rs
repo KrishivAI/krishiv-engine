@@ -310,6 +310,7 @@ impl Fallback {
                 1,
             ),
             counters: Arc::default(),
+            as_of: None,
         };
         Merge::new(Arc::clone(shared), spec, &env)
     }

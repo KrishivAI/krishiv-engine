@@ -1456,7 +1456,8 @@ fn listings_overrides_and_dataframe_writes_with_an_explicit_catalog_work_under_s
     )
     .unwrap();
     s.register_batches("src", schema, vec![batch]).unwrap();
-    let write = |name: &str| block_on(async { s.table("src").write().insert_into(name).await });
+    let write =
+        |name: &str| block_on(async { Box::pin(s.table("src").write().insert_into(name)).await });
     assert!(write("spark_catalog.default.t").is_ok());
     assert!(write("t").is_err());
     assert!(write("default.t").is_err());

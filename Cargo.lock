@@ -3030,6 +3030,7 @@ name = "krishiv-catalogs"
 version = "0.2.1"
 dependencies = [
  "arrow-array 60.1.0",
+ "async-trait",
  "futures",
  "krishiv-common",
  "krishiv-connectors-iceberg",
@@ -3495,11 +3496,13 @@ dependencies = [
  "krishiv-common",
  "krishiv-connect-server",
  "krishiv-exec",
+ "krishiv-memory",
  "krishiv-plan",
  "krishiv-server",
  "krishiv-session",
  "krishiv-sql",
  "krishiv-types",
+ "libmimalloc-sys",
  "mimalloc",
  "pyo3",
 ]
@@ -3594,6 +3597,7 @@ dependencies = [
  "prost",
  "regex-lite",
  "reqwest 0.13.5",
+ "rustix",
  "rustls",
  "saphyr-parser",
  "serde",
