@@ -251,6 +251,10 @@ impl PyDataFrame {
         Ok(self.derive(inner))
     }
 
+    fn sort_within_partitions(&self, cols: Vec<PyColumn>) -> Self {
+        self.derive(self.inner.sort_within_partitions(columns(cols)))
+    }
+
     fn limit(&self, n: i32) -> Self {
         self.derive(self.inner.limit(n))
     }
@@ -297,10 +301,6 @@ impl PyDataFrame {
 
     fn to_df(&self, names: Vec<String>) -> Self {
         self.derive(self.inner.to_df(names))
-    }
-
-    fn sample(&self, with_replacement: bool, fraction: f64, seed: i64) -> Self {
-        self.derive(self.inner.sample(with_replacement, fraction, seed))
     }
 
     fn unpivot(
@@ -676,6 +676,16 @@ pub struct PyGroupedData {
 
 #[pymethods]
 impl PyGroupedData {
+    /// Pivots on `col` with literal `values`: the next `agg` gives one column per value.
+    fn pivot(&self, col: PyColumn, values: Vec<PyColumn>) -> PyGroupedData {
+        PyGroupedData {
+            inner: self
+                .inner
+                .pivot(col.inner, values.into_iter().map(|c| c.inner)),
+            owned: self.owned.clone(),
+        }
+    }
+
     fn agg(&self, cols: Vec<PyColumn>) -> PyDataFrame {
         PyDataFrame {
             inner: self.inner.agg(columns(cols)),

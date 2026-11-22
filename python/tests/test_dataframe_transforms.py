@@ -374,18 +374,16 @@ def test_except_all(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> 
 # sample ----------------------------------------------------------------------------------------
 
 
-def test_sample_is_unsupported(spark: SparkSession) -> None:
+def test_sample_runs_and_refuses_replacement(spark: SparkSession) -> None:
     df = make(spark, {"age": [14], "name": ["Tom"]})
+    assert df.sample(1.0, 3).count() == 1
+    assert df.sample(fraction=0.0, seed=3).count() == 0
+    assert df.sample(withReplacement=False, fraction=1.0).count() == 1
+    assert df.sample(1.0, 3).columns == ["age", "name"]
     with pytest.raises(errors.UnsupportedOperationException) as bad:
-        df.sample(0.5, 3).count()
+        df.sample(True, 0.5, 3)
     assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
     assert bad.value.getSqlState() == "0A000"
-    with pytest.raises(errors.UnsupportedOperationException):
-        df.sample(fraction=0.5, seed=3).count()
-    with pytest.raises(errors.UnsupportedOperationException):
-        df.sample(True, 0.5, 3).count()
-    with pytest.raises(errors.UnsupportedOperationException):
-        df.sample(withReplacement=False, fraction=0.5).count()
 
 
 def test_sample_rejects_bad_arguments(spark: SparkSession) -> None:

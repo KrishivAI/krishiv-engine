@@ -276,6 +276,43 @@ repeated values raise `INVALID_ARRAY_INDEX` with ANSI on and leave NULL cells wi
 - a NULL pivot value for a binary or collated pivot column: Spark 4.2 compares it with the other values in a sorted
   map (and fails), earlier versions look it up in a hash map.
 
+## `describe`, `summary`, `freqItems` and sampling in Python
+
+- `describe`, `summary` and `freqItems` evaluate when called and return a local DataFrame (a snapshot: it is not
+  re-evaluated if the source changes); Spark builds a lazy plan. The values, formats and errors are Spark's.
+  `describe`/`summary` run one engine aggregate. A percentile is the engine's `percentile_approx` with Spark's accuracy
+  of 10000, which is the exact nearest rank up to 10000 rows.
+- `freqItems` reads each column into the Python driver and runs Spark's counting algorithm one row at a time, so it
+  costs O(rows) single-threaded Python work per column and fails with `KRISHIV_UNSUPPORTED_FEATURE` past 10,000,000
+  rows. It is exact on one partition; the order of the items is not Spark's hash order. An engine aggregate is the
+  follow-up.
+- `approxQuantile` runs one `percentile_approx` per column and probability (the engine takes no array of
+  percentages): with `relativeError=0` each one buffers the whole column, so k probabilities use k times its memory.
+  With `relativeError` above 0 the result may differ from Spark's Greenwald-Khanna summary in the last rank;
+  `relativeError=0` is exact. An empty `probabilities` raises `CANNOT_BE_EMPTY` (Spark fails with a
+  `NullPointerException`).
+- `sample`, `randomSplit` and `sampleBy` draw one number per row from Spark's `XORShiftRandom` (`rand(seed)`, seeded
+  with `seed + partition`) and keep the rows Spark keeps only when the partitions and the order of the rows inside
+  them are Spark's. Krishiv ignores `numSlices` (`spark.range(0, 20, 1, 4)` is one partition), reads a `union` as one
+  stream rather than one partition per input, and cannot match Spark after a shuffle (`repartition`) or on a file
+  split Spark divides differently; then a sample holds different rows and a different number of them. Only the
+  expected fraction holds. `randomSplit` sorts each partition by every sortable column as Spark does, and its splits
+  stay disjoint and complete for the same input.
+- `sampleBy` finds a stratum by type, as Spark's typed map does: a string column matches only string keys and a
+  numeric column only numbers.
+- `df.sample(0.3, seed=1)`: PySpark (3.5 to 4.2) drops the seed of this call form and samples at random. Krishiv
+  honours it, so the result is deterministic.
+- `sample(withReplacement=True, ...)` fails with `KRISHIV_UNSUPPORTED_FEATURE`: Spark draws each row's copies from a
+  Poisson distribution (commons-math `Well19937c`) seeded per partition, which is not reproduced, and a different
+  multiset of rows would be a silent difference. The Rust `DataFrame::sample` is not implemented either (no sample plan
+  node: the Python layer filters on `rand`), and a Spark Connect `Sample` is not served yet.
+- `GroupedData.pivot`: `count("*")` raises `INVALID_USAGE_OF_STAR_OR_REGEX` as Spark's DataFrame pivot does (SQL's
+  `PIVOT` clause accepts it). A grouping key that is not a plain or aliased column cannot be pivoted beside an
+  aggregate that reads a key of the same name (`KRISHIV_UNSUPPORTED_FEATURE`). A pivot after `rollup`, `cube` or
+  grouping sets (reachable only from Rust) fails with `KRISHIV_UNSUPPORTED_FEATURE` when the aggregate is applied, not
+  `UNSUPPORTED_FEATURE.PIVOT_AFTER_GROUP_BY` when `pivot` is called. A pivot's aggregate errors are raised by `agg`.
+  `values=[]` computes the values (as Spark Connect), where classic PySpark gives no pivot columns.
+
 ## Inferred join filters differ from Spark's
 Spark's `InferFiltersFromConstraints` adds filters to the inputs of a join from the join condition and the filters
 below it. Krishiv adds the same `isnotnull` on nullable join keys, and moves comparisons with a literal, literal `IN`
