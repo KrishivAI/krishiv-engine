@@ -121,7 +121,8 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::CollectMetrics { .. } => 41,
         PlanNode::ColumnNames { .. } => 42,
         PlanNode::Tail { .. } => 43,
-        PlanNode::AsOfJoin { .. } => 44,
+        PlanNode::MetricViewRead { .. } => 44,
+        PlanNode::AsOfJoin { .. } => 45,
     }
 }
 
@@ -1036,6 +1037,39 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::CollectMetrics { name, metrics, .. } => {
                 self.str(name);
                 self.exprs(metrics);
+            }
+            PlanNode::MetricViewRead {
+                name,
+                dimensions,
+                measures,
+                output,
+                ansi,
+                ..
+            } => {
+                self.strs(name);
+                for cols in [dimensions, measures] {
+                    self.len(cols.len());
+                    for c in cols {
+                        self.str(&c.name);
+                        self.expr(&c.expr);
+                        // Lossless: two reads whose column types differ only in nested
+                        // nullability, comments or fields are different plans.
+                        self.lossless_type(&c.data_type);
+                        self.u8(u8::from(c.nullable));
+                    }
+                }
+                self.len(output.len());
+                for c in output {
+                    self.put(&c.id.0.to_le_bytes());
+                    self.str(&c.name);
+                    self.lossless_type(&c.data_type);
+                    self.bool(c.nullable);
+                }
+                self.u8(match ansi {
+                    None => 0,
+                    Some(false) => 1,
+                    Some(true) => 2,
+                });
             }
             PlanNode::JoinHint { strategy, .. } => {
                 self.str(strategy.name());

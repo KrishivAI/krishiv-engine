@@ -65,7 +65,7 @@ def test_render_marks_failures_indicative_runs_and_limits_columns(tmp_path):
     write(tmp_path, "c_abba_x.json", "2026-10-03T00:00:00", {"q1": 1.0, "q2": 3.0})
     text = trend.render(trend.load_runs(tmp_path), last=2)
     assert "2026-10-01" not in text
-    assert "| query | 2026-10-02 | 2026-10-03 | trend | change |" in text
+    assert "| query | 2026-10-02 | 2026-10-03 | trend | change | latest 95% CI |" in text
     assert "| q1 | 1.00* | 1.00 |" in text
     assert "| q10 | x |  |" in text  # failed, then absent
     assert text.index("| q1 ") < text.index("| q2 ") < text.index("| q10 ")  # natural query order
@@ -131,3 +131,68 @@ def test_non_finite_or_non_positive_ratios_are_ignored(tmp_path):
     run = trend.load_runs(tmp_path)[("tpch", "1")][0]
     assert run["ratios"] == {"q1": None, "q2": None, "q3": 2.0}
     assert run["geomean"] == 2.0
+
+
+def query_rows(text: str) -> dict[str, str]:
+    """The rendered query rows by query name."""
+    return {line.split(" | ")[0][2:]: line for line in text.splitlines() if line.startswith("| q")}
+
+
+def test_render_shows_the_latest_runs_ci(tmp_path):
+    def rec(ratio, ci):
+        e = {"status": "ok", "ratio": ratio}
+        if ci is not None:
+            e["ratio_ci95"] = ci
+        return e
+
+    def put(name, when, queries, summary):
+        rec_ = {"kind": "abba", "suite": "tpch", "started_utc": when, "dataset": {"scale_factor": 10}}
+        (tmp_path / name).write_text(json.dumps({**rec_, "queries": queries, "summary": summary}))
+
+    put(
+        "a_abba_x.json",
+        "2026-10-01T00:00:00",
+        {"q1": rec(2.0, [1.5, 2.5]), "q2": rec(1.0, [0.5, 1.5])},
+        {"geomean": 1.4, "geomean_ci95": [1.0, 2.0]},
+    )
+    put(
+        "b_abba_x.json",
+        "2026-10-02T00:00:00",
+        {
+            "q1": rec(1.0, [0.912, 1.104]),
+            "q2": {"status": "failed", "reason": "wrong result"},
+            "q3": rec(1.0, None),  # an older record without a CI
+            "q4": rec(1.0, [1.2, 0.8]),  # not an interval
+            "q5": rec(1.0, [0.9, float("inf")]),
+            "q6": rec(1.0, [0.9]),
+            "q7": rec(1.0, [1, 10**400]),  # a bound past a double: no CI, the run stays
+        },
+        {"geomean": 1.0, "geomean_ci95": [0.95, 1.06]},
+    )
+    text = trend.render(trend.load_runs(tmp_path))
+    assert "| query | 2026-10-01 | 2026-10-02 | trend | change | latest 95% CI |" in text
+    assert "|---|---:|---:|---|---:|---|" in text
+    geomean_row = next(line for line in text.splitlines() if line.startswith("| **geomean**"))
+    assert geomean_row.endswith("| 0.95-1.06 |")
+    rows = query_rows(text)
+    assert rows["q1"].endswith("| -50% | 0.91-1.10 |")  # the latest run's CI, not the first's
+    for q in ("q2", "q3", "q4", "q5", "q6", "q7"):  # failed latest, no CI, or not a finite interval
+        assert rows[q].endswith(" |  |"), rows[q]
+    assert rows["q7"].startswith("| q7 |  | 1.00 |"), rows["q7"]
+    # The CI is the latest run's ratio; the page draws no conclusion about the change from it.
+    assert "a change inside it" not in text
+    assert "not the change between runs" in text
+
+
+def test_render_has_no_ci_when_the_latest_run_lacks_the_query(tmp_path):
+    write(tmp_path, "a_abba_x.json", "2026-10-01T00:00:00", {"q1": 2.0, "q2": 1.0})
+    write(tmp_path, "b_abba_x.json", "2026-10-02T00:00:00", {"q1": 1.0})
+    rows = query_rows(trend.render(trend.load_runs(tmp_path)))
+    assert rows["q2"] == "| q2 | 1.00 |  | ▅  | - |  |"
+
+
+def test_a_computed_geomean_shows_no_recorded_ci(tmp_path):
+    write(tmp_path, "a_abba_x.json", "2026-10-01T00:00:00", {"q1": 2.0}, summary={"geomean_ci95": [1.5, 2.5]})
+    text = trend.render(trend.load_runs(tmp_path))
+    geomean_row = next(line for line in text.splitlines() if line.startswith("| **geomean**"))
+    assert geomean_row.endswith("| - |  |")

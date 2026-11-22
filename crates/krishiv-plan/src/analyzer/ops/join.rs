@@ -698,6 +698,25 @@ impl Resolver<'_> {
         Ok(renamed)
     }
 
+    /// A [`PlanNode::ColumnNames`] as a relation of its own: `renamed["x"]` resolves against it,
+    /// also when the operation changed nothing and returned the child. Out of line so the
+    /// resolver's dispatch frame, on its recursion path, stays small.
+    #[inline(never)]
+    pub(in crate::analyzer) fn column_names_node(
+        &mut self,
+        p: &LogicalPlan,
+        input: &Arc<LogicalPlan>,
+        op: &crate::ColumnNamesOp,
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let mut r = self.column_names(p, input, op, env)?;
+        if let Some(id) = p.origin.plan_id {
+            let out = Arc::clone(&r.out);
+            Arc::make_mut(&mut r.carriers).insert(id, vec![out]);
+        }
+        Ok(r)
+    }
+
     /// A [`PlanNode::ColumnNames`]: the input's columns by name, as Spark's `toDF`,
     /// `withColumnsRenamed` and `drop(names)` resolve them. The node is not kept.
     pub(in crate::analyzer) fn column_names(

@@ -69,6 +69,9 @@ pub(super) struct AggInfo {
     /// output, one row per distinct set, so an aggregate added to it later (a `HAVING` or `ORDER BY`
     /// call the select list does not hold) would run over those rows, not the query's.
     pub(super) distinct_rewritten: bool,
+    /// The aggregate of a metric-view read whose select list holds no aggregate yet: Spark rewrites
+    /// it only once it does, so an `ORDER BY` or `HAVING` over it still reads the view's measures.
+    pub(super) metric: Option<Arc<super::metric_view::Deferred>>,
 }
 
 impl AggInfo {
@@ -213,6 +216,9 @@ pub(super) struct Resolver<'a> {
     /// `exprs::expr_in`): every [`RESOLVE_STEP`] levels run on a fresh
     /// stack.
     pub(super) expr_depth: usize,
+    /// How many implicit casts binding has inserted (`implicit_cast_as`): a metric-view `ORDER BY`
+    /// or `HAVING` whose expressions need one fails as Spark's does (`metric_view.rs`).
+    pub(super) implicit_casts: std::cell::Cell<usize>,
     /// Nodes under the key argument of an AES call (ADR 0042), shared by
     /// every nested `expr_in` (lambda bodies, subqueries) so the secret
     /// context is inherited on all analysis paths; cleared when the
@@ -296,6 +302,7 @@ pub(super) fn resolve(
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
         expr_depth: 0,
+        implicit_casts: std::cell::Cell::new(0),
         secret: std::collections::HashSet::new(),
         secret_scope: false,
         op_outer: None,
@@ -411,7 +418,8 @@ pub(super) fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
                 PlanNode::MapPartitions { output, .. }
                 | PlanNode::GroupMap { output, .. }
                 | PlanNode::CoGroupMap { output, .. }
-                | PlanNode::PythonTableFunction { output, .. } => output.iter().for_each(&mut bump),
+                | PlanNode::PythonTableFunction { output, .. }
+                | PlanNode::MetricViewRead { output, .. } => output.iter().for_each(&mut bump),
                 PlanNode::CteRef(r) => r.output.iter().for_each(&mut bump),
                 PlanNode::Shift { offset, .. } => shifts = shifts.saturating_add(*offset),
                 // The `exists` column is defined by the join alone: an
@@ -945,7 +953,7 @@ impl Resolver<'_> {
                 input,
                 grouping,
                 aggregates,
-            } => self.aggregate(p, input, grouping, aggregates, env),
+            } => self.aggregate_node(p, input, grouping, aggregates, env),
             PlanNode::Join {
                 left,
                 right,
@@ -1035,16 +1043,7 @@ impl Resolver<'_> {
                 params,
             } => self.hint(p, input, name, params, env),
             PlanNode::PipeOperator { input } => self.pipe_operator(input, env),
-            PlanNode::ColumnNames { input, op } => {
-                let mut r = self.column_names(p, input, op, env)?;
-                // The result is a relation of its own: `renamed["x"]` resolves against it, also when the
-                // operation changed nothing and returned the child.
-                if let Some(id) = p.origin.plan_id {
-                    let out = Arc::clone(&r.out);
-                    Arc::make_mut(&mut r.carriers).insert(id, vec![out]);
-                }
-                Ok(r)
-            }
+            PlanNode::ColumnNames { input, op } => self.column_names_node(p, input, op, env),
             PlanNode::Repartition { input, exprs } => self.repartition(p, input, exprs, env),
             PlanNode::CollectMetrics {
                 input,
@@ -1052,6 +1051,14 @@ impl Resolver<'_> {
                 metrics,
             } => self.collect_metrics(p, input, name, metrics, env),
             PlanNode::TableFunction { name, args } => self.table_function(p, name, args, env),
+            PlanNode::MetricViewRead {
+                input,
+                name,
+                dimensions,
+                measures,
+                output,
+                ansi,
+            } => self.metric_view_read(p, input, name, dimensions, measures, output, *ansi, env),
             // Listed, not wildcarded: a new `PlanNode` variant must be
             // placed here or in `leaf_node` to compile.
             PlanNode::Read(ReadSource::Files { .. } | ReadSource::Local(_))
@@ -1278,6 +1285,7 @@ impl Resolver<'_> {
             | PlanNode::PipeOperator { .. }
             | PlanNode::Repartition { .. }
             | PlanNode::CollectMetrics { .. }
+            | PlanNode::MetricViewRead { .. }
             | PlanNode::Union { .. }
             | PlanNode::Distinct { .. }
             | PlanNode::Pivot { .. }

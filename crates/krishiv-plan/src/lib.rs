@@ -84,6 +84,7 @@
 //! | `PlanNode::ColumnNames` | U | - | - |
 //! | `PlanNode::Repartition` | U, R | - | - |
 //! | `PlanNode::CollectMetrics` | U, R | - | `observe` |
+//! | `PlanNode::MetricViewRead` | U, R | - | - |
 //! | `PlanNode::JoinHint` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
@@ -189,9 +190,9 @@ pub fn generate_qualifier(index: usize, aliased: bool) -> String {
 
 pub use plan::{
     ALIAS_PART_SEP, AsOfDirection, AsOfMatch, ColumnNamesOp, Cte, CteRef, GeneratorKind, Grouping,
-    IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan, PivotValue, Plan, PlanNode,
-    ReadSource, SampleBounds, Scan, SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP, TableArg,
-    TableVersion, UnpivotColumnSet, generator_arg, without_generated_marker,
+    IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan, MetricColumn, PivotValue, Plan,
+    PlanNode, ReadSource, SampleBounds, Scan, SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP,
+    TableArg, TableVersion, UnpivotColumnSet, generator_arg, without_generated_marker,
 };
 pub use python::{
     check_python_aggregates, check_python_relation_determinism, is_python_udaf,

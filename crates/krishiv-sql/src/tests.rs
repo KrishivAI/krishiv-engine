@@ -16,6 +16,7 @@ mod commands;
 mod function;
 mod golden_syntax;
 mod json_table;
+mod metric_view;
 mod probe;
 mod sample;
 mod tail;

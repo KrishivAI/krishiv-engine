@@ -629,6 +629,13 @@ impl<'a> Walker<'a> {
                 let value = self.opaque(rows.iter().map(|(_, i)| i));
                 self.opaque_columns(output, &value, offset)
             }
+            // A metric-view read left in a plan (no aggregate over it) never runs: each output column is
+            // `opaque` over every source column.
+            PlanNode::MetricViewRead { input, output, .. } => {
+                let rows = self.plan(input, offset)?;
+                let value = self.opaque(rows.iter().map(|(_, i)| i));
+                self.opaque_columns(output, &value, offset)
+            }
             PlanNode::GroupMap {
                 input,
                 keys,

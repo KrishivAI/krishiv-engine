@@ -102,8 +102,9 @@ use std::sync::Arc;
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
     EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
-    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE,
-    SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND, SEMI_ANTI_JOIN_ORDER,
+    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES,
+    SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -188,6 +189,11 @@ pub struct Options {
     /// statistics say it pays. Needs statistics; a session configuration,
     /// when given, can switch it off.
     pub eager_aggregation: bool,
+    /// Grouping sets aggregate their input before the expansion repeats it
+    /// (`eager`, module `expand`), where no join takes the calls. Runs with
+    /// eager aggregation; a session configuration, when given, can switch it
+    /// off.
+    pub pre_aggregate_expand: bool,
     /// Late payload joins (`late_payload`): a dimension's payload columns
     /// join above the semi and anti joins that never read them. Needs
     /// statistics; a session configuration, when given, can switch it off.
@@ -234,6 +240,7 @@ impl Default for Options {
             cse: true,
             stats_propagation: true,
             eager_aggregation: true,
+            pre_aggregate_expand: true,
             late_payload_join: true,
             payload_above_aggregate: true,
             subquery_as_window: true,
@@ -587,8 +594,15 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(true)
             });
+        let expand = options.pre_aggregate_expand
+            && udfs.is_none_or(|(_, config)| {
+                config
+                    .get(&PRE_AGGREGATE_EXPAND)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
         let root = match stats {
-            Some(stats) if eager => eager_pass(&root, stats, options, joins, &mut t)?,
+            Some(stats) if eager => eager_pass(&root, stats, options, expand, joins, &mut t)?,
             _ => root,
         };
         // After eager aggregation (which may pre-empt it) and the final join
@@ -687,7 +701,7 @@ fn run(
                     }
                     let mut ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, joins, &mut t)?;
+                        ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
                     }
                     if coded {
                         let (after, notes) = group_code::rewrite(
@@ -736,7 +750,7 @@ fn run(
                     // the shape eager aggregation reads (where its gates allow,
                     // the aggregate then runs by the dimension's key below it).
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, joins, &mut t)?;
+                        ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
                     }
                     prune_and_tidy(&ordered, Some(stats), &mut t)?
                 }
@@ -937,10 +951,12 @@ fn eager_pass(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
     options: &Options,
+    expand: bool,
     joins: join_order::Settings,
     t: &mut Trace,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let (after, notes) = eager::rewrite(Arc::clone(root), stats, options.stats_propagation)?;
+    let (after, notes) =
+        eager::rewrite(Arc::clone(root), stats, options.stats_propagation, expand)?;
     t.notes("EagerAggregate", &after, notes);
     // The moved aggregate changes what its join's inputs estimate, and so
     // their canonical order.

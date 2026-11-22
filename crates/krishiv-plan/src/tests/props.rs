@@ -182,6 +182,15 @@ impl Gen<'_> {
         }
     }
 
+    fn metric_column(&mut self) -> crate::MetricColumn {
+        crate::MetricColumn {
+            name: self.name(),
+            expr: Arc::new(self.expr(1)),
+            data_type: self.data_type(),
+            nullable: self.flag(),
+        }
+    }
+
     fn bound(&mut self) -> BoundColumn {
         BoundColumn {
             id: AttrId(u64::from(self.pick(4))),
@@ -437,7 +446,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 36 };
+        let kinds = if depth == 0 { 4 } else { 37 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -530,7 +539,7 @@ impl Gen<'_> {
                     _ => JoinCondition::Using(self.many(1, 2, Gen::name)),
                 },
             },
-            35 => PlanNode::AsOfJoin {
+            36 => PlanNode::AsOfJoin {
                 left: self.input(d),
                 right: self.input(d),
                 kind: [JoinKind::Inner, JoinKind::LeftOuter][usize::from(self.pick(2))],
@@ -579,6 +588,14 @@ impl Gen<'_> {
                 input: self.input(d),
                 name: self.name(),
                 metrics: self.exprs(),
+            },
+            35 => PlanNode::MetricViewRead {
+                input: self.input(d),
+                name: self.many(1, 3, Gen::name),
+                dimensions: self.many(0, 2, Gen::metric_column),
+                measures: self.many(0, 2, Gen::metric_column),
+                output: self.many(0, 2, Gen::bound),
+                ansi: self.flag().then(|| self.flag()),
             },
             30 => PlanNode::Repartition {
                 input: self.input(d),
@@ -1394,6 +1411,25 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             name,
             metrics,
         } => m_string(name, w) || m_exprs(metrics, w) || m_plan(input, w),
+        PlanNode::MetricViewRead {
+            input,
+            name,
+            dimensions,
+            measures,
+            output,
+            ansi,
+        } => {
+            site!(w, *ansi = Some(!ansi.unwrap_or(false)));
+            m_strings(name, w)
+                || dimensions.iter_mut().chain(measures.iter_mut()).any(|c| {
+                    m_string(&mut c.name, w) || m_expr(&mut c.expr, w) || {
+                        site!(w, c.nullable = !c.nullable);
+                        false
+                    }
+                })
+                || output.iter_mut().any(|c| m_bound(c, w))
+                || m_plan(input, w)
+        }
         PlanNode::WithColumns { input, columns } => m_columns(columns, w) || m_plan(input, w),
         PlanNode::Filter {
             input,
