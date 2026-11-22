@@ -26,6 +26,54 @@ use krishiv_session::{Principal, PrincipalKind};
 use serde_json::Value;
 use tower::ServiceExt;
 
+/// Collects the `krishiv::admin_action` records as `field=value` strings.
+#[derive(Clone, Default)]
+struct Records(Arc<std::sync::Mutex<Vec<String>>>);
+
+struct Fields(String);
+
+impl tracing::field::Visit for Fields {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        use std::fmt::Write as _;
+        let _ = write!(self.0, "{}={value:?} ", field.name());
+    }
+}
+
+impl tracing::Subscriber for Records {
+    fn enabled(&self, m: &tracing::Metadata<'_>) -> bool {
+        m.target() == "krishiv::admin_action"
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, e: &tracing::Event<'_>) {
+        let mut f = Fields(String::new());
+        e.record(&mut f);
+        self.0.lock().unwrap().push(f.0);
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// One global subscriber, so a callsite first hit by a parallel test is never cached as off.
+fn records() -> &'static Records {
+    static RECORDS: std::sync::OnceLock<Records> = std::sync::OnceLock::new();
+    RECORDS.get_or_init(|| {
+        let r = Records::default();
+        let _ = tracing::subscriber::set_global_default(r.clone());
+        r
+    })
+}
+
+/// Whether a `Drain` record with an `ok` result and `target_part` in its target was written.
+fn drain_recorded(target_part: &str) -> bool {
+    records().0.lock().unwrap().iter().any(|r| {
+        r.contains("rpc=\"Drain\"") && r.contains("result=\"ok\"") && r.contains(target_part)
+    })
+}
+
 /// `Authorization: Bearer <name>:<role>` is the caller `name` with that role.
 struct Roles;
 
@@ -161,6 +209,7 @@ async fn readiness_and_drain_status_need_monitor() {
 
 #[tokio::test]
 async fn drain_and_resume_need_manage_and_follow_the_state_machine() {
+    let _ = records();
     let f = fixture(true);
     let (status, _) = f.call("o:operator", "POST", "/drain", Some("{}")).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "an operator may not drain");
@@ -172,6 +221,10 @@ async fn drain_and_resume_need_manage_and_follow_the_state_machine() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["status"]["state"], "draining");
     assert!(body["status"]["deadline"].is_string(), "{body}");
+    assert!(
+        drain_recorded("grace 5s, exit_when_drained false"),
+        "the Drain action record carries its grace and exit flag"
+    );
     assert!(f.rt.is_draining());
     assert!(
         !f.serving.load(std::sync::atomic::Ordering::SeqCst),
@@ -190,6 +243,7 @@ async fn drain_and_resume_need_manage_and_follow_the_state_machine() {
 
 #[tokio::test]
 async fn resume_after_exit_when_drained_is_a_failed_precondition() {
+    let _ = records();
     let f = fixture(true);
     let (status, _) = f
         .call(
@@ -200,6 +254,7 @@ async fn resume_after_exit_when_drained_is_a_failed_precondition() {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
+    assert!(drain_recorded("exit_when_drained true"));
     let (status, body) = f.call("a:admin", "DELETE", "/drain", None).await;
     assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{body}");
     assert_eq!(
