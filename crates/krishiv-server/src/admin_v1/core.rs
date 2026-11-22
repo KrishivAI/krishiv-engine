@@ -12,7 +12,7 @@ use super::action::{self, Action};
 use super::idempotency::{Idempotency, MAX_ID_LEN, Run};
 use super::{
     AdminApi, AdminError, AdminResult, Call, CancelQueriesByTagRequest, CancelQueryRequest,
-    DrainRequest, ErrorKind, GetCapabilitiesRequest, GetConfigRequest, GetDrainStatusRequest,
+    DrainRequest, GetCapabilitiesRequest, GetConfigRequest, GetDrainStatusRequest,
     GetReadinessRequest, GetResourceGroupConfigRequest, GetVersionRequest, KillSessionRequest,
     ListQueriesRequest, ListResourceGroupsRequest, ListSessionsRequest,
     ReloadResourceGroupConfigRequest, ReplaceResourceGroupConfigRequest, ResumeServingRequest,
@@ -116,14 +116,10 @@ impl Core {
                 })
                 .await
         });
-        let (result, how) = task.await.unwrap_or_else(|_| {
+        let (result, how) = task.await.unwrap_or_else(|e| {
+            tracing::error!(rpc, error = %e, "an admin mutation task ended without a result");
             (
-                Err(AdminError::new(
-                    ErrorKind::Internal,
-                    "INTERNAL_ERROR",
-                    "XX000",
-                    "The request could not be completed.",
-                )),
+                Err(AdminError::internal("The request could not be completed.")),
                 Run::Ran,
             )
         });

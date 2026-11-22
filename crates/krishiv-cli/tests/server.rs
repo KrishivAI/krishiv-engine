@@ -425,6 +425,8 @@ fn a_sigterm_drain_leaves_an_action_record() {
     assert!(record.contains("\"rpc\":\"Drain\""), "{record}");
     assert!(record.contains("\"transport\":\"signal\""), "{record}");
     assert!(record.contains("\"result\":\"ok\""), "{record}");
+    assert!(record.contains("\"auth_method\":\"none\""), "{record}");
+    assert!(record.contains("exit_when_drained true"), "{record}");
 }
 
 /// Runs `script` with a PySpark 4.x Connect client against a fresh server,

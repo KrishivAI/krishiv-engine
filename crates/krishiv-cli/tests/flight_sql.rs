@@ -206,7 +206,13 @@ async fn flight_sql_follows_the_admin_drain() {
         .try_collect()
         .await
         .expect("rows");
-    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+    assert_eq!(
+        batches
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        1
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         let status = admin_call(&server, "GET", "/drain", "");
@@ -232,7 +238,13 @@ async fn flight_sql_follows_the_admin_drain() {
         .try_collect()
         .await
         .expect("rows");
-    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+    assert_eq!(
+        batches
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        1
+    );
 }
 
 const ADMIN_TOKEN: &str = "adbc-admin-token-0123456789abcdef0123";

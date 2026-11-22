@@ -744,7 +744,12 @@ impl AdminApi for SessionAdmin {
                     })?,
             };
             (ops.start)(grace, request.exit_when_drained);
-            self.log(&call, "Drain", "", false, "ok", "");
+            let target = format!(
+                "grace {}s, exit_when_drained {}",
+                grace.as_secs(),
+                request.exit_when_drained
+            );
+            self.log(&call, "Drain", &target, false, "ok", "");
             Ok(DrainResponse {
                 status: Some(drain_status(ops)),
             })
