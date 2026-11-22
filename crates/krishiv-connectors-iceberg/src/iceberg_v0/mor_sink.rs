@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{Array, RecordBatch};
+use arrow_array::{Array, ArrayRef, PrimitiveArray, RecordBatch};
 use futures::future::BoxFuture;
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_exec::{GlobalState, LocalState, Sink, SinkStatus, TaskContext};
@@ -97,6 +97,22 @@ struct SinkGlobal {
     writers: Mutex<Vec<Writer>>,
 }
 
+/// Deletes each row's (file, position) from the task; `file_at` reads the file path of a row.
+fn delete_rows<'a>(
+    task: &mut super::row_delta::MorTask,
+    files: &ArrayRef,
+    positions: &PrimitiveArray<Int64Type>,
+    file_at: impl Fn(usize) -> &'a [u8],
+) -> Result<(), KrishivError> {
+    for row in 0..files.len() {
+        if files.is_null(row) || positions.is_null(row) {
+            return Err(internal("a merge-on-read row without a row id"));
+        }
+        task.delete(file_at(row), positions.value(row))?;
+    }
+    Ok(())
+}
+
 /// Applies one batch to the task: its deletes, and for an `UPDATE` its new rows.
 async fn apply(
     task: &mut super::row_delta::MorTask,
@@ -113,20 +129,15 @@ async fn apply(
     let positions = positions
         .as_primitive_opt::<Int64Type>()
         .ok_or_else(|| internal("a merge-on-read row position that is not a bigint"))?;
-    for row in 0..batch.num_rows() {
-        if files.is_null(row) || positions.is_null(row) {
-            return Err(internal("a merge-on-read row without a row id"));
-        }
-        let file: &[u8] = if let Some(a) = files.as_binary_view_opt() {
-            a.value(row)
-        } else if let Some(a) = files.as_binary_opt::<i32>() {
-            a.value(row)
-        } else if let Some(a) = files.as_binary_opt::<i64>() {
-            a.value(row)
-        } else {
-            return Err(internal("a merge-on-read row file that is not binary"));
-        };
-        task.delete(file, positions.value(row))?;
+    // The file column's type is fixed for the batch: resolve it once, not per row.
+    if let Some(a) = files.as_binary_view_opt() {
+        delete_rows(task, files, positions, |row| a.value(row))?;
+    } else if let Some(a) = files.as_binary_opt::<i32>() {
+        delete_rows(task, files, positions, |row| a.value(row))?;
+    } else if let Some(a) = files.as_binary_opt::<i64>() {
+        delete_rows(task, files, positions, |row| a.value(row))?;
+    } else {
+        return Err(internal("a merge-on-read row file that is not binary"));
     }
     task.settle().await?;
     if update && batch.num_rows() > 0 {
