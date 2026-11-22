@@ -10,6 +10,8 @@
 
 mod auth;
 pub mod client;
+#[cfg(test)]
+mod commit_tests;
 pub mod config;
 pub mod delegated;
 #[cfg(test)]
@@ -30,7 +32,7 @@ pub(crate) mod vended;
 #[doc(hidden)]
 pub mod fuzz_entry;
 
-pub use client::RestClient;
+pub use client::{CommitFailure, CommitReply, RestClient, Snapshots};
 pub use config::{ONELAKE_URI, RestAuth, RestConfig, RestLimits};
 pub use delegated::{DelegationLimits, RestCaller, SubjectToken};
 pub use error::{RestError, RestLimit};

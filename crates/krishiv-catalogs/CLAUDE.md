@@ -56,7 +56,7 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   call, a paged listing included; page/entry caps, a repeated or over-4-KiB token stops it; empty/`.`/`..` names and any path
   the URL parser rewrites refused; a 404 is "absent" only with a `NoSuch*` error model; credential prefixes as full URL,
   bucket or bare scheme; `load_table` checks every returned location and refuses read restrictions and server-side planning;
-  `load_credentials` only when advertised), `http_test_server.rs` (crate level, aliased as `test_server` here) a fake HTTP/1.1 server (tests only).
+  `load_credentials` only when advertised; `load_table_snapshots_as` sends `snapshots=all|refs`; `commit_table_as` (PR-36c part 2) one JSON `POST .../tables/{t}` with the same token, egress client and `X-Iceberg-Access-Delegation` as `load_table`, resent once only after a 401 with a renewable token, never after a 5xx or a timeout, body capped at `max_response_bytes` before sending, a 200's locations checked (a refused one is a failure after sending), `CommitReply` (status, `Retry-After`, body) or `CommitFailure { sent }` from `transport.rs`'s `call_tracked` (unsent only for an egress refusal, a request never built or connected, no token); `commit_tests.rs`), `http_test_server.rs` (crate level, aliased as `test_server` here) a fake HTTP/1.1 server (tests only).
 - `src/sqlite/` (feature `sqlite`; PB-07, ADR 0014 item 6, ADR 0037 `per_query`; `rusqlite` with the bundled C amalgamation, default features off) the embedded catalog:
   `mod.rs` `SqliteCatalog` (`Catalog` + `CatalogWrite`, `open` / `open_in_memory`, `table_details`, `list_namespaces`, `list_tables`; one connection behind a
   mutex, WAL, `synchronous=FULL`, a 10 s busy timeout; one `BEGIN IMMEDIATE` transaction per change, which bumps the epoch only when it changes
@@ -95,8 +95,8 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   `VendedPaths` (a location outside every scope, or no credential, is `KRISHIV_CATALOG_LOCATION_REFUSED` before any
   request: no ambient fallback), the §4.4 block-cache scope; `iceberg_rest/vended.rs` prefix forms (full URL on
   segments, bucket, scheme family), the Iceberg 1.12.0 credential keys and their expiries; `EmbeddedLocations` (embedded use
-  also accepts absolute `file:` locations). Tests: `declared/tests.rs` (names, auth), `declared/read_tests.rs` (a table the
-  connector's `testing::write_table` wrote, served by the fake REST server); `declared/vended_read_tests.rs`: a table
+  also accepts absolute `file:` locations). Writes (PR-36c part 2): `option.write = true` (default `false`, read-only; anything but true/false refused at startup) gives a table loaded at its current version a `RestCommitter` (the connector's `RestCommitTransport` over `commit_table_as` and an uncached `snapshots=all|refs` load, for the caller that loaded it, on the blocking pool), so its provider writes; the session does not route `INSERT`/DML to declared tables yet. Tests: `declared/tests.rs` (names, auth), `declared/read_tests.rs` (a table the
+  connector's `testing::write_table` wrote, served by the fake REST server), `declared/write_tests.rs` (appends over loopback HTTP into a fake catalog applying requests: committed and read back by SQL, a lost 200 probed, a 409 rebased, read-only by default); `declared/vended_read_tests.rs`: a table
   `testing::write_table_with` wrote to `s3://bucket/wh` with a writer key on `src/s3_test_server.rs` (a loopback S3 stand-in, tests only:
   PUT/GET range/HEAD/DELETE in memory, records each request's SigV4 key id, `deny` (403 `AccessDenied`) and `expire`
   (403 `ExpiredToken`; a bare 403 on HEAD, as real S3) per key id), read by a session with no S3 key:

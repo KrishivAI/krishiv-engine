@@ -88,7 +88,8 @@ krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version =
 # The `CatalogFactory` trait and the declarations it builds from (feature `session`).
 krishiv-session = { path = "../krishiv-session", version = "=0.2.1", optional = true }
 tracing.workspace = true
-# The vended-credential source of a declared table (`krishiv-store`'s `CredentialSource`, feature `session`).
+# The vended-credential source of a declared table (`krishiv-store`'s `CredentialSource`) and the
+# connector's async `RestCommitTransport` trait, implemented by a declared table's committer (feature `session`).
 async-trait = { workspace = true, optional = true }
 thrift = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt"], optional = true }

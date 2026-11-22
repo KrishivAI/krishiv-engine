@@ -215,6 +215,7 @@ fn an_undeclared_private_address_is_refused_before_sending() {
         &d,
         Arc::new(client),
         super::table::METADATA_TTL,
+        false,
     ));
     let e = load(&catalog, &ident(&["db"], "t")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivCatalogFailure);
