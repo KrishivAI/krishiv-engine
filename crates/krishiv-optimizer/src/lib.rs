@@ -96,6 +96,7 @@ mod repartition;
 mod restrict;
 mod semi_order;
 mod share_cte;
+mod share_literal;
 mod share_scan;
 mod stats;
 mod sum_rewrite;
@@ -108,7 +109,7 @@ use krishiv_common::config::{
     EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
     LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN,
     SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS,
-    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    SHARE_LITERAL_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -889,6 +890,22 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(SHARE_REPEATED_SUBTREES_DEFAULT)
             });
+        // Instances that differ only in a group key's literal read one
+        // definition over all the literals (`share_literal`, TPC-DS q31).
+        let literals = share
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&SHARE_LITERAL_INSTANCES)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
+        let root = if literals {
+            t.once("ShareLiteralInstances", &root, |r| {
+                share_literal::share(Arc::clone(r), direct)
+            })?
+        } else {
+            root
+        };
         let root = if share {
             t.once("ShareCte", &root, |r| {
                 share_cte::share(Arc::clone(r), direct)
@@ -1305,6 +1322,14 @@ pub(crate) fn groups_by_columns(g: &Grouping) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether the `WITH` definition `name` is one `ShareLiteralInstances`
+/// added (perf-1 lever A): computed for several literals at once, it is read
+/// from one shared plan even where a runtime filter reaches a reference.
+#[must_use]
+pub fn is_literal_shared(name: &str) -> bool {
+    name.starts_with(share_literal::LITERAL_PREFIX)
 }
 
 /// Whether every expression of `plan` (subquery plans included) and every Python relation UDF it runs is

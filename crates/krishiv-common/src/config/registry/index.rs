@@ -624,6 +624,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PRESERVED_SIDE_SEMI_JOIN,
     ),
     (
+        "krishiv.optimizer.shareLiteralInstances",
+        &SHARE_LITERAL_INSTANCES,
+    ),
+    (
         "krishiv.optimizer.shareRepeatedSubtrees",
         &SHARE_REPEATED_SUBTREES,
     ),

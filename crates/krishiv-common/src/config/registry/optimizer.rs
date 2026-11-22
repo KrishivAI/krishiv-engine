@@ -87,6 +87,23 @@ pub static SHARE_FILTERED_SCANS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Instances of one CTE that differ only in a group key compared with a
+/// literal share one computation over all the literals
+/// (`krishiv.optimizer.shareLiteralInstances`, perf-1 lever A).
+pub static SHARE_LITERAL_INSTANCES: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.shareLiteralInstances",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Internal. Compute a CTE read several times with a different literal on one of its group \
+          keys (TPC-DS q31's `d_qoy = 1`, `2`, `3`) once for all the literals (`d_qoy IN (1, 2, 3)`), \
+          each reader keeping the groups of its own literal. Needs \
+          `krishiv.sql.optimizer.shareCteInstances`. Results are the same either way; `false` turns it off.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 /// A group key computed from other group keys moves above the aggregate
 /// (`krishiv.optimizer.derivedKeysAbove`, P3-A part 2c).
 pub static DERIVED_KEYS_ABOVE: ConfigEntry = ConfigEntry {
