@@ -240,3 +240,224 @@ fn the_write_plans_keep_the_guarded_scans() {
     assert!(cleared.guarded().is_empty());
     assert!(cleared != *plan);
 }
+
+/// The test UDFs of design §7.4: `policy(k)` keeps a key that is not a multiple of 7; `leak(k)`
+/// returns `k` and fails on a key the policy rejects (as a function that reports its argument
+/// would leak it); neither is leakproof.
+#[derive(Debug)]
+struct KeyUdf(&'static str);
+
+impl krishiv_udf_sdk::ScalarUdf for KeyUdf {
+    fn name(&self) -> &str {
+        self.0
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &krishiv_udf_sdk::Signature {
+        use std::sync::OnceLock;
+        static SIG: OnceLock<krishiv_udf_sdk::Signature> = OnceLock::new();
+        SIG.get_or_init(|| {
+            krishiv_udf_sdk::Signature::Exact(vec![krishiv_udf_sdk::UdfInputType::Any])
+        })
+    }
+
+    fn return_field(
+        &self,
+        args: &[krishiv_udf_sdk::ArgField],
+    ) -> Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError> {
+        Ok(krishiv_udf_sdk::ReturnField {
+            data_type: if self.0 == "policy" {
+                krishiv_types::DataType::Boolean
+            } else {
+                args[0]
+                    .data_type
+                    .clone()
+                    .unwrap_or(krishiv_types::DataType::Long)
+            },
+            nullable: true,
+        })
+    }
+
+    fn invoke(
+        &self,
+        args: &[krishiv_udf_sdk::UdfArg<'_>],
+        rows: usize,
+        _: &krishiv_udf_sdk::InvokeContext,
+    ) -> Result<arrow_array::ArrayRef, krishiv_udf_sdk::UdfError> {
+        use arrow_array::Array;
+        use arrow_array::cast::AsArray;
+        use arrow_array::types::{Int32Type, Int64Type};
+        let a = args[0].array();
+        let at = |i: usize| if a.len() == 1 { 0 } else { i };
+        let key = |i: usize| -> Option<i64> {
+            let i = at(i);
+            if a.is_null(i) {
+                return None;
+            }
+            match a.data_type() {
+                arrow_schema::DataType::Int32 => {
+                    Some(i64::from(a.as_primitive::<Int32Type>().value(i)))
+                }
+                arrow_schema::DataType::Int64 => Some(a.as_primitive::<Int64Type>().value(i)),
+                _ => None,
+            }
+        };
+        let kept = |i: usize| key(i).is_none_or(|k| k % 7 != 0);
+        if self.0 == "policy" {
+            return Ok(Arc::new(arrow_array::BooleanArray::from(
+                (0..rows).map(kept).collect::<Vec<_>>(),
+            )));
+        }
+        if let Some(i) = (0..rows).find(|&i| !kept(i)) {
+            return Err(krishiv_udf_sdk::UdfError::new(format!(
+                "leak({:?}) ran on a row the policy rejects",
+                key(i)
+            )));
+        }
+        Ok(a)
+    }
+}
+
+fn udf(
+    name: &str,
+    args: Vec<Arc<krishiv_plan::Expr>>,
+    t: krishiv_types::DataType,
+) -> Arc<krishiv_plan::Expr> {
+    use krishiv_plan::{Expr, ExprNode, FunctionId, FunctionKind, ResolvedExpr, ResolvedFunction};
+    Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            id: FunctionId::Udf {
+                name: name.to_owned(),
+                version: 1,
+            },
+            kind: FunctionKind::Scalar,
+            args,
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+            data_type: t,
+            nullable: true,
+            deterministic: true,
+        },
+    ))))
+}
+
+/// `plan` with every table scan behind a barrier that keeps `policy(key)` rows (the key: the
+/// scan's first column) and, with `plant`, `isnotnull(leak(key))` above each barrier.
+fn guard_every_table(plan: &Plan, plant: bool) -> Plan {
+    use krishiv_plan::{
+        Builtin, Expr, ExprNode, FunctionId, FunctionKind, ResolvedExpr, ResolvedFunction,
+    };
+    let col = |c: &krishiv_plan::BoundColumn| {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+            c.clone(),
+        ))))
+    };
+    let root = Arc::clone(plan.root())
+        .transform_up(&mut |p| {
+            let PlanNode::Scan(scan) = &p.node else {
+                return Ok::<_, std::convert::Infallible>(p);
+            };
+            let (ReadSource::Table { name, .. }, Some(key)) = (&scan.source, scan.output.first())
+            else {
+                return Ok(p);
+            };
+            let table = name.last().cloned().unwrap_or_default();
+            let inner = LogicalPlan::clone(&p).filter(udf(
+                "policy",
+                vec![col(key)],
+                krishiv_types::DataType::Boolean,
+            ));
+            let barrier = inner.security_barrier(policy(&table));
+            if !plant {
+                return Ok(Arc::new(barrier));
+            }
+            let leak = udf("leak", vec![col(key)], key.data_type.clone());
+            Ok(Arc::new(barrier.filter(Arc::new(Expr::new(
+                ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+                    id: FunctionId::Builtin(Builtin::IsNotNull),
+                    kind: FunctionKind::Scalar,
+                    args: vec![leak],
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: krishiv_types::DataType::Boolean,
+                    nullable: false,
+                    deterministic: true,
+                })),
+            )))))
+        })
+        .unwrap_or_else(|e| match e {});
+    Plan::try_new(root).unwrap()
+}
+
+/// §7.4: the planted-leak plans of every TPC-H query through the executor under a policy that
+/// rejects a seventh of each table's keys. The optimized plan never runs `leak` on a rejected
+/// row (it fails the query if it does) and returns the rows of the same barriers without the
+/// leak.
+#[test]
+fn every_tpch_query_runs_the_barrier_rows_under_a_rejecting_policy() {
+    let (tpch, _rt) = tpch();
+    let udfs = Arc::new(krishiv_udf_sdk::UdfLibrary::new());
+    for name in ["policy", "leak"] {
+        udfs.register(Arc::new(KeyUdf(name))).unwrap();
+    }
+    let config = krishiv_common::config::Config::new();
+    let stats = ProviderStatistics(Arc::clone(&tpch.tables) as _);
+    let run = |plan: &Plan| {
+        let optimized =
+            krishiv_optimizer::optimize_with_udfs(plan, &stats, &udfs, &config).unwrap();
+        let runnable = tpch
+            .runnable_with_udfs(&optimized, Arc::clone(&udfs))
+            .unwrap()
+            .with_worker(|w| w.with_udfs(Arc::clone(&udfs)));
+        let mut out = rows(&super::run(&runnable).unwrap_or_else(|e| panic!("{e}\n{optimized}")));
+        out.sort();
+        out
+    };
+    let mut nonempty = 0;
+    for q in 1..=22 {
+        let plan = tpch.analyzed(&super::tpch::sql(q)).unwrap();
+        let want = run(&guard_every_table(&plan, false));
+        let got = run(&guard_every_table(&plan, true));
+        assert_eq!(got, want, "q{q}");
+        nonempty += usize::from(!want.is_empty());
+    }
+    assert!(nonempty >= 15, "{nonempty} of 22 queries return rows");
+    // The control: a leak below the policy's filter (what a broken pushdown arm would build) runs
+    // on the rejected rows, and the query fails.
+    let plan = tpch.analyzed("SELECT p_partkey FROM part").unwrap();
+    let root = Arc::clone(plan.root())
+        .transform_up(&mut |p| {
+            Ok::<_, std::convert::Infallible>(match &p.node {
+                PlanNode::Scan(scan) => {
+                    let key = scan.output[0].clone();
+                    let col = Arc::new(krishiv_plan::Expr::new(krishiv_plan::ExprNode::Resolved(
+                        krishiv_plan::ResolvedExpr::Column(key.clone()),
+                    )));
+                    let leaked = udf("leak", vec![col], key.data_type);
+                    let below = LogicalPlan::clone(&p).filter(udf(
+                        "policy",
+                        vec![leaked],
+                        krishiv_types::DataType::Boolean,
+                    ));
+                    Arc::new(below.security_barrier(policy("part")))
+                }
+                _ => p,
+            })
+        })
+        .unwrap_or_else(|e| match e {});
+    let broken = Plan::try_new(root).unwrap();
+    let runnable = tpch
+        .runnable_with_udfs(&broken, Arc::clone(&udfs))
+        .unwrap()
+        .with_worker(|w| w.with_udfs(Arc::clone(&udfs)));
+    let e = super::run(&runnable).unwrap_err();
+    assert!(
+        e.to_string().contains("ran on a row the policy rejects"),
+        "{e}"
+    );
+}
