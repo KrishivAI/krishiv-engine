@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use arrow_array::cast::AsArray;
 use futures::executor::block_on;
 use krishiv_common::error::KrishivError;
 use krishiv_plan::analyzer::PolicyVersion;
@@ -654,4 +655,67 @@ fn each_grantor_keeps_its_own_row() {
     assert_eq!(grants_on(&w, "t").matches("\"user:carl\"").count(), 2);
     ok(&root, "REVOKE MODIFY ON t FROM user:carl");
     denied(&carl, "INSERT INTO t VALUES (7, 8)");
+}
+
+/// The creator of a metric view owns it, as the creator of a view does (#941 review thread):
+/// it reads and drops it without an admin; `IF NOT EXISTS` over it gives another user nothing.
+#[test]
+fn the_creator_of_a_metric_view_owns_it() {
+    let w = World::new();
+    let root = w.admin();
+    ok(
+        &root,
+        "CREATE TABLE src (region STRING, amount INT) USING parquet",
+    );
+    ok(&root, "INSERT INTO src VALUES ('eu', 1)");
+    let (ana, bob) = (w.user("ana"), w.user("bob"));
+    for who in ["ana", "bob"] {
+        ok(
+            &root,
+            &format!("GRANT CREATE ON SCHEMA default TO user:{who}"),
+        );
+        ok(&root, &format!("GRANT SELECT ON TABLE src TO user:{who}"));
+    }
+    let create = |not_exists: &str| {
+        format!(
+            "CREATE VIEW {not_exists}mv WITH METRICS LANGUAGE YAML AS $$\nversion: 0.1\n\
+             source: src\ndimensions:\n  - name: region\n    expr: region\nmeasures:\n  \
+             - name: total\n    expr: sum(amount)\n$$"
+        )
+    };
+    ok(&ana, &create(""));
+    let shown =
+        block_on(async { ana.sql("SHOW GRANTS ON TABLE mv").await?.collect().await }).unwrap();
+    let text = format!("{shown:?}");
+    assert!(
+        text.contains("OWNERSHIP") && text.contains("user:ana"),
+        "{text}"
+    );
+    let rows = block_on(async {
+        ana.sql("SELECT region, measure(total) FROM mv GROUP BY region")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    // The one source row: region `eu`, `sum(amount)` 1.
+    let got: Vec<(String, i64)> = rows
+        .iter()
+        .flat_map(|b| {
+            let region = arrow_cast::cast(b.column(0), &arrow_schema::DataType::Utf8).unwrap();
+            let total = arrow_cast::cast(b.column(1), &arrow_schema::DataType::Int64).unwrap();
+            let region = region.as_string::<i32>();
+            let total = total.as_primitive::<arrow_array::types::Int64Type>();
+            (0..b.num_rows())
+                .map(|i| (region.value(i).to_owned(), total.value(i)))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(got, [("eu".to_owned(), 1)]);
+    ok(&bob, &create("IF NOT EXISTS "));
+    denied(
+        &bob,
+        "SELECT region, measure(total) FROM mv GROUP BY region",
+    );
+    ok(&ana, "DROP VIEW mv");
 }
