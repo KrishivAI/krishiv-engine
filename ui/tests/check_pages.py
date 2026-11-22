@@ -774,7 +774,7 @@ def start_checks() -> list[str]:
 
 def filter_checks() -> list[str]:
     """History's filters by client type and tag: a server console has them and they narrow the list; the console
-    of one session has neither."""
+    of one session has neither. Both filter by a part of the statement."""
     problems: list[str] = []
     # One link per listed query; the layout for the other width is in the page too, hidden.
     rows = "main a[href^='#/queries/']:visible"
@@ -792,6 +792,9 @@ def filter_checks() -> list[str]:
             page.evaluate("window.location.hash = '#/history'")
             page.locator(rows).first.wait_for(timeout=10000)
             fields = [page.get_by_label(n, exact=True) for n in ("Client", "Tag")]
+            statement = page.get_by_label("Statement", exact=True)
+            if statement.count() != 1:
+                problems.append(f"{mode}: History has no Statement filter")
             if mode == "embedded":
                 if any(f.count() for f in fields):
                     problems.append("embedded: History has a Client or Tag filter")
@@ -817,6 +820,22 @@ def filter_checks() -> list[str]:
                         )
                     field.fill("")
                     expect(page.locator(rows)).to_have_count(4, timeout=5000)
+            # Any part of a statement, in either case and whatever the space around it, in every console.
+            for typed, want in (
+                ("LINEITEM", 2),
+                (" from events ", 1),
+                ("no such statement", 0),
+            ):
+                statement.fill(typed)
+                try:
+                    expect(page.locator(rows)).to_have_count(want, timeout=5000)
+                except AssertionError:
+                    got = page.locator(rows).count()
+                    problems.append(
+                        f"{mode} history: statement {typed!r} lists {got} queries, not {want}"
+                    )
+                statement.fill("")
+                expect(page.locator(rows)).to_have_count(4, timeout=5000)
             problems += [f"{mode} filters: page error: {e}" for e in errors]
             page.close()
             server.shutdown()

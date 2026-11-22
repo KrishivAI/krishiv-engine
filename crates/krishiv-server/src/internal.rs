@@ -1186,6 +1186,9 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
     // of the name finds it, in either case.
     let client = filter_param(&uri, "client").map(|c| c.to_lowercase());
     let tag = filter_param(&uri, "tag");
+    // Any part of a statement finds it, in either case. It is looked for in the text as the list shows it, with
+    // the literals masked: a search of the stored text would tell a caller which literal a statement holds.
+    let statement = filter_param(&uri, "text").map(|t| t.to_lowercase());
     let session = filter_param(&uri, "session");
     // An empty filter is no filter, as for the others. One that does not decode is refused: dropping it would
     // list every session's queries under an address that names one.
@@ -1211,6 +1214,13 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
                 .is_none_or(|c| text(r, "client_type").to_lowercase().contains(c))
         })
         .filter(|r| tag.as_deref().is_none_or(|t| has_tag(r, t)))
+        .filter(|r| {
+            statement.as_deref().is_none_or(|t| {
+                mask_literals(text(r, "query_text"))
+                    .to_lowercase()
+                    .contains(t)
+            })
+        })
         .filter(|r| {
             session
                 .as_deref()

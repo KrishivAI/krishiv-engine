@@ -361,15 +361,17 @@ PROFILES_ROUTES = (
 
 def history(query: str) -> list[dict]:
     """The history under the page's filters, as `krishiv_server::internal` applies them: any part of the client's
-    name, a tag by its key or as `key=value`."""
+    name, a tag by its key or as `key=value`, any part of the statement (either case)."""
     asked = {k: v[0] for k, v in parse_qs(query).items()}
     client, tag = asked.get("client", "").lower(), asked.get("tag", "")
     session = asked.get("session", "")
+    statement = asked.get("text", "").lower()
     return [
         q
         for q in DATA["history"]
         if client in (q.get("client_type") or "").lower()
         and (not session or q.get("session_id") == session)
+        and statement in (q.get("query_text") or "").lower()
         and (
             not tag
             or any(tag in (k, f"{k}={v}") for k, v in (q.get("tags") or {}).items())

@@ -71,9 +71,11 @@ impl UiSource for Fake {
                     {"query_id": "q-wait", "state": "queued", "principal": "bob", "submitted_at": 1_000},
                     {"query_id": "q-a", "state": "finished", "principal": "ann", "submitted_at": 100, "session_id": "s-old",
                      "client_type": "_SPARK_CONNECT_PYTHON spark/4.2.0", "tags": {"team": "risk", "nightly": ""},
+                     "query_text": "SELECT sum(amount) FROM Orders WHERE region = 'emea-canary'",
                      "wall_ns": 1_000, "peak_memory_bytes": 10, "rows_produced": 5, "spill_bytes": 0},
                     {"query_id": "q-b", "state": "finished", "principal": "ann", "submitted_at": 200, "session_id": "s-old",
                      "client_type": "krishiv-cli", "tags": {"team": "ads", "krishiv-ui-run-7": ""},
+                     "query_text": "SELECT count(*) FROM clicks",
                      "wall_ns": 1_500, "peak_memory_bytes": 30, "rows_produced": 5, "spill_bytes": 7,
                      "hints": [{"code": "SPILL", "node_id": 2, "operator_id": 2, "message": "HashJoin spilled 4.0 KiB"}]},
                     {"query_id": "q-bad", "state": "failed", "principal": "bob@example.com", "submitted_at": 300,
@@ -423,6 +425,62 @@ async fn history_filters_by_user_client_type_and_tag() {
     // The tag the editor gives its own run is not sent.
     let from_editor = &get(addr, "/api/internal/history?client=cli").await["queries"][0];
     assert_eq!(from_editor["tags"], json!({"team": "ads"}));
+}
+
+#[tokio::test]
+async fn history_filters_by_a_part_of_the_statement_as_it_is_shown() {
+    let (addr, _) = start(false).await;
+    let ids = |path: &'static str| async move {
+        let body = get(addr, path).await;
+        body["queries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|q| q["query_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    // Any part of the statement, in either case; a space arrives as `+` or `%20`.
+    assert_eq!(ids("/api/internal/history?text=orders").await, ["q-a"]);
+    assert_eq!(ids("/api/internal/history?text=FROM+ORDERS").await, ["q-a"]);
+    assert_eq!(
+        ids("/api/internal/history?text=select").await,
+        ["q-b", "q-a"]
+    );
+    assert_eq!(
+        ids("/api/internal/history?text=count(*)%20from").await,
+        ["q-b"]
+    );
+    // A query whose text was not recorded matches no text.
+    assert_eq!(
+        ids("/api/internal/history?text=divide").await,
+        Vec::<String>::new()
+    );
+    // The literal is masked in the list, so it finds nothing: a search must not tell which literal a statement
+    // holds. The mask itself is what the list shows, and is found.
+    let shown = &get(addr, "/api/internal/history?text=orders").await["queries"][0];
+    assert_eq!(
+        shown["query_text"],
+        "SELECT sum(amount) FROM Orders WHERE region = ?"
+    );
+    assert_eq!(
+        ids("/api/internal/history?text=emea").await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        ids("/api/internal/history?text=region+%3D+%3F").await,
+        ["q-a"]
+    );
+    // It combines with the other filters; empty or undecodable, it is no filter.
+    assert_eq!(
+        ids("/api/internal/history?text=select&tag=nightly").await,
+        ["q-a"]
+    );
+    assert_eq!(
+        ids("/api/internal/history?text=select&client=cli").await,
+        ["q-b"]
+    );
+    assert_eq!(ids("/api/internal/history?text=").await.len(), 5);
+    assert_eq!(ids("/api/internal/history?text=%zz").await.len(), 5);
 }
 
 #[tokio::test]

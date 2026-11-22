@@ -114,8 +114,10 @@ spark.stop()             # the console stops with the session
 what its holder sees (the table in [single-node server security](single-node-server-security.md)): an operator
 sees and cancels every query and runs SQL as the signed-in user in a session of its own, and only an administrator
 opens Environment, where secrets show as `***`. The History page filters by state, principal, client (any part of
-the name a client reports, such as `python`), tag (`team` or `team=risk`) and session; the Queries page has one
-filter box over the running queries (principal, client, tag, text or id). A client chooses its operation ids, so
+the name a client reports, such as `python`), tag (`team` or `team=risk`), session and statement (any part of the
+SQL as the list shows it, in either case; literals are masked there, so a literal's value finds nothing); the
+Queries page has one filter box over the running queries (principal, client, tag, text or id). A statement run
+from the console's SQL editor is listed with its SQL like any other. A client chooses its operation ids, so
 two sessions can run queries under one id: a query's link and its **Cancel** carry the row's session
 (`/queries/<id>?session=<session id>`), and Cancel ends that session's query only.
 
