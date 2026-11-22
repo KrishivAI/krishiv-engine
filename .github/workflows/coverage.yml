@@ -170,6 +170,12 @@ jobs:
           # runner's disk on 2026-11-14 (#734, 3.5 GB free) and filled it on #743.
           CARGO_PROFILE_DEV_DEBUG: "false"
           CARGO_PROFILE_TEST_DEBUG: "false"
+          # No symbol tables either: llvm-cov reads the coverage map and profile names, not
+          # `.symtab`. A wide PR's instrumented build is ~105 GB in `debug/deps` and passing runs ended
+          # under 1 GB free (2026-11-21: #933, #951, #955 died with ENOSPC in this step). Stripping cut
+          # a krishiv-common test binary 28% (28.2 -> 20.2 MB) with identical SF/DA/LH/LF records.
+          CARGO_PROFILE_DEV_STRIP: symbols
+          CARGO_PROFILE_TEST_STRIP: symbols
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
           KRISHIV_UDF_POOL_REQUIRED: "1"
         run: |

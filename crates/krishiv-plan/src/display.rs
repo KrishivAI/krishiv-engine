@@ -456,6 +456,23 @@ impl Display for NodeLine<'_> {
                     List(metrics)
                 )
             }
+            PlanNode::MetricViewRead {
+                name,
+                dimensions,
+                measures,
+                output,
+                ..
+            } => {
+                write!(f, "MetricViewRead {} [", Name(name))?;
+                for (i, c) in dimensions.iter().chain(measures).enumerate() {
+                    write!(f, "{}{} = {}", sep(i), c.name, Text(&c.expr))?;
+                }
+                f.write_str("], [")?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
+            }
             PlanNode::JoinHint { strategy, .. } => {
                 write!(f, "JoinHint (strategy={})", strategy.name())
             }
