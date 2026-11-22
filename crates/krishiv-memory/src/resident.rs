@@ -50,11 +50,23 @@
 //! excess between them by limit.
 //!
 //! The probe belongs to the program that owns the allocator, like the
-//! release hook: the resident set only tracks the pools' reservations when
-//! the allocator returns freed memory promptly (`krishiv_alloc`'s settings
-//! under a limit below its generous threshold). An allocator that keeps
-//! freed memory for a second would make the guard spill for memory that is
-//! about to be returned. Without a probe nothing is sampled or cut.
+//! release hook. The resident set tracks the pools' reservations closely
+//! when the allocator returns freed memory promptly (`krishiv_alloc`'s
+//! settings under a limit below its generous threshold). An allocator that
+//! keeps freed memory for a second (mimalloc's defaults, at a generous
+//! limit or in the Python module) makes the guard cut for memory about to be
+//! returned; the cut also starts a pressure epoch, whose release hook
+//! returns it. An excess the release cannot lower (in the Python module the
+//! resident set also holds the program's own data) keeps its cut, but
+//! starts pressure epochs only with a back-off (`Backoff`). The `krishiv`
+//! CLI and the Python module install the probe at every limit anyway (on
+//! Linux; [`process_resident_bytes`] is `None` elsewhere): the default
+//! limit is 80% of the container, and with no guard memory the pools do not
+//! track took a process over its cgroup (acceptance SQL-34); a spill costs
+//! less than a kill. At the default limit the guard holds the process to
+//! about 0.9 x the container + 64 MiB, which is inside it from 640 MiB up;
+//! a smaller container needs a lower limit. Without a probe nothing is
+//! sampled or cut.
 
 use std::sync::atomic::{AtomicU64, Ordering as StdOrdering};
 use std::sync::{Arc, OnceLock, Weak};
@@ -76,6 +88,15 @@ const ALLOWANCE_DIVISOR: usize = 8;
 /// The cut is at most this fraction of a root's limit.
 const MAX_CUT_DIVISOR: usize = 4;
 
+/// A change of the excess by at least this much counts as a rise or a fall
+/// for the guard's release back-off ([`Backoff`]); smaller changes are the
+/// resident set's ordinary noise.
+const EXCESS_STEP: usize = 16 << 20;
+
+/// The longest wait, in milliseconds, between two pressure epochs the guard
+/// starts while the excess neither rises nor falls.
+const MAX_BACKOFF_MS: u64 = 1024;
+
 static PROBE: OnceLock<fn() -> Option<usize>> = OnceLock::new();
 
 /// Milliseconds since [`start`] at the last sample (0: none yet).
@@ -90,11 +111,78 @@ struct Guard {
     /// from the reservations, but that stays resident as allocator
     /// overhead, does not raise the cut further.
     high_water: Option<usize>,
+    /// When the guard may start its next pressure epoch.
+    backoff: Backoff,
+}
+
+/// When an excess starts a pressure epoch. The release hook can return only
+/// what the allocator keeps; an excess it cannot lower (in the Python
+/// module: the program's own data, which the resident set includes) would
+/// otherwise start an epoch, and a release on every pipeline thread, at
+/// every sample for as long as it lasts. So an excess starts one at once
+/// only when it is new, or reaches a new high or a new low by at least
+/// [`EXCESS_STEP`] beyond the range its epochs have covered since it began;
+/// otherwise the next waits for a back-off that doubles, up to
+/// [`MAX_BACKOFF_MS`], and restarts at 1 ms after an epoch at once. The
+/// range, not the last epoch's excess, is the reference: a release purges
+/// what the allocator kept, so the next sample is lower, and the running
+/// query then refills the same pages; judged against the last epoch, that
+/// purge and refill would read as a fall and a rise and start epochs at the
+/// refill rate. The range moves only at epochs, so a slow rise between
+/// them adds up until it crosses the step. The cut does not depend on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Backoff {
+    /// The lowest and highest excess at the guard's epochs since the excess
+    /// began (`None`: no epoch in this excess yet).
+    range: Option<(usize, usize)>,
+    /// The current wait between epochs, in milliseconds (0: none yet).
+    step_ms: u64,
+    /// Milliseconds since [`start`] before which no epoch starts unless the
+    /// excess leaves its range.
+    next_at: u64,
+}
+
+impl Backoff {
+    const NONE: Self = Self {
+        range: None,
+        step_ms: 0,
+        next_at: 0,
+    };
+
+    /// Whether a sample at `now` with `excess` starts a pressure epoch;
+    /// updates the back-off.
+    fn should_release(&mut self, excess: usize, now: u64) -> bool {
+        if excess == 0 {
+            *self = Self::NONE;
+            return false;
+        }
+        let outside = self.range.is_none_or(|(lowest, highest)| {
+            excess >= highest.saturating_add(EXCESS_STEP)
+                || excess.saturating_add(EXCESS_STEP) <= lowest
+        });
+        let step = if outside {
+            1
+        } else if now < self.next_at {
+            return false;
+        } else {
+            self.step_ms.saturating_mul(2).clamp(1, MAX_BACKOFF_MS)
+        };
+        let range = self.range.map_or((excess, excess), |(lo, hi)| {
+            (lo.min(excess), hi.max(excess))
+        });
+        *self = Self {
+            range: Some(range),
+            step_ms: step,
+            next_at: now.saturating_add(step),
+        };
+        true
+    }
 }
 
 static GUARD: std::sync::Mutex<Guard> = std::sync::Mutex::new(Guard {
     roots: Vec::new(),
     high_water: None,
+    backoff: Backoff::NONE,
 });
 
 fn guard() -> std::sync::MutexGuard<'static, Guard> {
@@ -116,6 +204,13 @@ pub fn set_resident_probe(probe: fn() -> Option<usize>) -> bool {
     PROBE.set(probe).is_ok()
 }
 
+/// Whether a resident-set probe is installed ([`set_resident_probe`]): the
+/// guard samples and cuts only then.
+#[must_use]
+pub fn resident_probe_installed() -> bool {
+    PROBE.get().is_some()
+}
+
 /// The allowance of a root pool with `limit`: what the process may hold
 /// beyond the root's reservations before the guard cuts into the limit.
 #[must_use]
@@ -126,23 +221,58 @@ pub fn allowance(limit: usize) -> usize {
 /// The process's resident set in bytes (`VmRSS` of `/proc/self/status`),
 /// for [`set_resident_probe`]. `None` off Linux or if it cannot be read.
 /// Allocates nothing: it can run while memory is short.
+///
+/// The open status file is kept with the pid that opened it: `/proc/self`
+/// names the opener, so after a `fork` the inherited file still reads the
+/// parent, and the child reopens its own. A child forked while another
+/// thread held the cache's lock reads without it (opening the file each
+/// time) rather than waiting on a lock no thread will release.
 #[must_use]
 pub fn process_resident_bytes() -> Option<usize> {
     #[cfg(target_os = "linux")]
     {
-        use std::os::unix::fs::FileExt;
-        static STATUS: OnceLock<Option<std::fs::File>> = OnceLock::new();
-        let file = STATUS
-            .get_or_init(|| std::fs::File::open("/proc/self/status").ok())
-            .as_ref()?;
-        let mut buf = [0u8; 4096];
-        let n = file.read_at(&mut buf, 0).ok()?;
-        vm_rss(&buf[..n])
+        use std::sync::{Mutex, TryLockError};
+        static STATUS: Mutex<Option<(u32, std::fs::File)>> = Mutex::new(None);
+        let pid = std::process::id();
+        match STATUS.try_lock() {
+            Ok(mut slot) => read_rss(status_file(&mut slot, pid, SELF_STATUS)?),
+            Err(TryLockError::Poisoned(p)) => {
+                read_rss(status_file(&mut p.into_inner(), pid, SELF_STATUS)?)
+            }
+            Err(TryLockError::WouldBlock) => read_rss(&std::fs::File::open(SELF_STATUS).ok()?),
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
         None
     }
+}
+
+/// The path [`process_resident_bytes`] reads.
+#[cfg(target_os = "linux")]
+const SELF_STATUS: &str = "/proc/self/status";
+
+/// The cached status file for `pid`, opening `path` when the cache is empty
+/// or was filled by another pid (a forked child's inherited file).
+#[cfg(target_os = "linux")]
+fn status_file<'a>(
+    slot: &'a mut Option<(u32, std::fs::File)>,
+    pid: u32,
+    path: &str,
+) -> Option<&'a std::fs::File> {
+    if slot.as_ref().is_none_or(|(owner, _)| *owner != pid) {
+        *slot = std::fs::File::open(path).ok().map(|f| (pid, f));
+    }
+    slot.as_ref().map(|(_, f)| f)
+}
+
+/// The `VmRSS:` of an open status file, read from its start.
+#[cfg(target_os = "linux")]
+fn read_rss(file: &std::fs::File) -> Option<usize> {
+    use std::os::unix::fs::FileExt;
+    let mut buf = [0u8; 4096];
+    let n = file.read_at(&mut buf, 0).ok()?;
+    vm_rss(&buf[..n])
 }
 
 /// The `VmRSS:` value of a `/proc/<pid>/status` text, in bytes.
@@ -200,9 +330,18 @@ pub(crate) fn sample() {
         .filter_map(Weak::upgrade)
         .filter_map(|r| r.limit().map(|l| (r, l)))
         .collect();
+    if limited.is_empty() {
+        // No guarded root (the guard is off, or no pool has a limit): the
+        // whole resident set would count as excess, so there is nothing to
+        // measure and no release to ask for.
+        g.high_water = None;
+        g.backoff = Backoff::NONE;
+        return;
+    }
     let Some(resident) = resident else {
         // Unknown: no cut rather than a stale one.
         g.high_water = None;
+        g.backoff = Backoff::NONE;
         for (root, _) in &limited {
             root.shared.cut.store(0, Ordering::Release);
         }
@@ -227,8 +366,9 @@ pub(crate) fn sample() {
             .cut
             .store(cut(excess, *limit, total_limit), Ordering::Release);
     }
+    let release = g.backoff.should_release(excess, now);
     drop(g);
-    if excess > 0 {
+    if release {
         crate::release::note_pressure();
     }
 }
@@ -283,6 +423,37 @@ mod tests {
         assert!(rss > 1 << 20 && rss < 1 << 40, "{rss}");
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_status_file_cached_by_another_pid_is_reopened() {
+        // As in a forked child: the cache holds a file the parent (another
+        // pid) opened, here one whose VmRSS is not this process's.
+        let dir = std::env::temp_dir().join(format!("krishiv-rss-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let parent = dir.join("status");
+        std::fs::write(&parent, b"VmRSS:\t 7 kB\n").unwrap();
+        let me = std::process::id();
+        let mut slot = Some((me.wrapping_add(1), std::fs::File::open(&parent).unwrap()));
+
+        // Another pid's file is replaced by this pid's own.
+        let own = status_file(&mut slot, me, SELF_STATUS).unwrap();
+        let rss = read_rss(own).unwrap();
+        assert!(rss > 1 << 20, "{rss}");
+        assert_eq!(slot.as_ref().map(|(p, _)| *p), Some(me));
+
+        // This pid's file is kept, not reopened (the path is not read again).
+        let kept = status_file(&mut slot, me, "/nonexistent/status").unwrap();
+        assert!(read_rss(kept).unwrap() > 1 << 20);
+
+        // An empty cache opens the path for this pid.
+        let mut empty = None;
+        assert_eq!(
+            read_rss(status_file(&mut empty, me, parent.to_str().unwrap()).unwrap()),
+            Some(7 * 1024)
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn the_allowance_is_an_eighth_of_the_limit_plus_the_base() {
         assert_eq!(allowance(2 << 30), (256 << 20) + ALLOWANCE_BASE);
@@ -297,6 +468,91 @@ mod tests {
         assert_eq!(excess(gib + al, gib, al, None), (0, None));
         assert_eq!(excess(10, gib, al, None), (0, None));
         assert_eq!(excess(usize::MAX, usize::MAX, al, None), (0, None));
+    }
+
+    #[test]
+    fn a_constant_excess_starts_few_epochs() {
+        let mut b = Backoff::NONE;
+        let excess = 1usize << 30;
+        // One sample a millisecond for ten seconds, the excess unchanged
+        // (give or take noise): 1, 2, 4, ... 1024 ms apart, then every
+        // 1024 ms, instead of 10,000 epochs.
+        let epochs = (1..=10_000u64)
+            .filter(|&ms| b.should_release(excess + usize::try_from(ms % 7).unwrap() * 4096, ms))
+            .count();
+        assert!(epochs <= 20, "{epochs}");
+        assert!(epochs >= 10, "{epochs}");
+    }
+
+    #[test]
+    fn a_rising_or_falling_excess_releases_at_once() {
+        let mut b = Backoff::NONE;
+        let mib = 1usize << 20;
+        assert!(b.should_release(100 * mib, 1));
+        // Within the back-off and unchanged: no epoch.
+        assert!(!b.should_release(100 * mib, 1));
+        for _ in 0..12 {
+            let at = b.next_at;
+            assert!(b.should_release(100 * mib, at));
+        }
+        assert_eq!(b.step_ms, MAX_BACKOFF_MS);
+        // A rise past the step: at once, and the back-off restarts.
+        let now = b.next_at - 1;
+        assert!(b.should_release(100 * mib + EXCESS_STEP, now));
+        assert_eq!(b.step_ms, 1);
+        // A small rise is noise.
+        assert!(!b.should_release(100 * mib + EXCESS_STEP + mib, now));
+        // The release helped (a new low past the step): at once again.
+        assert!(b.should_release(80 * mib, now));
+        // Back inside the range covered so far: the back-off decides.
+        assert!(!b.should_release(100 * mib, now));
+        // No excess: the next one starts fresh.
+        assert!(!b.should_release(0, now + 1));
+        assert_eq!(b, Backoff::NONE);
+        assert!(b.should_release(5 * mib, now + 1));
+    }
+
+    /// The guard's own release feeding back: an excess no release can lower
+    /// (`base`) plus `kept` that the allocator holds, which each release
+    /// purges by the next sample and the query refills at `refill` a
+    /// sample, up to `kept`. Ten seconds at one sample a millisecond.
+    fn epochs_with_feedback(kept: usize, refill: usize) -> usize {
+        let base = 1300usize << 20;
+        let mut b = Backoff::NONE;
+        let mut held = kept;
+        let mut epochs = 0;
+        for ms in 1..=10_000u64 {
+            if b.should_release(base + held, ms) {
+                epochs += 1;
+                held = 0;
+            } else {
+                held = (held + refill).min(kept);
+            }
+        }
+        epochs
+    }
+
+    #[test]
+    fn the_guards_own_purge_and_refill_start_few_epochs() {
+        let mib = 1usize << 20;
+        for kept in [16 * mib, 64 * mib, 256 * mib] {
+            for refill in [mib / 4, mib, 4 * mib, 16 * mib] {
+                let epochs = epochs_with_feedback(kept, refill);
+                assert!(epochs <= 25, "kept {kept} refill {refill}: {epochs}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_real_rise_still_releases_at_once() {
+        let (mib, base) = (1usize << 20, 100usize << 20);
+        let mut b = Backoff::NONE;
+        // The excess grows by 1 MiB a millisecond for ten seconds and no
+        // release lowers it: an epoch at least every 16 ms (each new high).
+        let epochs = (1..=10_000u64)
+            .filter(|&ms| b.should_release(base + usize::try_from(ms).unwrap() * mib, ms))
+            .count();
+        assert!(epochs >= 10_000 / 16, "{epochs}");
     }
 
     #[test]

@@ -15,6 +15,23 @@ def test_build_info_reports_mimalloc():
     assert set(info) == {"version", "allocator", "commit"}
 
 
+def test_the_module_installs_the_allocator_policy():
+    # The module owns its allocator, so import installs the release hook and the resident-set
+    # probe at every memory limit (acceptance SQL-33, SQL-34).
+    from krishiv import _native
+
+    assert _native.__allocator_policy__ == "release-hook,resident-probe"
+
+
+def test_the_pressure_epoch_is_readable():
+    # A count for measurements: all pressure epochs (pool refusals and the resident-set guard).
+    from krishiv import _native
+
+    epoch = _native._pressure_epoch()
+    assert isinstance(epoch, int)
+    assert epoch >= 0
+
+
 def test_build_info_commit_is_a_sha_or_unknown():
     commit = krishiv.build_info()["commit"]
     assert commit == "unknown" or (len(commit) >= 7 and all(c in "0123456789abcdef" for c in commit))
