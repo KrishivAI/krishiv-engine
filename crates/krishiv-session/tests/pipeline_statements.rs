@@ -142,6 +142,13 @@ fn insert_overwrite_directory_hive_form_is_refused_by_name() {
 }
 
 #[test]
+fn insert_overwrite_directory_without_a_path_is_refused_by_the_parser() {
+    let s = session();
+    let e = error(&s, "INSERT OVERWRITE DIRECTORY USING parquet SELECT 1 AS a");
+    assert_eq!(e.error_class(), ErrorClass::LegacyErrorTemp0049);
+}
+
+#[test]
 fn unbound_parameters() {
     let s = session();
     let e = error(&s, "SELECT ?");
