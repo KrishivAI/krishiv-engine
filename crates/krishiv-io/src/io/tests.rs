@@ -688,6 +688,28 @@ fn the_fault_store_delegates_and_flags_unscheduled_requests() {
     });
 }
 
+/// Two executions of one analyzed frame overlap: the newer one is charged while it lives, the
+/// older one again when it ends, and the session pool only when both have.
+#[test]
+fn overlapping_bound_queries_hand_back_to_the_earlier_one() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let root = TreePool::new(&MemoryConfig::default());
+    let session = root.child("session", None);
+    let s = setup(IoConfig::default());
+    let io = s.io.with_memory(Arc::clone(&session));
+    let (a, b) = (session.child("a", None), session.child("b", None));
+    let bound_a = io.bind_query_memory(Arc::clone(&a));
+    let bound_b = io.bind_query_memory(Arc::clone(&b));
+    assert!(Arc::ptr_eq(&io.memory_pool().unwrap(), &b));
+    drop(bound_b);
+    assert!(
+        Arc::ptr_eq(&io.memory_pool().unwrap(), &a),
+        "the earlier query is charged again"
+    );
+    drop(bound_a);
+    assert!(Arc::ptr_eq(&io.memory_pool().unwrap(), &session));
+}
+
 #[test]
 fn a_bound_query_pool_charges_every_clone_until_it_ends() {
     use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};

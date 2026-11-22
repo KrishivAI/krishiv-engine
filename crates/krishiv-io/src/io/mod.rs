@@ -954,8 +954,10 @@ impl IoContext {
     /// Charges the metadata reads of this context and every clone sharing its binding
     /// (the file tables a planner opened with one) to `pool`, the running query's, while
     /// the returned handle lives; afterwards they go back to the [`Self::with_memory`] pool.
-    /// Reservations taken before keep the pool they came from. A second binding replaces the
-    /// first.
+    /// Reservations taken before keep the pool they came from. Bindings may overlap (several
+    /// executions of one analyzed frame): the newest live one is charged, and the earlier one
+    /// again when it ends. Planning-time reads on the base pool use `grow`, so a wide footer
+    /// can abort a running query of the same session.
     pub fn bind_query_memory(&self, pool: Arc<dyn MemoryPool>) -> QueryIoMemory {
         self.memory.bind(pool)
     }
