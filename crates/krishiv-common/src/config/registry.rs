@@ -593,9 +593,12 @@ pub static MEMORY_RESIDENT_GUARD: ConfigEntry = ConfigEntry {
           (allocator overhead, memory used without a reservation) within an allowance of 1/8 of \
           the limit plus 64 MiB, by lowering the memory ordinary reservations may take so \
           operators spill. It needs a resident-set probe from the program that owns the \
-          allocator: the `krishiv` CLI and the Python module always install one, the bench \
-          runner when started with a limit below 4 GiB; elsewhere the setting has no effect. Spill I/O and arbitration \
-          rounds whose spills are exhausted are exempt from it.",
+          allocator: on Linux, the `krishiv` CLI and the Python module (builds with mimalloc, \
+          as shipped) install one at every limit, the bench runner when started with a limit \
+          below 4 GiB; on macOS and Windows, and elsewhere, the setting has no effect. In the \
+          Python module the resident set includes the Python program's own memory (its \
+          DataFrames, NumPy and Arrow data), so that memory lowers what queries may reserve. \
+          Spill I/O and arbitration rounds whose spills are exhausted are exempt from it.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",

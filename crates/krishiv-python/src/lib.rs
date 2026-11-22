@@ -46,12 +46,31 @@ fn release_freed_memory() {
 /// CLI does (acceptance SQL-33, SQL-34): under pressure, threads return freed memory; and a limited
 /// root pool (the default limit follows the container) keeps the resident set within its
 /// reservations plus an allowance (`krishiv_memory` resident-set guard), so a process near its
-/// cgroup spills instead of being killed. mimalloc keeps its defaults here: its options can only be
-/// set before the first allocation, which the Python interpreter makes long before this import.
+/// cgroup spills instead of being killed. mimalloc keeps its defaults here, on purpose: huge-page
+/// options take effect only before the first allocation, which the interpreter makes long before
+/// this import, and the 1 s purge delay (which a setting here would still change) is kept because
+/// the module usually runs at a generous limit, where prompt purging costs page faults; under
+/// pressure the release hook purges anyway.
 #[cfg(feature = "mimalloc")]
 fn install_allocator_policy() {
     krishiv_memory::set_release_hook(release_freed_memory);
     krishiv_memory::set_resident_probe(krishiv_memory::process_resident_bytes);
+}
+
+/// What of the allocator policy is installed, comma-separated: `release-hook` (threads return
+/// freed memory under pressure) and `resident-probe` (the resident-set guard samples); empty
+/// without either.
+fn allocator_policy() -> String {
+    let parts = [
+        (krishiv_memory::release_hook_installed(), "release-hook"),
+        (krishiv_memory::resident_probe_installed(), "resident-probe"),
+    ];
+    parts
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, name)| *name)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// The `krishiv._native` module.
@@ -63,6 +82,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     install_allocator_policy();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__allocator__", ALLOCATOR)?;
+    m.add("__allocator_policy__", allocator_policy())?;
     m.add("__commit__", COMMIT)?;
     m.add("__ui__", console::AVAILABLE)?;
     m.add_class::<console::PyConsole>()?;

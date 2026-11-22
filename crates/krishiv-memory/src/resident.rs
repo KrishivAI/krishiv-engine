@@ -56,11 +56,17 @@
 //! keeps freed memory for a second (mimalloc's defaults, at a generous
 //! limit or in the Python module) makes the guard cut for memory about to be
 //! returned; the cut also starts a pressure epoch, whose release hook
-//! returns it. The `krishiv` CLI and the Python module install the probe at
-//! every limit anyway: the default limit is 80% of the container, and with
-//! no guard memory the pools do not track took a process over its cgroup
-//! (acceptance SQL-34); a spill costs less than a kill. Without a probe
-//! nothing is sampled or cut.
+//! returns it. An excess the release cannot lower (in the Python module the
+//! resident set also holds the program's own data) keeps its cut, but
+//! starts pressure epochs only with a back-off (`Backoff`). The `krishiv`
+//! CLI and the Python module install the probe at every limit anyway (on
+//! Linux; [`process_resident_bytes`] is `None` elsewhere): the default
+//! limit is 80% of the container, and with no guard memory the pools do not
+//! track took a process over its cgroup (acceptance SQL-34); a spill costs
+//! less than a kill. At the default limit the guard holds the process to
+//! about 0.9 x the container + 64 MiB, which is inside it from 640 MiB up;
+//! a smaller container needs a lower limit. Without a probe nothing is
+//! sampled or cut.
 
 use std::sync::atomic::{AtomicU64, Ordering as StdOrdering};
 use std::sync::{Arc, OnceLock, Weak};
@@ -82,6 +88,15 @@ const ALLOWANCE_DIVISOR: usize = 8;
 /// The cut is at most this fraction of a root's limit.
 const MAX_CUT_DIVISOR: usize = 4;
 
+/// A change of the excess by at least this much counts as a rise or a fall
+/// for the guard's release back-off ([`Backoff`]); smaller changes are the
+/// resident set's ordinary noise.
+const EXCESS_STEP: usize = 16 << 20;
+
+/// The longest wait, in milliseconds, between two pressure epochs the guard
+/// starts while the excess neither rises nor falls.
+const MAX_BACKOFF_MS: u64 = 1024;
+
 static PROBE: OnceLock<fn() -> Option<usize>> = OnceLock::new();
 
 /// Milliseconds since [`start`] at the last sample (0: none yet).
@@ -96,11 +111,67 @@ struct Guard {
     /// from the reservations, but that stays resident as allocator
     /// overhead, does not raise the cut further.
     high_water: Option<usize>,
+    /// When the guard may start its next pressure epoch.
+    backoff: Backoff,
+}
+
+/// When an excess starts a pressure epoch. The release hook can return only
+/// what the allocator keeps; an excess it cannot lower (in the Python
+/// module: the program's own data, which the resident set includes) would
+/// otherwise start an epoch, and a release on every pipeline thread, at
+/// every sample for as long as it lasts. So an excess starts one at once
+/// when it is new or rose by [`EXCESS_STEP`] since the guard's last epoch;
+/// otherwise the next waits for a back-off that doubles, up to
+/// [`MAX_BACKOFF_MS`], each time the excess did not fall by [`EXCESS_STEP`]
+/// after a release, and restarts at 1 ms when it did. The cut does not
+/// depend on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Backoff {
+    /// The excess at the guard's last epoch (0: none in this excess).
+    last_excess: usize,
+    /// The current wait between epochs, in milliseconds (0: none yet).
+    step_ms: u64,
+    /// Milliseconds since [`start`] before which no epoch starts unless the
+    /// excess rises.
+    next_at: u64,
+}
+
+impl Backoff {
+    const NONE: Self = Self {
+        last_excess: 0,
+        step_ms: 0,
+        next_at: 0,
+    };
+
+    /// Whether a sample at `now` with `excess` starts a pressure epoch;
+    /// updates the back-off.
+    fn should_release(&mut self, excess: usize, now: u64) -> bool {
+        if excess == 0 {
+            *self = Self::NONE;
+            return false;
+        }
+        let rose = self.last_excess == 0 || excess >= self.last_excess.saturating_add(EXCESS_STEP);
+        let fell = excess.saturating_add(EXCESS_STEP) <= self.last_excess;
+        let step = if rose || fell {
+            1
+        } else if now < self.next_at {
+            return false;
+        } else {
+            self.step_ms.saturating_mul(2).clamp(1, MAX_BACKOFF_MS)
+        };
+        *self = Self {
+            last_excess: excess,
+            step_ms: step,
+            next_at: now.saturating_add(step),
+        };
+        true
+    }
 }
 
 static GUARD: std::sync::Mutex<Guard> = std::sync::Mutex::new(Guard {
     roots: Vec::new(),
     high_water: None,
+    backoff: Backoff::NONE,
 });
 
 fn guard() -> std::sync::MutexGuard<'static, Guard> {
@@ -120,6 +191,13 @@ fn start() -> Instant {
 /// a probe was set already.
 pub fn set_resident_probe(probe: fn() -> Option<usize>) -> bool {
     PROBE.set(probe).is_ok()
+}
+
+/// Whether a resident-set probe is installed ([`set_resident_probe`]): the
+/// guard samples and cuts only then.
+#[must_use]
+pub fn resident_probe_installed() -> bool {
+    PROBE.get().is_some()
 }
 
 /// The allowance of a root pool with `limit`: what the process may hold
@@ -209,6 +287,7 @@ pub(crate) fn sample() {
     let Some(resident) = resident else {
         // Unknown: no cut rather than a stale one.
         g.high_water = None;
+        g.backoff = Backoff::NONE;
         for (root, _) in &limited {
             root.shared.cut.store(0, Ordering::Release);
         }
@@ -233,8 +312,9 @@ pub(crate) fn sample() {
             .cut
             .store(cut(excess, *limit, total_limit), Ordering::Release);
     }
+    let release = g.backoff.should_release(excess, now);
     drop(g);
-    if excess > 0 {
+    if release {
         crate::release::note_pressure();
     }
 }
@@ -303,6 +383,46 @@ mod tests {
         assert_eq!(excess(gib + al, gib, al, None), (0, None));
         assert_eq!(excess(10, gib, al, None), (0, None));
         assert_eq!(excess(usize::MAX, usize::MAX, al, None), (0, None));
+    }
+
+    #[test]
+    fn a_constant_excess_starts_few_epochs() {
+        let mut b = Backoff::NONE;
+        let excess = 1usize << 30;
+        // One sample a millisecond for ten seconds, the excess unchanged
+        // (give or take noise): 1, 2, 4, ... 1024 ms apart, then every
+        // 1024 ms, instead of 10,000 epochs.
+        let epochs = (1..=10_000u64)
+            .filter(|&ms| b.should_release(excess + usize::try_from(ms % 7).unwrap() * 4096, ms))
+            .count();
+        assert!(epochs <= 20, "{epochs}");
+        assert!(epochs >= 10, "{epochs}");
+    }
+
+    #[test]
+    fn a_rising_or_falling_excess_releases_at_once() {
+        let mut b = Backoff::NONE;
+        let mib = 1usize << 20;
+        assert!(b.should_release(100 * mib, 1));
+        // Within the back-off and unchanged: no epoch.
+        assert!(!b.should_release(100 * mib, 1));
+        for _ in 0..12 {
+            let at = b.next_at;
+            assert!(b.should_release(100 * mib, at));
+        }
+        assert_eq!(b.step_ms, MAX_BACKOFF_MS);
+        // A rise past the step: at once, and the back-off restarts.
+        let now = b.next_at - 1;
+        assert!(b.should_release(100 * mib + EXCESS_STEP, now));
+        assert_eq!(b.step_ms, 1);
+        // A small rise is noise.
+        assert!(!b.should_release(100 * mib + EXCESS_STEP + mib, now));
+        // The release helped (a fall past the step): at once again.
+        assert!(b.should_release(80 * mib, now));
+        // No excess: the next one starts fresh.
+        assert!(!b.should_release(0, now + 1));
+        assert_eq!(b, Backoff::NONE);
+        assert!(b.should_release(5 * mib, now + 1));
     }
 
     #[test]

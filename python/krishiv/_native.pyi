@@ -14,6 +14,7 @@ from typing import final
 
 __version__: str
 __allocator__: str
+__allocator_policy__: str
 __commit__: str
 __ui__: bool
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "Session",
     "WindowSpec",
     "__allocator__",
+    "__allocator_policy__",
     "__commit__",
     "__ui__",
     "__version__",
