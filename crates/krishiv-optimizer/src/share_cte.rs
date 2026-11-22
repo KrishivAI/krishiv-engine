@@ -39,6 +39,12 @@
 //! definition. Whether a group is really shared is decided last by the
 //! physical planner, which keeps the copies when a runtime filter reaches
 //! one of them.
+//!
+//! Also under `direct`, two `GROUP BY` aggregates with equal grouping whose
+//! inputs differ only by filter conjuncts on group keys, and whose outputs
+//! differ only by which columns they keep (a derived table written twice
+//! that pruning and inferred join filters changed differently, TPC-DS q65),
+//! share one aggregate (`derived`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
