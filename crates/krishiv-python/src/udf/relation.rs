@@ -68,6 +68,14 @@ impl PyUdfRuntime {
             }
             .into());
         }
+        // A grouped-aggregate UDF used with OVER carries a window eval type; its window runner is PR-48b, and
+        // the grouped-aggregate wrapper would return one value per partition, not per row.
+        if matches!(spec.eval_type.code(), 203 | 253) {
+            return Err(KrishivUnsupportedFeature {
+                feature: "a Python aggregate UDF over a window in an embedded session".to_owned(),
+            }
+            .into());
+        }
         let registered = self.lookup(&spec.name, spec.version)?;
         if registered.lock.is_some() {
             return Err(KrishivUnsupportedFeature {
