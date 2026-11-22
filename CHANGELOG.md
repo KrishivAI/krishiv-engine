@@ -34,6 +34,10 @@ Krishiv 0.3 grows from an embedded engine into a server you can put in front of 
 - **More Spark Connect:** AnalyzePlan, Config and Interrupt, resumable result streams, `DataFrame.observe`, and
   `spark.catalog`.
 
+### Breaking changes
+
+- `krishiv-session`'s `Column` and `WindowSpec` are no longer `UnwindSafe` or `RefUnwindSafe` (found by `cargo semver-checks` against v0.2.0; nothing else in `krishiv` or `krishiv-session` breaks). Code that passes one across `std::panic::catch_unwind` wraps it in `AssertUnwindSafe`.
+
 ### Added
 
 - Python UDF workers of `krishiv server` can run in an OS sandbox (Landlock, seccomp and resource limits; no root needed): no network, no other programs, and no files outside the allowed paths. `krishiv.udf.sandbox` (default `on`) refuses server-side Python UDFs when the kernel cannot enforce it. (#717)
