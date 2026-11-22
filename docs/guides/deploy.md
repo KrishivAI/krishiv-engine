@@ -92,7 +92,7 @@ and the Python wheel both carry it (a build from source needs the `ui` feature, 
 | Shows | the one session that started it | every session of every client | the queries a history folder holds |
 | Listens on | `127.0.0.1`, a free port | the admin port (`--port`, default `8080`) | `127.0.0.1`, a free port (`--port`) |
 | Who may open it | whoever has the URL with its token | a token, by role | whoever has the URL with its token |
-| Pages | all | all; Environment for an administrator only | History and a query's page |
+| Pages | all but Sessions and Workload | all; Environment for an administrator only | History and a query's page |
 
 **In your process.** `krishiv.ui()` starts the console of the active session, prints its URL and returns a handle
 (`url`, `port`, `token`, `stop()`); `krishiv::ui(&session)` returns the same handle in Rust and prints nothing, so
@@ -114,7 +114,19 @@ spark.stop()             # the console stops with the session
 what its holder sees (the table in [single-node server security](single-node-server-security.md)): an operator
 sees and cancels every query and runs SQL as the signed-in user in a session of its own, and only an administrator
 opens Environment, where secrets show as `***`. The History page filters by state, principal, client (any part of
-the name a client reports, such as `python`) and tag (`team` or `team=risk`).
+the name a client reports, such as `python`), tag (`team` or `team=risk`) and session; the Queries page has one
+filter box over the running queries (principal, client, tag, text or id).
+
+The Sessions page lists the sessions of every client: who opened each, with which client and over which protocol,
+its current catalog and namespace, when it was last active and how many queries it runs and has started (the
+count opens History on that session). Sessions that ended (closed, expired, killed) are listed on request.
+**End session** asks once, then ends the session: its running queries fail with `KRISHIV_QUERY_KILLED` and the
+client's next call is refused with `INVALID_HANDLE.SESSION_CLOSED`, so the client must open a new session. Ending
+a session needs the operator role, like a cancel, and each writes one `krishiv::audit` record. The session the
+console's own editor runs in is listed and cannot be ended from the page. The Workload page lists
+the resource groups of `krishiv.workload.resourceGroups.file`, each under its parent, with what runs and waits
+against its limits, its memory in use and its scan quota; a server started without that file admits every query
+as it arrives, and the page says so.
 
 A server's history is kept in memory unless `krishiv.history.path` names a folder. With it, each finished query's
 profile is stored there, and a restarted server lists the newest 1,000 stored queries again. A query from before
@@ -128,7 +140,7 @@ krishiv server --port 8080 --conf krishiv.history.path=/var/lib/krishiv/history
 the History page and each query's page, nothing live and nothing to cancel. Use it to read the profiles of a
 server that is stopped, or a folder copied from another machine.
 
-Not in the console yet: Resources does not list UDF worker pools or client connections.
+Not in the console yet: Resources does not list UDF worker pools.
 
 ## Distributed
 

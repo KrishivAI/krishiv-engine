@@ -156,6 +156,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [Delta Lake writes](../concepts/known-differences.md#delta-lake-writes) |
 | [HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)](../concepts/known-differences.md#hll-sketches-the-compact-form-hll_sketch_agg-hll_union_agg-hll_union) |
 | [Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)](../concepts/known-differences.md#metric-views-create-view--with-metrics-language-yaml) |
+| [Pattern matching over collated strings (`LIKE`, `RLIKE`)](../concepts/known-differences.md#pattern-matching-over-collated-strings-like-rlike) |
 
 ## Where it runs
 

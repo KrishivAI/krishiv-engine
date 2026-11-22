@@ -713,3 +713,15 @@ these differences:
   record the SQL configuration a view captures); a self-join of a metric view (Spark's
   `UNRESOLVED_COLUMN`, Krishiv's internal error); `WHERE measure(m)` under an aggregate (Spark's
   `MISSING_ATTRIBUTES.*`, Krishiv's `INVALID_WHERE_CONDITION`); the physical plan `EXPLAIN` prints.
+
+## Pattern matching over collated strings (`LIKE`, `RLIKE`)
+
+`LIKE` and `ILIKE` over a `UTF8_LCASE` string match as Spark does, character by character in Java's case folding
+(final sigma, `ſ`, `ı`, `İ` and `µ` match their case partners), with or without an `ESCAPE` clause. The value
+operand's collation alone decides: `'Ab' LIKE 'a%' COLLATE UTF8_LCASE` is false, as in Spark. Spark 4.0.0 differs
+from 4.1 to 4.3 for `'ſ' ILIKE 'S'` over a column (false on 4.0); Krishiv follows 4.1 to 4.3. Still refused with a
+`KRISHIV_UNSUPPORTED_FEATURE` error that names the call: `LIKE` over `UTF8_LCASE_RTRIM`, `LIKE` over an ICU collation
+(Spark itself raises `DATATYPE_MISMATCH` there), `RLIKE` and the `regexp_*` family, and the `LIKE ANY`/`ALL` forms.
+Krishiv never matches such strings by bytes.
+
+Two smaller differences in `UTF8_LCASE` `LIKE`: case folding uses Rust's Unicode tables, which are newer than the JDK 17/21 tables Spark runs on, so a case pair added after Unicode 15 matches in Krishiv and not in Spark; and a malformed pattern (invalid or trailing escape) is reported with the case-folded pattern text, where Spark reports it as written. Java's matching is one-directional for a few characters (the pattern `ß` matches only `ß`, the pattern `ẞ` matches both), which a folded comparison cannot express: the value `ẞ` against the pattern `ß` matches in Krishiv and not in Spark.
