@@ -12,9 +12,17 @@ use krishiv_common::error::ErrorClass;
 mod namespace_and_row_format;
 mod property_keys;
 
+/// The options of a Spark 4.3 session (the grammar of `UNNEST` in `FROM` and `REPLACE` column lists).
+fn v43() -> ParserOptions {
+    ParserOptions {
+        insert_replace_column_list: true,
+        ..ParserOptions::default()
+    }
+}
+
 /// The tree of `sql`, without Spark's post-parse checks (tree shapes).
 fn tree(sql: &str) -> ast::Statement {
-    match crate::parser::parse_statement_unchecked(sql, ParserOptions::default()) {
+    match crate::parser::parse_statement_unchecked(sql, v43()) {
         Ok(s) => s,
         Err(e) => panic!("{sql}: {}", e.error),
     }
@@ -22,7 +30,7 @@ fn tree(sql: &str) -> ast::Statement {
 
 /// The tree of `sql`, with Spark's post-parse checks.
 fn checked(sql: &str) -> ast::Statement {
-    match parse_statement(sql, &ParserOptions::default()) {
+    match parse_statement(sql, &v43()) {
         Ok(s) => s,
         Err(e) => panic!("{sql}: {}", e.error),
     }
@@ -1771,7 +1779,8 @@ fn insert_replace_takes_a_column_list() {
             &["a", "b"],
         ),
     ] {
-        let ast::Statement::Insert(insert) = checked(sql) else {
+        // The tree only: `REPLACE ON` with a column list is a post-parse error in Spark.
+        let ast::Statement::Insert(insert) = tree(sql) else {
             panic!("{sql}: not an insert");
         };
         assert_eq!(

@@ -913,3 +913,77 @@ async fn zip_refuses_an_aggregate_against_the_plan_it_aggregates() {
     let status = run(&server, zip(outer, inner)).await.expect_err("refused");
     assert_eq!(error_class(&status), "ZIP_PLANS_NOT_MERGEABLE");
 }
+
+/// `rand() AS name`.
+fn rand_as(name: &str) -> pb::Expression {
+    use pb::expression::{Alias, ExprType, UnresolvedFunction};
+    pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Alias(Box::new(Alias {
+            expr: Some(Box::new(pb::Expression {
+                common: None,
+                expr_type: Some(ExprType::UnresolvedFunction(UnresolvedFunction {
+                    function_name: "rand".to_owned(),
+                    arguments: Vec::new(),
+                    is_distinct: false,
+                    is_user_defined_function: false,
+                    is_internal: None,
+                })),
+            })),
+            name: vec![name.to_owned()],
+            metadata: None,
+        }))),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_keeps_independent_nondeterministic_producers_apart() {
+    let server = start().await;
+    // Equal bodies, no shared parent: Spark gives each `rand()` its own seed, so `y` is not read from `x`.
+    let left = project(source(), vec![rand_as("x")]);
+    let right = project(source(), vec![rand_as("y")]);
+    let rows = run(&server, zip(left, right)).await.expect("runs");
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(|r| r[0] != r[1]), "{rows:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_of_a_zero_column_projection_keeps_the_other_side() {
+    let server = start().await;
+    let left = project(source(), Vec::new());
+    let right = project(source(), vec![attr("id")]);
+    assert_eq!(
+        run(&server, zip(left, right)).await.expect("runs"),
+        strings(&[&["1"], &["1"], &["2"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_keeps_a_reference_to_an_input_dataframe_resolvable() {
+    let server = start().await;
+    let with_id = |mut r: pb::Relation, id: i64| {
+        r.common = Some(pb::RelationCommon {
+            plan_id: Some(id),
+            ..Default::default()
+        });
+        r
+    };
+    let left = with_id(project(source(), vec![attr("id"), attr("a")]), 7);
+    let right = project(source(), vec![attr("b")]);
+    let by_plan = pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::UnresolvedAttribute(
+            pb::expression::UnresolvedAttribute {
+                unparsed_identifier: "a".to_owned(),
+                plan_id: Some(7),
+                is_metadata_column: None,
+            },
+        )),
+    };
+    assert_eq!(
+        run(&server, project(zip(left, right), vec![by_plan]))
+            .await
+            .expect("runs"),
+        strings(&[&["10"], &["10"], &["20"]])
+    );
+}

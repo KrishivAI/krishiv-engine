@@ -21,10 +21,11 @@ use crate::{
     AttrId, BoundColumn, Expr, ExprNode, LogicalPlan, Origin, Plan, PlanNode, ResolvedExpr,
 };
 
-/// A resolved projection chain: its aliases (innermost first), the outermost list, and the base under it.
+/// A resolved projection chain: its aliases (innermost first), the outermost list (`None` when the plan is
+/// the base itself: a projection may be empty, a zero-column `select()`), and the base under it.
 struct Chain {
     aliases: Vec<(BoundColumn, Arc<Expr>)>,
-    top: Vec<Arc<Expr>>,
+    top: Option<Vec<Arc<Expr>>>,
     base: Arc<LogicalPlan>,
 }
 
@@ -36,8 +37,8 @@ fn alias_of(e: &Expr) -> Option<(&BoundColumn, &Arc<Expr>)> {
     }
 }
 
-/// `plan` as a chain of projections over a base; `None` when a projection does something else than
-/// compute one value per row (the analyzer keeps generators, aggregates and windows out of a `Project`).
+/// `plan` as a chain of projections over a base (the plan itself when it is no projection: a generator,
+/// aggregate or window stays in the base, the analyzer keeps them out of a `Project`).
 fn chain(plan: &Arc<LogicalPlan>) -> Chain {
     match &plan.node {
         PlanNode::Project { input, exprs } => {
@@ -47,12 +48,12 @@ fn chain(plan: &Arc<LogicalPlan>) -> Chain {
                     .iter()
                     .filter_map(|e| alias_of(e).map(|(o, b)| (o.clone(), Arc::clone(b)))),
             );
-            inner.top.clone_from(exprs);
+            inner.top = Some(exprs.clone());
             inner
         }
         _ => Chain {
             aliases: Vec::new(),
-            top: Vec::new(),
+            top: None,
             base: Arc::clone(plan),
         },
     }
@@ -75,14 +76,17 @@ fn remap(e: &Arc<Expr>, map: &HashMap<AttrId, BoundColumn>) -> Arc<Expr> {
     done.unwrap_or_else(|never| match never {})
 }
 
-/// The ids of the columns `e` reads.
+/// The ids of the columns `e` reads, those a correlated subquery inside it reads from outside included.
 fn reads(e: &Arc<Expr>) -> Vec<AttrId> {
     let mut out = Vec::new();
-    let _: Result<_, std::convert::Infallible> = Arc::clone(e).transform_up(&mut |x| {
-        if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node {
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        if let crate::walk::Node::Expr(x) = n
+            && let ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) =
+                &x.node
+        {
             out.push(c.id);
         }
-        Ok(x)
+        std::ops::ControlFlow::Continue(())
     });
     out
 }
@@ -121,11 +125,11 @@ impl Resolver<'_> {
         }
         // Both outputs are the lists they were resolved to: one expression per column.
         let list = |c: &Chain, rel: &Rel, base: &[BoundColumn]| -> Vec<Arc<Expr>> {
-            if c.top.is_empty() {
-                base.iter().map(|b| col_expr(b, Origin::UNKNOWN)).collect()
+            if let Some(top) = &c.top {
+                debug_assert_eq!(top.len(), rel.out.len());
+                top.clone()
             } else {
-                debug_assert_eq!(c.top.len(), rel.out.len());
-                c.top.clone()
+                base.iter().map(|b| col_expr(b, Origin::UNKNOWN)).collect()
             }
         };
         let (l_top, r_top) = (list(&lc, &l, &lb), list(&rc, &r, &rb));
@@ -144,7 +148,14 @@ impl Resolver<'_> {
         let all = lc.aliases.iter().chain(&rc.aliases).map(|(o, b)| (o, b));
         for (output, body) in all {
             let body = remap(&remap(body, &map), &survivors);
-            match kept.iter().find(|(_, b)| **b == *body) {
+            // Equal bodies are one producer when the body is deterministic or both are the same alias (a
+            // parent both sides share); two independently written `rand()`s stay two (Spark gives each its
+            // own seed).
+            let det = crate::raises::is_deterministic(&body);
+            match kept
+                .iter()
+                .find(|(o, b)| **b == *body && (det || o.id == output.id))
+            {
                 Some((first, _)) => {
                     survivors.insert(output.id, first.clone());
                 }
@@ -248,6 +259,33 @@ impl Resolver<'_> {
                 });
             }
         }
-        Ok(self.projection(o, &rel, items, out))
+        let shown: Arc<[Attr]> = out.clone().into();
+        let mut res = self.projection(o, &rel, items, out);
+        // A DataFrame reference to either input (`left["a"]`) still resolves: the inputs' carriers stay,
+        // their columns read as the merged plan names them.
+        let named = |a: &Attr| {
+            let col = map
+                .get(&a.col.id)
+                .or_else(|| survivors.get(&a.col.id))
+                .cloned()
+                .unwrap_or_else(|| a.col.clone());
+            Attr { col, ..a.clone() }
+        };
+        let mut carriers = (*res.carriers).clone();
+        for side in [&l, &r] {
+            for (id, outs) in side.carriers.iter() {
+                carriers
+                    .entry(*id)
+                    .or_default()
+                    .extend(outs.iter().map(|c| -> Arc<[Attr]> {
+                        c.iter().map(named).collect::<Vec<_>>().into()
+                    }));
+            }
+        }
+        if let Some(id) = o.plan_id {
+            carriers.insert(id, vec![shown]);
+        }
+        res.carriers = Arc::new(carriers);
+        Ok(res)
     }
 }

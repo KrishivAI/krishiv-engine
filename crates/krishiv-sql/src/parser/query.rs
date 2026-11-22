@@ -1261,9 +1261,13 @@ impl Parser<'_> {
             }
         } else if self.kw_at(0, "JSON_TABLE") && self.sym_at(1, Sym::LParen) {
             self.json_table()?
-        } else if self.kw_at(0, "UNNEST") && self.sym_at(1, Sym::LParen) {
-            // ANSI `UNNEST(array, ...) [WITH ORDINALITY]` (Spark 4.3; `unnest` is non-reserved, so
-            // a quoted name stays a table function).
+        } else if self.opts.insert_replace_column_list
+            && self.kw_at(0, "UNNEST")
+            && self.sym_at(1, Sym::LParen)
+        {
+            // ANSI `UNNEST(array, ...) [WITH ORDINALITY]` (Spark 4.3 grammar, the flag the session sets from
+            // its profile; `unnest` is non-reserved, so a quoted name stays a table function, and an older
+            // profile keeps resolving `unnest(..)` as any table function).
             self.bump();
             self.bump();
             let args = self.comma_sep(Self::expr)?;
