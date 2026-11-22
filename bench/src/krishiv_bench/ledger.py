@@ -172,6 +172,10 @@ def parse_perf_script(text: str) -> list[tuple[float, list[str]]]:
     return samples
 
 
+# A Krishiv crate path: bare, nested, or inside a trait-impl frame (`<krishiv_a::T as krishiv_b::Tr>::f`).
+_KRISHIV_SYMBOL = re.compile(r"(?:^|::|<|\bas )krishiv_")
+
+
 class SymbolsMissingError(RuntimeError):
     """The perf samples carry no Krishiv symbols (stripped runner), so no bucket can be attributed."""
 
@@ -187,7 +191,7 @@ def wall_split(
     if t1 <= t0 or wall_s <= 0:
         return {}
     in_window = [frames for ts, frames in samples if t0 <= ts < t1]
-    if in_window and not any(f.startswith("krishiv_") or "::krishiv_" in f for fr in in_window for f in fr):
+    if in_window and not any(_KRISHIV_SYMBOL.search(f) for fr in in_window for f in fr):
         msg = (
             "no sample in the run window has a krishiv_* symbol: the runner is stripped or built without frame "
             "pointers, so every bucket would read `other`. Rebuild it with CARGO_PROFILE_DIST_STRIP=none "

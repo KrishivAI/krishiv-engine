@@ -540,3 +540,9 @@ def test_wall_split_refuses_samples_without_krishiv_symbols():
         ledger.wall_split(stripped, 10.0, 10.04, wall_s=0.04)
     ok = [(10.01, ["krishiv_exec::aggregate::x"])]
     assert ledger.wall_split(ok, 10.0, 10.04, wall_s=0.04)["aggregate"] > 0
+
+
+def test_wall_split_accepts_trait_impl_krishiv_frames():
+    frame = "<krishiv_exec::operators::file_scan::FileScanSource as krishiv_exec::pipeline::Source>::poll"
+    out = ledger.wall_split([(1000.0, [frame])], 1000.0, 1000.04, wall_s=0.04)
+    assert sum(out.values()) == pytest.approx(0.04)
