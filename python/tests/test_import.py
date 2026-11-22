@@ -28,7 +28,8 @@ def test_the_pressure_epoch_is_readable():
     from krishiv import _native
 
     epoch = _native._pressure_epoch()
-    assert isinstance(epoch, int) and epoch >= 0
+    assert isinstance(epoch, int)
+    assert epoch >= 0
 
 
 def test_build_info_commit_is_a_sha_or_unknown():
