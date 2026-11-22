@@ -224,6 +224,8 @@ tracing-opentelemetry = { version = "0.34.0", default-features = false }
 criterion = { package = "codspeed-criterion-compat", version = "5.0", default-features = false }
 insta = { version = "1.48", default-features = false }
 regex-lite = { version = "0.1", default-features = false, features = ["std", "string"] }
+# Metric-view YAML (P3 4.2-MV, krishiv-session only): a pure-Rust event parser, no `unsafe`; our own mapping.
+saphyr-parser = { version = "0.3.4", default-features = false }
 sqllogictest = { version = "0.29", default-features = false }
 # Property tests (dev-dependency only).
 proptest = { version = "1.9", default-features = false }

@@ -2,6 +2,7 @@
 source: crates/krishiv-optimizer/tests/it/rules.rs
 expression: "SELECT count(*) FROM t GROUP BY CUBE(a, b)"
 ---
-Aggregate [a#5, b#6, spark_grouping_id#3], [count(1) AS count(1)#4]
-+- Expand [[a#0, b#1, 0L], [a#0, CAST(NULL AS STRING), 1L], [CAST(NULL AS INT), b#1, 2L], [CAST(NULL AS INT), CAST(NULL AS STRING), 3L]], [a#5, b#6, spark_grouping_id#3]
-   +- Scan spark_catalog.default.t [a#0, b#1]
+Aggregate [a#5, b#6, spark_grouping_id#3], [count(state(count#count#7)) AS count(1)#4]
++- Expand [[a#0, b#1, 0L, count#count#7], [a#0, CAST(NULL AS STRING), 1L, count#count#7], [CAST(NULL AS INT), b#1, 2L, count#count#7], [CAST(NULL AS INT), CAST(NULL AS STRING), 3L, count#count#7]], [a#5, b#6, spark_grouping_id#3, count#count#7]
+   +- PartialAggregate [a#0, b#1], [count(1)]
+      +- Scan spark_catalog.default.t [a#0, b#1]

@@ -34,7 +34,7 @@ assert [tuple(r) for r in out.collect()] == [("east", 15.5), ("west", 20.0)]
 
 Search your project for the function names in the tables below. The `krishiv check-compat` scanner that automates this is not part of 0.2.0 (see [check-compat](check-compat.md)).
 
-## Spark functions Krishiv does not run yet (75)
+## Spark functions Krishiv does not run yet (74)
 
 A name that is not in the data is reported as unknown and is not supported. A workaround is given only where one exists;
 an empty cell means there is none yet.
@@ -69,7 +69,6 @@ an empty cell means there is none yet.
 | [`kll_sketch_to_string_bigint`](../reference/sql/functions/kll_sketch_to_string_bigint.md) | not yet |  |
 | [`kll_sketch_to_string_double`](../reference/sql/functions/kll_sketch_to_string_double.md) | not yet |  |
 | [`kll_sketch_to_string_float`](../reference/sql/functions/kll_sketch_to_string_float.md) | not yet |  |
-| [`measure`](../reference/sql/functions/measure.md) | not yet |  |
 | [`python_worker_logs`](../reference/sql/functions/python_worker_logs.md) | not yet |  |
 | [`reflect`](../reference/sql/functions/reflect.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`schema_of_avro`](../reference/sql/functions/schema_of_avro.md) | not yet |  |
@@ -157,6 +156,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
 | [Delta Lake writes](../concepts/known-differences.md#delta-lake-writes) |
 | [HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)](../concepts/known-differences.md#hll-sketches-the-compact-form-hll_sketch_agg-hll_union_agg-hll_union) |
+| [Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)](../concepts/known-differences.md#metric-views-create-view--with-metrics-language-yaml) |
 | [Pattern matching over collated strings (`LIKE`, `RLIKE`)](../concepts/known-differences.md#pattern-matching-over-collated-strings-like-rlike) |
 
 ## Where it runs

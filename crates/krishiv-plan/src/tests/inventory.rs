@@ -50,6 +50,7 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::ColumnNames { .. } => "PlanNode::ColumnNames",
         PlanNode::Repartition { .. } => "PlanNode::Repartition",
         PlanNode::CollectMetrics { .. } => "PlanNode::CollectMetrics",
+        PlanNode::MetricViewRead { .. } => "PlanNode::MetricViewRead",
         PlanNode::JoinHint { .. } => "PlanNode::JoinHint",
         PlanNode::Union { .. } => "PlanNode::Union",
         PlanNode::Distinct { .. } => "PlanNode::Distinct",
