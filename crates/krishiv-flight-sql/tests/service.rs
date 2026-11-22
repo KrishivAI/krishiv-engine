@@ -658,15 +658,18 @@ async fn a_statement_past_the_server_time_limit_ends_with_krishiv_query_timeout(
         .await
         .expect("do_get")
         .into_inner();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let end = loop {
-        assert!(Instant::now() < deadline, "the statement never timed out");
-        match stream.message().await {
-            Ok(Some(_)) => {}
-            Ok(None) => panic!("the stream finished instead of timing out"),
-            Err(status) => break status,
+    // The whole drain is bounded: a read that stays pending fails the test instead of hanging it.
+    let end = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match stream.message().await {
+                Ok(Some(_)) => {}
+                Ok(None) => panic!("the stream finished instead of timing out"),
+                Err(status) => break status,
+            }
         }
-    };
+    })
+    .await
+    .expect("the statement never timed out");
     assert_eq!(end.code(), Code::DeadlineExceeded, "{end:?}");
     assert_eq!(
         end.metadata()

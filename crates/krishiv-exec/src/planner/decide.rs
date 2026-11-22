@@ -44,15 +44,12 @@ impl<'a> Planner<'a> {
             .collect();
         // Spark infers `IsNotNull` of the columns the comparisons reject nulls of, all ahead of the
         // written conjuncts (the oracle's `four_conjunct`).
+        // The written conjuncts' keys, formatted once; each inferred one joins them as it is offered.
+        let mut known: std::collections::HashSet<String> =
+            written.iter().map(ToString::to_string).collect();
         for c in &written {
             for inferred in super::source_filter::inferred_not_null(c, &scan.output) {
-                let known = |e: &Expr| {
-                    exprs
-                        .iter()
-                        .chain(written.iter().copied())
-                        .any(|k| e.to_string() == k.to_string())
-                };
-                if !known(&inferred) {
+                if known.insert(inferred.to_string()) {
                     offered.push(OfferedConjunct {
                         filter: scan_filter(table, &layout, &inferred, scan, &self.env)?,
                         source: super::source_filter::classify(&inferred, &scan.output),
@@ -98,16 +95,15 @@ impl<'a> Planner<'a> {
         let id = self.cx.tables.bind_scan(Arc::clone(&decision.bound))?;
         let taken = |i: usize| decision.pushed.get(i).copied().unwrap_or(false);
         let (mut kept, mut untranslated): (Vec<&Expr>, Vec<&Expr>) = (Vec::new(), Vec::new());
-        let mut placed: Vec<usize> = Vec::new();
+        let mut placed = vec![false; groups];
         for (i, (o, e)) in offered.iter().zip(&exprs).enumerate() {
             if taken(i) {
                 continue;
             }
             // A split `LIKE` is offered three times; it stays once.
-            if placed.contains(&group[i]) {
+            if std::mem::replace(&mut placed[group[i]], true) {
                 continue;
             }
-            placed.push(group[i]);
             match o.source {
                 SourceConjunct::Untranslated => untranslated.push(e),
                 _ => kept.push(e),

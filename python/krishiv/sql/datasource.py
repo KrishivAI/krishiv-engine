@@ -548,7 +548,12 @@ def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession,
 
 
 def _plan_and_read(
-    session: SparkSession, source: DataSource, schema: StructType, label: str, filters: list[Filter] | None = None
+    session: SparkSession,
+    source: DataSource,
+    schema: StructType,
+    label: str,
+    filters: list[Filter] | None = None,
+    pushdown: bool | None = None,
 ) -> tuple[list[bool], Any]:
     """One scan's planning and read: ``reader()``, ``pushFilters(filters)`` when there are filters,
     ``partitions()``; returns ``(pushed, read)``: per filter whether the reader took it (so the engine does
@@ -563,6 +568,8 @@ def _plan_and_read(
     pa = _convert.require_pyarrow("a Python data source read")
     offered = filters or []
     pushed = [False] * len(offered)
+    # One planning call uses one setting: the caller's reading when it made one.
+    pushdown_on = _pushdown_enabled(session) if pushdown is None else pushdown
 
     def initialize() -> DataSourceReader:
         reader = source.reader(schema)
@@ -575,7 +582,7 @@ def _plan_and_read(
                 },
             )
         if getattr(reader.pushFilters, "__func__", None) is not DataSourceReader.pushFilters:
-            if not _pushdown_enabled(session):
+            if not pushdown_on:
                 raise PySparkAssertionError(
                     errorClass="DATA_SOURCE_PUSHDOWN_DISABLED",
                     messageParameters={"type": type(reader).__name__, "conf": PUSHDOWN_CONF},
@@ -685,10 +692,11 @@ def load(session: SparkSession, entry: _Registered, options: dict[str, str], use
 
     def plan(specs: list[tuple[Any, ...]]) -> tuple[list[bool], Any]:
         owner = owner_of()
-        if not _pushdown_enabled(owner):
+        enabled = _pushdown_enabled(owner)
+        if not enabled:
             # Nothing is offered (Spark raises DATA_SOURCE_PUSHDOWN_DISABLED at the action, not at explain()).
             return [False] * len(specs), read
-        return _plan_and_read(owner, source, schema, entry.name, [_filter_of(spec) for spec in specs])
+        return _plan_and_read(owner, source, schema, entry.name, [_filter_of(spec) for spec in specs], enabled)
 
     native = session._native.register_python_source(entry.name, empty, read, plan)
     return DataFrame(native, session)

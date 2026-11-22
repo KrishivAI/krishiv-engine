@@ -522,7 +522,7 @@ class Recording(DataSource):
                 return filters
 
             def read(self, partition: InputPartition) -> Any:
-                for x in range(1, 5):
+                for x in range(0 if options.get("mode") == "zero" else 1, 5):
                     if all(not (isinstance(f, EqualTo) and f.attribute == ("x",)) or x == f.value for f in self.taken):
                         yield (x, x * 10)
 
@@ -561,7 +561,8 @@ def test_unhandled_filters_stay_with_the_engine(pushdown: SparkSession) -> None:
 
 
 def test_residual_division_by_a_filtered_zero(pushdown: SparkSession) -> None:
-    df = pushdown.read.format("recording").load().filter("x > 0 AND 10 / x > 1")
+    # The source also holds the row x = 0: only the engine's own residual keeps `10 / x` from seeing it.
+    df = pushdown.read.format("recording").option("mode", "zero").load().filter("x > 0 AND 10 / x > 1")
     assert sorted(r.x for r in df.collect()) == [1, 2, 3, 4]
     assert Recording.seen[0] == [IsNotNull(("x",)), GreaterThan(("x",), 0)]
 
