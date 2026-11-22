@@ -116,6 +116,10 @@ pub struct StagedCommit {
     pub table: String,
     /// The write's id (a UUID), fixed for all attempts.
     pub write_id: String,
+    /// The caller's idempotency key (`krishiv.write.idempotencyKey`, E34): recorded as a `txn`
+    /// action (app id [`idempotency_app_id`], version 1); a table whose snapshot has it already
+    /// gets no commit ([`Committed::deduplicated`]).
+    pub idempotency_key: Option<String>,
     /// The operation.
     pub operation: CommitOperation,
     /// `commitInfo.operationParameters`, already stringified.
@@ -192,6 +196,15 @@ pub struct Committed {
     pub found_by_landed_check: bool,
     /// Commits since the last checkpoint, when the commit reported it (section 4.3).
     pub commits_since_checkpoint: Option<u64>,
+    /// The idempotency key was already committed: nothing was written, `version` is the table
+    /// version the lookup saw, and the statement's data files are orphans.
+    pub deduplicated: bool,
+}
+
+/// The `txn` application id that carries an idempotency key.
+#[must_use]
+pub fn idempotency_app_id(key: &str) -> String {
+    format!("krishiv.idempotency:{key}")
 }
 
 /// Partition values by physical name.

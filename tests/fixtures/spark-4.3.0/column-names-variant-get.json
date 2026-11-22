@@ -1,0 +1,454 @@
+{
+ "format_version": 1,
+ "generator": "tests/scripts/gen_variant_get_column_names.py",
+ "spark_version": "4.3.0",
+ "spark_tag": "v4.3.0",
+ "setup": [
+  "CREATE OR REPLACE TEMPORARY VIEW t AS SELECT parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}') AS v"
+ ],
+ "results": [
+  {
+   "id": "vg_col_int",
+   "sql": "SELECT variant_get(v, '$.a', 'int') FROM t",
+   "columns": [
+    "variant_get(v, $.a)"
+   ],
+   "types": [
+    "int"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "vg_lit_int",
+   "sql": "SELECT variant_get(parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'), '$.a', 'int')",
+   "columns": [
+    "variant_get(parse_json({\"a\":1,\"b\":{\"c\":\"x\"}}), $.a)"
+   ],
+   "types": [
+    "int"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "vg_col_string",
+   "sql": "SELECT variant_get(v, '$.a', 'string') FROM t",
+   "columns": [
+    "variant_get(v, $.a)"
+   ],
+   "types": [
+    "string"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "vg_lit_string",
+   "sql": "SELECT variant_get(parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'), '$.a', 'string')",
+   "columns": [
+    "variant_get(parse_json({\"a\":1,\"b\":{\"c\":\"x\"}}), $.a)"
+   ],
+   "types": [
+    "string"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "vg_col_double",
+   "sql": "SELECT variant_get(v, '$.a', 'double') FROM t",
+   "columns": [
+    "variant_get(v, $.a)"
+   ],
+   "types": [
+    "double"
+   ],
+   "rows": [
+    [
+     "1.0"
+    ]
+   ]
+  },
+  {
+   "id": "vg_lit_double",
+   "sql": "SELECT variant_get(parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'), '$.a', 'double')",
+   "columns": [
+    "variant_get(parse_json({\"a\":1,\"b\":{\"c\":\"x\"}}), $.a)"
+   ],
+   "types": [
+    "double"
+   ],
+   "rows": [
+    [
+     "1.0"
+    ]
+   ]
+  },
+  {
+   "id": "vg_col_array_int",
+   "sql": "SELECT variant_get(v, '$.a', 'array<int>') FROM t",
+   "columns": [
+    "variant_get(v, $.a)"
+   ],
+   "types": [
+    "array<int>"
+   ],
+   "error": {
+    "class": "INVALID_VARIANT_CAST",
+    "sqlState": "22023",
+    "params": {
+     "dataType": "\"ARRAY<INT>\"",
+     "value": "1"
+    },
+    "message": "[INVALID_VARIANT_CAST] The variant value `1` cannot be cast into `\"ARRAY<INT>\"`. Please use `try_variant_get` instead. SQLSTATE: 22023"
+   }
+  },
+  {
+   "id": "vg_lit_array_int",
+   "sql": "SELECT variant_get(parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'), '$.a', 'array<int>')",
+   "columns": [
+    "variant_get(parse_json({\"a\":1,\"b\":{\"c\":\"x\"}}), $.a)"
+   ],
+   "types": [
+    "array<int>"
+   ],
+   "error": {
+    "class": "INVALID_VARIANT_CAST",
+    "sqlState": "22023",
+    "params": {
+     "dataType": "\"ARRAY<INT>\"",
+     "value": "1"
+    },
+    "message": "[INVALID_VARIANT_CAST] The variant value `1` cannot be cast into `\"ARRAY<INT>\"`. Please use `try_variant_get` instead. SQLSTATE: 22023"
+   }
+  },
+  {
+   "id": "vg_col_2arg",
+   "sql": "SELECT variant_get(v, '$.a') FROM t",
+   "columns": [
+    "variant_get(v, $.a)"
+   ],
+   "types": [
+    "variant"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "vg_lit_2arg",
+   "sql": "SELECT variant_get(parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'), '$.a')",
+   "columns": [
+    "variant_get(parse_json({\"a\":1,\"b\":{\"c\":\"x\"}}), $.a)"
+   ],
+   "types": [
+    "variant"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "tvg_col_int",
+   "sql": "SELECT try_variant_get(v, '$.a', 'int') FROM t",
+   "columns": [
+    "try_variant_get(v, $.a)"
+   ],
+   "types": [
+    "int"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "tvg_lit_int",
+   "sql": "SELECT try_variant_get(parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'), '$.a', 'int')",
+   "columns": [
+    "try_variant_get(parse_json({\"a\":1,\"b\":{\"c\":\"x\"}}), $.a)"
+   ],
+   "types": [
+    "int"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "tvg_col_string",
+   "sql": "SELECT try_variant_get(v, '$.a', 'string') FROM t",
+   "columns": [
+    "try_variant_get(v, $.a)"
+   ],
+   "types": [
+    "string"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "tvg_lit_string",
+   "sql": "SELECT try_variant_get(parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'), '$.a', 'string')",
+   "columns": [
+    "try_variant_get(parse_json({\"a\":1,\"b\":{\"c\":\"x\"}}), $.a)"
+   ],
+   "types": [
+    "string"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "tvg_col_double",
+   "sql": "SELECT try_variant_get(v, '$.a', 'double') FROM t",
+   "columns": [
+    "try_variant_get(v, $.a)"
+   ],
+   "types": [
+    "double"
+   ],
+   "rows": [
+    [
+     "1.0"
+    ]
+   ]
+  },
+  {
+   "id": "tvg_lit_double",
+   "sql": "SELECT try_variant_get(parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'), '$.a', 'double')",
+   "columns": [
+    "try_variant_get(parse_json({\"a\":1,\"b\":{\"c\":\"x\"}}), $.a)"
+   ],
+   "types": [
+    "double"
+   ],
+   "rows": [
+    [
+     "1.0"
+    ]
+   ]
+  },
+  {
+   "id": "tvg_col_array_int",
+   "sql": "SELECT try_variant_get(v, '$.a', 'array<int>') FROM t",
+   "columns": [
+    "try_variant_get(v, $.a)"
+   ],
+   "types": [
+    "array<int>"
+   ],
+   "rows": [
+    [
+     null
+    ]
+   ]
+  },
+  {
+   "id": "tvg_lit_array_int",
+   "sql": "SELECT try_variant_get(parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'), '$.a', 'array<int>')",
+   "columns": [
+    "try_variant_get(parse_json({\"a\":1,\"b\":{\"c\":\"x\"}}), $.a)"
+   ],
+   "types": [
+    "array<int>"
+   ],
+   "rows": [
+    [
+     null
+    ]
+   ]
+  },
+  {
+   "id": "tvg_col_2arg",
+   "sql": "SELECT try_variant_get(v, '$.a') FROM t",
+   "columns": [
+    "try_variant_get(v, $.a)"
+   ],
+   "types": [
+    "variant"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "tvg_lit_2arg",
+   "sql": "SELECT try_variant_get(parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'), '$.a')",
+   "columns": [
+    "try_variant_get(parse_json({\"a\":1,\"b\":{\"c\":\"x\"}}), $.a)"
+   ],
+   "types": [
+    "variant"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "path_col",
+   "sql": "SELECT v:a FROM t",
+   "columns": [
+    "a"
+   ],
+   "types": [
+    "variant"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "path_col_nested",
+   "sql": "SELECT v:b.c FROM t",
+   "columns": [
+    "c"
+   ],
+   "types": [
+    "variant"
+   ],
+   "rows": [
+    [
+     "\"x\""
+    ]
+   ]
+  },
+  {
+   "id": "path_col_two",
+   "sql": "SELECT v:a:b FROM t",
+   "columns": [
+    "b"
+   ],
+   "types": [
+    "variant"
+   ],
+   "rows": [
+    [
+     null
+    ]
+   ]
+  },
+  {
+   "id": "path_col_bracket",
+   "sql": "SELECT v:['a'] FROM t",
+   "columns": [
+    "a"
+   ],
+   "types": [
+    "variant"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "path_col_cast_int",
+   "sql": "SELECT v:a::int FROM t",
+   "columns": [
+    "a"
+   ],
+   "types": [
+    "int"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "path_col_cast_string",
+   "sql": "SELECT v:a::string FROM t",
+   "columns": [
+    "a"
+   ],
+   "types": [
+    "string"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "path_lit",
+   "sql": "SELECT parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'):a",
+   "columns": [
+    "a"
+   ],
+   "types": [
+    "variant"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "path_lit_cast_int",
+   "sql": "SELECT parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'):a::int",
+   "columns": [
+    "a"
+   ],
+   "types": [
+    "int"
+   ],
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "path_lit_two",
+   "sql": "SELECT parse_json('{\"a\":1,\"b\":{\"c\":\"x\"}}'):a:b",
+   "columns": [
+    "b"
+   ],
+   "types": [
+    "variant"
+   ],
+   "rows": [
+    [
+     null
+    ]
+   ]
+  }
+ ]
+}
