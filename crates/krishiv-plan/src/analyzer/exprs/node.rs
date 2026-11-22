@@ -1352,6 +1352,19 @@ impl Resolver<'_> {
                     return Ok(b);
                 }
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
+                // Spark 4.3's `current_timestamp(6)` is the call without its
+                // argument (`typed_call` drops it), and so named.
+                let trimmed: Vec<Bound>;
+                let (kids, n) = if call_kids.len() < n {
+                    trimmed = kids[..call_kids.len()]
+                        .iter()
+                        .chain(&kids[n..])
+                        .cloned()
+                        .collect();
+                    (&trimmed[..], call_kids.len())
+                } else {
+                    (kids, n)
+                };
                 // `histogram_numeric(x, nb)`: `nb` is foldable and at least 2
                 // (Spark's `checkInputDataTypes`, after the implicit casts);
                 // the executor reads the folded literal.

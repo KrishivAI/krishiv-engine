@@ -377,8 +377,10 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
         time_zone: &zone,
     };
     let out = cast(input.as_ref(), &p.kernel_to, &opts)?;
-    let out = match (input.data_type(), out.data_type()) {
-        (ArrowType::Time64(_), ArrowType::Time64(_)) if p.precision.unit() > 1 => {
+    // A `time(p)` target keeps `p` digits whatever the source (a string or a
+    // `time(q)`); the kernel reads every digit the source holds.
+    let out = match out.data_type() {
+        ArrowType::Time64(_) if p.precision.unit() > 1 => {
             use arrow_array::types::Time64NanosecondType;
             let unit = p.precision.unit();
             Arc::new(

@@ -207,15 +207,28 @@ fn always_null_timestamp(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Timestamp, true))
 }
 
-/// The `TIME` types a time function takes: the first is what an untyped
-/// `NULL` becomes.
-fn any_time() -> InputType {
+/// The `TIME` types a time function takes: `TIME(6)` first (what an untyped `NULL` becomes),
+/// then every other precision of the profile's `TIME` (`[0, 6]` before Spark 4.3, `[0, 9]` from it).
+fn any_time(c: &CallTypes<'_>) -> InputType {
+    let max = if c.profile() >= SparkProfile::V4_3 {
+        DataType::TIME_MAX_PRECISION
+    } else {
+        6
+    };
     InputType::StrictOneOf(
-        [6, 0, 1, 2, 3, 4, 5]
-            .into_iter()
+        std::iter::once(6)
+            .chain((0..=max).filter(|p| *p != 6))
             .map(|precision| DataType::Time { precision })
             .collect(),
     )
+}
+
+fn one_time_input(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![any_time(c)]
+}
+
+fn time_diff_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![exact(DataType::String), any_time(c), any_time(c)]
 }
 
 /// A `TIME(6)` that is NULL for any row that does not parse.
@@ -291,7 +304,7 @@ fn clock_time(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         Some(Constant::Integral(n)) => {
             return Err(DatatypeMismatchValueOutOfRange {
                 sql_expr: format!("\"current_time({n})\""),
-                expr_name: "precision".to_owned(),
+                expr_name: "`precision`".to_owned(),
                 value_range: format!("[0, {max}]"),
                 current_value: n.to_string(),
             }
@@ -1118,12 +1131,12 @@ fn datetime() -> Vec<Spec> {
     ));
     out.extend(scalar(
         &["time_to_seconds"],
-        &Inputs::Expects(vec![any_time()]),
+        &Inputs::Built(InputBuilder(one_time_input)),
         time_seconds_result,
     ));
     out.extend(scalar(
         &["time_to_millis", "time_to_micros"],
-        &Inputs::Expects(vec![any_time()]),
+        &Inputs::Built(InputBuilder(one_time_input)),
         long,
     ));
     out.extend(scalar(
@@ -1138,7 +1151,7 @@ fn datetime() -> Vec<Spec> {
     ));
     out.extend(scalar(
         &["time_diff"],
-        &Inputs::Expects(vec![exact(DataType::String), any_time(), any_time()]),
+        &Inputs::Built(InputBuilder(time_diff_inputs)),
         long,
     ));
     out.extend(scalar(

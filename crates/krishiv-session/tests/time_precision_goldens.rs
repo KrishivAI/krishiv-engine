@@ -27,7 +27,46 @@ use serde_json::Value;
 type Rows = Vec<Vec<Option<String>>>;
 
 /// Cases not matched yet, by `(release, id)`: each must still differ (a fixed gap fails the test).
-const KNOWN_GAPS: &[(&str, &str)] = &[];
+const KNOWN_GAPS: &[(&str, &str)] = &[
+    // Spark gates TIME per expression (a cast to it, `TimeExpression`s); Krishiv's gate is plan-wide, so a
+    // literal or `localtime` with `spark.sql.timeType.enabled` off is refused.
+    ("4.2.0", "lit_types"),
+    ("4.2.0", "lit_name9"),
+    ("4.2.0", "lit_trailing_zeros"),
+    ("4.2.0", "lit_to_string"),
+    ("4.3.0", "lit_types"),
+    ("4.3.0", "lit_name9"),
+    ("4.3.0", "lit_trailing_zeros"),
+    ("4.3.0", "lit_to_string"),
+    ("4.3.0", "localtime_key_off"),
+    // Errors render the Spark 4.2.1 message template; release-keyed rendering is not built yet ([0, 9] in 4.3).
+    ("4.3.0", "time10"),
+    ("4.3.0", "time10_key_off"),
+    ("4.3.0", "time_huge"),
+    // `min`/`max` have no `Time64` accumulator yet.
+    ("4.2.0", "max_distinct"),
+    ("4.3.0", "max_distinct"),
+    // `to_time` with a pattern of nine `S` keeps six digits.
+    ("4.2.0", "to_time"),
+    ("4.3.0", "to_time"),
+    // `date_format` refuses a TIME before the implicit cast Spark tries (the class differs).
+    ("4.2.0", "date_format"),
+    ("4.3.0", "date_format"),
+    // No cast from TIME to TIMESTAMP_NTZ yet.
+    ("4.3.0", "to_timestamp_ntz"),
+    // A bare TIMESTAMP does not follow `spark.sql.timestampType` yet.
+    ("4.3.0", "ts6_ntz_default"),
+    // Spark 4.2 adds `: missing ')'` to the syntax error for some shapes; the hint is not reproduced.
+    ("4.2.0", "ts3_with_local"),
+    ("4.2.0", "ts9_without"),
+    // SQL-41: a literal given a collation by the implicit cast loses its `collate` in these rewrites' names.
+    ("4.2.0", "instr_collated"),
+    ("4.2.0", "locate_collated"),
+    ("4.2.0", "eq_collated"),
+    ("4.3.0", "instr_collated"),
+    ("4.3.0", "locate_collated"),
+    ("4.3.0", "eq_collated"),
+];
 
 fn fixture(release: &str) -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -158,6 +158,17 @@ fn primitive(
         "timestamp" | "timestamp_ntz" | "timestamp_ltz" if spark_4_3 && args.len() == 1 => {
             timestamp_precision(name, &args[0], span, opts)
         }
+        // Spark 4.2's grammar has no precision before `WITH [LOCAL] TIME ZONE` or `WITHOUT TIME
+        // ZONE`: the parser stops at that word. (Spark adds `: missing ')'` for some shapes; the hint
+        // is not reproduced.)
+        "timestamp" if !spark_4_3 && !args.is_empty() && name.ends_with(" time zone") => {
+            let word = name.split(' ').nth(1).unwrap_or_default().to_uppercase();
+            Err(crate::error::syntax_error(
+                format!("'{word}'"),
+                String::new(),
+                span,
+            ))
+        }
         _ if args.is_empty() && (name != head || PLAIN_TYPES.contains(&head)) => Ok(()),
         _ => Err(unsupported(name, args, span)),
     }
@@ -216,7 +227,16 @@ fn timestamp_precision(
 fn unsupported(name: &str, args: &[String], span: Span) -> ParseError {
     let mut type_name = name.to_uppercase();
     if !args.is_empty() {
-        type_name = format!("{type_name}({})", args.join(","));
+        // Spark shows an integer argument as read (`TIMESTAMP_NTZ(06)` is `TIMESTAMP_NTZ(6)`).
+        let shown: Vec<String> = args
+            .iter()
+            .map(|a| {
+                a.trim()
+                    .parse::<i32>()
+                    .map_or_else(|_| a.clone(), |v| v.to_string())
+            })
+            .collect();
+        type_name = format!("{type_name}({})", shown.join(","));
     }
     at(
         UnsupportedDatatype {
