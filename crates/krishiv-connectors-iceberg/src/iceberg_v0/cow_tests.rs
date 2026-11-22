@@ -260,7 +260,12 @@ impl<'a> Dml<'a> {
         SchemaRef,
         Vec<RecordBatch>,
     ) {
-        let mut batches = self.query(self.table.scan().unwrap(), select);
+        // A scan that refuses the statement (a v3 merge-on-read UPDATE) is the statement's error.
+        let scan = match self.table.scan() {
+            Ok(scan) => scan,
+            Err(e) => return (Err(e), Arc::new(arrow_schema::Schema::empty()), Vec::new()),
+        };
+        let mut batches = self.query(scan, select);
         let schema = batches.first().map_or_else(
             || {
                 let mut f: Vec<_> = input_schema().fields().iter().cloned().collect();
