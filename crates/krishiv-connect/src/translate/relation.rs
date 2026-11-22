@@ -970,6 +970,20 @@ impl Translator<'_> {
         if columns.iter().any(|(n, e)| {
             krishiv_plan::with_column_generator(&input, n, e, || Origin::UNKNOWN).is_some()
         }) {
+            // Spark binds every alias to the input; the one-at-a-time lift below would let an alias read a
+            // column an earlier alias of the same call has just replaced (`x = y, y = x`).
+            for (i, (_, value)) in columns.iter().enumerate() {
+                if columns[..i]
+                    .iter()
+                    .any(|(earlier, _)| reads_column(value, earlier))
+                {
+                    return Err(unsupported_field(
+                        "WithColumns",
+                        "aliases",
+                        "a generator column beside an alias that reads a column an earlier alias replaces",
+                    ));
+                }
+            }
             let mut plan = input;
             let last = columns.len() - 1;
             for (i, (name, value)) in columns.into_iter().enumerate() {
@@ -992,6 +1006,20 @@ impl Translator<'_> {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether `e` reads a column whose last name part is `name` (case-insensitively, as the resolver's default).
+fn reads_column(e: &krishiv_plan::Expr, name: &str) -> bool {
+    let mut stack = vec![e];
+    while let Some(e) = stack.pop() {
+        if let krishiv_plan::ExprNode::Column(c) = &e.node
+            && c.name.last().is_some_and(|n| n.eq_ignore_ascii_case(name))
+        {
+            return true;
+        }
+        e.for_each_child(&mut |child| stack.push(child));
+    }
+    false
+}
 
 /// The alias of a `SubqueryAlias`: `qualifier ++ [alias]` joined by [`ALIAS_PART_SEP`], as the IR
 /// holds a multi-part alias (Spark's `AliasIdentifier(alias, qualifier)`). A part holding the

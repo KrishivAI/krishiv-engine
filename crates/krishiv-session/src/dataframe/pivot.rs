@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature};
-use krishiv_plan::{ColumnRef, Expr, ExprNode, LogicalPlan, PivotValue, PlanNode, Star};
+use krishiv_plan::{ColumnRef, Expr, ExprNode, Literal, LogicalPlan, PivotValue, PlanNode, Star};
 
 use super::{DataFrame, GroupedData, Sets};
 use crate::column::Column;
@@ -133,6 +133,29 @@ impl GroupedData {
             .is_some_and(|v| v.eq_ignore_ascii_case("true"));
         let fold = |n: String| if case_sensitive { n } else { n.to_lowercase() };
         let read_names: Vec<String> = read.iter().filter_map(output_name).map(fold).collect();
+        if read_names.contains(&fold(PIVOT_COPY.to_owned())) {
+            return self.refuse(
+                "a pivot aggregate that reads a column named like the internal pivot copy",
+            );
+        }
+        // Two references of one name from different DataFrames (a cross join's `left["v"]`, `right["v"]`)
+        // cannot both survive a narrowing that keeps one column of each name.
+        let source = |r: &Expr| match &r.node {
+            ExprNode::Column(c) => c.plan_id.map(|id| id.0),
+            _ => None,
+        };
+        for (i, a) in read.iter().enumerate() {
+            let same_name = |b: &&Expr| output_name(b).map(fold) == output_name(a).map(fold);
+            if read[..i]
+                .iter()
+                .filter(same_name)
+                .any(|b| source(b) != source(a))
+            {
+                return self.refuse(
+                    "a pivot aggregate that reads same-named columns of different DataFrames",
+                );
+            }
+        }
         let names: Vec<Option<String>> = self.keys.iter().map(output_name).collect();
         let clash: Vec<bool> = names
             .iter()
@@ -144,6 +167,23 @@ impl GroupedData {
         let any_clash = clash.iter().any(|c| *c);
         if any_clash && names.iter().any(Option::is_none) {
             return self.refuse("a pivot aggregate that reads a grouping column beside an unnamed grouping expression");
+        }
+        let value_text: Vec<String> = p
+            .values
+            .iter()
+            .filter_map(|v| match v.exprs.first().map(|e| &e.node) {
+                Some(ExprNode::Literal(Literal::String(t))) => Some(fold(t.clone())),
+                _ => None,
+            })
+            .collect();
+        if names.iter().zip(&clash).any(|(n, c)| {
+            *c && n
+                .as_ref()
+                .is_some_and(|n| value_text.contains(&fold(n.clone())))
+        }) {
+            // The restored key `h` would sit beside a pivot output named `h`, and a bare lookup of it is ambiguous.
+            return self
+                .refuse("a pivot value named like a grouping column an aggregate also reads");
         }
         let copy = |i: usize| format!("__krishiv_key_{i}");
         let mut kept: Vec<Arc<Expr>> = Vec::new();
