@@ -36,11 +36,12 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type,
+    Int64Type, Time64NanosecondType,
 };
 use arrow_array::{
     Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
-    Int8Array, Int16Array, Int32Array, Int64Array, StringArray, new_null_array,
+    Int8Array, Int16Array, Int32Array, Int64Array, StringArray, Time64NanosecondArray,
+    new_null_array,
 };
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::{ErrorClass, InternalError, KrishivError};
@@ -450,7 +451,7 @@ fn fold_on_stack(
 }
 
 /// Whether `t` is, or holds as an element, key, value or field, a `time(p)`
-/// below `time(6)`.
+/// below `time(9)` (the carrier's precision).
 fn has_narrow_time(t: &DataType) -> bool {
     match t {
         DataType::Time { precision } => *precision < DataType::TIME_MAX_PRECISION,
@@ -461,7 +462,34 @@ fn has_narrow_time(t: &DataType) -> bool {
     }
 }
 
+/// A cast to `time(p)` (p < 9) folds as the cast to `time(9)`, the carrier's precision, and then
+/// cuts the value to `p` digits, as the executor does. A failed cast stays unfolded: the executor
+/// raises it naming the written type.
 fn fold_cast(
+    expr: &Arc<Expr>,
+    to: &DataType,
+    m: CastMode,
+    conf: Conf,
+    memo: &mut Memo,
+    functions: &dyn FunctionRegistry,
+) -> Folded {
+    let DataType::Time { precision } = to else {
+        return fold_cast_any(expr, to, m, conf, memo, functions);
+    };
+    if *precision >= DataType::TIME_MAX_PRECISION {
+        return fold_cast_any(expr, to, m, conf, memo, functions);
+    }
+    let full = DataType::Time {
+        precision: DataType::TIME_MAX_PRECISION,
+    };
+    let folded = fold_cast_any(expr, &full, m, conf, memo, functions)?.ok()?;
+    let nanos = folded.as_primitive_opt::<Time64NanosecondType>()?;
+    let unit = 10_i64.pow(u32::from(DataType::TIME_MAX_PRECISION - *precision));
+    let cut: Time64NanosecondArray = nanos.unary(|v| v - v.rem_euclid(unit));
+    Some(Ok(Arc::new(cut)))
+}
+
+fn fold_cast_any(
     expr: &Arc<Expr>,
     to: &DataType,
     m: CastMode,
@@ -1919,5 +1947,25 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+    /// A cast to a narrower `TIME` folds to the value cut to the target's digits (R3 review 13).
+    #[test]
+    fn a_cast_to_a_narrow_time_folds_to_the_cut_value() {
+        let fold_to = |text: &str, p: u32| {
+            let e = Arc::new(cast(
+                Literal::String(text.to_owned()),
+                DataType::time(p).unwrap(),
+            ));
+            let conf = Conf::new(true, true, false, (false, false), SparkProfile::V4_3, None);
+            let a = array(&e, conf, &mut Memo::default(), &BuiltinFunctions::new())
+                .expect("folds")
+                .expect("valid");
+            a.as_primitive::<Time64NanosecondType>().value(0)
+        };
+        let noon = 12 * 3_600 * 1_000_000_000_i64;
+        assert_eq!(fold_to("12:00:00.123456789", 6), noon + 123_456_000);
+        assert_eq!(fold_to("12:00:00.123456789", 0), noon);
+        assert_eq!(fold_to("12:00:00.123456789", 9), noon + 123_456_789);
+        assert_eq!(fold_to("01:00:00", 6), 3_600 * 1_000_000_000);
     }
 }

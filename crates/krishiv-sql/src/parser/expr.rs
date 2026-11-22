@@ -47,7 +47,7 @@ impl Op {
     }
 }
 
-const CURRENT_LIKE: &[&str] = &[
+pub(super) const CURRENT_LIKE: &[&str] = &[
     "CURRENT_DATE",
     "CURRENT_TIMESTAMP",
     "CURRENT_USER",
@@ -1118,7 +1118,7 @@ impl Parser<'_> {
     #[inline(never)]
     fn keyword_primary(&mut self, start: usize) -> PR<Option<Expr>> {
         let word = self.text(0);
-        let call = self.sym_at(1, Sym::LParen);
+        let call = self.sym_at(1, Sym::LParen) && self.current_like_alias != Some(self.pos);
         let is = |kw: &str| crate::keywords::is_kw(word, kw);
         let kind = if is("NULL") {
             self.bump();

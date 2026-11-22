@@ -301,6 +301,16 @@ pub fn make_time(
     Ok(out.into_iter().collect())
 }
 
+/// `nanos` cut to whole microseconds when `micros_only` (Spark 4.2's `TIME`), else unchanged.
+#[must_use]
+pub(crate) fn cut_to_micros(nanos: i64, micros_only: bool) -> i64 {
+    if micros_only {
+        nanos.wrapping_sub(nanos.rem_euclid(1_000))
+    } else {
+        nanos
+    }
+}
+
 /// `time_to_seconds|millis|micros`: whole `nanos_per_unit`s of each time.
 pub fn time_to_units(
     times: &PrimitiveArray<Time64NanosecondType>,
@@ -326,7 +336,6 @@ pub fn to_time(
     nanos: bool,
 ) -> Result<PrimitiveArray<Time64NanosecondType>, KernelError> {
     use crate::datetime_pattern::{DateTimePattern, Purpose};
-    const MICROS_PER_DAY: i64 = 86_400_000_000;
     let mut out = Vec::with_capacity(strings.len());
     for i in 0..strings.len() {
         let fmt = formats.map(|f| (!f.is_null(i)).then(|| f.value(i)));
@@ -340,9 +349,8 @@ pub fn to_time(
             None => parse_time(text),
             Some(f) => DateTimePattern::new(f, Purpose::Parse)
                 .map_err(|e| KernelError::with_row(Some(i), e))?
-                .parse_local(text, false)
-                .map_err(|e| KernelError::with_row(Some(i), e))?
-                .map(|m| m.rem_euclid(MICROS_PER_DAY).wrapping_mul(1_000)),
+                .parse_time_of_day_nanos(text)
+                .map_err(|e| KernelError::with_row(Some(i), e))?,
         };
         match parsed {
             Some(n) => out.push(Some(n)),

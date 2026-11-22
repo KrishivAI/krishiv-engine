@@ -239,6 +239,17 @@ impl KrishivError {
         }
     }
 
+    /// This error with its message worded as `release` words it (the default text is Spark
+    /// 4.2's: `UNSUPPORTED_TIME_PRECISION` says `[0, 6]` there and `[0, 9]` in 4.3). Unchanged
+    /// when the class does not exist in `release`.
+    #[must_use]
+    pub fn in_release(mut self, release: SparkRelease) -> Self {
+        if let Some(template) = self.class.message_template_for(release) {
+            self.message = template::render(template, &self.parameters);
+        }
+        self
+    }
+
     /// Who may see this error's details (its class's [`Audience`]).
     pub fn audience(&self) -> Audience {
         self.class.audience()

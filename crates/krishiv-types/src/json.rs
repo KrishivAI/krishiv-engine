@@ -124,6 +124,16 @@ impl DataType {
         Self::from_json_value(&value, 0, false)
     }
 
+    /// [`Self::from_json`] read under `grammar`: Spark 4.2 refuses `time(7..=9)` (as
+    /// `UNSUPPORTED_TIME_PRECISION`). A 4.3 `timestamp_ntz(6)` name still reads as the
+    /// microsecond type under 4.2 (only a 4.3 writer emits it).
+    ///
+    /// # Errors
+    /// As [`Self::from_json`].
+    pub fn from_json_in(text: &str, grammar: crate::TypeGrammar) -> Result<Self> {
+        Self::from_json(text)?.in_grammar(grammar)
+    }
+
     /// The inverse of [`Self::json`] for every type it writes: [`Self::from_json`] that also
     /// reads the INDETERMINATE collation of a mixed expression's type (`string collate null`,
     /// or `spark.null` in a field's `__COLLATIONS`), which Spark's `fromJson` refuses. For
@@ -418,13 +428,8 @@ fn atomic_from_name(name: &str) -> Option<Result<DataType>> {
     }
     // Spark 4.3's nanosecond timestamps (`DataType.fromJson` builds them whatever
     // `spark.sql.timestampNanosTypes.enabled` says): Krishiv has no such type yet.
-    if ["timestamp_ntz(", "timestamp_ltz("]
-        .iter()
-        .any(|p| name.starts_with(p) && name.ends_with(')'))
-    {
-        return Some(Err(error::unsupported(format!(
-            "the nanosecond-precision timestamp type {name} (Krishiv 0.3.1)"
-        ))));
+    if let Some(t) = timestamp_from_name(name) {
+        return Some(t);
     }
     if let Some(t) = geometry_from_name(name) {
         return Some(t);
@@ -479,7 +484,38 @@ fn time_from_name(name: &str) -> Option<Result<DataType>> {
     }
     Some(match inner.parse::<u32>() {
         Ok(p) => DataType::time(p),
-        Err(_) => Err(error::time_precision(&json_digits(inner))),
+        Err(_) => Err(error::time_precision(&json_digits(inner))
+            .in_release(krishiv_common::error::SparkRelease::V4_3)),
+    })
+}
+
+/// `timestamp_ntz(p)` / `timestamp_ltz(p)` in Spark 4.3's JSON form: 6 is the microsecond type,
+/// 7..=9 the nanosecond types (Krishiv has none yet), any other number
+/// `INVALID_TIMESTAMP_PRECISION`; `None` for a name that is no such form.
+fn timestamp_from_name(name: &str) -> Option<Result<DataType>> {
+    let (ntz, inner) = if let Some(rest) = name.strip_prefix("timestamp_ntz(") {
+        (true, rest)
+    } else {
+        (false, name.strip_prefix("timestamp_ltz(")?)
+    };
+    let inner = inner.strip_suffix(')')?.trim();
+    if inner.is_empty() || !inner.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(match inner.parse::<u32>() {
+        Ok(6) if ntz => Ok(DataType::TimestampNtz),
+        Ok(6) => Ok(DataType::Timestamp),
+        Ok(7..=9) => Err(error::unsupported(format!(
+            "the nanosecond-precision timestamp type {name} (Krishiv 0.3.1)"
+        ))),
+        _ => Err(error::invalid_timestamp_precision(
+            &json_digits(inner),
+            if ntz {
+                "TIMESTAMP_NTZ"
+            } else {
+                "TIMESTAMP_LTZ"
+            },
+        )),
     })
 }
 

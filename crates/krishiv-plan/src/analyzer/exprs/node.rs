@@ -75,61 +75,10 @@ impl Resolver<'_> {
                 kind: TypedLiteralKind::Time,
                 value,
             } => {
-                if !self.ctx.conf.time_type {
-                    return Err(AnalysisError::new(
-                        krishiv_common::error::UnsupportedTimeType {},
-                        e.origin,
-                    ));
-                }
-                // A time is a string cast to `TIME(6)` (design P2-T181): the
-                // value is checked again here, in case the plan came from a
-                // front end other than the SQL parser. Spark 4.3 keeps up to
-                // nine digits and types the literal `TIME(max(6, digits))`
-                // (more than nine: `INVALID_TIME_LITERAL_PRECISION`); Spark 4.2
-                // drops the digits past the sixth, in its name too.
-                let nanos_literal = self.ctx.profile >= crate::analyzer::SparkProfile::V4_3;
-                let digits = krishiv_kernels::cast::time_fraction_digits(value);
-                if nanos_literal && digits > usize::from(DataType::TIME_MAX_PRECISION) {
-                    return Err(AnalysisError::new(
-                        krishiv_common::error::InvalidTimeLiteralPrecision {
-                            value: format!("'{value}'"),
-                        },
-                        e.origin,
-                    ));
-                }
-                let (parsed, precision) = if nanos_literal {
-                    let p = u8::try_from(digits.max(6)).unwrap_or(DataType::TIME_MAX_PRECISION);
-                    (krishiv_kernels::cast::parse_time_nanos(value), p)
-                } else {
-                    (krishiv_kernels::cast::parse_time(value), 6)
-                };
-                let Some(nanos) = parsed else {
-                    return Err(AnalysisError::new(
-                        krishiv_common::error::InvalidTypedLiteral {
-                            value: format!("'{value}'"),
-                            value_type: "\"TIME\"".to_owned(),
-                        },
-                        e.origin,
-                    ));
-                };
-                let text = krishiv_kernels::cast::format_time(nanos);
-                // Spark names a time by its value as read: the shown literal
-                // holds that text, so the name follows the profile's digits.
-                let shown = Expr::new(ExprNode::TypedLiteral {
-                    kind: TypedLiteralKind::Time,
-                    value: text.clone(),
-                })
-                .with_origin(e.origin);
-                let text = Arc::new(Expr::from(Literal::String(text)).with_origin(e.origin));
-                let cast = Expr::new(ExprNode::Cast {
-                    expr: text,
-                    to: DataType::Time { precision },
-                    mode: CastMode::Ansi,
-                })
-                .with_origin(e.origin);
+                let (cast, shown, precision) = self.time_literal(e, value)?;
                 Bound {
-                    expr: Arc::new(cast),
-                    shown: Some(Arc::new(shown)),
+                    expr: cast,
+                    shown: Some(shown),
                     ..keep(ArgType {
                         nullable: false,
                         data_type: Some(DataType::Time { precision }),
@@ -1354,16 +1303,11 @@ impl Resolver<'_> {
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // Spark 4.3's `current_timestamp(6)` is the call without its
                 // argument (`typed_call` drops it), and so named.
-                let trimmed: Vec<Bound>;
-                let (kids, n) = if call_kids.len() < n {
-                    trimmed = kids[..call_kids.len()]
-                        .iter()
-                        .chain(&kids[n..])
-                        .cloned()
-                        .collect();
-                    (&trimmed[..], call_kids.len())
-                } else {
-                    (kids, n)
+                let trimmed =
+                    (call_kids.len() < n).then(|| drop_arguments(kids, call_kids.len(), n));
+                let (kids, n) = match &trimmed {
+                    Some(t) => (&t[..], call_kids.len()),
+                    None => (kids, n),
                 };
                 // `histogram_numeric(x, nb)`: `nb` is foldable and at least 2
                 // (Spark's `checkInputDataTypes`, after the implicit casts);
@@ -1692,6 +1636,7 @@ impl Resolver<'_> {
                         to,
                         mode,
                         self.ctx.conf.session_zone,
+                        self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
                     ));
                 }
                 let nullable = child.nullable
@@ -1906,6 +1851,83 @@ impl Resolver<'_> {
 }
 
 impl Resolver<'_> {
+    /// `TIME '...'`: a string cast to `TIME(p)`. Kept out of the recursive
+    /// `expr` match so its locals do not widen every level's frame.
+    #[inline(never)]
+    /// Returns the cast, the literal as shown and the precision `p`.
+    fn time_literal(
+        &self,
+        e: &Arc<Expr>,
+        value: &str,
+    ) -> Result<(Arc<Expr>, Arc<Expr>, u8), AnalysisError> {
+        if !self.ctx.conf.time_type {
+            return Err(AnalysisError::new(
+                krishiv_common::error::UnsupportedTimeType {},
+                e.origin,
+            ));
+        }
+        // A time is a string cast to `TIME(6)` (design P2-T181): the
+        // value is checked again here, in case the plan came from a
+        // front end other than the SQL parser. Spark 4.3 keeps up to
+        // nine digits and types the literal `TIME(max(6, digits))`
+        // (more than nine: `INVALID_TIME_LITERAL_PRECISION`); Spark 4.2
+        // drops the digits past the sixth, in its name too.
+        let nanos_literal = self.ctx.profile >= crate::analyzer::SparkProfile::V4_3;
+        let digits = krishiv_kernels::cast::time_fraction_digits(value);
+        if nanos_literal && digits > usize::from(DataType::TIME_MAX_PRECISION) {
+            return Err(AnalysisError::new(
+                krishiv_common::error::InvalidTimeLiteralPrecision {
+                    value: format!("'{value}'"),
+                },
+                e.origin,
+            ));
+        }
+        let (parsed, precision) = if nanos_literal {
+            let p = u8::try_from(digits.max(6)).unwrap_or(DataType::TIME_MAX_PRECISION);
+            (krishiv_kernels::cast::parse_time_nanos(value), p)
+        } else {
+            (krishiv_kernels::cast::parse_time(value), 6)
+        };
+        let Some(nanos) = parsed else {
+            return Err(AnalysisError::new(
+                krishiv_common::error::InvalidTypedLiteral {
+                    value: format!("'{value}'"),
+                    value_type: "\"TIME\"".to_owned(),
+                },
+                e.origin,
+            ));
+        };
+        let mut text = krishiv_kernels::cast::format_time(nanos);
+        // Spark 4.3 names a `TIME(7..=9)` literal with exactly `precision` digits (its
+        // `Literal.sql` pads back the zeros the formatter drops: `TIME '12:00:00.123456700'`);
+        // a `TIME(6)` keeps the formatter's text.
+        if precision > 6 {
+            let have = text.rsplit_once('.').map_or(0, |(_, f)| f.len());
+            if have == 0 {
+                text.push('.');
+            }
+            text.extend(std::iter::repeat_n(
+                '0',
+                usize::from(precision).saturating_sub(have),
+            ));
+        }
+        // Spark names a time by its value as read: the shown literal
+        // holds that text, so the name follows the profile's digits.
+        let shown = Expr::new(ExprNode::TypedLiteral {
+            kind: TypedLiteralKind::Time,
+            value: text.clone(),
+        })
+        .with_origin(e.origin);
+        let text = Arc::new(Expr::from(Literal::String(text)).with_origin(e.origin));
+        let cast = Expr::new(ExprNode::Cast {
+            expr: text,
+            to: DataType::Time { precision },
+            mode: CastMode::Ansi,
+        })
+        .with_origin(e.origin);
+        Ok((Arc::new(cast), Arc::new(shown), precision))
+    }
+
     /// `v IN (correlated global aggregate)`: the aggregate has exactly one
     /// row for each outer row (a count of nothing is 0), so the `IN` is
     /// `v = (scalar subquery)`, which the scalar path decorrelates with
@@ -2044,4 +2066,11 @@ fn first_aggregate(e: &Arc<Expr>) -> Option<Arc<Expr>> {
         }
     }
     None
+}
+
+/// `kids` without the call arguments `kept..n` that `typed_call` dropped (the
+/// kids after `n` stay). Out of line so the recursive `expr` frame stays small.
+#[inline(never)]
+fn drop_arguments(kids: &[Bound], kept: usize, n: usize) -> Vec<Bound> {
+    kids[..kept].iter().chain(&kids[n..]).cloned().collect()
 }

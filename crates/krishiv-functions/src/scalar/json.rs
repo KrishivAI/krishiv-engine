@@ -300,9 +300,18 @@ fn from(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     }
     let zone = Arc::clone(&opts.time_zone);
     let start = opts.query_start_micros;
+    // Spark 4.3's reader keeps every digit it reads, whatever the declared `TIME(p)` (a 4.3.0
+    // run: `from_json(.., 'a time(3)')` keeps nine); 4.2 cuts to `p`.
+    let spark_4_2 = opts.kernel.spark_version() < krishiv_kernels::SparkVersion::V4_3;
+    let mut options = options;
+    options.time_micros_only = spark_4_2;
     Ok(Binding::new(target.clone(), move |x: &Inputs<'_>| {
         let read = read_json(&x.strings(0)?, &target, &options, zone.as_ref(), start)?;
-        truncate_times(&read, &declared)
+        if spark_4_2 {
+            truncate_times(&read, &declared)
+        } else {
+            Ok(read)
+        }
     }))
 }
 

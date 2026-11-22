@@ -314,7 +314,9 @@ pub(in crate::analyzer) fn arg_type(data_type: DataType, nullable: bool) -> ArgT
     }
 }
 
-/// Spark's error for a cast of `arg` to `to` it refuses.
+/// Spark's error for a cast of `arg` to `to` it refuses. Spark 4.3 (`spark_4_3`) casts a `TIME`
+/// to a timestamp (today's date at that time), which Krishiv does not yet: that cast is
+/// `KRISHIV_UNSUPPORTED_FEATURE`, not Spark's mismatch.
 pub(super) fn bad_cast(
     bad: BadCast,
     origin: Origin,
@@ -322,7 +324,19 @@ pub(super) fn bad_cast(
     to: &DataType,
     mode: CastMode,
     zone: Option<SessionZone>,
+    spark_4_3: bool,
 ) -> AnalysisError {
+    if spark_4_3
+        && matches!(arg.ty.data_type, Some(DataType::Time { .. }))
+        && matches!(to, DataType::Timestamp | DataType::TimestampNtz)
+    {
+        return AnalysisError::new(
+            krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!("a cast from TIME to {} (Spark 4.3)", to.sql()),
+            },
+            origin,
+        );
+    }
     let shown = ExprNode::Cast {
         expr: arg.shown(),
         to: to.clone(),

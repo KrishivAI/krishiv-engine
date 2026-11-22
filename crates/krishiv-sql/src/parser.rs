@@ -200,6 +200,10 @@ pub(crate) struct Parser<'s> {
     /// Reading the bodies of a multi-table insert: `INSERT INTO|OVERWRITE`
     /// starts the next clause, never an implicit alias.
     insert_bodies: bool,
+    /// The token of a `CURRENT_TIMESTAMP`-like keyword that starts a select item followed by an
+    /// identifier list that ends the item (`current_timestamp(n)`): ANTLR reads the keyword
+    /// alone and the list as a multi-part alias, so the keyword is no call there.
+    current_like_alias: Option<usize>,
 }
 
 /// A part of a `CASE` expression.
@@ -813,6 +817,7 @@ impl<'s> Parser<'s> {
             cast_types: vec![],
             force_bare,
             insert_bodies: false,
+            current_like_alias: None,
         };
         if has_case {
             parser.closer_ahead = parser.closer_ahead_table(&case_words);
@@ -1239,6 +1244,30 @@ impl<'s> Parser<'s> {
 
     fn ident_list(&mut self) -> PR<Vec<Ident>> {
         self.paren_list(Self::any_ident)
+    }
+
+    /// Whether tokens `n..` are `( ident [, ident]* )` followed by the end of a select item (a
+    /// list end or a clause keyword such as `FROM`).
+    fn ident_list_ends_item_at(&self, n: usize) -> bool {
+        if !self.sym_at(n, Sym::LParen) {
+            return false;
+        }
+        let mut k = n + 1;
+        loop {
+            if !self.is_ident_at(k, true) {
+                return false;
+            }
+            k += 1;
+            if self.sym_at(k, Sym::Comma) {
+                k += 1;
+            } else {
+                break;
+            }
+        }
+        self.sym_at(k, Sym::RParen)
+            && (self.item_end_at(k + 1)
+                || (self.kind(k + 1) == Some(TokenKind::Word)
+                    && self.class(k + 1) & CLAUSE_WORD != 0))
     }
 
     /// Whether token `n` ends a list item: end of input, `,`, `)` or `;`.

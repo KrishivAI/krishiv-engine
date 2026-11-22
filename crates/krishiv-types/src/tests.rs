@@ -156,21 +156,81 @@ fn spatial_fields_need_their_tag() {
     );
 }
 
+/// The type grammar of a release (R3 review findings 7, 14, 15): 4.2 caps `TIME` at 6 and has no
+/// timestamp precision; 4.3 takes `TIME(0..=9)` and `TIMESTAMP_NTZ(6)`, refuses 7..=9, and words
+/// the range as `[0, 9]`.
+#[test]
+fn the_type_grammar_follows_the_release() {
+    use crate::{TypeGrammar, parse_data_type_in};
+    let class = |r: crate::error::Result<DataType>| r.err().map(|e| e.error_class());
+    let v42 = |s: &str| parse_data_type_in(s, TypeGrammar::V4_2);
+    let v43 = |s: &str| parse_data_type_in(s, TypeGrammar::V4_3);
+    assert_eq!(v43("time(9)"), Ok(DataType::Time { precision: 9 }));
+    assert_eq!(
+        class(v42("time(7)")),
+        Some(ErrorClass::UnsupportedTimePrecision)
+    );
+    assert!(
+        v42("time(7)")
+            .unwrap_err()
+            .to_string()
+            .contains("range [0, 6]")
+    );
+    assert!(
+        v43("time(10)")
+            .unwrap_err()
+            .to_string()
+            .contains("range [0, 9]")
+    );
+    assert_eq!(v43("timestamp_ntz(6)"), Ok(DataType::TimestampNtz));
+    assert_eq!(v43("timestamp_ltz(06)"), Ok(DataType::Timestamp));
+    assert_eq!(
+        class(v43("timestamp_ntz(9)")),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
+    assert_eq!(
+        class(v43("timestamp_ntz(3)")),
+        Some(ErrorClass::InvalidTimestampPrecision)
+    );
+    assert!(v42("timestamp_ntz(6)").is_err());
+    // Schema JSON: 6 is the microsecond type, 7..=9 refused, anything else malformed.
+    let field = |t: &str| {
+        format!(
+            r#"{{"type":"struct","fields":[{{"name":"a","type":"{t}","nullable":true,"metadata":{{}}}}]}}"#
+        )
+    };
+    let ntz = DataType::from_json(&field("timestamp_ntz(6)")).unwrap();
+    assert_eq!(ntz.simple_string(), "struct<a:timestamp_ntz>");
+    assert_eq!(
+        class(DataType::from_json(&field("timestamp_ltz(9)"))),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
+    assert_eq!(
+        class(DataType::from_json(&field("timestamp_ntz(2)"))),
+        Some(ErrorClass::InvalidTimestampPrecision)
+    );
+    assert!(DataType::from_json(&field("timestamp_ntz(x)")).is_err());
+    // A `time(9)` read under 4.2 is refused with 4.2's text.
+    let t9 = DataType::from_json_in(&field("time(9)"), TypeGrammar::V4_2).unwrap_err();
+    assert!(t9.to_string().contains("range [0, 6]"));
+    assert!(DataType::from_json_in(&field("time(9)"), TypeGrammar::V4_3).is_ok());
+}
+
 #[test]
 fn time_precision_bounds_follow_spark() {
-    for p in 0..=6 {
+    for p in 0..=9 {
         let t = DataType::time(p);
         assert_eq!(
             t.as_ref().map(DataType::simple_string),
             Ok(format!("time({p})"))
         );
     }
-    let e = DataType::time(7).err();
+    let e = DataType::time(10).err();
     assert_eq!(
         e.map(|e| e.to_string()).as_deref(),
         Some(
-            "[UNSUPPORTED_TIME_PRECISION] The seconds precision 7 of the TIME data type is out \
-             of the supported range [0, 6]. SQLSTATE: 0A001"
+            "[UNSUPPORTED_TIME_PRECISION] The seconds precision 10 of the TIME data type is out \
+             of the supported range [0, 9]. SQLSTATE: 0A001"
         )
     );
     assert!(DataType::time(u32::MAX).is_err());

@@ -6,10 +6,18 @@
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use futures::executor::block_on;
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 
 fn run(sql: &str) -> Result<Option<String>, String> {
-    let s = Session::new().map_err(|e| e.to_string())?;
+    run_on(SparkProfile::default(), sql)
+}
+
+fn run_on(profile: SparkProfile, sql: &str) -> Result<Option<String>, String> {
+    let s = Session::builder()
+        .profile(profile)
+        .build()
+        .map_err(|e| e.to_string())?;
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).map_err(|e| e.to_string())?;
     let df =
         block_on(s.sql(&format!("SELECT CAST(({sql}) AS STRING)"))).map_err(|e| e.to_string())?;
@@ -43,9 +51,16 @@ fn the_precision_types_the_result_and_cuts_the_digits() {
 }
 
 #[test]
-fn a_precision_outside_zero_to_six_is_refused() {
-    for p in ["7", "-1"] {
+fn a_precision_outside_the_profiles_range_is_refused() {
+    // Spark 4.3 (the default profile): TIME precision is [0, 9].
+    for p in ["10", "-1"] {
         let e = run(&format!("current_time({p})")).unwrap_err();
+        assert!(e.contains("DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"), "{e}");
+    }
+    assert_eq!(text("typeof(current_time(7))"), "time(7)");
+    // Spark 4.2: [0, 6].
+    for p in ["7", "-1"] {
+        let e = run_on(SparkProfile::V4_2, &format!("current_time({p})")).unwrap_err();
         assert!(e.contains("DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"), "{e}");
     }
     let e = run("current_time(1, 2)").unwrap_err();

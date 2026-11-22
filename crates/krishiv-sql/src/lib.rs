@@ -159,7 +159,7 @@ pub struct ParserOptions {
 }
 
 impl Default for ParserOptions {
-    /// Spark 4.2's defaults.
+    /// Spark's default configs, with the grammar of the default profile (Spark 4.3).
     fn default() -> Self {
         Self::from_conf(|_| None)
     }
@@ -167,7 +167,8 @@ impl Default for ParserOptions {
 
 impl ParserOptions {
     /// Options from Spark session configs; `conf` returns a config's value
-    /// if it is set. Unset configs take Spark 4.2's defaults.
+    /// if it is set. Unset configs take Spark's defaults; the grammar is the default profile's
+    /// (Spark 4.3: [`Self::spark_4_3`] is on; a session of an older profile turns it off).
     pub fn from_conf<'a>(conf: impl Fn(&str) -> Option<&'a str>) -> Self {
         let on = |key: &str, default: bool| {
             conf(key).map_or(default, |v| v.trim().eq_ignore_ascii_case("true"))
@@ -203,7 +204,7 @@ impl ParserOptions {
                 false,
             ),
             schema_level_collations: on("spark.sql.collation.schemaLevel.enabled", false),
-            spark_4_3: false,
+            spark_4_3: true,
             timestamp_nanos_types: on("spark.sql.timestampNanosTypes.enabled", false),
         }
     }

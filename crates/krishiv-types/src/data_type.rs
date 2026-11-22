@@ -175,6 +175,45 @@ impl std::hash::Hash for DataType {
     }
 }
 
+/// The type grammar of a Spark release line: what a type string or a type read from outside may
+/// say. Spark 4.3 added `TIME(7..=9)` and `TIMESTAMP[_NTZ|_LTZ](p)`; the default is 4.3 (the default
+/// profile).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TypeGrammar {
+    /// Spark 4.2 and older: `TIME(0..=6)`, no timestamp precision.
+    V4_2,
+    /// Spark 4.3: `TIME(0..=9)`, `TIMESTAMP[_NTZ|_LTZ](6)` is the microsecond type and 7..=9 the
+    /// nanosecond types (not in Krishiv yet).
+    #[default]
+    V4_3,
+}
+
+impl TypeGrammar {
+    /// The grammar of a session whose profile is Spark 4.3 or later (`spark_4_3`) or older.
+    #[must_use]
+    pub const fn new(spark_4_3: bool) -> Self {
+        if spark_4_3 { Self::V4_3 } else { Self::V4_2 }
+    }
+
+    /// The largest `TIME` precision the grammar takes.
+    #[must_use]
+    pub const fn max_time_precision(self) -> u8 {
+        match self {
+            Self::V4_2 => 6,
+            Self::V4_3 => DataType::TIME_MAX_PRECISION,
+        }
+    }
+
+    /// The release whose error texts this grammar's refusals use.
+    #[must_use]
+    pub const fn release(self) -> krishiv_common::error::SparkRelease {
+        match self {
+            Self::V4_2 => krishiv_common::error::SparkRelease::V4_2,
+            Self::V4_3 => krishiv_common::error::SparkRelease::V4_3,
+        }
+    }
+}
+
 impl DataType {
     /// The types that carry no value besides their kind: equal to themselves by kind alone. The
     /// match is exhaustive, so a new variant must be placed here to compile.
@@ -386,6 +425,43 @@ impl DataType {
         }
     }
 
+    /// The largest `TIME` precision in this type (nested types included); `None` without one.
+    #[must_use]
+    pub fn max_time_precision(&self) -> Option<u8> {
+        match self {
+            Self::Time { precision } => Some(*precision),
+            Self::Array(a) => a.element_type().max_time_precision(),
+            Self::Map(m) => m
+                .key_type()
+                .max_time_precision()
+                .max(m.value_type().max_time_precision()),
+            Self::Struct(s) => s
+                .fields()
+                .iter()
+                .filter_map(|f| f.data_type().max_time_precision())
+                .max(),
+            Self::Udt(u) => u.sql_type().max_time_precision(),
+            _ => None,
+        }
+    }
+
+    /// `self`, or `UNSUPPORTED_TIME_PRECISION` (worded as Spark 4.2 words it) when `grammar` is
+    /// [`TypeGrammar::V4_2`] and the type holds a `TIME(7..=9)`, which only Spark 4.3 has. For a
+    /// type read from outside (schema JSON, Spark Connect) under an older profile.
+    ///
+    /// # Errors
+    /// As above.
+    pub fn in_grammar(self, grammar: TypeGrammar) -> Result<Self> {
+        match self.max_time_precision() {
+            Some(p)
+                if grammar == TypeGrammar::V4_2 && p > TypeGrammar::V4_2.max_time_precision() =>
+            {
+                Err(error::time_precision(&p.to_string()))
+            }
+            _ => Ok(self),
+        }
+    }
+
     /// `self`, or `KRISHIV_UNSUPPORTED_FEATURE` if it holds a collated
     /// string. The analyzer does not take collated types yet (ADR 0043,
     /// unit 2a): a user-facing entry point that cannot honour a collation
@@ -503,7 +579,8 @@ impl DataType {
     pub fn time(precision: u32) -> Result<Self> {
         match u8::try_from(precision) {
             Ok(p) if p <= Self::TIME_MAX_PRECISION => Ok(Self::Time { precision: p }),
-            _ => Err(error::time_precision(&precision.to_string())),
+            _ => Err(error::time_precision(&precision.to_string())
+                .in_release(krishiv_common::error::SparkRelease::V4_3)),
         }
     }
 

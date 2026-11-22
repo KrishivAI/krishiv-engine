@@ -998,15 +998,20 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 DataType::Int64
             };
             Binding::new(result, move |x: &Inputs<'_>| {
-                let out = time_to_units(&x.array::<Time64NanosecondType>(0)?, per);
+                let times = x.array::<Time64NanosecondType>(0)?;
                 Ok(if seconds {
+                    // Spark 4.3 rounds the seconds half up to six digits (`43201.123456789` is
+                    // `43201.123457`); the integral units truncate.
+                    let micros: arrow_array::PrimitiveArray<Int64Type> =
+                        times.unary(|n| n.saturating_add(500) / 1_000);
                     Arc::new(
-                        out.unary::<_, Decimal128Type>(i128::from)
+                        micros
+                            .unary::<_, Decimal128Type>(i128::from)
                             .with_precision_and_scale(14, 6)
                             .map_err(|e| internal(e.to_string()))?,
                     ) as ArrayRef
                 } else {
-                    Arc::new(out) as ArrayRef
+                    Arc::new(time_to_units(&times, per)) as ArrayRef
                 })
             })
         }

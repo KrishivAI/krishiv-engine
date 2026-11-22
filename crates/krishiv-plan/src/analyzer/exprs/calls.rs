@@ -138,11 +138,42 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
-        let Some(Constant::Integral(p)) = self.fold(&arg.expr, self.ctx.conf.ansi) else {
-            return Ok(false);
+        let p = match self.fold(&arg.expr, self.ctx.conf.ansi) {
+            Some(Constant::Integral(p)) => p,
+            // `now(CAST(NULL AS INT))` (Spark 4.3: `DATATYPE_MISMATCH.UNEXPECTED_NULL`).
+            Some(Constant::Null) => {
+                let zone = self.ctx.conf.session_zone;
+                return Err(AnalysisError::new(
+                    krishiv_common::error::DatatypeMismatchUnexpectedNull {
+                        sql_expr: format!("\"{}\"", pretty(&arg.shown(), zone)),
+                        expr_name: "`precision`".to_owned(),
+                    },
+                    e.origin,
+                ));
+            }
+            // A column (`current_timestamp(n) AS x`): Spark 4.3's `NON_FOLDABLE_ARGUMENT`.
+            None if crate::analyzer::ops::not_constant(&arg.expr) => {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::NonFoldableArgument {
+                        func_name: format!("`{name}`"),
+                        param_name: "`precision`".to_owned(),
+                        param_type: "\"INT\"".to_owned(),
+                    },
+                    e.origin,
+                ));
+            }
+            _ => return Ok(false),
         };
         match p {
             6 => Ok(true),
+            7..=9 if self.ctx.conf.timestamp_nanos_types => Err(AnalysisError::new(
+                krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: format!(
+                        "`{name}({p})`: the nanosecond-precision timestamp types (Krishiv 0.3.1)"
+                    ),
+                },
+                e.origin,
+            )),
             7..=9 => Err(AnalysisError::new(
                 krishiv_common::error::FeatureNotEnabled {
                     feature_name: "Nanosecond-precision timestamp types".to_owned(),

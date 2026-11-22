@@ -997,7 +997,23 @@ fn unix_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 
 /// `date_format`: NULL when an argument may be, or when the value's
 /// implicit cast to `TIMESTAMP` may yield NULL.
+/// `date_format`: a date-like value and a pattern. Spark 4.3 also formats a `TIME`, which reaches
+/// [`date_format_result`] so it is refused as not yet supported, not as a type mismatch.
+fn date_format_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let first = match c.data_type(0) {
+        Some(t @ DataType::Time { .. }) if c.profile() >= SparkProfile::V4_3 => exact(t.clone()),
+        _ => strict_date_like(),
+    };
+    vec![first, exact(DataType::String)]
+}
+
 fn date_format_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if matches!(c.data_type(0), Some(DataType::Time { .. })) {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "date_format of a TIME value (Spark 4.3)".to_owned(),
+        }
+        .into());
+    }
     let nullable = c.any_nullable()
         || match c.data_type(0) {
             Some(DataType::Boolean | DataType::Binary) => {
@@ -1226,7 +1242,7 @@ fn datetime() -> Vec<Spec> {
     ));
     out.extend(scalar(
         &["date_format"],
-        &Inputs::Expects(vec![strict_date_like(), exact(DataType::String)]),
+        &Inputs::Built(InputBuilder(date_format_inputs)),
         date_format_result,
     ));
     out.extend(scalar(

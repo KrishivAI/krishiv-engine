@@ -873,7 +873,17 @@ impl Parser<'_> {
 
     pub(super) fn select_item(&mut self) -> PR<SelectItem> {
         let start = self.start();
-        let expr = self.expr()?;
+        if self.kind(0) == Some(TokenKind::Word)
+            && super::expr::CURRENT_LIKE
+                .iter()
+                .any(|k| crate::keywords::is_kw(self.text(0), k))
+            && self.ident_list_ends_item_at(1)
+        {
+            self.current_like_alias = Some(self.pos);
+        }
+        let expr = self.expr();
+        self.current_like_alias = None;
+        let expr = expr?;
         let alias = self.select_alias()?;
         Ok(SelectItem {
             expr,

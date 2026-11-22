@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! TIME(p <= 9), `LOCALTIME`, the nanosecond timestamp refusals and the collated literal names (P3 R3)
+//! TIME(p <= 9), `LOCALTIME` and the nanosecond timestamp refusals (P3 R3)
 //! against real Spark 4.2.0 and 4.3.0 runs: `tests/fixtures/spark-<v>/time-precision-goldens.json`,
 //! written by `tests/scripts/gen_time_precision_goldens.py`. Each case runs on the session profile of
 //! its release, in UTC. A case that runs is compared by its column names and, unless it reads a clock,
@@ -39,16 +39,9 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
     ("4.3.0", "lit_trailing_zeros"),
     ("4.3.0", "lit_to_string"),
     ("4.3.0", "localtime_key_off"),
-    // Errors render the Spark 4.2.1 message template; release-keyed rendering is not built yet ([0, 9] in 4.3).
-    ("4.3.0", "time10"),
-    ("4.3.0", "time10_key_off"),
-    ("4.3.0", "time_huge"),
     // `min`/`max` have no `Time64` accumulator yet.
     ("4.2.0", "max_distinct"),
     ("4.3.0", "max_distinct"),
-    // `to_time` with a pattern of nine `S` keeps six digits.
-    ("4.2.0", "to_time"),
-    ("4.3.0", "to_time"),
     // `date_format` refuses a TIME before the implicit cast Spark tries (the class differs).
     ("4.2.0", "date_format"),
     ("4.3.0", "date_format"),
