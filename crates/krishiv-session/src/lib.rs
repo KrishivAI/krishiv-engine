@@ -164,6 +164,7 @@ pub use python_udfs::{
     ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary, PythonUdtfDef,
     PythonUdtfEntry,
 };
+pub use python_udfs::{MAX_PYTHON_SOURCE_CALLS, run_python_source_call};
 #[cfg(feature = "unstable-ir")]
 pub use python_udfs::{python_udf_call_name, python_udtf_call_name};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};

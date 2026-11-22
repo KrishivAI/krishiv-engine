@@ -664,21 +664,26 @@ impl SourcePlanner for PythonPlanner {
         &self,
         filters: &[SourceFilter],
     ) -> Result<PlannedRead, krishiv_common::error::KrishivError> {
-        Python::attach(|py| {
-            let offered = filters
-                .iter()
-                .map(|f| filter_spec(py, f))
-                .collect::<PyResult<Vec<_>>>()
-                .map_err(|e| source_failure(py, &e))?;
-            let answer = self
-                .plan
-                .call1(py, (offered,))
-                .map_err(|e| source_failure(py, &e))?;
-            let (pushed, read): (Vec<bool>, Py<PyAny>) =
-                answer.extract(py).map_err(|e| source_failure(py, &e))?;
-            Ok(PlannedRead {
-                pushed,
-                read: python_batch_source(read),
+        // User Python, on a thread of its own: no engine thread waits holding the GIL, and the
+        // statement's cancel ends the wait at once.
+        let filters = filters.to_vec();
+        let plan = Python::attach(|py| self.plan.clone_ref(py));
+        krishiv_session::run_python_source_call(move || {
+            Python::attach(|py| {
+                let offered = filters
+                    .iter()
+                    .map(|f| filter_spec(py, f))
+                    .collect::<PyResult<Vec<_>>>()
+                    .map_err(|e| source_failure(py, &e))?;
+                let answer = plan
+                    .call1(py, (offered,))
+                    .map_err(|e| source_failure(py, &e))?;
+                let (pushed, read): (Vec<bool>, Py<PyAny>) =
+                    answer.extract(py).map_err(|e| source_failure(py, &e))?;
+                Ok(PlannedRead {
+                    pushed,
+                    read: python_batch_source(read),
+                })
             })
         })
     }
