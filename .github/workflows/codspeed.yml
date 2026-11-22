@@ -6,7 +6,10 @@ on:
   # Pull requests run the benchmarks only when they change the execution path the
   # benchmarks measure; every push to main runs them all, so a regression from any
   # other change still shows up on the next main run and is fixed forward.
+  # A pull request runs them only when it carries the label `perf` or its branch starts with
+  # `p3/perf` or `fix/perf` (a draft never does); adding the label starts the run (`labeled`).
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - "crates/krishiv-exec/**"
       - "crates/krishiv-kernels/**"
@@ -45,6 +48,7 @@ jobs:
   # duplicate variation).
   plan:
     name: Plan the benchmark shards
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft != true && (contains(github.event.pull_request.labels.*.name, 'perf') || startsWith(github.event.pull_request.head.ref, 'p3/perf') || startsWith(github.event.pull_request.head.ref, 'fix/perf'))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -128,7 +132,7 @@ jobs:
   benchmarks:
     name: Benchmarks
     needs: [plan, shards]
-    if: always()
+    if: ${{ always() && (github.event_name != 'pull_request' || (github.event.pull_request.draft != true && (contains(github.event.pull_request.labels.*.name, 'perf') || startsWith(github.event.pull_request.head.ref, 'p3/perf') || startsWith(github.event.pull_request.head.ref, 'fix/perf')))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

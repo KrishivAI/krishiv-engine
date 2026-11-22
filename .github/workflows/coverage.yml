@@ -24,6 +24,7 @@ name: Coverage
 # the other; that is no weaker than the Rust-only gate it extends.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
     types: [checks_requested]
 
@@ -46,7 +47,7 @@ jobs:
   diff-coverage:
     # Pull requests only: the diff gate was enforced on the PR; a merge-group
     # run reports this job as skipped, which satisfies the required check.
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     # A PR that touches krishiv-session tests most of the workspace (its dependents): #869's
     # runs took 39, 56 and 59 minutes, and two more were cancelled at the old 60-minute limit,

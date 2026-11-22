@@ -5,6 +5,7 @@ name: Docs site
 # Rust pages need nightly rustdoc and stay in the nightly `docs-reference` job.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "docs/**"
       - "xtask/src/docs_*.rs"
@@ -34,6 +35,7 @@ concurrency:
 
 jobs:
   docs-site:
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -74,6 +76,7 @@ jobs:
           if-no-files-found: ignore
 
   generated:
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 40
     # The generators and the rerun examples build much of the workspace; no debug info keeps that build off the

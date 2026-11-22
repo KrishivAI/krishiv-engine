@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
     types: [checks_requested]
   # No push and no schedule trigger (owner 2026-11-08: run each gate once). A push to main only measures
@@ -50,6 +50,9 @@ env:
 jobs:
   # Decides whether the Rust jobs run. Docs/bench/plan-only PRs skip them.
   changes:
+    # A draft pull request skips every heavy job below (they need this one, or carry the same test);
+    # marking it ready starts the full run (`ready_for_review`). A skipped job satisfies a required check.
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
@@ -96,7 +99,7 @@ jobs:
 
   # Formatting and spelling of non-Rust files; no Rust toolchain needed.
   text-lint:
-    if: github.event_name != 'merge_group'
+    if: github.event_name != 'merge_group' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -130,7 +133,7 @@ jobs:
   # crates/krishiv-ui-assets/assets (ADR 0024: cargo build never needs Node), and the
   # Playwright page check (ui/tests/check_pages.py) against that build. No Rust toolchain.
   ui:
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' && github.event.pull_request.draft != true
     runs-on: ubuntu-24.04 # Playwright has no chromium build for ubuntu-latest (26.04)
     steps:
       - name: Harden the runner (audit egress)
@@ -166,7 +169,7 @@ jobs:
   # runs on every PR instead of being gated by `changes`. Required check (a maintainer
   # adds `python-quality` to branch protection). Versions come from each uv.lock.
   python-quality:
-    if: github.event_name != 'merge_group'
+    if: github.event_name != 'merge_group' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -620,7 +623,7 @@ jobs:
   miri-kernels:
     # Not in the merge queue (about 33 minutes; it ran on the pull request, and the nightly
     # run covers main). The check still reports there: a skipped job satisfies it.
-    if: github.event_name != 'merge_group'
+    if: github.event_name != 'merge_group' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -661,7 +664,7 @@ jobs:
   miri-bridges:
     # Not in the merge queue (about 8 minutes; it ran on the pull request, and the nightly
     # run covers main). The check still reports there: a skipped job satisfies it.
-    if: github.event_name != 'merge_group'
+    if: github.event_name != 'merge_group' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -995,7 +998,7 @@ jobs:
   # the `wheel-sizes` job below (label-aware), which is required too.
   wheels-ok:
     needs: [changes, wheels, wheels-targets]
-    if: always()
+    if: always() && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -1046,7 +1049,7 @@ jobs:
   # re-runs both gates with it. It does nothing itself.
   gates-ready:
     needs: [changes, budgets-measure, wheels-targets, wheels-ok]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -1060,7 +1063,7 @@ jobs:
   budgets:
     # Starts when the measurement has finished (never before), so no runner polls for it.
     needs: [changes, gates-ready]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -1212,7 +1215,7 @@ jobs:
   wheel-sizes:
     # Starts when the measurement has finished (never before), so no runner polls for it.
     needs: [changes, gates-ready]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
