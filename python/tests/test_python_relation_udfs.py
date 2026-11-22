@@ -397,12 +397,12 @@ def _count_cogroup(lpdf, rpdf):
     return pd.DataFrame({"nl": [len(lpdf)], "nr": [len(rpdf)]})
 
 
-def test_a_cogroup_with_a_missing_right_table_raises_the_right_sides_error() -> None:
+def test_a_cogroup_with_an_unparsable_right_table_name_raises_the_right_sides_error() -> None:
     spark = _spark()
     left = spark.createDataFrame([(1, 1)], ["id", "v"])
-    right = spark.table("no_such_table")
+    right = spark.table("a b")  # a deferred build error, not an unresolved table
     out = left.groupBy("id").cogroup(right.groupBy("id")).applyInPandas(_count_cogroup, "nl long, nr long")
-    with pytest.raises(Exception, match="TABLE_OR_VIEW_NOT_FOUND"):
+    with pytest.raises(Exception, match="PARSE_SYNTAX_ERROR"):
         out.collect()
 
 
