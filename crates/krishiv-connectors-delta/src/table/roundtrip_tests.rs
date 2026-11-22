@@ -30,7 +30,7 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
-use delta_kernel::expressions::{MapData, Scalar, StructData};
+use delta_kernel::expressions::{Expression, MapData, Predicate, Scalar, StructData};
 use delta_kernel::schema::{DataType, MapType, StructField, StructType};
 use krishiv_common::config::Config;
 use krishiv_exec::ScanPushdowns;
@@ -428,11 +428,251 @@ fn krishiv_commits_on_spark_tables() {
 
         record.insert(name.to_owned(), json!({ "read": read, "steps": steps }));
     }
+    race_tables(&spark, &mut record);
     std::fs::write(
         out_dir().join("KRISHIV-RT.json"),
         serde_json::to_vec_pretty(&Value::Object(record)).unwrap(),
     )
     .unwrap();
+}
+
+/// The concurrent-writer tables (PR-53b, added 2026-11-20): both partitioned by `x`.
+const RACE_TABLES: [&str; 2] = ["race_k", "race_s"];
+
+/// A read of partition `x = value` (a statement whose condition is that partition's).
+fn reads_x(value: i32) -> ReadSet {
+    ReadSet {
+        predicates: vec![Arc::new(Predicate::eq(
+            Expression::column(["x"]),
+            Expression::literal(value),
+        ))],
+        ..ReadSet::default()
+    }
+}
+
+/// Commits `staged` on `table`'s snapshot (perhaps not the latest): the new version, or the error.
+fn commit_from(env: &Env, table: &DeltaTable, staged: StagedCommit) -> Result<u64, KrishivError> {
+    env.block_on(delta_commit(
+        &env.engine,
+        Arc::clone(table.snapshot()),
+        staged,
+        RetryLimits::default(),
+    ))
+    .map(|c| c.version)
+}
+
+fn open_at(env: &Env, version: Option<u64>) -> DeltaTable {
+    env.block_on(DeltaTable::open(
+        env.engine.clone(),
+        version,
+        &Config::new(),
+    ))
+    .unwrap()
+}
+
+/// A whole-file `DELETE` of the files `pick` accepts in `table`'s snapshot, reading partition
+/// `x = read` (the condition's partition conjunct).
+fn delete_files(
+    env: &Env,
+    name: &str,
+    table: &DeltaTable,
+    pick: fn(&str) -> bool,
+    read: i32,
+) -> StagedCommit {
+    let (r, _) = removes(env, table, pick);
+    assert!(!r.is_empty(), "{name}: files to remove");
+    let predicate = format!("[\"(x = {read})\"]");
+    let mut s = staged(
+        name,
+        CommitOperation::Delete,
+        &[("predicate", predicate.as_str())],
+        Vec::new(),
+        r,
+    );
+    s.read_set = reads_x(read);
+    s
+}
+
+fn append_ids(env: &Env, name: &str, tag: &str, ids: &[i64]) -> StagedCommit {
+    let ids: Vec<Option<i64>> = ids.iter().copied().map(Some).collect();
+    staged(
+        name,
+        CommitOperation::Write,
+        &[("mode", "Append")],
+        write_files(env, tag, &ids, true),
+        Vec::new(),
+    )
+}
+
+/// One race event: what ran, from which version, and how it ended (`version` when it landed,
+/// `class` when it conflicted), with Krishiv's read of the latest version after it.
+fn event(env: &Env, what: &str, from: u64, outcome: Result<u64, KrishivError>) -> Value {
+    let rows = krishiv_read(env, None);
+    match outcome {
+        Ok(v) => json!({ "what": what, "from": from, "version": v, "rows": rows }),
+        Err(e) => json!({
+            "what": what,
+            "from": from,
+            "class": e.error_class().name(),
+            "message": e.to_string(),
+            "rows": rows,
+        }),
+    }
+}
+
+/// Step 2's concurrent-writer cases. `race_k`: two Krishiv commits staged from one snapshot:
+/// appends (both land), a `DELETE` of the same files (the first lands, the second conflicts), a
+/// `DELETE` of different partitions (both land). `race_s`: Krishiv commits from the version
+/// before Spark's `DELETE` of `x = 0`: an append (lands), a `DELETE` of `x = 0` (conflicts), a
+/// `DELETE` of `x = 1` (lands). The landed commits are the table's `steps` (read back by Spark
+/// as the other tables' are), every event in `race`.
+fn race_tables(spark: &Value, record: &mut serde_json::Map<String, Value>) {
+    for name in RACE_TABLES {
+        let env = Env::at(table_dir(name));
+        let created = &spark[name];
+        let latest = created["version"].as_u64().unwrap();
+        let mut events = Vec::new();
+        if name == "race_k" {
+            let s0 = open_at(&env, None);
+            let from = s0.version();
+            let a = commit_from(&env, &s0, append_ids(&env, name, "k1", &[203, 206]));
+            events.push(event(&env, "append", from, a));
+            let b = commit_from(&env, &s0, append_ids(&env, name, "k2", &[209, 212]));
+            events.push(event(&env, "append", from, b));
+            let s1 = open_at(&env, None);
+            let from = s1.version();
+            let d1 = delete_files(&env, name, &s1, |p| p.starts_with("x=0/"), 0);
+            let d2 = delete_files(&env, name, &s1, |p| p.starts_with("x=0/"), 0);
+            events.push(event(&env, "delete", from, commit_from(&env, &s1, d1)));
+            events.push(event(&env, "delete", from, commit_from(&env, &s1, d2)));
+            let s2 = open_at(&env, None);
+            let from = s2.version();
+            let e1 = delete_files(&env, name, &s2, |p| p.starts_with("x=1/"), 1);
+            // Spark's files of x = 2 only: Krishiv's appended rows stay.
+            let e2 = delete_files(
+                &env,
+                name,
+                &s2,
+                |p| p.starts_with("x=2/") && !krishiv_file(p),
+                2,
+            );
+            events.push(event(&env, "delete", from, commit_from(&env, &s2, e1)));
+            events.push(event(&env, "delete", from, commit_from(&env, &s2, e2)));
+        } else {
+            // Spark's DELETE of x = 0 is `latest`; Krishiv read the version before it.
+            let from = latest - 1;
+            let s0 = open_at(&env, Some(from));
+            let a = commit_from(&env, &s0, append_ids(&env, name, "s1", &[203, 206]));
+            events.push(event(&env, "append", from, a));
+            let d = delete_files(&env, name, &s0, |p| p.starts_with("x=0/"), 0);
+            events.push(event(&env, "delete", from, commit_from(&env, &s0, d)));
+            let e = delete_files(&env, name, &s0, |p| p.starts_with("x=1/"), 1);
+            events.push(event(&env, "delete", from, commit_from(&env, &s0, e)));
+        }
+        let steps: Vec<Value> = events
+            .iter()
+            .filter(|e| e.get("version").is_some())
+            .cloned()
+            .collect();
+        record.insert(
+            name.to_owned(),
+            json!({ "read": created["rows"], "steps": steps, "race": events }),
+        );
+    }
+}
+
+/// Step 4's checks of the races: the outcomes the cases expect, a conflict leaves the table
+/// readable and unchanged, and Spark reads every landed version as Krishiv read it.
+fn check_races(created: &Value, krishiv: &Value, spark: &Value) {
+    for name in RACE_TABLES {
+        let env = Env::at(table_dir(name));
+        let k = &krishiv[name];
+        let s = &spark[name];
+        let events = k["race"].as_array().unwrap();
+        let outcomes: Vec<&str> = events
+            .iter()
+            .map(|e| {
+                if e.get("version").is_some() {
+                    "lands"
+                } else {
+                    "conflicts"
+                }
+            })
+            .collect();
+        let expected: &[&str] = if name == "race_k" {
+            &["lands", "lands", "lands", "conflicts", "lands", "lands"]
+        } else {
+            &["lands", "conflicts", "lands"]
+        };
+        assert_eq!(outcomes, expected, "{name}: outcomes {events:#?}");
+        let mut latest = created[name]["version"].as_u64().unwrap();
+        let mut rows = spark_rows(&created[name]["rows"]);
+        for e in events {
+            if let Some(v) = e["version"].as_u64() {
+                assert_eq!(v, latest + 1, "{name}: {} lands next", e["what"]);
+                latest = v;
+                let key = v.to_string();
+                assert_eq!(
+                    sorted(spark_rows(&s["at"][&key])),
+                    sorted(e["rows"].as_array().unwrap().clone()),
+                    "{name}: Spark at Krishiv's version {v}"
+                );
+                let h = &s["history"][&key];
+                let op = if e["what"] == "delete" {
+                    "DELETE"
+                } else {
+                    "WRITE"
+                };
+                assert_eq!(h["operation"], op, "{name}: operation of {v}");
+                assert_eq!(
+                    h["isolationLevel"], "Serializable",
+                    "{name}: isolation of {v}"
+                );
+                // The snapshot the commit read, also after a retry over a winner (delta-spark's
+                // `readVersion` is the transaction's snapshot, `OptimisticTransaction.scala`).
+                assert_eq!(h["readVersion"], e["from"], "{name}: readVersion of {v}");
+            } else {
+                let class = e["class"].as_str().unwrap();
+                // delta-spark's `ConcurrentModificationException` family.
+                assert!(
+                    class.starts_with("DELTA_CONCURRENT_"),
+                    "{name}: conflict class {class}: {}",
+                    e["message"]
+                );
+                assert_eq!(
+                    sorted(e["rows"].as_array().unwrap().clone()),
+                    sorted(rows.clone()),
+                    "{name}: a conflict changes nothing and the table stays readable"
+                );
+            }
+            rows = e["rows"].as_array().unwrap().clone();
+        }
+        // Spark's DELETE of x = 0 (race_s) and Krishiv's deletes leave only rows of x = 2:
+        // Krishiv's appends, and on race_s Spark's x = 2 rows.
+        let mut left: Vec<i64> = rows.iter().map(|r| r[0].as_i64().unwrap()).collect();
+        left.sort_unstable();
+        let want: Vec<i64> = if name == "race_k" {
+            vec![203, 206, 209, 212]
+        } else {
+            vec![2, 5, 8, 11, 203, 206]
+        };
+        assert_eq!(left, want, "{name}: rows left");
+        assert_eq!(
+            s["before"]["version"].as_u64(),
+            Some(latest),
+            "{name}: Spark's version"
+        );
+        assert_eq!(
+            sorted(spark_rows(&s["before"]["rows"])),
+            sorted(rows),
+            "{name}: Spark reads the races' result"
+        );
+        assert_eq!(
+            sorted(krishiv_read(&env, None)),
+            sorted(spark_rows(&s["after"]["rows"])),
+            "{name}: Krishiv reads Spark's result"
+        );
+    }
 }
 
 /// Step 4: Spark read what Krishiv committed, and Krishiv reads Spark's DML on top.
@@ -442,6 +682,7 @@ fn krishiv_reads_spark_on_top() {
     let created = read_json("SPARK-CREATE.json");
     let krishiv = read_json("KRISHIV-RT.json");
     let spark = read_json("SPARK-READBACK.json");
+    check_races(&created, &krishiv, &spark);
     for (name, _) in TABLES {
         let env = Env::at(table_dir(name));
         let k = &krishiv[name];

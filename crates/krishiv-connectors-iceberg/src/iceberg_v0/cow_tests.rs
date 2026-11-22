@@ -118,7 +118,18 @@ pub(super) struct Dml<'a> {
 
 impl<'a> Dml<'a> {
     pub(super) fn open(env: &'a Env, catalog: &Arc<Catalog>, op: RowLevelOperation) -> Self {
-        let p = provider(env, &catalog.location(), catalog);
+        Self::open_at(env, &catalog.location(), catalog, op)
+    }
+
+    /// The statement pinned at the metadata file `location`, committing through `catalog` (whose
+    /// current metadata may be newer: another writer's commit it has to rebase onto).
+    pub(super) fn open_at(
+        env: &'a Env,
+        location: &str,
+        catalog: &Arc<Catalog>,
+        op: RowLevelOperation,
+    ) -> Self {
+        let p = provider(env, location, catalog);
         let lineage = p.snapshot().format_version >= 3;
         Self {
             env,

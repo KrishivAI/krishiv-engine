@@ -36,6 +36,18 @@ check compares one engine's record (JSON files in `OUT`, never committed) with t
    delete files stay, as Java keeps them); v3 row
    ids survive Krishiv's rewrite; Krishiv reads Spark's last metadata and time travels back to its own snapshots.
 
+### Concurrent writers (`race_k`, `race_s`)
+
+Two more copy-on-write v2 tables partitioned by `x`, in `roundtrip_tests::race_tables` (step 2) and `check_races`
+(step 4). `race_k`, Krishiv against Krishiv (writers pinned at one base): two appends both land (the second rebased);
+two `DELETE ... WHERE x = 0`: the first lands, the second gets `KRISHIV_ICEBERG_COMMIT_CONFLICT` and the table reads as
+before; `DELETE`s of `x = 1` and of Spark's rows of `x = 2` both land. `race_s`, Krishiv against Spark: Spark's
+`DELETE` of `x = 0` ends step 1, Krishiv's writers are pinned at the metadata before it and commit through a catalog
+whose current metadata is Spark's: `DELETE` of `x = 1` lands, of `x = 0` conflicts, an append lands. Step 3 reads them
+as the other tables (time travel to each landed snapshot, DML on top); step 4 checks the outcomes, Spark's history
+and parents, and both engines' reads. The `DELETE`s run before the appends: Krishiv's conflict filter is every row
+(the session passes no read filter yet), so a `DELETE` after a concurrent append conflicts under `serializable`.
+
 ## `delta_roundtrip.sh` (Spark first, Spark last)
 
 1. `gen_delta_roundtrip.py create`: Spark makes `plain`, `part` (partitioned by `x`), `dv` (a deletion vector) and
@@ -53,6 +65,14 @@ check compares one engine's record (JSON files in `OUT`, never committed) with t
    and change feed agree with Krishiv's reads; Spark's DML metrics are non-zero (`numDeletedRows`,
    `numUpdatedRows`, MERGE's deleted and inserted rows, `numDeletionVectorsAdded` on `dv` and `cdf`); Krishiv reads
    Spark's last version and its own versions again.
+
+Concurrent writers, `race_k` and `race_s` (partitioned by `x`), in `roundtrip_tests::race_tables` (step 2) and
+`check_races` (step 4): on `race_k` two Krishiv commits staged from one snapshot (two appends both land; two whole-file
+`DELETE`s of `x = 0`: the first lands, the second gets a `DELTA_CONCURRENT_*` class and the table reads as before;
+`DELETE`s of `x = 1` and of Spark's files of `x = 2` both land); on `race_s` Spark's `DELETE` of `x = 0` ends step 1
+and Krishiv commits from the version before it (an append and a `DELETE` of `x = 1` land, a `DELETE` of `x = 0`
+conflicts). Spark reads each landed version (history: operation, `Serializable`, `readVersion` = the version the
+commit read, also after a retry, as delta-spark's transaction keeps its snapshot) and both engines read the result.
 
 Krishiv's SQL takes the direct commits' place on three more tables Spark makes in step 1 (`sql_plain`, `sql_part`,
 `sql_dv`, as `plain`, `part` and `dv`), in krishiv-session `tests/delta_roundtrip.rs` (feature `delta`):
@@ -75,6 +95,8 @@ Krishiv's SQL takes the direct commits' place on three more tables Spark makes i
 | Iceberg `MERGE` through Krishiv's SQL | PR-37c (the round trip drives the row-level table as the session's planner does) |
 | Column mapping on Krishiv-written files in the round trip | follow-up (its own Spark readback is in `tests/fixtures/delta-4.4.1/krishiv-written/`) |
 | Delta `MERGE` and DVs written by Krishiv (merge-on-read) | PR-37c, PR-37d |
+| Concurrent `MERGE` races (Iceberg and Delta); a race of Krishiv's SQL statements (the cases commit through the connectors' write paths) | PR-37c; the session's read filter for Iceberg row-level writes |
+| Spark losing a race to Krishiv (Spark committing from a version before Krishiv's commit) | Spark's writers read the latest version; needs a held Spark transaction |
 | Krishiv's change feed read (`table_changes`) | PR-37e |
 | `isBlindAppend: false` on Krishiv's non-append Delta commits (Spark's history shows NULL; the check pins it) | delta_kernel writes the field only when true and replaces a connector's value |
 | Krishiv-written tables with non-primitive or wide column types, other `write.*` properties | follow-up |

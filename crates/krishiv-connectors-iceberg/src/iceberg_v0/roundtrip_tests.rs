@@ -29,6 +29,7 @@ use iceberg::spec::{
 };
 use krishiv_exec::planner::{RowLevelOperation, TableProvider as _};
 use krishiv_exec::testing::Batches;
+use krishiv_exec::{Sink, Source};
 use krishiv_types::batch::Batch;
 use serde_json::{Value, json};
 
@@ -39,6 +40,7 @@ use super::scan::read_manifest_files;
 use super::sink_tests::{Catalog, input_schema, local_path, provider, range, request, rows, run};
 use super::write_conformance_tests::{krishiv_rows, snapshot_json, spark_rows, text};
 use crate::plan::VersionSpec;
+use krishiv_common::error::KrishivError;
 
 const OUT_VAR: &str = "KRISHIV_ICEBERG_RT_OUT";
 
@@ -236,11 +238,190 @@ fn krishiv_meets_spark_tables() {
             }),
         );
     }
+    race_tables(&env, &spark, &mut record);
     std::fs::write(
         out_dir().join("KRISHIV-RT.json"),
         serde_json::to_vec_pretty(&Value::Object(record)).unwrap(),
     )
     .unwrap();
+}
+
+/// The concurrent-writer tables (PR-53b, added 2026-11-20): v2, copy-on-write, partitioned by `x`.
+const RACE_TABLES: [&str; 2] = ["race_k", "race_s"];
+
+/// An append of `ids` through a provider pinned at the metadata file `location`.
+fn append_at(
+    env: &Env,
+    location: &str,
+    catalog: &Arc<Catalog>,
+    ids: (i64, i64),
+) -> (Arc<dyn Sink>, Arc<dyn Source>) {
+    let p = provider(env, location, catalog);
+    let sink = p.writer(&request(None)).unwrap();
+    let input: Arc<dyn Source> =
+        Batches::new(input_schema(), vec![Batch::new(range(ids.0, ids.1))]);
+    (sink, input)
+}
+
+/// One race event: what ran, how it ended (`snapshot_id` when it landed, `class` when it
+/// conflicted) and Krishiv's read of the catalog's current metadata after it.
+fn race_event(
+    env: &Env,
+    catalog: &Catalog,
+    name: &str,
+    what: &str,
+    outcome: Result<(), KrishivError>,
+) -> Value {
+    match outcome {
+        Ok(()) => step(env, catalog, name, what),
+        Err(e) => json!({
+            "what": what,
+            "class": e.error_class().name(),
+            "message": e.to_string(),
+            "rows": krishiv_rows(env, &catalog.location(), name, &VersionSpec::Current),
+        }),
+    }
+}
+
+/// Step 2's concurrent-writer cases. `race_k`: two Krishiv writers pinned at one base: appends
+/// (both land, the second rebased), a `DELETE` of `x = 0` (the first lands, the second conflicts:
+/// its files are gone), `DELETE`s of `x = 1` and of Spark's rows of `x = 2` (both land). `race_s`:
+/// Krishiv pinned at the metadata before Spark's `DELETE` of `x = 0`, committing through a catalog
+/// whose current metadata is Spark's: a `DELETE` of `x = 1` (lands), of `x = 0` (conflicts), an
+/// append (lands). The `DELETE`s come before the append: Krishiv's conflict filter is every row
+/// (the session passes no read filter yet), so a `DELETE` after a concurrent append conflicts
+/// under `serializable`, where Spark's filter would not.
+fn race_tables(env: &Env, spark: &Value, record: &mut serde_json::Map<String, Value>) {
+    for name in RACE_TABLES {
+        let created = &spark[name]["spark"];
+        let location = created["metadata"].as_str().unwrap().to_owned();
+        let catalog = Catalog::with_metadata(metadata_at(&location), location.clone());
+        let mut events = Vec::new();
+        if name == "race_k" {
+            let base = catalog.location();
+            let (s1, i1) = append_at(env, &base, &catalog, (203, 205));
+            let (s2, i2) = append_at(env, &base, &catalog, (206, 208));
+            let r = run(env, s1, i1, None).0;
+            events.push(race_event(env, &catalog, name, "append", r));
+            let r = run(env, s2, i2, None).0;
+            events.push(race_event(env, &catalog, name, "append", r));
+            let a = Dml::open(env, &catalog, RowLevelOperation::Delete);
+            let b = Dml::open(env, &catalog, RowLevelOperation::Delete);
+            events.push(race_event(env, &catalog, name, "delete", a.delete("x = 0")));
+            events.push(race_event(env, &catalog, name, "delete", b.delete("x = 0")));
+            let c = Dml::open(env, &catalog, RowLevelOperation::Delete);
+            let d = Dml::open(env, &catalog, RowLevelOperation::Delete);
+            events.push(race_event(env, &catalog, name, "delete", c.delete("x = 1")));
+            let r = d.delete("x = 2 AND id < 100");
+            events.push(race_event(env, &catalog, name, "delete", r));
+        } else {
+            let base = spark[name]["base"]["metadata"].as_str().unwrap().to_owned();
+            let a = Dml::open_at(env, &base, &catalog, RowLevelOperation::Delete);
+            let b = Dml::open_at(env, &base, &catalog, RowLevelOperation::Delete);
+            let (s, i) = append_at(env, &base, &catalog, (203, 205));
+            events.push(race_event(env, &catalog, name, "delete", a.delete("x = 1")));
+            events.push(race_event(env, &catalog, name, "delete", b.delete("x = 0")));
+            let r = run(env, s, i, None).0;
+            events.push(race_event(env, &catalog, name, "append", r));
+        }
+        let steps: Vec<Value> = events
+            .iter()
+            .filter(|e| e.get("snapshot_id").is_some())
+            .cloned()
+            .collect();
+        let published = publish_to_hadoop_catalog(name, &catalog.location());
+        record.insert(
+            name.to_owned(),
+            json!({
+                "read": created["rows"],
+                "steps": steps,
+                "race": events,
+                "snapshots": snapshot_json(&catalog.metadata()),
+                "metadata": published,
+            }),
+        );
+    }
+}
+
+/// Step 4's checks of the races: the outcomes the cases expect, a conflict leaves the table
+/// readable and unchanged, Spark reads every landed snapshot as Krishiv read it and lists them in
+/// its history with Krishiv's parents, and Krishiv reads Spark's DML on top.
+fn check_races(env: &Env, created: &Value, krishiv: &Value, spark: &Value) {
+    for name in RACE_TABLES {
+        let k = &krishiv[name];
+        let s = &spark[name];
+        let events = k["race"].as_array().unwrap();
+        let outcomes: Vec<&str> = events
+            .iter()
+            .map(|e| {
+                if e.get("snapshot_id").is_some() {
+                    "lands"
+                } else {
+                    "conflicts"
+                }
+            })
+            .collect();
+        let expected: &[&str] = if name == "race_k" {
+            &["lands", "lands", "lands", "conflicts", "lands", "lands"]
+        } else {
+            &["lands", "conflicts", "lands"]
+        };
+        assert_eq!(outcomes, expected, "{name}: outcomes {events:#?}");
+        let mut rows = spark_rows(&created[name]["spark"]["rows"]);
+        for e in events {
+            let now = strings(&e["rows"]);
+            if let Some(id) = e.get("snapshot_id") {
+                let id = text(id);
+                assert_eq!(
+                    sorted(spark_rows(&s["at"][&id])),
+                    sorted(now.clone()),
+                    "{name}: Spark at Krishiv's {} snapshot {id}",
+                    e["what"]
+                );
+                assert_ne!(
+                    sorted(now.clone()),
+                    sorted(rows.clone()),
+                    "{name}: {id} changed rows"
+                );
+            } else {
+                assert_eq!(
+                    e["class"], "KRISHIV_ICEBERG_COMMIT_CONFLICT",
+                    "{name}: conflict class: {}",
+                    e["message"]
+                );
+                assert_eq!(
+                    sorted(now.clone()),
+                    sorted(rows.clone()),
+                    "{name}: a conflict changes nothing and the table stays readable"
+                );
+            }
+            rows = now;
+        }
+        // Spark's history holds Krishiv's landed snapshots with Krishiv's parents.
+        let spark_snapshots = s["before"]["snapshots"].as_array().unwrap();
+        for ks in k["snapshots"].as_array().unwrap() {
+            let found = spark_snapshots
+                .iter()
+                .find(|ss| text(&ss["snapshot_id"]) == text(&ks["snapshot_id"]))
+                .unwrap_or_else(|| panic!("{name}: Spark lists snapshot {}", ks["snapshot_id"]));
+            assert_eq!(
+                text(&found["parent_id"]),
+                text(&ks["parent_id"]),
+                "{name}: parent"
+            );
+        }
+        assert_eq!(
+            sorted(spark_rows(&s["before"]["rows"])),
+            sorted(rows),
+            "{name}: Spark reads the races' result"
+        );
+        let location = s["after"]["metadata"].as_str().unwrap();
+        assert_eq!(
+            sorted(krishiv_rows(env, location, name, &VersionSpec::Current)),
+            sorted(spark_rows(&s["after"]["rows"])),
+            "{name}: Krishiv reads Spark's DML on top"
+        );
+    }
 }
 
 fn ids_of(rows: &Value) -> Vec<(String, i64)> {
@@ -267,6 +448,7 @@ fn krishiv_reads_spark_on_top() {
     let krishiv = read_json("KRISHIV-RT.json");
     let spark = read_json("SPARK-READBACK.json");
     let env = local_env();
+    check_races(&env, &created, &krishiv, &spark);
     for name in TABLES {
         let k = &krishiv[name];
         let s = &spark[name];

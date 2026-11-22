@@ -24,6 +24,12 @@ an ``INSERT`` through Krishiv's Delta writer (its data files and statistics), a 
 ``sql_part`` a whole-file ``DELETE`` of a partition, and a second ``INSERT``, recorded in ``KRISHIV-SQL.json``. Step
 3 reads them as it reads the others, with each Krishiv commit's ``operationMetrics``.
 
+``race_k`` and ``race_s`` (partitioned by ``x``) are the concurrent-writer cases: on ``race_k`` two Krishiv commits
+staged from one snapshot (appends both land; ``DELETE`` of the same files: one lands, the other conflicts; ``DELETE``
+of different partitions: both land); ``race_s`` ends ``create`` with Spark's ``DELETE`` of partition ``x = 0``, and
+Krishiv commits from the version before it (an append and a ``DELETE`` of ``x = 1`` land, a ``DELETE`` of ``x = 0``
+conflicts). Step 3 reads them as the others.
+
 No expected value is written by hand: every comparison is between the two engines' records. Run through
 ``tests/scripts/delta_roundtrip.sh`` (it mounts ``<out>`` at the same path).
 """
@@ -45,6 +51,10 @@ TABLES = {
     "sql_plain": ("", ""),
     "sql_part": ("PARTITIONED BY (x)", ""),
     "sql_dv": ("", DV),
+    # Concurrent writers (``roundtrip_tests::race_tables``): two Krishiv commits from one snapshot on ``race_k``;
+    # on ``race_s`` Krishiv commits from the version before Spark's ``DELETE`` of partition ``x = 0``.
+    "race_k": ("PARTITIONED BY (x)", ""),
+    "race_s": ("PARTITIONED BY (x)", ""),
 }
 
 
@@ -107,6 +117,9 @@ def create(spark, out_dir):
         if props:
             # A deletion vector on a Spark file.
             spark.sql(f"DELETE FROM {t} WHERE id IN (1, 5)")
+        if name == "race_s":
+            # Spark's winner: Krishiv commits from the version before it.
+            spark.sql(f"DELETE FROM {t} WHERE x = 0")
         result[name] = state(spark, t)
     return result
 

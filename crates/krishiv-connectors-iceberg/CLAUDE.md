@@ -210,7 +210,7 @@ result. `roundtrip_tests.rs`: two `#[ignore]`d steps of `tests/scripts/iceberg_r
 Spark makes `mor2`/`mor3`/`evolved` (position deletes, a DV, a promoted and a renamed column, a spec added), Krishiv
 reads them, appends, runs copy-on-write DELETE/UPDATE and, on `mor2`/`mor3`, merge-on-read DELETE (v2 also UPDATE) (`cow_tests`' `Dml`, over `sink_tests`' `Catalog::with_metadata` on
 Spark's metadata), Spark lists Krishiv's delete files and time travels to Krishiv's snapshots and runs merge-on-read DML on top, Krishiv reads the
-result. Pending, not stubbed: MERGE through SQL. See
+result. Pending, not stubbed: MERGE through SQL. Concurrent writers: `race_k` (two Krishiv writers pinned at one base) and `race_s` (Krishiv pinned before Spark's `DELETE`, committing onto it; `Dml::open_at`), `race_tables`/`check_races`. See
 `tests/scripts/iceberg_write_conformance.README.md`.
 
 ## Invariants
