@@ -12,7 +12,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from krishiv import _native
-from krishiv.errors import not_expected_type, not_implemented, unsupported_feature
+from krishiv.errors import not_expected_type, not_implemented
 from krishiv.sql import functions as F
 from krishiv.sql.column import Column
 
@@ -307,7 +307,6 @@ class GroupedData:
                 seen_nan = True
             out.append(F.lit(value))
         return out
-
 
     def applyInPandas(self, func: Any, schema: Any) -> DataFrame:
         """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""

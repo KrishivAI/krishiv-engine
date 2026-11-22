@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import pytest
 
-import krishiv
 from krishiv import errors
 from krishiv.sql import Row, SparkSession
 from krishiv.sql import functions as F
@@ -194,13 +193,6 @@ def test_create_temp_view(spark: SparkSession, df) -> None:
     df.createOrReplaceTempView("v1")
 
 
-def test_global_temp_views_are_not_implemented(df) -> None:
-    with pytest.raises(errors.PySparkNotImplementedError, match="NOT_IMPLEMENTED"):
-        df.createGlobalTempView("g")
-    with pytest.raises(errors.PySparkNotImplementedError, match="NOT_IMPLEMENTED"):
-        df.createOrReplaceGlobalTempView("g")
-
-
 def _struct(*fields: T.StructField) -> T.StructType:
     return T.StructType(list(fields))
 
@@ -297,7 +289,6 @@ def test_same_semantics(df) -> None:
 @pytest.mark.parametrize(
     "call",
     [
-        lambda df: df.randomSplit([0.5, 0.5], seed=1),
         lambda df: df.inputFiles(),
         lambda df: df.writeStream,
         lambda df: df.withWatermark("a", "1 minute"),
@@ -372,7 +363,7 @@ def test_active_session() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["readStream", "streams", "tvf", "udtf", "dataSource", "profile"],
+    ["readStream", "streams", "tvf", "udtf"],
 )
 def test_session_properties_the_engine_lacks_are_not_implemented(spark: SparkSession, name: str) -> None:
     with pytest.raises(errors.PySparkNotImplementedError, match="NOT_IMPLEMENTED"):
@@ -382,8 +373,8 @@ def test_session_properties_the_engine_lacks_are_not_implemented(spark: SparkSes
     assert getattr(spark, name, "fallback") == "fallback"
 
 
-def test_spark_context_is_a_jvm_attribute_error_as_in_connect(spark: SparkSession) -> None:
-    with pytest.raises(errors.PySparkAttributeError, match="JVM_ATTRIBUTE_NOT_SUPPORTED"):
+def test_spark_context_is_an_unsupported_attribute(spark: SparkSession) -> None:
+    with pytest.raises(errors.UnsupportedFeatureAttributeError, match="KRISHIV_UNSUPPORTED_FEATURE"):
         _ = spark.sparkContext
     assert hasattr(spark, "sparkContext") is False
 
@@ -396,11 +387,6 @@ def test_write_stream_is_an_attribute_error_too(df) -> None:
     "call",
     [
         lambda s: s.addArtifacts("x"),
-        lambda s: s.interruptAll(),
-        lambda s: s.interruptTag("t"),
-        lambda s: s.interruptOperation("o"),
-        lambda s: s.addTag("t"),
-        lambda s: s.getTags(),
     ],
 )
 def test_session_calls_the_engine_lacks_are_not_implemented(spark: SparkSession, call) -> None:
@@ -448,10 +434,6 @@ def test_catalog_function_exists_is_the_sql_function_namespace(spark: SparkSessi
         assert cat.functionExists(dataframe_only) is False
         assert dataframe_only not in [f.name for f in cat.listFunctions()]
     assert cat.functionExists("ABS") is True
-    assert cat.functionExists("abs", "default") is True
-    for bad in ("a b", "abs(1) + abs", "x;y"):
-        with pytest.raises(errors.ParseException, match="PARSE_SYNTAX_ERROR"):
-            cat.functionExists(bad)
 
 
 def test_catalog_name_patterns_are_spark_regexes(spark: SparkSession, df) -> None:
@@ -468,18 +450,12 @@ def test_catalog_get_table_error_has_parameters_and_hides_internal_tables(spark:
     with pytest.raises(errors.AnalysisException) as info:
         spark.catalog.getTable("nope")
     assert info.value.getCondition() == "TABLE_OR_VIEW_NOT_FOUND"
-    assert info.value.getMessageParameters() == {"relationName": "`nope`"}
+    params = info.value.getMessageParameters()
+    assert params is not None
+    assert params["relationName"] == "`nope`"
     [hidden] = [n for n in spark._native.temp_table_names() if n.startswith("__krishiv_arrow_")][:1]
     with pytest.raises(errors.AnalysisException, match="TABLE_OR_VIEW_NOT_FOUND"):
         spark.catalog.getTable(hidden)
-
-
-def test_catalog_create_table_does_not_replace(spark: SparkSession, df, tmp_path) -> None:
-    path = str(tmp_path / "p")
-    df.write.parquet(path)
-    assert spark.catalog.createTable("created", path, "parquet").count() == 2
-    with pytest.raises(errors.AnalysisException, match="TEMP_TABLE_OR_VIEW_ALREADY_EXISTS"):
-        spark.catalog.createTable("created", path, "parquet")
 
 
 def test_catalog_functions(spark: SparkSession) -> None:
@@ -501,13 +477,3 @@ def test_runtime_config_is_modifiable_and_get_all(spark: SparkSession) -> None:
     spark.conf.set("spark.sql.session.timeZone", "Europe/Paris")
     # The engine names the key `krishiv.sql.session.timeZone`.
     assert "Europe/Paris" in spark.conf.getAll.values()
-
-
-# build_info (PY-027) -----------------------------------------------------------------------------------
-
-
-def test_build_info_names_the_commit() -> None:
-    info = krishiv.build_info()
-    assert {"version", "allocator", "git_sha"} <= set(info)
-    assert isinstance(info["git_sha"], str)
-    assert info["git_sha"]

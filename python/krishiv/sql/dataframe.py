@@ -23,10 +23,9 @@ from krishiv.errors import (
     PySparkTypeError,
     PySparkValueError,
     not_expected_type,
-    unsupported_attribute,
     not_implemented,
     not_implemented_attribute,
-    unsupported_feature,
+    unsupported_attribute,
 )
 from krishiv.sql import _convert, _stats
 from krishiv.sql.column import Column, _literal, _named
@@ -2207,10 +2206,6 @@ class DataFrame:
             if not isinstance(c, str | Column):
                 raise not_expected_type("cols", "Column or str", c)
         return self._new(self._df)
-
-    def randomSplit(self, weights: list[float], seed: int | None = None) -> list[DataFrame]:
-        """Not available: it needs ``sample``, which the engine cannot run yet (``NOT_IMPLEMENTED``)."""
-        raise not_implemented("DataFrame.randomSplit (the engine has no sampling yet)")
 
     def inputFiles(self) -> list[str]:
         """Not available: the engine does not report the files a plan reads (``NOT_IMPLEMENTED``)."""

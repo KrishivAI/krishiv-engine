@@ -423,8 +423,8 @@ def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession,
     the first element decides between the Arrow path, which only checks the schema, and the row path)."""
     from itertools import chain, islice
 
-    from krishiv.sql.row import Row
     from krishiv.sql import _convert, _rowconv
+    from krishiv.sql.row import Row
     from krishiv.sql.session import _pa_schema, _session_zone
 
     arrow_schema = _pa_schema(schema, pa)

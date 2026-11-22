@@ -37,10 +37,7 @@ def alias(self, alias: str) -> DataFrame
 def approxQuantile(self, col: str | list[str] | tuple[str, ...], probabilities: list[float] | tuple[float, ...], relativeError: float) -> list[Any]
 ```
 
-The approximate quantiles of numeric columns.
-
-.. note:: The engine has no approximate-percentile aggregate yet: after checking its
-    arguments this fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+The approximate quantiles of numeric columns (see `DataFrameStatFunctions.approxQuantile`).
 
 ### `cache`
 
@@ -108,6 +105,17 @@ numPartitions : int
 
 `DataFrame`
 
+### `colRegex`
+
+```python
+def colRegex(self, colName: str) -> Column
+```
+
+The columns whose names match the regular expression `colName` (in backquotes,
+optionally qualified; the qualifier is ignored), for `select`: ``df.select(df.colRegex("`^a.*`"))`. It is
+only meaningful as a `select` argument (anywhere else it stands for its first match). Matching is
+case-insensitive unless `spark.sql.caseSensitive`` is true.
+
 ### `collect`
 
 ```python
@@ -130,10 +138,7 @@ def columns(self) -> list[str]
 def corr(self, col1: str, col2: str, method: str | None=None) -> float
 ```
 
-The Pearson correlation of two columns as a double value.
-
-.. note:: The engine has no correlation aggregate yet: after checking its arguments this
-    fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+The Pearson correlation of two columns as a double value (see `DataFrameStatFunctions.corr`).
 
 ### `count`
 
@@ -150,9 +155,6 @@ def cov(self, col1: str, col2: str) -> float
 ```
 
 The sample covariance of two columns as a double value.
-
-.. note:: The engine has no covariance aggregate yet: after checking its arguments this
-    fails with `KRISHIV_UNSUPPORTED_FEATURE`.
 
 ### `createGlobalTempView`
 
@@ -177,6 +179,15 @@ def createOrReplaceTempView(self, name: str) -> None
 ```
 
 Registers this DataFrame as the temporary view `name` (views of reads by path only, so far).
+
+### `createTempView`
+
+```python
+def createTempView(self, name: str) -> None
+```
+
+Registers this DataFrame as the temporary view `name`; fails with
+`TEMP_TABLE_OR_VIEW_ALREADY_EXISTS` when a view of that name exists.
 
 ### `crossJoin`
 
@@ -230,6 +241,14 @@ does for a pivot; at most `spark.sql.pivotMaxValues` (10000) are allowed.
 +-----+---+---+---+
 ```
 
+### `cube`
+
+```python
+def cube(self, *cols: ColumnsOrNames) -> GroupedData
+```
+
+Groups by every subset of `cols` (a key a row is rolled up over reads `NULL`).
+
 ### `describe`
 
 ```python
@@ -238,13 +257,18 @@ def describe(self, *cols: str | list[str]) -> DataFrame
 
 Computes basic statistics for numeric and string columns: count, mean, stddev, min and max.
 
-.. note:: The engine has no standard-deviation aggregate yet: after checking its
-    arguments this fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+This includes count, mean, stddev, min, and max. If no columns are given, this function computes
+statistics for all numerical or string columns. Other columns are left out.
 
 **Parameters**
 
 cols : str, list, optional
      Column name or list of column names to describe by (default All columns).
+
+**Notes**
+
+The statistics are computed when this is called (one engine aggregate) and the result is a local
+`DataFrame` of strings.
 
 ### `distinct`
 
@@ -388,6 +412,14 @@ Deduplicate values on 'name' and 'height' columns.
 |Alice|  5|    80|
 +-----+---+------+
 ```
+
+### `dropDuplicatesWithinWatermark`
+
+```python
+def dropDuplicatesWithinWatermark(self, subset: list[str] | None=None) -> DataFrame
+```
+
+Not available: streaming is not part of 0.2 (`NOT_IMPLEMENTED`).
 
 ### `dropna`
 
@@ -662,22 +694,45 @@ Rows where `condition` is true; a string parses as a SQL expression, as PySpark'
 def first(self) -> Row | None
 ```
 
+### `foreach`
+
+```python
+def foreach(self, f: Callable[[Row], None]) -> None
+```
+
+Applies `f` to every row (in this process, as there are no executors), streaming the result.
+
+### `foreachPartition`
+
+```python
+def foreachPartition(self, f: Callable[[Iterator[Row]], None]) -> None
+```
+
+Applies `f` to an iterator over all the rows (the one partition of an embedded session).
+
 ### `freqItems`
 
 ```python
 def freqItems(self, cols: list[str] | tuple[str, ...], support: float | None=None) -> DataFrame
 ```
 
-The frequent items of columns, possibly with false positives.
-
-.. note:: The engine has no frequent-items sketch yet: after checking its arguments this
-    fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+The frequent items of columns, possibly with false positives (see
+`DataFrameStatFunctions.freqItems`).
 
 ### `groupBy`
 
 ```python
 def groupBy(self, *cols: ColumnsOrNames) -> GroupedData
 ```
+
+### `groupingSets`
+
+```python
+def groupingSets(self, groupingSets: Sequence[Sequence[ColumnOrName]], *cols: ColumnOrName) -> GroupedData
+```
+
+Groups by each of `groupingSets` (a key a set does not group by reads `NULL`); `cols`
+are the grouping columns of the result.
 
 ### `head`
 
@@ -710,6 +765,14 @@ parameters : str, list, float or int
 A hint the engine cannot follow (an unknown hint, a hint naming no relation, or a
 partitioning hint, which has no effect on one node) comes back as a warning, as Spark
 logs it; the rows never change. Use `explain` to see the recorded hint.
+
+### `inputFiles`
+
+```python
+def inputFiles(self) -> list[str]
+```
+
+Not available: the engine does not report the files a plan reads (`NOT_IMPLEMENTED`).
 
 ### `intersect`
 
@@ -782,6 +845,23 @@ resolves columns by position (not by name).
 +---+---+
 ```
 
+### `isEmpty`
+
+```python
+def isEmpty(self) -> bool
+```
+
+Whether this `DataFrame` has no rows.
+
+### `isStreaming`
+
+```python
+@property
+def isStreaming(self) -> bool
+```
+
+Always `False`: the engine runs no streaming DataFrames.
+
 ### `is_cached`
 
 ```python
@@ -823,6 +903,22 @@ storageLevel : `krishiv.storagelevel.StorageLevel`, optional
 
 `DataFrame`
     The checkpointed frame.
+
+### `mapInArrow`
+
+```python
+def mapInArrow(self, func: Callable[..., Any], schema: StructType | str, barrier: bool=False, profile: Any=None) -> DataFrame
+```
+
+Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
+
+### `mapInPandas`
+
+```python
+def mapInPandas(self, func: Callable[..., Any], schema: StructType | str, barrier: bool=False, profile: Any=None) -> DataFrame
+```
+
+Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
 
 ### `melt`
 
@@ -930,8 +1026,11 @@ DataFrame[age: bigint, name: string]
 ### `printSchema`
 
 ```python
-def printSchema(self) -> None
+def printSchema(self, level: int | None=None) -> None
 ```
+
+Prints the schema as a tree, with the type names Spark prints (`integer`, `long`, ...),
+to `level` levels of nesting (all by default).
 
 ### `profile`
 
@@ -941,6 +1040,45 @@ def profile(self) -> ProfileView
 
 Runs the query and returns its profile as a viewer (`EXPLAIN ANALYZE`): leave it as
 the last expression of a notebook cell, or call `.save("profile.html")`. Krishiv extension.
+
+### `randomSplit`
+
+```python
+def randomSplit(self, weights: list[float], seed: int | None=None) -> list[DataFrame]
+```
+
+Randomly splits this `DataFrame` with the provided weights.
+
+**Parameters**
+
+weights : list
+    list of doubles as weights with which to split the `DataFrame`.
+    Weights will be normalized if they don't sum up to 1.0.
+seed : int, optional
+    The seed for sampling.
+
+**Notes**
+
+The rows are ordered by every sortable column first, so a split does not depend on the order of the
+input; each split is the rows whose draw of `rand(seed)` falls in its slice of the weights, so the
+splits are disjoint and together are the input.
+
+**Examples**
+
+```python
+>>> df = spark.range(20)
+>>> splits = df.randomSplit([1.0, 2.0, 3.0], 11)
+>>> [s.count() for s in splits]
+[6, 5, 9]
+```
+
+### `registerTempTable`
+
+```python
+def registerTempTable(self, name: str) -> None
+```
+
+Deprecated alias of `createOrReplaceTempView` (deprecated since Spark 2.0).
 
 ### `repartition`
 
@@ -966,6 +1104,14 @@ cols : str or `Column`
 
 `DataFrame`
     Repartitioned DataFrame.
+
+### `repartitionByRange`
+
+```python
+def repartitionByRange(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame
+```
+
+Partitions by ranges of `cols`; accepted and ignored on one node, as `repartition`.
 
 ### `replace`
 
@@ -1075,6 +1221,23 @@ Example 4: Replace 10 to 18 in the 'age' column.
 +----+------+-----+
 ```
 
+### `rollup`
+
+```python
+def rollup(self, *cols: ColumnsOrNames) -> GroupedData
+```
+
+Groups by `cols` and their prefixes (a key a row is rolled up over reads `NULL`).
+
+### `sameSemantics`
+
+```python
+def sameSemantics(self, other: DataFrame) -> bool
+```
+
+Whether this and `other` have the same logical plan (compared by their `explain`
+text, so `True` is reliable and `False` may miss equivalent plans, as in Spark).
+
 ### `sample`
 
 ```python
@@ -1083,13 +1246,11 @@ def sample(self, withReplacement: bool | float | None=None, fraction: float | No
 
 Returns a sampled subset of this `DataFrame`.
 
-.. note:: The engine cannot sample yet: the returned `DataFrame` fails its
-    first action with `KRISHIV_UNSUPPORTED_FEATURE`.
-
 **Parameters**
 
 withReplacement : bool, optional
-    Sample with replacement or not (default `False`).
+    Sample with replacement or not (default `False`). Sampling with replacement is not
+    supported: it fails with `KRISHIV_UNSUPPORTED_FEATURE`.
 fraction : float, optional
     Fraction of rows to generate, range [0.0, 1.0].
 seed : int, optional
@@ -1107,6 +1268,19 @@ count of the given `DataFrame`.
 
 `fraction` is required and, `withReplacement` and `seed` are optional.
 
+Each row draws one number from Spark's `XORShiftRandom` stream (`rand(seed)`) and is kept when
+it is below `fraction`, so on one partition the rows are the ones Spark keeps for the same seed. An
+explicit `seed` is always honoured, also in `df.sample(0.3, seed=1)`, where PySpark (4.2.0) drops
+it and samples at random. The result depends on the order of the rows and on how they are partitioned.
+
+**Examples**
+
+```python
+>>> df = spark.range(20)
+>>> df.sample(0.3, 1).count()
+7
+```
+
 ### `sampleBy`
 
 ```python
@@ -1115,10 +1289,6 @@ def sampleBy(self, col: ColumnOrName, fractions: dict[Any, float], seed: int | N
 
 Returns a stratified sample without replacement based on the
 fraction given on each stratum.
-
-.. note:: The engine cannot sample yet: unless `fractions` is empty, the returned
-    `DataFrame` fails its first action with `KRISHIV_UNSUPPORTED_FEATURE` (from
-    `DataFrame.sample`).
 
 **Parameters**
 
@@ -1136,7 +1306,7 @@ a new `DataFrame` that represents the stratified sample
 
 **Notes**
 
-The rows come back grouped by stratum, not in the order of this DataFrame.
+As Spark, each row draws `rand(seed)` and is kept when the draw is below its stratum's fraction.
 
 ### `schema`
 
@@ -1163,6 +1333,14 @@ Projects a set of SQL expressions, as `pyspark.sql.DataFrame.selectExpr`: each s
 holds one expression with an optional alias, so `AS` aliases and `*` work as they do
 in a `SELECT` list (`df.selectExpr("a", "b AS c")`).
 
+### `semanticHash`
+
+```python
+def semanticHash(self) -> int
+```
+
+A 32-bit hash of the plan, equal for DataFrames `sameSemantics` calls the same.
+
 ### `show`
 
 ```python
@@ -1170,6 +1348,14 @@ def show(self, n: int=20, truncate: bool | int=True, vertical: bool=False) -> No
 ```
 
 Prints the first `n` rows as a table (needs pyarrow).
+
+### `sortWithinPartitions`
+
+```python
+def sortWithinPartitions(self, *cols: ColumnsOrNames, ascending: bool | list[bool]=True) -> DataFrame
+```
+
+Sorts each partition; the embedded engine has one partition, so this is `orderBy`.
 
 ### `sparkSession`
 
@@ -1246,13 +1432,16 @@ def summary(self, *statistics: str | list[str]) -> DataFrame
 Computes the given statistics (count, mean, stddev, min, max and percentiles such as
 `75%`) for numeric and string columns.
 
-.. note:: The engine has no standard-deviation or approximate-percentile aggregate yet:
-    after checking its arguments this fails with `KRISHIV_UNSUPPORTED_FEATURE`.
-
 **Parameters**
 
 statistics : str, optional
      The statistics to calculate (default count, mean, stddev, min, 25%, 50%, 75%, max).
+     Also `count_distinct` and `approx_count_distinct`, and any `<number>%`.
+
+**Notes**
+
+The statistics are computed when this is called (one engine aggregate) and the result is a local
+`DataFrame` of strings. A percentile is the exact nearest-rank value up to 10000 rows.
 
 ### `tail`
 
@@ -1290,6 +1479,16 @@ list
 ```python
 def take(self, num: int) -> list[Row]
 ```
+
+### `to`
+
+```python
+def to(self, schema: StructType) -> DataFrame
+```
+
+Reconciles each row with `schema` as Spark's `Dataset.to`: columns are matched by name,
+reordered (inside structs too) and cast where store assignment allows; see
+`krishiv.sql._to_schema` for the errors. (Spark 4.x: the method is new in 3.4.)
 
 ### `toArrow`
 
@@ -1343,10 +1542,7 @@ def toJSON(self, use_unicode: bool=True) -> DataFrame
 
 Converts a `DataFrame` into one of JSON strings, one row per document, in a
 single `string` column `value` (Spark Connect's form; classic PySpark returns an
-`RDD`).
-
-The engine has no `to_json` function yet, so this raises the engine's
-`KRISHIV_UNSUPPORTED_FEATURE` rather than formatting JSON in Python.
+`RDD`): `to_json(struct(*))` of each row, so null fields are left out as Spark does.
 
 ### `toLocalIterator`
 
@@ -1675,6 +1871,15 @@ Rename a column that does not exist (no-op)
 +---+-----+
 ```
 
+### `withColumns`
+
+```python
+def withColumns(self, colsMap: dict[str, Column | str]) -> DataFrame
+```
+
+Adds or replaces columns by name (a replaced column keeps its place); every expression
+sees the columns of this DataFrame, not those added in the same call.
+
 ### `withColumnsRenamed`
 
 ```python
@@ -1753,6 +1958,14 @@ Rename with an empty dictionary (no-op)
 +---+-----+
 ```
 
+### `withWatermark`
+
+```python
+def withWatermark(self, eventTime: str, delayThreshold: str) -> DataFrame
+```
+
+Not available: streaming is not part of 0.2 (`NOT_IMPLEMENTED`).
+
 ### `write`
 
 ```python
@@ -1761,6 +1974,15 @@ def write(self) -> DataFrameWriter
 ```
 
 Writes this `DataFrame`'s rows to files, as `pyspark.sql.DataFrame.write`.
+
+### `writeStream`
+
+```python
+@property
+def writeStream(self) -> Any
+```
+
+Not available: streaming writes are not part of 0.2 (`NOT_IMPLEMENTED`).
 
 ### `writeTo`
 

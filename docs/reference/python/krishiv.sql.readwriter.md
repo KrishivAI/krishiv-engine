@@ -37,7 +37,7 @@ def format(self, source: str) -> DataFrameReader
 def jdbc(self, *args: object, **kwargs: object) -> DataFrame
 ```
 
-Not supported: Krishiv has no JDBC source (`KRISHIV_UNSUPPORTED_FEATURE`).
+Not supported: there is no JDBC (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ### `json`
 
@@ -63,6 +63,14 @@ def option(self, key: str, value: object) -> DataFrameReader
 def options(self, **options: object) -> DataFrameReader
 ```
 
+### `orc`
+
+```python
+def orc(self, path: str | list[str], **options: object) -> DataFrame
+```
+
+Not supported: the engine reads no ORC (`KRISHIV_UNSUPPORTED_FEATURE`).
+
 ### `parquet`
 
 ```python
@@ -79,6 +87,31 @@ The input schema: a `StructType` or a DDL string (`"a INT,
 b STRING"`). The files are read as its columns, never inferred; as in
 Spark, partition columns found under the path come last (one the schema
 names takes its type) and every column reads as nullable.
+
+### `table`
+
+```python
+def table(self, tableName: str) -> DataFrame
+```
+
+The table or view `tableName` as a DataFrame (as `spark.table`).
+
+### `text`
+
+```python
+def text(self, paths: str | list[str], wholetext: bool=False, lineSep: str | None=None, pathGlobFilter: str | None=None, recursiveFileLookup: bool | None=None, modifiedBefore: str | None=None, modifiedAfter: str | None=None) -> DataFrame
+```
+
+Reads text files into a DataFrame with one string column `value` per line (the whole
+file per row with `wholetext`).
+
+### `xml`
+
+```python
+def xml(self, path: str | list[str], **options: object) -> DataFrame
+```
+
+Not supported: the engine reads no XML (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ## `DataFrameWriter`
 
@@ -108,6 +141,16 @@ Buckets the output by `col` (and `cols`) into `numBuckets`
 buckets. Only `saveAsTable` accepts it in Spark, and the engine has
 no bucketed tables (see the class doc).
 
+### `clusterBy`
+
+```python
+def clusterBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
+```
+
+Clusters the output by `col` (and `cols`); each call replaces the columns of the one
+before. The engine has no clustered tables: `save` and `saveAsTable` then fail with
+`KRISHIV_UNSUPPORTED_FEATURE`.
+
 ### `csv`
 
 ```python
@@ -134,7 +177,7 @@ Inserts the rows into the existing table `tableName` by position.
 def jdbc(self, *args: object, **kwargs: object) -> None
 ```
 
-Not supported: Krishiv has no JDBC sink (`KRISHIV_UNSUPPORTED_FEATURE`).
+Not supported: there is no JDBC (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ### `json`
 
@@ -159,6 +202,14 @@ def option(self, key: str, value: object) -> DataFrameWriter
 ```python
 def options(self, **options: object) -> DataFrameWriter
 ```
+
+### `orc`
+
+```python
+def orc(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, compression: str | None=None) -> None
+```
+
+Not supported: the engine writes no ORC (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ### `parquet`
 
@@ -209,6 +260,14 @@ def text(self, path: str, compression: str | None=None, lineSep: str | None=None
 ```
 
 Writes the rows as text files: one string column, as in Spark.
+
+### `xml`
+
+```python
+def xml(self, path: str, **options: object) -> None
+```
+
+Not supported: the engine writes no XML (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ## `DataFrameWriterV2`
 

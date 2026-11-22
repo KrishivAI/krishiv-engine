@@ -224,6 +224,23 @@ class SparkSession
 
 An embedded session. Create one with `SparkSession.builder.getOrCreate()`.
 
+### `active`
+
+```python
+@classmethod
+def active(cls) -> SparkSession
+```
+
+The active session; fails with `NO_ACTIVE_OR_DEFAULT_SESSION` when there is none, as PySpark.
+
+### `addArtifacts`
+
+```python
+def addArtifacts(self, *path: str, pyfile: bool=False, archive: bool=False, file: bool=False) -> None
+```
+
+Not available: artifacts belong to Spark Connect sessions (`NOT_IMPLEMENTED`).
+
 ### `addTag`
 
 ```python
@@ -261,6 +278,14 @@ Removes every tag of this thread.
 @property
 def conf(self) -> RuntimeConfig
 ```
+
+### `copyFromLocalToFs`
+
+```python
+def copyFromLocalToFs(self, local_path: str, dest_path: str) -> None
+```
+
+Not available: artifacts belong to Spark Connect sessions (`NOT_IMPLEMENTED`).
 
 ### `createDataFrame`
 
@@ -338,10 +363,19 @@ or a DDL string), as `pyspark.sql.SparkSession.emptyDataFrame`.
 >>> df.printSchema()
 root
  |-- name: string (nullable = true)
- |-- age: int (nullable = true)
+ |-- age: integer (nullable = true)
 >>> df.count()
 0
 ```
+
+### `getActiveSession`
+
+```python
+@classmethod
+def getActiveSession(cls) -> SparkSession | None
+```
+
+The session `getOrCreate` made and `stop` has not ended, or `None`.
 
 ### `getTags`
 
@@ -438,6 +472,15 @@ accepted and ignored (one node has nothing to partition).
 def read(self) -> DataFrameReader
 ```
 
+### `readStream`
+
+```python
+@property
+def readStream(self) -> Any
+```
+
+Not available: streaming reads are not part of 0.2 (`NOT_IMPLEMENTED`).
+
 ### `removeTag`
 
 ```python
@@ -471,11 +514,29 @@ def stop(self) -> None
 
 Ends this session; the next `getOrCreate` makes a new one.
 
+### `streams`
+
+```python
+@property
+def streams(self) -> Any
+```
+
+Not available: streaming queries are not part of 0.2 (`NOT_IMPLEMENTED`).
+
 ### `table`
 
 ```python
 def table(self, tableName: str) -> DataFrame
 ```
+
+### `tvf`
+
+```python
+@property
+def tvf(self) -> Any
+```
+
+Not available: the `TableValuedFunction` namespace (`NOT_IMPLEMENTED`).
 
 ### `udf`
 
@@ -485,6 +546,15 @@ def udf(self) -> UDFRegistration
 ```
 
 The `UDFRegistration` of this session (`spark.udf.register(name, f, returnType)`).
+
+### `udtf`
+
+```python
+@property
+def udtf(self) -> Any
+```
+
+Not available: user-defined table functions (`NOT_IMPLEMENTED`).
 
 ### `version`
 

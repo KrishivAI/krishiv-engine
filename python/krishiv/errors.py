@@ -96,7 +96,6 @@ _TEMPLATES = {
     "NO_OBSERVE_BEFORE_GET": "Should observe by calling `DataFrame.observe` before `get`.",
     "VALUE_ALLOWED": "Value for `<arg_name>` does not allow <disallowed_value>.",
     "VALUE_NOT_NON_EMPTY_STR": "Value for `<arg_name>` must be a non-empty string, got '<arg_value>'.",
-    "CANNOT_BE_EMPTY": "At least one <item> must be specified.",
     "VALUE_NOT_POSITIVE": "Value for `<arg_name>` must be positive, got '<arg_value>'.",
     "NEGATIVE_VALUE": "Value for `<arg_name>` must be greater than or equal to 0, got '<arg_value>'.",
     "ARGUMENT_REQUIRED": "Argument `<arg_name>` is required when <condition>.",
@@ -596,6 +595,8 @@ def unsupported_attribute(feature: str) -> UnsupportedFeatureAttributeError:
 def unsupported_module(feature: str) -> UnsupportedFeatureImportError:
     """:func:`unsupported_feature` for a module (also an ``ImportError``)."""
     return UnsupportedFeatureImportError(_unsupported_text(feature), **_unsupported_args(feature))
+
+
 def not_implemented_attribute(feature: str) -> PySparkNotImplementedAttributeError:
     """:func:`not_implemented` for a property: ``hasattr`` is ``False`` and the error still says ``NOT_IMPLEMENTED``."""
     return PySparkNotImplementedAttributeError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": feature})

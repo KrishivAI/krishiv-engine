@@ -58,10 +58,6 @@ class DataFrameReader:
         self._format = source
         return self
 
-    def jdbc(self, *args: object, **kwargs: object) -> DataFrame:
-        """Not supported: Krishiv has no JDBC source (``KRISHIV_UNSUPPORTED_FEATURE``)."""
-        raise unsupported_feature("DataFrameReader.jdbc (there is no JDBC data source)")
-
     def schema(self, schema: StructType | str) -> DataFrameReader:
         """The input schema: a :class:`StructType` or a DDL string (``"a INT,
         b STRING"``). The files are read as its columns, never inferred; as in
@@ -196,10 +192,6 @@ class DataFrameWriter:
         self._format_set = True
         return self
 
-    def jdbc(self, *args: object, **kwargs: object) -> None:
-        """Not supported: Krishiv has no JDBC sink (``KRISHIV_UNSUPPORTED_FEATURE``)."""
-        raise unsupported_feature("DataFrameWriter.jdbc (there is no JDBC data source)")
-
     def mode(self, saveMode: str) -> DataFrameWriter:
         self._mode = saveMode
         return self
@@ -262,6 +254,7 @@ class DataFrameWriter:
             raise AnalysisException(errorClass="SORT_BY_WITHOUT_BUCKETING", messageParameters={}, sqlState="42601")
         code = "_LEGACY_ERROR_TEMP_1312" if self._sort_by is None else "_LEGACY_ERROR_TEMP_1313"
         raise AnalysisException(errorClass=code, messageParameters={"operation": operation})
+
     def clusterBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter:
         """Clusters the output by ``col`` (and ``cols``); each call replaces the columns of the one
         before. The engine has no clustered tables: ``save`` and ``saveAsTable`` then fail with
