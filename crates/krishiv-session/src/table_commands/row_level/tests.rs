@@ -1354,6 +1354,32 @@ mod merge {
         assert_eq!(read("SELECT id, s FROM t WHERE id = 2", "src.s"), None);
     }
 
+    /// A session `krishiv.write.idempotencyKey` is refused before the MERGE runs, as on
+    /// `UPDATE` and `DELETE` (#962 review, Codex P2).
+    #[test]
+    fn a_session_idempotency_key_is_refused_on_merge() {
+        let files = Files::new();
+        let (session, _) = session(&files);
+        session
+            .conf()
+            .set("krishiv.write.idempotencyKey", "job-1")
+            .unwrap();
+        let e = try_merge(
+            &session,
+            statement(
+                SOURCE,
+                vec![clause(
+                    ClauseKind::Matched,
+                    None,
+                    ClauseAction::Update(vec![set("s", "src.s")]),
+                )],
+            ),
+        )
+        .unwrap_err();
+        assert!(e.message().contains("idempotencyKey"), "{e}");
+        assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+    }
+
     #[test]
     fn a_case_sensitive_session_is_refused() {
         let files = Files::new();

@@ -261,6 +261,8 @@ impl Session {
         // A Delta table's root, to find a reread of the target in the rewrite (`row_level.rs`).
         #[cfg(feature = "delta")]
         let delta_root = probe.env.catalog.delta_root(&scan).transpose()?;
+        // As `UPDATE` and `DELETE`: a session key is refused before anything runs (E34).
+        super::row_level::refuse_idempotency_key(&probe.env.config)?;
         let rule = table.capabilities().cardinality;
         if rule != CardinalityRule::DeltaWithUnconditionalDeleteExemption {
             return Err(KrishivUnsupportedFeature {
