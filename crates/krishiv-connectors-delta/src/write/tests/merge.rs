@@ -392,3 +392,43 @@ fn append_only_and_change_data_feed_tables_take_only_inserting_merges() {
         assert_eq!(commit_info(&env.log(env.latest()))["operation"], "MERGE");
     }
 }
+
+/// A `MERGE` that rewrites a file carrying a deletion vector counts it in
+/// `numTargetDeletionVectorsRemoved` (delta-spark's metric; Krishiv rewrites, so it adds none).
+/// The table is delta-spark's `deletion-vectors` fixture: one file of `range(40000)` with a DV.
+#[test]
+fn a_merge_that_rewrites_a_file_with_a_deletion_vector_counts_it_removed() {
+    let env = Env::fixture("deletion-vectors");
+    let table = env.open().unwrap();
+    let files = row_files(&env, &table, RowLevelOperation::Merge);
+    let touched = files[0].1.clone();
+    let live: Vec<i64> = files.iter().map(|(id, ..)| *id).collect();
+    let schema = Arc::new(arrow_schema::Schema::new(vec![
+        arrow_schema::Field::new("id", arrow_schema::DataType::Int64, true),
+        arrow_schema::Field::new("v", arrow_schema::DataType::Int32, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(arrow_array::Int64Array::from(live.clone())),
+            Arc::new(arrow_array::Int32Array::from(vec![0; live.len()])),
+        ],
+    )
+    .unwrap();
+    merge(
+        &env,
+        &table,
+        schema,
+        vec![touched],
+        vec![batch],
+        r#"{"source_rows":1,"matched_updated":1,"inserted":0,"materialize_ms":0}"#,
+        UPSERT,
+        "merge-dv",
+    )
+    .unwrap();
+    let info = commit_info(&env.log(env.latest()));
+    let m = &info["operationMetrics"];
+    assert_eq!(m["numTargetFilesRemoved"], "1");
+    assert_eq!(m["numTargetDeletionVectorsRemoved"], "1");
+    assert_eq!(m["numTargetDeletionVectorsAdded"], "0");
+}

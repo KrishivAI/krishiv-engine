@@ -1299,6 +1299,47 @@ mod merge {
         );
     }
 
+    /// The conflict read set is the `ON` condition's, unless the rewrite reads the target again:
+    /// an assignment subquery or a source over `t` reads every row (#962 review, Codex P2).
+    #[test]
+    fn a_merge_that_reads_the_target_again_reads_every_row() {
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let other = Arc::new(Schema::new(vec![Field::new("x", ArrowType::Utf8, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&other),
+            vec![Arc::new(arrow_array::StringArray::from(vec!["z"])) as ArrayRef],
+        )
+        .unwrap();
+        session.register_batches("o", other, vec![batch]).unwrap();
+        let read = |source: &str, value: &str| {
+            merge(
+                &session,
+                statement(
+                    source,
+                    vec![clause(
+                        ClauseKind::Matched,
+                        None,
+                        ClauseAction::Update(vec![set("s", value)]),
+                    )],
+                ),
+            );
+            files
+                .reads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pop()
+                .unwrap()
+        };
+        let kept = read(SOURCE, "(SELECT max(x) FROM o)");
+        assert!(
+            kept.as_deref().is_some_and(|f| f.contains("id")),
+            "{kept:?}"
+        );
+        assert_eq!(read(SOURCE, "(SELECT max(s) FROM t)"), None);
+        assert_eq!(read("SELECT id, s FROM t WHERE id = 2", "src.s"), None);
+    }
+
     #[test]
     fn a_case_sensitive_session_is_refused() {
         let files = Files::new();

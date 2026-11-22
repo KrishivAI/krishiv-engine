@@ -258,6 +258,9 @@ impl Session {
         let Some(table) = provider.row_level(RowLevelOperation::Merge) else {
             return Ok(None);
         };
+        // A Delta table's root, to find a reread of the target in the rewrite (`row_level.rs`).
+        #[cfg(feature = "delta")]
+        let delta_root = probe.env.catalog.delta_root(&scan).transpose()?;
         let rule = table.capabilities().cardinality;
         if rule != CardinalityRule::DeltaWithUnconditionalDeleteExemption {
             return Err(KrishivUnsupportedFeature {
@@ -537,9 +540,27 @@ impl Session {
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let target = find_scan(physical.root(), &target_name)
             .ok_or_else(|| internal("a MERGE rewrite that reads no target".to_owned()))?;
+        // The rewrite's own read of the target is the hidden provider: a scan of the target in it
+        // is an assignment subquery's read of the table. The source is read before the rewrite (a
+        // snapshot or a spilled copy), so its own plan is asked too.
+        let source_analysis = source.action_analysis().await?;
+        let rereads = |plan: &krishiv_plan::LogicalPlan, catalog: &crate::catalog::QueryCatalog| {
+            #[cfg(feature = "delta")]
+            if let Some(root) = &delta_root {
+                return crate::catalog::reads_delta_root(plan, root, catalog);
+            }
+            let _ = catalog;
+            crate::catalog::reads_source(plan, &scan.source)
+        };
+        let rereads_target = rereads(analysis.analyzed.plan.root(), &analysis.env.catalog)
+            || rereads(
+                source_analysis.analyzed.plan.root(),
+                &source_analysis.env.catalog,
+            );
         // The conflict check reads the table by the `ON` condition's target conjuncts; a `NOT
-        // MATCHED BY SOURCE` clause reads every row.
-        let read_filter = if by_source {
+        // MATCHED BY SOURCE` clause reads every row, and so does a rewrite that reads the target
+        // again (as an `UPDATE` does: `row_level.rs` `read_filter`).
+        let read_filter = if by_source || rereads_target {
             None
         } else {
             Some(Arc::new(on_of(&m.on)?))
