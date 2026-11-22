@@ -265,6 +265,14 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
             "via time travel",
             sql("SELECT * FROM canary VERSION AS OF 1"),
         ),
+        (
+            "via time travel on a hidden view",
+            sql("SELECT * FROM dvc VERSION AS OF 1"),
+        ),
+        (
+            "via time travel on a hidden view, suffix",
+            sql("SELECT * FROM dvc@v1"),
+        ),
         ("via path", sql(&path_read)),
         (
             "via temporary view",
@@ -340,16 +348,6 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
     for (row, run) in &refused {
         let result = run(&ana);
         let records = take();
-        // Time travel is refused as unsupported before anything is read; when it is supported,
-        // this row is a denial like the others.
-        if *row == "via time travel"
-            && let Err(e) = &result
-            && e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE"
-            && records.is_empty()
-            && leaks(&e.to_string()).is_none()
-        {
-            continue;
-        }
         match &result {
             Err(e) if e.error_class().name() == DENIED => {
                 if e.sql_state() != Some("42501") {

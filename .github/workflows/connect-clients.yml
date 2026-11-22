@@ -6,7 +6,9 @@ name: Spark Connect client smoke runs
 on:
   workflow_dispatch:
   schedule:
-    - cron: "41 23 * * 0"
+    # Delay of six hours or more is expected (as for fuzz-weekly): 19:41 lands near 02:00 UTC, inside the guard's
+    # night window; 23:41 would land after 06:00.
+    - cron: "41 19 * * 0"
 
 concurrency:
   group: connect-clients-${{ github.ref }}
@@ -20,8 +22,35 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  smoke:
+  # A scheduled run that GitHub delayed into the working day exits at once, so it never holds the runners
+  # the PR checks need. A manual run is not guarded. Window: scheduled runs may start 18:00-06:00 UTC.
+  # The window bounds the start only: a run that starts at 05:59 may still run into the morning (up to
+  # its job limit).
+  guard:
     if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    # The guard reads the clock only: no token scopes.
+    permissions: {}
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - id: g
+        run: |
+          hour=$((10#$(date -u +%H)))
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$hour" -ge 6 ] && [ "$hour" -lt 18 ]; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "A scheduled run that starts at $hour:xx UTC is outside the night window (18:00-06:00): skipped." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+  smoke:
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

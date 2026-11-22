@@ -120,6 +120,7 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::PythonTableFunction { .. } => 40,
         PlanNode::CollectMetrics { .. } => 41,
         PlanNode::ColumnNames { .. } => 42,
+        PlanNode::Tail { .. } => 43,
     }
 }
 
@@ -930,7 +931,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.bool(*global);
                 self.orders(order);
             }
-            PlanNode::Limit { limit, .. } => {
+            PlanNode::Limit { limit, .. } | PlanNode::Tail { limit, .. } => {
                 self.expr(limit);
             }
             PlanNode::SubqueryAlias { alias, columns, .. } => {

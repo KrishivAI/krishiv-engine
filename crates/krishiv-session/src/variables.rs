@@ -33,10 +33,6 @@ pub(crate) struct StoredVariable {
 /// scope, as in Spark.
 pub(crate) const DECLARE_SEARCH_PATH: &str = "[`system`.`session`]";
 
-/// The search path an assignment or drop resolves a name on, as in Spark.
-pub(crate) const RESOLVE_SEARCH_PATH: &str =
-    "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]";
-
 /// The session's variables, by lower-case unqualified name, with a version
 /// bumped under the write lock after every change.
 ///

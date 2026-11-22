@@ -7,8 +7,11 @@ name: canary
 
 on:
   schedule:
-    # 13:00 UTC: the scheduled nightly run on main starts about 02:00 UTC and ends well before this.
-    - cron: "0 13 * * *"
+    # 05:30 UTC is the cron time; GitHub has created this canary up to about eight hours late (an earlier
+    # 13:00 cron ran at 20:52-22:40). The nightly cron (22:23) has been created 03:17-03:34 UTC (about five hours
+    # late) and its longest job may run 350 minutes, so the latest run may still be going: then the newest
+    # completed run is judged instead, and a run younger than 8 hours is not a problem for being unfinished.
+    - cron: "30 5 * * *"
   workflow_dispatch:
 
 permissions:
@@ -36,32 +39,73 @@ jobs:
       - name: Latest scheduled nightly run on main
         id: run
         run: |
-          run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main --event schedule \
-            --limit 1 --json conclusion,createdAt,url,status \
-            -q '.[0] | "\(.status) \(.conclusion // "none") \(.createdAt) \(.url)"') || run="query-failed"
-          echo "run=$run" >> "$GITHUB_OUTPUT"
-          echo "Latest scheduled ci run on main: $run" >> "$GITHUB_STEP_SUMMARY"
-          status=$(echo "$run" | cut -d' ' -f1)
-          conclusion=$(echo "$run" | cut -d' ' -f2)
-          created=$(echo "$run" | cut -d' ' -f3)
-          url=$(echo "$run" | cut -d' ' -f4)
+          runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main --event schedule \
+            --limit 2 --json conclusion,createdAt,url,status \
+            -q '.[] | "\(.status) \(.conclusion // "none") \(.createdAt) \(.url)"') || runs="query-failed"
+          run=$(echo "$runs" | sed -n 1p)
+          fallback=""
+          what="the latest"
           problem=""
-          if [ "$run" = "query-failed" ]; then
+          judged=yes
+          if [ "$runs" = "query-failed" ]; then
             problem="could not query the scheduled ci runs on main (see the step log)"
-          elif [ -z "$run" ] || [ "$created" = "null" ]; then
+          elif [ -z "$run" ]; then
             problem="no scheduled ci run on main was found"
-          elif [ "$status" != "completed" ]; then
-            problem="the latest scheduled ci run is still $status ($url)"
-          elif [ "$conclusion" != "success" ]; then
-            problem="the latest scheduled ci run on main ended $conclusion ($url)"
           else
-            age=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
-            if [ "$age" -gt $((26 * 3600)) ]; then
-              problem="the latest scheduled ci run on main is older than 26 hours ($created, $url)"
+            status=$(echo "$run" | cut -d' ' -f1)
+            created=$(echo "$run" | cut -d' ' -f3)
+            if [ "$status" != "completed" ] && [ $(( $(date -u +%s) - $(date -u -d "$created" +%s) )) -lt $((8 * 3600)) ]; then
+              # The night's run is still going: judge the newest completed run instead (its age is not
+              # checked: the running one proves the schedule is alive), and never call that night green.
+              fallback=$(echo "$runs" | sed -n 2p)
+              echo "the latest scheduled run is still $status and younger than 8 hours; judging the previous completed run" >> "$GITHUB_STEP_SUMMARY"
+              what="the previous"
+              if [ -n "$fallback" ] && [ "$(echo "$fallback" | cut -d' ' -f1)" = completed ]; then run="$fallback"; else run=""; judged=no; fi
             fi
           fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "Judged scheduled ci run on main ($what): $run" >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$problem" ] && [ -n "$run" ]; then
+            status=$(echo "$run" | cut -d' ' -f1)
+            conclusion=$(echo "$run" | cut -d' ' -f2)
+            created=$(echo "$run" | cut -d' ' -f3)
+            url=$(echo "$run" | cut -d' ' -f4)
+            if [ "$status" != "completed" ]; then
+              problem="$what scheduled ci run is still $status after 8 hours ($url)"
+            elif [ "$conclusion" != "success" ]; then
+              problem="$what scheduled ci run on main ended $conclusion ($url)"
+            elif [ -z "$fallback" ]; then
+              age=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
+              if [ "$age" -gt $((26 * 3600)) ]; then
+                problem="the latest scheduled ci run on main is older than 26 hours ($created, $url)"
+              fi
+            fi
+          fi
+          # The late-start guard of the scheduled workflows ends a run `success` with every job skipped:
+          # a night on which nothing ran must not look green. The key job of each must not be skipped.
+          # The daily workflows are read for their two newest scheduled runs: a skipped run is created in the
+          # working day, so by the next canary a newer run may already be the newest (and the judged run
+          # above may be the second). The weekly ones need one run: a daily canary reads between two of their
+          # runs. A skipped weekly run alerts on each of the next seven days; a manual run does not clear it
+          # (only scheduled runs are read).
+          if [ -z "$problem" ]; then
+            for spec in "nightly.yml:all-features:2" "mutants.yml:mutants:2" "fuzz-weekly.yml:kernels:1" "connect-clients.yml:smoke:1"; do
+              wf=${spec%%:*}; rest=${spec#*:}; job=${rest%%:*}; count=${rest#*:}
+              ids=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --branch main --event schedule \
+                --limit "$count" --json databaseId -q '.[].databaseId') || ids=""
+              if [ -z "$ids" ]; then echo "could not list $wf runs (no run, or the query failed): not checked" >> "$GITHUB_STEP_SUMMARY"; continue; fi
+              for id in $ids; do
+                skipped=$(gh run view "$id" --repo "$GITHUB_REPOSITORY" --json jobs \
+                  -q "[.jobs[] | select(.name | startswith(\"$job\")) | select(.conclusion == \"skipped\")] | length") \
+                  || { skipped=0; echo "could not read run $id of $wf: not checked" >> "$GITHUB_STEP_SUMMARY"; }
+                if [ "${skipped:-0}" -gt 0 ]; then
+                  problem="a recent scheduled $wf run on main skipped its $job job(s): it started outside the night window (run $id)"
+                fi
+              done
+            done
+          fi
           echo "problem=$problem" >> "$GITHUB_OUTPUT"
-          if [ -n "$problem" ]; then echo "::error::CI canary: $problem"; else echo "CI canary: nightly ci on main is green."; fi
+          if [ -n "$problem" ]; then echo "::error::CI canary: $problem"; elif [ -n "$fallback" ] && [ "$judged" = yes ]; then echo "CI canary: the previous nightly run on main is green; tonight's run is still going and was not judged."; elif [ "$judged" = no ]; then echo "CI canary: the night's run is still going and no earlier run completed; not judged."; else echo "CI canary: nightly ci on main is green."; fi
       - name: Alert on ntfy
         if: steps.run.outputs.problem != ''
         env:

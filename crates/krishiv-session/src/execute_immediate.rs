@@ -170,7 +170,7 @@ impl Session {
                     .await?
             }
             statement => {
-                let class = krishiv_sql::classify_with(&statement, &env.parser);
+                let class = self.statement_class(&statement, &env);
                 // The text of the statement does not see a running script's locals (Spark's
                 // `EXECUTE IMMEDIATE` runs it apart from the script); its arguments did.
                 let plain = self.with_locals(Vec::new());
@@ -245,7 +245,7 @@ impl Session {
             let Some(key) = variable_key(name) else {
                 return Err(crate::command::unresolved_variable(
                     name,
-                    crate::variables::RESOLVE_SEARCH_PATH,
+                    &self.search_path(),
                     text,
                 ));
             };
