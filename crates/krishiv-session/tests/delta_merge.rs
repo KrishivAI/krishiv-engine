@@ -890,3 +890,37 @@ fn a_quoted_column_name_with_a_dot_is_a_top_level_column() {
     .unwrap_err();
     assert!(e.to_string().contains("nested field"), "{e}");
 }
+
+/// A `MERGE` inside a SQL script sees the script's locals in its source, its clause conditions
+/// and its values, and a local shadows a session variable of the same name (#962 review).
+#[test]
+fn a_merge_in_a_script_reads_the_script_s_locals() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let session = Session::new().unwrap();
+    sql(
+        &session,
+        &format!(
+            "CREATE TABLE t USING delta LOCATION '{}' AS SELECT * FROM VALUES \
+             (CAST(1 AS BIGINT), 'a') AS x(id, v)",
+            dir.display()
+        ),
+    )
+    .unwrap();
+    sql(&session, "DECLARE VARIABLE k BIGINT DEFAULT 100").unwrap();
+    sql(
+        &session,
+        "BEGIN \
+           DECLARE k BIGINT DEFAULT 2; \
+           DECLARE w STRING DEFAULT 'local'; \
+           MERGE INTO t USING (SELECT k AS id UNION ALL SELECT 1) s ON t.id = s.id \
+           WHEN MATCHED AND s.id < k THEN UPDATE SET v = w \
+           WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id + k, w); \
+         END",
+    )
+    .unwrap();
+    assert_eq!(
+        table_rows(&dir),
+        serde_json::json!([[1, "local"], [4, "local"]])
+    );
+}

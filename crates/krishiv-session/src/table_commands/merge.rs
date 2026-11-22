@@ -308,7 +308,9 @@ impl Session {
             nullable: false,
             char_varchar: None,
         });
-        let source = plain.nested_frame(&m.source).await?;
+        // The source is a query of the statement: inside a script it reads the script's locals
+        // (only the target probe above runs without them).
+        let source = self.nested_frame(&m.source).await?;
         let source_columns: Vec<String> = source
             .schema()
             .await?
