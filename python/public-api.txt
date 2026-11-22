@@ -1716,9 +1716,12 @@ class Row(tuple[Any, ...])
 Catalog.def __init__(self, session: SparkSession) -> None
 Catalog.def cacheTable(self, tableName: str, storageLevel: StorageLevel | None=None) -> None
 Catalog.def clearCache(self) -> None
+Catalog.def createExternalTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, **options: str) -> DataFrame
+Catalog.def createTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, description: str | None=None, **options: str) -> DataFrame
 Catalog.def currentCatalog(self) -> str
 Catalog.def currentDatabase(self) -> str
 Catalog.def databaseExists(self, dbName: str) -> bool
+Catalog.def dropGlobalTempView(self, viewName: str) -> bool
 Catalog.def dropTempView(self, viewName: str) -> bool
 Catalog.def functionExists(self, functionName: str, dbName: str | None=None) -> bool
 Catalog.def getDatabase(self, dbName: str) -> Database
@@ -1730,6 +1733,7 @@ Catalog.def listColumns(self, tableName: str, dbName: str | None=None) -> list[C
 Catalog.def listDatabases(self, pattern: str | None=None) -> list[Database]
 Catalog.def listFunctions(self, dbName: str | None=None, pattern: str | None=None) -> list[Function]
 Catalog.def listTables(self, dbName: str | None=None, pattern: str | None=None) -> list[Table]
+Catalog.def recoverPartitions(self, tableName: str) -> None
 Catalog.def refreshByPath(self, path: str) -> None
 Catalog.def refreshTable(self, tableName: str) -> DataFrame
 Catalog.def registerFunction(self, name: str, f: Any, returnType: Any=None) -> Any
