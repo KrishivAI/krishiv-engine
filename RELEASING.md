@@ -94,7 +94,7 @@ Connect work. Every channel stays a hard stop: tag and publish only on the owner
 |---|---|---|
 | PyPI `krishiv` | abi3 (cp311+) and free-threaded cp314t wheels: manylinux x86_64/aarch64, musllinux, macOS arm64 | `wheels.yml` builds and tests every wheel; `publish-testpypi.yml` (manual) uploads them to TestPyPI |
 | crates.io `krishiv` | the facade plus the internal crates at the same version (ADR 0026) | `publish-dry-run` job of `ci.yml` (`.github/scripts/publish-dry-run.sh`) |
-| GitHub Release `v0.2.0` | changelog, quickstart, `krishiv` CLI binaries for Linux x86_64, Linux aarch64 and macOS arm64, SBOM, signatures | `binaries.yml` builds and smoke-tests the three binaries (and the `krishiv-compat` x86-64 baseline); the SBOM, the signatures and the release upload are **not wired yet** |
+| GitHub Release `v0.2.0` | changelog, quickstart, `krishiv` CLI binaries for Linux x86_64, Linux aarch64 and macOS arm64, SBOM, checksums, build attestations | `binaries.yml` builds and smoke-tests the three binaries (and the `krishiv-compat` x86-64 baseline); `release.yml` (manual, inert) bundles wheels, binaries, `SHA256SUMS` and CycloneDX SBOMs and attests every file; the GitHub Release upload itself is **not wired yet** |
 
 Not wired yet (each is a reviewed change by the maintainer, because it edits the guards in
 `release_publishing_is_manual_and_gated`):
@@ -102,8 +102,8 @@ Not wired yet (each is a reviewed change by the maintainer, because it edits the
 - dropping `publish = false` and adding versions to the path dependencies of the crates that ship (what
   `publish-dry-run.sh` simulates), and the PyPI and crates.io credentials (a PyPI trusted publisher over OIDC and a
   scoped crates.io token) behind `environment:` gates with required reviewers;
-- a gated release workflow (`workflow_dispatch` only) that downloads the `binaries.yml` artifacts, writes checksums
-  and an SBOM, signs them and drafts the GitHub Release. Its dry-run mode must stop before any upload or tag.
+- drafting the GitHub Release and uploading the `release.yml` bundle to it (signing included). The workflow's
+  dry-run mode must stop before any upload or tag.
 
 Owner actions before the gate are listed in `ops/needs-owner.md` ("Release 0.2.0 channels and pre-publish setup"):
 crates.io keywords and description (drop `datafusion`), the PyPI classifier, the credentials, and the go/no-go.
@@ -198,6 +198,26 @@ docs fix for a released version needs no new release. After the tag `v0.X.0` is 
 3. **Deploy** with `site/deploy.sh`.
 4. **Check** the version switcher lists the new version as latest and that the previous version still serves its own
    pages.
+
+## Release checklist
+
+Run `cargo xtask release-check [VERSION]` first. It is read-only and prints `ok` or `FAIL` per line: the version, that
+every crate inherits it, that the release workflows and `docs/concepts/stability.md` exist, that
+`.github/scripts/publish-crates.txt` has no duplicates, names real crates and lists each after its dependencies,
+that the changelog has the section (or `changelog.d` has fragments for `cargo xtask changelog assemble`), and that
+the tag is free in the local checkout (fetch tags first: `git fetch --tags`; the remote is not queried). To measure
+a CI change, save `gh run list --workflow ci.yml --event pull_request --status success --limit 50 --json
+databaseId,startedAt,updatedAt,conclusion > before.json` before it merges and the same command with
+`> after.json` afterwards, then run `cargo xtask ci-time --compare before.json after.json` (median and p90 of the
+PR gate). Then, in order (each step after the check is the owner's):
+
+1. `cargo xtask release-check X.Y.Z` is all `ok`; the latest scheduled nightly is green on the commit.
+2. `cargo xtask changelog assemble X.Y.Z`, review the section, merge the release PR.
+3. Run "Release artifacts" (`release.yml`) on main; check `SHA256SUMS` and `gh attestation verify <file> --repo KrishivAI/krishiv-engine`.
+4. Sign and push the tag (`git tag -s`, `git verify-tag`).
+5. TestPyPI rehearsal, PyPI, crates.io, then the GitHub Release (see the step-by-step above).
+6. `cargo-semver-checks` (nightly job `semver-checks`) is non-blocking until a release tag exists to compare
+   against; once `v0.2.x` is tagged, remove its `continue-on-error`.
 
 ## Before any release
 

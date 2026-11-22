@@ -4,7 +4,18 @@
 //! A [`Session`] runs Spark SQL ([`Session::sql`]) and DataFrames
 //! ([`DataFrame`], built with [`functions`] and [`Column`]) in this
 //! process. Results are Arrow record batches ([`arrow`]). Errors are
-//! [`Error`]s carrying Spark's error class and SQLSTATE.
+//! [`Error`]s carrying Spark's error class and SQLSTATE: match on
+//! [`Error::error_class`] against [`ErrorClass`] variants, or compare
+//! `error_class().name()` with Spark's class name.
+//!
+//! # Cargo features
+//!
+//! `kafka`, `iceberg`, `cdc`, `connect`, `flight-sql`, `mcp`, `python`, `wasm-udf`,
+//! `celeborn` and `mimalloc` are reserved names: they enable no code in this crate
+//! yet (features are additive, ADR 0027, so they can gain code later without breaking
+//! anyone who names them). The ones that do something are `delta`, `cloud`,
+//! `collations-icu` (on by default), `ui`, `unstable-ir`, `tokio-console`, `telemetry-logs` and
+//! `telemetry-otlp`; `full` turns on the reserved names and the optional backends together.
 //!
 //! ```
 //! use std::sync::Arc;
@@ -34,7 +45,7 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
 
-pub use krishiv_common::error::KrishivError as Error;
+pub use krishiv_common::error::{ErrorClass, ErrorQueryContext, KrishivError as Error};
 pub use krishiv_session::{
     AggregateProperties, AggregateUdf, ArgField, CancelReason, Column, CounterSample, DataFrame,
     DataFrameReader, DataFrameWriter, EngineRuntime, EngineRuntimeBuilder, Estimate, ExplainMode,

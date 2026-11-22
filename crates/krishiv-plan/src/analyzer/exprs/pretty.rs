@@ -576,6 +576,11 @@ pub(super) fn call(
         (Some(Builtin::Remainder), 2) => infix("%"),
         (Some(Builtin::IntegralDivide), 2) => infix("div"),
         (Some(Builtin::Like), 2) => format!("{} LIKE {}", k[0], k[1]),
+        (Some(Builtin::Like), 3) => format!("{} LIKE {} ESCAPE '{}'", k[0], k[1], k[2]),
+        // Spark's `ILike` shows its escape character nowhere (4.1 to 4.3 runs).
+        _ if name.eq_ignore_ascii_case("ilike") && k.len() == 3 => {
+            format!("ilike({}, {})", k[0], k[1])
+        }
         (Some(Builtin::Not), 1) => format!("(NOT {})", k[0]),
         (Some(Builtin::Negative), 1) => format!("(- {})", k[0]),
         (Some(Builtin::IsNull), 1) => format!("({} IS NULL)", k[0]),
