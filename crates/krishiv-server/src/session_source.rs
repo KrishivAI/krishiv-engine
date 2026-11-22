@@ -421,6 +421,7 @@ fn table_name(table: SystemTable) -> &'static str {
         SystemTable::Caches => "caches",
         SystemTable::Sessions => "sessions",
         SystemTable::ResourceGroups => "resource_groups",
+        SystemTable::PartitionAdvice => "partition_advice",
     }
 }
 
@@ -697,6 +698,21 @@ impl UiSource for SessionSource {
                 return Ok(false);
             };
             Ok(self.runtime.cancel(&id, CancelReason::Admin))
+        })
+    }
+
+    fn cancel_in_session<'a>(
+        &'a self,
+        query_id: &'a str,
+        session_id: &'a str,
+    ) -> UiFuture<'a, bool> {
+        Box::pin(async move {
+            let Ok(id) = QueryId::parse(query_id) else {
+                return Ok(false);
+            };
+            Ok(self
+                .runtime
+                .cancel_in_session(session_id, &id, CancelReason::Admin))
         })
     }
 
@@ -1042,7 +1058,8 @@ impl UiSource for ProfilesSource {
                 SystemTable::Memory
                 | SystemTable::Caches
                 | SystemTable::Sessions
-                | SystemTable::ResourceGroups => Vec::new(),
+                | SystemTable::ResourceGroups
+                | SystemTable::PartitionAdvice => Vec::new(),
             })
         })
     }

@@ -330,6 +330,7 @@ impl Resolver<'_> {
         let Some(to) = to else {
             return b.clone();
         };
+        self.implicit_casts.set(self.implicit_casts.get() + 1);
         let mode = match (try_cast, self.ctx.conf.ansi) {
             (true, _) => CastMode::Try,
             (false, true) => CastMode::Ansi,

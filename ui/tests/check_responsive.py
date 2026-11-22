@@ -63,10 +63,11 @@ ALL_PAGES = [
     ("sql", "#/sql", "Run"),
     ("environment", "#/environment", "krishiv.auth.token"),
 ]
-# The two pages a server console alone has.
+# The three pages a server console alone has.
 SERVER_PAGES = [
     ("sessions", "#/sessions", "ADBC Flight SQL"),
     ("workload", "#/workload", "nightly"),
+    ("advisor", "#/advisor", "event_date"),
 ]
 MODE_PAGES = {
     "server": ALL_PAGES + SERVER_PAGES,
@@ -332,11 +333,11 @@ def menu_checks(browser: Browser, origin: str) -> list[str]:
         page, _ = _open(browser, origin, size, True)
         links = page.locator("header nav a").locator("visible=true")
         if (
-            links.count() != 9
+            links.count() != 10
             or page.get_by_role("button", name="Open the menu").is_visible()
         ):
             problems.append(
-                f"menu {size[0]}: the top bar shows {links.count()} of the 9 pages"
+                f"menu {size[0]}: the top bar shows {links.count()} of the 10 pages"
             )
         page.context.close()
     return problems
