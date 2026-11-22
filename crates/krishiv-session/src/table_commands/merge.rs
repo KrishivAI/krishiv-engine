@@ -794,9 +794,10 @@ impl Session {
                 .exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, original)
                 .await;
         }
-        let (name, quoted) = self
+        let target = self
             .row_level_target_checked(&m.target, "MERGE INTO TABLE", &env, &changes, original)
             .await?;
+        let (name, quoted) = target.clone();
         let slice = |span: krishiv_sql::ast::Span| {
             original
                 .get(span.start..span.end)
@@ -808,15 +809,28 @@ impl Session {
             .as_ref()
             .map_or_else(|| name.name.clone(), |a| a.value.clone());
         let (source, source_alias) = match &m.source {
-            MergeSource::Table { name, alias, .. } => {
+            MergeSource::Table {
+                name,
+                options,
+                alias,
+                ..
+            } => {
                 let last = match name {
                     krishiv_sql::ast::DdlName::Parts(p) => {
                         p.parts.last().map(|i| i.value.clone()).unwrap_or_default()
                     }
                     other => slice(other.span()),
                 };
+                // The source is a plain read with its own `WITH (...)` options, as Spark reads it
+                // (AstBuilder.scala 1286-1290 at v4.3.0): each option as written.
+                let with = if options.is_empty() {
+                    String::new()
+                } else {
+                    let written: Vec<String> = options.iter().map(|o| slice(o.span)).collect();
+                    format!(" WITH ({})", written.join(", "))
+                };
                 (
-                    format!("SELECT * FROM {}", slice(name.span())),
+                    format!("SELECT * FROM {}{with}", slice(name.span())),
                     alias.as_ref().map_or(last, |a| a.value.clone()),
                 )
             }
@@ -908,7 +922,8 @@ impl Session {
             self.forget_cached(&name);
             return Ok(done);
         }
-        self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, original)
+        // No MERGE-capable row-level table: the refusal path, on the target already checked.
+        self.exec_row_level_change_on(target, None, "MERGE INTO TABLE", &changes, original)
             .await
     }
 }

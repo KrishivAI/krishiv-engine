@@ -890,9 +890,23 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        let (name, quoted) = self
+        let target = self
             .row_level_target_checked(table, operation, &env, changes, original)
             .await?;
+        self.exec_row_level_change_on(target, alias, operation, changes, original)
+            .await
+    }
+
+    /// [`Self::exec_row_level_change`] on a target `row_level_target_checked` already resolved
+    /// and checked (`MERGE INTO` falls back here after its own check).
+    pub(crate) async fn exec_row_level_change_on(
+        &self,
+        (name, quoted): (TableName, String),
+        alias: Option<&krishiv_sql::ast::Ident>,
+        operation: &str,
+        changes: &RowChanges<'_>,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
         // Spark analyzes the condition and the new values against the table before it finds that the
         // table cannot change: an unknown column is the error then.
         // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own

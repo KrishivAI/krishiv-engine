@@ -696,3 +696,69 @@ fn a_merge_cancelled_through_the_session_changes_nothing() {
     }
     assert!(left.is_empty(), "{left:?}");
 }
+
+/// A CSV source by path with `header` in its `WITH (...)` options at `<tmp>/src`.
+fn csv_source(tmp: &Path) -> PathBuf {
+    let src = tmp.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("s.csv"), "id,v\n1,zz\n9,new\n").unwrap();
+    src
+}
+
+#[test]
+fn a_merge_source_reads_with_its_own_options() {
+    // Spark reads a table source with its `WITH (...)` options (AstBuilder.scala 1286-1290 at
+    // v4.3.0): with `header`, the header line is not a source row.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    copy_dir(&fixtures().join("unpartitioned").join("before"), &dir);
+    let src = csv_source(tmp.path());
+    let session = Session::new().unwrap();
+    let text = format!(
+        "MERGE INTO delta.`{}` t USING csv.`{}` WITH ('header' = 'true') s \
+         ON t.id = CAST(s.id AS BIGINT) \
+         WHEN MATCHED THEN UPDATE SET v = s.v \
+         WHEN NOT MATCHED THEN INSERT (id, v, n) VALUES (CAST(s.id AS BIGINT), s.v, 0)",
+        dir.display(),
+        src.display()
+    );
+    let (_, out) = sql(&session, &text).unwrap();
+    assert_eq!(out, serde_json::json!([[2, 1, 0, 1]]));
+    let rows = table_rows(&dir);
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 7, "{rows:?}");
+    assert!(rows.iter().any(|r| r[0] == 1 && r[1] == "zz"), "{rows:?}");
+    assert!(rows.iter().any(|r| r[0] == 9 && r[1] == "new"), "{rows:?}");
+    assert!(!rows.iter().any(|r| r[1] == "v"), "{rows:?}");
+}
+
+#[test]
+fn a_merge_source_option_error_is_the_reads_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    copy_dir(&fixtures().join("unpartitioned").join("before"), &dir);
+    let src = csv_source(tmp.path());
+    let session = Session::new().unwrap();
+    let read = sql(
+        &session,
+        &format!(
+            "SELECT * FROM csv.`{}` WITH ('header' = 'true', 'sep' = '')",
+            src.display()
+        ),
+    )
+    .unwrap_err();
+    let merge = sql(
+        &session,
+        &format!(
+            "MERGE INTO delta.`{}` t USING csv.`{}` WITH ('header' = 'true', 'sep' = '') s \
+             ON t.id = CAST(s.id AS BIGINT) WHEN MATCHED THEN DELETE",
+            dir.display(),
+            src.display()
+        ),
+    )
+    .unwrap_err();
+    assert_eq!(merge.error_class(), read.error_class(), "{merge} / {read}");
+    assert_eq!(merge.to_string(), read.to_string());
+    // The table is unchanged.
+    assert_eq!(table_rows(&dir).as_array().unwrap().len(), 6);
+}
