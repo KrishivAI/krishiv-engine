@@ -1532,3 +1532,49 @@ fn a_stored_function_body_may_reference_no_object_of_the_session() {
     );
     assert_eq!(ok(&s, "SELECT r8_tmp()"), ["9"]);
 }
+
+/// Spark 4.2.1 (run 2026-11-22; `SQLFunctionExpression`'s children): an argument the body never
+/// reads is still checked against the GROUP BY.
+#[test]
+fn an_unread_argument_is_still_checked_against_the_group_by() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION seven(x BIGINT) RETURNS BIGINT RETURN 7",
+    );
+    let e = fails(&s, "SELECT name, seven(id) FROM people GROUP BY name");
+    let (class, params) = class_and_params(&e);
+    assert_eq!(class, "MISSING_AGGREGATION");
+    assert_eq!(params["expression"], "\"id\"");
+    let e = fails(&s, "SELECT seven(id), count(*) FROM people");
+    assert_eq!(e.error_class().name(), "MISSING_GROUP_BY");
+    // A grouped or aggregated argument is fine, and so is a call that is itself grouped.
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT id, seven(id) FROM people GROUP BY id ORDER BY id"
+        ),
+        ["1\t7", "2\t7", "3\t7"]
+    );
+    assert_eq!(ok(&s, "SELECT seven(sum(id)) FROM people"), ["7"]);
+    assert_eq!(
+        ok(&s, "SELECT seven(id) FROM people GROUP BY seven(id)"),
+        ["7"]
+    );
+    // Nested: the unread argument of an inner call inside an outer one.
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION wrap(y BIGINT) RETURNS BIGINT RETURN y + 1",
+    );
+    let e = fails(&s, "SELECT name, wrap(seven(id)) FROM people GROUP BY name");
+    assert_eq!(e.error_class().name(), "MISSING_AGGREGATION");
+    // HAVING reads the aggregate's output, where `id` is not a column.
+    let e = fails(
+        &s,
+        "SELECT name FROM people GROUP BY name HAVING seven(id) > 0",
+    );
+    assert!(
+        e.error_class().name().starts_with("UNRESOLVED_COLUMN"),
+        "{e:?}"
+    );
+}

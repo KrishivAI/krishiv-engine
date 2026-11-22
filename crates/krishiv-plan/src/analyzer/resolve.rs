@@ -237,6 +237,10 @@ pub(super) struct Resolver<'a> {
     pub(super) in_stored_view: bool,
     /// SQL function calls inlined so far in this analysis (a budget).
     pub(super) sql_calls: usize,
+    /// The inlined bodies of SQL function calls (by address, the body kept alive) with the
+    /// arguments the body never reads: Spark checks them as the call's children
+    /// (`SQLFunctionExpression`), so an aggregate's check walks them too.
+    pub(super) unread_args: HashMap<usize, (Arc<Expr>, Vec<Arc<Expr>>)>,
     /// The first aggregate over a nondeterministic argument: Spark checks
     /// it after the operators' other rules, so any other error wins.
     pub(super) pending_nondeterministic: Option<AnalysisError>,
@@ -307,6 +311,7 @@ pub(super) fn resolve(
         view_nodes: HashSet::new(),
         in_stored_view: false,
         sql_calls: 0,
+        unread_args: HashMap::new(),
         pending_nondeterministic: None,
         built_ids: std::collections::HashSet::new(),
         declared: HashMap::new(),

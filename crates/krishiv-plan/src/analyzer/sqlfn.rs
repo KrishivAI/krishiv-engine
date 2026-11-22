@@ -385,6 +385,18 @@ impl Resolver<'_> {
                 ));
             }
         }
+        let unread: Vec<Arc<Expr>> = frame
+            .params
+            .iter()
+            .filter(|fp| fp.reads.load(Ordering::Relaxed) == 0)
+            .map(|fp| Arc::clone(&fp.arg.expr))
+            .collect();
+        if !unread.is_empty() {
+            self.unread_args.insert(
+                super::bind::addr(&*body.expr),
+                (Arc::clone(&body.expr), unread),
+            );
+        }
         Ok(body)
     }
 

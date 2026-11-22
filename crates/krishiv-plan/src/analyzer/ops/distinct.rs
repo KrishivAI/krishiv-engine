@@ -766,6 +766,11 @@ impl Resolver<'_> {
                 {
                     continue;
                 }
+                // A SQL function's argument its body never reads is still the
+                // call's child in Spark's check.
+                if let Some((_, unread)) = self.unread_args.get(&super::super::bind::addr(&*x)) {
+                    stack.extend(unread.iter().cloned());
+                }
                 match &x.node {
                     ExprNode::Resolved(ResolvedExpr::Function(f))
                         if f.kind == FunctionKind::Aggregate => {}
