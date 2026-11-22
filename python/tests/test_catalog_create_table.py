@@ -36,9 +36,12 @@ def test_create_table_twice_fails(spark, tmp_path: Path) -> None:
 def test_create_table_with_a_schema(spark, tmp_path: Path) -> None:
     path = str(tmp_path / "p")
     spark.sql("select 1 as a, 'x' as b").write.parquet(path)
-    schema = T.StructType([T.StructField("a", T.IntegerType()), T.StructField("b", T.StringType())])
+    schema = T.StructType([T.StructField("a", T.LongType()), T.StructField("b", T.StringType())])
+    inferred = spark.read.parquet(path).dtypes
     df = spark.catalog.createTable("with_schema", path, "parquet", schema)
-    assert df.columns == ["a", "b"]
+    assert df.dtypes == [("a", "bigint"), ("b", "string")]
+    assert inferred[0] == ("a", "int")  # the schema differs from inference, so an ignored schema fails the line above
+    assert [tuple(r) for r in df.collect()] == [(1, "x")]
 
 
 def test_create_external_table_is_a_deprecated_alias(spark, tmp_path: Path) -> None:

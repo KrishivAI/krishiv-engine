@@ -152,13 +152,16 @@ def test_rollup_cube_grouping_sets(df) -> None:
     rolled = df.rollup("b").count().sort("b").collect()
     assert rolled == [Row(b=None, count=2), Row(b="a", count=1), Row(b="b", count=1)]
     cubed = df.cube("a", "b").count().collect()
-    assert len(cubed) == 1 + 2 + 2 + 2
-    assert Row(a=None, b=None, count=2) in cubed
+    assert sorted(map(tuple, cubed), key=repr) == sorted(
+        [(None, None, 2), (None, "a", 1), (None, "b", 1), (1, None, 1), (2, None, 1), (1, "a", 1), (2, "b", 1)],
+        key=repr,
+    )
     sets = df.groupingSets([["a"], []], "a").count().sort("a").collect()
     assert sets == [Row(a=None, count=2), Row(a=1, count=1), Row(a=2, count=1)]
     summed = df.rollup("a", "b").agg(F.sum("c").alias("s")).collect()
-    assert Row(a=None, b=None, s=4.0) in summed
-    assert Row(a=1, b=None, s=1.5) in summed
+    assert sorted(map(tuple, summed), key=repr) == sorted(
+        [(None, None, 4.0), (1, None, 1.5), (2, None, 2.5), (1, "a", 1.5), (2, "b", 2.5)], key=repr
+    )
 
 
 def test_with_columns_replaces_in_place_and_adds(df) -> None:

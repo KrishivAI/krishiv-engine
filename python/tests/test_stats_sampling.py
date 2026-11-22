@@ -150,11 +150,11 @@ def test_summary_percentiles_are_nearest_rank(spark: SparkSession) -> None:
     ]
 
 
-def test_summary_of_decimals_gives_double_percentiles(spark: SparkSession) -> None:
+def test_summary_of_decimals_keeps_decimal_percentiles(spark: SparkSession) -> None:
     from decimal import Decimal
 
     df = spark.createDataFrame([(Decimal(v),) for v in ("1.20", "2.00", "3.45", "9.99")], "x decimal(10,2)")
-    assert table(df.summary("25%", "50%", "75%")) == [("25%", "1.2"), ("50%", "2.0"), ("75%", "3.45")]
+    assert table(df.summary("25%", "50%", "75%")) == [("25%", "1.20"), ("50%", "2.00"), ("75%", "3.45")]
 
 
 def test_summary_errors(mixed: DataFrame) -> None:

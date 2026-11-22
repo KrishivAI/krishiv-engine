@@ -238,7 +238,7 @@ def approx_quantile(
     # One scalar aggregate for each column and probability (the engine takes no array of percentages).
     aggregates = []
     for i, name in enumerate(columns):
-        value = F.col(_quote(name)).cast("double")
+        value = F.col(name).cast("double")
         usable = F.when(~F.isnan(value), value)
         for j, p in enumerate(probabilities):
             aggregates.append(F.percentile_approx(usable, float(p), accuracy).alias(f"q{i}_{j}"))
@@ -269,7 +269,7 @@ def _require_numeric(df: DataFrame, name: str, what: str) -> None:
 
 def _filled(name: str) -> Column:
     """The column as a double, with NULL read as 0.0 (Spark replaces NULL before ``corr`` and ``cov``)."""
-    return F.coalesce(F.col(_quote(name)).cast("double"), F.lit(0.0))
+    return F.coalesce(F.col(name).cast("double"), F.lit(0.0))
 
 
 def corr(df: DataFrame, col1: str, col2: str) -> float:
@@ -341,7 +341,7 @@ def frequent_items(df: DataFrame, cols: list[str], support: float) -> DataFrame:
     result: list[Any] = []
     plain = True
     for name in cols:
-        column = df.select(F.col(_quote(name)))
+        column = df.select(F.col(name))
         fields.append(StructField(f"{name}_freqItems", ArrayType(column.schema.fields[0].dataType, True), False))
         counts: dict[Any, int] = {}
         originals: dict[Any, Any] = {}
