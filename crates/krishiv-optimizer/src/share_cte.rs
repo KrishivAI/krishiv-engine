@@ -407,16 +407,17 @@ fn walk(plan: &Arc<LogicalPlan>, f: &mut impl FnMut(&Arc<LogicalPlan>)) {
     }
 }
 
-/// A top-down rewrite that replaces the members and rebuilds what is above.
-struct Sharer<'a> {
-    replace: &'a HashMap<*const LogicalPlan, Arc<LogicalPlan>>,
+/// A top-down rewrite that replaces the members and rebuilds what is above
+/// (also `share_scan`'s).
+pub(crate) struct Sharer<'a> {
+    pub(crate) replace: &'a HashMap<*const LogicalPlan, Arc<LogicalPlan>>,
     /// Original → rewritten; the original is kept alive so its address stays
     /// unique.
-    done: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
+    pub(crate) done: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
 }
 
 impl Sharer<'_> {
-    fn go(&mut self, plan: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
+    pub(crate) fn go(&mut self, plan: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
         let key = Arc::as_ptr(&plan);
         if let Some(r) = self.replace.get(&key) {
             return Ok(Arc::clone(r));
@@ -434,7 +435,10 @@ impl Sharer<'_> {
     /// A definition's body: its children and expressions are rewritten, but
     /// the body itself is not replaced by its own reference (a direct member
     /// is keyed by the body's pointer).
-    fn go_def(&mut self, plan: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
+    pub(crate) fn go_def(
+        &mut self,
+        plan: Arc<LogicalPlan>,
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
         // Only the body's own direct reference (`output == source`, offset 0)
         // is skipped; a shared `Shift` that happens to be a body is replaced.
         let own = self.replace.get(&Arc::as_ptr(&plan)).is_some_and(|r| {

@@ -785,6 +785,16 @@ async fn stored_profiles_give_the_history_and_operator_rows_and_cannot_cancel() 
     assert_eq!(source.plan(&unknown).await.unwrap(), None);
     assert!(source.rows(SystemTable::Memory).await.unwrap().is_empty());
     assert!(source.rows(SystemTable::Caches).await.unwrap().is_empty());
+    // Nothing is connected to stored profiles, and nothing is admitted.
+    assert!(source.rows(SystemTable::Sessions).await.unwrap().is_empty());
+    assert!(
+        source
+            .rows(SystemTable::ResourceGroups)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(source.close_session("anything").await.unwrap(), None);
     assert!(!source.cancel("anything").await.unwrap());
     assert!(ProfilesSource::open(std::path::Path::new("/nonexistent/krishiv-profiles")).is_err());
 

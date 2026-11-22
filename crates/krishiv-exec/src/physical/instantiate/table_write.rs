@@ -48,6 +48,17 @@ impl Instantiation<'_> {
                 request.table_name()
             )));
         }
+        // Every connector gets the same refusal of an empty key: it would match the next empty key.
+        if let TableWriteRequest::Write(w) = request
+            && w.idempotency_key().is_some_and(|k| k.is_empty())
+        {
+            return Err(krishiv_common::error::KrishivInvalidConfigValue {
+                key: crate::planner::IDEMPOTENCY_KEY_OPTION.to_owned(),
+                value: String::new(),
+                reason: "an idempotency key must not be empty".to_owned(),
+            }
+            .into());
+        }
         let provider = self.worker.tables.provider(table)?;
         let sink = match request {
             TableWriteRequest::Write(w) => provider.writer(w)?,

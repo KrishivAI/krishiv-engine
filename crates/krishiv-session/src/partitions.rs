@@ -850,6 +850,7 @@ impl Session {
                 mode: CommitMode::Overwrite,
                 add,
                 remove,
+                idempotency_key: None,
             };
             match log.commit(snapshot.version, &entry).await {
                 Ok(_) => return Ok(removed),
@@ -893,6 +894,7 @@ impl Session {
             mode: CommitMode::Append,
             add: files,
             remove: Vec::new(),
+            idempotency_key: None,
         };
         let mut races = 0;
         loop {
@@ -1723,7 +1725,7 @@ impl Session {
             .catalog
             .store
             .table(&name.namespace, &name.name)
-            .ok_or_else(|| name.not_found())?;
+            .ok_or_else(|| name.not_found(self.table_search_path()))?;
         if table.view.is_some() {
             return Err(forbidden("VIEW"));
         }

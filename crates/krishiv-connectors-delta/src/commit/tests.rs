@@ -288,6 +288,7 @@ fn staged(write_id: &str, adds: Vec<RecordBatch>, read_set: ReadSet) -> StagedCo
     StagedCommit {
         table: "delta.`t`".to_owned(),
         write_id: write_id.to_owned(),
+        idempotency_key: None,
         operation: CommitOperation::Write,
         operation_parameters: vec![("mode".to_owned(), Some("Append".to_owned()))],
         operation_metrics: Vec::new(),
@@ -583,6 +584,91 @@ fn a_retried_commit_finds_its_own_landing() {
     let retried = env.commit(&s, first).unwrap();
     assert_eq!((retried.version, retried.found_by_landed_check), (2, true));
     assert_eq!(env.latest(), 3);
+}
+
+fn keyed(write_id: &str, key: &str, file: &str) -> StagedCommit {
+    let mut c = staged(write_id, vec![add(file, Some("x"))], ReadSet::default());
+    c.idempotency_key = Some(key.to_owned());
+    c
+}
+
+/// E34: a statement retried with a new write id but the same key appends once, from a fresh
+/// snapshot or from the stale one; the key is a `txn` action; another key commits.
+#[test]
+fn a_retried_statement_with_the_same_idempotency_key_commits_once() {
+    let env = Env::new();
+    let s = env.snapshot();
+    let first = env.commit(&s, keyed("w1", "job-7", "a.parquet")).unwrap();
+    assert!(!first.deduplicated);
+    let log = env.log(first.version);
+    assert!(
+        log.iter()
+            .any(|a| a["txn"]["appId"] == "krishiv.idempotency:job-7" && a["txn"]["version"] == 1)
+    );
+    let latest = env.latest();
+
+    let stale = env.commit(&s, keyed("w2", "job-7", "b.parquet")).unwrap();
+    assert!(stale.deduplicated && stale.attempts == 0);
+    let fresh = env
+        .commit(&env.snapshot(), keyed("w3", "job-7", "c.parquet"))
+        .unwrap();
+    assert!(fresh.deduplicated);
+    assert_eq!(fresh.version, latest);
+    assert_eq!(env.latest(), latest, "no commit was made");
+
+    let other = env
+        .commit(&env.snapshot(), keyed("w4", "job-8", "d.parquet"))
+        .unwrap();
+    assert!(!other.deduplicated);
+    assert_eq!(env.latest(), latest + 1);
+}
+
+/// E34: a keyed write that reads the table and loses its race to a retry of the same statement
+/// (same key, another write id) is deduplicated before the winner is checked for conflicts: the
+/// winner's append would otherwise be a concurrent-append conflict.
+#[test]
+fn a_same_key_winner_is_deduplicated_before_conflict_checks() {
+    let env = Env::new();
+    let s = env.snapshot();
+    let reads = |write_id: &str, file: &str| {
+        let mut c = staged(write_id, vec![add(file, Some("x"))], whole_table());
+        c.idempotency_key = Some("job-9".to_owned());
+        c
+    };
+    let first = env.commit(&s, reads("w1", "a.parquet")).unwrap();
+    let latest = env.latest();
+    let retry = env.commit(&s, reads("w2", "b.parquet")).unwrap();
+    assert!(retry.deduplicated, "{retry:?}");
+    assert_eq!(retry.version, first.version);
+    assert_eq!(env.latest(), latest, "no commit was made");
+    // An unrelated winner still conflicts.
+    let (c, _) = class(env.commit(
+        &s,
+        staged("w3", vec![add("c.parquet", Some("x"))], whole_table()),
+    ));
+    assert!(
+        format!("{c:?}").starts_with("DeltaConcurrentAppend"),
+        "{c:?}"
+    );
+}
+
+/// E34: with no attempt left, a winner carrying this write's key is still a deduplicated write,
+/// not `DELTA_MAX_COMMIT_RETRIES_EXCEEDED`.
+#[test]
+fn a_same_key_winner_is_deduplicated_when_out_of_attempts() {
+    let env = Env::new();
+    let s = env.snapshot();
+    let first = env.commit(&s, keyed("w1", "job-10", "a.parquet")).unwrap();
+    let limits = RetryLimits {
+        max_attempts: 0,
+        ..fast()
+    };
+    let retry = env
+        .commit_with(&s, keyed("w2", "job-10", "b.parquet"), limits)
+        .unwrap();
+    assert!(retry.deduplicated, "{retry:?}");
+    assert_eq!(retry.version, first.version);
+    assert_eq!(env.latest(), first.version);
 }
 
 #[test]
