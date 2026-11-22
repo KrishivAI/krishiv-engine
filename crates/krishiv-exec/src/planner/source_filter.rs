@@ -20,7 +20,8 @@ pub(crate) fn classify(e: &Expr, scan: &[BoundColumn]) -> SourceConjunct {
 }
 
 /// `x LIKE 'a%b'` (a prefix and a suffix, no other wildcard): Spark's `LikeSimplification` rewrites it
-/// to `StartsWith(x, 'a') AND EndsWith(x, 'b')`, two conjuncts before pushdown.
+/// to `length(x) >= n AND StartsWith(x, 'a') AND EndsWith(x, 'b')`. The two leaves; the length guard is
+/// not a leaf, so the caller keeps the `LIKE` above the scan.
 pub(crate) fn split_like(e: &Expr, scan: &[BoundColumn]) -> Option<[SourceConjunct; 2]> {
     let (Builtin::Like, args) = builtin(e)? else {
         return None;
@@ -31,18 +32,53 @@ pub(crate) fn split_like(e: &Expr, scan: &[BoundColumn]) -> Option<[SourceConjun
     let ExprNode::Literal(Literal::String(p)) = &p.node else {
         return None;
     };
-    let (head, tail) = p.split_once('%')?;
-    let plain = |s: &str| !s.is_empty() && !s.contains(['%', '_', '\\']);
-    if !plain(head) || !plain(tail) {
+    let Shape::Both(head, tail) = shape(p)? else {
         return None;
-    }
+    };
     let Some(Attr::Plain(c, _)) = attribute(x, scan) else {
         return None;
     };
     Some([
-        SourceConjunct::Serializable(SourceFilter::StringStartsWith(c.clone(), head.to_owned())),
-        SourceConjunct::Serializable(SourceFilter::StringEndsWith(c, tail.to_owned())),
+        SourceConjunct::Serializable(SourceFilter::StringStartsWith(c.clone(), head)),
+        SourceConjunct::Serializable(SourceFilter::StringEndsWith(c, tail)),
     ])
+}
+
+/// What `LikeSimplification` (v4.3.0) turns a pattern into; the five regexes, `%+` for a run of `%`.
+enum Shape {
+    Equal(String),
+    Starts(String),
+    Ends(String),
+    Contains(String),
+    Both(String, String),
+}
+
+fn shape(p: &str) -> Option<Shape> {
+    let plain = |s: &str| !s.contains(['%', '_', '\\']);
+    let solid = |s: &str| !s.is_empty() && plain(s);
+    if plain(p) {
+        return Some(Shape::Equal(p.to_owned()));
+    }
+    let lead = p.len() - p.trim_start_matches('%').len();
+    let trail = p.len() - p.trim_end_matches('%').len();
+    let core = p.trim_matches('%');
+    if lead > 0 && trail > 0 && solid(core) {
+        return Some(Shape::Contains(core.to_owned()));
+    }
+    if lead == 0 && trail > 0 && solid(core) {
+        return Some(Shape::Starts(core.to_owned()));
+    }
+    if lead > 0 && trail == 0 && solid(core) {
+        return Some(Shape::Ends(core.to_owned()));
+    }
+    if lead == 0 && trail == 0 {
+        let (head, rest) = core.split_once('%')?;
+        let tail = rest.trim_start_matches('%');
+        if solid(head) && solid(tail) {
+            return Some(Shape::Both(head.to_owned(), tail.to_owned()));
+        }
+    }
+    None
 }
 
 /// `parts` joined by `AND`, left-deep, in the order given; `None` for no parts.
@@ -141,7 +177,6 @@ fn null_rejected<'a>(e: &'a Expr, scan: &[BoundColumn], out: &mut Vec<&'a Expr>)
                         | Builtin::Like
                         | Builtin::ILike
                         | Builtin::RLike
-                        | Builtin::Concat
                 )
             {
                 for a in args {
@@ -281,7 +316,7 @@ fn compare(b: Builtin, l: &Expr, r: &Expr, scan: &[BoundColumn]) -> Tr {
     Tr::Leaf(f)
 }
 
-/// `x LIKE 'p%'`, `'%p'` or `'%p%'` with no other wildcard or escape.
+/// `x LIKE` a pattern `LikeSimplification` rewrites to a leaf: no wildcard (`EqualTo`), `p%`, `%p`, `%p%`.
 fn like(x: &Expr, p: &Expr, scan: &[BoundColumn]) -> Tr {
     let Some(attr) = attribute(x, scan) else {
         return Tr::No;
@@ -292,23 +327,13 @@ fn like(x: &Expr, p: &Expr, scan: &[BoundColumn]) -> Tr {
     let Attr::Plain(c, _) = attr else {
         return Tr::Translated;
     };
-    let plain = |s: &str| !s.is_empty() && !s.contains(['%', '_', '\\']);
-    if let Some(n) = p.strip_prefix('%').and_then(|s| s.strip_suffix('%'))
-        && plain(n)
-    {
-        return Tr::Leaf(SourceFilter::StringContains(c, n.to_owned()));
+    match shape(p) {
+        Some(Shape::Equal(n)) => Tr::Leaf(SourceFilter::EqualTo(c, ScalarValue::Utf8(n))),
+        Some(Shape::Contains(n)) => Tr::Leaf(SourceFilter::StringContains(c, n)),
+        Some(Shape::Starts(n)) => Tr::Leaf(SourceFilter::StringStartsWith(c, n)),
+        Some(Shape::Ends(n)) => Tr::Leaf(SourceFilter::StringEndsWith(c, n)),
+        _ => Tr::No,
     }
-    if let Some(n) = p.strip_suffix('%')
-        && plain(n)
-    {
-        return Tr::Leaf(SourceFilter::StringStartsWith(c, n.to_owned()));
-    }
-    if let Some(n) = p.strip_prefix('%')
-        && plain(n)
-    {
-        return Tr::Leaf(SourceFilter::StringEndsWith(c, n.to_owned()));
-    }
-    Tr::No
 }
 
 enum Attr<'a> {

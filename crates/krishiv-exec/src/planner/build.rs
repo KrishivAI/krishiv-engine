@@ -1421,126 +1421,6 @@ impl<'a> Planner<'a> {
         }
     }
 
-    /// Offers every conjunct of `predicate` to a scan that decides once, and binds the read it planned.
-    /// The residual is Spark's: the conjuncts the scan did not take that translate, then those that do
-    /// not, then those holding a subquery.
-    fn decide_scan(
-        &mut self,
-        factory: &dyn crate::operators::ScanPushdown,
-        table: &SchemaRef,
-        scan: &krishiv_plan::Scan,
-        predicate: &Arc<Expr>,
-        projection: &[ColumnPath],
-    ) -> Result<Decision> {
-        use crate::operators::{DecidedScan, OfferedConjunct, SourceConjunct};
-        let layout: Vec<AttrId> = table
-            .fields()
-            .iter()
-            .map(|f| match scan.output.iter().find(|c| c.name == *f.name()) {
-                Some(c) => c.id,
-                None => self.fresh_id(),
-            })
-            .collect();
-        let mut offered = Vec::new();
-        let mut exprs: Vec<Expr> = Vec::new();
-        let mut subqueries = Vec::new();
-        let written: Vec<&Expr> = krishiv_plan::conjuncts(predicate)
-            .into_iter()
-            .filter(|c| !krishiv_plan::has_subquery(c))
-            .collect();
-        // Spark infers `IsNotNull` of the columns the comparisons reject nulls of, all ahead of the
-        // written conjuncts (the oracle's `four_conjunct`).
-        for c in &written {
-            for inferred in super::source_filter::inferred_not_null(c, &scan.output) {
-                let known = |e: &Expr| {
-                    exprs
-                        .iter()
-                        .chain(written.iter().copied())
-                        .any(|k| e.to_string() == k.to_string())
-                };
-                if !known(&inferred) {
-                    offered.push(OfferedConjunct {
-                        filter: scan_filter(table, &layout, &inferred, scan, &self.env)?,
-                        source: super::source_filter::classify(&inferred, &scan.output),
-                    });
-                    exprs.push(inferred);
-                }
-            }
-        }
-        for c in krishiv_plan::conjuncts(predicate) {
-            if krishiv_plan::has_subquery(c) {
-                subqueries.push(c);
-                continue;
-            }
-            let filter = scan_filter(table, &layout, c, scan, &self.env)?;
-            let sources = match super::source_filter::split_like(c, &scan.output) {
-                Some(two) => two.to_vec(),
-                None => vec![super::source_filter::classify(c, &scan.output)],
-            };
-            for source in sources {
-                offered.push(OfferedConjunct {
-                    filter: filter.clone(),
-                    source,
-                });
-                exprs.push(c.clone());
-            }
-        }
-        let decision = factory.decide(&offered, projection)?;
-        if decision.pushed.len() != offered.len() {
-            return Err(internal(
-                "a scan decided on a different number of conjuncts",
-            ));
-        }
-        let id = self.cx.tables.bind_scan(Arc::clone(&decision.bound))?;
-        let taken = |i: usize| decision.pushed.get(i).copied().unwrap_or(false);
-        let (mut kept, mut untranslated): (Vec<&Expr>, Vec<&Expr>) = (Vec::new(), Vec::new());
-        for (i, (o, e)) in offered.iter().zip(&exprs).enumerate() {
-            if taken(i) {
-                continue;
-            }
-            // A split `LIKE` is offered twice; it stays once.
-            if kept
-                .iter()
-                .chain(&untranslated)
-                .any(|k| k.to_string() == e.to_string())
-            {
-                continue;
-            }
-            match o.source {
-                SourceConjunct::Untranslated => untranslated.push(e),
-                _ => kept.push(e),
-            }
-        }
-        kept.extend(untranslated);
-        kept.extend(subqueries);
-        let pushed: Vec<u32> = (0..offered.len())
-            .filter(|i| taken(*i))
-            .filter_map(|i| u32::try_from(i).ok())
-            .collect();
-        Ok(Decision {
-            shown: pushed
-                .iter()
-                .filter_map(|i| exprs.get(*i as usize))
-                .map(ToString::to_string)
-                .collect(),
-            decided: DecidedScan { id, pushed },
-            residual: super::source_filter::and_all(kept),
-            bound: decision.bound,
-        })
-    }
-
-    /// A scan whose filter has a conjunct that may raise gets no runtime
-    /// filter: Spark evaluates its runtime filter as the last conjunct of
-    /// the filter over the scan, so it never keeps that conjunct from
-    /// seeing a row (it raises on a row whose key matches nothing, even
-    /// alone in its file). Dropping the scan's sites keeps joins above from
-    /// targeting it.
-    fn no_runtime_filters_before(&self, scan: &mut Planned, predicate: &Expr) {
-        if krishiv_plan::may_raise(predicate, self.env.ansi) {
-            scan.sites.clear();
-        }
-    }
-
     pub(crate) fn filter(&mut self, input: Planned, predicate: &Expr) -> Result<Planned> {
         let prepared = self.prepare(&[predicate])?;
         let e = prepared
@@ -1563,34 +1443,6 @@ impl<'a> Planner<'a> {
                 subqueries,
             },
         ))
-    }
-
-    /// Each row `count` times (`INTERSECT ALL` / `EXCEPT ALL`).
-    fn replicate(&mut self, input: Planned, count: &Expr) -> Result<Planned> {
-        let prepared = self.prepare(&[count])?;
-        let e = prepared
-            .exprs
-            .first()
-            .cloned()
-            .ok_or_else(|| internal("a replication without a count"))?;
-        let op = replicate_op(&input.schema, &input.layout, &e, &self.values(&prepared))?;
-        let layout = input.layout.clone();
-        let mut planned = Self::attach(
-            input,
-            prepared,
-            op.schema(),
-            layout,
-            ("ReplicateRows", count.to_string()),
-            |input, layout, subqueries| PhysNode::ReplicateRows {
-                input,
-                layout,
-                count: e,
-                subqueries,
-            },
-        );
-        // The replication count is computed over groups the filter cuts.
-        planned.sites.clear();
-        Ok(planned)
     }
 
     /// Each row once per element of `arg` (`explode`, `posexplode`,
@@ -2138,13 +1990,4 @@ fn unseeded_sample_seed(salt: Option<u64>, n: u64) -> i64 {
         None => std::collections::hash_map::RandomState::new().hash_one(n),
     };
     (draw % 1000).cast_signed()
-}
-
-/// What a scan that decides once answered for one filter: see `Builder::decide_scan`.
-struct Decision {
-    decided: crate::operators::DecidedScan,
-    bound: Arc<dyn crate::operators::BoundScan>,
-    /// The pushed conjuncts as `EXPLAIN` shows them.
-    shown: Vec<String>,
-    residual: Option<Expr>,
 }

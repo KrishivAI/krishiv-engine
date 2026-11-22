@@ -289,3 +289,15 @@ fn a_decided_scan_outside_an_execution_is_internal() {
     let err = run(&bare).unwrap_err();
     assert!(err.to_string().contains("outside an execution"), "{err}");
 }
+
+#[test]
+fn a_split_like_keeps_spark_length_guard_above_the_scan() {
+    // `s LIKE 's%1'` is StartsWith + EndsWith plus `length(s) >= 2`: a source that takes both leaves
+    // must not lose the guard (`s1` overlaps; `s` alone would match both leaves).
+    let f = fixture();
+    let plan = f.plan("SELECT b FROM t WHERE s LIKE 's%1'", true);
+    assert!(has_filter(&plan), "the LIKE stays above the scan: {plan}");
+    let decides = f.log.decides.lock().unwrap();
+    assert_eq!(decides[0].len(), 3, "{decides:?}");
+    assert!(matches!(decides[0][2], SourceConjunct::Untranslated));
+}

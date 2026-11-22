@@ -1815,19 +1815,12 @@ fn an_append_whose_files_an_overwrite_swept_never_publishes_missing_files() {
     let committed =
         env.rt
             .block_on(append.commit(&env.io, format.as_ref(), schema(), &o, append_files));
-    let visible = env.visible("t");
-    let on_store = env.names("t");
-    match committed {
-        Err(e) => assert_eq!(e.error_class(), ErrorClass::KrishivConcurrentCommit, "{e}"),
-        Ok(_) => {
-            for v in &visible {
-                assert!(
-                    on_store.iter().any(|n| n.ends_with(v.as_str())),
-                    "{v} is visible but gone: {on_store:?}"
-                );
-            }
-        }
-    }
+    let err = committed.expect_err("the append's files were swept, so its commit is refused");
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivConcurrentCommit,
+        "{err}"
+    );
 }
 
 /// Adoption uses the reads' hidden-name rule: a copy in progress is not data.

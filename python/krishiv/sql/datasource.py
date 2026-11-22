@@ -414,7 +414,34 @@ _BUILTIN_FORMATS = frozenset(
         "rate",
         "rate-micro-batch",
         "socket",
-        "memory",
+        "statestore",
+        "state-metadata",
+    }
+)
+
+# `DataSource.backwardCompatibilityMap` (v4.3.0): the class names Spark maps to a built-in source, lower-cased.
+_BACKWARD_COMPATIBLE = frozenset(
+    {
+        "org.apache.spark.sql.jdbc",
+        "org.apache.spark.sql.jdbc.defaultsource",
+        "org.apache.spark.sql.execution.datasources.jdbc",
+        "org.apache.spark.sql.execution.datasources.jdbc.defaultsource",
+        "org.apache.spark.sql.execution.datasources.json",
+        "org.apache.spark.sql.execution.datasources.json.defaultsource",
+        "org.apache.spark.sql.execution.datasources.parquet",
+        "org.apache.spark.sql.execution.datasources.parquet.defaultsource",
+        "org.apache.spark.sql.parquet",
+        "org.apache.spark.sql.hive.orc.defaultsource",
+        "org.apache.spark.sql.hive.orc",
+        "org.apache.spark.sql.execution.datasources.orc.defaultsource",
+        "org.apache.spark.sql.execution.datasources.orc",
+        "org.apache.spark.ml.source.libsvm.defaultsource",
+        "org.apache.spark.ml.source.libsvm",
+        "org.apache.spark.sql.execution.streaming.textsocketsourceprovider",
+        "org.apache.spark.sql.execution.streaming.ratesourceprovider",
+        "com.databricks.spark.csv",
+        "com.databricks.spark.xml",
+        "com.databricks.spark.avro",
     }
 )
 
@@ -423,7 +450,7 @@ def registered(session: SparkSession, name: str) -> _Registered | None:
     """The class registered under ``name`` (any letter case), if any. Spark's built-in file sources win over a
     Python source of the same name (``DataSource.lookupDataSource``)."""
     lowered = name.lower()
-    if lowered in _BUILTIN_FORMATS or lowered.startswith("org.apache.spark."):
+    if lowered in _BUILTIN_FORMATS or lowered in _BACKWARD_COMPATIBLE:
         return None
     return _registry(session).get(name.lower())
 
@@ -618,10 +645,10 @@ def _filter_of(spec: tuple[Any, ...]) -> Filter:
     kind, attribute, value = spec
     if kind == "Not":
         return Not(_filter_of(value))
-    cls = _FILTERS[kind]
+    cls: Any = _FILTERS[kind]
     if kind in ("IsNull", "IsNotNull"):
-        return cls(attribute)  # type: ignore[call-arg]
-    return cls(attribute, value)  # type: ignore[call-arg]
+        return cls(attribute)
+    return cls(attribute, value)
 
 
 def _pushdown_enabled(session: SparkSession) -> bool:

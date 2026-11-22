@@ -412,3 +412,53 @@ pub(super) fn narrow_scan(
         ..scan.clone()
     })
 }
+
+impl Planner<'_> {
+    /// A scan whose filter has a conjunct that may raise gets no runtime
+    /// filter: Spark evaluates its runtime filter as the last conjunct of
+    /// the filter over the scan, so it never keeps that conjunct from
+    /// seeing a row (it raises on a row whose key matches nothing, even
+    /// alone in its file). Dropping the scan's sites keeps joins above from
+    /// targeting it.
+    pub(in crate::planner) fn no_runtime_filters_before(
+        &self,
+        scan: &mut Planned,
+        predicate: &Expr,
+    ) {
+        if krishiv_plan::may_raise(predicate, self.env.ansi) {
+            scan.sites.clear();
+        }
+    }
+
+    /// Each row `count` times (`INTERSECT ALL` / `EXCEPT ALL`).
+    pub(in crate::planner) fn replicate(
+        &mut self,
+        input: Planned,
+        count: &Expr,
+    ) -> Result<Planned> {
+        let prepared = self.prepare(&[count])?;
+        let e = prepared
+            .exprs
+            .first()
+            .cloned()
+            .ok_or_else(|| internal("a replication without a count"))?;
+        let op = replicate_op(&input.schema, &input.layout, &e, &self.values(&prepared))?;
+        let layout = input.layout.clone();
+        let mut planned = Self::attach(
+            input,
+            prepared,
+            op.schema(),
+            layout,
+            ("ReplicateRows", count.to_string()),
+            |input, layout, subqueries| PhysNode::ReplicateRows {
+                input,
+                layout,
+                count: e,
+                subqueries,
+            },
+        );
+        // The replication count is computed over groups the filter cuts.
+        planned.sites.clear();
+        Ok(planned)
+    }
+}

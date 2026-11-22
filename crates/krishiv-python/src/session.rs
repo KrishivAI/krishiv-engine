@@ -771,7 +771,11 @@ fn scalar<'py>(py: Python<'py>, value: &krishiv_io::ScalarValue) -> PyResult<Bou
             .call_method1("fromordinal", (i64::from(*days) + 719_163,))?,
         // TIMESTAMP: an aware UTC `datetime`, whatever the session zone (the oracle's `timestamp_ltz.json`).
         V::TimestampMicros(micros) => {
-            let utc = datetime()?.getattr("timezone")?.getattr("utc")?;
+            // Spark 4.3.0 hands `zoneinfo.ZoneInfo(key='UTC')`, not `datetime.timezone.utc`.
+            let utc = py
+                .import("zoneinfo")?
+                .getattr("ZoneInfo")?
+                .call1(("UTC",))?;
             let epoch = datetime()?
                 .getattr("datetime")?
                 .call1((1970, 1, 1, 0, 0, 0, 0, utc))?;

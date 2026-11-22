@@ -225,9 +225,8 @@ impl BoundScan for BoundSource {
         Box::pin(async move {
             // The source runs user code (Python) and blocks: on a bounded `krishiv-pysrc` thread, not
             // an engine pool thread; the caller races this future against the query's cancel.
-            let scan = crate::python_source_call(move || table.materialize())
-                .await
-                .map_err(|e| internal(format!("a source read failed: {e}")))?;
+            // The source's own error keeps its class (a Python exception is `PYTHON_DATA_SOURCE_ERROR`).
+            let scan = crate::python_source_call(move || table.materialize()).await?;
             Ok(Arc::new(scan) as Arc<dyn ScanPushdown>)
         })
     }

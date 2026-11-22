@@ -281,7 +281,8 @@ impl DirectoryWrite {
     /// An append that another writer's commit overtook publishes only files that are still there: an
     /// overwrite sweeps unlogged files older than its grace, and an append that stayed uncommitted
     /// that long would otherwise list files that are gone. A file that vanishes after this check
-    /// needs the sweep to run inside the window between the check and the publish.
+    /// needs the sweep to run inside the window between the check and the publish; the sweep's one-hour grace
+    /// is the real guard, this check only turns the rare late append into a refusal.
     async fn refuse_if_files_swept(
         &self,
         io: &IoContext,
@@ -292,16 +293,24 @@ impl DirectoryWrite {
         if now.version == state.base {
             return Ok(());
         }
-        for f in add {
-            let path = Path::from(format!("{}/{}", self.dir, f.path));
-            if !matches!(io.head(&self.store, &path).await, Ok(Some(_))) {
-                return Err(krishiv_common::error::KrishivConcurrentCommit {
-                    root: format!("{}/{}", self.store, self.dir),
-                    version: now
-                        .version
-                        .map_or_else(|| "0".to_owned(), |v| v.to_string()),
+        // Concurrent HEADs, bounded: a large append that lost a race must not cost one request after another.
+        // Only a missing file (`Ok(None)`) is a swept one; a failed request is its own error.
+        for chunk in add.chunks(32) {
+            let mut heads = Vec::with_capacity(chunk.len());
+            for f in chunk {
+                let path = Path::from(format!("{}/{}", self.dir, f.path));
+                heads.push(Box::pin(async move { io.head(&self.store, &path).await }));
+            }
+            for head in futures::future::join_all(heads).await {
+                if head?.is_none() {
+                    return Err(krishiv_common::error::KrishivConcurrentCommit {
+                        root: format!("{}/{}", self.store, self.dir),
+                        version: now
+                            .version
+                            .map_or_else(|| "0".to_owned(), |v| v.to_string()),
+                    }
+                    .into());
                 }
-                .into());
             }
         }
         Ok(())

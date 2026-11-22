@@ -28,6 +28,7 @@
 mod aggregate;
 mod build;
 mod build_project;
+mod decide;
 pub(crate) mod eval;
 mod explain;
 mod file_table;

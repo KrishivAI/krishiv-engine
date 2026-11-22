@@ -89,6 +89,7 @@ mod distributed;
 mod order;
 mod python_eval;
 mod python_relation;
+mod reads;
 mod table_write;
 pub(crate) use aggregate::{aggregate_node, aggregate_spec};
 pub(crate) use detached::{Detached, LoopRun};
@@ -326,29 +327,6 @@ impl WorkerContext {
     pub fn with_broadcasts(mut self, broadcasts: Arc<BroadcastTables>) -> Self {
         self.broadcasts = Some(broadcasts);
         self
-    }
-
-    /// The same context keeping the rows a decided scan reads in `reads`, shared by the execution's tasks.
-    #[must_use]
-    pub fn with_execution_reads(mut self, reads: Arc<crate::operators::ExecutionReads>) -> Self {
-        self.execution_reads = Some(reads);
-        self
-    }
-
-    /// Reads the decided scans of `plan` for this execution, each against `cancelled`
-    /// ([`crate::operators::ExecutionReads::fill`]). A no-op for a context without execution reads.
-    ///
-    /// # Errors
-    /// The read's error; `cancelled`'s when it completes first.
-    pub async fn fill_reads(
-        &self,
-        plan: &PhysicalPlan,
-        cancelled: impl std::future::Future<Output = krishiv_common::error::KrishivError>,
-    ) -> Result<()> {
-        match &self.execution_reads {
-            Some(reads) => reads.fill(plan, &*self.tables, cancelled).await,
-            None => Ok(()),
-        }
     }
 
     /// The same context running a partial aggregate, its exchange and its
@@ -1387,20 +1365,7 @@ impl Instantiation<'_> {
     }
 
     fn scan(&mut self, s: &ScanNode) -> Result<Built> {
-        let factory = match &s.decided {
-            Some(decided) if decided.is_undecided() => {
-                return Err(internal(
-                    "a deciding scan planned without its decision".to_owned(),
-                ));
-            }
-            Some(decided) => {
-                let Some(reads) = &self.worker.execution_reads else {
-                    return Err(internal("a decided scan outside an execution".to_owned()));
-                };
-                reads.get(decided.id)?
-            }
-            None => self.worker.tables.provider(&s.scan)?.scan()?,
-        };
+        let factory = self.scan_factory(s)?;
         let factory = self.splits(s.id, factory)?;
         if s.row_id && !factory.supports_take() {
             return Err(internal(format!(
