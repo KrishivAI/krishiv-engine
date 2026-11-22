@@ -1320,11 +1320,7 @@ impl Session {
                     declared_paths,
                     Arc::clone(&config),
                     scans.slots,
-                    crate::catalog_registry::ScopedStores::new(
-                        Arc::clone(&config),
-                        Arc::clone(&self.state.io),
-                        self.state.cwd.clone(),
-                    ),
+                    self.declared_stores(&config),
                 ));
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
