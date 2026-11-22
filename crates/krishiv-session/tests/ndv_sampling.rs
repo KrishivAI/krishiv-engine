@@ -341,7 +341,8 @@ fn group_keys_inside_a_subquery_are_sampled() {
 /// In the default mode (`krishiv.optimizer.groupKeyCode` off,
 /// `krishiv.optimizer.groupKeyCodeMultiDimension` on; design P2b D2 §8) only
 /// the group keys of an aggregate with keys of two or more dimensions that
-/// may pay are sampled: one dimension's keys sample nothing.
+/// may pay are sampled: one dimension's keys sample nothing, and a dimension
+/// grouped by its own join key does not count.
 #[test]
 fn the_default_samples_only_aggregates_with_two_dimensions() {
     let dir = tempfile::tempdir().unwrap();
@@ -366,6 +367,13 @@ fn the_default_samples_only_aggregates_with_two_dimensions() {
         "SELECT n_name, r_name, count(*) FROM {orders} JOIN {nation} ON id % 25 = n_key \
          JOIN {region} ON id % 5 = r_key GROUP BY n_name, r_name"
     );
+    // A dimension grouped by the column it is equi-joined on (TPC-H q10's
+    // `customer`) is refused by the rule, so it does not count: one left.
+    let joined = format!(
+        "SELECT n_key, n_name, r_name, count(*) FROM {orders} JOIN {nation} ON id = n_key \
+         JOIN {region} ON id % 5 = r_key GROUP BY n_key, n_name, r_name"
+    );
+    assert!(sample_lines(&explain(&s, "COST", &joined)).is_empty());
     let lines = sample_lines(&explain(&s, "COST", &two));
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(

@@ -61,8 +61,13 @@ impl QueryCatalog {
                 let scan = scans.iter().find(|s| s.3.iter().any(|(i, _)| *i == id))?;
                 Some(self.opened(&scan.0)?.statistics()?.rows)
             };
+            // A dimension whose group keys include a column it is equi-joined
+            // on is refused by the rule (condition 1: TPC-H q10's
+            // `customer`, q18's `orders`), so it is not sampled.
+            let joined = equated_columns(plan);
             let may_pay: Vec<GroupKeys> = grouped_columns(plan)
                 .into_iter()
+                .filter(|g| !g.keys.iter().any(|k| joined.contains(k)))
                 .filter(|g| dimension_may_pay(rows(g.scan), g.others.iter().map(|id| rows(*id))))
                 .collect();
             for g in &may_pay {
@@ -318,6 +323,51 @@ fn subquery_plans(e: &Arc<Expr>, out: &mut Vec<Arc<LogicalPlan>>) {
 /// (subquery plans included) compares with a deterministic expression that
 /// reads no column: the columns whose distinct count decides the
 /// comparison's selectivity (P2-T164 U6).
+/// The columns of `plan` (subquery plans left out) that an `=` or `<=>`
+/// between two columns reads, in a filter or a join condition: the equi-join
+/// keys, whatever form the query wrote the join in.
+fn equated_columns(plan: &LogicalPlan) -> std::collections::HashSet<krishiv_plan::AttrId> {
+    use krishiv_plan::{Builtin, FunctionId, ResolvedExpr, ResolvedFunction};
+    let mut out = std::collections::HashSet::new();
+    let mut plans = std::collections::HashSet::new();
+    let mut exprs = std::collections::HashSet::new();
+    let mut stack = vec![plan];
+    while let Some(p) = stack.pop() {
+        if !plans.insert(std::ptr::from_ref(p)) {
+            continue;
+        }
+        let mut roots = Vec::new();
+        match &p.node {
+            PlanNode::Filter { predicate, .. } => roots.push(Arc::clone(predicate)),
+            PlanNode::Join {
+                condition: krishiv_plan::JoinCondition::On(c),
+                ..
+            } => roots.push(Arc::clone(c)),
+            _ => {}
+        }
+        while let Some(x) = roots.pop() {
+            if !exprs.insert(Arc::as_ptr(&x)) {
+                continue;
+            }
+            if let ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+                id: FunctionId::Builtin(Builtin::Eq | Builtin::EqNullSafe),
+                args,
+                ..
+            })) = &x.node
+                && let [a, b] = args.as_slice()
+                && let (Some(a), Some(b)) = (column_of(a), column_of(b))
+            {
+                out.extend([a, b]);
+            }
+            if !matches!(x.node, ExprNode::Subquery { .. }) {
+                x.for_each_child(&mut |c| roots.push(Arc::clone(c)));
+            }
+        }
+        p.for_each_child(&mut |c| stack.push(c.as_ref()));
+    }
+    out
+}
+
 fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
     // Plans and expressions are DAGs: every node is visited once.
     walk(plan, out, &mut std::collections::HashSet::new());
