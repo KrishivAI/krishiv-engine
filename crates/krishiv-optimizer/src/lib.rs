@@ -92,6 +92,7 @@ mod repartition;
 mod restrict;
 mod semi_order;
 mod share_cte;
+mod share_scan;
 mod stats;
 mod sum_rewrite;
 mod win_magic;
@@ -102,7 +103,8 @@ use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
     EAGER_AGGREGATION, GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION, JOIN_COST, JOIN_DP_LIMIT,
     JOIN_ENUMERATOR, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER,
-    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES,
+    SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -204,6 +206,11 @@ pub struct Options {
     /// direct members, P3 W1 shape (b)). Runs only when
     /// `krishiv.optimizer.shareRepeatedSubtrees` is also on.
     pub share_repeated_subtrees: bool,
+    /// A table scan read only by filters is read once under the disjunction
+    /// of their predicates (`share_scan`). Needs statistics; runs only with a
+    /// session configuration where `krishiv.optimizer.shareFilteredScans` and
+    /// `krishiv.sql.optimizer.shareCteInstances` are on.
+    pub share_filtered_scans: bool,
     /// Group-key codes (`group_code`, design P2b D2): an aggregate's keys
     /// from one dimension travel as one integer code. Needs statistics; a
     /// session configuration, when given, must also switch it on
@@ -231,6 +238,7 @@ impl Default for Options {
             payload_above_aggregate: true,
             subquery_as_window: true,
             share_repeated_subtrees: true,
+            share_filtered_scans: true,
             group_key_code: true,
             derived_keys_above: true,
             inferred_join_filters: true,
@@ -813,6 +821,22 @@ fn run(
         let root = if share {
             t.once("ShareCte", &root, |r| {
                 share_cte::share(Arc::clone(r), direct)
+            })?
+        } else {
+            root
+        };
+        // A scan read only by filters is read once (`share_scan`, TPC-DS q28).
+        let scans = share
+            && options.share_filtered_scans
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&SHARE_FILTERED_SCANS)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
+        let root = if scans {
+            t.once("ShareFilteredScan", &root, |r| {
+                share_scan::share(Arc::clone(r), stats.unwrap_or(&NoStatistics))
             })?
         } else {
             root

@@ -13,7 +13,7 @@ SHOW VIEWS IN d
 SHOW COLUMNS IN t
   col_name: string not null
 SHOW FUNCTIONS
-  (refused by the session)
+  function: string not null
 SHOW DATABASES
   namespace: string not null
 SHOW CREATE TABLE t
@@ -27,7 +27,7 @@ SHOW CURRENT NAMESPACE
 DESCRIBE TABLE t
   col_name: string not null, data_type: string not null, comment: string
 DESCRIBE FUNCTION abs
-  (refused by the session)
+  function_desc: string not null
 DESCRIBE DATABASE d
   info_name: string not null, info_value: string
 DESCRIBE QUERY SELECT a, b FROM t
