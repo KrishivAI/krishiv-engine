@@ -1309,7 +1309,6 @@ DataFrame.@property def sparkSession(self) -> SparkSession
 DataFrame.@property def stat(self) -> DataFrameStatFunctions
 DataFrame.@property def storageLevel(self) -> StorageLevel
 DataFrame.@property def write(self) -> DataFrameWriter
-DataFrame.@property def writeStream(self) -> Any
 DataFrame.def __arrow_c_stream__(self, requested_schema: object=None) -> object
 DataFrame.def __getattr__(self, name: str) -> Column
 DataFrame.def __getitem__(self, item: Any) -> Any
@@ -1570,7 +1569,6 @@ class DataFrameReader()
 class DataFrameWriter()
 class DataFrameWriterV2()
 ## sql/row.py
-Row.def __call__(self, *args: Any) -> Row
 Row.def __contains__(self, item: object) -> bool
 Row.def __getattr__(self, name: str) -> Any
 Row.def __getitem__(self, item: Any) -> Any
@@ -1609,7 +1607,6 @@ SparkSession.@property def catalog(self) -> Catalog
 SparkSession.@property def conf(self) -> RuntimeConfig
 SparkSession.@property def profile(self) -> Profile
 SparkSession.@property def read(self) -> DataFrameReader
-SparkSession.@property def readStream(self) -> Any
 SparkSession.@property def sparkContext(self) -> Any
 SparkSession.@property def udf(self) -> UDFRegistration
 SparkSession.@property def version(self) -> str
@@ -1721,7 +1718,6 @@ StructType.def add(self, field: str | StructField, data_type: str | DataType | N
 StructType.def fieldNames(self) -> list[str]
 StructType.def jsonValue(self) -> dict[str, Any]
 StructType.def simpleString(self) -> str
-StructType.def treeString(self) -> str
 TimestampNTZType.@classmethod def typeName(cls) -> str
 VarcharType.def __init__(self, length: int) -> None
 VarcharType.def __repr__(self) -> str

@@ -84,10 +84,9 @@ def test_print_schema(df: DataFrame, capsys: pytest.CaptureFixture[str]) -> None
     df.printSchema()
     assert capsys.readouterr().out.splitlines() == [
         "root",
-        " |-- id: long (nullable = true)",
+        " |-- id: bigint (nullable = true)",
         " |-- name: string (nullable = true)",
         " |-- v: double (nullable = true)",
-        "",
     ]
 
 

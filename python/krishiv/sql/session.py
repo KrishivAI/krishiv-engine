@@ -223,11 +223,6 @@ class SparkSession:
         return Profile(self._profile_registry)
 
     @property
-    def readStream(self) -> Any:
-        """Not available in the Python API yet: ``NOT_IMPLEMENTED`` (streaming runs through SQL)."""
-        raise not_implemented("SparkSession.readStream")
-
-    @property
     def read(self) -> DataFrameReader:
         return DataFrameReader(self)
 

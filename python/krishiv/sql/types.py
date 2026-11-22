@@ -487,10 +487,6 @@ class StructType(DataType):
     def fieldNames(self) -> list[str]:
         return list(self.names)
 
-    def treeString(self) -> str:
-        """The field tree ``printSchema`` prints, as a string."""
-        return _tree_string(self)
-
     def simpleString(self) -> str:
         return "struct<" + ",".join(f.simpleString() for f in self.fields) + ">"
 
@@ -573,45 +569,6 @@ class StructType(DataType):
 
     def __hash__(self) -> int:
         return hash(tuple(self.fields))
-
-
-def _tree_name(data_type: DataType) -> str:
-    """The type name ``printSchema`` shows: ``integer``, ``long``, ``decimal(10,2)``, ``array``, ``struct``."""
-    simple = data_type.simpleString()
-    return (
-        simple
-        if "(" in simple and not isinstance(data_type, ArrayType | MapType | StructType)
-        else data_type.typeName()
-    )
-
-
-def _tree_lines(data_type: DataType, prefix: str, out: list[str]) -> None:
-    """Spark's ``treeString`` body for the children of ``data_type``, one line each."""
-    if isinstance(data_type, StructType):
-        for f in data_type.fields:
-            out.append(f"{prefix} |-- {f.name}: {_tree_name(f.dataType)} (nullable = {str(f.nullable).lower()})")
-            _tree_lines(f.dataType, prefix + " |   ", out)
-    elif isinstance(data_type, ArrayType):
-        out.append(
-            f"{prefix} |-- element: {_tree_name(data_type.elementType)} "
-            f"(containsNull = {str(data_type.containsNull).lower()})"
-        )
-        _tree_lines(data_type.elementType, prefix + " |   ", out)
-    elif isinstance(data_type, MapType):
-        out.append(f"{prefix} |-- key: {_tree_name(data_type.keyType)}")
-        out.append(
-            f"{prefix} |-- value: {_tree_name(data_type.valueType)} "
-            f"(valueContainsNull = {str(data_type.valueContainsNull).lower()})"
-        )
-        _tree_lines(data_type.keyType, prefix + " |   ", out)
-        _tree_lines(data_type.valueType, prefix + " |   ", out)
-
-
-def _tree_string(schema: StructType) -> str:
-    """``root`` and the field tree, as Spark's ``StructType.treeString`` (ends with a newline)."""
-    out = ["root"]
-    _tree_lines(schema, "", out)
-    return "\n".join(out) + "\n"
 
 
 def _struct_from_columns(columns: list[tuple[str, str, bool]]) -> StructType:
