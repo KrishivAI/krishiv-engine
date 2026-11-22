@@ -508,11 +508,13 @@ impl ThetaSketchAcc {
                 let items = a.value(i);
                 if let Some(v) = items.as_any().downcast_ref::<Int32Array>() {
                     // A NULL element reads as 0, as `ArrayData.toIntArray` does.
-                    let ints = v.iter().map(|x| x.unwrap_or(0)).collect::<Vec<_>>();
-                    self.apply(g as usize, |s| theta::update_ints(s, &ints))?;
+                    self.apply(g as usize, |s| {
+                        theta::update_int_words(s, v.len(), v.iter().map(|x| x.unwrap_or(0)));
+                    })?;
                 } else if let Some(v) = items.as_any().downcast_ref::<Int64Array>() {
-                    let longs = v.iter().map(|x| x.unwrap_or(0)).collect::<Vec<_>>();
-                    self.apply(g as usize, |s| theta::update_longs(s, &longs))?;
+                    self.apply(g as usize, |s| {
+                        theta::update_long_words(s, v.len(), v.iter().map(|x| x.unwrap_or(0)));
+                    })?;
                 } else {
                     return Err(internal(format!(
                         "theta_sketch_agg over {:?}",

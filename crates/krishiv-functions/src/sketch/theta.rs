@@ -196,16 +196,33 @@ pub fn update_bytes(sketch: &mut ThetaSketch, value: &[u8]) {
 
 /// `ARRAY<INT>` input: the elements as little-endian 4-byte words; an empty array is ignored.
 pub fn update_ints(sketch: &mut ThetaSketch, values: &[i32]) {
-    if !values.is_empty() {
-        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+    update_int_words(sketch, values.len(), values.iter().copied());
+}
+
+/// `ARRAY<INT>` input from an iterator of `len` elements: the words are written straight into the one buffer the
+/// sketch hashes, so no second copy of the elements is held.
+pub fn update_int_words(sketch: &mut ThetaSketch, len: usize, values: impl Iterator<Item = i32>) {
+    if len > 0 {
+        let mut bytes = Vec::with_capacity(len.saturating_mul(4));
+        for v in values {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
         sketch.update(raw_bytes::from_vec(bytes));
     }
 }
 
 /// `ARRAY<BIGINT>` input: the elements as little-endian 8-byte words; an empty array is ignored.
 pub fn update_longs(sketch: &mut ThetaSketch, values: &[i64]) {
-    if !values.is_empty() {
-        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+    update_long_words(sketch, values.len(), values.iter().copied());
+}
+
+/// `ARRAY<BIGINT>` input from an iterator of `len` elements (see [`update_int_words`]).
+pub fn update_long_words(sketch: &mut ThetaSketch, len: usize, values: impl Iterator<Item = i64>) {
+    if len > 0 {
+        let mut bytes = Vec::with_capacity(len.saturating_mul(8));
+        for v in values {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
         sketch.update(raw_bytes::from_vec(bytes));
     }
 }
