@@ -3,7 +3,7 @@
 //!
 //! A relation task holds one pool thread for its whole life, so a driver whose tasks outnumber the pool's
 //! threads would wait forever for the last of them while the first ones wait for its frames. The pool
-//! therefore has as many **slots** as threads. A driver takes the slots of all its lanes together, or waits
+//! therefore has as many **slots** as threads, less one thread kept for scalar UDF jobs when it has two or more. A driver takes the slots of all its lanes together, or waits
 //! for them in arrival order, holding none; a driver that needs more than the pool has is refused at once with
 //! `KRISHIV_PYTHON_WORKER_LIMIT` naming `krishiv.python.udf.threads`. A slot is freed when its task ends.
 
@@ -80,7 +80,11 @@ impl Drop for Held {
 pub(crate) struct SlotHandle(pub(crate) Arc<Slots>);
 
 impl SlotHandle {
-    pub(crate) fn new(limit: usize) -> Arc<Self> {
+    /// The slots of a pool of `threads` threads: all of them, but with two or more one thread stays free for
+    /// the scalar UDF jobs that feed a relation task (they queue on the same threads and never take a slot).
+    /// A one-thread pool has nothing to spare, so its one slot is the thread itself.
+    pub(crate) fn new(threads: usize) -> Arc<Self> {
+        let limit = if threads >= 2 { threads - 1 } else { threads };
         Arc::new(Self(Slots::new(limit)))
     }
 }

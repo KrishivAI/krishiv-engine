@@ -399,7 +399,9 @@ fn a_pregel_loop_of_lazy_checkpoints_and_persists_stays_bounded_with_no_action_b
     let s = session(dir.path(), &[]);
     run(&s, "CREATE TABLE edges (id INT, nxt INT) USING parquet");
     run(&s, "INSERT INTO edges VALUES (1, 2), (2, 3), (3, 1)");
-    let (sizes, rows, live) = within_a_minute(move || {
+    // No wall-clock bound here: the 50 rounds plan and run queries, and the test runner's own timeout
+    // catches a hang.
+    let (sizes, rows, live) = {
         let edges = s.table("edges");
         let mut state = s.table("src");
         let mut sizes = Vec::new();
@@ -428,7 +430,7 @@ fn a_pregel_loop_of_lazy_checkpoints_and_persists_stays_bounded_with_no_action_b
         let rows = ids(&state);
         let live = cache_entries(&s, "relation");
         (sizes, rows, live)
-    });
+    };
     // The plan is flat: the longest of the last ten rounds is no longer than the longest of the
     // first four (a checkpoint round is short, the round after it is the long one).
     let early = *sizes[..4].iter().max().unwrap();
@@ -438,8 +440,10 @@ fn a_pregel_loop_of_lazy_checkpoints_and_persists_stays_bounded_with_no_action_b
         "the plan grew from {early} to {late} characters: {sizes:?}"
     );
     assert_eq!(rows, vec![1, 2, 3]);
+    // The last two persisted frames are live (and the checkpoint the final round took, at most one more): a
+    // count above three means unpersisted frames stay cached, none at all means the live ones were dropped.
     assert!(
-        live <= 3,
-        "{live} cache entries are live: unpersisted frames stay cached"
+        (1..=3).contains(&live),
+        "{live} cache entries are live: expected the last persisted frames, 1 to 3"
     );
 }

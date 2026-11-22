@@ -22,6 +22,7 @@
 //! waiting for room is abandoned, and a runner inside bytecode is interrupted as a scalar call is
 //! (`interrupt::Call`).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::RecordBatch;
@@ -107,6 +108,7 @@ impl PreparedRelationUdf for PreparedRelation {
             mpsc::channel::<Result<RecordBatch, KrishivError>>(RESULT_WINDOW);
         let call = Call::new();
         let cancel = CancelOnDrop(Arc::clone(&call));
+        let finished = Arc::new(AtomicBool::new(false));
         let job = Job {
             registered: Arc::clone(&self.registered),
             spec: self.spec.clone(),
@@ -114,12 +116,14 @@ impl PreparedRelationUdf for PreparedRelation {
             frames: frames_rx,
             results: results_tx,
             call,
+            finished: Arc::clone(&finished),
             _slot: slot,
         };
         pool.submit(Box::new(move |py| job.run(py)));
         Ok(Box::new(InProcessTask {
             frames: frames_tx,
             results: futures::lock::Mutex::new(results_rx),
+            finished,
             _cancel: cancel,
         }))
     }
@@ -129,6 +133,9 @@ impl PreparedRelationUdf for PreparedRelation {
 struct InProcessTask {
     frames: mpsc::Sender<Frame>,
     results: futures::lock::Mutex<mpsc::Receiver<Result<RecordBatch, KrishivError>>>,
+    /// Set by the job when it ran to its end: a closed result channel without it means the job was dropped
+    /// unrun (the pool shut down), which is a failure, not an empty rest of the partition.
+    finished: Arc<AtomicBool>,
     /// Interrupts a runner still in bytecode when the task is dropped.
     _cancel: CancelOnDrop,
 }
@@ -149,7 +156,12 @@ impl UdfTask for InProcessTask {
             match rx.next().await {
                 Some(Ok(batch)) => Ok(Some(batch)),
                 Some(Err(e)) => Err(e),
-                None => Ok(None),
+                None if self.finished.load(Ordering::Acquire) => Ok(None),
+                None => Err(InternalError {
+                    message: "a Python relation UDF task ended before it ran to its end (the UDF pool shut down)"
+                        .to_owned(),
+                }
+                .into()),
             }
         })
     }
@@ -163,6 +175,8 @@ struct Job {
     frames: mpsc::Receiver<Frame>,
     results: mpsc::Sender<Result<RecordBatch, KrishivError>>,
     call: Arc<Call>,
+    /// Told to the task when this job ends (see `InProcessTask::finished`).
+    finished: Arc<AtomicBool>,
     /// Frees the pool slot when the job ends (or is dropped unrun).
     _slot: Option<RelationSlot>,
 }
@@ -176,10 +190,12 @@ impl Job {
             frames,
             mut results,
             call,
+            finished,
             _slot,
         } = self;
         // A task dropped before it started has nobody to read it.
         if results.is_closed() {
+            finished.store(true, Ordering::Release);
             return;
         }
         let _scope = RunnerScope::enter(runner, 0);
@@ -188,6 +204,7 @@ impl Job {
             // The engine may be gone already; then there is nobody to tell.
             let _ = py.detach(|| block_on(results.send(Err(e))));
         }
+        finished.store(true, Ordering::Release);
     }
 }
 

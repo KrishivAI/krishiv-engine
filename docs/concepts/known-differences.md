@@ -697,4 +697,12 @@ its own Python UDF worker, because each is a task that holds its worker until it
 default of one worker (`krishiv.python.udf.threads` = 1),
 `df.groupBy(k).agg(udf1(x), udf2(y))` with two such UDFs therefore fails with
 `KRISHIV_PYTHON_WORKER_LIMIT` (SQLSTATE 54000), which names the setting. Raise `krishiv.python.udf.threads`
-to at least the number of grouped-aggregate UDFs in the `agg` and the query runs.
+to the number of grouped-aggregate UDFs in the `agg` plus one (one thread stays free for scalar UDFs that feed
+them) and the query runs. The pool is made when the first Python UDF query starts and is not resized, so set
+the value before that query (in the session's configuration, or start a fresh interpreter with the higher value).
+On the default single thread a scalar `pandas_udf` feeding a `mapInPandas` or `applyInPandas` in the same query
+has no free thread and can stall; raise the setting to 2 or more.
+
+The embedded `mapInPandas` / `mapInArrow` takes each result batch's columns by position and relabels them with the
+declared schema. `spark.sql.execution.arrow.pyspark.validateSchema.enabled` (which makes the server's worker pool
+refuse a result of other field names or nullability with `ARROW_TYPE_MISMATCH`) is not read by the embedded runtime yet.

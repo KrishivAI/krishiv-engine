@@ -353,8 +353,12 @@ def slow(pdf):
     return pdf
 
 df = spark.range(300).repartition(1)
-res = df.groupBy("id").applyInPandas(slow, "id long")
 box = []
+started = threading.Event()
+def slow_started(pdf):
+    started.set()
+    return slow(pdf)
+res = df.groupBy("id").applyInPandas(slow_started, "id long")
 def run():
     try:
         box.append(res.collect())
@@ -362,10 +366,12 @@ def run():
         box.append(e)
 t = threading.Thread(target=run)
 t.start()
-time.sleep(0.5)
+assert started.wait(60), "the UDF never started"
 spark.interruptAll()
 t.join(30)
 assert not t.is_alive(), "the cancelled query did not return"
+assert len(box) == 1 and isinstance(box[0], Exception), f"the query was not cancelled: {box!r}"
+assert "OPERATION_CANCELED" in str(box[0]) or "cancel" in str(box[0]).lower(), str(box[0])
 ok = spark.range(5).mapInPandas(lambda it: it, "id long").collect()
 print("rows", len(ok))
 """,
