@@ -668,7 +668,9 @@ jobs:
   # test code runs here, in the hosted-runner sandbox only. Each version runs the suite, then the
   # pass-list ratchet against `tests/pyspark/summary/<ver>.json`: a recorded pass that fails fails
   # the job. `min_rate` is the blocking floor (percent); empty = report-only. 4.0.5 and 4.1.4 take
-  # 75 once the owner freezes the manifest and a first run is committed; 3.5.7 stays report-only.
+  # 75 once the owner freezes the manifest, a first run is committed AND the denominator excludes the
+  # run's JVM-only conditional skips (this job passes no --oracle-junit; `ratchet` refuses --min-rate
+  # until `conditional_skips` is set); 3.5.7 stays report-only.
   pyspark-suite:
     if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
     needs: guard
@@ -680,11 +682,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { version: "4.3.0", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
-          - { version: "4.2.1", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
-          - { version: "4.1.4", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
-          - { version: "4.0.5", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
-          - { version: "3.5.7", python: "3.11", deps: "pandas<2.3 numpy<2 pyarrow<18", min_rate: "", pyspark: "pyspark[connect]", report_only: "1" }
+          - { version: "4.3.0", sha: "98bc0212c947", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
+          - { version: "4.2.1", sha: "617618396087", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
+          - { version: "4.1.4", sha: "45b9b176e6e2", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
+          - { version: "4.0.5", sha: "b472a3aa3c4b", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark-client" }
+          - { version: "3.5.7", sha: "ed00d046951a", python: "3.11", deps: "pandas<2.3 numpy<2 pyarrow<18", min_rate: "", pyspark: "pyspark[connect]", report_only: "1" }
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -703,11 +705,14 @@ jobs:
       - name: Spark test sources (sparse checkout of the tag)
         env:
           VERSION: ${{ matrix.version }}
+          SHA: ${{ matrix.sha }}
         run: |
           git clone --no-checkout --filter=blob:none --depth 1 --branch "v${VERSION}" https://github.com/apache/spark.git "$RUNNER_TEMP/spark"
           git -C "$RUNNER_TEMP/spark" sparse-checkout set python/pyspark/sql/tests python/pyspark/testing
+          # The tests are downloaded code: refuse a moved or re-created tag.
+          case "$(git -C "$RUNNER_TEMP/spark" rev-parse "v${VERSION}^{commit}")" in "$SHA"*) ;; *) echo "tag v${VERSION} is not at $SHA"; exit 1 ;; esac
           git -C "$RUNNER_TEMP/spark" checkout
-      - name: Python 3.12 venv for the version
+      - name: Python venv for the version
         env:
           VERSION: ${{ matrix.version }}
           PYSPARK: ${{ matrix.pyspark }}
@@ -723,7 +728,7 @@ jobs:
         run: |
           cd tests/scripts
           "$RUNNER_TEMP/venv/bin/python" -m pyspark_suite run --version "$VERSION" --checkout "$RUNNER_TEMP/spark" \
-            --port 15002 --server-cmd "$GITHUB_WORKSPACE/target/release/krishiv" server --port 0 --connect-port 15002
+            --out "$RUNNER_TEMP/out" --port 15002 --server-cmd "$GITHUB_WORKSPACE/target/release/krishiv" server --port 0 --connect-port 15002
       # `run --out` leaves the committed summary alone; the ratchet compares the fresh one with it.
       - name: Pass-list ratchet
         env:

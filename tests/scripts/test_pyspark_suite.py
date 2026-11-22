@@ -268,3 +268,21 @@ def test_run_fails_when_every_file_fails_to_run(tmp_path, monkeypatch):
     )
     with pytest.raises(SystemExit, match="every selected file failed"):
         cli.cmd_run(a)
+
+
+def test_ratchet_refuses_min_rate_while_conditional_skips_are_in_the_denominator(tmp_path, monkeypatch):
+    import argparse
+    import json
+
+    from pyspark_suite import __main__ as cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    cur = {"version": "4.0.5", "source": "run", "passed": 2, "pass_rate": 99.0, "passed_ids": [], "counts": {"skip": 3}}
+    f = tmp_path / "cur.json"
+    f.write_text(json.dumps(cur))
+    a = argparse.Namespace(version="4.0.5", current=f, min_rate=75.0, report_only=False)
+    with pytest.raises(SystemExit, match="conditional"):
+        cli.cmd_ratchet(a)
+    cur["denominator"] = {"conditional_skips": 3}
+    f.write_text(json.dumps(cur))
+    cli.cmd_ratchet(a)  # excluded from the denominator: the floor applies normally

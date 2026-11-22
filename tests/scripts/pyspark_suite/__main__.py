@@ -92,6 +92,15 @@ def cmd_ratchet(a: argparse.Namespace) -> None:
         raise SystemExit(f"ratchet: {a.current} is for {current['version']}, not {a.version}")
     if current.get("source") != "run":
         raise SystemExit("ratchet: the current summary is not from a `run`")
+    if (
+        a.min_rate is not None
+        and not current.get("denominator", {}).get("conditional_skips")
+        and current.get("counts", {}).get("skip", 0) > 0
+    ):
+        raise SystemExit(
+            "ratchet: --min-rate needs a denominator that excludes conditional (JVM-only) skips; "
+            "pass --oracle-junit to `run` first"
+        )
     lost = ratchet_regressions(previous, current)
     print(
         f"{a.version}: {current['passed']} passed ({current['pass_rate']}%), {len(lost)} lost since the committed list"
