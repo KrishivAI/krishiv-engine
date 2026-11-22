@@ -18,13 +18,16 @@
 
   const ended = (d: QueryDetail) => !["running", "queued"].includes(d.query.state ?? "");
 
+  // The session travels with both reads; a signed link was signed with it, so the embedded view sends its own.
+  const at = (sep: string) => (session ? `${sep}session=${encodeURIComponent(session)}` : "");
+
   const q = createQuery<QueryDetail>(() => ({
     queryKey: ["query", id, session ?? ""],
     queryFn: () =>
       api<QueryDetail>(
         embed
-          ? `/api/internal/embed/queries/${encodeURIComponent(id)}?exp=${encodeURIComponent(embed.exp)}&sig=${encodeURIComponent(embed.sig)}`
-          : `/api/internal/queries/${encodeURIComponent(id)}${session ? `?session=${encodeURIComponent(session)}` : ""}`,
+          ? `/api/internal/embed/queries/${encodeURIComponent(id)}?exp=${encodeURIComponent(embed.exp)}&sig=${encodeURIComponent(embed.sig)}${at("&")}`
+          : `/api/internal/queries/${encodeURIComponent(id)}${at("?")}`,
       ),
     refetchInterval: (query) => {
       const d = query.state.data;

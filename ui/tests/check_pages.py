@@ -209,6 +209,25 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
                 ]
                 ctx.close()
 
+        # 2b. A link that names its query's session: the view sends the session with its read (the server signed
+        # the link with it), and the same link without the session is not valid.
+        for src, valid in (
+            (f"{link}-session&session={quote(fixture_server.EMBED_SESSION)}", True),
+            (f"{link}-session", False),
+        ):
+            ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+            ctx.route("http://parent.test/**", serve_html(parent_html(src)))
+            page = ctx.new_page()
+            page.goto("http://parent.test/")
+            want = "HashJoin" if valid else "This link is not valid"
+            try:
+                page.frame_locator("#f").get_by_text(want).first.wait_for(timeout=10000)
+            except PlaywrightTimeout:
+                problems.append(
+                    f"embed link with a session ({'named' if valid else 'dropped'}): {want!r} is not shown"
+                )
+            ctx.close()
+
         # 3. Framed from an origin that is not allowed: the browser blocks it (CSP frame-ancestors).
         ctx = browser.new_context()
         ctx.route(

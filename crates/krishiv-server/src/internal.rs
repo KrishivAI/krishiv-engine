@@ -430,10 +430,14 @@ fn filter_param(uri: &Uri, name: &str) -> Option<String> {
 /// request names none. A qualifier that is there but empty or does not decode is refused (400): dropping it
 /// would act on whichever session's query comes first.
 fn session_param(uri: &Uri, name: &str) -> Result<Option<String>, Box<Response>> {
-    if param(uri, name).is_none() {
+    // A bare key (`?session`, no `=`) names an empty session too.
+    let bare = uri
+        .query()
+        .is_some_and(|q| q.split('&').any(|kv| kv == name));
+    if !bare && param(uri, name).is_none() {
         return Ok(None);
     }
-    match filter_param(uri, name) {
+    match filter_param(uri, name).filter(|_| !bare) {
         Some(session) => Ok(Some(session)),
         None => Err(Box::new(error(
             StatusCode::BAD_REQUEST,
@@ -1000,13 +1004,20 @@ fn query_param(raw: Option<&str>, name: &str) -> Option<String> {
     })
 }
 
-/// `GET /api/internal/queries/{id}/embed-link[?ttl=seconds&theme=json]`: a signed read-only link to one query's
-/// profile for an embedding console (T071). The life is the asked one, at most `krishiv.ui.embed.linkTtl`.
+/// `GET /api/internal/queries/{id}/embed-link[?ttl=seconds&theme=json&session=id]`: a signed read-only link to
+/// one query's profile for an embedding console (T071). The life is the asked one, at most
+/// `krishiv.ui.embed.linkTtl`. With `session` the link opens that session's query only (two sessions may run a
+/// query under one id); without it, the first query of the id.
 async fn embed_link(
     State(s): State<UiState>,
     Path(id): Path<String>,
     RawQuery(raw): RawQuery,
+    uri: Uri,
 ) -> Response {
+    let session = match session_param(&uri, "session") {
+        Ok(session) => session,
+        Err(e) => return *e,
+    };
     let embed = s.policy.embed();
     let max = embed.ttl().as_secs();
     let ttl = match query_param(raw.as_deref(), "ttl") {
@@ -1040,7 +1051,7 @@ async fn embed_link(
         },
     };
     let expires = now_secs().saturating_add(ttl);
-    let Some(sig) = embed.sign(&id, expires) else {
+    let Some(sig) = embed.sign_in(&id, session.as_deref(), expires) else {
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
             "unavailable",
@@ -1052,13 +1063,17 @@ async fn embed_link(
         crate::embed::percent_encode(&id),
         crate::embed::EMBED_PARAM
     );
+    if let Some(session) = &session {
+        url.push_str("&session=");
+        url.push_str(&crate::embed::percent_encode(session));
+    }
     if let Some(t) = theme {
         url.push_str("&theme=");
         url.push_str(&crate::embed::percent_encode(&t));
     }
     json_response(
         StatusCode::OK,
-        &json!({"url": url, "expires_at": expires, "query_id": id}),
+        &json!({"url": url, "expires_at": expires, "query_id": id, "session_id": session}),
     )
 }
 
@@ -1071,17 +1086,26 @@ async fn embed_config(State(s): State<UiState>) -> Response {
     )
 }
 
-/// `GET /api/internal/embed/queries/{id}?exp=&sig=`: the query detail for a valid signed link, nothing else.
+/// `GET /api/internal/embed/queries/{id}?exp=&sig=[&session=]`: the query detail for a valid signed link,
+/// nothing else. The session is part of what was signed: a link opens the query of the session it was issued
+/// for, and one issued for the id alone opens no named session's.
 async fn embed_query(
     State(s): State<UiState>,
     Path(id): Path<String>,
     RawQuery(raw): RawQuery,
+    uri: Uri,
 ) -> Response {
     let exp = query_param(raw.as_deref(), "exp").and_then(|e| e.parse::<u64>().ok());
     let sig = query_param(raw.as_deref(), "sig");
-    match (exp, sig) {
-        (Some(exp), Some(sig)) if s.policy.embed().verify(&id, exp, &sig, now_secs()) => {
-            detail(&s, &id, None).await
+    // A session that is there but empty or does not decode was never signed: the link is not valid.
+    let session = session_param(&uri, "session").ok();
+    match (exp, sig, session) {
+        (Some(exp), Some(sig), Some(session))
+            if s.policy
+                .embed()
+                .verify_in(&id, session.as_deref(), exp, &sig, now_secs()) =>
+        {
+            detail(&s, &id, session.as_deref()).await
         }
         _ => error(
             StatusCode::UNAUTHORIZED,
@@ -1163,6 +1187,15 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
     let client = filter_param(&uri, "client").map(|c| c.to_lowercase());
     let tag = filter_param(&uri, "tag");
     let session = filter_param(&uri, "session");
+    // An empty filter is no filter, as for the others. One that does not decode is refused: dropping it would
+    // list every session's queries under an address that names one.
+    if session.is_none() && param(&uri, "session").is_some_and(|v| !v.is_empty()) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "the session filter is not valid text",
+        );
+    }
     let mut done: Vec<&Row> = rows
         .iter()
         .filter(|r| !is_live(r))

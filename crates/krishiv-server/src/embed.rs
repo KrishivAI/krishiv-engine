@@ -3,8 +3,8 @@
 //! shows one query's profile without a token, and the theme an embedding console may pass.
 //!
 //! Threat model (P3 security notes, T-W3): a signed link has a bounded life and one scope (one query, read-only);
-//! it is an HMAC-SHA256 over the query id and the expiry with a key made at start-up, so it ends with the process
-//! and cannot be forged from another query's link. Only the embeddable views are ever framable, and only by the
+//! it is an HMAC-SHA256 over the query id, the session when the link names one, and the expiry, with a key made at
+//! start-up, so it ends with the process and cannot be forged from another query's link. Only the embeddable views are ever framable, and only by the
 //! origins the operator lists (`frame-ancestors`; the default is `'none'`).
 
 use std::time::Duration;
@@ -92,28 +92,62 @@ impl EmbedPolicy {
     /// server has no random key.
     #[must_use]
     pub fn sign(&self, query_id: &str, expires: u64) -> Option<String> {
+        self.sign_in(query_id, None, expires)
+    }
+
+    /// [`EmbedPolicy::sign`] for the query of one session: two sessions may run a query under one id, and a link
+    /// signed with `session` opens that session's query only. `None` signs for the id alone.
+    #[must_use]
+    pub fn sign_in(&self, query_id: &str, session: Option<&str>, expires: u64) -> Option<String> {
         if self.key == [0u8; 32] {
             return None;
         }
-        Some(hex(&hmac_sha256(&self.key, &message(query_id, expires))))
+        Some(hex(&hmac_sha256(
+            &self.key,
+            &message(query_id, session, expires),
+        )))
     }
 
     /// Whether `sig` is the signature of a link for `query_id` ending at `expires`, and `expires` is after `now`
     /// and no more than the policy's life away (a link cannot outlive the life this process issues links for).
     #[must_use]
     pub fn verify(&self, query_id: &str, expires: u64, sig: &str, now: u64) -> bool {
+        self.verify_in(query_id, None, expires, sig, now)
+    }
+
+    /// [`EmbedPolicy::verify`] for a link that names `session` (or none): a link signed for one session is not
+    /// one for another, nor for the id alone, and a link for the id alone gains no session.
+    #[must_use]
+    pub fn verify_in(
+        &self,
+        query_id: &str,
+        session: Option<&str>,
+        expires: u64,
+        sig: &str,
+        now: u64,
+    ) -> bool {
         if expires <= now || expires > now.saturating_add(self.ttl.as_secs()) {
             return false;
         }
-        let Some(want) = self.sign(query_id, expires) else {
+        let Some(want) = self.sign_in(query_id, session, expires) else {
             return false;
         };
         constant_time_eq(want.as_bytes(), sig.as_bytes())
     }
 }
 
-fn message(query_id: &str, expires: u64) -> Vec<u8> {
-    format!("krishiv-embed-v1\n{query_id}\n{expires}").into_bytes()
+/// The signed text. A link for an id alone keeps the first form. One that names a session carries both lengths,
+/// so no id and session pair reads as another pair (either may hold a line break: both come from an address).
+fn message(query_id: &str, session: Option<&str>, expires: u64) -> Vec<u8> {
+    match session {
+        None => format!("krishiv-embed-v1\n{query_id}\n{expires}"),
+        Some(session) => format!(
+            "krishiv-embed-v2\n{}\n{}\n{query_id}\n{session}\n{expires}",
+            query_id.len(),
+            session.len()
+        ),
+    }
+    .into_bytes()
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -444,6 +478,38 @@ mod tests {
         assert!(!p.verify("q1", 1_000, &sig, 2_000), "long expired");
         assert!(!p.verify("q1", 1_000, "", 500), "no signature");
         assert!(!p.verify("q1", 1_000, &sig[..sig.len() - 1], 500), "short");
+    }
+
+    #[test]
+    fn a_link_for_one_session_is_not_one_for_another_or_for_the_id_alone() {
+        let p = policy();
+        let sig = p.sign_in("q1", Some("s1"), 1_000).expect("key");
+        assert!(p.verify_in("q1", Some("s1"), 1_000, &sig, 500));
+        assert!(!p.verify_in("q1", Some("s2"), 1_000, &sig, 500), "another");
+        assert!(
+            !p.verify_in("q1", None, 1_000, &sig, 500),
+            "session dropped"
+        );
+        assert!(!p.verify("q1", 1_000, &sig, 500), "session dropped");
+        assert!(
+            !p.verify_in("q1", Some("s1"), 1_000, &sig, 1_000),
+            "expired"
+        );
+        let bare = p.sign("q1", 1_000).expect("key");
+        assert_eq!(p.sign_in("q1", None, 1_000).as_deref(), Some(&*bare));
+        assert!(!p.verify_in("q1", Some("s1"), 1_000, &bare, 500), "added");
+        assert!(!p.verify_in("q1", Some(""), 1_000, &bare, 500), "empty");
+    }
+
+    #[test]
+    fn an_id_and_a_session_do_not_read_as_another_pair() {
+        let p = policy();
+        // Without the lengths both pairs would sign the same lines.
+        let sig = p.sign_in("a\nb", Some("c"), 1_000).expect("key");
+        assert!(!p.verify_in("a", Some("b\nc"), 1_000, &sig, 500));
+        // Nor does a session-less id that spells the second form's lines.
+        let sig = p.sign_in("q", Some("s"), 1_000).expect("key");
+        assert!(!p.verify("1\n1\nq\ns", 1_000, &sig, 500));
     }
 
     #[test]

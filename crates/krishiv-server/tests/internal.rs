@@ -908,12 +908,73 @@ async fn a_session_qualifier_that_is_empty_or_does_not_decode_is_refused_not_dro
             "GET",
             "/api/internal/compare?a=q-dup&b=q-solo&b_session=%zz",
         ),
+        // A key with no `=` names an empty session too.
+        ("POST", "/api/internal/queries/q-solo/cancel?session"),
+        ("GET", "/api/internal/queries/q-dup?session"),
+        ("GET", "/api/internal/compare?a=q-dup&b=q-solo&a_session"),
+        ("GET", "/api/internal/queries/q-dup/embed-link?session=%FF"),
+        ("GET", "/api/internal/queries/q-dup/embed-link?session"),
+        // The history's filter: not decodable is refused, where dropping it would list every session's.
+        ("GET", "/api/internal/history?session=%FF"),
     ] {
         let (status, _, body) = request(addr, method, path, true).await;
         assert_eq!(status, 400, "{path}: {body}");
         assert_eq!(body["error"], "bad_request", "{path}");
     }
     assert!(fake.cancelled.lock().unwrap().is_empty());
+}
+
+/// An empty history filter is no filter, as the page sends it when the box is cleared.
+#[tokio::test]
+async fn an_empty_session_filter_lists_the_history_of_every_session() {
+    let (addr, _) = start_dup().await;
+    let all = get(addr, "/api/internal/history").await;
+    assert_eq!(get(addr, "/api/internal/history?session=").await, all);
+}
+
+/// A signed link issued for one session's query opens that query, and no other reading of the same link does:
+/// not the other session's query of the id, not the id alone.
+#[tokio::test]
+async fn a_signed_link_opens_the_query_of_the_session_it_names() {
+    let (addr, _) = start_dup().await;
+    let link = |session: String| async move {
+        let path = format!("/api/internal/queries/q-dup/embed-link?ttl=60{session}");
+        let (status, _, body) = request(addr, "GET", &path, true).await;
+        assert_eq!(status, 200, "{body}");
+        let url = body["url"].as_str().unwrap().to_owned();
+        (url.split_once('?').unwrap().1.to_owned(), body)
+    };
+    let open = |query: String| async move {
+        let path = format!("/api/internal/embed/queries/q-dup?{query}");
+        request(addr, "GET", &path, false).await
+    };
+    for (session, principal) in [("s-a", "ann"), ("s-b", "bob")] {
+        let (query, issued) = link(format!("&session={session}")).await;
+        assert_eq!(issued["session_id"], session);
+        assert!(query.ends_with(&format!("&session={session}")), "{query}");
+        let (status, _, body) = open(query.clone()).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["query"]["principal"], principal, "{body}");
+        // The same signature under another session, or under none, is not a link.
+        let other = if session == "s-a" { "s-b" } else { "s-a" };
+        let swapped = query.replace(&format!("session={session}"), &format!("session={other}"));
+        assert_eq!(open(swapped).await.0, 401);
+        let stripped = query.replace(&format!("&session={session}"), "");
+        assert_eq!(open(stripped).await.0, 401);
+    }
+    // A link for the id alone opens the first query of the id, and gains no session afterwards.
+    let (query, issued) = link(String::new()).await;
+    assert_eq!(issued["session_id"], Value::Null);
+    assert!(!query.contains("session"), "{query}");
+    let (status, _, body) = open(query.clone()).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["query"]["principal"], "ann", "{body}");
+    assert_eq!(open(format!("{query}&session=s-b")).await.0, 401);
+    assert_eq!(open(format!("{query}&session=%FF")).await.0, 401);
+    assert_eq!(open(format!("{query}&session=")).await.0, 401, "empty");
+    // A link for a session with no query of the id is signed (nothing is read to issue it) and finds nothing.
+    let (query, _) = link("&session=s-c".to_owned()).await;
+    assert_eq!(open(query).await.0, 404);
 }
 
 #[tokio::test]

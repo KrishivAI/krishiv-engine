@@ -53,6 +53,8 @@ CSP = (
 EMBED_PARENT = "http://parent.test"
 # Framed by the page's CSP but absent from the allowed origins: its theme messages must be ignored.
 EMBED_OTHER = "http://other.test"
+# The session a signed link of the embed check names (a space: the page must encode it).
+EMBED_SESSION = "s 1"
 # The paths the page serves as deep links (routes.json); the page itself is `index.html`.
 DEEP_LINKS = (
     "health",
@@ -535,7 +537,15 @@ class Handler(BaseHTTPRequestHandler):
                 200, {"allowed_origins": [EMBED_PARENT], "hide_attribution": False}
             )
         if url.path.startswith("/api/internal/embed/queries/"):
-            if "sig=ok" not in url.query:
+            asked = parse_qs(url.query)
+            # `ok` is a link for the id alone; `ok-session` was signed for EMBED_SESSION, as the server signs a
+            # link that names a session, so the read must name it too.
+            valid = asked.get("sig") == ["ok"] and "session" not in asked
+            valid = valid or (
+                asked.get("sig") == ["ok-session"]
+                and asked.get("session") == [EMBED_SESSION]
+            )
+            if not valid:
                 return self.send_json(401, {"error": "unauthorized"})
             return self.send_json(200, DATA["detail"])
         if url.path.startswith("/api/internal/"):
