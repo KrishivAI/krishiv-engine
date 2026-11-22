@@ -164,6 +164,33 @@ pub(super) async fn refuse_unlogged_key_early(
     Ok(())
 }
 
+/// What [`refuse_unlogged_key_early`] decides for a write to a directory that does not exist yet
+/// (`errorifexists`), from the configuration and the store's cached probe alone: no I/O, so an
+/// overwrite can ask it before it drops the table it replaces.
+///
+/// # Errors
+/// An invalid key; `KRISHIV_UNSUPPORTED_FEATURE` for a key on `commitProtocol=NONE` or on a store
+/// known to lack put-if-absent.
+pub(crate) fn refuse_unkeyable_fresh_write(
+    config: &Config,
+    options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+    probes: &Mutex<HashMap<String, bool>>,
+    at: &krishiv_exec::files::LocatedPath,
+) -> Result<(), KrishivError> {
+    if write_idempotency_key(config, options)?.is_none() {
+        return Ok(());
+    }
+    let known_unsupported = probes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(at.store.key())
+        == Some(&false);
+    if commit_protocol(config).as_deref() == Some("NONE") || known_unsupported {
+        return Err(unlogged_key(&at.display));
+    }
+    Ok(())
+}
+
 /// `write`, through the commit log when the directory uses one (with the write's idempotency key,
 /// E34), else as it is.
 ///

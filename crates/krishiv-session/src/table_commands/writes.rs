@@ -815,6 +815,14 @@ impl Session {
                 let at =
                     self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
                 self.authorize_write_path(&at).await?;
+                // A key the new table's write would refuse (empty, secret, no commit log): not
+                // after the drop.
+                crate::session::writes::refuse_unkeyable_fresh_write(
+                    &env.config,
+                    &spec.options,
+                    &self.state.commit_log_probes,
+                    &at.at,
+                )?;
                 // A managed table's own directory goes with it; any other one in the way stays.
                 let own = self
                     .state

@@ -253,6 +253,49 @@ fn an_explicit_key_deduplicates_file_table_saves() {
     assert_eq!(count(&s, "keyed_dedup"), 2 * n);
 }
 
+/// E34 (review of #966): an overwrite whose key the write would refuse leaves the old table in place.
+#[test]
+fn a_refused_key_on_an_overwrite_keeps_the_old_table() {
+    let s = session();
+    let n = count(&s, "people");
+    block_on(s.table("people").write().save_as_table("kept")).unwrap();
+    let empty = block_on(
+        s.table("people")
+            .write()
+            .mode("overwrite")
+            .option("krishiv.write.idempotencyKey", "")
+            .save_as_table("kept"),
+    );
+    assert!(empty.is_err());
+    assert_eq!(count(&s, "kept"), n);
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "NONE")
+        .unwrap();
+    let none = block_on(
+        s.table("people")
+            .write()
+            .mode("overwrite")
+            .option("krishiv.write.idempotencyKey", "job-1")
+            .save_as_table("kept"),
+    );
+    assert!(none.is_err());
+    assert_eq!(count(&s, "kept"), n);
+}
+
+/// E34 (review of #966): strict option checking accepts the forwarded key.
+#[test]
+fn strict_options_accept_the_idempotency_key_on_a_file_table() {
+    let s = session();
+    s.conf().set("krishiv.io.strictOptions", "true").unwrap();
+    block_on(
+        s.table("people")
+            .write()
+            .option("krishiv.write.idempotencyKey", "job-1")
+            .save_as_table("strict_keyed"),
+    )
+    .unwrap();
+}
+
 #[test]
 fn text_writes_one_string_column_and_orc_is_unsupported() {
     let s = session();

@@ -187,7 +187,7 @@ pub(crate) struct SessionState {
     pub(crate) memory: Arc<dyn MemoryPool>,
     /// Whether a store creates objects only if absent (the commit log's
     /// probe), by store id; per session, never process-wide.
-    commit_log_probes: Mutex<HashMap<String, bool>>,
+    pub(crate) commit_log_probes: Mutex<HashMap<String, bool>>,
     pub(crate) io: Arc<IoScheduler>,
     /// The session's content-addressed relations: every memory table's
     /// batches as Arrow IPC, so workers resolve a batch range through it
