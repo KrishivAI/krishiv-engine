@@ -510,7 +510,18 @@ impl Session {
                 let filled = if *lazy {
                     frame.is_cached().await.map(drop)
                 } else {
-                    frame.count().await.map(drop)
+                    // Spark plans the relation itself: a metric-view read no aggregate rewrote fails
+                    // there (the count's own aggregate would rewrite it).
+                    match frame.analysis().await {
+                        Ok(a) => {
+                            match krishiv_plan::analyzer::refuse_unplannable(a.analyzed.plan.root())
+                            {
+                                Ok(()) => frame.count().await.map(drop),
+                                Err(e) => Err(e),
+                            }
+                        }
+                        Err(e) => Err(e),
+                    }
                 };
                 if let Err(error) = filled {
                     // A failed `CACHE TABLE` leaves nothing cached, nor the view `AS query` made.

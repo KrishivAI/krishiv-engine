@@ -112,6 +112,19 @@ impl Session {
                     .await?
             }
         };
+        // Spark's planning failure is one row per line of its text (`ExplainCommand`), as the
+        // metric-view refusals give it (`failed`).
+        if let Some(rest) = text.strip_prefix(PLANNING_ERROR)
+            && rest.starts_with("\n[INTERNAL_ERROR]")
+        {
+            let rows = std::iter::once(PLANNING_ERROR)
+                .chain(rest.lines().skip(1))
+                .map(|l| vec![Some(l.to_owned())])
+                .collect();
+            return self
+                .string_frame(crate::analyze::command_schema::EXPLAIN, rows)
+                .await;
+        }
         self.one_row(&text).await
     }
 }
@@ -748,6 +761,11 @@ fn failed(
     analysis: Option<&Arc<Analysis>>,
     error: &KrishivError,
 ) -> String {
+    // A metric-view read or `measure(..)` left in the plan: Spark's planner fails before any
+    // section prints, and `ExplainCommand` gives the failure's lines whatever the mode.
+    if krishiv_plan::analyzer::is_unplannable(error) {
+        return format!("{PLANNING_ERROR}\n{error}");
+    }
     match mode {
         ExplainMode::Extended => {
             let mut out = format!("== Parsed Logical Plan ==\n{parsed}\n");

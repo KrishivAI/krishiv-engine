@@ -81,6 +81,7 @@ mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;
 mod memory_table;
+mod metric_view;
 mod monitor;
 mod nested_value;
 mod observation;

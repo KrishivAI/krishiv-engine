@@ -408,6 +408,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
     (
+        "krishiv.optimizer.preAggregateExpand",
+        &PRE_AGGREGATE_EXPAND,
+    ),
+    (
         "krishiv.optimizer.shareFilteredScans",
         &SHARE_FILTERED_SCANS,
     ),
