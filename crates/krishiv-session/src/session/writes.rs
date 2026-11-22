@@ -41,7 +41,7 @@ pub(crate) fn partition_overwrite_is_dynamic(
 ///
 /// # Errors
 /// `INVALID_CONF_VALUE` for an empty key.
-pub(super) fn write_idempotency_key(
+pub(crate) fn write_idempotency_key(
     config: &Config,
     options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
 ) -> Result<Option<String>, KrishivError> {

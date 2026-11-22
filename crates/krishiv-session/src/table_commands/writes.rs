@@ -404,6 +404,10 @@ impl Session {
         let key = target
             .options
             .and_then(|o| super::explicit_key(o, |v: &OptionValue| v.as_plain()));
+        // A key given as a secret is refused, as on a write to a path, never dropped.
+        if let Some(o) = target.options {
+            crate::session::writes::write_idempotency_key(&self.state.runtime.config, o)?;
+        }
         if dry {
             // Every check of the write, without writing.
             return self.check_table_write(table, &df, overwrite, key).await;
