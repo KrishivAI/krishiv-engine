@@ -17,6 +17,27 @@ use crate::{ExprNode, Literal, LogicalPlan, PlanNode, ResolvedExpr};
 /// The feature name of the `TIME` type.
 const TIME: &str = "the TIME data type";
 
+/// The functions that take or give a `TIME` while the gate is off, as Spark's (comparisons, `typeof`,
+/// `current_time`): everything else that touches one is `UNSUPPORTED_TIME_TYPE`.
+fn time_passes(name: &str) -> bool {
+    matches!(
+        name,
+        "current_time"
+            | "typeof"
+            | "isnull"
+            | "isnotnull"
+            | "="
+            | "=="
+            | "<=>"
+            | "<"
+            | "<="
+            | ">"
+            | ">="
+            | "!="
+            | "<>"
+    )
+}
+
 fn feature(t: &DataType, time_type: bool) -> Option<&'static str> {
     // The first unevaluable type in the type or inside it (an array
     // element, a map key or value, a struct field).
@@ -331,19 +352,25 @@ pub(super) fn check_known(
                 _ => (Vec::new(), p.origin),
             },
             Node::Expr(e) => {
+                // While the gate is off Spark still evaluates a `TIME` value that is only produced,
+                // compared, shown (`typeof`, a cast to string) or projected: `current_time(n)`, a
+                // `TIME '..'` literal, `<`, `=`. It refuses the written type (a cast target, bind) and a
+                // time function that takes or gives one (`hour`, `make_time`, `to_time`, ...): checked
+                // on 4.2.0 (`research/spark/sql26`). So only a call outside the pass-through set that holds
+                // a `TIME` in its arguments or its result is flagged here.
                 let t = match &e.node {
-                    ExprNode::Literal(Literal::Null(Some(t))) | ExprNode::Cast { to: t, .. } => {
-                        Some(t)
+                    ExprNode::Resolved(ResolvedExpr::Function(f))
+                        if !time_passes(super::exprs::builtin_name(f)) =>
+                    {
+                        std::iter::once(&f.data_type)
+                            .chain(f.args.iter().filter_map(|a| expr_type(a)))
+                            .collect()
                     }
-                    ExprNode::Resolved(
-                        ResolvedExpr::Column(c)
-                        | ResolvedExpr::OuterColumn(c)
-                        | ResolvedExpr::Alias { output: c, .. },
-                    ) => Some(&c.data_type),
-                    ExprNode::Resolved(ResolvedExpr::Function(f)) => Some(&f.data_type),
-                    _ => None,
+                    // A typed `NULL` of the type is the written type (Spark's parser refuses it).
+                    ExprNode::Literal(Literal::Null(Some(t))) => vec![t],
+                    _ => Vec::new(),
                 };
-                (t.into_iter().collect(), e.origin)
+                (t, e.origin)
             }
         };
         match types.into_iter().find_map(|t| feature(t, time_type)) {

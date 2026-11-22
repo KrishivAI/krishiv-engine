@@ -1086,6 +1086,7 @@ fn foreign_overwrite(env: &Env, catalog: &Arc<Catalog>) {
             branch: "main",
             write_id: "foreign",
             query_id: None,
+            idempotency_key: None,
         };
         prepare_attempt(&io, &m, &mut new, ids, m.last_updated_ms() + 1, MAX)
             .await

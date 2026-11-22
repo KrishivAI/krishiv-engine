@@ -3036,6 +3036,7 @@ dependencies = [
  "reqwest 0.13.5",
  "rusqlite",
  "serde_json",
+ "sha2",
  "tempfile",
  "thrift 0.25.0",
  "tokio",

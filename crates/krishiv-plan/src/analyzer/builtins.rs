@@ -91,6 +91,8 @@ pub(super) enum NamedDefault {
     Null,
     /// A string literal default (as `mask`'s replacements do).
     Text(&'static str),
+    /// A boolean literal default (as `variant_set`'s `create_if_missing` does).
+    Bool(bool),
 }
 
 /// The named-parameter signature of the functions Spark 4.2 documents with
@@ -99,7 +101,7 @@ pub(super) enum NamedDefault {
 /// calls reorder and then fail as unsupported). Any other function rejects
 /// named arguments with `NAMED_PARAMETERS_NOT_SUPPORTED`.
 pub(super) fn named_signature(name: &str) -> Option<&'static [NamedParam]> {
-    use NamedDefault::{Null, Required, Text};
+    use NamedDefault::{Bool, Null, Required, Text};
     const MASK: &[NamedParam] = &[
         NamedParam {
             name: "str",
@@ -151,7 +153,38 @@ pub(super) fn named_signature(name: &str) -> Option<&'static [NamedParam]> {
             default: Null,
         },
     ];
+    // Spark 4.3's `VariantSet` / `TryVariantSet` and `VariantStripNulls` builders declare `functionSignature`.
+    const VARIANT_SET: &[NamedParam] = &[
+        NamedParam {
+            name: "v",
+            default: Required,
+        },
+        NamedParam {
+            name: "path",
+            default: Required,
+        },
+        NamedParam {
+            name: "val",
+            default: Required,
+        },
+        NamedParam {
+            name: "create_if_missing",
+            default: Bool(true),
+        },
+    ];
+    const VARIANT_STRIP_NULLS: &[NamedParam] = &[
+        NamedParam {
+            name: "v",
+            default: Required,
+        },
+        NamedParam {
+            name: "include_arrays",
+            default: Bool(true),
+        },
+    ];
     match name.to_ascii_lowercase().as_str() {
+        "variant_set" | "try_variant_set" => Some(VARIANT_SET),
+        "variant_strip_nulls" => Some(VARIANT_STRIP_NULLS),
         "mask" => Some(MASK),
         "counter_diff" => Some(COUNTER_DIFF),
         "count_min_sketch" => Some(COUNT_MIN_SKETCH),

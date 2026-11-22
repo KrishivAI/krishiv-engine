@@ -76,3 +76,16 @@ fn delta_commit_retry_entries_parse_and_default() {
     );
     assert!(c.set("krishiv.delta.maxCommitAttempts", "0").is_err());
 }
+
+/// E34: the write idempotency key has no default and keeps the caller's text.
+#[test]
+fn the_write_idempotency_key_has_no_default() {
+    let mut c = Config::new();
+    assert!(c.get(&WRITE_IDEMPOTENCY_KEY).is_none());
+    c.set("krishiv.write.idempotencyKey", "job-7/run-2")
+        .unwrap();
+    assert_eq!(
+        c.get(&WRITE_IDEMPOTENCY_KEY).and_then(ConfigValue::as_str),
+        Some("job-7/run-2")
+    );
+}

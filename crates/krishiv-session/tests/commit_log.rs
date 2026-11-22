@@ -524,3 +524,125 @@ fn an_intermediate_log_below_a_base_path_is_found_by_the_recheck_order() {
         .parquet([leaf.to_str().unwrap()]);
     assert_eq!(block_on(df.count()).unwrap(), 1);
 }
+
+/// E34: a retried statement with the same `krishiv.write.idempotencyKey` (as a write option or the
+/// session setting) appends once; another key appends; a plain directory refuses the key.
+#[test]
+fn a_retried_write_with_the_same_idempotency_key_appends_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = session_with(&[1, 2]);
+    let write = |key: &str| {
+        block_on(
+            s.table("t")
+                .write()
+                .mode("append")
+                .option("krishiv.write.idempotencyKey", key)
+                .parquet(&path),
+        )
+        .unwrap();
+    };
+    write("job-1");
+    let versions = log_versions(&root);
+    write("job-1");
+    assert_eq!(log_versions(&root), versions, "the retry made no commit");
+    assert_eq!(ids(&s, &path), [1, 2]);
+    let files = |r: &std::path::Path| {
+        std::fs::read_dir(r)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|x| x == "parquet")
+            })
+            .count()
+    };
+    assert_eq!(files(&root), 1, "the retry's file is gone");
+
+    // The session setting does the same, and another key appends.
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "job-2")
+        .unwrap();
+    block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
+    block_on(s.table("t").write().mode("append").parquet(&path)).unwrap();
+    assert_eq!(ids(&s, &path), [1, 1, 2, 2]);
+
+    // An empty key is invalid.
+    s.conf().set("krishiv.write.idempotencyKey", "").unwrap();
+    let e = block_on(s.table("t").write().mode("append").parquet(&path)).unwrap_err();
+    assert!(e.message().contains("must not be empty"), "{e}");
+}
+
+#[test]
+fn an_idempotency_key_on_a_directory_without_a_log_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("plain").to_str().unwrap().to_owned();
+    let s = session_with(&[1]);
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "NONE")
+        .unwrap();
+    let r = block_on(
+        s.table("t")
+            .write()
+            .mode("append")
+            .option("krishiv.write.idempotencyKey", "k")
+            .parquet(&path),
+    );
+    let e = r.unwrap_err();
+    assert!(e.message().contains("commit log"), "{e}");
+}
+
+/// An overwrite of an existing file with a key and no commit log is refused before the file is deleted.
+#[test]
+fn a_refused_key_leaves_the_file_an_overwrite_would_have_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("one.parquet");
+    let s = session_with(&[1, 2]);
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "NONE")
+        .unwrap();
+    block_on(
+        s.table("t")
+            .write()
+            .mode("overwrite")
+            .parquet(path.to_str().unwrap()),
+    )
+    .unwrap();
+    let before = std::fs::metadata(&path).map(|m| m.len()).ok();
+    let r = block_on(
+        s.table("t")
+            .write()
+            .mode("overwrite")
+            .option("krishiv.write.idempotencyKey", "k")
+            .parquet(path.to_str().unwrap()),
+    );
+    assert!(r.unwrap_err().message().contains("commit log"));
+    assert_eq!(path.exists(), before.is_some(), "the target was removed");
+}
+
+/// E34: a keyed retry under `errorifexists` or `overwrite` finds its key in the log and writes nothing,
+/// instead of failing on the directory the first try created or replacing what it wrote.
+#[test]
+fn a_keyed_retry_succeeds_under_errorifexists_and_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = session_with(&[1, 2]);
+    for mode in ["errorifexists", "errorifexists", "overwrite"] {
+        block_on(
+            s.table("t")
+                .write()
+                .mode(mode)
+                .option("krishiv.write.idempotencyKey", "job-1")
+                .parquet(&path),
+        )
+        .unwrap();
+    }
+    assert_eq!(ids(&s, &path), [1, 2]);
+    // Without the key the directory still exists.
+    let e = block_on(s.table("t").write().mode("errorifexists").parquet(&path)).unwrap_err();
+    assert!(e.message().contains("already exists"), "{e}");
+}

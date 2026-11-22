@@ -66,6 +66,11 @@ const fn c(name: &'static str) -> CommandColumn {
     CommandColumn::new(name)
 }
 
+/// `SHOW FUNCTIONS`.
+pub(crate) const SHOW_FUNCTIONS: &[CommandColumn] = &[c("function")];
+/// `DESCRIBE FUNCTION`.
+pub(crate) const DESCRIBE_FUNCTION: &[CommandColumn] = &[c("function_desc")];
+
 /// `SHOW TABLES`.
 pub(crate) const SHOW_TABLES: &[CommandColumn] =
     &[c("namespace"), c("tableName"), c("isTemporary")];
@@ -173,8 +178,8 @@ fn show_columns(kind: &ShowKind) -> Option<&'static [CommandColumn]> {
         ShowKind::Partitions { .. } => SHOW_PARTITIONS,
         ShowKind::Catalogs { .. } => SHOW_CATALOGS,
         ShowKind::CurrentNamespace { .. } => SHOW_CURRENT_NAMESPACE,
-        // `SHOW FUNCTIONS` (refused by the session, `KRISHIV_UNSUPPORTED_FEATURE`) and kinds added later have no
-        // result schema here.
+        ShowKind::Functions { .. } => SHOW_FUNCTIONS,
+        // Kinds added later have no result schema here.
         _ => return None,
     })
 }
@@ -195,7 +200,8 @@ fn describe_columns(kind: &DescribeKind) -> Option<&'static [CommandColumn]> {
         }
         DescribeKind::Namespace { .. } => DESCRIBE_NAMESPACE,
         DescribeKind::Query { .. } => DESCRIBE_TABLE,
-        // `DESCRIBE FUNCTION` (refused by the session, `KRISHIV_UNSUPPORTED_FEATURE`) and kinds added later.
+        DescribeKind::Function { .. } => DESCRIBE_FUNCTION,
+        // Kinds added later.
         _ => return None,
     })
 }

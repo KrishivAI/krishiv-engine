@@ -499,7 +499,8 @@ fn create_view_with_both_flags_fails_before_the_query_is_checked() {
 fn drop_view_needs_the_view() {
     let s = session();
     block_on(s.sql("CREATE TEMP VIEW v AS SELECT id FROM people")).unwrap();
-    // A missing view fails as in Spark, naming the view and search path.
+    // A missing view fails as in Spark's v1 `NoSuchTableException`: the qualified view, and only the
+    // current namespace as the path (identifier-clause-legacy.sql.out).
     let e = block_on(s.sql("DROP VIEW nosuch")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
     assert_eq!(e.sql_state(), Some("42P01"));
@@ -507,11 +508,24 @@ fn drop_view_needs_the_view() {
     assert_eq!(
         e.message_parameters(),
         [
-            ("relationName", "`nosuch`".to_owned()),
             (
-                "searchPath",
-                "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]".to_owned()
+                "relationName",
+                "`spark_catalog`.`default`.`nosuch`".to_owned()
             ),
+            ("searchPath", "[`spark_catalog`.`default`]".to_owned()),
+        ]
+    );
+    // A qualified name in another database reports that database, not the current one.
+    block_on(s.sql("CREATE DATABASE otherdb")).unwrap();
+    let e = block_on(s.sql("DROP VIEW otherdb.nosuch")).unwrap_err();
+    assert_eq!(
+        e.message_parameters(),
+        [
+            (
+                "relationName",
+                "`spark_catalog`.`otherdb`.`nosuch`".to_owned()
+            ),
+            ("searchPath", "[`spark_catalog`.`otherdb`]".to_owned()),
         ]
     );
     // `IF EXISTS` tolerates it, returning an empty frame as in Spark.
@@ -839,5 +853,110 @@ fn unexecuted_commands_parse_and_report_unsupported() {
     ] {
         block_on(async { s.sql(sql).await?.collect().await })
             .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+}
+
+/// A command's `TABLE_OR_VIEW_NOT_FOUND` ends its search path at the current namespace, as Spark 4.2.1
+/// does after `USE db`.
+#[test]
+fn a_commands_not_found_error_names_the_current_namespace() {
+    let s = session();
+    block_on(s.sql("CREATE DATABASE nsdb")).unwrap();
+    block_on(s.sql("USE nsdb")).unwrap();
+    let path = |sql: &str| {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound, "{sql}");
+        let found = e
+            .message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "searchPath")
+            .map(|(_, v)| v.clone());
+        found.unwrap()
+    };
+    let want = "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`nsdb`]";
+    assert_eq!(path("DESCRIBE TABLE nosuch"), want);
+    assert_eq!(path("UNCACHE TABLE nosuch"), want);
+    // `SET PATH` changes what the error names, as it does for a query.
+    block_on(s.sql("SET spark.sql.path.enabled = true")).unwrap();
+    block_on(s.sql("SET PATH = system.session, CURRENT_SCHEMA")).unwrap();
+    assert_eq!(
+        path("UNCACHE TABLE nosuch"),
+        "[`system`.`session`, `spark_catalog`.`nsdb`]"
+    );
+}
+
+/// REFRESH, INSERT, ALTER VIEW and a global temp view name a missing relation with the full current
+/// path (no Spark golden covers these four; they follow the analyzer's own error).
+#[test]
+fn other_commands_name_the_current_namespace_when_the_relation_is_missing() {
+    let s = session();
+    block_on(s.sql("CREATE DATABASE odb")).unwrap();
+    block_on(s.sql("USE odb")).unwrap();
+    for sql in [
+        "REFRESH TABLE nosuch",
+        "INSERT INTO nosuch VALUES (1)",
+        "ALTER VIEW nosuch AS SELECT 1",
+        "SELECT * FROM global_temp.nosuch",
+    ] {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound, "{sql}");
+        let path = e
+            .message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "searchPath")
+            .map(|(_, v)| v.clone());
+        assert_eq!(
+            path.as_deref(),
+            Some("[`system`.`builtin`, `system`.`session`, `spark_catalog`.`odb`]"),
+            "{sql}"
+        );
+    }
+}
+
+/// Commands that resolve a table or view only (`ALTER TABLE`, `SHOW COLUMNS`, `SHOW TABLE EXTENDED ..
+/// PARTITION`) name a search path without `system.builtin`, as Spark 4.2's goldens do.
+#[test]
+fn table_only_commands_name_a_path_without_the_builtin_schema() {
+    let s = session();
+    block_on(s.sql("CREATE DATABASE tdb")).unwrap();
+    block_on(s.sql("USE tdb")).unwrap();
+    let path = |sql: &str| {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound, "{sql}");
+        e.message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "searchPath")
+            .map(|(_, v)| v.clone())
+            .unwrap()
+    };
+    let want = "[`system`.`session`, `spark_catalog`.`tdb`]";
+    assert_eq!(path("ALTER TABLE nosuch ADD COLUMN c INT"), want);
+    assert_eq!(path("SHOW COLUMNS IN nosuch"), want);
+    assert_eq!(
+        path("SHOW TABLE EXTENDED LIKE 'nosuch*' PARTITION(c = 1)"),
+        want
+    );
+}
+
+/// An unresolved variable in `SET VARIABLE` / `DROP TEMPORARY VARIABLE` names the current namespace in
+/// its search path, like a missing table.
+#[test]
+fn an_unresolved_variable_error_names_the_current_namespace() {
+    let s = session();
+    block_on(s.sql("CREATE DATABASE vardb")).unwrap();
+    block_on(s.sql("USE vardb")).unwrap();
+    let want = "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`vardb`]";
+    for sql in [
+        "SET VAR a.b.nosuch = 1",
+        "DROP TEMPORARY VARIABLE a.b.nosuch",
+    ] {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::UnresolvedVariable, "{sql}");
+        let found = e
+            .message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "searchPath")
+            .map(|(_, v)| v.clone());
+        assert_eq!(found.as_deref(), Some(want), "{sql}");
     }
 }
