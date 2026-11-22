@@ -37,8 +37,7 @@ GRANT ROLE analysts TO user:ana;
 `WITH GRANT OPTION` lets the grantee pass a privilege on; `REVOKE GRANT OPTION FOR` takes that right away and keeps
 the privilege. Revoking it on a table clears the flag on the table's columns too.
 
-`SHOW GRANTS` (a Krishiv extension, 7 columns) lists the grants you may see; `SHOW GRANTS ON TABLE t` narrows it to
-one object. A listing of tables, views or functions shows only the ones the caller may see.
+`SHOW GRANTS` (a Krishiv extension, 7 columns) lists grants; `SHOW GRANTS ON TABLE t` narrows it to one object. A listing of tables, views or functions shows only the ones the caller may see.
 
 ## Views and functions
 
@@ -55,6 +54,5 @@ Dropping a view (`DROP VIEW`) needs the `DROP` privilege on it, as `DROP FUNCTIO
 
 ## Check it
 
-Connect as the principal and run the statement; a denied one fails with an error whose message names the object and
-the missing privilege. For the server's authentication settings see
+Connect as the principal and run the statement; a denied one fails with an error. For the server's authentication settings see
 [Securing a single-node server](single-node-server-security.md).
