@@ -223,10 +223,11 @@ impl BoundScan for BoundSource {
     ) -> futures::future::BoxFuture<'static, krishiv_exec::Result<Arc<dyn ScanPushdown>>> {
         let table = self.table.clone();
         Box::pin(async move {
-            // The source runs user code (Python) and blocks: off the async task.
-            let scan = tokio::task::spawn_blocking(move || table.materialize())
+            // The source runs user code (Python) and blocks: on a bounded `krishiv-pysrc` thread, not
+            // an engine pool thread; the caller races this future against the query's cancel.
+            let scan = crate::python_source_call(move || table.materialize())
                 .await
-                .map_err(|e| internal(format!("a source read panicked: {e}")))??;
+                .map_err(|e| internal(format!("a source read failed: {e}")))?;
             Ok(Arc::new(scan) as Arc<dyn ScanPushdown>)
         })
     }

@@ -566,36 +566,43 @@ pub const MAX_PYTHON_SOURCE_CALLS: usize = 32;
 pub fn run_python_source_call<T: Send + 'static>(
     call: impl FnOnce() -> Result<T, KrishivError> + Send + 'static,
 ) -> Result<T, KrishivError> {
+    wait_for_user_code(
+        Box::pin(python_source_call(call)),
+        "planning a Python data source on a current-thread runtime; run the statement on a \
+         multi-thread runtime",
+    )
+}
+
+/// The async form of [`run_python_source_call`]: the call runs on a `krishiv-pysrc` thread under the
+/// same 32-permit bound; the caller awaits it (and races its own cancel). Dropping the future leaves
+/// the thread to finish and free its permit.
+///
+/// # Errors
+/// `call`'s error; `KRISHIV_INTERNAL_ERROR` when the thread does not start.
+pub async fn python_source_call<T: Send + 'static>(
+    call: impl FnOnce() -> Result<T, KrishivError> + Send + 'static,
+) -> Result<T, KrishivError> {
     use std::sync::OnceLock;
     use tokio::sync::{Semaphore, oneshot};
     static PERMITS: OnceLock<Arc<Semaphore>> = OnceLock::new();
     let permits =
         Arc::clone(PERMITS.get_or_init(|| Arc::new(Semaphore::new(MAX_PYTHON_SOURCE_CALLS))));
-    let work = async move {
-        let permit = permits
-            .acquire_owned()
-            .await
-            .map_err(|_| internal_error("the Python source call limit closed"))?;
-        let (tx, rx) = oneshot::channel();
-        std::thread::Builder::new()
-            .name("krishiv-pysrc".to_owned())
-            .spawn(move || {
-                let result = call();
-                // The permit goes back when the user code returned, not when the caller gave up.
-                drop(permit);
-                let _ = tx.send(result);
-            })
-            .map_err(|e| {
-                internal_error(&format!("a Python source call thread did not start: {e}"))
-            })?;
-        rx.await
-            .map_err(|_| internal_error("a Python source call ended without an answer"))?
-    };
-    wait_for_user_code(
-        Box::pin(work),
-        "planning a Python data source on a current-thread runtime; run the statement on a \
-         multi-thread runtime",
-    )
+    let permit = permits
+        .acquire_owned()
+        .await
+        .map_err(|_| internal_error("the Python source call limit closed"))?;
+    let (tx, rx) = oneshot::channel();
+    std::thread::Builder::new()
+        .name("krishiv-pysrc".to_owned())
+        .spawn(move || {
+            let result = call();
+            // The permit goes back when the user code returned, not when the caller gave up.
+            drop(permit);
+            let _ = tx.send(result);
+        })
+        .map_err(|e| internal_error(&format!("a Python source call thread did not start: {e}")))?;
+    rx.await
+        .map_err(|_| internal_error("a Python source call ended without an answer"))?
 }
 
 fn internal_error(message: &str) -> KrishivError {
@@ -605,8 +612,6 @@ fn internal_error(message: &str) -> KrishivError {
     .into()
 }
 
-/// Waits for `work` (user code that cannot yield), ending with the statement's cancel: see
-/// [`wait_for_analysis`]. `current_thread_refusal` names what is refused on a current-thread runtime.
 fn wait_for_user_code<T>(
     work: futures::future::BoxFuture<'static, Result<T, KrishivError>>,
     current_thread_refusal: &str,
