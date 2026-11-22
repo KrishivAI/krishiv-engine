@@ -1,6 +1,6 @@
 ## __init__.py
 __all__
-__all__ = ['LocalConnect', 'ProfileView', 'SparkConf', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
+__all__ = ['Console', 'LocalConnect', 'ProfileView', 'SparkConf', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
 def build_info() -> dict[str, str]
 def metrics() -> list[dict[str, Any]]
 def session() -> SparkSession
@@ -44,6 +44,13 @@ Column.def sort_order(self, ascending: bool, nulls_first: bool) -> Column
 Column.def sub(self, other: Column) -> Column
 Column.def try_cast(self, to: str) -> Column
 Column.def with_field(self, name: str, value: Column) -> Column
+Console.@property def port(self) -> int
+Console.@property def session_id(self) -> str
+Console.@property def token(self) -> str
+Console.@property def url(self) -> str
+Console.def __new__(cls, session: Session, port: int=...) -> Console
+Console.def is_running(self) -> bool
+Console.def stop(self) -> None
 DataFrame.def agg(self, cols: list[Column]) -> DataFrame
 DataFrame.def alias(self, alias: str) -> DataFrame
 DataFrame.def cache(self) -> DataFrame
@@ -127,6 +134,7 @@ Session.def metrics(self) -> list[dict[str, object]]
 Session.def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None=..., schema_json: str | None=..., schema_ddl: str | None=...) -> DataFrame
 Session.def refresh_files(self) -> None
 Session.def refresh_table(self, name: str) -> None
+Session.def register_python_source(self, label: str, schema: object, read: object) -> DataFrame
 Session.def register_python_udf(self, name: str, eval_type: int, return_type: str, deterministic: bool, thread_safe: bool, wrapper: object) -> int
 Session.def sql(self, query: str) -> DataFrame
 Session.def table(self, name: str) -> DataFrame
@@ -139,10 +147,11 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
-__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'LocalConnectServer', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__commit__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'Console', 'DataFrame', 'GroupedData', 'LocalConnectServer', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__commit__', '__ui__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
 class AnonymousPythonUdf()
 class ArrowStream()
 class Column()
+class Console()
 class DataFrame()
 class GroupedData()
 class LocalConnectServer()
@@ -1390,6 +1399,88 @@ EAGER_DEFAULT_MAX_ROWS
 EAGER_ENABLED_KEY
 EAGER_MAX_ROWS_KEY
 class DataFrame()
+## sql/datasource.py
+CaseInsensitiveDict.def __contains__(self, key: object) -> bool
+CaseInsensitiveDict.def __delitem__(self, key: str) -> None
+CaseInsensitiveDict.def __getitem__(self, key: str) -> Any
+CaseInsensitiveDict.def __init__(self, *args: Any, **kwargs: Any) -> None
+CaseInsensitiveDict.def __setitem__(self, key: str, value: Any) -> None
+CaseInsensitiveDict.def copy(self) -> CaseInsensitiveDict
+CaseInsensitiveDict.def get(self, key: str, default: Any=None) -> Any
+CaseInsensitiveDict.def pop(self, key: str, *default: Any) -> Any
+CaseInsensitiveDict.def setdefault(self, key: str, default: Any=None) -> Any
+CaseInsensitiveDict.def update(self, *args: Any, **kwargs: Any) -> None
+ColumnPath
+DataSource.@classmethod def name(cls) -> str
+DataSource.def __init__(self, options: dict[str, str]) -> None
+DataSource.def reader(self, schema: StructType) -> DataSourceReader
+DataSource.def schema(self) -> StructType | str
+DataSource.def streamReader(self, schema: StructType) -> Any
+DataSource.def streamWriter(self, schema: StructType, overwrite: bool) -> Any
+DataSource.def writer(self, schema: StructType, overwrite: bool) -> DataSourceWriter
+DataSourceReader.@abstractmethod def read(self, partition: InputPartition) -> Iterator[tuple[Any, ...]] | Iterator[Any]
+DataSourceReader.def partitions(self) -> Sequence[InputPartition]
+DataSourceReader.def pushFilters(self, filters: list[Filter]) -> Iterable[Filter]
+DataSourceRegistration.def __init__(self, session: SparkSession) -> None
+DataSourceRegistration.def register(self, dataSource: type[DataSource]) -> None
+DataSourceWriter.@abstractmethod def write(self, iterator: Iterator[Any]) -> WriterCommitMessage
+DataSourceWriter.def abort(self, messages: list[WriterCommitMessage | None]) -> None
+DataSourceWriter.def commit(self, messages: list[WriterCommitMessage | None]) -> None
+EqualNullSafe.attribute: ColumnPath
+EqualNullSafe.value: Any
+EqualTo.attribute: ColumnPath
+EqualTo.value: Any
+GreaterThan.attribute: ColumnPath
+GreaterThan.value: Any
+GreaterThanOrEqual.attribute: ColumnPath
+GreaterThanOrEqual.value: Any
+In.attribute: ColumnPath
+In.value: tuple[Any, ...]
+InputPartition.def __init__(self, value: Any) -> None
+InputPartition.def __repr__(self) -> str
+IsNotNull.attribute: ColumnPath
+IsNull.attribute: ColumnPath
+LessThan.attribute: ColumnPath
+LessThan.value: Any
+LessThanOrEqual.attribute: ColumnPath
+LessThanOrEqual.value: Any
+MAX_BATCH_ROWS
+MAX_SOURCE_BYTES
+Not.child: Filter
+PUSHDOWN_CONF
+StringContains.attribute: ColumnPath
+StringContains.value: str
+StringEndsWith.attribute: ColumnPath
+StringEndsWith.value: str
+StringStartsWith.attribute: ColumnPath
+StringStartsWith.value: str
+__all__
+__all__ = ['CaseInsensitiveDict', 'DataSource', 'DataSourceArrowWriter', 'DataSourceReader', 'DataSourceRegistration', 'DataSourceWriter', 'EqualNullSafe', 'EqualTo', 'Filter', 'GreaterThan', 'GreaterThanOrEqual', 'In', 'InputPartition', 'IsNotNull', 'IsNull', 'LessThan', 'LessThanOrEqual', 'Not', 'StringContains', 'StringEndsWith', 'StringStartsWith', 'WriterCommitMessage']
+class CaseInsensitiveDict(dict)
+class DataSource(ABC)
+class DataSourceArrowWriter(DataSourceWriter)
+class DataSourceReader(ABC)
+class DataSourceRegistration()
+class DataSourceWriter(ABC)
+class EqualNullSafe(Filter)
+class EqualTo(Filter)
+class Filter(ABC)
+class GreaterThan(Filter)
+class GreaterThanOrEqual(Filter)
+class In(Filter)
+class InputPartition()
+class IsNotNull(Filter)
+class IsNull(Filter)
+class LessThan(Filter)
+class LessThanOrEqual(Filter)
+class Not(Filter)
+class StringContains(Filter)
+class StringEndsWith(Filter)
+class StringStartsWith(Filter)
+class WriterCommitMessage()
+def load(session: SparkSession, entry: _Registered, options: dict[str, str], user_schema: Any) -> DataFrame
+def registered(session: SparkSession, name: str) -> _Registered | None
+def save(session: SparkSession, entry: _Registered, df: DataFrame, mode: str, options: dict[str, str]) -> None
 ## sql/functions.py
 __all__
 __all__ = [*_HAND_WRITTEN, *_generated_functions.__all__]
@@ -1605,6 +1696,7 @@ Catalog.def uncacheTable(self, tableName: str) -> None
 SPARK_VERSION
 SparkSession.@property def catalog(self) -> Catalog
 SparkSession.@property def conf(self) -> RuntimeConfig
+SparkSession.@property def dataSource(self) -> DataSourceRegistration
 SparkSession.@property def profile(self) -> Profile
 SparkSession.@property def read(self) -> DataFrameReader
 SparkSession.@property def sparkContext(self) -> Any

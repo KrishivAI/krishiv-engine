@@ -290,6 +290,7 @@ fn staged(
     StagedCommit {
         table: format!("delta.`{name}`"),
         write_id: format!("rt-{name}-{}", uuid_like()),
+        idempotency_key: None,
         operation,
         operation_parameters: parameters
             .iter()

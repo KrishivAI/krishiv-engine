@@ -30,6 +30,7 @@ use krishiv_memory::{Seat, SeatState, SpillSignal};
 use krishiv_types::batch::Batch;
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 
+use super::dml::RowLevelPlan;
 use super::files::{DriverWriter, FileLimits, Plan, Written, delete_files};
 use super::filter::{FilterRefusal, partition_predicate};
 use super::{PREDICATE_TEXT_OPTION, READS_TARGET_OPTION};
@@ -51,6 +52,8 @@ enum Mode {
     Filter(PredicateRef, String),
     /// The files of the partitions written.
     Dynamic,
+    /// A copy-on-write `DELETE` or `UPDATE` ([`super::dml`]).
+    RowLevel(Arc<RowLevelPlan>),
 }
 
 impl Mode {
@@ -142,7 +145,7 @@ impl NewDeltaTable {
         new.engine
             .clone()
             .delta_blocking(move |e| -> Result<(), KrishivError> {
-                match plan_create(e, &new, &write_id, FileLimits::default())? {
+                match plan_create(e, &new, &write_id, None, FileLimits::default())? {
                     Planned::Landed => Ok(()),
                     Planned::Ready { create, .. } => {
                         let txn = take_create(&create)?;
@@ -173,6 +176,7 @@ impl TableProvider for NewDeltaTable {
             target: Target::Create(Arc::clone(&self.table)),
             mode: Mode::Append,
             write_id: write_id(request)?,
+            idempotency_key: request.idempotency_key(),
             reads_target: false,
             limits: RetryLimits::default(),
             files: file_limits(request)?,
@@ -216,7 +220,7 @@ pub(crate) fn writer(
         }
         WriteMode::OverwriteByFilter(filter) => {
             let partitions = table.partition_columns();
-            let pred = partition_predicate(filter, &snapshot.schema(), &partitions).map_err(
+            let pred = partition_predicate(filter, &snapshot.schema(), &partitions, &[]).map_err(
                 |refusal| {
                     let what = match refusal {
                         FilterRefusal::DataColumn(c) => {
@@ -251,19 +255,7 @@ pub(crate) fn writer(
     };
     if mode.removes() {
         let props = snapshot.table_properties();
-        if props.append_only == Some(true) {
-            // delta-spark names a path table `null` here (`tests/fixtures/delta-4.4.1/WRITES.json`).
-            let table_name = if name == hadoop_path(table.engine().table_root()) {
-                "null".to_owned()
-            } else {
-                name
-            };
-            return Err(DeltaCannotModifyAppendOnly {
-                table_name,
-                config: "delta.appendOnly".to_owned(),
-            }
-            .into());
-        }
+        append_only_refusal(table)?;
         if props.enable_change_data_feed == Some(true) {
             return Err(UnsupportedFeatureTableOperation {
                 table_name: request.table_name.clone(),
@@ -279,6 +271,7 @@ pub(crate) fn writer(
         target: Target::Existing(table.clone()),
         mode,
         write_id: write_id(request)?,
+        idempotency_key: request.idempotency_key(),
         reads_target: request
             .options
             .get(READS_TARGET_OPTION)
@@ -286,6 +279,46 @@ pub(crate) fn writer(
         limits,
         files: file_limits(request)?,
     }))
+}
+
+/// `DELTA_CANNOT_MODIFY_APPEND_ONLY` when `table` is append-only (`delta.appendOnly`), as
+/// delta-spark's `DeltaLog.assertRemovable` raises it before a write that removes rows.
+pub(super) fn append_only_refusal(table: &DeltaTable) -> Result<(), KrishivError> {
+    if table.snapshot().table_properties().append_only != Some(true) {
+        return Ok(());
+    }
+    let name = table.name().to_owned();
+    // delta-spark names a path table `null` here (`tests/fixtures/delta-4.4.1/WRITES.json`).
+    let table_name = if name == hadoop_path(table.engine().table_root()) {
+        "null".to_owned()
+    } else {
+        name
+    };
+    Err(DeltaCannotModifyAppendOnly {
+        table_name,
+        config: "delta.appendOnly".to_owned(),
+    }
+    .into())
+}
+
+/// The sink of a copy-on-write row-level change of `table` ([`super::dml`]): the rewritten rows
+/// are written as an overwrite's are, and the commit removes the touched files.
+pub(super) fn row_level_sink(
+    table: &DeltaTable,
+    plan: RowLevelPlan,
+    write_id: String,
+    idempotency_key: Option<String>,
+    limits: RetryLimits,
+) -> Arc<dyn Sink> {
+    Arc::new(DeltaWriteSink {
+        target: Target::Existing(table.clone()),
+        mode: Mode::RowLevel(Arc::new(plan)),
+        write_id,
+        idempotency_key,
+        reads_target: true,
+        limits,
+        files: FileLimits::default(),
+    })
 }
 
 /// The file limits of a write: Delta's `maxRecordsPerFile` write option (`DeltaOptions`, case
@@ -318,6 +351,8 @@ pub struct DeltaWriteSink {
     target: Target,
     mode: Mode,
     write_id: String,
+    /// `krishiv.write.idempotencyKey` (E34).
+    idempotency_key: Option<String>,
     reads_target: bool,
     limits: RetryLimits,
     files: FileLimits,
@@ -343,12 +378,16 @@ struct WriteGlobal {
     target: Target,
     mode: Mode,
     write_id: String,
+    /// `krishiv.write.idempotencyKey` (E34): a create records it in version 0.
+    idempotency_key: Option<String>,
     files: FileLimits,
     planned: OnceCell<Arc<Planned>>,
     /// The writers of the drivers that ended their input.
     writers: Mutex<Vec<Arc<AsyncMutex<DriverWriter>>>>,
     /// A driver's batch failed: the write is abandoned.
     failed: std::sync::atomic::AtomicBool,
+    /// When the sink started (a row-level change's `rewriteTimeMs`).
+    started: std::time::Instant,
 }
 
 impl WriteGlobal {
@@ -380,12 +419,15 @@ impl WriteGlobal {
                 let target = self.target.clone();
                 let mode = self.mode.clone();
                 let write_id = self.write_id.clone();
+                let key = self.idempotency_key.clone();
                 let files = self.files;
                 let planned = self
                     .engine
                     .delta_blocking(move |e| match &target {
                         Target::Existing(table) => plan_existing(e, table, &mode, files),
-                        Target::Create(new) => plan_create(e, new, &write_id, files),
+                        Target::Create(new) => {
+                            plan_create(e, new, &write_id, key.as_deref(), files)
+                        }
                     })
                     .await??;
                 Ok(Arc::new(planned))
@@ -487,10 +529,12 @@ impl Sink for DeltaWriteSink {
             target: self.target.clone(),
             mode: self.mode.clone(),
             write_id: self.write_id.clone(),
+            idempotency_key: self.idempotency_key.clone(),
             files: self.files,
             planned: OnceCell::new(),
             writers: Mutex::new(Vec::new()),
             failed: std::sync::atomic::AtomicBool::new(false),
+            started: std::time::Instant::now(),
         });
         #[cfg(test)]
         super::test_hooks::record(&self.write_id, &global);
@@ -534,6 +578,9 @@ impl Sink for DeltaWriteSink {
         let batch = input.into_parts().0;
         if batch.num_rows() == 0 {
             return Ok(SinkStatus::NeedMoreInput);
+        }
+        if let Mode::RowLevel(plan) = &self.mode {
+            plan.check_rows()?;
         }
         let mut w = Arc::clone(&l.writer)
             .try_lock_owned()
@@ -881,7 +928,7 @@ fn plan_existing(
         .is_some_and(|f| f.iter().any(|f| f.to_string() == "deletionVectors"));
     let check = match mode {
         Mode::Filter(pred, text) => Some((Arc::clone(pred), text.clone(), Arc::clone(&schema))),
-        _ => None,
+        Mode::Append | Mode::Truncate | Mode::Dynamic | Mode::RowLevel(_) => None,
     };
     Ok(Planned::Ready {
         plan: Arc::new(Plan {
@@ -901,13 +948,15 @@ fn plan_existing(
 }
 
 /// The plan of a create: the kernel's `create_table` transaction with the table-features
-/// protocol, carrying the write's id. When the transaction cannot be built because version 0
+/// protocol, carrying the write's id and, for a keyed write, the key's `txn` action (E34: in
+/// version 0 itself, so a retry of the statement on the created table finds it). When the transaction cannot be built because version 0
 /// exists, it is this write's when version 0 carries its id (a retried task: [`Planned::Landed`]),
 /// else `TABLE_OR_VIEW_ALREADY_EXISTS`.
 pub(super) fn plan_create(
     e: &DeltaEngine,
     new: &NewTable,
     write_id: &str,
+    key: Option<&str>,
     files: FileLimits,
 ) -> Result<Planned, KrishivError> {
     let name = new.name.as_str();
@@ -932,7 +981,10 @@ pub(super) fn plan_create(
         )
         .build(e, Box::new(FileSystemCommitter::new()));
     let txn = match built {
-        Ok(txn) => txn,
+        Ok(txn) => match key {
+            Some(k) => txn.with_transaction_id(crate::commit::idempotency_app_id(k), 1),
+            None => txn,
+        },
         Err(err) => {
             return match version_zero(e, name)? {
                 Some(owner) if owner.as_deref() == Some(write_id) => Ok(Planned::Landed),
@@ -1034,11 +1086,29 @@ impl DeltaWriteSink {
         table: &DeltaTable,
         written: Written,
     ) -> Result<(), Failure> {
+        if let Mode::RowLevel(plan) = &self.mode {
+            let orphans = written.paths.clone();
+            let staged =
+                super::dml::stage(&g.engine, g.started, table, plan, written, &self.write_id)
+                    .await?;
+            return match staged {
+                Some(mut staged) => {
+                    staged.idempotency_key.clone_from(&self.idempotency_key);
+                    self.commit_staged(g, table, staged, orphans).await
+                }
+                None => {
+                    // Nothing changed: no commit, as delta-spark's `commitIfNeeded`.
+                    g.release_writers();
+                    Ok(())
+                }
+            };
+        }
         let engine = &g.engine;
         let name = table.name().to_owned();
         let snapshot = Arc::clone(table.snapshot());
         let partitions = table.partition_columns();
         let predicate: Option<Option<PredicateRef>> = match &self.mode {
+            Mode::RowLevel(_) => return Err(Failure::NotCommitted(internal("a row-level mode"))),
             Mode::Append => None,
             Mode::Truncate => Some(None),
             Mode::Filter(pred, _) => Some(Some(Arc::clone(pred))),
@@ -1060,7 +1130,7 @@ impl DeltaWriteSink {
         match &self.mode {
             Mode::Append => read_set.whole_table = self.reads_target,
             // Truncate and dynamic overwrite remove what they find anywhere in the table.
-            Mode::Truncate | Mode::Dynamic => read_set.whole_table = true,
+            Mode::Truncate | Mode::Dynamic | Mode::RowLevel(_) => read_set.whole_table = true,
             Mode::Filter(pred, _) => {
                 read_set.predicates.push(Arc::clone(pred));
                 read_set.whole_table = self.reads_target;
@@ -1120,9 +1190,11 @@ impl DeltaWriteSink {
             g.release_writers();
             return Ok(());
         }
+        let written_paths = written.paths.clone();
         let staged = StagedCommit {
             table: name.clone(),
             write_id: self.write_id.clone(),
+            idempotency_key: self.idempotency_key.clone(),
             operation: CommitOperation::Write,
             operation_parameters: parameters,
             operation_metrics: metrics,
@@ -1130,10 +1202,30 @@ impl DeltaWriteSink {
             removes,
             read_set,
         };
+        self.commit_staged(g, table, staged, written_paths).await
+    }
+
+    /// Commits `staged` on the snapshot the statement read, then starts a checkpoint when one
+    /// is due. The writers are let go first: from here their files stay (the commit may land).
+    async fn commit_staged(
+        &self,
+        g: &WriteGlobal,
+        table: &DeltaTable,
+        staged: StagedCommit,
+        orphans: Vec<object_store::path::Path>,
+    ) -> Result<(), Failure> {
+        let engine = &g.engine;
+        let name = table.name().to_owned();
+        let snapshot = Arc::clone(table.snapshot());
         g.release_writers();
         let committed = commit(engine, snapshot, staged, self.limits)
             .await
             .map_err(Failure::Unknown)?;
+        if committed.deduplicated {
+            // An earlier attempt of this statement committed: this one's files are orphans.
+            delete_files(engine, &orphans).await;
+            return Ok(());
+        }
         let interval = table
             .snapshot()
             .table_properties()
@@ -1240,6 +1332,36 @@ pub(super) fn select_removes(
         }
     }
     Ok((out, files, bytes))
+}
+
+/// Every scan metadata batch of `snapshot`'s live files, with its selection, given to `f` as
+/// the listing goes (nothing is kept here).
+pub(super) fn for_each_scan_batch(
+    e: &DeltaEngine,
+    snapshot: &SnapshotRef,
+    name: &str,
+    mut f: impl FnMut(RecordBatch, Vec<bool>) -> Result<(), KrishivError>,
+) -> Result<(), KrishivError> {
+    let kernel = |err: &delta_kernel::KernelError| from_kernel(err, name);
+    let scan = Arc::clone(snapshot)
+        .scan_builder()
+        .with_cancellation_token(e.kernel_cancellation())
+        .build()
+        .map_err(|err| kernel(&err))?;
+    for metadata in scan.scan_metadata(e).map_err(|err| kernel(&err))? {
+        let (data, selection) = metadata
+            .map_err(|err| kernel(&err))?
+            .scan_files
+            .into_parts();
+        let batch = KrishivEngineData::from_engine_data(data)
+            .map_err(|err| kernel(&err))?
+            .into_batch();
+        let selection: Vec<bool> = (0..batch.num_rows())
+            .map(|i| selection.get(i).copied().unwrap_or(true))
+            .collect();
+        f(batch, selection)?;
+    }
+    Ok(())
 }
 
 /// An overwrite predicate evaluated exactly over scan rows' partition values.

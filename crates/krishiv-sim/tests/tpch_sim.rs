@@ -757,6 +757,7 @@ fn write_on_two_workers(fault: Option<Fault>) -> (Vec<String>, Vec<String>) {
                 target_file_bytes: 0,
                 partition_by: Vec::new(),
                 column_types: BTreeMap::new(),
+                bucket: None,
             })?;
             let mut files = Vec::new();
             for b in batches(11, &coordinator, &write, &worker, &pool, 1).await? {

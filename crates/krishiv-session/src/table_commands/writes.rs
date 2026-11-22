@@ -37,12 +37,16 @@ impl Session {
             && !self.temp_entry_of(name, env)
         {
             if table.view.is_none() {
-                // INSERT writes through the Delta writer (`delta_writes.rs`); the other writes are
-                // refused by name (a read command never reaches here as a write).
+                // INSERT writes through the Delta writer (`delta_writes.rs`), DELETE and UPDATE
+                // through its row-level table (`row_level.rs`); the other writes are refused by
+                // name (a read command never reaches here as a write).
                 #[cfg(feature = "delta")]
                 if access == Access::Write
                     && is_delta_table(&table)
-                    && !matches!(operation, "INSERT" | "INSERT OVERWRITE")
+                    && !matches!(
+                        operation,
+                        "INSERT" | "INSERT OVERWRITE" | "DELETE" | "UPDATE TABLE"
+                    )
                 {
                     return Err(delta_write_refused(name.quoted(), operation));
                 }
@@ -64,13 +68,21 @@ impl Session {
                 env.analysis.conf.case_sensitive,
             );
         if self.temp_entry_of(name, env) || global {
+            // A temporary view is named as written (a global one without a catalog).
+            let view_name = name.written.clone();
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
                 operation: operation.to_owned(),
-                view_name: name.quoted(),
+                view_name,
             }
             .into());
         }
-        Err(name.not_found())
+        // ALTER TABLE resolves a table only, so its path has no `system.builtin` (Spark's goldens).
+        let path = if matches!(operation, "ALTER TABLE" | "COMMENT ON TABLE") {
+            self.table_search_path()
+        } else {
+            self.search_path()
+        };
+        Err(name.not_found(path))
     }
 
     /// `INSERT INTO|OVERWRITE [TABLE] name [(columns)] [BY NAME] query`, or the multi-table
@@ -98,6 +110,12 @@ impl Session {
             let env = self.query_env();
             for clause in &clauses {
                 let name = self.table_name(&clause.name, &env)?;
+                if clause.replace_where.is_some()
+                    || clause.replace_on.is_some()
+                    || clause.replace_using.is_some()
+                {
+                    self.refuse_replace_into_view(&name, &env)?;
+                }
                 self.table_for_write(&name, "INSERT", &env)?;
             }
             for clause in &clauses {
@@ -110,6 +128,28 @@ impl Session {
         self.empty_frame().await
     }
 
+    /// Spark checks the target before the capability of a `REPLACE` write: a view is not writable at all.
+    fn refuse_replace_into_view(
+        &self,
+        name: &TableName,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let permanent_view = self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some_and(|t| t.view.is_some())
+            && !self.temp_entry_of(name, env);
+        if permanent_view {
+            return Err(krishiv_common::error::ViewWriteNotAllowed {
+                name: name.quoted(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
     /// `c` checked through to the rows it would write (`dry`), or written.
     pub(super) async fn insert_clause(
         &self,
@@ -119,11 +159,22 @@ impl Session {
         dry: bool,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
-        if c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some() {
-            return Err(unsupported("INSERT ... REPLACE"));
-        }
+        let replace =
+            c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some();
         let name = self.table_name(&c.name, &env)?;
+        if replace {
+            self.refuse_replace_into_view(&name, &env)?;
+        }
         let table = self.table_for_write(&name, "INSERT", &env)?;
+        if replace {
+            // A session-catalog table has no replace-by-condition write (Spark: the table lacks the capability).
+            let operation = if c.replace_where.is_some() {
+                "INSERT INTO ... REPLACE WHERE"
+            } else {
+                "INSERT INTO ... REPLACE ON/USING"
+            };
+            return Err(table_operation(&name, operation));
+        }
         let statics = match &c.partition {
             None => Vec::new(),
             Some(spec) => {
@@ -423,8 +474,8 @@ impl Session {
         name: &TableName,
         spec: &V2WriteSpec,
     ) -> Result<(), KrishivError> {
-        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
-            return Err(unsupported("partitioned tables"));
+        if !spec.cluster_by.is_empty() {
+            return Err(unsupported("clustered tables"));
         }
         self.warehouse_dir()?;
         self.provider_of(spec.provider.clone())?;
@@ -455,8 +506,9 @@ impl Session {
     /// table is created from the DataFrame's schema (an existing one in
     /// `errorifexists` mode fails with `TABLE_OR_VIEW_ALREADY_EXISTS`),
     /// `ignore` leaves an existing table alone, `append` adds the rows by
-    /// column name (names that do not match the table's, a format other than
-    /// its, or a `partition_by` fail with `KRISHIV_UNSUPPORTED_FEATURE`), and
+    /// column name (a view, another format, a different column count or names,
+    /// partitioning or bucketing fail with Spark's `_LEGACY_ERROR_TEMP_1158`
+    /// to `_LEGACY_ERROR_TEMP_1164`, checked in Spark's order), and
     /// `overwrite` drops the table and creates it again, after the checks that
     /// can refuse the new table and the `UNSUPPORTED_OVERWRITE.TABLE` check
     /// (a query that reads the table it replaces); a temporary view of the
@@ -486,20 +538,30 @@ impl Session {
                 // Asked first, as `insertInto` does: what is reported about a table the caller
                 // may not write must not depend on its metadata.
                 self.authorize_table_write(&name, false, &env).await?;
-                let table = self.table_for_write(&name, "INSERT", &env)?;
-                // Spark refuses an append whose format or partitioning differs
-                // from the table's.
-                if !spec.partitioned_by.is_empty() {
-                    return Err(unsupported("partitioned tables"));
-                }
-                if spec
-                    .provider
-                    .as_deref()
-                    .is_some_and(|p| !p.eq_ignore_ascii_case(&table.provider))
+                // `Saving data into a view is not allowed.`
+                if self
+                    .state
+                    .catalog
+                    .store
+                    .table(&name.namespace, &name.name)
+                    .is_some_and(|t| t.view.is_some())
+                    && !self.temp_entry_of(&name, &env)
                 {
-                    return Err(unsupported(
-                        "saveAsTable append with a format other than the table's",
-                    ));
+                    return Err(krishiv_common::error::LegacyErrorTemp1158 {}.into());
+                }
+                let table = self.table_for_write(&name, "INSERT", &env)?;
+                // Spark refuses an append whose format, schema, partitioning or bucketing differs from
+                // the table's (`PreprocessTableCreation`), in this order: 1159, 1161, 1162, 1163, 1164.
+                // The writer's source is compared always: a writer that names none uses
+                // `spark.sql.sources.default`.
+                let asked_provider = self.written_provider(spec.provider.clone());
+                if !asked_provider.eq_ignore_ascii_case(&table.provider) {
+                    return Err(krishiv_common::error::LegacyErrorTemp1159 {
+                        table_name: spark_name(&name),
+                        existing_provider: datasource_class(&table.provider),
+                        specified_provider: datasource_class(&asked_provider),
+                    }
+                    .into());
                 }
                 let schema = df.schema().await?;
                 let case_sensitive = env.analysis.conf.case_sensitive;
@@ -510,6 +572,48 @@ impl Session {
                         a.eq_ignore_ascii_case(b)
                     }
                 };
+                let list = |v: Vec<&str>| v.join(", ");
+                let same_names = |want: &[&str], have: &[String]| {
+                    want.len() == have.len() && want.iter().zip(have).all(|(w, h)| same(w, h))
+                };
+                let schema_text = |fields: Vec<(String, String)>| {
+                    format!(
+                        "struct<{}>",
+                        fields
+                            .into_iter()
+                            .map(|(n, t)| format!("{n}:{t}"))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                };
+                if table.columns.len() != schema.fields().len() {
+                    return Err(krishiv_common::error::LegacyErrorTemp1161 {
+                        table_name: spark_name(&name),
+                        existing_table_schema: schema_text(
+                            table
+                                .columns
+                                .iter()
+                                .map(|c| (c.name.clone(), c.data_type.simple_string()))
+                                .collect(),
+                        ),
+                        query_schema: schema_text(
+                            schema
+                                .fields()
+                                .iter()
+                                .map(|f| {
+                                    (
+                                        f.name().clone(),
+                                        krishiv_types::DataType::from_arrow_field(f).map_or_else(
+                                            |_| f.data_type().to_string(),
+                                            |t| t.simple_string(),
+                                        ),
+                                    )
+                                })
+                                .collect(),
+                        ),
+                    }
+                    .into());
+                }
                 let mut order = Vec::with_capacity(table.columns.len());
                 for c in &table.columns {
                     let mut hits = schema
@@ -522,10 +626,79 @@ impl Session {
                         _ => break,
                     }
                 }
-                if order.len() != table.columns.len() || order.len() != schema.fields().len() {
-                    return Err(unsupported(
-                        "saveAsTable append with column names that differ from the table's",
-                    ));
+                if order.len() != table.columns.len() {
+                    // The first table column no query column carries by name.
+                    let missing = table.columns[order.len()].name.clone();
+                    return Err(krishiv_common::error::LegacyErrorTemp1162 {
+                        col: missing,
+                        input_columns: schema
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    }
+                    .into());
+                }
+                let asked_parts: Vec<&str> =
+                    spec.partitioned_by.iter().map(String::as_str).collect();
+                // A Delta append that names no partitioning takes the table's own.
+                #[cfg(feature = "delta")]
+                let infer_parts = asked_parts.is_empty() && is_delta_table(&table);
+                #[cfg(not(feature = "delta"))]
+                let infer_parts = false;
+                if !infer_parts && !same_names(&asked_parts, &table.layout.partition_columns) {
+                    return Err(krishiv_common::error::LegacyErrorTemp1163 {
+                        table_name: spark_name(&name),
+                        specified_part_cols: list(asked_parts),
+                        existing_part_cols: table.layout.partition_columns.join(", "),
+                    }
+                    .into());
+                }
+                // Bucketing is compared as options: an append with no `bucketBy` into a bucketed
+                // table is refused, as is a bucketed one into a plain table (`BucketSpec.toString`).
+                let asked_bucket: Option<(u64, Vec<&str>, Vec<&str>)> =
+                    spec.bucket.as_ref().map(|a| {
+                        (
+                            a.buckets,
+                            a.clustered_by.iter().map(|c| c.value.as_str()).collect(),
+                            a.sorted_by.iter().map(|c| c.name.value.as_str()).collect(),
+                        )
+                    });
+                let same_bucket = match (&asked_bucket, &table.layout.bucket) {
+                    (None, None) => true,
+                    (Some((n, cols, sorts)), Some(b)) => {
+                        *n == b.num_buckets
+                            && same_names(cols, &b.columns)
+                            && same_names(sorts, &b.sort_columns)
+                    }
+                    _ => false,
+                };
+                if !same_bucket {
+                    let text = |n: u64, c: &[&str], s: &[&str]| {
+                        let sort = if s.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", sort columns: [{}]", s.join(", "))
+                        };
+                        format!("{n} buckets, bucket columns: [{}]{sort}", c.join(", "))
+                    };
+                    return Err(krishiv_common::error::LegacyErrorTemp1164 {
+                        table_name: spark_name(&name),
+                        specified_bucket_string: asked_bucket
+                            .as_ref()
+                            .map_or_else(|| "not bucketed".to_owned(), |(n, c, s)| text(*n, c, s)),
+                        existing_bucket_string: table.layout.bucket.as_ref().map_or_else(
+                            || "not bucketed".to_owned(),
+                            |b| {
+                                let c: Vec<&str> = b.columns.iter().map(String::as_str).collect();
+                                let s: Vec<&str> =
+                                    b.sort_columns.iter().map(String::as_str).collect();
+                                text(b.num_buckets, &c, &s)
+                            },
+                        ),
+                    }
+                    .into());
                 }
                 // Built directly: a name with dots or a star is one plain column.
                 let by_name = df.select(order.iter().map(|h| {
@@ -550,6 +723,13 @@ impl Session {
             {
                 // delta-spark's v1 overwrite of a Delta table is a data overwrite (design 4.1).
                 self.authorize_table_write(&name, false, &env).await?;
+                // A Delta table has no bucketing: refuse before the overwrite truncates it.
+                if spec.bucket.is_some() {
+                    return Err(super::delta::delta_write_refused(
+                        spark_name(&name),
+                        "bucketBy",
+                    ));
+                }
                 let table = self.table_for_write(&name, "INSERT OVERWRITE", &env)?;
                 self.delta_save_as_table_overwrite(df, &table, &spec.options)
                     .await?;
@@ -584,11 +764,36 @@ impl Session {
                 self.validate_new_table(&name, &spec)?;
                 // The write refuses an indeterminate string column: not after the drop.
                 crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
+                // The requested partition and bucket columns must exist in the new output:
+                // `create_table_from` would refuse them, but only after the drop.
+                crate::partitions::table_layout(
+                    &name,
+                    &mut crate::char_write::output_columns(&analysis.analyzed, Some(true)),
+                    &spec.partitioned_by,
+                    spec.bucket.as_ref(),
+                    env.analysis.conf.case_sensitive,
+                )?;
                 // What the write itself would refuse (a format the engine does not
                 // write, duplicate output columns, options the format rejects) must
                 // not come after the drop.
                 let provider = self.provider_of(spec.provider.clone())?;
                 let schema = df.schema().await?;
+                // A bucket column the write cannot hash (a MAP, inside or not) is refused here, not
+                // after the drop.
+                if let Some(b) = &spec.bucket {
+                    for c in &b.clustered_by {
+                        let field = schema
+                            .fields()
+                            .iter()
+                            .find(|f| f.name().eq_ignore_ascii_case(&c.value));
+                        if field.is_some_and(|f| arrow_type_has_map(f.data_type())) {
+                            return Err(unsupported(&format!(
+                                "bucketing by the MAP column {}",
+                                c.value
+                            )));
+                        }
+                    }
+                }
                 self.check_write_ready(&provider, &spec.options, &schema, &env)?;
                 // The write asks the policy about the table's directory, in the form
                 // `write_files` asks it (`locate_write_path`), and the create refuses
@@ -696,8 +901,9 @@ impl Session {
     /// is `CREATE TABLE name AS SELECT` over `df` (one code path, a failed
     /// write leaves no table), `Append` is `INSERT INTO name` by position.
     /// `Replace` and `CreateOrReplace` fail as `REPLACE TABLE AS SELECT` does
-    /// on file-source tables; overwrites and partitioned or clustered tables
-    /// are unsupported, as in `INSERT` and `CREATE TABLE`.
+    /// on file-source tables; overwrites and clustered tables are unsupported,
+    /// as in `INSERT` and `CREATE TABLE`. A partitioned table is created as `CREATE TABLE ... PARTITIONED BY`
+    /// creates one.
     pub(crate) async fn exec_write_v2(
         &self,
         df: &DataFrame,
@@ -733,12 +939,8 @@ impl Session {
             }
             V2Mode::Create => {}
         }
-        #[cfg(feature = "delta")]
-        let delta = spec.provider.as_deref().is_some_and(crate::delta::handles);
-        #[cfg(not(feature = "delta"))]
-        let delta = false;
-        if (!spec.partitioned_by.is_empty() && !delta) || !spec.cluster_by.is_empty() {
-            return Err(unsupported("partitioned tables"));
+        if !spec.cluster_by.is_empty() {
+            return Err(unsupported("clustered tables"));
         }
         let warehouse = self.warehouse_dir()?;
         let provider_written = self.written_provider(spec.provider.clone());
@@ -760,6 +962,8 @@ impl Session {
         }
         let mut options = BTreeMap::new();
         for (k, v) in &spec.options {
+            // The idempotency key travels with the creation write (`create_table_from` strips it
+            // before the table is stored: it belongs to this one write, never to the table).
             // Table metadata is stored as plain text: a secret never is.
             let Some(text) = v.as_plain() else {
                 return Err(unsupported("secret table options"));
@@ -786,22 +990,17 @@ impl Session {
             data_version: 0,
             stamp: 0,
         };
-        let partition_by = if delta {
-            spec.partitioned_by.clone()
-        } else {
-            Vec::new()
-        };
         let layout = LayoutRequest {
-            partition_by: &partition_by,
-            bucket: None,
+            partition_by: &spec.partitioned_by,
+            bucket: spec.bucket.as_ref(),
         };
         self.create_table_from(table, df, CreateMode::ErrorIfExists, &layout, pre)
             .await
     }
 
     /// Writes `df` to the files of `table` with the writer's save `mode`, in partition directories when the
-    /// table is partitioned, and returns the partition directories written. Bucketed files are not written:
-    /// a bucketed table refuses the write.
+    /// table is partitioned, and returns the partition directories written. A bucketed table's rows go to
+    /// one file per bucket (`table_writer`).
     pub(super) async fn write_table_rows(
         &self,
         table: &CatalogTable,
@@ -835,4 +1034,35 @@ enum Access {
     Read,
     /// Writes or changes it.
     Write,
+}
+
+/// Whether an Arrow type is or contains a map (which the bucket hash cannot take).
+fn arrow_type_has_map(t: &arrow_schema::DataType) -> bool {
+    use arrow_schema::DataType as T;
+    match t {
+        T::Map(..) => true,
+        T::List(f) | T::LargeList(f) | T::FixedSizeList(f, _) => arrow_type_has_map(f.data_type()),
+        T::Struct(fs) => fs.iter().any(|f| arrow_type_has_map(f.data_type())),
+        _ => false,
+    }
+}
+
+/// The class name Spark's `_LEGACY_ERROR_TEMP_1159` prints for a provider (observed on Spark 4.3.0:
+/// `ParquetDataSourceV2`, `JsonDataSourceV2`); a provider without a known class prints as written.
+fn datasource_class(provider: &str) -> String {
+    match provider.to_ascii_lowercase().as_str() {
+        "parquet" => "ParquetDataSourceV2".to_owned(),
+        "json" => "JsonDataSourceV2".to_owned(),
+        "csv" => "CSVDataSourceV2".to_owned(),
+        "orc" => "OrcDataSourceV2".to_owned(),
+        "text" => "TextDataSourceV2".to_owned(),
+        "avro" => "AvroFileFormat".to_owned(),
+        "delta" => "DeltaDataSource".to_owned(),
+        _ => provider.to_owned(),
+    }
+}
+
+/// The table's name as Spark prints it in `_LEGACY_ERROR_TEMP` parameters (`unquotedString`).
+fn spark_name(name: &TableName) -> String {
+    format!("spark_catalog.{}.{}", name.namespace, name.name)
 }

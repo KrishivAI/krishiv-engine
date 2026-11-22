@@ -31,7 +31,8 @@ futures = { workspace = true, features = ["alloc", "executor"] }
 [features]
 # ICU collations are on by default (ADR 0043 decision 5; +1.7% binary size); turn off with default-features = false.
 default = ["collations-icu"]
-# Strictly additive (ADR 0027). Forwarded to crates as they gain code.
+# Strictly additive (ADR 0027). Forwarded to crates as they gain code. The empty ones
+# (kafka .. mimalloc, celeborn) are reserved names, documented as such in the crate docs.
 kafka = []
 iceberg = []
 delta = ["krishiv-session/delta"]
@@ -41,7 +42,8 @@ flight-sql = []
 mcp = []
 python = []
 wasm-udf = []
-ui = ["dep:krishiv-server"]
+# The web console: `krishiv::ui(&session)` serves it from this process; `krishiv::server` is the server crate.
+ui = ["dep:krishiv-server", "krishiv-server/session"]
 celeborn = []
 collations-icu = ["krishiv-session/collations-icu"]
 mimalloc = []

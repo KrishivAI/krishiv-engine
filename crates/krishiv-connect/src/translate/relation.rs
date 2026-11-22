@@ -14,15 +14,16 @@ use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
-    ALIAS_PART_SEP, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan,
-    Origin, PlanId, PlanNode, ReadSource, SampleBounds, SetOperation, SqlArgs, UnpivotColumnSet,
+    ALIAS_PART_SEP, Builtin, CastMode, ColumnNamesOp, Expr, ExprNode, Grouping, JoinCondition,
+    JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode, ReadSource, SampleBounds,
+    SetOperation, SqlArgs, UnpivotColumnSet,
 };
 
 use super::errors::{
-    assertion, invalid_enum, not_set, relation_not_set, unsupported, unsupported_field,
-    unsupported_variant,
+    assertion, expression_not_set, invalid_enum, not_set, relation_not_set, unsupported,
+    unsupported_field, unsupported_variant,
 };
-use super::names::parse_multipart_identifier;
+use super::names::{parse_attribute_name, parse_multipart_identifier};
 use super::{Result, Translator};
 use crate::extension::{Extension, Slot, resolve};
 use crate::proto::v4_3::{self as pb, Expression};
@@ -79,6 +80,11 @@ impl Translator<'_> {
                 input: self.input("Offset", o.input.as_deref())?,
                 offset: Arc::new(Expr::literal(Literal::Integer(o.offset))),
             },
+            // A negative count is the analyzer's `INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE`.
+            RelType::Tail(t) => PlanNode::Tail {
+                input: self.input("Tail", t.input.as_deref())?,
+                limit: Arc::new(Expr::literal(Literal::Integer(t.limit))),
+            },
             RelType::Aggregate(a) => self.aggregate(a)?,
             RelType::SubqueryAlias(a) => PlanNode::SubqueryAlias {
                 input: self.input("SubqueryAlias", a.input.as_deref())?,
@@ -101,6 +107,12 @@ impl Translator<'_> {
                     })
                 })?))
             }
+            RelType::Catalog(c) => {
+                let call = super::catalog::catalog_call(c)?;
+                PlanNode::Read(ReadSource::Local(
+                    self.local_relation(|| Ok(super::LocalRequest::Catalog(call)))?,
+                ))
+            }
             RelType::CachedRemoteRelation(c) => {
                 self.conf.cached_remote.record(&c.relation_id);
                 PlanNode::Read(ReadSource::Table {
@@ -120,8 +132,56 @@ impl Translator<'_> {
                 name: h.name.clone(),
                 params: self.expressions(&h.parameters)?,
             },
+            RelType::Cov(c) => {
+                self.stat_pair("StatCov", c.input.as_deref(), &c.col1, &c.col2, "cov")?
+            }
+            RelType::Corr(c) => {
+                if let Some(m) = c.method.as_deref()
+                    && m != "pearson"
+                {
+                    return Err(unsupported_field(
+                        "StatCorr",
+                        "method",
+                        "a correlation method other than pearson",
+                    ));
+                }
+                self.stat_pair("StatCorr", c.input.as_deref(), &c.col1, &c.col2, "corr")?
+            }
+            RelType::SampleBy(s) => self.sample_by(s)?,
+            RelType::FillNa(n) => self.na_fill(n)?,
+            RelType::Replace(n) => self.na_replace(n)?,
+            RelType::DropNa(n) => {
+                // A count of 0 or less keeps every row, as `AtLeastNNonNulls(0 or less)` does.
+                let min = n.min_non_nulls.map(|m| m.max(0).unsigned_abs());
+                PlanNode::ColumnNames {
+                    input: self.input("NaDrop", n.input.as_deref())?,
+                    op: ColumnNamesOp::DropNa {
+                        subset: n.cols.clone(),
+                        min_non_nulls: min,
+                    },
+                }
+            }
+            RelType::Repartition(r) => PlanNode::Hint {
+                input: self.input("Repartition", r.input.as_deref())?,
+                // Spark's own hint forms: `repartition(n)` is `REPARTITION(n)`, and
+                // `coalesce(n)` (shuffle false, or unset: the field is `optional bool`, default false,
+                // read with `getShuffle`) is `COALESCE(n)`. Rows pass through.
+                name: if r.shuffle.unwrap_or(false) {
+                    "REPARTITION"
+                } else {
+                    "COALESCE"
+                }
+                .to_owned(),
+                params: vec![Arc::new(Expr::literal(Literal::Integer(r.num_partitions)))],
+            },
             RelType::RepartitionByExpression(r) => self.repartition_by_expression(r)?,
             RelType::Unpivot(u) => self.unpivot(u)?,
+            RelType::ToDf(t) => PlanNode::ColumnNames {
+                input: self.input("ToDF", t.input.as_deref())?,
+                op: ColumnNamesOp::ToDf(t.column_names.clone()),
+            },
+            RelType::WithColumnsRenamed(w) => self.with_columns_renamed(w)?,
+            RelType::Drop(d) => self.drop_columns(d)?,
             RelType::Extension(any) => match resolve(any, Slot::Relation)? {
                 // One row, one string column: `SELECT '<message>' AS message`.
                 Extension::Echo(echo) => PlanNode::Project {
@@ -177,6 +237,147 @@ impl Translator<'_> {
                 upper: s.upper_bound,
             },
             seed: s.seed,
+        })
+    }
+
+    /// `StatSampleBy`: Spark's `DataFrameStatFunctions.sampleBy` keeps a row when
+    /// `rand(seed) < fractions.getOrElse(stratum, 0.0)`, drawing the random number for every row.
+    /// Lowered to `Filter(rand(seed) < CASE WHEN col = k1 THEN f1 ... ELSE 0.0 END)` so the draw
+    /// is not skipped for unmatched strata. A NULL stratum matches nothing (fraction 0.0). A
+    /// fraction outside [0, 1] is refused (Spark's classless `require`). A stratum listed twice
+    /// keeps the last fraction (Spark's `Map`). The stratum is compared with SQL `=` (numeric
+    /// coercion); whether Spark's boxed lookup matches an Int stratum to a Long column the same
+    /// way is not verified against a real Spark run.
+    fn sample_by(&mut self, s: &pb::StatSampleBy) -> Result<PlanNode> {
+        let input = self.input("StatSampleBy", s.input.as_deref())?;
+        let column = self.required_expression(s.col.as_ref())?;
+        if s.fractions
+            .iter()
+            .any(|f| !(0.0..=1.0).contains(&f.fraction))
+        {
+            return Err(assertion("Fractions must be in [0, 1]"));
+        }
+        let mut branches: Vec<Expr> = Vec::new();
+        // `CASE` takes the first match, so walking the pairs backwards keeps the last of a repeated stratum.
+        for f in s.fractions.iter().rev() {
+            let stratum = f.stratum.as_ref().ok_or_else(expression_not_set)?;
+            let key = self.literal_expression(stratum)?;
+            branches.push(Expr::function(
+                Builtin::Eq.name(),
+                vec![(*column).clone(), (*key).clone()],
+            ));
+            branches.push(Expr::literal(Literal::Double(f.fraction)));
+        }
+        branches.push(Expr::literal(Literal::Double(0.0)));
+        let fraction = Expr::function(Builtin::When.name(), branches);
+        let draw = match s.seed {
+            Some(seed) => Expr::function("rand", vec![Expr::literal(Literal::Long(seed))]),
+            None => Expr::function("rand", Vec::new()),
+        };
+        Ok(PlanNode::Filter {
+            input,
+            predicate: Arc::new(Expr::function(Builtin::Lt.name(), vec![draw, fraction])),
+        })
+    }
+
+    /// `StatCov` and `StatCorr`: Spark's `StatFunctions.calculateCov` / `pearsonCorrelation`, which
+    /// read each NULL as 0.0 (a Spark 4.0 run: `(1,2),(NULL,3),(3,7),(4,NULL)` gives cov -1/3), and
+    /// answer one never-NULL double row: `cov` 0.0 and `corr` NaN below two rows. Lowered to
+    /// `coalesce(covar_samp | corr (coalesce(cast(c as double), 0.0)), 0.0 | NaN)`. The cast is
+    /// ANSI, so a value that is not a number is an error, never 0.0. Recorded differences: Spark
+    /// refuses every non-numeric column by type (`require(NumericType)`), the translator sees no
+    /// types, so a STRING column of numbers is answered here; and a zero-variance `corr` is NaN
+    /// where Spark 4.0 under ANSI raises DIVIDE_BY_ZERO.
+    fn stat_pair(
+        &mut self,
+        message: &str,
+        input: Option<&Relation>,
+        col1: &str,
+        col2: &str,
+        name: &str,
+    ) -> Result<PlanNode> {
+        let input = self.input(message, input)?;
+        // Each argument is an attribute reference (`t.x`, `` `a.b` ``), parsed as `UnresolvedAttribute`.
+        let zero_filled = |c: &str| -> Result<Expr> {
+            Ok(Expr::function(
+                "coalesce",
+                vec![
+                    Expr::new(ExprNode::Cast {
+                        expr: Arc::new(Expr::column(parse_attribute_name(c)?)),
+                        to: krishiv_types::DataType::Double,
+                        mode: CastMode::Ansi,
+                    }),
+                    Expr::literal(Literal::Double(0.0)),
+                ],
+            ))
+        };
+        let (left, right) = (zero_filled(col1)?, zero_filled(col2)?);
+        let (func, default) = if name == "cov" {
+            ("covar_samp", 0.0)
+        } else {
+            ("corr", f64::NAN)
+        };
+        let value = Expr::function(
+            "coalesce",
+            vec![
+                Expr::function(func, vec![left, right]),
+                Expr::literal(Literal::Double(default)),
+            ],
+        )
+        .alias(name);
+        Ok(PlanNode::Aggregate {
+            input,
+            grouping: Grouping::GroupBy(Vec::new()),
+            aggregates: vec![Arc::new(value)],
+        })
+    }
+
+    /// `NAFill`: Spark's `transformFillNa`. No values, or several values that don't pair with
+    /// the columns, are `CONNECT_INVALID_PLAN` errors; the type each value fills is decided by
+    /// the analyzer, which knows the columns' types.
+    fn na_fill(&mut self, n: &pb::NaFill) -> Result<PlanNode> {
+        use krishiv_common::error::{
+            ConnectInvalidPlanNaFillValuesEmpty, ConnectInvalidPlanNaFillValuesLengthMismatch,
+        };
+        if n.values.is_empty() {
+            return Err(ConnectInvalidPlanNaFillValuesEmpty {}.into());
+        }
+        if n.values.len() > 1 && n.values.len() != n.cols.len() {
+            return Err(ConnectInvalidPlanNaFillValuesLengthMismatch {}.into());
+        }
+        let values = n
+            .values
+            .iter()
+            .map(|l| self.literal_expression(l))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(PlanNode::ColumnNames {
+            input: self.input("NaFill", n.input.as_deref())?,
+            op: ColumnNamesOp::FillNa {
+                cols: n.cols.clone(),
+                values,
+            },
+        })
+    }
+
+    /// `NAReplace`: Spark's `transformReplace`; an empty replacement list leaves the input as it is.
+    /// The columns each pair reaches are decided by the analyzer, which knows their types.
+    fn na_replace(&mut self, n: &pb::NaReplace) -> Result<PlanNode> {
+        let mut pairs = Vec::with_capacity(n.replacements.len() * 2);
+        for r in &n.replacements {
+            let (Some(old), Some(new)) = (&r.old_value, &r.new_value) else {
+                return Err(assertion(
+                    "NAReplace.Replacement needs old_value and new_value",
+                ));
+            };
+            pairs.push(self.literal_expression(old)?);
+            pairs.push(self.literal_expression(new)?);
+        }
+        Ok(PlanNode::ColumnNames {
+            input: self.input("NaReplace", n.input.as_deref())?,
+            op: ColumnNamesOp::Replace {
+                cols: n.cols.clone(),
+                pairs,
+            },
         })
     }
 
@@ -240,6 +441,73 @@ impl Translator<'_> {
         Ok(PlanNode::Repartition {
             input: self.input("RepartitionByExpression", r.input.as_deref())?,
             exprs: self.expressions(&r.partition_exprs)?,
+        })
+    }
+
+    /// `WithColumnsRenamed`: the `renames` list, or the older `rename_columns_map` when the list is
+    /// empty (Spark's own fallback). Names that match no column are ignored, as Spark does.
+    /// Spark applies the map in the order of the decoded Java map, which is wire order and is
+    /// lost once the message is decoded, so a map whose result depends on the order is refused.
+    fn with_columns_renamed(&mut self, w: &pb::WithColumnsRenamed) -> Result<PlanNode> {
+        let pairs = if w.renames.is_empty() {
+            let keys: Vec<String> = w
+                .rename_columns_map
+                .keys()
+                .map(|k| k.to_lowercase())
+                .collect();
+            // A new name equal to *another* entry's key makes the result depend on order; equal
+            // to its own key (`a -> a`, `name -> Name`) it cannot.
+            let ordered = w.rename_columns_map.iter().all(|(from, to)| {
+                let (from, to) = (from.to_lowercase(), to.to_lowercase());
+                from == to || !keys.contains(&to)
+            }) && keys.iter().enumerate().all(|(i, k)| !keys[..i].contains(k));
+            if !ordered {
+                return Err(unsupported_field(
+                    "WithColumnsRenamed",
+                    "rename_columns_map",
+                    "a map whose result depends on the order of its entries (a new name equal to \
+                     another key, or two keys equal ignoring case); use the renames list",
+                ));
+            }
+            w.rename_columns_map
+                .iter()
+                .map(|(from, to)| (from.clone(), to.clone()))
+                .collect()
+        } else {
+            w.renames
+                .iter()
+                .map(|r| (r.col_name.clone(), r.new_col_name.clone()))
+                .collect()
+        };
+        Ok(PlanNode::ColumnNames {
+            input: self.input("WithColumnsRenamed", w.input.as_deref())?,
+            op: ColumnNamesOp::Rename(pairs),
+        })
+    }
+
+    /// `Drop` by name, or by column expressions that are plain one-part column names (resolved
+    /// over the input, so an ambiguous one is an error as in Spark). A qualified column or one
+    /// tied to a DataFrame (`df["a"]`) drops by attribute in Spark and is refused.
+    fn drop_columns(&mut self, d: &pb::Drop) -> Result<PlanNode> {
+        let names = d.column_names.clone();
+        let mut columns = Vec::new();
+        for e in self.expressions(&d.columns)? {
+            match &e.node {
+                ExprNode::Column(c) if c.name.len() == 1 && c.plan_id.is_none() => {
+                    columns.push(c.name[0].clone());
+                }
+                _ => {
+                    return Err(unsupported_field(
+                        "Drop",
+                        "columns",
+                        "dropping a column expression that is not a plain column name",
+                    ));
+                }
+            }
+        }
+        Ok(PlanNode::ColumnNames {
+            input: self.input("Drop", d.input.as_deref())?,
+            op: ColumnNamesOp::Drop { names, columns },
         })
     }
 

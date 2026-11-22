@@ -538,30 +538,250 @@ pub(crate) fn parse_date(s: &[u8]) -> Option<i32> {
     i32::try_from(days).ok()
 }
 
-/// Of the two shortest decimals around a tie — the truncation `head` and
-/// `head + 1` in the last digit — the one with an even last digit, given the
-/// odd one `odd` a formatter picked; `true` when rounding up carried into a
-/// new leading digit.
-fn even_neighbour(head: &str, odd: &str) -> (String, bool) {
-    if head != odd {
-        return (head.to_owned(), false);
-    }
-    let mut up: Vec<u8> = head.bytes().collect();
-    for d in up.iter_mut().rev() {
-        if *d == b'9' {
-            *d = b'0';
+/// Java's shortest decimal of a float (`Double.toString` / `Float.toString`, JDK 19+): the value is
+/// `digits x 10^(exp - len + 1)`, `digits` has `len` digits and may end in zeros. For zero, `digits` is 0 and `len` 1; `negative` keeps the sign of `-0.0`. NaN and the
+/// infinities have none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Shortest {
+    pub(crate) negative: bool,
+    pub(crate) digits: u64,
+    pub(crate) len: u32,
+    pub(crate) exp: i64,
+}
+
+impl Shortest {
+    /// The value rounded `HALF_UP` to `scale` decimals as an unscaled integer (as
+    /// [`BigDec::to_scale`] of its text), or `None` when that does not fit in 128 bits.
+    pub(crate) fn to_scale(self, scale: u8) -> Option<i128> {
+        let len = i64::from(self.len);
+        let shift = self
+            .exp
+            .checked_add(i64::from(scale))?
+            .checked_sub(len)?
+            .checked_add(1)?;
+        let digits = i128::from(self.digits);
+        let v = if shift >= 0 {
+            let mut v = digits;
+            for _ in 0..shift {
+                v = v.checked_mul(10)?;
+            }
+            v
+        } else if shift.unsigned_abs() > u64::from(self.len) {
+            0
         } else {
-            *d += 1;
-            return (String::from_utf8(up).unwrap_or_default(), false);
+            let drop = u32::try_from(shift.unsigned_abs()).ok()?;
+            let div = i128::from(pow10_u64(drop)?);
+            let half = div.checked_div(10)?.checked_mul(5)?;
+            let (q, r) = (digits.checked_div(div)?, digits.checked_rem(div)?);
+            if r >= half { q.checked_add(1)? } else { q }
+        };
+        Some(if self.negative { v.checked_neg()? } else { v })
+    }
+}
+
+/// A stack buffer for one `{:e}` rendering (at most 17 digits, a point, a sign and an exponent).
+struct ExpBuf {
+    bytes: [u8; 48],
+    used: usize,
+}
+
+impl std::fmt::Write for ExpBuf {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let end = self.used.checked_add(s.len()).ok_or(std::fmt::Error)?;
+        self.bytes
+            .get_mut(self.used..end)
+            .ok_or(std::fmt::Error)?
+            .copy_from_slice(s.as_bytes());
+        self.used = end;
+        Ok(())
+    }
+}
+
+/// The sign, digits, digit count and exponent of a `{:e}` / `{:.1e}` rendering.
+fn read_exp(text: &[u8]) -> Option<(bool, u64, u32, i64)> {
+    let (negative, text) = match text.split_first() {
+        Some((b'-', rest)) => (true, rest),
+        _ => (false, text),
+    };
+    let e = text.iter().position(|&b| b == b'e')?;
+    let (mant, exp) = text.split_at(e);
+    let (mut digits, mut len) = (0_u64, 0_u32);
+    for &b in mant.iter().filter(|b| b.is_ascii_digit()) {
+        digits = digits
+            .checked_mul(10)?
+            .checked_add(u64::from(b.wrapping_sub(b'0')))?;
+        len = len.checked_add(1)?;
+    }
+    let exp = std::str::from_utf8(exp.get(1..)?).ok()?.parse().ok()?;
+    Some((negative, digits, len, exp))
+}
+
+/// The exact value of a finite `v` as `n x 10^e` with `n` holding no trailing zero, when `n` has at
+/// most 18 digits (a tie between two shortest decimals of at most 17 digits needs no more); `None`
+/// otherwise.
+fn exact_decimal(v: f64) -> Option<(u64, i64)> {
+    const LIMIT: u64 = 1_000_000_000_000_000_000;
+    let bits = v.to_bits();
+    let field = i64::try_from((bits >> 52) & 0x7ff).ok()?;
+    let frac = bits & ((1_u64 << 52).wrapping_sub(1));
+    let (mut m, mut q) = if field == 0 {
+        (frac, -1074_i64)
+    } else {
+        (frac | (1_u64 << 52), field.wrapping_sub(1075))
+    };
+    if m == 0 {
+        return Some((0, 0));
+    }
+    let tz = m.trailing_zeros();
+    m >>= tz;
+    q = q.wrapping_add(i64::from(tz));
+    let (mut n, mut e) = if q >= 0 {
+        // 2^60 > 10^18: a larger shift has more digits.
+        let shift = u32::try_from(q).ok().filter(|&s| s < 60)?;
+        (m.checked_shl(shift).filter(|&n| n >> shift == m)?, 0_i64)
+    } else {
+        // m x 2^q = m x 5^-q x 10^q; 5^26 > 10^18, so a longer one has more digits.
+        let j = u32::try_from(q.unsigned_abs()).ok().filter(|&j| j <= 25)?;
+        (m.checked_mul(5_u64.checked_pow(j)?)?, q)
+    };
+    while n % 10 == 0 {
+        n /= 10;
+        e = e.wrapping_add(1);
+    }
+    (n < LIMIT).then_some((n, e))
+}
+
+/// `10^k` for `k <= 19`.
+fn pow10_u64(k: u32) -> Option<u64> {
+    10_u64.checked_pow(k)
+}
+
+/// The shortest decimal of a double that is a short decimal (`12.34`, `0.001`), without a formatter:
+/// the least `k` for which `c = round(|v| x 10^k)` reads back as `|v|` (`c / 10^k` is correctly
+/// rounded: `c < 2^53` and `10^k` are exact), when no neighbour `c +- 1` reads back too (then `c` is the
+/// one shortest decimal, so no tie). `None` sends the value to the formatter.
+///
+/// The least `k` is never skipped for a longer one: when some `c'` at `k'` reads back, `|v| x 10^k'` is
+/// within `x x 2^-53` of it and the product rounds by at most half an ulp, so `round` misses `c'` only
+/// for `x >= 2^51`; then `x x 10 >= 2^53` at the next `k` and the value goes to the formatter.
+fn short_decimal(v: f64) -> Option<(u64, u32, i64)> {
+    const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    const POW10: [f64; 18] = [
+        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+        1e17,
+    ];
+    let a = v.abs();
+    // Below 1e-5 Java's two-digit rule and subnormals come into play.
+    if !(1e-5..EXACT).contains(&a) {
+        return None;
+    }
+    for (k, &p) in (0_u32..).zip(POW10.iter()) {
+        let x = a * p;
+        if x >= EXACT {
+            return None;
+        }
+        let r = x.round();
+        if r / p == a {
+            let below = r - 1.0;
+            let above = r + 1.0;
+            if below / p == a || above / p == a {
+                return None;
+            }
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "r is a non-negative integer below 2^53"
+            )]
+            let c = r as u64;
+            let len = c.checked_ilog10()?.checked_add(1)?;
+            let exp = i64::from(len).wrapping_sub(1).wrapping_sub(i64::from(k));
+            return Some((c, len, exp));
         }
     }
-    up.insert(0, b'1');
-    (String::from_utf8(up).unwrap_or_default(), true)
+    None
+}
+
+/// [`Shortest`] of a finite `v`; `None` for NaN and the infinities.
+pub(crate) fn java_shortest<F: std::fmt::LowerExp + Copy + Into<f64>>(v: F) -> Option<Shortest> {
+    use std::fmt::Write as _;
+    let wide: f64 = v.into();
+    if !wide.is_finite() {
+        return None;
+    }
+    let render = |two: bool| {
+        let mut buf = ExpBuf {
+            bytes: [0; 48],
+            used: 0,
+        };
+        let ok = if two {
+            write!(buf, "{v:.1e}")
+        } else {
+            write!(buf, "{v:e}")
+        };
+        ok.ok()?;
+        read_exp(buf.bytes.get(..buf.used)?)
+    };
+    if size_of::<F>() == size_of::<f64>()
+        && let Some((digits, len, exp)) = short_decimal(wide)
+    {
+        return Some(Shortest {
+            negative: wide.is_sign_negative(),
+            digits,
+            len,
+            exp,
+        });
+    }
+    let (negative, mut digits, mut len, mut exp) = render(false)?;
+    if digits == 0 {
+        return Some(Shortest {
+            negative,
+            digits: 0,
+            len: 1,
+            exp: 0,
+        });
+    }
+    // Java picks the closest decimal of at least two digits: when the shortest has one (5e-324), the
+    // correctly rounded two-digit one (4.9e-324) is at least as close, so it also round-trips.
+    if len == 1 {
+        (_, digits, len, exp) = render(true)?;
+    }
+    // Of two equally close shortest decimals Java takes the even one; the shortest-digits formatter may
+    // pick the odd one. A tie means the exact value has one digit more than the shortest, a 5.
+    if digits % 2 == 1 {
+        match exact_decimal(wide) {
+            // More than 18 exact digits: never a tie (a shortest has at most 17).
+            None => {}
+            Some((n, e)) => {
+                let exact_len = n.checked_ilog10().map_or(1, |l| l.wrapping_add(1));
+                let first = e.wrapping_add(i64::from(exact_len)).wrapping_sub(1);
+                if exact_len == len.wrapping_add(1) && n % 10 == 5 && first == exp {
+                    let head = n / 10;
+                    let even = if head % 2 == 0 {
+                        head
+                    } else {
+                        head.checked_add(1)?
+                    };
+                    if Some(even) == pow10_u64(len) {
+                        digits = pow10_u64(len.wrapping_sub(1))?;
+                        exp = exp.wrapping_add(1);
+                    } else {
+                        digits = even;
+                    }
+                }
+            }
+        }
+    }
+    Some(Shortest {
+        negative,
+        digits,
+        len,
+        exp,
+    })
 }
 
 /// Java's `Double.toString` / `Float.toString` (JDK 19+: shortest
 /// digits): plain for `1e-3 <= |v| < 1e7`, else `d.dddE[-]n`.
-pub(crate) fn java_float_string<F: std::fmt::LowerExp + Copy>(
+pub(crate) fn java_float_string<F: std::fmt::LowerExp + Copy + Into<f64>>(
     v: F,
     nan: bool,
     inf: Option<bool>,
@@ -572,48 +792,27 @@ pub(crate) fn java_float_string<F: std::fmt::LowerExp + Copy>(
     if let Some(neg) = inf {
         return if neg { "-Infinity" } else { "Infinity" }.to_owned();
     }
-    // Java picks the closest decimal of at least two digits: when the
-    // shortest has one (5e-324), the correctly rounded two-digit one
-    // (4.9e-324) is at least as close, so it also round-trips.
-    let mut e = format!("{v:e}");
-    if e.split_once('e')
-        .is_some_and(|(m, _)| m.trim_start_matches('-').len() == 1)
-    {
-        e = format!("{v:.1e}");
-    }
-    let (mant, exp) = e.split_once('e').unwrap_or((&e, "0"));
-    let exp: i64 = exp.parse().unwrap_or(0);
-    let (sign, mant) = mant.strip_prefix('-').map_or(("", mant), |m| ("-", m));
-    let mut digits: String = mant.chars().filter(char::is_ascii_digit).collect();
-    if digits.bytes().all(|b| b == b'0') {
+    let Some(Shortest {
+        negative,
+        digits,
+        exp,
+        ..
+    }) = java_shortest(v)
+    else {
+        // Unreachable: `java_shortest` is `None` only for NaN and the infinities, handled above (and a
+        // `{:e}` rendering always fits its buffer and reads back).
+        return "NaN".to_owned();
+    };
+    let sign = if negative { "-" } else { "" };
+    if digits == 0 {
         return format!("{sign}0.0");
     }
-    let mut exp = exp;
-    // Of two equally close shortest decimals Java takes the even one; the
-    // shortest-digits formatter may pick the odd one. A tie means the exact
-    // value ends in a single 5 right after the last digit.
-    if digits.bytes().last().is_some_and(|d| d % 2 == 1) {
-        let exact = format!("{v:.766e}");
-        let exact: String = exact
-            .split('e')
-            .next()
-            .unwrap_or_default()
-            .chars()
-            .filter(char::is_ascii_digit)
-            .collect();
-        let n = digits.len();
-        let (head, tail) = exact.split_at(n.min(exact.len()));
-        if tail.starts_with('5') && tail.bytes().skip(1).all(|b| b == b'0') {
-            let (even, carry) = even_neighbour(head, &digits);
-            digits = even;
-            exp += i64::from(carry);
-        }
-    }
+    let digits = digits.to_string();
     let digits = digits.trim_end_matches('0');
     if (-3..7).contains(&exp) {
-        let point = exp + 1;
+        let point = exp.wrapping_add(1);
         if point <= 0 {
-            let zeros = "0".repeat(usize::try_from(-point).unwrap_or(0));
+            let zeros = "0".repeat(usize::try_from(point.unsigned_abs()).unwrap_or(0));
             return format!("{sign}0.{zeros}{digits}");
         }
         let p = usize::try_from(point).unwrap_or(0);
@@ -635,6 +834,101 @@ pub(crate) fn java_float_string<F: std::fmt::LowerExp + Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Of the two shortest decimals around a tie — the truncation `head` and
+    /// `head + 1` in the last digit — the one with an even last digit, given the
+    /// odd one `odd` a formatter picked; `true` when rounding up carried into a
+    /// new leading digit.
+    fn even_neighbour(head: &str, odd: &str) -> (String, bool) {
+        if head != odd {
+            return (head.to_owned(), false);
+        }
+        let mut up: Vec<u8> = head.bytes().collect();
+        for d in up.iter_mut().rev() {
+            if *d == b'9' {
+                *d = b'0';
+            } else {
+                *d += 1;
+                return (String::from_utf8(up).unwrap_or_default(), false);
+            }
+        }
+        up.insert(0, b'1');
+        (String::from_utf8(up).unwrap_or_default(), true)
+    }
+
+    /// The former rendering (a 766-digit exact print for every odd last digit), kept as the oracle of
+    /// [`java_float_string`]: Java's `Double.toString` / `Float.toString` (JDK 19+: shortest
+    /// digits): plain for `1e-3 <= |v| < 1e7`, else `d.dddE[-]n`.
+    fn reference_java_float_string<F: std::fmt::LowerExp + Copy>(
+        v: F,
+        nan: bool,
+        inf: Option<bool>,
+    ) -> String {
+        if nan {
+            return "NaN".to_owned();
+        }
+        if let Some(neg) = inf {
+            return if neg { "-Infinity" } else { "Infinity" }.to_owned();
+        }
+        // Java picks the closest decimal of at least two digits: when the
+        // shortest has one (5e-324), the correctly rounded two-digit one
+        // (4.9e-324) is at least as close, so it also round-trips.
+        let mut e = format!("{v:e}");
+        if e.split_once('e')
+            .is_some_and(|(m, _)| m.trim_start_matches('-').len() == 1)
+        {
+            e = format!("{v:.1e}");
+        }
+        let (mant, exp) = e.split_once('e').unwrap_or((&e, "0"));
+        let exp: i64 = exp.parse().unwrap_or(0);
+        let (sign, mant) = mant.strip_prefix('-').map_or(("", mant), |m| ("-", m));
+        let mut digits: String = mant.chars().filter(char::is_ascii_digit).collect();
+        if digits.bytes().all(|b| b == b'0') {
+            return format!("{sign}0.0");
+        }
+        let mut exp = exp;
+        // Of two equally close shortest decimals Java takes the even one; the
+        // shortest-digits formatter may pick the odd one. A tie means the exact
+        // value ends in a single 5 right after the last digit.
+        if digits.bytes().last().is_some_and(|d| d % 2 == 1) {
+            let exact = format!("{v:.766e}");
+            let exact: String = exact
+                .split('e')
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect();
+            let n = digits.len();
+            let (head, tail) = exact.split_at(n.min(exact.len()));
+            if tail.starts_with('5') && tail.bytes().skip(1).all(|b| b == b'0') {
+                let (even, carry) = even_neighbour(head, &digits);
+                digits = even;
+                exp += i64::from(carry);
+            }
+        }
+        let digits = digits.trim_end_matches('0');
+        if (-3..7).contains(&exp) {
+            let point = exp + 1;
+            if point <= 0 {
+                let zeros = "0".repeat(usize::try_from(-point).unwrap_or(0));
+                return format!("{sign}0.{zeros}{digits}");
+            }
+            let p = usize::try_from(point).unwrap_or(0);
+            let int: String = digits
+                .chars()
+                .chain(std::iter::repeat('0'))
+                .take(p)
+                .collect();
+            let frac = digits.get(p..).filter(|f| !f.is_empty()).unwrap_or("0");
+            return format!("{sign}{int}.{frac}");
+        }
+        let (first, rest) = digits.split_at(1);
+        format!(
+            "{sign}{first}.{}E{exp}",
+            if rest.is_empty() { "0" } else { rest }
+        )
+    }
 
     #[test]
     fn integral_strings_match_spark() {
@@ -880,6 +1174,83 @@ mod tests {
         ] {
             assert_eq!(d(bad), None, "{bad:?}");
         }
+    }
+
+    /// A xorshift sequence of bit patterns: every exponent, so subnormals, huge values and the
+    /// money-sized values of a decimal cast all appear.
+    fn bit_patterns(seed: u64, n: usize) -> impl Iterator<Item = u64> {
+        let mut x = seed;
+        (0..n).map(move |_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        })
+    }
+
+    /// Doubles a decimal cast meets: cents and other short decimals, read as Java reads them.
+    fn short_decimals() -> impl Iterator<Item = f64> {
+        bit_patterns(7, 30_000).map(|b| {
+            let cents = (b % 2_000_000_000) as f64 - 1e9;
+            let scale = [1.0, 10.0, 100.0, 1000.0, 1e6][(b >> 40) as usize % 5];
+            cents / scale
+        })
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "hundreds of thousands of 766-digit renderings")]
+    fn float_strings_match_the_former_rendering() {
+        let old =
+            |v: f64| reference_java_float_string(v, v.is_nan(), v.is_infinite().then_some(v < 0.0));
+        let new = |v: f64| java_float_string(v, v.is_nan(), v.is_infinite().then_some(v < 0.0));
+        let mut edges = vec![
+            0.0,
+            -0.0,
+            5e-324,
+            -5e-324,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            0.5,
+            9.5,
+        ];
+        edges.extend((0..=60).map(|k| 2_f64.powi(k)));
+        edges.extend((-30..=30).map(|k| 10_f64.powi(k)));
+        edges.extend((0..2000).map(|k| f64::from(k) / 8.0 + 0.5));
+        edges.push(f64::from_bits(0x4311_5417_2198_6fdd));
+        edges.push(f64::from_bits(0xc30a_3881_8007_86aa));
+        let random = bit_patterns(0x9e37_79b9_7f4a_7c15, 60_000).map(f64::from_bits);
+        for v in edges.into_iter().chain(random).chain(short_decimals()) {
+            assert_eq!(new(v), old(v), "{:#x}", v.to_bits());
+        }
+        for b in bit_patterns(0x1234_5678, 60_000) {
+            let f = f32::from_bits(u32::try_from(b >> 32).unwrap());
+            let (nan, inf) = (f.is_nan(), f.is_infinite().then_some(f < 0.0));
+            assert_eq!(
+                java_float_string(f, nan, inf),
+                reference_java_float_string(f, nan, inf),
+                "{:#x}",
+                f.to_bits()
+            );
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "hundreds of thousands of 766-digit renderings")]
+    fn shortest_to_scale_matches_the_text_path() {
+        let random = bit_patterns(0x51_7cc1_b727_220a, 30_000).map(f64::from_bits);
+        for v in random.chain(short_decimals()).filter(|v| v.is_finite()) {
+            let text = reference_java_float_string(v, false, None);
+            let fast = java_shortest(v).unwrap();
+            for scale in [0_u8, 1, 2, 3, 6, 10, 18, 38] {
+                let want = parse_decimal(&text)
+                    .unwrap()
+                    .to_scale(scale)
+                    .and_then(i256::to_i128);
+                assert_eq!(fast.to_scale(scale), want, "{text} at scale {scale}");
+            }
+        }
+        assert_eq!(java_shortest(f64::NAN), None);
+        assert_eq!(java_shortest(f64::NEG_INFINITY), None);
     }
 
     #[test]

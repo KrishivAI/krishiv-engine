@@ -363,6 +363,13 @@ result is first analyzed (its first action, or the first call that needs its sch
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
 
+## A second catalog, `system`, next to `spark_catalog`
+
+`SHOW CATALOGS` lists `spark_catalog` and `system`. `system` is Krishiv's own catalog of introspection tables
+(`system.capabilities`, `system.caches`, `system.queries`, `system.metrics`, among others); Spark has no such catalog and
+lists only `spark_catalog`. A declared catalog (`krishiv.catalog.<name>.*`, or Spark's `spark.sql.catalog.<name>`) appears in the list as well. The names
+`spark_catalog`, `system`, `delegation` and `vended` cannot be used for a declared catalog.
+
 ## `remote("local")` is not supported
 
 In Spark 4.3, `SparkSession.builder.remote("local")` starts a JVM `SparkContext` with the Connect plugin and
@@ -618,7 +625,53 @@ Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-
   never raised.
 - **Refused.** `replaceWhere` on data columns, schema evolution (`mergeSchema`), `overwriteSchema`
   on an existing table and every replace (RTAS, `REPLACE TABLE`, `createOrReplace`) are refused by
-  name.
+  name. A `replaceWhere` or `INSERT OVERWRITE` filter must name partition columns by one-part names:
+  a qualified name (`t.p`) and a struct field (`s.p`, a data column for delta-spark) are refused, and
+  so is a string compared with a `TIMESTAMP` partition column, which delta-spark casts in
+  `spark.sql.session.timeZone` (Krishiv's filter translation does not know the zone yet).
+
+`DELETE` and `UPDATE` of a Delta table (copy-on-write, `src/write/dml.rs`) leave the rows, the
+command's `num_affected_rows` and the files removed that delta-spark leaves
+(`tests/fixtures/delta-4.4.1/dml/DML.json`; Spark reads the tables back, `dml/krishiv-written/`).
+They differ in:
+
+- **Predicate text.** `operationParameters.predicate` holds the condition as written, in
+  parentheses (`["(id = 2)"]`); delta-spark prints Catalyst's form with expression ids
+  (`["(id#1231L = 2)"]`). Without a condition both write `["true"]` (`DELETE`) and `[]`
+  (`UPDATE`).
+- **Deletion vectors.** Krishiv never writes them: on a table with
+  `delta.enableDeletionVectors = true` delta-spark marks deleted and updated rows in deletion
+  vectors (its default); Krishiv rewrites the files. The rows are the same.
+- **Files per partition.** A rewrite writes one file per partition per driver; delta-spark one per
+  partition per task.
+- **Whole-file deletes.** A `DELETE` removes whole files without rewriting them only when its
+  condition is a comparison, `IN` or `IS [NOT] NULL` of partition columns with literals (combined
+  by `AND`, `OR`, `NOT`); delta-spark also takes other expressions of partition columns. Other
+  conditions rewrite (the same rows go, with a rewrite's metrics). A column qualified by the
+  statement's alias counts (`x.p`); a struct field (`s.p`) and a string compared with a
+  `TIMESTAMP` partition column (Spark casts it in the session time zone) make the statement a
+  rewrite. A partition file with no live row is removed only when its statistics prove it
+  (`numRecords` less its deletion vector's cardinality); delta-spark removes every file of the
+  matching partitions.
+- **Partition-only `UPDATE`.** An `UPDATE` whose condition names only partition columns rewrites
+  the files that hold a matching row; delta-spark rewrites every file of the matching partitions,
+  which differs only for files with no live row.
+- **Read predicates.** The conflict check reads by the condition's top-level `AND` conjuncts that
+  translate as partition predicates, and every live file they select is a read file (as
+  delta-spark's `filterFiles`); delta-spark also takes partition-only conjuncts of other forms,
+  which Krishiv reads as the whole table (a concurrent append to any partition conflicts).
+- **Subqueries.** A condition with a subquery is refused with `DELTA_UNSUPPORTED_SUBQUERY` before
+  anything runs, as delta-spark does; its `cond` parameter is the condition as written, where
+  delta-spark prints Catalyst's SQL of the resolved condition. `delete.allowExistsSubquery`
+  (delta-spark's internal flag admitting `EXISTS` in a `DELETE`) is not read.
+- **Write errors.** An error raised while the rewrite writes its rows is `TASK_WRITE_FAILED` (the
+  table's root) caused by the error, as Spark's writer raises it; an overflow of the stored value's
+  cast is `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE`, naming the first assigned column whose new value's
+  type casts to the overflowing type. Krishiv's own refusals, conflicts, internal errors and
+  cancellations stay unwrapped.
+- **Refused.** On a table with the change data feed on, `UPDATE` and a `DELETE` that rewrites rows
+  are refused (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written: Krishiv writes no
+  change data files yet. A `DELETE` of whole partitions commits. `MERGE` is refused by name.
 
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 
@@ -629,3 +682,15 @@ both forms, so a sketch written by one engine can be estimated or unioned by the
 `length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
 `hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
 (`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.
+
+## Pattern matching over collated strings (`LIKE`, `RLIKE`)
+
+`LIKE` and `ILIKE` over a `UTF8_LCASE` string match as Spark does, character by character in Java's case folding
+(final sigma, `ſ`, `ı`, `İ` and `µ` match their case partners), with or without an `ESCAPE` clause. The value
+operand's collation alone decides: `'Ab' LIKE 'a%' COLLATE UTF8_LCASE` is false, as in Spark. Spark 4.0.0 differs
+from 4.1 to 4.3 for `'ſ' ILIKE 'S'` over a column (false on 4.0); Krishiv follows 4.1 to 4.3. Still refused with a
+`KRISHIV_UNSUPPORTED_FEATURE` error that names the call: `LIKE` over `UTF8_LCASE_RTRIM`, `LIKE` over an ICU collation
+(Spark itself raises `DATATYPE_MISMATCH` there), `RLIKE` and the `regexp_*` family, and the `LIKE ANY`/`ALL` forms.
+Krishiv never matches such strings by bytes.
+
+Two smaller differences in `UTF8_LCASE` `LIKE`: case folding uses Rust's Unicode tables, which are newer than the JDK 17/21 tables Spark runs on, so a case pair added after Unicode 15 matches in Krishiv and not in Spark; and a malformed pattern (invalid or trailing escape) is reported with the case-folded pattern text, where Spark reports it as written. Java's matching is one-directional for a few characters (the pattern `ß` matches only `ß`, the pattern `ẞ` matches both), which a folded comparison cannot express: the value `ẞ` against the pattern `ß` matches in Krishiv and not in Spark.

@@ -62,6 +62,20 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+      # First step, before the checkout: the runner's disk filled during the job (#947's own run,
+      # 2026-11-21 15:06 UTC: "No space left on device" writing the runner's diag log), and an instrumented
+      # build of a wide change (many dependent packages) needs most of what is free (2026-11-04: ENOSPC at
+      # the link with 41 GB free after the first cleanup). Drop the preinstalled toolchains and container
+      # images this job never uses (about 25-30 GB). No third-party action.
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" \
+            /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium \
+            /opt/microsoft /opt/az /usr/lib/google-cloud-sdk /usr/lib/mono /usr/local/julia* /usr/local/graalvm
+          if command -v docker > /dev/null; then sudo docker image prune --all --force > /dev/null || true; fi
+          df -h /
       # Check out the PR head, not the merge commit: the diff's line numbers
       # (base...head) must match the tree that produces the LCOV report.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,28 +110,20 @@ jobs:
           # xtask runs the gate, so it needs cargo for either language.
           if [ "$rust" = true ] || [ "$bench" = true ]; then echo "cargo=true" >> "$GITHUB_OUTPUT"; else echo "cargo=false" >> "$GITHUB_OUTPUT"; fi
           echo "Rust-relevant changes: $rust, bench changes: $bench"
-      # The instrumented build of a wide change (many dependent packages) can fill
-      # the runner's disk (2026-11-04: "No space left on device" at the link with 41 GB free after
-      # the first cleanup). Drop preinstalled toolchains this job never uses.
-      - name: Free runner disk
-        if: steps.changes.outputs.rust == 'true'
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
-            /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/boost \
-            /opt/microsoft /opt/az /usr/lib/google-cloud-sdk /usr/lib/mono /usr/local/julia* /usr/local/graalvm \
-            /opt/hostedtoolcache/Java_* /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy
-          # The image's preinstalled container images (this job runs none).
-          if command -v docker > /dev/null; then sudo docker image prune --all --force > /dev/null || true; fi
-          df -h /
       - name: Toolchain (from rust-toolchain.toml)
         if: steps.changes.outputs.cargo == 'true'
         run: rustup show active-toolchain
       - name: llvm-tools
         if: steps.changes.outputs.rust == 'true'
         run: rustup component add llvm-tools-preview
+      # Registry and git sources only, no `target/`: this workflow never runs on main, so a
+      # saved target restores only into the same PR's next run, and saving the instrumented
+      # build filled the runner's disk at the post-job save on 2026-11-21 (#933, #927, #937,
+      # #940: the gate passed, then `zstd: error 70`, 96 MB free).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.changes.outputs.cargo == 'true'
+        with:
+          cache-targets: "false"
       - uses: $/.github/actions/setup-mold
         if: steps.changes.outputs.cargo == 'true'
       # Which packages to test: see the comment at the top of this file.
@@ -164,6 +170,12 @@ jobs:
           # runner's disk on 2026-11-14 (#734, 3.5 GB free) and filled it on #743.
           CARGO_PROFILE_DEV_DEBUG: "false"
           CARGO_PROFILE_TEST_DEBUG: "false"
+          # No symbol tables either: llvm-cov reads the coverage map and profile names, not
+          # `.symtab`. A wide PR's instrumented build is ~105 GB in `debug/deps` and passing runs ended
+          # under 1 GB free (2026-11-21: #933, #951, #955 died with ENOSPC in this step). Stripping cut
+          # a krishiv-common test binary 28% (28.2 -> 20.2 MB) with identical SF/DA/LH/LF records.
+          CARGO_PROFILE_DEV_STRIP: symbols
+          CARGO_PROFILE_TEST_STRIP: symbols
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
           KRISHIV_UDF_POOL_REQUIRED: "1"
         run: |
@@ -207,3 +219,11 @@ jobs:
           flags: rust,pr
           use_oidc: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           fail_ci_if_error: false
+      # Last step, before the post-job cache save: drop the pooled profiles and the
+      # instrumented build, so that save (and the runner's own log upload) has disk.
+      - name: Free coverage artifacts
+        if: always() && steps.scope.outputs.rust == 'true'
+        run: |
+          find target/llvm-cov-target -maxdepth 1 -name '*.profraw' -delete 2> /dev/null || true
+          rm -rf target/llvm-cov-target
+          df -h /

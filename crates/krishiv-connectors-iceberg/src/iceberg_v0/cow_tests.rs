@@ -23,7 +23,7 @@ use iceberg::spec::{
 use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::planner::{RowLevelOperation, RowLevelTable, RowLevelWrite, TableProvider};
-use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown};
+use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown, Sink};
 use krishiv_types::batch::Batch;
 use krishiv_types::{DataType, StructField, StructType};
 
@@ -39,7 +39,7 @@ use super::sink_tests::{
 use crate::plan::{DELETE_FILE_PATH_ID, DELETE_FILE_POS_ID, encode_dv};
 
 /// A provider whose scan is `0`.
-pub(super) struct Over(Arc<dyn ScanPushdown>);
+pub(super) struct Over(pub(super) Arc<dyn ScanPushdown>);
 
 impl std::fmt::Debug for Over {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -236,6 +236,76 @@ impl<'a> Dml<'a> {
             &format!("SELECT {} FROM t", self.select_list(Some((&hit, value)))),
             Vec::new(),
         )
+    }
+
+    /// A merge-on-read statement: the rows `select` gives over the whole snapshot (ending with
+    /// the row id) into the rewriter, which recognizes them by the row id columns.
+    pub(super) fn merge_on_read(&self, select: &str) -> Result<(), KrishivError> {
+        let (sink, schema, batches) = self.mor_parts(select);
+        let input = Arc::new(PerDriver {
+            schema,
+            batches,
+            stall: false,
+        });
+        run(self.env, sink?, input, None).0
+    }
+
+    /// The rewriter of a merge-on-read statement (or its refusal), with the schema and the rows
+    /// `select` gives; the tests of the sink run them their own way.
+    pub(super) fn mor_parts(
+        &self,
+        select: &str,
+    ) -> (
+        Result<Arc<dyn Sink>, KrishivError>,
+        SchemaRef,
+        Vec<RecordBatch>,
+    ) {
+        let mut batches = self.query(self.table.scan().unwrap(), select);
+        let schema = batches.first().map_or_else(
+            || {
+                let mut f: Vec<_> = input_schema().fields().iter().cloned().collect();
+                f.push(Arc::new(arrow_schema::Field::new(
+                    ROW_FILE_COLUMN,
+                    A::BinaryView,
+                    false,
+                )));
+                f.push(Arc::new(arrow_schema::Field::new(
+                    ROW_POSITION_COLUMN,
+                    A::Int64,
+                    false,
+                )));
+                Arc::new(Schema::new(f))
+            },
+            RecordBatch::schema,
+        );
+        if batches.is_empty() {
+            batches.push(RecordBatch::new_empty(Arc::clone(&schema)));
+        }
+        let mut request =
+            RowLevelWrite::new(self.op, "`db`.`t`", Arc::clone(&schema), Vec::new(), None);
+        request.write_id = Some(format!("dml-{}", super::sink::unique_u64()));
+        let sink = self.table.rewriter(&request);
+        (sink, schema, batches)
+    }
+
+    /// Whether the statement's scan is refused (an unknown `write.*.mode`).
+    pub(super) fn scan_is_refused(&self) -> bool {
+        self.table.scan().is_err()
+    }
+
+    /// `DELETE FROM t WHERE condition` in merge-on-read mode.
+    pub(super) fn mor_delete(&self, condition: &str) -> Result<(), KrishivError> {
+        self.merge_on_read(&format!(
+            "SELECT {ROW_FILE_COLUMN}, {ROW_POSITION_COLUMN} FROM t WHERE coalesce(({condition}), false)"
+        ))
+    }
+
+    /// `UPDATE t SET name = value WHERE condition` in merge-on-read mode.
+    pub(super) fn mor_update(&self, condition: &str, value: &str) -> Result<(), KrishivError> {
+        self.merge_on_read(&format!(
+            "SELECT id, x, {value} AS name, {ROW_FILE_COLUMN}, {ROW_POSITION_COLUMN} FROM t \
+             WHERE coalesce(({condition}), false)"
+        ))
     }
 
     /// The rewrite's columns: `name` replaced where `set.0` holds by `set.1`;
@@ -546,6 +616,22 @@ pub(super) fn add_deletes(
     catalog: &Arc<Catalog>,
     make: impl FnOnce(&[String]) -> Vec<iceberg::spec::DataFile>,
 ) {
+    foreign_deletes(env, catalog, make, false);
+}
+
+/// A foreign `delete` snapshot that removes every live delete file and adds
+/// none (as a compaction or `removeDeletes` would).
+pub(super) fn remove_all_deletes(env: &Env, catalog: &Arc<Catalog>) {
+    foreign_deletes(env, catalog, |_| Vec::new(), true);
+}
+
+/// [`add_deletes`], also removing every live delete file when `remove`.
+fn foreign_deletes(
+    env: &Env,
+    catalog: &Arc<Catalog>,
+    make: impl FnOnce(&[String]) -> Vec<iceberg::spec::DataFile>,
+    remove: bool,
+) {
     let m = catalog.metadata();
     let io = env.reg.file_io();
     let parent = m.current_snapshot().unwrap();
@@ -569,6 +655,32 @@ pub(super) fn add_deletes(
         .unwrap();
         for d in deletes {
             w.add_file(d, UNASSIGNED_SEQUENCE_NUMBER).unwrap();
+        }
+        if remove {
+            let mut kept = Vec::new();
+            for mf in base {
+                if mf.content != ManifestContentType::Deletes {
+                    kept.push(mf);
+                    continue;
+                }
+                let bytes = io
+                    .new_input(&mf.manifest_path)
+                    .unwrap()
+                    .read()
+                    .await
+                    .unwrap();
+                for e in iceberg::spec::Manifest::parse_avro(&bytes)
+                    .unwrap()
+                    .entries()
+                {
+                    if e.is_alive() {
+                        let seq = e.sequence_number().unwrap_or(mf.sequence_number);
+                        w.add_delete_file(e.data_file().clone(), seq, Some(seq))
+                            .unwrap();
+                    }
+                }
+            }
+            base = kept;
         }
         base.push(w.write_manifest_file().await.unwrap());
         let list = env.at("snap-rowdelta.avro");
@@ -964,7 +1076,7 @@ fn the_iceberg_scan_takes_rows_by_position() {
 
 /// The DVs of `files` (each deleting positions `positions`), one blob per
 /// file in the one Puffin file `name`.
-fn dvs_in_one_puffin(
+pub(super) fn dvs_in_one_puffin(
     env: &Env,
     name: &str,
     files: &[String],
@@ -999,7 +1111,23 @@ fn dvs_in_one_puffin(
 }
 
 /// A position delete file `name` deleting position `pos` of `of`.
-fn position_delete(env: &Env, name: &str, of: &str, pos: i64) -> iceberg::spec::DataFile {
+pub(super) fn position_delete(
+    env: &Env,
+    name: &str,
+    of: &str,
+    pos: i64,
+) -> iceberg::spec::DataFile {
+    position_delete_scoped(env, name, of, pos, false)
+}
+
+/// [`position_delete`], with `referenced_data_file` set to `of` when `scoped` (a file-scoped delete).
+pub(super) fn position_delete_scoped(
+    env: &Env,
+    name: &str,
+    of: &str,
+    pos: i64,
+    scoped: bool,
+) -> iceberg::spec::DataFile {
     let path = env.at(name);
     let b = super::provider_tests::batch(
         vec![
@@ -1020,6 +1148,9 @@ fn position_delete(env: &Env, name: &str, of: &str, pos: i64) -> iceberg::spec::
         .record_count(1)
         .partition(Struct::empty())
         .partition_spec_id(0);
+    if scoped {
+        d.referenced_data_file(Some(of.to_owned()));
+    }
     d.build().unwrap()
 }
 

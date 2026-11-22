@@ -71,6 +71,7 @@ pub mod grants;
 mod history;
 mod identifier_clause;
 mod introspection;
+mod introspection_functions;
 #[cfg(test)]
 mod lineage_tests;
 #[cfg(feature = "unstable-ir")]
@@ -156,6 +157,7 @@ pub use krishiv_udf_sdk::{
     ReturnField, ScalarUdf, Signature, StateField, UdfArg, UdfError, UdfInputType, UdfLibrary,
     UdfProperties,
 };
+pub use memory_table::BatchSource;
 pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use python_udfs::{

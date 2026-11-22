@@ -459,7 +459,7 @@ impl<'a> Estimator<'a> {
                     RelStats::unknown(rows, ids())
                 }
             }
-            PlanNode::Limit { input, limit } => {
+            PlanNode::Limit { input, limit } | PlanNode::Tail { input, limit } => {
                 let est = RelStats::clone(&self.plan(input));
                 let n = limit_value(limit).map_or(est.rows, to_f64);
                 let rows = est.rows.min(n);
@@ -1000,18 +1000,37 @@ pub(crate) fn same_renames(predicate: &Arc<Expr>, input: &LogicalPlan) -> Arc<Ex
 /// first output (the canonical name of the column).
 fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
     // Filters and subquery aliases keep their input's columns (attributes):
-    // the projection may sit below them.
+    // the projection may sit below them. A `Shift` renumbers them by its
+    // offset: the renames below it hold at the shifted ids (the instance of a
+    // shared body, `Shift +6 (Project [a AS c1, a AS c2])`).
     let mut input = input;
-    while let PlanNode::Filter { input: below, .. } | PlanNode::SubqueryAlias { input: below, .. } =
-        &input.node
-    {
-        input = below;
+    let mut shift = 0_u64;
+    loop {
+        match &input.node {
+            PlanNode::Filter { input: below, .. }
+            | PlanNode::SubqueryAlias { input: below, .. } => {
+                input = below;
+            }
+            PlanNode::Shift {
+                input: below,
+                offset,
+            } => {
+                shift = shift.saturating_add(*offset);
+                input = below;
+            }
+            _ => break,
+        }
     }
     let PlanNode::Project { exprs, .. } = &input.node else {
         return HashMap::new();
     };
     let mut first: HashMap<AttrId, BoundColumn> = HashMap::new();
     let mut to: HashMap<AttrId, BoundColumn> = HashMap::new();
+    let moved = |c: &BoundColumn| {
+        let mut c = c.clone();
+        c.id = AttrId(c.id.0.saturating_add(shift));
+        c
+    };
     for e in exprs {
         // `a AS c` renames `a`; a bare `a` passes it through under its own
         // name (`Project [a, a AS c0]`: `a = c0` is `a = a`).
@@ -1025,7 +1044,7 @@ fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
         };
         let canon = first.entry(source).or_insert_with(|| output.clone());
         if canon.id != output.id {
-            to.insert(output.id, canon.clone());
+            to.insert(AttrId(output.id.0.saturating_add(shift)), moved(canon));
         }
     }
     to

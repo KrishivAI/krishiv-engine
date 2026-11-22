@@ -26,6 +26,7 @@ mod conditional;
 mod crypto;
 mod csv;
 mod defs;
+mod describe;
 mod element;
 mod generator;
 mod geo;
@@ -56,6 +57,7 @@ use std::sync::{Arc, LazyLock};
 pub use catalog::SparkFunction;
 pub use defs::legacy_day_count;
 pub use defs::{approx_percentile_result, exact_percentile_result};
+pub use describe::spark_function_description;
 pub use groups::{FunctionGroup, spark_function_groups};
 pub(crate) use json::parse_json_schema;
 pub use variant::variant_castable;
@@ -337,6 +339,8 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__find_in_set_lcase" => "__find_in_set_lcase",
         "__trim_collated" => "__trim_collated",
         "__icu_case" => "__icu_case",
+        "__like_fold" => "__like_fold",
+        "__like_fold_pattern" => "__like_fold_pattern",
         "__replace_lcase" => "__replace_lcase",
         "__translate_lcase" => "__translate_lcase",
         "__split_part_lcase" => "__split_part_lcase",
@@ -367,8 +371,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
             | "__startswith_lcase"
             | "__endswith_lcase"
             | "__find_in_set_lcase"
-            | "__json_table_value"
-            | "__json_table_exists"
+            | "__like_fold"
     ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {

@@ -1,0 +1,1 @@
+?{"metadata-location": "s3://b/t/metadata/v1.json", "metadata": {"format-version": 2, "table-uuid": "u", "location": "s3://b/t", "schemas": [], "current-schema-id": 0}, "config": {"k": "v"}, "storage-credentials": [{"prefix": "s3://b", "config": {"s3.access-key-id": "x"}}]}

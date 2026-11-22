@@ -502,6 +502,13 @@ impl Session {
         };
         #[cfg(feature = "delta")]
         if is_delta_table(&table) {
+            // A Delta table has no bucketing: refuse before anything is created.
+            if table.layout.bucket.is_some() {
+                return Err(super::delta::delta_write_refused(
+                    quoted(&table.namespace, &table.name),
+                    "bucketBy",
+                ));
+            }
             // Version 0 of a new Delta table with the rows (design section 4.1, "CTAS").
             drop(pre.take());
             let source =
@@ -547,6 +554,11 @@ impl Session {
             if let Some(owned) = owned {
                 owned.keep();
             }
+            // The idempotency key belongs to this one write, never to the table: stored, it would
+            // deduplicate every later write of the table.
+            table.options.retain(|k, _| {
+                !k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION)
+            });
             self.add_table(table, mode, true).await?;
             return Ok(());
         }
@@ -559,6 +571,11 @@ impl Session {
         if let Some(owned) = owned {
             owned.keep();
         }
+        // The idempotency key belongs to this one write, never to the table: stored, it would
+        // deduplicate every later write of the table.
+        table
+            .options
+            .retain(|k, _| !k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION));
         self.add_table(table, mode, true).await?;
         // `RepairTableCommand`: the partitions written, with their file statistics.
         self.register_partitions(&name, &dirs, true);
@@ -633,7 +650,7 @@ impl Session {
                 None,
             )
         } else {
-            return Err(source.not_found());
+            return Err(source.not_found(self.search_path()));
         };
         let (provider, provider_written) = match &t.using {
             Some(u) => {
@@ -734,7 +751,7 @@ impl Session {
                 remove_dir(&dir)?;
             }
         } else if !if_exists {
-            return Err(name.not_found());
+            return Err(name.not_found(self.search_path()));
         }
         Ok(())
     }
@@ -874,7 +891,57 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(table, &env)?;
-        self.table_for_write(&name, operation, &env)?;
+        // `delta.`/path``: a Delta table by path (no catalog entry), read as its scans read it.
+        #[cfg(feature = "delta")]
+        let by_path = match crate::access::ddl_parts(table, &env)?.as_slice() {
+            [format, path]
+                if format.eq_ignore_ascii_case("delta")
+                    && path.contains('/')
+                    && self
+                        .state
+                        .catalog
+                        .store
+                        .table(&name.namespace, &name.name)
+                        .is_none() =>
+            {
+                // The path as written: a table name is case-folded, a path is not.
+                Some(format!("delta.`{}`", path.replace('`', "``")))
+            }
+            _ => None,
+        };
+        #[cfg(not(feature = "delta"))]
+        let by_path: Option<String> = None;
+        // The statement's own check named the target as a table; a table by path changes the
+        // files at that path, so `Modify` on it is asked first, as a Delta save to the path asks.
+        #[cfg(feature = "delta")]
+        if by_path.is_some()
+            && let [_, path] = crate::access::ddl_parts(table, &env)?.as_slice()
+        {
+            let qualified = self.qualify_path(path)?;
+            self.authorize_qualified_root(
+                &qualified,
+                &[Privilege::Modify],
+                krishiv_sql::StatementClass::Write,
+            )
+            .await?;
+        }
+        let quoted = match by_path {
+            Some(q) => q,
+            None => {
+                if let Err(refusal) = self.table_for_write(&name, operation, &env) {
+                    // Spark analyzes the subqueries before it finds the target cannot change: a time
+                    // travel clause in one is the error then. A target that does not exist is reported first.
+                    if refusal.error_class().name() != "TABLE_OR_VIEW_NOT_FOUND" {
+                        self.refuse_time_travel_in_subqueries(changes, original)
+                            .await?;
+                    }
+                    return Err(refusal);
+                }
+                name.quoted()
+            }
+        };
+        self.refuse_time_travel_in_subqueries(changes, original)
+            .await?;
         // Spark analyzes the condition and the new values against the table before it finds that the
         // table cannot change: an unknown column is the error then.
         // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own
@@ -887,7 +954,7 @@ impl Session {
                 .map(|p| format!("`{}`", p.value.replace('`', "``")))
                 .collect::<Vec<_>>()
                 .join(".");
-            let sql = format!("SELECT {written} FROM {}", name.quoted());
+            let sql = format!("SELECT {written} FROM {quoted}");
             plain.analyze_variable_query(&sql).await?;
         }
         let slice = |e: &krishiv_sql::ast::Expr| {
@@ -906,7 +973,7 @@ impl Session {
         if select.is_empty() {
             select.push("1".to_owned());
         }
-        let mut sql = format!("SELECT {} FROM {}", select.join(", "), name.quoted());
+        let mut sql = format!("SELECT {} FROM {quoted}", select.join(", "));
         if let Some(alias) = alias {
             sql.push_str(&format!(" AS `{}`", alias.value.replace('`', "``")));
         }
@@ -915,11 +982,20 @@ impl Session {
         }
         // Spark 4.2 does not resolve a running script's local variables in these statements (the
         // record shows `UNRESOLVED_COLUMN` for one), so the analysis does not see them either.
-        self.with_locals(Vec::new())
+        let analysis = self
+            .with_locals(Vec::new())
             .analyze_variable_query(&sql)
             .await?;
+        // A time travel clause in the condition or a value's subquery is refused where the relation resolves.
+        analysis
+            .env
+            .catalog
+            .check_reference_options(analysis.analyzed.plan.root())?;
         // A table whose provider offers a row-level table runs the statement (PR-DML).
+        // The target's `WITH (...)` options reach the table's scan builder, and no table of the
+        // session catalog takes them: the statement is refused as Spark refuses it for such a table.
         let op = match operation {
+            _ if !changes.options.is_empty() => None,
             "DELETE" => Some(krishiv_exec::planner::RowLevelOperation::Delete),
             "UPDATE TABLE" => Some(krishiv_exec::planner::RowLevelOperation::Update),
             _ => None,
@@ -948,13 +1024,7 @@ impl Session {
                 .collect();
             let condition = changes.condition.map(slice);
             if let Some(done) = self
-                .run_row_level(
-                    op,
-                    &name.quoted(),
-                    &alias,
-                    condition.as_deref(),
-                    &assignments,
-                )
+                .run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments)
                 .await?
             {
                 // The table's data changed: what read it is stale (as after an `INSERT`).
@@ -965,10 +1035,46 @@ impl Session {
             }
         }
         Err(UnsupportedFeatureTableOperation {
-            table_name: name.quoted(),
+            table_name: quoted,
             operation: operation.to_owned(),
         }
         .into())
+    }
+
+    /// Analyzes each subquery of a `DELETE`, `UPDATE` or `MERGE` on its own and refuses a time travel clause
+    /// in it. Any other failure (a correlated column does not resolve alone) is left to the statement's own
+    /// analysis.
+    async fn refuse_time_travel_in_subqueries(
+        &self,
+        changes: &RowChanges<'_>,
+        original: &str,
+    ) -> Result<(), KrishivError> {
+        let mut queries: Vec<&krishiv_sql::ast::Query> = changes.sources.to_vec();
+        for e in changes
+            .condition
+            .into_iter()
+            .chain(changes.values.iter().copied())
+            .chain(changes.more.iter().copied())
+        {
+            super::all_subqueries(e, &mut queries);
+        }
+        let plain = self.with_locals(Vec::new());
+        for q in queries {
+            let Some(text) = original.get(q.span.start..q.span.end) else {
+                continue;
+            };
+            match plain.analyze_variable_query(text).await {
+                Ok(analysis) => analysis
+                    .env
+                    .catalog
+                    .check_reference_options(analysis.analyzed.plan.root())?,
+                Err(e) if e.error_class().name() == "UNSUPPORTED_FEATURE.TIME_TRAVEL" => {
+                    return Err(e);
+                }
+                Err(_) => {}
+            }
+        }
+        Ok(())
     }
 
     /// Drops the cached relations that read the permanent table `name`: its data or existence changed.

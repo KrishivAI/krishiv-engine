@@ -1,0 +1,904 @@
+{
+ "format_version": 1,
+ "spark_tag": "v4.3.0",
+ "status": "oracle",
+ "generator": "tests/scripts/gen_write_semantics_goldens.py",
+ "note": "'observed' blocks come from running tests/scripts/gen_write_semantics_goldens.py against a Spark Connect 4.3.0 server (tag v4.3.0; the server build and run date were not recorded: fixtures committed 2026-11-20). Cases the run skipped carry kind 'skipped' and a reason. 'expect' is derived from the v4.3.0 source; where it differs from 'observed' for a scripted case, 'expect' is set to the run's result.",
+ "cases": [
+  {
+   "id": "DML-parquet-delete-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WITH ('k' = 'v') WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1245-1258"
+   ],
+   "note": "options parse and bind as read options of the v1 relation; the statement then fails exactly as it does without WITH (...)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "DELETE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_0`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_0`.`t` does not support DELETE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-parquet-delete-alias-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t AS x WITH ('k' = 'v') WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "alias precedes WITH (grammar order: tableAlias optionsClause?)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "DELETE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_1`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_1`.`t` does not support DELETE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-parquet-delete-nooptions",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))"
+   ],
+   "note": "baseline without options (same error)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "DELETE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_2`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_2`.`t` does not support DELETE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-parquet-update-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t WITH ('k' = 'v') SET b = 9 WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1260-1275"
+   ],
+   "note": "raised at planning (SparkUnsupportedOperationException), SQLSTATE 0A000",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "UPDATE TABLE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_3`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_3`.`t` does not support UPDATE TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-parquet-update-alias-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t AS x WITH ('k' = 'v') SET b = 9 WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "UPDATE TABLE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_4`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_4`.`t` does not support UPDATE TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-parquet-merge-target-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('k' = 'v') USING s ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1284-1385"
+   ],
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "MERGE INTO TABLE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_5`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_5`.`t` does not support MERGE INTO TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-parquet-merge-source-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t USING s WITH ('k' = 'v') ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1286-1290 (source options are a separate bag; source is a read)"
+   ],
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "MERGE INTO TABLE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_6`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_6`.`t` does not support MERGE INTO TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-parquet-merge-both-opts",
+   "target": "parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) USING parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('a' = '1') USING s WITH ('b' = '2') ON t.a = s.a WHEN NOT MATCHED THEN INSERT *",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "SPARK-58007 parser test: sql/catalyst/src/test/.../DDLParserSuite.scala:2462-2490 (parse shape only)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "MERGE INTO TABLE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_7`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_7`.`t` does not support MERGE INTO TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-parquet-delete-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WITH ('k' = 'v') WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1245-1258"
+   ],
+   "note": "options parse and bind as read options of the v1 relation; the statement then fails exactly as it does without WITH (...)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "DELETE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_8`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_8`.`t` does not support DELETE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-parquet-delete-alias-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t AS x WITH ('k' = 'v') WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "alias precedes WITH (grammar order: tableAlias optionsClause?)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "DELETE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_9`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_9`.`t` does not support DELETE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-parquet-delete-nooptions",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:550-583 (case LogicalRelationWithTable -> unsupportedTableOperationError(identifier, \"DELETE\"))"
+   ],
+   "note": "baseline without options (same error)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "DELETE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_10`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_10`.`t` does not support DELETE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-parquet-update-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t WITH ('k' = 'v') SET b = 9 WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1260-1275"
+   ],
+   "note": "raised at planning (SparkUnsupportedOperationException), SQLSTATE 0A000",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "UPDATE TABLE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_11`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_11`.`t` does not support UPDATE TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-parquet-update-alias-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t AS x WITH ('k' = 'v') SET b = 9 WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "UPDATE TABLE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_12`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_12`.`t` does not support UPDATE TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-parquet-merge-target-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('k' = 'v') USING s ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1284-1385"
+   ],
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "MERGE INTO TABLE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_13`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_13`.`t` does not support MERGE INTO TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-parquet-merge-source-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t USING s WITH ('k' = 'v') ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1286-1290 (source options are a separate bag; source is a read)"
+   ],
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "MERGE INTO TABLE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_14`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_14`.`t` does not support MERGE INTO TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-parquet-merge-both-opts",
+   "target": "hive-serde-parquet",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS parquet",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('a' = '1') USING s WITH ('b' = '2') ON t.a = s.a WHEN NOT MATCHED THEN INSERT *",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "SPARK-58007 parser test: sql/catalyst/src/test/.../DDLParserSuite.scala:2462-2490 (parse shape only)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "MERGE INTO TABLE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_15`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_15`.`t` does not support MERGE INTO TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-textfile-delete-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WITH ('k' = 'v') WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/hive/.../HiveStrategies.scala:HiveAnalysis (DeleteFromTable over SubqueryAlias(_, HiveTableRelation) -> unsupportedTableOperationError(table.identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1245-1258"
+   ],
+   "note": "options parse and bind as read options of the v1 relation; the statement then fails exactly as it does without WITH (...)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "DELETE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_16`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_16`.`t` does not support DELETE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-textfile-delete-alias-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t AS x WITH ('k' = 'v') WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "INTERNAL_ERROR",
+    "sqlstate": "XX000",
+    "params": {
+     "message": "Unexpected table relation: HiveTableRelation [`spark_catalog`.`ws_dml_with_options_17`.`t`, org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe, Data Cols: [a#7499, b#7500], Partition Cols: []]\n"
+    },
+    "note": "Spark 4.3.0 raises INTERNAL_ERROR for DELETE with an alias on a Hive textfile table (HiveTableRelation); expectation from source (TABLE_OPERATION) was wrong for this case"
+   },
+   "source": [
+    "sql/hive/.../HiveStrategies.scala:HiveAnalysis (DeleteFromTable over SubqueryAlias(_, HiveTableRelation) -> unsupportedTableOperationError(table.identifier, \"DELETE\"))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "alias precedes WITH (grammar order: tableAlias optionsClause?) Observed by the run differs from the source-derived expectation (kept in spark_expected_by_source); the run is the truth.",
+   "observed": {
+    "kind": "error",
+    "class": "INTERNAL_ERROR",
+    "sqlstate": "XX000",
+    "params": {
+     "message": "Unexpected table relation: HiveTableRelation [`spark_catalog`.`ws_dml_with_options_17`.`t`, org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe, Data Cols: [a#7499, b#7500], Partition Cols: []]\n"
+    },
+    "message": "[INTERNAL_ERROR] Unexpected table relation: HiveTableRelation [`spark_catalog`.`ws_dml_with_options_17`.`t`, org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe, Data Cols: [a#7499, b#7500], Partition Cols: []]",
+    "note": "Spark 4.3.0 raises INTERNAL_ERROR for DELETE with an alias on a Hive textfile table (HiveTableRelation); expectation from source (TABLE_OPERATION) was wrong for this case"
+   },
+   "spark_expected_by_source": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   }
+  },
+  {
+   "id": "DML-hv-textfile-delete-nooptions",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "DELETE FROM t WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`spark_catalog`.`default`.`t`",
+     "operation": "DELETE"
+    }
+   },
+   "source": [
+    "sql/hive/.../HiveStrategies.scala:HiveAnalysis (DeleteFromTable over SubqueryAlias(_, HiveTableRelation) -> unsupportedTableOperationError(table.identifier, \"DELETE\"))"
+   ],
+   "note": "baseline without options (same error)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "DELETE",
+     "tableName": "`spark_catalog`.`ws_dml_with_options_18`.`t`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`ws_dml_with_options_18`.`t` does not support DELETE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-textfile-update-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t WITH ('k' = 'v') SET b = 9 WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`unknown`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1260-1275"
+   ],
+   "note": "raised at planning (SparkUnsupportedOperationException), SQLSTATE 0A000; textfile Hive table not converted to a LogicalRelation, so the table name is `unknown` (unverified-by-run)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "UPDATE TABLE",
+     "tableName": "`unknown`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `unknown` does not support UPDATE TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-textfile-update-alias-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)"
+   ],
+   "stmt": "UPDATE t AS x WITH ('k' = 'v') SET b = 9 WHERE x.a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`unknown`",
+     "operation": "UPDATE TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1251-1253 (UpdateTable -> ddlUnsupportedTemporarilyError(\"UPDATE TABLE\", extractTableNameForError(u.table)))",
+    "SparkStrategies.scala:1282-1295 (LogicalRelation -> catalogTable.identifier.unquotedString; non-NamedRelation such as HiveTableRelation -> \"unknown\")",
+    "sql/catalyst/.../errors/QueryExecutionErrors.scala:1148-1154",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "UPDATE TABLE",
+     "tableName": "`unknown`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `unknown` does not support UPDATE TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-textfile-merge-target-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('k' = 'v') USING s ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`unknown`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1284-1385"
+   ],
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "MERGE INTO TABLE",
+     "tableName": "`unknown`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `unknown` does not support MERGE INTO TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-textfile-merge-source-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t USING s WITH ('k' = 'v') ON t.a = s.a WHEN MATCHED THEN UPDATE SET t.b = s.b",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`unknown`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)",
+    "AstBuilder.scala:1286-1290 (source options are a separate bag; source is a read)"
+   ],
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "MERGE INTO TABLE",
+     "tableName": "`unknown`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `unknown` does not support MERGE INTO TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-hv-textfile-merge-both-opts",
+   "target": "hive-serde-textfile",
+   "setup": [
+    "CREATE TABLE t (a INT, b INT) STORED AS textfile",
+    "INSERT INTO t VALUES (1, 2), (3, 4)",
+    "CREATE TABLE s (a INT, b INT) USING parquet",
+    "INSERT INTO s VALUES (1, 7)"
+   ],
+   "stmt": "MERGE INTO t WITH ('a' = '1') USING s WITH ('b' = '2') ON t.a = s.a WHEN NOT MATCHED THEN INSERT *",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "tableName": "`unknown`",
+     "operation": "MERGE INTO TABLE"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/SparkStrategies.scala:1254-1256 (MergeIntoTable -> ddlUnsupportedTemporarilyError(\"MERGE INTO TABLE\", ...))",
+    "sql/api/.../antlr4/.../SqlBaseParser.g4:750-754 (v4.3.0)"
+   ],
+   "note": "SPARK-58007 parser test: sql/catalyst/src/test/.../DDLParserSuite.scala:2462-2490 (parse shape only)",
+   "observed": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+    "sqlstate": "0A000",
+    "params": {
+     "operation": "MERGE INTO TABLE",
+     "tableName": "`unknown`"
+    },
+    "message": "[UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `unknown` does not support MERGE INTO TABLE. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+   }
+  },
+  {
+   "id": "DML-nowith-4.2-grammar",
+   "target": "any",
+   "setup": [],
+   "stmt": "DELETE FROM t WITH ('k' = 'v') WHERE a = 1",
+   "expect": {
+    "kind": "error",
+    "class": "TABLE_OR_VIEW_NOT_FOUND",
+    "sqlstate": "42P01",
+    "params": {
+     "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`ws_dml_with_options_24`]",
+     "relationName": "`t`"
+    }
+   },
+   "source": [
+    "v4.2.0 SqlBaseParser.g4:742-743: DELETE/UPDATE have no optionsClause; v4.1.0 :677-678; v3.5.8 :445-446"
+   ],
+   "note": "WITH(...) on UPDATE/DELETE/MERGE is new in 4.3 (SPARK-57681/58007/58008); parameters of the syntax error not captured (unverified-by-run) Observed by the run differs from the source-derived expectation (kept in spark_expected_by_source); the run is the truth.",
+   "observed": {
+    "kind": "error",
+    "class": "TABLE_OR_VIEW_NOT_FOUND",
+    "sqlstate": "42P01",
+    "params": {
+     "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`ws_dml_with_options_24`]",
+     "relationName": "`t`"
+    },
+    "message": "[TABLE_OR_VIEW_NOT_FOUND] The table or view `t` cannot be found. Verify the spelling and correctness of the schema and catalog."
+   },
+   "spark_expected_by_source": {
+    "kind": "error",
+    "class": "PARSE_SYNTAX_ERROR",
+    "sqlstate": "42601",
+    "versions_only": [
+     "3.5",
+     "4.0",
+     "4.1",
+     "4.2"
+    ]
+   }
+  },
+  {
+   "id": "DML-v2-delete-opts-reach-table",
+   "target": "dsv2 (InMemoryRowLevelOperationTableCatalog)",
+   "setup": [
+    "CREATE TABLE testcat.t (pk int, dep string) ...",
+    "INSERT ..."
+   ],
+   "stmt": "DELETE FROM testcat.t WITH ('k' = 'v') WHERE pk = 1",
+   "expect": {
+    "kind": "ok",
+    "note": "options reach DeleteFromTableExec(options) / RowLevelOperationInfoImpl(command, options)"
+   },
+   "source": [
+    "sql/core/.../datasources/v2/DataSourceV2Strategy.scala:547-567",
+    "sql/catalyst/.../analysis/RewriteRowLevelCommand.scala:78-84 (buildOperationTable(table, command, options))",
+    "sql/core/src/test/.../connector/DeleteFromTableSuiteBase.scala, MergeIntoTableSuiteBase.scala (grep 'WITH (')"
+   ],
+   "note": "behavioural detail (which option map each operation sees) must be captured from the V2 test catalog or Iceberg run; not derived",
+   "observed": {
+    "kind": "skipped",
+    "reason": "needs V2 catalog testcat"
+   }
+  }
+ ],
+ "spark_version": "4.3.0"
+}

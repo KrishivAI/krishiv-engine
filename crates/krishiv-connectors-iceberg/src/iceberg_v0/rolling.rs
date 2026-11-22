@@ -58,8 +58,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use iceberg::io::FileIO;
 use iceberg::spec::{
-    DataFile, FormatVersion, ManifestFile, ManifestWriter, ManifestWriterBuilder, PartitionSpec,
-    SchemaRef, UNASSIGNED_SEQUENCE_NUMBER,
+    DataFile, FormatVersion, ManifestContentType, ManifestFile, ManifestWriter,
+    ManifestWriterBuilder, PartitionSpec, SchemaRef, UNASSIGNED_SEQUENCE_NUMBER,
 };
 use krishiv_common::error::KrishivError;
 
@@ -120,6 +120,9 @@ pub(crate) struct SpecManifests<'a> {
     pub(crate) snapshot_id: i64,
     /// `commit.manifest.target-size-bytes`.
     pub(crate) target_size_bytes: i64,
+    /// Data or delete manifests (a row delta's delete files, PR-36c, rolled
+    /// as Java's `writeDeleteManifests` rolls them).
+    pub(crate) content: ManifestContentType,
 }
 
 /// The names of a write's manifests and the paths written so far.
@@ -142,10 +145,12 @@ impl SpecManifests<'_> {
             Arc::clone(self.schema),
             self.spec.clone(),
         );
-        match self.version {
-            FormatVersion::V1 => builder.build_v1(),
-            FormatVersion::V2 => builder.build_v2_data(),
-            FormatVersion::V3 => builder.build_v3_data(),
+        match (self.version, self.content) {
+            (FormatVersion::V1, _) => builder.build_v1(),
+            (FormatVersion::V2, ManifestContentType::Data) => builder.build_v2_data(),
+            (FormatVersion::V2, ManifestContentType::Deletes) => builder.build_v2_deletes(),
+            (FormatVersion::V3, ManifestContentType::Data) => builder.build_v3_data(),
+            (FormatVersion::V3, ManifestContentType::Deletes) => builder.build_v3_deletes(),
         }
     }
 
