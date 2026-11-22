@@ -575,6 +575,17 @@ async fn off_workers<T: Send + 'static>(
     }
 }
 
+impl RestCommitter {
+    /// Drops the table's cached `loadTable` answers and advances the catalog epoch.
+    fn invalidate(&self) {
+        self.cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(_, ns, name), _| !(ns == &self.namespace && name == &self.table));
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 #[async_trait]
 impl RestCommitTransport for RestCommitter {
     fn name(&self) -> String {
@@ -590,12 +601,9 @@ impl RestCommitTransport for RestCommitter {
         );
         match off_workers(move || client.commit_table_as(&caller, &ns, &table, &body)).await {
             Ok(Ok(r)) => {
-                if (200..300).contains(&r.status) {
-                    self.cache
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .retain(|(_, ns, name), _| !(ns == &self.namespace && name == &self.table));
-                    self.epoch.fetch_add(1, Ordering::SeqCst);
+                // 2xx applied the commit; 5xx may have applied it before failing.
+                if (200..300).contains(&r.status) || r.status >= 500 {
+                    self.invalidate();
                 }
                 let mut reply = TransportReply::new(r.status, r.body);
                 if let Some(wait) = r.retry_after {
@@ -603,16 +611,26 @@ impl RestCommitTransport for RestCommitter {
                 }
                 Ok(reply)
             }
-            Ok(Err(f)) => Err(TransportFailure::new(f.sent, f.reason)),
+            Ok(Err(f)) => {
+                if f.sent {
+                    self.invalidate();
+                }
+                Err(TransportFailure::new(f.sent, f.reason))
+            }
             // The blocking call may have sent the request before it was lost.
-            Err(_) => Err(TransportFailure::new(
-                true,
-                "the commit call did not finish",
-            )),
+            Err(_) => {
+                self.invalidate();
+                Err(TransportFailure::new(
+                    true,
+                    "the commit call did not finish",
+                ))
+            }
         }
     }
 
     async fn load(&self, all_snapshots: bool) -> Result<Vec<u8>, KrishivError> {
+        // A probe follows an uncertain commit: the cached pre-write answer is stale if it landed.
+        self.invalidate();
         let client = Arc::clone(&self.client);
         let (caller, ns, table) = (
             self.caller.clone(),
