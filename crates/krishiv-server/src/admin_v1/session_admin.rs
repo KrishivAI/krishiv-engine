@@ -33,8 +33,13 @@ use super::{
     Query, Session,
 };
 use super::{
-    DrainRequest, DrainResponse, DrainStatus, GetDrainStatusResponse, GetReadinessResponse,
-    ReadinessCheck, ResumeServingRequest, ResumeServingResponse,
+    DrainRequest, DrainResponse, DrainStatus, GetConfigRequest, GetConfigResponse,
+    GetDrainStatusResponse, GetReadinessResponse, GetResourceGroupConfigRequest,
+    GetResourceGroupConfigResponse, ListResourceGroupsRequest, ListResourceGroupsResponse,
+    ReadinessCheck, ReloadResourceGroupConfigRequest, ReloadResourceGroupConfigResponse,
+    ReplaceResourceGroupConfigRequest, ReplaceResourceGroupConfigResponse, ResumeServingRequest,
+    ResumeServingResponse, SetConfigDefaultsRequest, SetConfigDefaultsResponse,
+    ValidateResourceGroupConfigRequest, ValidateResourceGroupConfigResponse,
 };
 use crate::drain::{DrainController, DrainState, Exiting, MAX_GRACE, MIN_GRACE};
 use crate::readiness::{CheckState, Readiness};
@@ -72,6 +77,8 @@ pub struct SessionAdmin {
     runtime: Arc<EngineRuntime>,
     denials: Option<Arc<DeniedCounts>>,
     ops: Option<Arc<DrainOps>>,
+    /// The `krishiv.auth.*` settings as the operator wrote them (references, never resolved).
+    pub(super) startup_auth: Arc<[(String, String)]>,
 }
 
 impl std::fmt::Debug for SessionAdmin {
@@ -81,6 +88,10 @@ impl std::fmt::Debug for SessionAdmin {
 }
 
 impl SessionAdmin {
+    pub(super) fn runtime(&self) -> &EngineRuntime {
+        &self.runtime
+    }
+
     /// The admin API over `runtime`; registers the `admin.v1` capability row.
     #[must_use]
     pub fn new(runtime: Arc<EngineRuntime>) -> Self {
@@ -93,7 +104,16 @@ impl SessionAdmin {
             runtime,
             denials: None,
             ops: None,
+            startup_auth: Arc::from([]),
         }
+    }
+
+    /// The same, listing the `krishiv.auth.*` startup settings (as written, so a secret reference
+    /// is shown, never its secret) in `GetConfig`: withheld unless the caller holds `Manage`.
+    #[must_use]
+    pub fn with_startup_auth(mut self, settings: Vec<(String, String)>) -> Self {
+        self.startup_auth = settings.into();
+        self
     }
 
     /// The same, serving the drain and readiness RPCs over `ops`.
@@ -111,20 +131,34 @@ impl SessionAdmin {
     }
 }
 
+/// Runs `work` on the blocking pool; a panicked or cancelled task is an internal error.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> AdminResult<T> + Send + 'static,
+) -> AdminResult<T> {
+    tokio::task::spawn_blocking(work).await.unwrap_or_else(|_| {
+        Err(AdminError::new(
+            ErrorKind::Internal,
+            "INTERNAL_ERROR",
+            "XX000",
+            "The request could not be completed.",
+        ))
+    })
+}
+
 /// The owner name of a caller with no identity: a control character, so no real principal has it.
 const ANONYMOUS_OWNER: &str = "\u{0}anonymous";
 
 /// What a caller may do, resolved from what the guard authenticated.
-struct Who {
-    principal: Principal,
-    monitor: bool,
-    operate_sessions: bool,
-    operate_queries: bool,
-    manage: bool,
+pub(super) struct Who {
+    pub(super) principal: Principal,
+    pub(super) monitor: bool,
+    pub(super) operate_sessions: bool,
+    pub(super) operate_queries: bool,
+    pub(super) manage: bool,
 }
 
 impl Who {
-    fn of(call: &Call) -> Self {
+    pub(super) fn of(call: &Call) -> Self {
         let system = |n: &str| Securable::System(n.to_owned());
         let authenticated = call
             .caller
@@ -164,7 +198,7 @@ impl Who {
     }
 }
 
-fn timestamp(ms: i64) -> Timestamp {
+pub(super) fn timestamp(ms: i64) -> Timestamp {
     Timestamp {
         seconds: ms.div_euclid(1000),
         nanos: i32::try_from(ms.rem_euclid(1000) * 1_000_000).unwrap_or(0),
@@ -261,7 +295,15 @@ impl SessionAdmin {
         error.disguised_denial()
     }
 
-    fn log(&self, call: &Call, rpc: &str, target: &str, own: bool, result: &str, class: &str) {
+    pub(super) fn log(
+        &self,
+        call: &Call,
+        rpc: &str,
+        target: &str,
+        own: bool,
+        result: &str,
+        class: &str,
+    ) {
         action::record(&Action {
             principal: &call.caller.principal,
             role: call.caller.role.as_deref().unwrap_or("none"),
@@ -279,6 +321,76 @@ impl SessionAdmin {
 }
 
 impl AdminApi for SessionAdmin {
+    fn list_resource_groups(
+        &self,
+        call: &Call,
+        request: ListResourceGroupsRequest,
+    ) -> BoxFuture<'_, AdminResult<ListResourceGroupsResponse>> {
+        let call = call.clone();
+        async move { self.do_list_resource_groups(&call, &request) }.boxed()
+    }
+
+    fn get_resource_group_config(
+        &self,
+        call: &Call,
+        _request: GetResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<GetResourceGroupConfigResponse>> {
+        let call = call.clone();
+        let me = self.clone();
+        // File reads, writes and fsyncs: off the async workers (a stalled mount parks one thread).
+        async move { blocking(move || me.do_get_resource_group_config(&call)).await }.boxed()
+    }
+
+    fn validate_resource_group_config(
+        &self,
+        call: &Call,
+        request: ValidateResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<ValidateResourceGroupConfigResponse>> {
+        let call = call.clone();
+        async move { self.do_validate_resource_group_config(&call, &request) }.boxed()
+    }
+
+    fn replace_resource_group_config(
+        &self,
+        call: &Call,
+        request: ReplaceResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<ReplaceResourceGroupConfigResponse>> {
+        let call = call.clone();
+        let me = self.clone();
+        // File reads, writes and fsyncs: off the async workers (a stalled mount parks one thread).
+        async move { blocking(move || me.do_replace_resource_group_config(&call, &request)).await }
+            .boxed()
+    }
+
+    fn reload_resource_group_config(
+        &self,
+        call: &Call,
+        _request: ReloadResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<ReloadResourceGroupConfigResponse>> {
+        let call = call.clone();
+        let me = self.clone();
+        // File reads, writes and fsyncs: off the async workers (a stalled mount parks one thread).
+        async move { blocking(move || me.do_reload_resource_group_config(&call)).await }.boxed()
+    }
+
+    fn get_config(
+        &self,
+        call: &Call,
+        request: GetConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<GetConfigResponse>> {
+        let call = call.clone();
+        async move { self.do_get_config(&call, &request) }.boxed()
+    }
+
+    fn set_config_defaults(
+        &self,
+        call: &Call,
+        request: SetConfigDefaultsRequest,
+    ) -> BoxFuture<'_, AdminResult<SetConfigDefaultsResponse>> {
+        let call = call.clone();
+        async move { self.do_set_config_defaults(&call, &request) }.boxed()
+    }
+
     fn idempotency_scope(&self, call: &Call) -> String {
         let p = Who::of(call).principal;
         format!(
@@ -607,8 +719,15 @@ impl AdminApi for SessionAdmin {
         let who = Who::of(call);
         let call = call.clone();
         async move {
-            let ops = self.ops_for("Drain")?;
             self.require(&call, who.manage, Privilege::Manage, "Drain", "cluster")?;
+            let ops = match self.ops_for("Drain") {
+                Ok(ops) => ops,
+                Err(e) => {
+                    // A refused mutation leaves its record, supported or not.
+                    self.log(&call, "Drain", "", false, "failed", &e.error_class);
+                    return Err(e);
+                }
+            };
             let grace = match request.grace_period {
                 None => ops.default_grace,
                 Some(d) => u64::try_from(d.seconds)
@@ -625,7 +744,12 @@ impl AdminApi for SessionAdmin {
                     })?,
             };
             (ops.start)(grace, request.exit_when_drained);
-            self.log(&call, "Drain", "", false, "ok", "");
+            let target = format!(
+                "grace {}s, exit_when_drained {}",
+                grace.as_secs(),
+                request.exit_when_drained
+            );
+            self.log(&call, "Drain", &target, false, "ok", "");
             Ok(DrainResponse {
                 status: Some(drain_status(ops)),
             })
@@ -641,7 +765,6 @@ impl AdminApi for SessionAdmin {
         let who = Who::of(call);
         let call = call.clone();
         async move {
-            let ops = self.ops_for("ResumeServing")?;
             self.require(
                 &call,
                 who.manage,
@@ -649,6 +772,14 @@ impl AdminApi for SessionAdmin {
                 "ResumeServing",
                 "cluster",
             )?;
+            let ops = match self.ops_for("ResumeServing") {
+                Ok(ops) => ops,
+                Err(e) => {
+                    // A refused mutation leaves its record, supported or not.
+                    self.log(&call, "ResumeServing", "", false, "failed", &e.error_class);
+                    return Err(e);
+                }
+            };
             if (ops.resume)().is_err() {
                 let e = AdminError::new(
                     ErrorKind::FailedPrecondition,
@@ -683,7 +814,7 @@ impl SessionAdmin {
     }
 
     /// Fails with the denial (counted, audited, recorded) unless `allowed`.
-    fn require(
+    pub(super) fn require(
         &self,
         call: &Call,
         allowed: bool,

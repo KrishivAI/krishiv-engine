@@ -21,6 +21,7 @@ mod ddl;
 mod expr;
 mod function;
 pub(crate) mod jvm_udf;
+mod metric_view;
 mod names;
 pub(crate) use function::check_temporary_function_name;
 mod script;

@@ -667,6 +667,17 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "filters":[],
 "warnings":[]}
 
+-- CreateMetricView: CREATE VIEW db.mv WITH METRICS LANGUAGE YAML AS $$version: 0.1$$
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":true,
+"securables":[{"kind":"namespace","name":["spark_catalog","db"],"display":"namespace `spark_catalog`.`db`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
 -- DropPermanentView: DROP VIEW db.v
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"DDL",

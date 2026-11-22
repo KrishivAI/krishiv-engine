@@ -371,6 +371,16 @@ impl KrishivError {
         self
     }
 
+    /// This error with no query context, for a caller that analyzed text of its own making and
+    /// attaches the context of the text the user wrote instead (a metric view's expressions).
+    #[must_use]
+    pub fn without_query_contexts(mut self) -> Self {
+        if let Some(e) = &mut self.extra {
+            e.contexts.clear();
+        }
+        self
+    }
+
     /// This error marked as raised at `site`, unless it already has a site or a
     /// query context (the innermost expression's site wins). No text enters the
     /// error: the session that owns the statement's text renders it.
