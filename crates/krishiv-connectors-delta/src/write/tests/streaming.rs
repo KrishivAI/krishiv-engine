@@ -552,7 +552,14 @@ fn a_detached_engine_reserves_nothing_from_the_statement() {
     let detached = env
         .engine
         .detached(Arc::new(krishiv_exec::CancellationToken::new()));
-    assert!(detached.io().memory_pool().is_none());
+    // The test environment attaches a process root: the detached engine reserves from it, never
+    // from the statement's pool.
+    let statement = env.engine.io().memory_pool().expect("statement pool");
+    let root = detached.io().memory_pool().expect("process root");
+    assert!(
+        !std::ptr::addr_eq(Arc::as_ptr(&statement), Arc::as_ptr(&root)),
+        "the detached engine shares the statement's pool"
+    );
 }
 
 /// No write into an oracle table, of any mode, raises `INTERNAL_ERROR` (design section 3.7:
