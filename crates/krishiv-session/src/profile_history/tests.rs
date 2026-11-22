@@ -45,6 +45,193 @@ fn run(session: &Session, sql: &str) {
     block_on(df.collect()).unwrap();
 }
 
+/// The runtime reads one query's profile back by id (what the console's query page asks for): each stored query
+/// gets its own document, an id the store does not hold gets none, and a runtime with no history has none to give.
+#[test]
+fn the_runtime_reads_one_stored_profile_by_query_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path(), "64m");
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    run(&session, "SELECT id FROM range(0, 10) WHERE id > 3");
+    run(
+        &session,
+        "SELECT id % 2 AS k, count(*) AS n FROM range(0, 100) GROUP BY id % 2",
+    );
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = read_history(dir.path()).unwrap();
+    assert_eq!(stored.len(), 2);
+    assert_ne!(stored[0].query_id, stored[1].query_id);
+    for want in &stored {
+        let got = rt.stored_profile(&want.query_id).unwrap();
+        assert_eq!(got.as_ref(), Some(want));
+        // The document carries the plan the page draws.
+        let doc: serde_json::Value = serde_json::from_str(&want.profile).unwrap();
+        assert!(
+            doc["plan"].as_array().is_some_and(|p| !p.is_empty()),
+            "{doc}"
+        );
+    }
+    assert_eq!(rt.stored_profile("no-such-query").unwrap(), None);
+    // Queries stored later land in later segments; the earlier ones are still found.
+    run(&session, "SELECT 1");
+    rt.profile_history.as_ref().unwrap().flush();
+    assert_eq!(
+        rt.stored_profile(&stored[0].query_id).unwrap().as_ref(),
+        Some(&stored[0])
+    );
+    let plain = EngineRuntime::builder().build().unwrap();
+    assert_eq!(plain.stored_profile(&stored[0].query_id).unwrap(), None);
+}
+
+/// A query id stored more than once (a client may reuse an operation id) reads back as its newest profile:
+/// the newest segment that names it decides, and within a segment the latest finish. A segment that does not
+/// read is passed over.
+#[test]
+fn a_query_id_stored_twice_reads_back_as_the_newest() {
+    let dir = tempfile::tempdir().unwrap();
+    let again = |finished_at_ms: i64, profile: &str| StoredProfile {
+        query_id: "q1".to_owned(),
+        ..row(finished_at_ms, profile.to_owned())
+    };
+    write_segment(
+        dir.path(),
+        "history-0000000000001-000001.parquet",
+        &[row(1, "first".to_owned()), row(2, "other".to_owned())],
+    )
+    .unwrap();
+    write_segment(
+        dir.path(),
+        "history-0000000000005-000002.parquet",
+        &[
+            again(7, "third"),
+            again(5, "second"),
+            row(3, "x".to_owned()),
+        ],
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("history-0000000000009-000003.parquet"),
+        b"not parquet",
+    )
+    .unwrap();
+    let read = |id: &str| super::read_stored(dir.path(), id).unwrap();
+    assert_eq!(read("q1"), Some(again(7, "third")));
+    // Only the older segment names this one.
+    assert_eq!(read("q2"), Some(row(2, "other".to_owned())));
+    assert_eq!(read("q9"), None);
+    // No store there at all.
+    assert!(super::read_stored(&dir.path().join("missing"), "q1").is_err());
+}
+
+/// The row is found by its id and finish time, then read alone: a query in any of a segment's row groups
+/// reads back as its own row, and of two rows with one id and one finish time the later one is returned.
+#[test]
+fn a_lookup_reads_the_profile_of_the_one_row_it_returns() {
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+    let dir = tempfile::tempdir().unwrap();
+    // 3,000 rows in row groups of 1,000; the wanted id is in the last group, between others.
+    let rows: Vec<StoredProfile> = (0..3000).map(|i| row(i, format!("doc-{i}"))).collect();
+    write_segment(dir.path(), "history-0000000000001-000001.parquet", &rows).unwrap();
+    let path = dir.path().join("history-0000000000001-000001.parquet");
+    let whole = super::read_segment(&path).unwrap();
+    let small = dir.path().join("history-0000000000002-000002.parquet");
+    let batch = {
+        let reader = super::open_segment(&path)
+            .unwrap()
+            .with_batch_size(3000)
+            .build()
+            .unwrap();
+        reader.into_iter().next().unwrap().unwrap()
+    };
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(1000))
+        .build();
+    let mut writer = ArrowWriter::try_new(
+        std::fs::File::create(&small).unwrap(),
+        batch.schema(),
+        Some(props),
+    )
+    .unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(
+        super::open_segment(&small)
+            .unwrap()
+            .metadata()
+            .num_row_groups(),
+        3
+    );
+    for i in [0_usize, 999, 1000, 2500, 2999] {
+        assert_eq!(
+            super::read_stored(dir.path(), &format!("q{i}"))
+                .unwrap()
+                .as_ref(),
+            Some(&whole[i]),
+            "row {i}"
+        );
+    }
+    assert_eq!(super::read_stored(dir.path(), "q3000").unwrap(), None);
+    let twin = |profile: &str| StoredProfile {
+        query_id: "twin".to_owned(),
+        ..row(9, profile.to_owned())
+    };
+    write_segment(
+        dir.path(),
+        "history-0000000000003-000003.parquet",
+        &[twin("first"), row(1, "between".to_owned()), twin("last")],
+    )
+    .unwrap();
+    assert_eq!(
+        super::read_stored(dir.path(), "twin").unwrap(),
+        Some(twin("last"))
+    );
+}
+
+/// Two engines on one directory write segments whose finish times overlap, and a segment is named by its first
+/// finish: the newest profile of an id both wrote can be in the segment that sorts first.
+#[test]
+fn a_lookup_returns_the_newest_profile_across_overlapping_segments() {
+    let dir = tempfile::tempdir().unwrap();
+    let reused = |at: i64, profile: &str| StoredProfile {
+        query_id: "reused".to_owned(),
+        ..row(at, profile.to_owned())
+    };
+    write_segment(
+        dir.path(),
+        "history-0000000000100-a-000001.parquet",
+        &[row(100, "x".to_owned()), reused(400, "newest")],
+    )
+    .unwrap();
+    write_segment(
+        dir.path(),
+        "history-0000000000200-b-000001.parquet",
+        &[row(200, "y".to_owned()), reused(300, "older")],
+    )
+    .unwrap();
+    let read = |id: &str| super::read_stored(dir.path(), id).unwrap();
+    assert_eq!(read("reused"), Some(reused(400, "newest")));
+    // A segment that ends before the match found is not a candidate, and one that only ties does not replace it.
+    let path = dir.path().join("history-0000000000100-a-000001.parquet");
+    assert_eq!(
+        super::last_finish(&super::open_segment(&path).unwrap()),
+        Some(400)
+    );
+    assert_eq!(
+        super::find_in_segment(&path, "reused", Some(400)).unwrap(),
+        None
+    );
+    assert_eq!(
+        super::find_in_segment(&path, "reused", Some(399)).unwrap(),
+        Some(reused(400, "newest"))
+    );
+    assert_eq!(
+        super::find_in_segment(&path, "q100", Some(399)).unwrap(),
+        None
+    );
+}
+
 #[test]
 fn a_finished_query_leaves_a_profile_that_reads_back() {
     let dir = tempfile::tempdir().unwrap();

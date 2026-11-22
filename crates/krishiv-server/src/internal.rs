@@ -47,6 +47,10 @@ pub enum SystemTable {
     Memory,
     /// `system.caches`.
     Caches,
+    /// `system.sessions`: the sessions of every client, open and lately ended.
+    Sessions,
+    /// `system.resource_groups`: the workload groups with their limits and live counters.
+    ResourceGroups,
 }
 
 /// A source failed to read a table or act on a query. Carries the engine's Spark error class and SQLSTATE
@@ -114,6 +118,33 @@ pub trait UiSource: Send + Sync + 'static {
     /// Cancels the query as an operator's kill (the `admin` reason: the query fails with
     /// `KRISHIV_QUERY_KILLED`); `false` when it is not running.
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool>;
+
+    /// Ends session `session_id` as an operator's kill: its running queries fail with `KRISHIV_QUERY_KILLED`
+    /// and the session's next call is refused. The number of queries cancelled; `None` when no open session
+    /// has that id, or when the source does not end sessions (a console over one session, or over stored
+    /// profiles).
+    fn close_session<'a>(&'a self, session_id: &'a str) -> UiFuture<'a, Option<usize>> {
+        let _ = session_id;
+        Box::pin(async { Ok(None) })
+    }
+
+    /// The plan tree of the finished query whose `system.queries` row is `query`, as the profile document
+    /// stores it (an array of nodes: `id`, `name`, `children` as indexes into the array), `None` when this
+    /// source keeps no plan for it. The page joins the nodes to the query's operators by `node_id`, and lists
+    /// the operators alone when there is none. Only a node's id, name and children reach the page
+    /// (`plan_nodes`).
+    fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
+        let _ = query;
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Whether the plan of the ended query whose row is `query` can still arrive: the source writes a history
+    /// store and the query ended a moment ago, so its profile may not be written yet. The page asks again
+    /// only while this holds; a source that will never have the plan says `false` and the page says so at once.
+    fn plan_pending(&self, query: &Row) -> bool {
+        let _ = query;
+        false
+    }
 
     /// Which console this is, as `/api/internal/health` reports it and the page reads it: `server` (every
     /// session of a server), `embedded` (one session of the host process) or `profiles` (stored profiles, no
@@ -289,6 +320,12 @@ pub fn router_with_ui_policy(
         .route("/api/internal/history", get(history))
         .route("/api/internal/compare", get(compare))
         .route("/api/internal/resources", get(resources))
+        .route("/api/internal/sessions", get(crate::workload::sessions))
+        .route(
+            "/api/internal/sessions/{id}/close",
+            post(crate::workload::close_session),
+        )
+        .route("/api/internal/groups", get(crate::workload::groups))
         .route("/api/internal/events", get(events))
         .route("/api/internal/catalog/catalogs", get(pages::catalogs))
         .route(
@@ -616,8 +653,19 @@ fn pick_query(row: &Row) -> Row {
     picked
 }
 
+/// [`pick_query`] for a list of queries (the live list, the history): the row also names its session, so the
+/// Sessions page can point at a session's queries. A query's own page does not carry it: a signed embed link
+/// reads that response with no session of its own.
+fn pick_listed(row: &Row) -> Value {
+    let mut picked = pick_query(row);
+    if let Some(session) = row.get("session_id") {
+        picked.insert("session_id".to_owned(), session.clone());
+    }
+    Value::Object(picked)
+}
+
 /// Keeps only the allowlisted columns of a row.
-fn pick(row: &Row, columns: &[&str]) -> Row {
+pub(crate) fn pick(row: &Row, columns: &[&str]) -> Row {
     columns
         .iter()
         .filter_map(|c| row.get(*c).map(|v| ((*c).to_owned(), v.clone())))
@@ -698,11 +746,11 @@ const CACHE_COLUMNS: &[&str] = &[
     "loads_in_flight",
 ];
 
-fn text<'a>(row: &'a Row, column: &str) -> &'a str {
+pub(crate) fn text<'a>(row: &'a Row, column: &str) -> &'a str {
     row.get(column).and_then(Value::as_str).unwrap_or("")
 }
 
-fn int(row: &Row, column: &str) -> i64 {
+pub(crate) fn int(row: &Row, column: &str) -> i64 {
     row.get(column).and_then(Value::as_i64).unwrap_or(0)
 }
 
@@ -713,12 +761,10 @@ fn is_live(row: &Row) -> bool {
 fn live_queries(rows: &[Row]) -> Vec<Value> {
     let mut live: Vec<&Row> = rows.iter().filter(|r| is_live(r)).collect();
     live.sort_by_key(|r| int(r, "submitted_at"));
-    live.into_iter()
-        .map(|r| Value::Object(pick_query(r)))
-        .collect()
+    live.into_iter().map(pick_listed).collect()
 }
 
-async fn table(s: &UiState, t: SystemTable) -> Result<Vec<Row>, Box<Response>> {
+pub(crate) async fn table(s: &UiState, t: SystemTable) -> Result<Vec<Row>, Box<Response>> {
     s.source
         .rows(t)
         .await
@@ -839,14 +885,56 @@ async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Respo
         .filter(|r| text(r, "query_id") == id)
         .collect();
     ops.sort_by_key(|r| int(r, "operator_id"));
+    // A source with no plan for the query leaves the page its flat operator list. A query that has not ended
+    // has no stored plan, and its page asks again every second: the store is not searched for it.
+    let ended = !matches!(text(query, "state"), "running" | "queued");
+    let plan = if !ended {
+        None
+    } else {
+        s.source
+            .plan(query)
+            .await
+            .ok()
+            .flatten()
+            .as_ref()
+            .and_then(plan_nodes)
+    };
     json_response(
         StatusCode::OK,
         &json!({
             "query": pick_query(query),
             "operators": ops.iter().map(|r| Value::Object(pick(r, OPERATOR_COLUMNS))).collect::<Vec<_>>(),
             "hot_operator": hot_operator(&ops),
+            // A query with no operator rows (one refused before it ran) has nothing to draw a plan over: no wait.
+            "plan_pending": ended && plan.is_none() && !ops.is_empty() && s.source.plan_pending(query),
+            "plan": plan,
         }),
     )
+}
+
+/// The nodes of a stored plan as the page gets them: `id`, `name` and `children`, nothing else. A node's
+/// `detail` and `facts` are the plan's own text: with `krishiv.history.literals = keep` they hold the
+/// statement's literals, which the page never shows (the statement's text is masked on the same page, and a
+/// signed link reads this response with no session); with the default they are blanked to `?`. `None` when
+/// `plan` is not an array of nodes.
+fn plan_nodes(plan: &Value) -> Option<Value> {
+    let nodes = plan.as_array()?;
+    Some(Value::Array(
+        nodes
+            .iter()
+            .map(|n| {
+                json!({
+                    "id": n.get("id").filter(|v| v.is_u64()),
+                    "name": n.get("name").and_then(Value::as_str).unwrap_or(""),
+                    "children": n
+                        .get("children")
+                        .and_then(Value::as_array)
+                        .map(|c| c.iter().filter(|i| i.is_u64()).cloned().collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                })
+            })
+            .collect(),
+    ))
 }
 
 fn now_secs() -> u64 {
@@ -956,9 +1044,27 @@ async fn embed_query(
     }
 }
 
-async fn cancel(State(s): State<UiState>, Path(id): Path<String>) -> Response {
+/// `POST /api/internal/queries/{id}/cancel`: an operator's kill of a running query; a query that was
+/// cancelled is one audit record.
+async fn cancel(
+    State(s): State<UiState>,
+    caller: Option<Extension<Caller>>,
+    Path(id): Path<String>,
+) -> Response {
     match s.source.cancel(&id).await {
-        Ok(true) => json_response(StatusCode::OK, &json!({"cancelled": true})),
+        Ok(true) => {
+            let caller = caller.map(|c| c.0);
+            tracing::info!(
+                target: "krishiv::audit",
+                principal = caller.as_ref().map_or("unknown", |c| c.principal.as_str()),
+                role = caller.as_ref().and_then(|c| c.role.as_deref()).unwrap_or("none"),
+                surface = "ui",
+                action = "cancel_query",
+                query = %id,
+                "query cancelled"
+            );
+            json_response(StatusCode::OK, &json!({"cancelled": true}))
+        }
         Ok(false) => error(
             StatusCode::NOT_FOUND,
             "not_running",
@@ -983,6 +1089,7 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
     // of the name finds it, in either case.
     let client = filter_param(&uri, "client").map(|c| c.to_lowercase());
     let tag = filter_param(&uri, "tag");
+    let session = filter_param(&uri, "session");
     let mut done: Vec<&Row> = rows
         .iter()
         .filter(|r| !is_live(r))
@@ -998,12 +1105,17 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
                 .is_none_or(|c| text(r, "client_type").to_lowercase().contains(c))
         })
         .filter(|r| tag.as_deref().is_none_or(|t| has_tag(r, t)))
+        .filter(|r| {
+            session
+                .as_deref()
+                .is_none_or(|s| text(r, "session_id") == s)
+        })
         .collect();
     done.sort_by_key(|r| std::cmp::Reverse(int(r, "submitted_at")));
     done.truncate(limit);
     json_response(
         StatusCode::OK,
-        &json!({"queries": done.into_iter().map(|r| Value::Object(pick_query(r))).collect::<Vec<_>>()}),
+        &json!({"queries": done.into_iter().map(pick_listed).collect::<Vec<_>>()}),
     )
 }
 

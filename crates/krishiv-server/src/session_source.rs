@@ -49,6 +49,9 @@ pub struct SessionSource {
     own_session: bool,
 }
 
+/// How long after a query ended its plan is still expected from the history writer.
+const PLAN_WAIT_MICROS: i64 = 10_000_000;
+
 /// Stored queries a server's history shows beside its own (the newest; the History page lists at most 1,000).
 const MAX_STORED_QUERIES: usize = 1000;
 
@@ -137,7 +140,7 @@ impl SessionSource {
     /// tables; a query in both is shown as the runtime has it.
     #[must_use]
     pub fn with_stored_history(mut self, stored: &[krishiv_session::StoredProfile]) -> Self {
-        // The console's own reads are stored like any query (about two a second while a page is open): they
+        // The console's own reads are stored like any query (about one a second while a page is open): they
         // are dropped before the cut, or they would take every place in it.
         let users = newest_per_query(stored.iter().filter(|p| !of_console(p)));
         let newest = &users[users.len().saturating_sub(MAX_STORED_QUERIES)..];
@@ -180,29 +183,19 @@ impl SessionSource {
             .collect())
     }
 
-    /// Adds `client_type` to each query row: what the client of the query's session said it is
-    /// (`system.sessions`). A query whose session is no longer listed has none.
-    async fn add_client_types(&self, queries: &mut [Row]) -> Result<(), UiError> {
-        let sql = "SELECT session_id, client_type FROM system.sessions";
+    /// The ids of the queries session `session_id` ran, read with one narrow statement.
+    pub(crate) async fn query_ids_of(
+        &self,
+        session_id: &str,
+    ) -> Result<std::collections::HashSet<String>, UiError> {
+        let sql = "SELECT query_id, session_id FROM system.queries";
         let df = self.session.sql_boxed(sql).await.map_err(ui_error)?;
         let batches = df.collect_boxed().await.map_err(ui_error)?;
-        let clients: std::collections::HashMap<String, Value> = batches_to_rows(&batches)
-            .into_iter()
-            .filter_map(|mut s| match s.remove("session_id") {
-                Some(Value::String(id)) => Some((id, s.remove("client_type")?)),
-                _ => None,
-            })
-            .collect();
-        for query in queries {
-            let client = query
-                .get("session_id")
-                .and_then(Value::as_str)
-                .and_then(|id| clients.get(id));
-            if let Some(client) = client {
-                query.insert("client_type".to_owned(), client.clone());
-            }
-        }
-        Ok(())
+        Ok(batches_to_rows(&batches)
+            .iter()
+            .filter(|r| r.get("session_id").and_then(Value::as_str) == Some(session_id))
+            .filter_map(|r| query_id(r).map(str::to_owned))
+            .collect())
     }
 
     /// The session `caller` runs statements in, built on first use.
@@ -220,9 +213,11 @@ impl SessionSource {
         let key = self.owner_key(caller).unwrap_or_default();
         let mut sessions = lock(&self.sessions);
         // A session's policy is fixed for its life: a caller whose role differs from the one its session was built
-        // with (a group claim that moved) gets a new session, as the Connect session manager gives.
+        // with (a group claim that moved) gets a new session, as the Connect session manager gives. So does a
+        // caller whose session was ended (the Sessions page, an idle sweep): the editor keeps working.
         if let Some((role, s)) = sessions.get(&key)
             && *role == who.role
+            && !s.is_closed()
         {
             return Ok((key, s.clone()));
         }
@@ -424,6 +419,8 @@ fn table_name(table: SystemTable) -> &'static str {
         SystemTable::Operators => "operators",
         SystemTable::Memory => "memory",
         SystemTable::Caches => "caches",
+        SystemTable::Sessions => "sessions",
+        SystemTable::ResourceGroups => "resource_groups",
     }
 }
 
@@ -520,8 +517,21 @@ pub(crate) async fn catalog_rows(session: &Session, path: &[String]) -> Result<V
         [c, s, t] => format!("DESCRIBE TABLE {}.{}.{}", quote(c), quote(s), quote(t)),
         _ => return Ok(Vec::new()),
     };
-    let df = session.sql_boxed(&sql).await.map_err(ui_error)?;
-    let batches = df.collect_boxed().await.map_err(ui_error)?;
+    let batches = match collect(session, &sql).await {
+        Ok(batches) => batches,
+        // A temporary view is listed under every schema, but its name has one part: `c.s.v` does not name
+        // it. The three-part name is tried first, so a table of the schema with the view's name is the one
+        // described, and a name that is neither keeps the first statement's error. So does a table of that
+        // name whose own `DESCRIBE` fails: the view is described only when the schema has no such table.
+        Err(e) => match path {
+            [c, s, t] if is_temporary_view(session, c, s, t).await => {
+                collect(session, &format!("DESCRIBE TABLE {}", quote(t)))
+                    .await
+                    .map_err(ui_error)?
+            }
+            _ => return Err(ui_error(e)),
+        },
+    };
     let mut out = Vec::new();
     for r in batches_to_rows(&batches) {
         let first = |keys: &[&str]| {
@@ -552,16 +562,64 @@ pub(crate) async fn catalog_rows(session: &Session, path: &[String]) -> Result<V
     Ok(out)
 }
 
+/// The batches of one statement of the catalog page.
+async fn collect(session: &Session, sql: &str) -> Result<Vec<RecordBatch>, KrishivError> {
+    session.sql_boxed(sql).await?.collect_boxed().await
+}
+
+/// Whether `SHOW TABLES IN c.s` lists `t` as a temporary view and as nothing else. `false` when the listing fails.
+async fn is_temporary_view(session: &Session, c: &str, s: &str, t: &str) -> bool {
+    let sql = format!("SHOW TABLES IN {}.{}", quote(c), quote(s));
+    collect(session, &sql)
+        .await
+        .is_ok_and(|batches| only_temporary(&batches_to_rows(&batches), t))
+}
+
+/// Whether the `SHOW TABLES` rows `listing` name `t` as a temporary view and hold no other row of that name.
+/// A table of the schema with the view's name is what the three-part name means, so its own error is the one
+/// to show: the view's columns under the table's name would hide it.
+fn only_temporary(listing: &[Row], t: &str) -> bool {
+    let mut named = listing
+        .iter()
+        .filter(|r| r.get("tableName").and_then(Value::as_str) == Some(t))
+        .map(|r| r.get("isTemporary") == Some(&Value::Bool(true)))
+        .peekable();
+    named.peek().is_some() && named.all(|temporary| temporary)
+}
+
+/// `system.queries` with the `client_type` of each query's session.
+const QUERIES_WITH_CLIENT: &str = "SELECT q.*, s.client_type FROM system.queries q \
+     LEFT JOIN system.sessions s ON q.session_id = s.session_id";
+
 impl UiSource for SessionSource {
     fn rows(&self, table: SystemTable) -> UiFuture<'_, Vec<Row>> {
         Box::pin(async move {
-            let sql = format!("SELECT * FROM system.{}", table_name(table));
+            // A query row carries `client_type`: what the client of the query's session said it is
+            // (`system.sessions`), null when the session is no longer listed. One statement reads both.
+            let sql = if table == SystemTable::Queries {
+                QUERIES_WITH_CLIENT.to_owned()
+            } else {
+                format!("SELECT * FROM system.{}", table_name(table))
+            };
             let df = self.session.sql_boxed(&sql).await.map_err(ui_error)?;
             let batches = df.collect_boxed().await.map_err(ui_error)?;
             let mut rows = batches_to_rows(&batches);
             if table == SystemTable::Queries {
+                // The runtime mints a session's id, so `system.sessions` holds one row per id and the join
+                // answers each query once. Two sessions may run a query under one operation id (the client
+                // chooses it, per session): both are listed.
                 rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
-                self.add_client_types(&mut rows).await?;
+            }
+            // The console's own session is not a client's. The session the editor runs in is listed (what
+            // it runs shows on it) and marked: `close_session` refuses it, so the page offers no action.
+            if table == SystemTable::Sessions {
+                rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
+                let editor = self.anonymous.id();
+                for row in &mut rows {
+                    if row.get("session_id").and_then(Value::as_str) == Some(editor) {
+                        row.insert("endable".to_owned(), Value::Bool(false));
+                    }
+                }
             }
             if self.stored.is_none()
                 || !matches!(table, SystemTable::Queries | SystemTable::Operators)
@@ -585,6 +643,53 @@ impl UiSource for SessionSource {
         })
     }
 
+    fn plan_pending(&self, query: &Row) -> bool {
+        // The writer holds an entry for half a second before it writes a segment; a query that ended longer
+        // ago than the window and is not in the store will not get there (trimmed, a failed write).
+        let ended_us = query.get("ended_at").and_then(Value::as_i64);
+        let now_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_micros()).unwrap_or(i64::MAX));
+        self.runtime.keeps_profile_history()
+            && ended_us.is_some_and(|ended| now_us.saturating_sub(ended) < PLAN_WAIT_MICROS)
+    }
+
+    fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
+        Box::pin(async move {
+            let Some(query_id) = query_id(query) else {
+                return Ok(None);
+            };
+            // The runtime's store, once the writer has reached the query. The store also holds earlier runs
+            // (a server reads and writes one directory) and a client may reuse an id, so a profile is this
+            // query's only if it ended after this query was submitted: until this run's profile is written
+            // the store's newest under the id is an earlier run's, whose plan is not this run's operators'.
+            let runtime = Arc::clone(&self.runtime);
+            let id = query_id.to_owned();
+            let own = tokio::task::spawn_blocking(move || runtime.stored_profile(&id))
+                .await
+                .map_err(|e| UiError::new(e.to_string()))?
+                .map_err(ui_error)?;
+            let submitted_ms = query
+                .get("submitted_at")
+                .and_then(Value::as_i64)
+                .map_or(i64::MAX, |us| us.div_euclid(1000));
+            if let Some(profile) = own.filter(|p| p.finished_at_ms >= submitted_ms) {
+                return Ok(plan_of(&profile.profile));
+            }
+            // One of an earlier run that the source was given when it was built, unless this run has a
+            // query of that id.
+            match &self.stored {
+                Some(stored) if stored.plans.contains_key(query_id) => {
+                    if self.live_ids().await?.contains(query_id) {
+                        return Ok(None);
+                    }
+                    Ok(stored.plans.get(query_id).cloned())
+                }
+                _ => Ok(None),
+            }
+        })
+    }
+
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool> {
         Box::pin(async move {
             // An id that is not an id names no running query.
@@ -592,6 +697,19 @@ impl UiSource for SessionSource {
                 return Ok(false);
             };
             Ok(self.runtime.cancel(&id, CancelReason::Admin))
+        })
+    }
+
+    fn close_session<'a>(&'a self, session_id: &'a str) -> UiFuture<'a, Option<usize>> {
+        Box::pin(async move {
+            // The console reads through its own session, and the editor of an unidentified caller runs in one
+            // shared session: ending either would break the console for everyone, so neither can be ended here.
+            // Any other session ends as an operator's kill (`killed` / `admin_kill`), the caller's own editor
+            // session included: the console does not know which session is the caller's.
+            if session_id == self.session.id() || session_id == self.anonymous.id() {
+                return Ok(None);
+            }
+            Ok(self.runtime.kill_session(session_id, CancelReason::Admin))
         })
     }
 
@@ -779,6 +897,7 @@ fn authenticated(caller: &Caller) -> Option<&Authenticated> {
 pub struct ProfilesSource {
     queries: Vec<Row>,
     operators: Vec<Row>,
+    plans: std::collections::HashMap<String, Value>,
 }
 
 impl ProfilesSource {
@@ -803,6 +922,7 @@ impl ProfilesSource {
     fn of<'a>(stored: impl Iterator<Item = &'a krishiv_session::StoredProfile>) -> Self {
         let mut queries = Vec::new();
         let mut operators = Vec::new();
+        let mut plans = std::collections::HashMap::new();
         for p in stored {
             let doc: Value = serde_json::from_str(&p.profile).unwrap_or(Value::Null);
             let usage = &doc["usage"];
@@ -836,6 +956,9 @@ impl ProfilesSource {
                 p.error_class.clone().map_or(Value::Null, Value::String),
             );
             queries.push(q);
+            if let Some(plan) = plan_in(&doc) {
+                plans.insert(p.query_id.clone(), plan);
+            }
             for o in doc["operators"].as_array().map_or(&[][..], Vec::as_slice) {
                 let m = &o["metrics"];
                 let mut r = Row::new();
@@ -862,13 +985,28 @@ impl ProfilesSource {
                 operators.push(r);
             }
         }
-        Self { queries, operators }
+        Self {
+            queries,
+            operators,
+            plans,
+        }
     }
 }
 
 /// The query a row of `system.queries` or `system.operators` belongs to.
 fn query_id(row: &Row) -> Option<&str> {
     row.get("query_id").and_then(Value::as_str)
+}
+
+/// The plan tree of a profile document (`krishiv.query-profile` JSON text), `None` when it does not read or
+/// has none.
+fn plan_of(profile: &str) -> Option<Value> {
+    plan_in(&serde_json::from_str(profile).ok()?)
+}
+
+/// The `plan` member of a profile document: its array of nodes.
+fn plan_in(doc: &Value) -> Option<Value> {
+    doc.get("plan").filter(|p| p.is_array()).cloned()
 }
 
 /// `stored` (oldest first) with one profile per query id, the newest, in the same order. A client may reuse an
@@ -901,13 +1039,20 @@ impl UiSource for ProfilesSource {
             Ok(match table {
                 SystemTable::Queries => self.queries.clone(),
                 SystemTable::Operators => self.operators.clone(),
-                SystemTable::Memory | SystemTable::Caches => Vec::new(),
+                SystemTable::Memory
+                | SystemTable::Caches
+                | SystemTable::Sessions
+                | SystemTable::ResourceGroups => Vec::new(),
             })
         })
     }
 
     fn cancel<'a>(&'a self, _query_id: &'a str) -> UiFuture<'a, bool> {
         Box::pin(async { Ok(false) })
+    }
+
+    fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
+        Box::pin(async move { Ok(query_id(query).and_then(|id| self.plans.get(id).cloned())) })
     }
 }
 
@@ -1091,6 +1236,26 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// The page describes a temporary view by its one-part name only when the schema has no table of that
+    /// name: a table whose `DESCRIBE` failed keeps its error.
+    #[test]
+    fn a_view_is_described_only_when_no_table_has_its_name() {
+        let listing: Vec<Row> = [("t", false), ("t", true), ("v", true), ("u", false)]
+            .into_iter()
+            .map(|(name, temporary)| {
+                let mut r = Row::new();
+                r.insert("tableName".into(), json!(name));
+                r.insert("isTemporary".into(), json!(temporary));
+                r
+            })
+            .collect();
+        assert!(only_temporary(&listing, "v"));
+        assert!(!only_temporary(&listing, "t"), "a table has the name too");
+        assert!(!only_temporary(&listing, "u"), "a table alone");
+        assert!(!only_temporary(&listing, "missing"));
+        assert!(!only_temporary(&[], "v"));
+    }
 
     /// Every column type a system table uses, with a null in the second row of each.
     #[test]

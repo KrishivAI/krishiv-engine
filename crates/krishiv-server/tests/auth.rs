@@ -148,6 +148,25 @@ async fn each_role_reaches_what_the_matrix_gives_it() {
         status(&call(addr, "POST", cancel, Some(OPERATOR)).await),
         "403"
     );
+    // Who is connected and how work is admitted are an operator's to read; ending a session is an operator's
+    // act, like a cancel (ADR 0046 §3).
+    let close = "/api/internal/sessions/s1/close";
+    for path in ["/api/internal/sessions", "/api/internal/groups"] {
+        assert_eq!(status(&call(addr, "GET", path, Some(VIEWER)).await), "403");
+        assert_eq!(
+            status(&call(addr, "GET", path, Some(OPERATOR)).await),
+            "200"
+        );
+    }
+    assert_eq!(
+        status(&call(addr, "POST", close, Some(VIEWER)).await),
+        "403"
+    );
+    assert_eq!(
+        status(&call(addr, "POST", close, Some(OPERATOR)).await),
+        "404",
+        "allowed, and the source knows no such session"
+    );
     // The configured token works in the UI's query-string form too (GET only).
     let page = format!("{queries}?token={OPERATOR}");
     assert_eq!(status(&call(addr, "GET", &page, None).await), "200");

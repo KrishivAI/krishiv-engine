@@ -52,6 +52,22 @@ unity = [
     "krishiv-store/cloud",
 ]
 
+# The AWS Glue Data Catalog read-only client (JSON API over async reqwest, signed with SigV4 on `sha2`; no AWS SDK).
+# Off by default; shares no code with `iceberg-rest` or `unity`.
+glue = [
+    "dep:reqwest",
+    "dep:serde_json",
+    "dep:tokio",
+    "dep:url",
+    "dep:sha2",
+    "dep:krishiv-plan",
+    "dep:krishiv-types",
+    "tokio/time",
+    "tokio/sync",
+    "dep:krishiv-store",
+    "krishiv-store/cloud",
+]
+
 # The embedded SQLite catalog (`rusqlite` with the bundled C amalgamation: a C build). Off by default.
 sqlite = ["dep:rusqlite", "dep:serde_json", "dep:krishiv-plan", "dep:krishiv-types"]
 
@@ -73,6 +89,7 @@ reqwest = { workspace = true, features = ["rustls"], optional = true }
 serde_json = { workspace = true, features = ["std"], optional = true }
 url = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 futures = { workspace = true, features = ["alloc", "executor"] }

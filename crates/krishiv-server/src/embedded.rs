@@ -74,13 +74,7 @@ impl EmbeddedSource {
 
     /// The ids of the session's own queries.
     async fn own_ids(&self) -> Result<HashSet<String>, UiError> {
-        Ok(self
-            .own_queries()
-            .await?
-            .iter()
-            .filter_map(|r| r.get("query_id").and_then(Value::as_str))
-            .map(str::to_owned)
-            .collect())
+        self.inner.query_ids_of(self.session.id()).await
     }
 }
 
@@ -121,8 +115,25 @@ impl UiSource for EmbeddedSource {
                     Ok(rows)
                 }
                 SystemTable::Caches => self.inner.rows(table).await,
+                // The one session the console shows; the groups are a server's.
+                SystemTable::Sessions => {
+                    let id = self.session.id();
+                    let mut rows = self.inner.rows(table).await?;
+                    rows.retain(|r| r.get("session_id").and_then(Value::as_str) == Some(id));
+                    Ok(rows)
+                }
+                SystemTable::ResourceGroups => Ok(Vec::new()),
             }
         })
+    }
+
+    fn plan_pending(&self, query: &Row) -> bool {
+        self.inner.plan_pending(query)
+    }
+
+    fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
+        // `query` is a row this source listed, so one of the session's own.
+        self.inner.plan(query)
     }
 
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool> {

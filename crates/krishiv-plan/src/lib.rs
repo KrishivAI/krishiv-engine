@@ -73,6 +73,7 @@
 //! | `PlanNode::Sort` | U, R | Q1-Q5, Q7-Q13, Q15, Q16, Q18, Q20-Q22 | `orderBy`, `sort` |
 //! | `PlanNode::Limit` | U, R | Q2, Q3, Q10, Q18, Q21 | `limit` |
 //! | `PlanNode::Offset` | U, R | - | `offset` |
+//! | `PlanNode::Tail` | U, R | - | - |
 //! | `PlanNode::SubqueryAlias` | U, R | Q7-Q9, Q13, Q21, Q22 | `df.alias` |
 //! | `PlanNode::WithCte` | U, R | Q15 | - |
 //! | `PlanNode::CteRef` | R | - | - |
@@ -146,6 +147,11 @@ pub(crate) mod spark_fmt;
 mod tests;
 pub mod udtf;
 mod walk;
+
+/// The option key under which a table reference's time-travel clause (`VERSION AS OF`, `@v1`, ...)
+/// rides on its read: no table reads an older version yet, so the session refuses it when the
+/// relation resolves.
+pub const TIME_TRAVEL_OPTION: &str = "__krishiv.timeTravel";
 
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash, semantic_plan_hash};
 pub use display::Annotated;
