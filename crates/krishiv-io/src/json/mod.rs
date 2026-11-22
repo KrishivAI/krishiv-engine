@@ -145,4 +145,6 @@ mod count_tests;
 #[cfg(test)]
 mod golden_tests;
 #[cfg(test)]
+mod infer_tests;
+#[cfg(test)]
 mod tests;

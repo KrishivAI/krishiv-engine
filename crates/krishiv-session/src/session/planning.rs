@@ -3,6 +3,15 @@
 
 use super::*;
 
+/// Now, as microseconds since the epoch.
+fn query_start_micros() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_micros()).ok())
+        .unwrap_or_default()
+}
+
 impl Session {
     /// The physical plan of `analyzed`, once the files it scans are
     /// listed and their footers read.

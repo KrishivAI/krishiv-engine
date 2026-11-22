@@ -31,14 +31,20 @@ impl ResourceGroups {
     /// a stale `etag`, then a file edited since it was loaded, then a target that is a link or not
     /// writable are refused; the document is validated; the file is written beside itself,
     /// synced, renamed over the original (mode kept) and the directory synced; then the tree is
-    /// swapped as [`ResourceGroups::reload_json`] does. Nothing changes on a refusal.
+    /// swapped as [`ResourceGroups::reload_json`] does; returns the document, etag and load time
+    /// installed. Nothing changes on a refusal.
     ///
     /// # Errors
     ///
     /// `KRISHIV_ADMIN_PRECONDITION_FAILED` (`stale_etag`, `file_changed`),
     /// `KRISHIV_RESOURCE_GROUP_CONFIG_READ_ONLY`, `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID` for an
     /// invalid document, `INTERNAL_ERROR` when the write fails.
-    pub fn replace_file(&self, path: &str, document: &str, etag: &str) -> Result<(), KrishivError> {
+    pub fn replace_file(
+        &self,
+        path: &str,
+        document: &str,
+        etag: &str,
+    ) -> Result<(String, String, u64), KrishivError> {
         let _one = self
             .replacing
             .lock()
@@ -60,6 +66,13 @@ impl ResourceGroups {
         }
         if meta.permissions().readonly() {
             return Err(read_only(path, "it is not writable"));
+        }
+        if owner_would_change(&meta) {
+            return Err(read_only(
+                path,
+                "it belongs to another user, and a replace would change its owner; edit it as \
+                 that user and reload",
+            ));
         }
         Self::validate(document, self.total_memory)?;
         match write_atomically(Path::new(path), document, &meta) {
@@ -89,6 +102,31 @@ fn read_only(path: &str, reason: &str) -> KrishivError {
         reason: reason.to_owned(),
     }
     .into()
+}
+
+/// Whether a new file made by this process would have another owner than `original`: a replace
+/// writes a temporary file and renames it over the original, and a process cannot give a file to
+/// another user without privilege, so a file owned by someone else is not replaced (design §5.4
+/// asks for the original's owner). The process's user is its effective user id.
+#[cfg(unix)]
+fn owner_would_change(original: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    uid_differs(original.uid(), rustix::process::geteuid().as_raw())
+}
+
+/// Whether a file of `file_uid` would change owner when `process_uid` replaces it.
+#[cfg(unix)]
+fn uid_differs(file_uid: u32, process_uid: u32) -> bool {
+    file_uid != process_uid
+}
+
+/// Non-Unix targets have no owner check: the file's owner is not read there, and a replace may
+/// give the file to the server's account. Krishiv's server mode (the only caller of a replace)
+/// supports Unix only, so this stays an unchecked, documented exclusion until a Windows server
+/// build exists.
+#[cfg(not(unix))]
+fn owner_would_change(_: &fs::Metadata) -> bool {
+    false
 }
 
 /// A write refused for want of permission or on a read-only mount.
@@ -137,4 +175,52 @@ fn write_atomically(path: &Path, text: &str, original: &fs::Metadata) -> std::io
         tracing::warn!(error = %e, "the resource group file's directory could not be synced");
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_owned_by_another_user_would_change_owner() {
+        assert!(!uid_differs(1000, 1000));
+        assert!(uid_differs(0, 1000));
+        assert!(uid_differs(1000, 0));
+    }
+
+    #[test]
+    fn a_file_this_process_made_keeps_its_owner() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let file = dir.path().join("f");
+        fs::write(&file, "x").unwrap_or_else(|e| panic!("{e}"));
+        let meta = fs::metadata(&file).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!owner_would_change(&meta));
+    }
+
+    #[test]
+    fn a_replace_refuses_a_file_owned_by_another_user() {
+        // Giving a file away needs privilege: where the tests do not run as root there is no
+        // foreign-owned fixture to make, and the comparison above covers the rule.
+        if rustix::process::geteuid().as_raw() != 0 {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let path = dir.path().join("groups.json");
+        let text = r#"{"rootGroups":[{"name":"root","hardConcurrencyLimit":1,"maxQueued":1}],"defaultGroup":"root"}"#;
+        fs::write(&path, text).unwrap_or_else(|e| panic!("{e}"));
+        std::os::unix::fs::chown(&path, Some(65_534), None).unwrap_or_else(|e| panic!("{e}"));
+        let groups = ResourceGroups::from_file(path.to_str().unwrap_or_default(), 1 << 30)
+            .unwrap_or_else(|e| panic!("{e}"));
+        // As root every file is writable, but a file of another owner still must not be replaced
+        // by a root-owned copy.
+        let err = groups
+            .replace_file(path.to_str().unwrap_or_default(), "{}", &groups.etag())
+            .expect_err("a foreign-owned file is refused");
+        assert!(err.to_string().contains("belongs to another user"), "{err}");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}")),
+            text,
+            "the file is unchanged"
+        );
+    }
 }
