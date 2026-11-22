@@ -227,6 +227,7 @@ impl RestCatalog {
         }
         let who = rest_caller(caller);
         let (ns, table) = (namespace.to_vec(), name.to_owned());
+        let epoch_before = self.epoch.load(Ordering::SeqCst);
         let Some(found) = self
             .blocking(move |c| c.load_table_as(&who, &ns, &table))
             .await?
@@ -235,6 +236,11 @@ impl RestCatalog {
         };
         let loaded = Arc::new(self.keep(namespace, name, found)?);
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        // A commit or refresh that moved the epoch while this load ran may have made the answer
+        // stale: use it for this call but do not keep it.
+        if self.epoch.load(Ordering::SeqCst) != epoch_before {
+            return Ok(Some(loaded));
+        }
         if cache.len() >= MAX_ENTRIES && !cache.contains_key(&key) {
             let oldest = cache
                 .iter()
@@ -575,14 +581,19 @@ async fn off_workers<T: Send + 'static>(
     }
 }
 
+/// Drops `namespace.table`'s cached `loadTable` answers and advances the catalog epoch, the
+/// epoch under the cache lock so a load that began before it cannot insert after it
+/// (`RestCatalog::loaded` compares the epoch under the same lock).
+fn invalidate_table(cache: &SharedCache, epoch: &AtomicU64, namespace: &[String], table: &str) {
+    let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    cache.retain(|(_, ns, name), _| !(ns.as_slice() == namespace && name == table));
+    epoch.fetch_add(1, Ordering::SeqCst);
+}
+
 impl RestCommitter {
     /// Drops the table's cached `loadTable` answers and advances the catalog epoch.
     fn invalidate(&self) {
-        self.cache
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|(_, ns, name), _| !(ns == &self.namespace && name == &self.table));
-        self.epoch.fetch_add(1, Ordering::SeqCst);
+        invalidate_table(&self.cache, &self.epoch, &self.namespace, &self.table);
     }
 }
 
@@ -599,24 +610,30 @@ impl RestCommitTransport for RestCommitter {
             self.namespace.clone(),
             self.table.clone(),
         );
-        match off_workers(move || client.commit_table_as(&caller, &ns, &table, &body)).await {
+        let (cache, epoch) = (Arc::clone(&self.cache), Arc::clone(&self.epoch));
+        // The invalidation runs inside the blocking call, so a query cancelled while it awaits
+        // (which drops this future) still drops the stale entries once the commit has landed.
+        let call = move || {
+            let out = client.commit_table_as(&caller, &ns, &table, &body);
+            // 2xx applied the commit; 5xx or a sent-but-lost request may have applied it.
+            let may_have_landed = match &out {
+                Ok(r) => (200..300).contains(&r.status) || r.status >= 500,
+                Err(f) => f.sent,
+            };
+            if may_have_landed {
+                invalidate_table(&cache, &epoch, &ns, &table);
+            }
+            out
+        };
+        match off_workers(call).await {
             Ok(Ok(r)) => {
-                // 2xx applied the commit; 5xx may have applied it before failing.
-                if (200..300).contains(&r.status) || r.status >= 500 {
-                    self.invalidate();
-                }
                 let mut reply = TransportReply::new(r.status, r.body);
                 if let Some(wait) = r.retry_after {
                     reply = reply.with_retry_after(wait);
                 }
                 Ok(reply)
             }
-            Ok(Err(f)) => {
-                if f.sent {
-                    self.invalidate();
-                }
-                Err(TransportFailure::new(f.sent, f.reason))
-            }
+            Ok(Err(f)) => Err(TransportFailure::new(f.sent, f.reason)),
             // The blocking call may have sent the request before it was lost.
             Err(_) => {
                 self.invalidate();
