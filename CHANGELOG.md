@@ -12,6 +12,28 @@ Nothing yet.
 
 ## 0.3.0
 
+Krishiv 0.3 grows from an embedded engine into a server you can put in front of other tools and other engines' tables.
+
+### Highlights
+
+- **Iceberg tables you can write.** Appends, `INSERT OVERWRITE`, and copy-on-write and merge-on-read `DELETE`/`UPDATE`
+  (deletion vectors on v3, position deletes on v2) commit with Iceberg's own conflict rules, also through a REST catalog
+  with an optimistic commit. Reads apply Spark's position, equality and deletion-vector deletes.
+- **Delta Lake reads** with deletion vectors, column mapping, type widening, partition pruning and data skipping, and
+  `krishiv.write.idempotencyKey` so a retried write commits once.
+- **Metric views** (Spark 4.2): `CREATE VIEW ... WITH METRICS LANGUAGE YAML`, read with `measure(<name>)`.
+- **Arrow Flight SQL** on the Spark Connect port: ADBC and Arrow JDBC drivers run statements, prepared statements and
+  catalog metadata calls with the same sessions, authentication and cancellation as Spark Connect.
+- **Python UDFs on the server** in sandboxed worker pools (one per principal and session): scalar, pandas and Arrow UDFs,
+  grouped, cogrouped and map UDFs, window UDFs and table functions, with an OS sandbox (Landlock, seccomp).
+- **Workload management:** resource groups limit concurrency, queueing, memory and scanned bytes per group and route
+  queries by user, source, tag and statement type; queries can be cancelled by tag.
+- **A web console** in three places (`krishiv.ui()`, `krishiv::ui(&session)` and `krishiv server`) with a catalog
+  browser, a SQL editor, a plan view shaded by metric, History, Sessions, Workload and Advisor pages.
+- **Server security:** TLS, mTLS and OIDC bearer tokens, with path and object-store access confined by allow lists.
+- **More Spark Connect:** AnalyzePlan, Config and Interrupt, resumable result streams, `DataFrame.observe`, and
+  `spark.catalog`.
+
 ### Added
 
 - Python UDF workers of `krishiv server` can run in an OS sandbox (Landlock, seccomp and resource limits; no root needed): no network, no other programs, and no files outside the allowed paths. `krishiv.udf.sandbox` (default `on`) refuses server-side Python UDFs when the kernel cannot enforce it. (#717)
