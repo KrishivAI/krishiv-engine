@@ -174,6 +174,18 @@ impl RowLevelTable for IcebergRowLevel {
 
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
         self.check_mode()?;
+        // A v3 merge-on-read UPDATE would need new row ids (design §8 item 3): refuse before the
+        // table is read, not at the rewrite after the scan.
+        if self.lineage && self.op == RowLevelOperation::Update && self.capabilities().merge_on_read
+        {
+            return Err(KrishivUnsupportedFeature {
+                feature:
+                    "UPDATE of an Iceberg format version 3 table in merge-on-read mode, which \
+                          would need new row ids"
+                        .to_owned(),
+            }
+            .into());
+        }
         let inner = self.provider.row_level_scan(self.lineage, None)?;
         Ok(Arc::new(RowIdScan::new(inner)?))
     }
