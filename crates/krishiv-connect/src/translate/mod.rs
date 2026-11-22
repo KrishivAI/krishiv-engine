@@ -14,6 +14,7 @@
 //! | `Read.data_source` | `Read` (files: format, paths, options) |
 //! | `SQL` | `Sql` (query, parameters) |
 //! | `Project`, `Filter`, `Sort`, `Limit`, `Offset` | `Project`, `Filter`, `Sort`, `Limit`, `Offset` |
+//! | `Tail` | `Tail` |
 //! | `Join` (all seven types, `using_columns`) | `Join` |
 //! | `Aggregate` (group by, rollup, cube, grouping sets) | `Aggregate` |
 //! | `SubqueryAlias` | `SubqueryAlias` |

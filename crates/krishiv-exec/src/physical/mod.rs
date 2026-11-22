@@ -408,6 +408,14 @@ pub enum PhysNode {
         /// The row count.
         limit: u64,
     },
+    /// The last `limit` rows of `input` in its row order (Spark's
+    /// `Dataset.tail`, `CollectTailExec`); the input is read by one driver.
+    Tail {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The number of trailing rows to keep.
+        limit: u64,
+    },
     /// The rows of `input`, then one column per Python UDF call evaluated
     /// over **every** row (design P2-T059 §2.2, Spark's `ExtractPythonUDFs`):
     /// the nodes above read each call's column by its attribute. Calls of
@@ -1217,6 +1225,7 @@ plan_data!(enum PhysNode {
     Filter { input, layout, predicate, subqueries },
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
+    Tail { input, limit },
     CollectMetrics { input, name, measure, instance, limit },
     ReplicateRows { input, layout, count, subqueries },
     Sample { input, lower, upper, seed },
@@ -1331,6 +1340,7 @@ impl PhysNode {
                 .chain(subqueries.iter().map(|s| &s.plan))
                 .collect(),
             Self::Limit { input, .. }
+            | Self::Tail { input, .. }
             | Self::Sample { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
@@ -1397,6 +1407,7 @@ impl PhysNode {
                 .chain(subqueries.iter_mut().map(|s| &mut s.plan))
                 .collect(),
             Self::Limit { input, .. }
+            | Self::Tail { input, .. }
             | Self::Sample { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }

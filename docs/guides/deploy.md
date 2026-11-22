@@ -20,6 +20,17 @@ unsupported CPU is detected at import time and reported by name instead of crash
 Memory use is bounded by `krishiv.*` settings (see [configuration](../reference/config/index.md)); operators spill to
 disk when the limit is reached.
 
+### The memory limit in a container
+
+`krishiv.memory.limit` is the limit of the process's memory pool. Left unset, it is 80% of the effective memory limit:
+the tightest cgroup limit that applies to the process (a Docker `--memory`, a Kubernetes memory limit, a systemd
+`MemoryMax`), else the machine's physical memory, or 2 GiB where neither can be read; when both a cgroup limit and the
+physical memory are known, the smaller of the two. A 4 GiB container on a 62 GB host therefore gets a pool of about
+3.2 GiB, not 50 GB. Set `krishiv.memory.limit` (a startup setting) to use another value.
+
+`SET krishiv.memory.limit` answers `<undefined>` while the key is unset, as `SET` does for any unset Spark key; it does
+not print the derived value. `EXPLAIN ANALYZE` prints the limit the query ran under (for example `limit 3.2 GiB`).
+
 ## Single-node
 
 The 0.2.0 command line has no `server` subcommand: it lists only `sql` and `debug-bundle`. In builds after 0.2.0,

@@ -98,6 +98,15 @@ fn show(at: &[PathSegment]) -> String {
     let mut s = String::from("$");
     for step in at {
         match step {
+            // Spark's `renderVariantPath`: a key that is empty or holds `.` or `[` is bracketed, in double quotes
+            // when it also holds `'`.
+            PathSegment::Key(k) if k.is_empty() || k.contains(['.', '[']) => {
+                if k.contains('\'') {
+                    s.push_str(&format!("[\"{k}\"]"));
+                } else {
+                    s.push_str(&format!("['{k}']"));
+                }
+            }
             PathSegment::Key(k) => {
                 s.push('.');
                 s.push_str(k);
@@ -253,6 +262,10 @@ fn rec(
             if *index >= n
                 && let Some(val) = created(edit)
             {
+                // Each filler null costs bytes, so an index past the size limit is refused before any is written.
+                if *index >= VARIANT_SIZE_LIMIT / 5 {
+                    return Err(size_limit());
+                }
                 for _ in n..*index {
                     offsets.push(w.position().saturating_sub(start));
                     w.null();
@@ -288,11 +301,27 @@ fn created<'a>(edit: Edit<'a>) -> Option<VariantRef<'a>> {
 const MAX_CREATED_DEPTH: usize = 1000;
 
 fn size_limit() -> KrishivError {
+    size_limit_in("variant")
+}
+
+/// `VARIANT_SIZE_LIMIT` in the function `function`.
+#[must_use]
+pub fn size_limit_in(function: &str) -> KrishivError {
     VariantSizeLimit {
         size_limit: "128.0 MiB".to_owned(),
-        function_name: "`variant`".to_owned(),
+        function_name: format!("`{function}`"),
     }
     .into()
+}
+
+/// `error` with a `VARIANT_SIZE_LIMIT` naming `function` (the writer's own limit names `variant`).
+#[must_use]
+pub fn named_in(error: KrishivError, function: &str) -> KrishivError {
+    if error.error_class() == krishiv_common::error::ErrorClass::VariantSizeLimit {
+        size_limit_in(function)
+    } else {
+        error
+    }
 }
 
 /// Writes the value an edit creates where the path leaves the existing value: the nested objects and arrays of the

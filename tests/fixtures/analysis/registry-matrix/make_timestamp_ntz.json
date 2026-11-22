@@ -1,52 +1,12 @@
 {
   "entries": [
     {
-      "id": "make_timestamp_ntz#36d031f591c7/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(CAST(1 AS SMALLINT), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#36d031f591c7/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(CAST(1 AS SMALLINT), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#45028c6331dd/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(1.5D, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#45028c6331dd/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(1.5D, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#48efb30e3e29/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#48efb30e3e29/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#4d20034d0b2a/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(1, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#4d20034d0b2a/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(1, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ntz#50e1fa3d756d/ansi_on",
       "reason": "SELECT make_timestamp_ntz(NULL, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_timestamp_ntz#50e1fa3d756d/ansi_off",
       "reason": "SELECT make_timestamp_ntz(NULL, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#555b3e1d38ba/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(X'01', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#555b3e1d38ba/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(X'01', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ntz#600ddf67d404/ansi_on",
@@ -65,60 +25,12 @@
       "reason": "SELECT make_timestamp_ntz(DATE'0001-01-01', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE"
     },
     {
-      "id": "make_timestamp_ntz#6b225bb1af50/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(CAST(1.5 AS DECIMAL(38,18)), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#6b225bb1af50/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(CAST(1.5 AS DECIMAL(38,18)), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#74f33a874790/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(named_struct('a', 1, 'b', 'x'), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#74f33a874790/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(named_struct('a', 1, 'b', 'x'), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#889a169ecfec/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(CAST(1.5 AS DECIMAL(10,2)), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#889a169ecfec/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(CAST(1.5 AS DECIMAL(10,2)), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ntz#8c7c144b2eba/ansi_on",
       "reason": "SELECT make_timestamp_ntz(CAST(NULL AS date), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_timestamp_ntz#8c7c144b2eba/ansi_off",
       "reason": "SELECT make_timestamp_ntz(CAST(NULL AS date), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#a0af7834b32a/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(true, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#a0af7834b32a/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(true, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#aa18fb450f43/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(CAST(1 AS TINYINT), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#aa18fb450f43/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(CAST(1 AS TINYINT), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#b4dfef97013f/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(INTERVAL '1 02:03:04' DAY TO SECOND, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#b4dfef97013f/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(INTERVAL '1 02:03:04' DAY TO SECOND, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ntz#ba18932bc0ac/ansi_on",
@@ -137,76 +49,12 @@
       "reason": "SELECT make_timestamp_ntz(DATE'2024-02-29', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE"
     },
     {
-      "id": "make_timestamp_ntz#c6917994f553/ansi_on",
-      "reason": "SELECT make_timestamp_ntz('1', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#c6917994f553/ansi_off",
-      "reason": "SELECT make_timestamp_ntz('1', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#ca4cb76a6c48/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(1L, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#ca4cb76a6c48/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(1L, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#d37d7568b2e3/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(map('a', 1), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#d37d7568b2e3/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(map('a', 1), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#d6185bb88c51/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(INTERVAL '1-2' YEAR TO MONTH, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#d6185bb88c51/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(INTERVAL '1-2' YEAR TO MONTH, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#dd81bcec2971/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(array(1, 2), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#dd81bcec2971/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(array(1, 2), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#e1bacc84eb30/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(CAST(1.5 AS FLOAT), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#e1bacc84eb30/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(CAST(1.5 AS FLOAT), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ntz#e40be4e9b1ba/ansi_on",
       "reason": "SELECT make_timestamp_ntz(DATE'1582-10-10', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_timestamp_ntz#e40be4e9b1ba/ansi_off",
       "reason": "SELECT make_timestamp_ntz(DATE'1582-10-10', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#e6a0a593b479/ansi_on",
-      "reason": "SELECT make_timestamp_ntz('abc', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#e6a0a593b479/ansi_off",
-      "reason": "SELECT make_timestamp_ntz('abc', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#edcea3994da2/ansi_on",
-      "reason": "SELECT make_timestamp_ntz(TIMESTAMP'2024-02-29 12:34:56.123456', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ntz#edcea3994da2/ansi_off",
-      "reason": "SELECT make_timestamp_ntz(TIMESTAMP'2024-02-29 12:34:56.123456', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ntz#f5752436209a/ansi_on",

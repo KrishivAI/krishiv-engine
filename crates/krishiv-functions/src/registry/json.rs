@@ -52,14 +52,10 @@ pub(super) fn specs() -> Vec<Spec> {
         ]),
         table_rows_result,
     ));
-    out.extend(scalar(
-        &["__json_table_value"],
-        &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
-        string_result,
-    ));
+    out.extend(scalar(&["__json_table_value"], &Inputs::Any, string_result));
     out.extend(scalar(
         &["__json_table_exists"],
-        &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
+        &Inputs::Any,
         exists_result,
     ));
     out.extend(scalar(&["schema_of_json"], &Inputs::Any, schema_of_json));
