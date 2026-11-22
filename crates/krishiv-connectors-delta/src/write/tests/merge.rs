@@ -83,6 +83,12 @@ fn merge(
         input: Arc::new(Leaf(input)),
         sink,
     }));
+    // As in `Env::write_as`: an ended driver's row groups are shipped by a background flush that returns its
+    // memory a moment after the query finished.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while env.query_pool.reserved() != 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     assert_eq!(
         env.query_pool.reserved(),
         0,
@@ -459,4 +465,76 @@ fn a_merge_that_rewrites_a_file_with_a_deletion_vector_reports_none_removed() {
     assert_eq!(m["numTargetFilesRemoved"], "1");
     assert_eq!(m["numTargetDeletionVectorsRemoved"], "0");
     assert_eq!(m["numTargetDeletionVectorsAdded"], "0");
+}
+
+/// The classes a Delta table gives the session planner's problems (`DeltaRowLevel::error`):
+/// delta-spark's for a `MERGE`, its `DELETE`/`UPDATE` names for a subquery, and none for what
+/// it leaves to the session (a duplicate assignment of a `DELETE` is not a Delta problem).
+#[test]
+fn the_merge_problems_take_delta_spark_s_classes() {
+    use krishiv_common::error::{ErrorClass, InternalError};
+    use krishiv_exec::planner::RowLevelProblem;
+
+    let env = Env::new();
+    two_file_table(&env, &[]);
+    let table = env.open().unwrap();
+    let rl = table.row_level(RowLevelOperation::Merge).unwrap();
+    let merge = RowLevelOperation::Merge;
+    let class = |op: RowLevelOperation, p: &RowLevelProblem<'_>| {
+        rl.error(op, p)
+            .map(|e| (e.error_class(), e.message().to_owned()))
+    };
+
+    let cause: KrishivError = InternalError {
+        message: "unresolved".to_owned(),
+    }
+    .into();
+    let (c, m) = class(merge, &RowLevelProblem::Unresolved(&cause)).unwrap();
+    assert_eq!(c, ErrorClass::InternalError);
+    assert!(m.contains("DELTA_MERGE_UNRESOLVED_EXPRESSION"), "{m}");
+    assert!(
+        class(
+            RowLevelOperation::Update,
+            &RowLevelProblem::Unresolved(&cause)
+        )
+        .is_none()
+    );
+
+    let nd = RowLevelProblem::NonDeterministic {
+        what: "search condition",
+        condition: "rand() > 0.5",
+    };
+    let (c, m) = class(merge, &nd).unwrap();
+    assert_eq!(c, ErrorClass::DeltaNonDeterministicFunctionNotSupported);
+    assert!(m.contains("search condition of MERGE operation"), "{m}");
+    assert!(m.contains("(condition = rand() > 0.5)"), "{m}");
+
+    let sub = RowLevelProblem::Subquery {
+        what: "UPDATE condition",
+        condition: "id IN (SELECT 1)",
+    };
+    let (c, m) = class(merge, &sub).unwrap();
+    assert_eq!(c, ErrorClass::DeltaUnsupportedSubquery);
+    assert!(m.contains("UPDATE condition of MERGE operation"), "{m}");
+    for (op, name) in [
+        (RowLevelOperation::Update, "UPDATE"),
+        (RowLevelOperation::Delete, "DELETE"),
+    ] {
+        let (c, m) = class(op, &sub).unwrap();
+        assert_eq!(c, ErrorClass::DeltaUnsupportedSubquery, "{name}");
+        assert_eq!(
+            m,
+            format!("Subqueries are not supported in the {name} (condition = id IN (SELECT 1)).")
+        );
+    }
+
+    let columns = vec!["s".to_owned(), "a`b".to_owned()];
+    let dup = RowLevelProblem::DuplicateAssignment { columns: &columns };
+    let (c, m) = class(merge, &dup).unwrap();
+    assert_eq!(c, ErrorClass::DeltaConflictSetColumn);
+    assert!(m.contains("`s`, `a``b`"), "{m}");
+    assert!(class(RowLevelOperation::Delete, &dup).is_none());
+
+    let (c, _) = class(merge, &RowLevelProblem::DuplicateInsertColumn).unwrap();
+    assert_eq!(c, ErrorClass::DeltaDuplicateColumnsOnInsert);
 }

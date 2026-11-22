@@ -189,11 +189,19 @@ fn statement(text: &str, dir: &Path) -> String {
 
 /// Every step, each on its own copy of its scenario's `before` table.
 fn run_all() -> Vec<(Value, Run)> {
+    run_where(|_, _| true)
+}
+
+/// The steps `keep(scenario, step)` selects, chosen before any table is copied or run.
+fn run_where(keep: impl Fn(&str, &str) -> bool) -> Vec<(Value, Run)> {
     let oracle = oracle();
     let mut out = Vec::new();
     for (scenario, s) in oracle["scenarios"].as_object().unwrap() {
         let versions = s["versions"].as_u64().unwrap();
         for step in s["steps"].as_array().unwrap() {
+            if !keep(scenario, step["step"].as_str().unwrap()) {
+                continue;
+            }
             let tmp = tempfile::tempdir().unwrap();
             let dir = tmp.path().join("t");
             copy_dir(&fixtures().join(scenario).join("before"), &dir);
@@ -436,10 +444,7 @@ fn delta_merge_metrics_match() {
 fn delta_merge_cardinality() {
     let mut raised = 0;
     let mut exempt = 0;
-    for (step, run) in run_all() {
-        if !run.step.starts_with("multiple_match") {
-            continue;
-        }
+    for (step, run) in run_where(|_, step| step.starts_with("multiple_match")) {
         let name = format!("{}/{}", run.scenario, run.step);
         match (&run.outcome, &step["error"]) {
             (Err(e), Value::Object(_)) => {
@@ -465,10 +470,11 @@ fn delta_merge_cardinality() {
 #[test]
 fn delta_cdf_merge_refused() {
     let mut refusals = 0;
-    for (step, run) in run_all() {
-        if !cdf_refused(&run) {
-            continue;
-        }
+    for (step, run) in run_where(|scenario, step| {
+        CDF_REFUSED
+            .iter()
+            .any(|(s, n)| *s == scenario && *n == step)
+    }) {
         let name = format!("{}/{}", run.scenario, run.step);
         // delta-spark commits these with change data files; Krishiv refuses them before any
         // file is written.
@@ -661,6 +667,11 @@ fn a_merge_source_larger_than_memory_spills() {
          FROM range(300000)) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = substr(s.v, 1, 3)",
         dir.display()
     );
+    // Every target row matches: each keeps its id and `n`, `v` becomes "xxx".
+    let mut expected = table_rows(&dir);
+    for r in expected.as_array_mut().unwrap() {
+        r[1] = serde_json::json!("xxx");
+    }
     let (_, out) = sql(&session, &text).unwrap();
     assert_eq!(out, serde_json::json!([[6, 6, 0, 0]]));
     assert_eq!(session.memory_reserved(), 0);
@@ -670,10 +681,38 @@ fn a_merge_source_larger_than_memory_spills() {
     let left = spill_files(&spill);
     assert!(left.is_empty(), "{left:?}");
     let rows = table_rows(&dir);
-    assert!(
-        rows.as_array().unwrap().iter().all(|r| r[1] == "xxx"),
-        "{rows}"
-    );
+    assert_eq!(rows.as_array().map(Vec::len), Some(6), "{rows}");
+    assert_eq!(rows, expected);
+}
+
+/// Under `spark.sql.ansi.doubleQuotedIdentifiers` a double-quoted name in a clause is the source
+/// column, in the rewrite as in the analysis (the clause text is read again under the statement's
+/// parser options); a single-quoted one stays a literal.
+#[test]
+fn a_double_quoted_name_in_a_clause_reads_the_column_under_ansi_identifiers() {
+    for (value, written) in [("\"payload\"", "new"), ("'payload'", "payload")] {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("t");
+        copy_dir(&fixtures().join("unpartitioned").join("before"), &dir);
+        let mut expected = table_rows(&dir);
+        for r in expected.as_array_mut().unwrap() {
+            r[1] = serde_json::json!(written);
+        }
+        let session = Session::new().unwrap();
+        sql(&session, "SET spark.sql.ansi.enabled = true").unwrap();
+        sql(
+            &session,
+            "SET spark.sql.ansi.doubleQuotedIdentifiers = true",
+        )
+        .unwrap();
+        let text = format!(
+            "MERGE INTO delta.`{}` t USING (SELECT id, 'new' AS payload FROM range(1000)) s \
+             ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = {value}",
+            dir.display()
+        );
+        sql(&session, &text).unwrap();
+        assert_eq!(table_rows(&dir), expected, "{value}");
+    }
 }
 
 /// A MERGE cancelled through the session while it runs (its query's time limit, during the

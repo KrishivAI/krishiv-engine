@@ -1088,8 +1088,7 @@ mod merge {
         let rows = strings(&files);
         assert!(rows.contains(&(2, "u2".to_owned())), "{rows:?}");
         assert!(rows.contains(&(10, "n10!".to_owned())), "{rows:?}");
-        let nine = rows.iter().find(|(id, _)| *id == 9).map(|(_, s)| s.clone());
-        assert!(nine.is_some_and(|s| s.ends_with('?')), "{rows:?}");
+        assert!(rows.contains(&(9, "s9?".to_owned())), "{rows:?}");
         assert_eq!(session.memory_reserved(), 0);
     }
 
@@ -1346,10 +1345,7 @@ mod merge {
                 .unwrap()
         };
         let kept = read(SOURCE, "(SELECT max(x) FROM o)");
-        assert!(
-            kept.as_deref().is_some_and(|f| f.contains("id")),
-            "{kept:?}"
-        );
+        assert_eq!(kept.as_deref(), Some("(t.id == src.id)"));
         assert_eq!(read(SOURCE, "(SELECT max(s) FROM t)"), None);
         assert_eq!(read("SELECT id, s FROM t WHERE id = 2", "src.s"), None);
     }
@@ -1378,6 +1374,89 @@ mod merge {
         .unwrap_err();
         assert!(e.message().contains("idempotencyKey"), "{e}");
         assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+    }
+
+    /// The class of the refusal of `clauses` over the test table (no table classes of its own,
+    /// so the session's own ones), with nothing committed.
+    fn refused_class(clauses: Vec<MergeClause>) -> String {
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let e = try_merge(&session, statement(SOURCE, clauses)).unwrap_err();
+        assert_eq!(files.commits.load(Ordering::Relaxed), 0, "{e}");
+        format!("{:?}", e.error_class())
+    }
+
+    fn update(assignments: Vec<Assignment>) -> MergeClause {
+        clause(ClauseKind::Matched, None, ClauseAction::Update(assignments))
+    }
+
+    #[test]
+    fn the_analysis_refusals_are_the_session_s_own_classes() {
+        // An `UPDATE` setting a column twice (Spark's `DUPLICATE_ASSIGNMENTS`).
+        assert_eq!(
+            refused_class(vec![update(vec![set("s", "src.s"), set("S", "'x'")])]),
+            "DuplicateAssignments"
+        );
+        // An `INSERT` naming a column twice: the test table has no class for it.
+        assert_eq!(
+            refused_class(vec![clause(
+                ClauseKind::NotMatched,
+                None,
+                ClauseAction::Insert(vec![set("id", "src.id"), set("id", "1")]),
+            )]),
+            "KrishivUnsupportedFeature"
+        );
+        // A nested field, `= DEFAULT`, and a column the table does not have.
+        let nested = Assignment {
+            nested: true,
+            column: "s.x".to_owned(),
+            value: Some("'x'".to_owned()),
+        };
+        assert_eq!(
+            refused_class(vec![update(vec![nested])]),
+            "KrishivUnsupportedFeature"
+        );
+        let default = Assignment {
+            nested: false,
+            column: "s".to_owned(),
+            value: None,
+        };
+        assert_eq!(
+            refused_class(vec![update(vec![default])]),
+            "KrishivUnsupportedFeature"
+        );
+        assert_eq!(
+            refused_class(vec![update(vec![set("nope", "src.s")])]),
+            "UnresolvedColumnWithSuggestion"
+        );
+        // A value ANSI store assignment cannot put in the column (a string into `id BIGINT`).
+        assert_eq!(
+            refused_class(vec![update(vec![set("id", "src.s")])]),
+            "IncompatibleDataForTableCannotSafelyCast"
+        );
+        // A clause of each `NOT MATCHED` kind left without a condition before another.
+        assert_eq!(
+            refused_class(vec![
+                clause(ClauseKind::NotMatched, None, ClauseAction::InsertStar),
+                clause(
+                    ClauseKind::NotMatched,
+                    Some("src.id > 0"),
+                    ClauseAction::InsertStar
+                ),
+            ]),
+            "NonLastNotMatchedByTargetClauseOmitCondition"
+        );
+        assert_eq!(
+            refused_class(vec![
+                clause(ClauseKind::NotMatchedBySource, None, ClauseAction::Delete),
+                clause(
+                    ClauseKind::NotMatchedBySource,
+                    Some("t.id > 0"),
+                    ClauseAction::Delete,
+                ),
+            ]),
+            "NonLastNotMatchedBySourceClauseOmitCondition"
+        );
     }
 
     #[test]
