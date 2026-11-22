@@ -74,7 +74,9 @@ fn infer_files(files: &[(&str, &[u8])], multi_line: bool) -> Result<(), KrishivE
 
 #[test]
 fn failfast_names_the_scalars_merged_before_the_first_object() {
-    // (file, the type Spark 4.2.0 names)
+    // (file, the type Spark 4.2.0 names). The seeded fold this replaced
+    // failed the scalar-merge cases (the first, fourth, fifth and sixth);
+    // the others pin shapes it already named right.
     let cases: [(&[u8], &str); 9] = [
         // Merged first: BIGINT and STRING are STRING (qa-1's T32-1).
         (b"5\n\"str\"\n{\"a\":1}\n", "STRING"),
@@ -106,10 +108,11 @@ fn failfast_multi_line_reads_the_first_value_of_the_file() {
 }
 
 #[test]
-fn failfast_reduces_one_partition_of_small_files_largest_first() {
-    // One partition (small files pack into one), read largest first:
-    // the object, then `"str"`, so Spark 4.2.0 (`local[1]`) names STRING
-    // where listing order (the object, then `5`) would name BIGINT.
+fn failfast_reads_one_partition_of_small_files_largest_first() {
+    // Pins the split order the reduce sees, not the reduce itself: one
+    // partition (small files pack into one), read largest first: the
+    // object, then `"str"`, so Spark 4.2.0 (`local[1]`) names STRING where
+    // listing order (the object, then `5`) would name BIGINT.
     let files: [(&str, &[u8]); 3] = [
         ("a.json", b"{\"a\":1}\n"),
         ("b.json", b"5\n"),
@@ -129,10 +132,32 @@ fn failfast_multi_line_merges_the_files_scalars_first() {
     ];
     let e = infer_files(&files, true).expect_err("refused");
     assert_eq!(named(&e), "STRING");
+    // Listing order: Spark 4.2.0 names these the same in `local[1]` and
+    // `local[*]`. Its order within a combined split is Hadoop's, not a
+    // contract: files `{"a":1}`, `5`, `"str"` named STRING in one run and
+    // BIGINT in the next, so that shape is not pinned here.
+    let ml3: [(&str, &[u8]); 3] = [
+        ("a.json", b"\"str\""),
+        ("b.json", b"{\"a\":1}"),
+        ("c.json", b"5"),
+    ];
+    assert_eq!(
+        named(&infer_files(&ml3, true).expect_err("refused")),
+        "STRING"
+    );
+    let ml4: [(&str, &[u8]); 3] = [
+        ("a.json", b"5"),
+        ("b.json", b"{\"a\":1}"),
+        ("c.json", b"\"strstrstr\""),
+    ];
+    assert_eq!(
+        named(&infer_files(&ml4, true).expect_err("refused")),
+        "BIGINT"
+    );
 }
 
 #[test]
-fn permissive_and_dropmalformed_schemas_are_unchanged_by_the_reduce() {
+fn permissive_and_dropmalformed_schemas_follow_the_reduce() {
     let text = b"5\n\"str\"\n{\"a\":1}\n";
     let permissive = infer(text, &options(&serde_json::json!({}))).expect("schema");
     let names: Vec<&str> = permissive
@@ -152,4 +177,18 @@ fn permissive_and_dropmalformed_schemas_are_unchanged_by_the_reduce() {
     let only = infer(b"5\n\"str\"\n", &options(&serde_json::json!({}))).expect("schema");
     assert_eq!(only.fields().len(), 1);
     assert_eq!(only.field(0).name(), "_corrupt_record");
+    // A scalar before an object that has a field named like the corrupt
+    // column: the scalar meets that object, not an empty root, so the field
+    // keeps its own type (Spark 4.2.0: `struct<_corrupt_record:bigint>`;
+    // the seeded fold added the column as a string first).
+    let named_like = infer(
+        b"5\n{\"_corrupt_record\":1}\n",
+        &options(&serde_json::json!({})),
+    )
+    .expect("schema");
+    assert_eq!(named_like.fields().len(), 1);
+    assert_eq!(
+        named_like.field(0).data_type(),
+        &arrow_schema::DataType::Int64
+    );
 }

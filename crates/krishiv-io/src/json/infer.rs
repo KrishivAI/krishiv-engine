@@ -592,10 +592,12 @@ pub(crate) fn infer<'a>(
         };
         let mut root = Ty::Struct(Vec::new());
         if opts.multi_line {
-            // One partition: Spark packs whole files into combined splits of
-            // at least `openCostInBytes` (4 MiB), so small files share one.
-            // [inferred] Within a split Spark's file order follows Hadoop's
-            // block grouping; Krishiv takes the listing order.
+            // One partition, in listing order. Spark packs whole files into
+            // combined splits of at least `openCostInBytes` (4 MiB), so small
+            // files share one (observed); larger inputs split into several
+            // [inferred], which only changes the type a FAILFAST error names.
+            // Spark's file order within a split is Hadoop's and varied
+            // between runs of the same files.
             let mut part = None;
             for file in files {
                 let ctx = ctx_of(file);
