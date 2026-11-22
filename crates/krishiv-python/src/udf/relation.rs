@@ -34,7 +34,8 @@ use futures::executor::block_on;
 use futures::future::BoxFuture;
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::python_relation::{
-    Frame, PreparedRelationUdf, RelationCallSpec, RelationSlot, RelationSlots, UdfTask,
+    Frame, PreparedRelationUdf, RelationCallSpec, RelationSlot, RelationSlots, SchemaCheck,
+    UdfTask, VALIDATE_SCHEMA,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -46,6 +47,8 @@ use super::runtime::{
     PoolCache, PyUdfRuntime, Registered, RunnerConf, RunnerScope, Running, from_pyarrow,
     python_error, to_pyarrow,
 };
+use crate::stream::capsule_pointer;
+use crate::stream::ffi::SCHEMA_CAPSULE;
 
 /// Frames a task's input holds before the sender waits (Spark's JVM side is bounded the same way).
 const FRAME_WINDOW: usize = 4;
@@ -83,8 +86,24 @@ impl PyUdfRuntime {
             }
             .into());
         }
+        // Spark 4.1+'s result-schema check of the map kinds, when the session turns it on.
+        let validate = VALIDATE_SCHEMA
+            .iter()
+            .find_map(|k| self.conf_value(k))
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+        let declared = krishiv_types::StructType::new(
+            spec.output_names
+                .iter()
+                .zip(&spec.output_types)
+                .zip(spec.output_arrow.fields())
+                .map(|((n, t), f)| {
+                    krishiv_types::StructField::new(n.clone(), t.clone(), f.is_nullable())
+                }),
+        );
+        let check = SchemaCheck::new(spec.eval_type.code(), declared, validate);
         Ok(Arc::new(PreparedRelation {
             registered,
+            check,
             spec: spec.clone(),
             pool: self.pool(),
             runner: Arc::new(self.runner_conf()),
@@ -94,6 +113,7 @@ impl PyUdfRuntime {
 
 struct PreparedRelation {
     registered: Arc<Registered>,
+    check: Option<SchemaCheck>,
     spec: RelationCallSpec,
     pool: Arc<PoolCache>,
     runner: Arc<RunnerConf>,
@@ -119,6 +139,7 @@ impl PreparedRelationUdf for PreparedRelation {
         let finished = Arc::new(AtomicBool::new(false));
         let job = Job {
             registered: Arc::clone(&self.registered),
+            check: self.check.clone(),
             spec: self.spec.clone(),
             runner: Arc::clone(&self.runner),
             frames: frames_rx,
@@ -178,6 +199,7 @@ impl UdfTask for InProcessTask {
 /// The pool thread's end of a task.
 struct Job {
     registered: Arc<Registered>,
+    check: Option<SchemaCheck>,
     spec: RelationCallSpec,
     runner: Arc<RunnerConf>,
     frames: mpsc::Receiver<Frame>,
@@ -193,6 +215,7 @@ impl Job {
     fn run(self, py: Python<'_>) {
         let Self {
             registered,
+            check,
             spec,
             runner,
             frames,
@@ -207,7 +230,15 @@ impl Job {
             return;
         }
         let _scope = RunnerScope::enter(runner, 0);
-        let outcome = drive(py, &registered, &spec, frames, &results, &call);
+        let outcome = drive(
+            py,
+            &registered,
+            check.as_ref(),
+            &spec,
+            frames,
+            &results,
+            &call,
+        );
         if let Err(e) = outcome {
             // The engine may be gone already; then there is nobody to tell.
             let _ = py.detach(|| block_on(results.send(Err(e))));
@@ -220,6 +251,7 @@ impl Job {
 fn drive(
     py: Python<'_>,
     registered: &Registered,
+    check: Option<&SchemaCheck>,
     spec: &RelationCallSpec,
     frames: mpsc::Receiver<Frame>,
     results: &mpsc::Sender<Result<RecordBatch, KrishivError>>,
@@ -257,7 +289,14 @@ fn drive(
             .map_err(|e| python_error(py, &e))?;
         for item in iterator {
             let batch = item.map_err(|e| python_error(py, &e))?;
-            let batch = import_batch(py, array_type, batch_type, &batch, &spec.output_arrow)?;
+            let batch = import_batch(
+                py,
+                array_type,
+                batch_type,
+                &batch,
+                &spec.output_arrow,
+                check,
+            )?;
             // Waiting for room detaches: the engine reads on its own threads.
             let mut tx = results.clone();
             let delivered = py.detach(|| block_on(tx.send(Ok(batch))));
@@ -282,6 +321,7 @@ fn import_batch(
     batch_type: &Bound<'_, PyType>,
     batch: &Bound<'_, PyAny>,
     declared: &SchemaRef,
+    check: Option<&SchemaCheck>,
 ) -> Result<RecordBatch, KrishivError> {
     // Only pyarrow's batches are imported (§2.5 "Trusted producer").
     if !batch
@@ -298,6 +338,9 @@ fn import_batch(
             ),
         }
         .into());
+    }
+    if let Some(check) = check {
+        check.check(&batch_schema(py, batch)?)?;
     }
     let rows: usize = batch
         .getattr("num_rows")
@@ -335,6 +378,27 @@ fn import_batch(
             message: format!(
                 "a Python relation UDF's result does not fit its declared schema: {e}"
             ),
+        }
+        .into()
+    })
+}
+
+/// The Arrow schema of a result batch, read through the C data interface.
+fn batch_schema(
+    py: Python<'_>,
+    batch: &Bound<'_, PyAny>,
+) -> Result<arrow_schema::Schema, KrishivError> {
+    let capsule = batch
+        .getattr("schema")
+        .and_then(|s| s.call_method0("__arrow_c_schema__"))
+        .map_err(|e| python_error(py, &e))?;
+    let ptr = capsule_pointer(&capsule, SCHEMA_CAPSULE).map_err(|e| python_error(py, &e))?;
+    // SAFETY: the pointer of the live `arrow_schema` capsule `capsule`, which this frame holds; the schema is
+    // only borrowed (converted to an owned `Schema`), never released.
+    let schema = unsafe { &*ptr.cast::<arrow_schema::ffi::FFI_ArrowSchema>() };
+    arrow_schema::Schema::try_from(schema).map_err(|e| {
+        InternalError {
+            message: format!("a Python relation UDF's result schema cannot be read: {e}"),
         }
         .into()
     })

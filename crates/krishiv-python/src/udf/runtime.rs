@@ -269,6 +269,11 @@ impl PyUdfRuntime {
             .collect()
     }
 
+    /// One setting of the session, as it is now.
+    pub(super) fn conf_value(&self, key: &str) -> Option<String> {
+        self.conf.get(key)
+    }
+
     pub(super) fn pool(&self) -> Arc<PoolCache> {
         Arc::clone(&self.pool)
     }

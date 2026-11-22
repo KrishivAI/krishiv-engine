@@ -59,8 +59,10 @@ use crate::error::Result;
 mod admit;
 mod lane;
 mod pair;
+mod schema_check;
 pub(crate) mod sink;
 
+pub use schema_check::{SchemaCheck, VALIDATE_SCHEMA};
 pub use sink::{
     DEFAULT_WINDOW, InputColumn, RelationLane, RelationLimits, RelationShape, RelationSink,
 };

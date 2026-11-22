@@ -36,7 +36,6 @@ mod runtime;
 #[cfg(target_os = "linux")]
 mod udtf;
 #[cfg(target_os = "linux")]
-mod validate;
 #[cfg(target_os = "linux")]
 pub mod wire;
 #[cfg(target_os = "linux")]
