@@ -90,7 +90,6 @@ fn two_file_table(env: &Env, partitions: &[&str]) {
     clippy::too_many_arguments,
     reason = "test helper: the request's parts"
 )]
-#[expect(clippy::needless_pass_by_value, reason = "test helper")]
 fn rewrite(
     env: &Env,
     rl: &Arc<dyn RowLevelTable>,
@@ -101,6 +100,25 @@ fn rewrite(
     affected: u64,
     write_id: &str,
 ) -> Result<(), KrishivError> {
+    rewrite_keyed(
+        env, rl, op, touched, batches, condition, affected, write_id, None,
+    )
+}
+
+/// [`rewrite`] under `krishiv.write.idempotencyKey` = `key` (E34).
+#[expect(clippy::too_many_arguments, reason = "a test helper over one request")]
+#[expect(clippy::needless_pass_by_value, reason = "test helper")]
+fn rewrite_keyed(
+    env: &Env,
+    rl: &Arc<dyn RowLevelTable>,
+    op: RowLevelOperation,
+    touched: Vec<Vec<u8>>,
+    batches: Vec<RecordBatch>,
+    condition: Option<(&str, Expr)>,
+    affected: u64,
+    write_id: &str,
+    key: Option<&str>,
+) -> Result<(), KrishivError> {
     let mut request = RowLevelWrite::new(
         op,
         "`t`",
@@ -109,6 +127,11 @@ fn rewrite(
         condition.as_ref().map(|(_, e)| Arc::new(e.clone())),
     );
     request.write_id = Some(write_id.to_owned());
+    if let Some(key) = key {
+        request
+            .options
+            .insert("krishiv.write.idempotencyKey".to_owned(), key.to_owned());
+    }
     request
         .options
         .insert(ROW_LEVEL_AFFECTED_OPTION.to_owned(), affected.to_string());
@@ -256,6 +279,36 @@ fn a_row_level_delete_removes_the_touched_file_and_adds_its_other_rows() {
     let out = rl.output(&RowLevelCounts::affected(1)).unwrap();
     assert_eq!(out.schema().field(0).name(), "num_affected_rows");
     assert_eq!(out.column(0).as_primitive::<Int64Type>().value(0), 1);
+}
+
+/// E34: the table takes the statement's key; a retry under it commits nothing and claims no rows.
+#[test]
+fn a_keyed_row_level_delete_retried_commits_nothing_and_claims_no_rows() {
+    let env = Env::new();
+    two_file_table(&env, &[]);
+    let table = env.open().unwrap();
+    let rl = table.row_level(RowLevelOperation::Delete).unwrap();
+    assert!(rl.capabilities().idempotent_commit);
+    let touched = the_file_of(&row_files(&env, &table, RowLevelOperation::Delete), 2);
+    let delete = |write_id: &str| {
+        rewrite_keyed(
+            &env,
+            &rl,
+            RowLevelOperation::Delete,
+            vec![touched.clone()],
+            rows(&[(1, "a", Some("x")), (3, "c", Some("y"))]),
+            Some(("id = 2", eq("id", Literal::Long(2)))),
+            1,
+            write_id,
+            Some("job-1"),
+        )
+    };
+    delete("dml-key-1").unwrap();
+    let version = env.latest();
+    delete("dml-key-2").unwrap();
+    assert_eq!(env.latest(), version, "the retry committed nothing");
+    let out = rl.output(&RowLevelCounts::affected(1)).unwrap();
+    assert_eq!(out.column(0).as_primitive::<Int64Type>().value(0), 0);
 }
 
 #[test]

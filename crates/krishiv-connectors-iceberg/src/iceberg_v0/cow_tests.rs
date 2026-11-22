@@ -471,10 +471,9 @@ fn a_retry_with_the_same_idempotency_key_commits_no_snapshot() {
     let t = create(&env, 2, false, &[]);
     let catalog = Catalog::new(&t);
     append(&env, &catalog, range(0, 10));
-    Dml::open(&env, &catalog, RowLevelOperation::Delete)
-        .with_key("job-1")
-        .delete("id < 3")
-        .unwrap();
+    let first = Dml::open(&env, &catalog, RowLevelOperation::Delete);
+    assert!(first.table.capabilities().idempotent_commit);
+    first.with_key("job-1").delete("id < 3").unwrap();
     let snapshots = catalog.metadata().snapshots().count();
     let mut files = super::mor_tests::files_ending(&env, "");
     files.sort();
