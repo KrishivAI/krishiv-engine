@@ -92,6 +92,23 @@ fn a_raw_update_after_a_merge_goes_into_the_union_the_merge_made() {
     b.update(&[0, 0], &longs(&[Some(3), Some(9)]), |_| true)
         .unwrap();
     assert_eq!(estimate_of(&b.evaluate(&[0]).unwrap(), 0), 5);
+    // The state taken while raw rows are pending holds them, and a merge after them folds them in first.
+    let state = b.state(&[0]).unwrap().remove(0);
+    let state = state.as_any().downcast_ref::<BinaryArray>().unwrap();
+    assert_eq!(
+        theta::estimate(&theta::from_bytes(state.value(0), "t").unwrap()),
+        5
+    );
+    let mut other = ThetaSketchAcc::new(ThetaSketchOp::Sketch(12)).unwrap();
+    other.resize(1);
+    other
+        .update(&[0, 0], &longs(&[Some(100), Some(101)]), |_| true)
+        .unwrap();
+    let other_state = other.state(&[0]).unwrap().remove(0);
+    let other_state = other_state.as_any().downcast_ref::<BinaryArray>().unwrap();
+    b.merge(&[0], other_state).unwrap();
+    b.update(&[0], &longs(&[Some(102)]), |_| true).unwrap();
+    assert_eq!(estimate_of(&b.evaluate(&[0]).unwrap(), 0), 8);
     // Two groups in one batch keep separate pending sketches.
     let mut c = ThetaSketchAcc::new(ThetaSketchOp::Sketch(12)).unwrap();
     c.resize(2);
