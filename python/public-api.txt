@@ -147,7 +147,7 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
-__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'Console', 'DataFrame', 'GroupedData', 'LocalConnectServer', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__allocator_policy__', '__commit__', '__ui__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'Console', 'DataFrame', 'GroupedData', 'LocalConnectServer', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__allocator_policy__', '__commit__', '__ui__', '__version__', '_pressure_epoch', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
 class AnonymousPythonUdf()
 class ArrowStream()
 class Column()

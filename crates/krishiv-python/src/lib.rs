@@ -73,6 +73,13 @@ fn allocator_policy() -> String {
         .join(",")
 }
 
+/// The resident-set guard's pressure epochs since the process started: how often threads were
+/// asked to return freed memory. For measurements (`krishiv_memory::pressure_epoch`).
+#[pyfunction]
+fn _pressure_epoch() -> u64 {
+    krishiv_memory::pressure_epoch()
+}
+
 /// The `krishiv._native` module.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -88,6 +95,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<console::PyConsole>()?;
     m.add_class::<stream::ArrowStream>()?;
     m.add_function(wrap_pyfunction!(udf::_udf_pool_shutdown, m)?)?;
+    m.add_function(wrap_pyfunction!(_pressure_epoch, m)?)?;
     m.add_function(wrap_pyfunction!(udf::runtime::_udf_runner_conf, m)?)?;
     m.add_class::<udf::PyAnonymousUdf>()?;
     m.add_class::<session::PySession>()?;

@@ -23,6 +23,14 @@ def test_the_module_installs_the_allocator_policy():
     assert _native.__allocator_policy__ == "release-hook,resident-probe"
 
 
+def test_the_pressure_epoch_is_readable():
+    # A count for measurements: how often the guard asked threads to return freed memory.
+    from krishiv import _native
+
+    epoch = _native._pressure_epoch()
+    assert isinstance(epoch, int) and epoch >= 0
+
+
 def test_build_info_commit_is_a_sha_or_unknown():
     commit = krishiv.build_info()["commit"]
     assert commit == "unknown" or (len(commit) >= 7 and all(c in "0123456789abcdef" for c in commit))

@@ -216,7 +216,11 @@ mod tests {
     /// case that ran without the guard before (acceptance SQL-34).
     #[test]
     fn the_allocator_policy_installs_the_guard_at_a_generous_limit() {
-        assert!(!krishiv_alloc::bounded());
+        assert!(
+            !krishiv_alloc::bounded(),
+            "this test needs a process started without a limit below 4 GiB: unset \
+             KRISHIV_MEMORY_LIMIT and run outside a cgroup smaller than that"
+        );
         super::install_allocator_policy();
         assert!(krishiv_memory::release_hook_installed());
         assert!(krishiv_memory::resident_probe_installed());

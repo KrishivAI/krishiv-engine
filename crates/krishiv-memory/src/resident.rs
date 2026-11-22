@@ -120,25 +120,31 @@ struct Guard {
 /// module: the program's own data, which the resident set includes) would
 /// otherwise start an epoch, and a release on every pipeline thread, at
 /// every sample for as long as it lasts. So an excess starts one at once
-/// when it is new or rose by [`EXCESS_STEP`] since the guard's last epoch;
+/// only when it is new, or reaches a new high or a new low by at least
+/// [`EXCESS_STEP`] beyond the range its epochs have covered since it began;
 /// otherwise the next waits for a back-off that doubles, up to
-/// [`MAX_BACKOFF_MS`], each time the excess did not fall by [`EXCESS_STEP`]
-/// after a release, and restarts at 1 ms when it did. The cut does not
-/// depend on it.
+/// [`MAX_BACKOFF_MS`], and restarts at 1 ms after an epoch at once. The
+/// range, not the last epoch's excess, is the reference: a release purges
+/// what the allocator kept, so the next sample is lower, and the running
+/// query then refills the same pages; judged against the last epoch, that
+/// purge and refill would read as a fall and a rise and start epochs at the
+/// refill rate. The range moves only at epochs, so a slow rise between
+/// them adds up until it crosses the step. The cut does not depend on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Backoff {
-    /// The excess at the guard's last epoch (0: none in this excess).
-    last_excess: usize,
+    /// The lowest and highest excess at the guard's epochs since the excess
+    /// began (`None`: no epoch in this excess yet).
+    range: Option<(usize, usize)>,
     /// The current wait between epochs, in milliseconds (0: none yet).
     step_ms: u64,
     /// Milliseconds since [`start`] before which no epoch starts unless the
-    /// excess rises.
+    /// excess leaves its range.
     next_at: u64,
 }
 
 impl Backoff {
     const NONE: Self = Self {
-        last_excess: 0,
+        range: None,
         step_ms: 0,
         next_at: 0,
     };
@@ -150,17 +156,22 @@ impl Backoff {
             *self = Self::NONE;
             return false;
         }
-        let rose = self.last_excess == 0 || excess >= self.last_excess.saturating_add(EXCESS_STEP);
-        let fell = excess.saturating_add(EXCESS_STEP) <= self.last_excess;
-        let step = if rose || fell {
+        let outside = self.range.is_none_or(|(lowest, highest)| {
+            excess >= highest.saturating_add(EXCESS_STEP)
+                || excess.saturating_add(EXCESS_STEP) <= lowest
+        });
+        let step = if outside {
             1
         } else if now < self.next_at {
             return false;
         } else {
             self.step_ms.saturating_mul(2).clamp(1, MAX_BACKOFF_MS)
         };
+        let range = self.range.map_or((excess, excess), |(lo, hi)| {
+            (lo.min(excess), hi.max(excess))
+        });
         *self = Self {
-            last_excess: excess,
+            range: Some(range),
             step_ms: step,
             next_at: now.saturating_add(step),
         };
@@ -417,12 +428,57 @@ mod tests {
         assert_eq!(b.step_ms, 1);
         // A small rise is noise.
         assert!(!b.should_release(100 * mib + EXCESS_STEP + mib, now));
-        // The release helped (a fall past the step): at once again.
+        // The release helped (a new low past the step): at once again.
         assert!(b.should_release(80 * mib, now));
+        // Back inside the range covered so far: the back-off decides.
+        assert!(!b.should_release(100 * mib, now));
         // No excess: the next one starts fresh.
         assert!(!b.should_release(0, now + 1));
         assert_eq!(b, Backoff::NONE);
         assert!(b.should_release(5 * mib, now + 1));
+    }
+
+    /// The guard's own release feeding back: an excess no release can lower
+    /// (`base`) plus `kept` that the allocator holds, which each release
+    /// purges by the next sample and the query refills at `refill` a
+    /// sample, up to `kept`. Ten seconds at one sample a millisecond.
+    fn epochs_with_feedback(kept: usize, refill: usize) -> usize {
+        let base = 1300usize << 20;
+        let mut b = Backoff::NONE;
+        let mut held = kept;
+        let mut epochs = 0;
+        for ms in 1..=10_000u64 {
+            if b.should_release(base + held, ms) {
+                epochs += 1;
+                held = 0;
+            } else {
+                held = (held + refill).min(kept);
+            }
+        }
+        epochs
+    }
+
+    #[test]
+    fn the_guards_own_purge_and_refill_start_few_epochs() {
+        let mib = 1usize << 20;
+        for kept in [16 * mib, 64 * mib, 256 * mib] {
+            for refill in [mib / 4, mib, 4 * mib, 16 * mib] {
+                let epochs = epochs_with_feedback(kept, refill);
+                assert!(epochs <= 25, "kept {kept} refill {refill}: {epochs}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_real_rise_still_releases_at_once() {
+        let (mib, base) = (1usize << 20, 100usize << 20);
+        let mut b = Backoff::NONE;
+        // The excess grows by 1 MiB a millisecond for ten seconds and no
+        // release lowers it: an epoch at least every 16 ms (each new high).
+        let epochs = (1..=10_000u64)
+            .filter(|&ms| b.should_release(base + usize::try_from(ms).unwrap() * mib, ms))
+            .count();
+        assert!(epochs >= 10_000 / 16, "{epochs}");
     }
 
     #[test]
