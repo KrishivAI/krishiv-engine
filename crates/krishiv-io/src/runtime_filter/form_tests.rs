@@ -227,7 +227,7 @@ proptest! {
 #[test]
 fn short_integer_ranges_are_bit_sets() {
     let o = KeyFilterOptions::default();
-    let dense_cost = 1.0;
+    let dense_cost = 1.2;
     // About TPC-DS q34's shape (1,040 of `hd_demo_sk` 1-7,200): 1,028 keys.
     let keys: Vec<i64> = (1..=7_200).filter(|k| k % 7 == 0).collect();
     let f = filter(&Int64Array::from(keys.clone()), o);
