@@ -1,5 +1,5 @@
 ---
-title: Access control with grants
+description: "Who may read or change what in server mode: the grants provider, roles, and views that run with their owner's rights."
 ---
 
 # Access control with grants

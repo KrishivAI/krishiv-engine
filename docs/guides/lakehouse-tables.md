@@ -1,5 +1,5 @@
 ---
-title: Iceberg and Delta tables, and catalogs
+description: "What Krishiv reads and writes in Iceberg and Delta tables, how to declare an Iceberg REST catalog, and idempotent writes."
 ---
 
 # Iceberg and Delta tables, and catalogs
@@ -31,18 +31,13 @@ retry after losing a race; `krishiv.write.commitRetryTimeout` bounds all the att
 
 ## Iceberg tables
 
-An Iceberg table is read through a [declared catalog](#declare-a-catalog).
+An Iceberg table is read through a [declared catalog](#declare-a-catalog) (`SELECT * FROM lake.sales.orders`).
+Reads cover position deletes, deletion vectors and equality deletes.
 
-| Operation | Support |
-|---|---|
-| Read, including position deletes, deletion vectors and equality deletes | yes |
-| `INSERT`, CTAS | yes |
-| `INSERT OVERWRITE`: whole table, by filter, and dynamic partition overwrite | yes |
-| `DELETE` and `UPDATE` | yes, merge-on-read (delete files; data files are not rewritten) |
-| Commit through an Iceberg REST catalog | yes; `krishiv.iceberg.commit.maxIntervening` bounds how many snapshots may land on the branch meanwhile |
-
-`krishiv.iceberg.write.statistics.enabled` (default `false`) makes an append also write a Theta sketch and a Puffin
-statistics file, which later queries use for distinct-count estimates.
+Writing Iceberg tables is not available from SQL or the DataFrame API in 0.3: `INSERT`, `CREATE TABLE ... USING iceberg`
+and the other writes do not reach the Iceberg writer yet. The connector itself implements appends, overwrites
+(whole table, by filter, dynamic), merge-on-read `DELETE` and `UPDATE`, and commits through an Iceberg REST catalog;
+those are for Rust embedders of the connector, not session statements.
 
 ## Declare a catalog
 
@@ -53,6 +48,7 @@ builder. The same keys under Spark's `spark.sql.catalog.<name>` prefix are accep
 krishiv.catalog.lake.type          = iceberg-rest
 krishiv.catalog.lake.uri           = https://catalog.example.com/api/catalog
 krishiv.catalog.lake.warehouse     = analytics
+krishiv.catalog.lake.storage       = allowed-prefixes
 krishiv.catalog.lake.auth          = client-credentials
 krishiv.catalog.lake.clientId      = krishiv
 krishiv.catalog.lake.clientSecret  = env:LAKE_SECRET
@@ -60,8 +56,11 @@ krishiv.catalog.lake.tokenEndpoint = https://idp.example.com/oauth2/token
 krishiv.catalog.default            = lake
 ```
 
-Types are `iceberg-rest`, `hive`, `unity`, `glue`, `sqlite` and `memory`. Reading is
-`SELECT * FROM lake.sales.orders`.
+The only catalog type `krishiv server` serves in 0.3 is `iceberg-rest`, in a binary built with the
+`catalog-iceberg-rest` feature. The other values (`hive`, `unity`, `glue`, `sqlite`, `memory`) are recognised in a
+declaration but a server refuses to start with one. Catalog storage must be `allowed-prefixes`: `vended` credentials
+are not supported yet, and a table of a catalog that is left on the default `vended` fails with
+`KRISHIV_UNSUPPORTED_FEATURE`.
 
 | Key | Meaning |
 |---|---|
@@ -69,7 +68,7 @@ Types are `iceberg-rest`, `hive`, `unity`, `glue`, `sqlite` and `memory`. Readin
 | `auth` | `none` (default), `token`, `client-credentials` or `delegated` |
 | `token`, `clientSecret` | a secret by reference: `env:NAME` or `file:/path`, never the value |
 | `delegation` | with `auth = delegated`: `exchange` (RFC 8693 token exchange, default) or `forward` (the caller's own token); needs `audience` |
-| `storage` | `vended` (the catalog hands out storage credentials) or `allowed-prefixes` |
+| `storage` | `allowed-prefixes` (set it); `vended` (the catalog hands out credentials) is not supported yet |
 | `tenants` | the tenants that may use the catalog; absent means every tenant |
 | `allowInsecure` | allows an `http://` uri, server mode only |
 

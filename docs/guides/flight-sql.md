@@ -1,5 +1,5 @@
 ---
-title: Arrow Flight SQL
+description: "Connect JDBC and ADBC clients to the server over Arrow Flight SQL on the Spark Connect port, and the limits that apply."
 ---
 
 # Arrow Flight SQL
