@@ -638,6 +638,12 @@ impl PyDataFrame {
         )
     }
 
+    /// Registers this DataFrame as the temporary view `name`, failing when one exists.
+    fn create_temp_view(&self, py: Python<'_>, name: &str) -> PyResult<()> {
+        let (df, name) = (self.inner.clone(), name.to_owned());
+        block_on(py, async move { df.create_temp_view(&name).await })
+    }
+
     /// Registers this DataFrame as the global temporary view `global_temp.name`; `replace` says whether
     /// one of that name may be replaced.
     fn create_global_temp_view(&self, py: Python<'_>, name: &str, replace: bool) -> PyResult<()> {

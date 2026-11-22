@@ -129,7 +129,7 @@ def test_foreach_streams_rows(df) -> None:
 
 def test_col_regex_of_a_plain_name_is_that_column(df) -> None:
     assert df.select(df.colRegex("a")).columns == ["a"]
-    assert df.select(df.colRegex("t.`^[ab]$`")).columns == ["a", "b"]
+    assert df.alias("t").select(df.alias("t").colRegex("t.`^[ab]$`")).columns == ["a", "b"]
 
 
 def test_print_schema_level(df, capsys: pytest.CaptureFixture[str]) -> None:
@@ -491,3 +491,11 @@ def test_with_columns_rejects_resolver_duplicates(spark: SparkSession) -> None:
 def test_pivot_explicit_empty_values_skips_discovery(spark: SparkSession) -> None:
     df = spark.createDataFrame([(1, "a", 2)], "g int, p string, v int")
     assert [r.asDict() for r in df.groupBy("g").pivot("p", []).sum("v").collect()] == [{"g": 1}]
+
+
+def test_col_regex_qualifier_selects_one_side_of_a_join(spark: SparkSession) -> None:
+    left = spark.createDataFrame([(1, 2)], "ax int, k int").alias("l")
+    right = spark.createDataFrame([(3, 2)], "ay int, k int").alias("r")
+    joined = left.join(right, F.col("l.k") == F.col("r.k"))
+    assert joined.select(joined.colRegex("l.`^a.*`")).collect() == [Row(ax=1)]
+    assert joined.select(joined.colRegex("r.`^a.*`")).collect() == [Row(ay=3)]

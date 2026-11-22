@@ -89,16 +89,23 @@ def _flatten(cols: tuple[Any, ...]) -> list[Any]:
 class _RegexColumn(Column):
     """What :meth:`DataFrame.colRegex` returns: ``select`` expands it to the matching columns."""
 
-    def __init__(self, names: list[str], text: str) -> None:
-        super().__init__(_native.col(f"`{names[0]}`" if names else "*"))
+    def __init__(self, names: list[str], text: str, qualifier: str | None = None) -> None:
+        super().__init__(_native.col(_regex_ref(names[0], qualifier) if names else "*"))
         self._names = names
         self._text = text
+        self._qualifier = qualifier
 
     def _expand(self) -> list[Column]:
-        return [_quoted(n) for n in self._names]
+        return [Column(_native.col(_regex_ref(n, self._qualifier))) for n in self._names]
 
     def __repr__(self) -> str:
         return f"Column<'unresolvedregex({self._text})'>"
+
+
+def _regex_ref(name: str, qualifier: str | None) -> str:
+    """A reference to column ``name`` (literal, backquoted), under ``qualifier`` (a DataFrame alias) when given."""
+    quoted = "`" + name.replace("`", "``") + "`"
+    return quoted if qualifier is None else f"{qualifier}.{quoted}"
 
 
 def _quoted(name: str) -> Column:
@@ -2144,15 +2151,7 @@ class DataFrame:
         ``TEMP_TABLE_OR_VIEW_ALREADY_EXISTS`` when a view of that name exists."""
         if not isinstance(name, str):
             raise not_expected_type("name", "str", name)
-        if self._session.catalog.tableExists(name):
-            raise AnalysisException(
-                f"[TEMP_TABLE_OR_VIEW_ALREADY_EXISTS] Cannot create the temporary view `{name}` because it already "
-                "exists.\nChoose a different name, drop or replace the existing view. SQLSTATE: 42P07",
-                errorClass="TEMP_TABLE_OR_VIEW_ALREADY_EXISTS",
-                messageParameters={"relationName": f"`{name}`"},
-                sqlState="42P07",
-            )
-        self._df.create_or_replace_temp_view(name)
+        self._df.create_temp_view(name)
 
     def createGlobalTempView(self, name: str) -> None:
         """Registers this DataFrame as ``global_temp.<name>``; fails when that view exists."""
@@ -2239,18 +2238,30 @@ class DataFrame:
 
     def colRegex(self, colName: str) -> Column:
         """The columns whose names match the regular expression ``colName`` (in backquotes,
-        optionally qualified; the qualifier is ignored), for ``select``: ``df.select(df.colRegex("`^a.*`"))``. It is
-        only meaningful as a ``select`` argument (anywhere else it stands for its first match). Matching is
-        case-insensitive unless ``spark.sql.caseSensitive`` is true."""
+        optionally qualified by a DataFrame alias, which then selects the columns of that alias), for
+        ``select``: ``df.select(df.colRegex("`^a.*`"))``. It is only meaningful as a ``select`` argument
+        (anywhere else it stands for its first match). Matching is case-insensitive unless
+        ``spark.sql.caseSensitive`` is true."""
         if not isinstance(colName, str):
             raise not_expected_type("colName", "str", colName)
-        match = re.fullmatch(r"(?:[^`]*\.)?`((?:[^`]|``)*)`", colName)
+        match = re.fullmatch(r"(?:([^`]*)\.)?`((?:[^`]|``)*)`", colName)
         if match is None:
             return self[colName]  # not a backquoted pattern: a plain column, as Spark
-        pattern = match.group(1).replace("``", "`")
+        qualifier = match.group(1)
+        pattern = match.group(2).replace("``", "`")
         flags = 0 if _case_sensitive(self._session) else re.IGNORECASE
         names = [c for c in self.columns if re.fullmatch(pattern, c, flags)]
-        return _RegexColumn(names, colName)
+        if qualifier:
+            # Keep the names the qualifier can resolve (a joined frame lists a name once per side).
+            names = [n for n in dict.fromkeys(names) if self._resolves(_regex_ref(n, qualifier))]
+        return _RegexColumn(names, colName, qualifier or None)
+
+    def _resolves(self, ref: str) -> bool:
+        try:
+            self._new(self._df.select([_native.col(ref)])).schema  # noqa: B018  (analysis raises when unresolved)
+        except AnalysisException:
+            return False
+        return True
 
     def sortWithinPartitions(self, *cols: ColumnsOrNames, ascending: bool | list[bool] = True) -> DataFrame:
         """Sorts each partition; the embedded engine has one partition, so this is :meth:`orderBy`."""

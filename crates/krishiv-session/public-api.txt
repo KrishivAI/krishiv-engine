@@ -1519,6 +1519,7 @@ pub fn krishiv_session::DataFrame::collect_boxed(&self) -> core::pin::Pin<alloc:
 pub async fn krishiv_session::DataFrame::create_global_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::create_or_replace_global_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::create_or_replace_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::create_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::cross_join(&self, &Self) -> Self
 pub fn krishiv_session::DataFrame::cube(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
 pub fn krishiv_session::DataFrame::distinct(&self) -> Self
