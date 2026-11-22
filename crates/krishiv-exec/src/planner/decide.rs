@@ -116,11 +116,16 @@ impl<'a> Planner<'a> {
             .filter_map(|i| u32::try_from(i).ok())
             .collect();
         Ok(Decision {
-            shown: pushed
-                .iter()
-                .filter_map(|i| exprs.get(*i as usize))
-                .map(ToString::to_string)
-                .collect(),
+            // A split `LIKE` whose two leaves were both taken is shown once.
+            shown: {
+                let mut seen = std::collections::HashSet::new();
+                pushed
+                    .iter()
+                    .filter(|i| group.get(**i as usize).is_some_and(|g| seen.insert(*g)))
+                    .filter_map(|i| exprs.get(*i as usize))
+                    .map(ToString::to_string)
+                    .collect()
+            },
             decided: DecidedScan { id, pushed },
             residual: super::source_filter::and_all(kept),
             bound: decision.bound,

@@ -301,6 +301,14 @@ fn a_split_like_keeps_spark_length_guard_above_the_scan() {
     assert_eq!(decides[0].len(), 3, "{decides:?}");
     assert!(matches!(decides[0][2], SourceConjunct::Untranslated));
     drop(decides);
+    // Both leaves were taken: `PushedFilters` lists the conjunct once.
+    let text = plan.to_string();
+    let pushed = text
+        .split("PushedFilters: [")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .unwrap_or_default();
+    assert_eq!(pushed.to_lowercase().matches("like").count(), 1, "{text}");
     // The fixture's source trusts both leaves and filters nothing: the rows that come back are the
     // residual's answer. `s%1` over s0..s9 is exactly `s1`.
     assert_eq!(f.rows(&plan), 1);
