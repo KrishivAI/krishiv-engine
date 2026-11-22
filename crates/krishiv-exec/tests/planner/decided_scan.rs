@@ -300,4 +300,8 @@ fn a_split_like_keeps_spark_length_guard_above_the_scan() {
     let decides = f.log.decides.lock().unwrap();
     assert_eq!(decides[0].len(), 3, "{decides:?}");
     assert!(matches!(decides[0][2], SourceConjunct::Untranslated));
+    drop(decides);
+    // The fixture's source trusts both leaves and filters nothing: the rows that come back are the
+    // residual's answer. `s%1` over s0..s9 is exactly `s1`.
+    assert_eq!(f.rows(&plan), 1);
 }
