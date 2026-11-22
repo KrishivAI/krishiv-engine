@@ -1762,7 +1762,7 @@ impl Resolver<'_> {
                 super::super::python_udtf::refuse_table_argument(kind, e.origin)?;
                 let env = self.sub_env(cx);
                 let saved = std::mem::take(&mut self.lambdas);
-                let rel = self.rel(plan, &env);
+                let rel = self.subquery_rel(plan, &env);
                 let stale = std::mem::replace(&mut self.lambdas, saved);
                 debug_assert!(stale.is_empty(), "a subquery leaks lambda scopes");
                 let rel = rel?;
