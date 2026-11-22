@@ -1236,6 +1236,110 @@ fn file_store(path: &Path) -> Arc<dyn krishiv_connect_server::FunctionStore> {
     )))
 }
 
+/// SQL `CREATE FUNCTION ... AS 'python' USING PYTHON` keeps a registered UDF in the catalog and `DROP FUNCTION` removes
+/// it (P3-T072d): a new session of a restarted server types it; a dropped one is gone, and dropping it again is
+/// `ROUTINE_NOT_FOUND` unless `IF EXISTS`.
+#[cfg(feature = "function-catalog")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sql_creates_and_drops_a_persisted_udf() {
+    let dir = tempfile::tempdir().expect("dir");
+    let file = dir.path().join("functions.db");
+    let command = |text: &str| pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(CommandType::SqlCommand(Box::new(pb::SqlCommand {
+                sql: text.to_owned(),
+                ..Default::default()
+            }))),
+        }))),
+    };
+    let query = || sql("SELECT plus_one(id) FROM range(3)");
+    {
+        let run = start_store(
+            None,
+            Some(Arc::new(Spy::default())),
+            Some(file_store(&file)),
+        )
+        .await;
+        // Nothing registered: refused.
+        let e = execute(
+            &run.channel,
+            command("CREATE FUNCTION plus_one AS 'python' USING PYTHON 'plus_one'"),
+            ADMIN,
+        )
+        .await
+        .expect_err("not registered");
+        assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE", "{e:?}");
+        execute(
+            &run.channel,
+            register(udf(None, "plus_one", PLUS_ONE, long(), Vec::new())),
+            ADMIN,
+        )
+        .await
+        .expect("registered");
+        execute(
+            &run.channel,
+            command("CREATE FUNCTION plus_one AS 'python' USING PYTHON 'plus_one'"),
+            ADMIN,
+        )
+        .await
+        .expect("created");
+        let e = execute(
+            &run.channel,
+            command("CREATE FUNCTION plus_one AS 'python' USING PYTHON 'plus_one'"),
+            ADMIN,
+        )
+        .await
+        .expect_err("exists");
+        assert_eq!(error_class(&e), "ROUTINE_ALREADY_EXISTS", "{e:?}");
+        for text in [
+            "CREATE FUNCTION IF NOT EXISTS plus_one AS 'python' USING PYTHON 'plus_one'",
+            "CREATE OR REPLACE FUNCTION plus_one AS 'python' USING PYTHON 'plus_one'",
+        ] {
+            execute(&run.channel, command(text), ADMIN)
+                .await
+                .expect(text);
+        }
+    }
+    let run = start_store(
+        None,
+        Some(Arc::new(Spy::default())),
+        Some(file_store(&file)),
+    )
+    .await;
+    analyze_schema(&run.channel, query(), ADMIN)
+        .await
+        .expect("typed in a new session of a restarted server");
+    // Another principal neither sees it nor drops it.
+    let e = execute(&run.channel, command("DROP FUNCTION plus_one"), ADMIN2)
+        .await
+        .expect_err("not erin's");
+    assert_eq!(error_class(&e), "ROUTINE_NOT_FOUND", "{e:?}");
+    execute(&run.channel, command("DROP FUNCTION plus_one"), ADMIN)
+        .await
+        .expect("dropped");
+    let e = execute(&run.channel, command("DROP FUNCTION plus_one"), ADMIN)
+        .await
+        .expect_err("gone");
+    assert_eq!(error_class(&e), "ROUTINE_NOT_FOUND", "{e:?}");
+    execute(
+        &run.channel,
+        command("DROP FUNCTION IF EXISTS plus_one"),
+        ADMIN,
+    )
+    .await
+    .expect("if exists");
+    let run = start_store(
+        None,
+        Some(Arc::new(Spy::default())),
+        Some(file_store(&file)),
+    )
+    .await;
+    let e = analyze_schema(&run.channel, query(), ADMIN)
+        .await
+        .expect_err("dropped for good");
+    assert_eq!(error_class(&e), "UNRESOLVED_ROUTINE", "{e:?}");
+}
+
 /// A UDF persisted over the Connect service survives a server restart: a new server on the reopened catalog
 /// file types it in a fresh session whose first request is `AnalyzePlan`; another principal of that file
 /// does not see it (tenants are keyed the same way, `t:<tenant>` instead of `p:<principal>`).

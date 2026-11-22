@@ -122,6 +122,7 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             | Statement::Reset(_)
             | Statement::DropView(_)
             | Statement::DropFunction(_)
+            | Statement::CreatePersistedFunction(_)
             | Statement::DropTable(_)
             | Statement::DropNamespace(_)
             | Statement::Use(_)
