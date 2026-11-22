@@ -72,6 +72,15 @@ impl Session {
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        // Metric views arrive in Spark 4.2: older releases fail to parse the statement, at `WITH`
+        // (3.5) or at `METRICS` (4.0, 4.1), the gate goldens of P3 4.2-MV. `session.rs`'s dispatch
+        // arm checks the same again, for EXECUTE IMMEDIATE and scripts; this check is only here so
+        // that the refusal comes right after the parse, before any access check. Keep both.
+        if let Statement::CreateMetricView(v) = &statement
+            && let Some(e) = metric_view_gate_error(v, self.state.profile, query, &redacted)
+        {
+            return Err(e);
+        }
         // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
         // clause when it drops it; the parser sees only the evaluated name.
         if named_by_clause
@@ -96,5 +105,53 @@ impl Session {
         // text and class when it runs.
         df.with_statement(&redacted, class.name());
         Ok(Ran::Frame(df, command))
+    }
+}
+
+/// Spark's `PARSE_SYNTAX_ERROR` for a metric view on a release before 4.2, told against `query`
+/// (the text `v` was parsed from). Checked right after the parse of a top-level statement (before
+/// any access check) and again where the statement is dispatched, for the statements of
+/// `EXECUTE IMMEDIATE` and of a script.
+pub(crate) fn metric_view_gate_error(
+    v: &krishiv_sql::ast::CreateMetricView,
+    profile: SparkProfile,
+    query: &str,
+    redacted: &RedactedSql,
+) -> Option<KrishivError> {
+    let span = metric_view_gate(v, profile)?;
+    // Errors never echo a string literal's text (`krishiv-sql/CLAUDE.md`).
+    let token = if span.range() == v.body_span.range() {
+        "$$"
+    } else {
+        query.get(span.start..span.end).unwrap_or_default()
+    };
+    let error = krishiv_common::error::ParseSyntaxError {
+        error: format!("'{token}'"),
+        hint: String::new(),
+    };
+    Some(sql_context(error.into(), redacted, span.start, span.end))
+}
+
+/// Where a Spark release before 4.2 stops parsing `CREATE VIEW .. WITH METRICS`, if `profile` is
+/// one: at a view's `LANGUAGE` (no release before 4.2 has it), or at `WITH METRICS`, whichever
+/// comes first; 3.5 has no `WITH` there, 4.0 and 4.1 take `WITH` for a schema-binding clause and
+/// fail at the next token (Spark 3.5.7 and 4.1.0 runs, 2026-11-21). The statement always holds
+/// one of the two (else it is no metric view), so the span never covers the YAML literal.
+fn metric_view_gate(
+    v: &krishiv_sql::ast::CreateMetricView,
+    profile: SparkProfile,
+) -> Option<krishiv_sql::ast::Span> {
+    let at = v.with_metrics.map(|[with, metrics]| match profile {
+        SparkProfile::V3_5 => with,
+        _ => metrics,
+    });
+    let first = [at, v.language_keyword]
+        .into_iter()
+        .flatten()
+        .min_by_key(|s| s.start);
+    match profile {
+        // Unreachable fallback, refused all the same: the literal's span, whose text is never shown.
+        SparkProfile::V3_5 | SparkProfile::V4_0 | SparkProfile::V4_1 => first.or(Some(v.body_span)),
+        _ => None,
     }
 }

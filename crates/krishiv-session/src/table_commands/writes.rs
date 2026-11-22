@@ -58,6 +58,23 @@ impl Session {
                 let _ = access;
                 return Ok(table);
             }
+            if table
+                .view
+                .as_ref()
+                .is_some_and(crate::store::ViewDef::is_metric)
+            {
+                // A metric view is no relation Spark can write or measure (4.2.1 goldens):
+                // `INSERT` meets its plan as an RDD-based one, `ANALYZE` the view refusal.
+                match operation {
+                    "INSERT" | "INSERT OVERWRITE" => {
+                        return Err(krishiv_common::error::UnsupportedInsertRddBased {}.into());
+                    }
+                    "ANALYZE TABLE" => {
+                        return Err(krishiv_common::error::UnsupportedFeatureAnalyzeView {}.into());
+                    }
+                    _ => {}
+                }
+            }
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
                 operation: operation.to_owned(),
                 view_name: name.quoted(),

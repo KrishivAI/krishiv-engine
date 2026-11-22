@@ -727,7 +727,7 @@ pub(crate) fn alias_map(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
 
 /// A common-subexpression projection's definitions: each `cse_*` output id
 /// and the expression it names.
-fn cse_defs(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
+pub(crate) fn cse_defs(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
     exprs
         .iter()
         .filter_map(|e| match &e.node {

@@ -730,6 +730,7 @@ impl Session {
                 // The store sets the version (review r10 M10).
                 revision: 0,
                 author: self.state.principal.name.clone(),
+                kind: crate::store::ViewKind::Sql,
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -1006,6 +1007,7 @@ impl Session {
                     default: None,
                     comment: None,
                     char_varchar: None,
+                    metric: None,
                 })
             })
             .collect()
@@ -1066,8 +1068,22 @@ impl Session {
             }
             Some(t) => Err(WrongCommandForObjectType {
                 operation: "DROP VIEW".to_owned(),
-                required_type: "VIEW".to_owned(),
-                object_name: format!("{}.{}", name.namespace, name.name),
+                // Spark 4.2 drops either view kind and names both (`ddl.scala`); earlier
+                // releases have no metric view (3.5.7 and 4.1.0 gate goldens).
+                required_type: match self.state.profile {
+                    krishiv_plan::analyzer::SparkProfile::V3_5
+                    | krishiv_plan::analyzer::SparkProfile::V4_0
+                    | krishiv_plan::analyzer::SparkProfile::V4_1 => "VIEW",
+                    _ => "VIEW or METRIC_VIEW",
+                }
+                .to_owned(),
+                // `CatalogTable.qualifiedName`, with the catalog (all releases).
+                object_name: format!(
+                    "{}.{}.{}",
+                    crate::catalog::CATALOG,
+                    name.namespace,
+                    name.name
+                ),
                 found_type: if t.managed { "MANAGED" } else { "EXTERNAL" }.to_owned(),
                 alternative: "DROP TABLE".to_owned(),
             }
@@ -1112,6 +1128,17 @@ impl Session {
                 operation: "ALTER VIEW".to_owned(),
             }
             .into());
+        }
+        let metric = existing
+            .view
+            .as_ref()
+            .is_some_and(crate::store::ViewDef::is_metric);
+        if let (true, AlterViewAction::RenameTo { name: to, .. }) = (metric, &a.action) {
+            // A metric view keeps its kind, YAML and column metadata under the new name (4.2.1
+            // golden). A plain view's rename is not built yet.
+            return self
+                .rename_table(&existing, &self.table_name(to, &env)?)
+                .await;
         }
         let mut changed = (*existing).clone();
         match &a.action {
@@ -1186,6 +1213,12 @@ impl Session {
                     // A new text: the store gives it a new version (review r10 M10).
                     revision: 0,
                     author: self.state.principal.name.clone(),
+                    // Spark's `AlterViewAsCommand` keeps the table type: a metric view's text
+                    // becomes the query, read later as YAML (4.2.1 golden).
+                    kind: existing
+                        .view
+                        .as_ref()
+                        .map_or(crate::store::ViewKind::Sql, |v| v.kind.clone()),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {
@@ -1482,9 +1515,55 @@ impl Session {
                 }
                 .into());
             }
+            let metric = self
+                .state
+                .catalog
+                .store
+                .table(&name.namespace, &name.name)
+                .and_then(|t| t.view.as_ref().map(crate::store::ViewDef::is_metric))
+                .unwrap_or(false);
+            // The partition commands resolve a table by name (`UnresolvedTable`, `AstBuilder`);
+            // a metric view there is refused with no alternative (4.2.1 golden).
+            let partition_operation = match a.action {
+                AlterTableAction::AddPartition { .. } => Some("ALTER TABLE ... ADD PARTITION ..."),
+                AlterTableAction::DropPartition { .. } => {
+                    Some("ALTER TABLE ... DROP PARTITION ...")
+                }
+                AlterTableAction::RenamePartition { .. } => {
+                    Some("ALTER TABLE ... RENAME TO PARTITION")
+                }
+                AlterTableAction::RecoverPartitions => Some("ALTER TABLE ... RECOVER PARTITIONS"),
+                _ => None,
+            };
+            if let (true, Some(operation)) = (metric, partition_operation) {
+                return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
+                    operation: operation.to_owned(),
+                    view_name: name.quoted(),
+                }
+                .into());
+            }
             return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
-                operation: "`ALTER TABLE`".to_owned(),
-                view_name: name.quoted(),
+                // Spark quotes the operation for a plain view only (4.2.1 goldens).
+                operation: if metric {
+                    "ALTER TABLE"
+                } else {
+                    "`ALTER TABLE`"
+                }
+                .to_owned(),
+                // ... and names a metric view as written, a plain one fully qualified.
+                view_name: if metric {
+                    match &a.table {
+                        DdlName::Parts(n) => n
+                            .parts
+                            .iter()
+                            .map(|p| format!("`{}`", p.value.replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join("."),
+                        _ => format!("`{}`", name.name.replace('`', "``")),
+                    }
+                } else {
+                    name.quoted()
+                },
             }
             .into());
         }
@@ -1544,12 +1623,12 @@ impl Session {
     /// between puts the directory back.
     async fn rename_table(
         &self,
-        table: &CatalogTable,
+        table: &Arc<CatalogTable>,
         to: &TableName,
     ) -> Result<DataFrame, KrishivError> {
         let to = &self.rename_target(table, to)?;
         let store = &self.state.catalog.store;
-        let mut renamed = table.clone();
+        let mut renamed = (**table).clone();
         renamed.namespace.clone_from(&to.namespace);
         renamed.name.clone_from(&to.name);
         // The canonical directories moved (to, from), to move back on a failure.
@@ -1582,9 +1661,17 @@ impl Session {
         self.state
             .cache
             .invalidate_table(&format!("{}.{}", table.namespace, table.name));
-        store.drop_table(&table.namespace, &table.name);
-        if let Err(e) = store.create_table(renamed, CreateMode::ErrorIfExists) {
-            let _ = store.create_table(table.clone(), CreateMode::Replace);
+        // The entry read, swapped for the renamed one under one store lock: both names or neither,
+        // and no window where a reader finds neither or a restore replaces a newer object.
+        let failed = match store.rename_table_entry(table, renamed) {
+            Ok(Some(_)) => None,
+            Ok(None) => Some(internal(format!(
+                "{} was changed by another statement while this one ran; retry",
+                quoted(&table.namespace, &table.name)
+            ))),
+            Err(e) => Some(e),
+        };
+        if let Some(e) = failed {
             if let Some((target, source)) = moved {
                 self.move_back(&target, &source)?;
             }
@@ -1888,6 +1975,7 @@ mod writes;
 mod create;
 #[cfg(feature = "delta")]
 mod delta;
+mod metric_view;
 #[cfg(feature = "delta")]
 pub(crate) use delta::{delta_write_refused, is_delta_table};
 #[cfg(feature = "delta")]

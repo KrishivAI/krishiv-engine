@@ -698,7 +698,7 @@ fn store_assignment_overflow<'a>(
     }
     // delta-spark's `canCauseCastOverflow` (`:729-732`).
     let can_overflow = |from: &DataType, to: &DataType| {
-        contains_integral_or_decimal(to) && !crate::view_schema::can_up_cast(from, to)
+        contains_integral_or_decimal(to) && !krishiv_plan::analyzer::can_up_cast(from, to)
     };
     columns.iter().find_map(|c| {
         value_types

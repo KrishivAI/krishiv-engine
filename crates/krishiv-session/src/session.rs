@@ -638,6 +638,14 @@ impl Session {
                 let ids = (&*env.identifier_spans, &*env.identifier_written);
                 self.exec_create_permanent_view(&v, query, ids).await
             }
+            Statement::CreateMetricView(v) => {
+                if let Some(e) =
+                    ran::metric_view_gate_error(&v, self.state.profile, query, redacted)
+                {
+                    return Err(e);
+                }
+                self.exec_create_metric_view(&v, query).await
+            }
             Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
             Statement::AlterView(a) => {
                 let ids = (&*env.identifier_spans, &*env.identifier_written);
@@ -1379,6 +1387,8 @@ impl Session {
             definer_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
             // Set per analysis to the permanent views it inlined (review r5 Z1, Z2).
             stored_view_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
+            // Set per analysis to the temporary views it inlined.
+            temp_view_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
         };
         // The epoch the query's catalog reads at: entries it loads are at least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
@@ -1519,16 +1529,12 @@ impl Session {
                 .map(|r| Arc::clone(&r.query))
                 .collect(),
         );
-        let trusting_views;
-        let views_analysis = if texts.is_empty() && stored_texts.is_empty() {
-            &env.analysis
-        } else {
-            let mut ctx = env.analysis.clone();
-            ctx.definer_texts = texts.clone();
-            ctx.stored_view_texts = stored_texts.clone();
-            trusting_views = ctx;
-            &trusting_views
-        };
+        // Every temporary view's text: the metric-view rule stops there, as at a permanent view's.
+        let temp_texts =
+            krishiv_plan::analyzer::views::DefinerTexts::new(expansion.temp_texts.clone());
+        let trusting_views =
+            definer::trusting_context(&env.analysis, &texts, &stored_texts, &temp_texts);
+        let views_analysis = trusting_views.as_ref().unwrap_or(&env.analysis);
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
         let (synced, renames) =
@@ -1547,20 +1553,13 @@ impl Session {
         let (renamed, mut kept) = crate::view_schema::apply_renames_keeping(
             &expansion.plan,
             &renames,
-            &[&texts, &stored_texts],
+            &[&texts, &stored_texts, &temp_texts],
         );
+        let temp_texts = kept.pop().unwrap_or_default();
         let stored_texts = kept.pop().unwrap_or_default();
         let texts = kept.pop().unwrap_or_default();
-        let trusting;
-        let analysis = if texts.is_empty() && stored_texts.is_empty() {
-            &env.analysis
-        } else {
-            let mut ctx = env.analysis.clone();
-            ctx.definer_texts = texts;
-            ctx.stored_view_texts = stored_texts;
-            trusting = ctx;
-            &trusting
-        };
+        let trusting = definer::trusting_context(&env.analysis, &texts, &stored_texts, &temp_texts);
+        let analysis = trusting.as_ref().unwrap_or(&env.analysis);
         let plan = Plan::try_new(renamed)?;
         // The bodies of the functions the plan calls read views the same way:
         // the policy is asked about them before the analysis' own result (or
