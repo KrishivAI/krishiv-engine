@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Snapshot check of the eight UI pages at phone, tablet and desktop widths, dark and light, of the pages the
+"""Snapshot check of the ten UI pages at phone, tablet and desktop widths, dark and light, of the pages the
 embedded and the profiles console show, and of TPC-H Q9's profile in the console and in the offline viewer.
 
     uv run --with playwright python ui/tests/check_pages.py [SHOT_DIR]
@@ -57,6 +57,21 @@ PAGES = [
         ],
     ),
     ("history", "#/history", ["History", "DIVIDE_BY_ZERO", "Compare the two selected"]),
+    (
+        "sessions",
+        "#/sessions",
+        ["Sessions", "End session", "3 open", "ADBC Flight SQL", "for bi-gateway"],
+    ),
+    (
+        "workload",
+        "#/workload",
+        ["Workload", "interactive", "nightly", "by priority · 2", "4 / 4", "removed"],
+    ),
+    (
+        "advisor",
+        "#/advisor",
+        ["Advisor", "Partition by", "event_date", "100 of 120", "83.1%"],
+    ),
     ("resources", "#/resources", ["Memory", "Caches", "root/query-1"]),
     ("catalog", "#/catalog", ["Catalog", "spark_catalog", "Schemas", "Tables"]),
     ("sql", "#/sql", ["SQL", "Run", "Cancel"]),
@@ -590,6 +605,11 @@ MODE_PAGES = {
         ("#/resources", ["Memory pools and caches of this process"], []),
         ("#/sql", ["Statements run in your session", "Run"], []),
         ("#/environment", ["The settings of this session", "***"], []),
+        # The sessions of every client, the resource groups and the advice folded from every principal's
+        # queries are a server's: their addresses open the first page.
+        ("#/sessions", ["This process and the session"], ["End session"]),
+        ("#/workload", ["This process and the session"], ["Scheduling"]),
+        ("#/advisor", ["This process and the session"], ["Partition by"]),
     ],
     # Every address but a query's own page opens the history: the mode has no other page.
     "profiles": [
@@ -598,6 +618,9 @@ MODE_PAGES = {
         ("#/queries", ["DIVIDE_BY_ZERO"], ["Refreshes once a second"]),
         ("#/sql", ["DIVIDE_BY_ZERO"], ["Ctrl or Cmd"]),
         ("#/environment", ["DIVIDE_BY_ZERO"], ["Secrets show"]),
+        ("#/sessions", ["DIVIDE_BY_ZERO"], ["End session"]),
+        ("#/workload", ["DIVIDE_BY_ZERO"], ["Scheduling"]),
+        ("#/advisor", ["DIVIDE_BY_ZERO"], ["Partition by"]),
         (
             "#/queries/01932a40-1a00-7a01-8001-aaaaaaaaaa02",
             ["HashJoin", "← History"],
@@ -606,7 +629,16 @@ MODE_PAGES = {
     ],
 }
 # The requests a console over stored profiles never makes: the pages behind them are not in the mode.
-PROFILES_NEVER = ("/events", "/environment", "/catalog", "/sql", "/resources")
+PROFILES_NEVER = (
+    "/events",
+    "/environment",
+    "/catalog",
+    "/sql",
+    "/resources",
+    "/sessions",
+    "/groups",
+    "/advice",
+)
 
 
 def mode_checks() -> list[str]:
@@ -667,7 +699,8 @@ def mode_checks() -> list[str]:
                         problems.append(
                             f"profiles: the menu lists {links}, not only History"
                         )
-                    if mode == "embedded" and len(links) != len(PAGES) - 1:
+                    # Every page but a query's own, and but the three a server alone has.
+                    if mode == "embedded" and len(links) != len(PAGES) - 4:
                         problems.append(f"embedded: the menu lists {links}")
                     tail = fixture_server.SESSION_ID[-8:]
                     if mode == "embedded" and tail not in page.inner_text("header"):
@@ -676,6 +709,12 @@ def mode_checks() -> list[str]:
                         )
                 problems += [f"{mode} {label}: page error: {e}" for e in errors]
                 ctx.close()
+            if mode == "embedded":
+                problems += [
+                    f"embedded: the page asked for {path}"
+                    for path in sorted(set(server.asked))
+                    if path.endswith(("/sessions", "/groups", "/advice"))
+                ]
             if mode == "profiles":
                 problems += [
                     f"profiles: the page asked for {path}"
@@ -763,6 +802,300 @@ def filter_checks() -> list[str]:
             page.close()
             server.shutdown()
         browser.close()
+    return problems
+
+
+def workload_checks() -> list[str]:
+    """A server console's Sessions and Workload pages and the filter of the live list: the ended sessions are
+    off the list until asked for, the filter narrows it, ending a session takes two presses and says what was
+    cancelled, a session's query count opens History on that session; the groups are indented under their
+    parents and a server with none says so."""
+    problems: list[str] = []
+    server = fixture_server.serve()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    # One row per session or group: the table's rows at this width (the cards for a narrower one are hidden),
+    # without the one row an empty table shows its text in.
+    rows = "main table tbody tr:visible:not(:has(td[colspan]))"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on(
+            "dialog", lambda d: (errors.append(f"dialog: {d.message}"), d.dismiss())
+        )
+        page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
+        page.locator("header nav a").first.wait_for(timeout=10000)
+
+        def count(what: str, want: int) -> None:
+            try:
+                expect(page.locator(rows)).to_have_count(want, timeout=5000)
+            except AssertionError:
+                got = page.locator(rows).count()
+                problems.append(f"{what}: {got} rows, not {want}")
+
+        page.evaluate("window.location.hash = '#/sessions'")
+        count("sessions: the open sessions", 3)
+        if page.get_by_role("button", name="End session").count() != 2 or not shows(
+            page, ["The console's editor"], "main"
+        ):
+            problems.append(
+                "sessions: the editor's session is not marked, or offers End session"
+            )
+        if "idle_timeout" in page.inner_text("main"):
+            problems.append(
+                "sessions: an ended session is listed before it is asked for"
+            )
+        filter_box = page.get_by_label("Filter", exact=True)
+        for typed, want in (("flight", 1), ("TEAM=RISK", 1), ("no-such-client", 0)):
+            filter_box.fill(typed)
+            count(f"sessions: the filter {typed!r}", want)
+        filter_box.fill("")
+        page.get_by_label("Show ended sessions").check()
+        count("sessions: with the ended ones", 4)
+        if not shows(page, ["expired", "idle_timeout"], "main"):
+            problems.append("sessions: an ended session does not say how it ended")
+        page.get_by_label("Show ended sessions").uncheck()
+        count("sessions: the open sessions again", 3)
+
+        # Ending a session: the first press asks, "Keep" takes it back, the second press ends it.
+        bob = page.locator(rows).filter(has_text="bob")
+        bob.get_by_role("button", name="End session").click()
+        if server.closed:
+            problems.append("sessions: one press ended a session")
+        bob.get_by_role("button", name="Keep").click()
+        if bob.get_by_role("button", name="End session").count() != 1:
+            problems.append("sessions: Keep does not take the question back")
+        bob.get_by_role("button", name="End session").click()
+        bob.get_by_role("button", name="End it and cancel 1 running").click()
+        if not shows(page, ["Ended the session of bob and cancelled 1 query."], "main"):
+            problems.append("sessions: the page does not say what ending a session did")
+        count("sessions: after one was ended", 2)
+        if server.closed != [fixture_server.SESSION_B]:
+            problems.append(f"sessions: the page ended {server.closed}")
+
+        # A session's query count opens History on that session's queries.
+        ann = page.locator(rows).filter(has_text="ann")
+        ann.get_by_role(
+            "button", name="The 14 queries of this session in History"
+        ).click()
+        page.wait_for_function("location.hash === '#/history'", timeout=5000)
+        history_rows = "main a[href^='#/queries/']:visible"
+        try:
+            expect(page.locator(history_rows)).to_have_count(2, timeout=5000)
+        except AssertionError:
+            got = page.locator(history_rows).count()
+            problems.append(f"history of a session: {got} queries, not 2")
+        session_box = page.get_by_label("Session", exact=True)
+        if session_box.input_value() != fixture_server.SESSION_A:
+            problems.append("history of a session: the Session filter does not show it")
+        session_box.fill("")
+        expect(page.locator(history_rows)).to_have_count(4, timeout=5000)
+        # The id was read once: coming back to History later lists everything.
+        page.evaluate("window.location.hash = '#/health'")
+        shows(page, ["uptime"], "main")
+        page.evaluate("window.location.hash = '#/history'")
+        expect(page.locator(history_rows)).to_have_count(4, timeout=5000)
+
+        # The live list: the filter finds a query by its principal, its text or its session.
+        page.evaluate("window.location.hash = '#/queries'")
+        live = len(fixture_server.DATA["live"])
+        count("queries: the live list", live)
+        filter_box = page.get_by_label("Filter", exact=True)
+        for typed, want in (
+            ("bob", 1),
+            ("L_RETURNFLAG", 1),
+            (fixture_server.SESSION_A, 2),
+            ("no-such-query", 0),
+        ):
+            filter_box.fill(typed)
+            count(f"queries: the filter {typed!r}", want)
+            shown = page.locator("[data-query-count]")
+            if shown.inner_text() != f"{want} of {live} shown":
+                problems.append(
+                    f"queries: {typed!r} says {shown.inner_text()!r}, not '{want} of {live} shown'"
+                )
+        if not shows(page, ["No running query matches."], "main"):
+            problems.append("queries: an empty filtered list is not said to be one")
+        filter_box.fill("")
+        count("queries: the live list again", live)
+
+        # The groups: a parent before its children, each indented under it, a limit reached in bold.
+        page.evaluate("window.location.hash = '#/workload'")
+        count("workload: the groups", len(fixture_server.GROUPS))
+        depths = page.locator("main table [data-depth]").evaluate_all(
+            "es => es.map(e => [e.textContent.trim(), Number(e.dataset.depth), e.title])"
+        )
+        want_depths = [
+            ["root", 0, "root"],
+            ["interactive", 1, "root.interactive"],
+            ["etl", 1, "root.etl"],
+            ["nightly", 2, "root.etl.nightly"],
+            ["adhoc", 1, "root.adhoc"],
+        ]
+        if depths != want_depths:
+            problems.append(f"workload: the groups are {depths}")
+        bold = page.locator("main table td span.font-bold").all_inner_texts()
+        # `root.etl` runs as many as it may; `root.etl.nightly` also holds as many waiting as it may. A group
+        # that may hold none waiting (`root.adhoc`, 0 / 0) is not "at its limit".
+        if bold != ["4 / 4", "2 / 2", "5 / 5"]:
+            problems.append(f"workload: the limits shown as reached are {bold}")
+        problems += [f"workload: page error: {e}" for e in errors]
+        if page.evaluate("window.__xss"):
+            problems.append("workload: markup in a session's row ran")
+        browser.close()
+    server.shutdown()
+
+    # A server started with no resource-group file: the page says so and shows no table.
+    server = fixture_server.serve(groups=False)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.goto(
+            f"http://127.0.0.1:{server.server_address[1]}/?token=fixture#/workload"
+        )
+        try:
+            page.locator("[data-no-groups]").wait_for(timeout=10000)
+        except PlaywrightTimeout:
+            problems.append("workload: a server with no groups does not say so")
+        if page.locator("main table, main ul li").count():
+            problems.append("workload: a server with no groups shows a list")
+        browser.close()
+    server.shutdown()
+    return problems
+
+
+def advisor_checks() -> list[str]:
+    """A server console's Advisor page and the session a query's link carries: one row a table with its best
+    column and the other candidates, a filter over the tables, the history read when the page opens and when
+    asked (never on a timer), a server with no advice saying so; and a listed query's page and its Cancel name
+    the row's session."""
+    problems: list[str] = []
+    server = fixture_server.serve()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    rows = "main table tbody tr:visible:not(:has(td[colspan]))"
+    advice_path = "/api/internal/advice"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
+        page.locator("header nav a").first.wait_for(timeout=10000)
+
+        def count(what: str, want: int) -> None:
+            try:
+                expect(page.locator(rows)).to_have_count(want, timeout=5000)
+            except AssertionError:
+                got = page.locator(rows).count()
+                problems.append(f"{what}: {got} rows, not {want}")
+
+        page.evaluate("window.location.hash = '#/advisor'")
+        tables = fixture_server.ADVICE
+        count("advisor: one row a table", len(tables))
+        first = page.locator(rows).first.inner_text()
+        for shown in (
+            "spark_catalog.default.events",
+            "event_date",
+            "100 of 120",
+            "365",
+        ):
+            if shown not in first:
+                problems.append(f"advisor: the first table's row lacks {shown!r}")
+        others = page.locator("main table [data-other-candidates] li").all_inner_texts()
+        if (
+            len(others) != 2
+            or "region · 20 queries · 3 partitions · 11.1%" not in others[0]
+        ):
+            problems.append(f"advisor: the other candidates are {others}")
+        # A share too small for one decimal still reads as a number, not as markup or an exponent.
+        if len(others) == 2 and "0.1%" not in others[1]:
+            problems.append(f"advisor: a small share reads {others[1]!r}")
+        filter_box = page.get_by_label("Filter", exact=True)
+        for typed, want in (("ORDERS", 1), ("spark_catalog", 2), ("no-such-table", 0)):
+            filter_box.fill(typed)
+            count(f"advisor: the filter {typed!r}", want)
+            said = page.locator("[data-advice-count]").inner_text()
+            if said != f"{want} of {len(tables)} tables shown":
+                problems.append(f"advisor: {typed!r} says {said!r}")
+        if not shows(page, ["No table matches."], "main"):
+            problems.append("advisor: an empty filtered list is not said to be one")
+        filter_box.fill("")
+        count("advisor: the tables again", len(tables))
+        # Reading the advice reads the history store: once for the page, and once more only when asked.
+        page.wait_for_timeout(2500)
+        if server.asked.count(advice_path) != 1:
+            problems.append(
+                f"advisor: the page read the advice {server.asked.count(advice_path)} times unasked"
+            )
+        page.get_by_role("button", name="Read the history again").click()
+        try:
+            page.wait_for_function(
+                "() => !document.querySelector('main button[disabled]')", timeout=5000
+            )
+        except PlaywrightTimeout:
+            problems.append("advisor: the page never finished reading again")
+        if server.asked.count(advice_path) != 2:
+            problems.append("advisor: asking again did not read the advice once more")
+        if page.evaluate("window.__xss"):
+            problems.append("advisor: markup in a column's name ran")
+
+        # A listed query's page and its Cancel name the row's session: two sessions may share a query id.
+        page.evaluate("window.location.hash = '#/queries'")
+        bob = page.locator(rows).filter(has_text="bob")
+        bob.get_by_role("button", name="Cancel").click()
+        want = f"/cancel?session={fixture_server.SESSION_B}"
+        if not shows(page, ["Cancelled "], "main"):
+            problems.append("queries: Cancel never answered")
+        if len(server.cancels) != 1 or not server.cancels[0].endswith(want):
+            problems.append(f"queries: Cancel asked for {server.cancels}")
+        bob.locator("a[href^='#/queries/']").click()
+        if not shows(page, ["Operators"], "main"):
+            problems.append("queries: a row's link does not open the query's page")
+        want = f"?session={fixture_server.SESSION_B}"
+        if not server.query_reads or not all(
+            r.endswith(want) for r in server.query_reads
+        ):
+            problems.append(f"queries: the query's page read {server.query_reads}")
+        # A row with no session (a profile stored before a restart) links the id alone, as before.
+        try:
+            with page.expect_response(
+                lambda r: r.url.endswith(f"/api/internal/queries/{QID}"), timeout=5000
+            ) as unqualified:
+                page.evaluate(f"window.location.hash = '#/queries/{QID}'")
+            read = unqualified.value.ok
+        except PlaywrightTimeout:
+            read = False
+        if (
+            not read
+            or not shows(page, ["Operators"], "main")
+            or "?" in server.query_reads[-1]
+        ):
+            problems.append(
+                f"queries: a link without a session read {server.query_reads}"
+            )
+        problems += [f"advisor: page error: {e}" for e in errors]
+        browser.close()
+    server.shutdown()
+
+    # A server whose history has no advice: the page says where advice comes from and shows no table.
+    server = fixture_server.serve(advice=False)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.goto(
+            f"http://127.0.0.1:{server.server_address[1]}/?token=fixture#/advisor"
+        )
+        try:
+            page.locator("[data-no-advice]").wait_for(timeout=10000)
+        except PlaywrightTimeout:
+            problems.append("advisor: a server with no advice does not say so")
+        if page.locator("main table, main ul li, main input").count():
+            problems.append("advisor: a server with no advice shows a list or a filter")
+        browser.close()
+    server.shutdown()
     return problems
 
 
@@ -1182,14 +1515,17 @@ if __name__ == "__main__":
     found += role_checks()
     found += start_checks()
     found += filter_checks()
+    found += workload_checks()
+    found += advisor_checks()
     found += heatmap_checks(f"http://127.0.0.1:{server.server_address[1]}")
     found += q9_checks(shots)
     found += responsive_checks(shots / "responsive" if shots is not None else None)
     print(
         "\n".join(found)
         if found
-        else "ui pages: ok (8 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, deep links, embed, "
-        "embedded and profiles consoles, operator, history filters, the plan heatmap, TPC-H Q9's profile, "
+        else "ui pages: ok (11 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, deep links, embed, "
+        "embedded and profiles consoles, operator, history filters, sessions and workload, the advisor and session links, the plan heatmap, "
+        "TPC-H Q9's profile, "
         "responsive: 3 consoles x 13 screen sizes, touch targets, SQL editor on a phone, text size, motion)"
     )
     sys.exit(1 if found else 0)

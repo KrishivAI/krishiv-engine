@@ -12,6 +12,9 @@
   import QueryDetail from "./pages/QueryDetail.svelte";
   import History from "./pages/History.svelte";
   import Resources from "./pages/Resources.svelte";
+  import Sessions from "./pages/Sessions.svelte";
+  import Workload from "./pages/Workload.svelte";
+  import Advisor from "./pages/Advisor.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import Id from "$lib/components/id.svelte";
@@ -85,11 +88,14 @@
     return listenForTheme(config.then((c) => c.allowed_origins));
   });
 
-  const route = $derived(parseRoute(window.location.pathname, hash));
+  const route = $derived(parseRoute(window.location.pathname, hash, window.location.search));
   const labels: Record<string, string> = {
     health: "Health",
     queries: "Queries",
     history: "History",
+    sessions: "Sessions",
+    workload: "Workload",
+    advisor: "Advisor",
     resources: "Resources",
     catalog: "Catalog",
     sql: "SQL",
@@ -127,12 +133,13 @@
   <!-- The bar's items sit in the same centred box as the content, so on a very wide screen they line up with it
        instead of going to the screen's corners. -->
   <header class="sticky top-0 z-30 border-b border-border bg-card">
-   <div data-shell class="mx-auto flex h-14 max-w-[120rem] items-center gap-4 px-3 md:px-4">
+   <div data-shell class="mx-auto flex min-h-14 max-w-[120rem] items-center gap-4 px-3 md:px-4">
     <picture class="flex shrink-0">
       <source media="(prefers-color-scheme: dark)" srcset={markDark} />
       <img class="h-6 w-auto" src={markLight} alt="Krishiv" />
     </picture>
-    <nav class="hidden gap-0.5 md:flex" aria-label="Pages">
+    <!-- Ten links do not fit one row on a tablet or at a large text size: the row wraps and the bar grows. -->
+    <nav class="hidden min-w-0 flex-wrap gap-0.5 md:flex" aria-label="Pages">
       {#each links as [id, label]}
         <a href={`#/${id}`} class={linkClass(id, true)} aria-current={page === id ? "page" : undefined}>{label}</a>
       {/each}
@@ -194,11 +201,17 @@
       </p>
       <Button onclick={() => open(false)}>Try again</Button>
     {:else if page === "queries" && route.id}
-      <QueryDetail id={route.id} />
+      <QueryDetail id={route.id} session={route.session} />
     {:else if page === "queries"}
       <Queries />
     {:else if page === "history"}
       <History />
+    {:else if page === "sessions"}
+      <Sessions />
+    {:else if page === "workload"}
+      <Workload />
+    {:else if page === "advisor"}
+      <Advisor />
     {:else if page === "resources"}
       <Resources />
     {:else if page === "catalog"}

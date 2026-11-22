@@ -29,7 +29,7 @@ SELECT * FROM t NATURAL JOIN u
 SELECT * FROM t, LATERAL (SELECT a)
   => Project [*] | +- Join LateralInner |    :- Read t |    +- SubqueryAlias __auto_generated_subquery_name |       +- Project [a] |          +- OneRowRelation | 
 SELECT * FROM t VERSION AS OF 1
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature time travel is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..31
+  => Project [*] | +- Read t {__krishiv.timeTravel=Version} | 
 SELECT a FROM t CLUSTER BY a
   => Sort [a ASC NULLS FIRST], false | +- Repartition (a) |    +- Project [a] |       +- Read t | 
 SELECT a FROM t DISTRIBUTE BY a

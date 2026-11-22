@@ -8,39 +8,60 @@
   import { fieldClass } from "$lib/components/ui/input";
   import Id from "$lib/components/id.svelte";
   import ResponsiveTable, { type Column } from "$lib/components/responsive-table.svelte";
-  import { cn } from "$lib/utils";
+  import { cn, keyOf } from "$lib/utils";
+  import { queryHref } from "../routes";
 
   let stateFilter = $state("");
   let principal = $state("");
   let client = $state("");
   let tag = $state("");
-  let picked = $state<string[]>([]);
+  // The Sessions page opens History on one session's queries: it leaves the id here, and it is read once.
+  function sessionAsked(): string {
+    try {
+      const id = sessionStorage.getItem("krishiv_history_session") ?? "";
+      sessionStorage.removeItem("krishiv_history_session");
+      return id;
+    } catch {
+      return "";
+    }
+  }
+  let session = $state(sessionAsked());
+  // A run is its id and its session: two sessions may each have run a query under one id.
+  type Pick = { id: string; session: string };
+  let picked = $state<Pick[]>([]);
+  const pickOf = (r: Query): Pick => ({ id: r.query_id, session: r.session_id ?? "" });
+  const isPicked = (r: Query) => picked.some((p) => p.id === r.query_id && p.session === (r.session_id ?? ""));
   let compared = $state<Compare | null>(null);
   let compareError = $state("");
 
   const q = createQuery<{ queries: Query[] }>(() => ({
-    queryKey: ["history", stateFilter, principal, client, tag],
+    queryKey: ["history", stateFilter, principal, client, tag, session],
     queryFn: () => {
       const p = new URLSearchParams({ limit: "200" });
       if (stateFilter) p.set("state", stateFilter);
       if (principal) p.set("principal", principal);
       if (client.trim()) p.set("client", client.trim());
       if (tag.trim()) p.set("tag", tag.trim());
+      if (session.trim()) p.set("session", session.trim());
       return api(`/api/internal/history?${p}`);
     },
     // Stored profiles do not change while the console is open.
     refetchInterval: consoleInfo.mode === "profiles" ? false : 5000,
   }));
 
-  function toggle(id: string) {
-    picked = picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id].slice(-2);
+  function toggle(r: Query) {
+    const pick = pickOf(r);
+    picked = isPicked(r) ? picked.filter((p) => p.id !== pick.id || p.session !== pick.session) : [...picked, pick].slice(-2);
     compared = null;
   }
 
   async function compare() {
     compareError = "";
     try {
-      compared = await api<Compare>(`/api/internal/compare?a=${encodeURIComponent(picked[0])}&b=${encodeURIComponent(picked[1])}`);
+      const p = new URLSearchParams({ a: picked[0].id, b: picked[1].id });
+      if (picked[0].session) p.set("a_session", picked[0].session);
+      if (picked[1].session) p.set("b_session", picked[1].session);
+      compared = await api<Compare>(`/api/internal/compare?${p}`);
     } catch (e) {
       compareError = (e as Error).message;
     }
@@ -98,6 +119,9 @@
     <label class="flex w-full items-center gap-2 sm:w-auto">Tag
       <input class={cn(fieldClass, "flex-1")} bind:value={tag} placeholder="key or key=value" size="16" />
     </label>
+    <label class="flex w-full items-center gap-2 sm:w-auto">Session
+      <input class={cn(fieldClass, "mono flex-1")} bind:value={session} placeholder="any" size="14" />
+    </label>
   {/if}
   <Button class="w-full sm:w-auto" disabled={picked.length !== 2} onclick={compare}>Compare the two selected</Button>
   {#if compareError}<span class="text-error">{compareError}</span>{/if}
@@ -137,13 +161,13 @@
 {:else if q.isError}
   <p class="text-error">Could not load history: {q.error.message}</p>
 {:else}
-  <ResponsiveTable {columns} rows={q.data.queries} rowKey={(r) => r.query_id} empty="No finished queries match.">
+  <ResponsiveTable {columns} rows={q.data.queries} rowKey={keyOf(q.data.queries, (r) => r.query_id)} empty="No finished queries match.">
     {#snippet cell(r, c)}
       {#if c.key === "query"}
         <label class="mr-2 inline-flex min-h-11 min-w-11 items-center justify-center align-middle">
-          <input class="size-5 accent-[var(--k-silver)]" type="checkbox" checked={picked.includes(r.query_id)} onchange={() => toggle(r.query_id)} aria-label={`Select ${oneLine(r.query_text, 40)} (${r.query_id.slice(-8)}) for comparison`} />
+          <input class="size-5 accent-[var(--k-silver)]" type="checkbox" checked={isPicked(r)} onchange={() => toggle(r)} aria-label={`Select ${oneLine(r.query_text, 40)} (${r.query_id.slice(-8)}) for comparison`} />
         </label>
-        <a class="inline-flex min-h-11 min-w-11 items-center align-middle underline underline-offset-4" href={`#/queries/${encodeURIComponent(r.query_id)}`}>{oneLine(r.query_text, 90)}</a>
+        <a class="inline-flex min-h-11 min-w-11 items-center align-middle underline underline-offset-4" href={queryHref(r.query_id, r.session_id)}>{oneLine(r.query_text, 90)}</a>
         <div><Id id={r.query_id} /></div>
         {#if tagsOf(r).length}
           <div class="mono text-xs break-all text-muted-foreground">{tagsOf(r).join(" · ")}</div>
