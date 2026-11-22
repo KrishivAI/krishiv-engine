@@ -1,0 +1,1210 @@
+{
+ "format_version": 1,
+ "spark_tag": "v4.2.0",
+ "status": "observed-on-real-spark-4.2.0 (apache/spark:4.2.0 spark-shell, local[1]); error sources cited by tag path:line (line numbers from WebFetch of the v4.2.0 raw files, counted from the license header as line 1)",
+ "spark_version": "4.2.0",
+ "probe_scripts": [
+  "/home/krishiv/krishiv-data/tmp/perf-4/rs10/probe.scala (default spark-shell: Hive support on)",
+  "/home/krishiv/krishiv-data/tmp/perf-4/rs10/probe2.scala (--conf spark.sql.catalogImplementation=in-memory)",
+  "/home/krishiv/krishiv-data/tmp/perf-4/rs10/probe3.scala (empty-result file sizes)"
+ ],
+ "probe_outputs": [
+  "probe.out",
+  "probe2.out"
+ ],
+ "note": "<DIR> = a scratch directory path, <TMP> = scratch parent. File names normalised: part-<N>-<UUID>-c000... Rows are compared unordered. Every statement returns schema struct<> and zero rows when successful. Cases are SQL-only; the generator does not exist yet (hand-assembled from the probe output). Error messages are exactly the SparkThrowable.getMessage of 4.2.0.",
+ "cases": [
+  {
+   "id": "IOD-01-parquet",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT id, cast(id as string) AS s FROM range(3)",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ],
+    "read_back": {
+     "format": "parquet",
+     "schema": "struct<id:bigint,s:string>",
+     "rows": [
+      [
+       0,
+       "0"
+      ],
+      [
+       1,
+       "1"
+      ],
+      [
+       2,
+       "2"
+      ]
+     ]
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "statement result: zero columns, zero rows (schema struct<>). One part file because local[1]; the part count follows the query's partitions (one file per non-empty/any task partition)."
+  },
+  {
+   "id": "IOD-02-csv",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING csv SELECT id, cast(id as string) AS s FROM range(3)",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.csv"
+    ],
+    "read_back": {
+     "format": "csv",
+     "schema": "struct<_c0:string,_c1:string>",
+     "rows": [
+      [
+       "0",
+       "0"
+      ],
+      [
+       "1",
+       "1"
+      ],
+      [
+       "2",
+       "2"
+      ]
+     ]
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "no header by default; reading back without header option gives _c0,_c1"
+  },
+  {
+   "id": "IOD-03-json",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING json SELECT id, cast(id as string) AS s FROM range(3)",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.json"
+    ],
+    "read_back": {
+     "format": "json",
+     "schema": "struct<id:bigint,s:string>",
+     "rows": [
+      [
+       0,
+       "0"
+      ],
+      [
+       1,
+       "1"
+      ],
+      [
+       2,
+       "2"
+      ]
+     ]
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible"
+  },
+  {
+   "id": "IOD-04-text",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING text SELECT cast(id as string) AS value FROM range(3)",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.txt"
+    ],
+    "read_back": {
+     "format": "text",
+     "schema": "struct<value:string>",
+     "rows": [
+      [
+       "0"
+      ],
+      [
+       "1"
+      ],
+      [
+       "2"
+      ]
+     ]
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible"
+  },
+  {
+   "id": "IOD-05-orc",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING orc SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.zstd.orc"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "ORC default codec is zstd in 4.2.0"
+  },
+  {
+   "id": "IOD-06-provider-class-name",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING org.apache.spark.sql.parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "full class / legacy short name resolves like USING parquet"
+  },
+  {
+   "id": "IOD-07-replace-wholesale",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "setup": "directory pre-exists with old.txt and sub/deep.txt",
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79 (saveMode Overwrite at :69)",
+    "sql/core/.../execution/datasources/InsertIntoHadoopFsRelationCommand.scala:141 (case (SaveMode.Overwrite, _) -> deleteMatchingPartitions / committer.deleteWithJob)"
+   ],
+   "compat": "compatible",
+   "note": "before: [old.txt, sub]; after: only the new output. The whole directory is deleted (SaveMode.Overwrite on the path), unknown files and subdirectories included."
+  },
+  {
+   "id": "IOD-08-options-path",
+   "stmt": "INSERT OVERWRITE DIRECTORY USING parquet OPTIONS ('path' '<DIR>') SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir) :1335-1347"
+   ],
+   "compat": "compatible"
+  },
+  {
+   "id": "IOD-09-path-and-options-path",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet OPTIONS ('path' '<DIR>2') SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_0049",
+    "sqlstate": null,
+    "message": "Directory path and 'path' in OPTIONS should be specified one, but not both.\n\n== SQL (line 1, position 1) ==\n<sql>\n^^^^ (underline spans the whole statement)"
+   },
+   "source": [
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir) :1340-1342",
+    "QueryParsingErrors.directoryPathAndOptionsPathBothSpecifiedError"
+   ],
+   "compat": "compatible",
+   "note": "ParseException, no SQLSTATE (legacy class). Nothing is written to either path."
+  },
+  {
+   "id": "IOD-10-no-path",
+   "stmt": "INSERT OVERWRITE DIRECTORY USING parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_0049",
+    "sqlstate": null,
+    "message": "Directory path and 'path' in OPTIONS should be specified one, but not both."
+   },
+   "source": [
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir) :1340-1342"
+   ],
+   "compat": "compatible",
+   "note": "same error when neither is given; an empty literal '' counts as not given"
+  },
+  {
+   "id": "IOD-11-empty-literal-path",
+   "stmt": "INSERT OVERWRITE DIRECTORY '' USING parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_0049",
+    "sqlstate": null,
+    "message": "Directory path and 'path' in OPTIONS should be specified one, but not both."
+   },
+   "source": [
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir) :1338-1342"
+   ],
+   "compat": "compatible"
+  },
+  {
+   "id": "IOD-12-csv-options",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING csv OPTIONS (header 'true', compression 'gzip', sep '|') SELECT 1 AS a, 'x' AS b",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.csv.gz"
+    ],
+    "read_back": {
+     "format": "csv",
+     "options": {
+      "header": "true",
+      "sep": "|"
+     },
+     "rows": [
+      [
+       "1",
+       "x"
+      ]
+     ],
+     "raw_lines": [
+      "a|b",
+      "1|x"
+     ]
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79 :55-61 (options = storage.properties ++ path)"
+   ],
+   "compat": "compatible",
+   "note": "options other than path are the data source options (storage.properties) and are honoured; gz codec in the file name"
+  },
+  {
+   "id": "IOD-13-parquet-compression",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet OPTIONS (compression 'gzip') SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.gz.parquet"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible"
+  },
+  {
+   "id": "IOD-14-json-compression",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING json OPTIONS (compression 'gzip') SELECT 1 AS a, null AS n",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.json.gz"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible"
+  },
+  {
+   "id": "IOD-15-local-using",
+   "stmt": "INSERT OVERWRITE LOCAL DIRECTORY '<DIR>' USING parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir) :1349-1360"
+   ],
+   "compat": "compatible",
+   "note": "LOCAL is allowed with USING; scheme forced to file; a non-file scheme is a parse error (unsupportedLocalFileSchemeError, :1353-1354, not probed)"
+  },
+  {
+   "id": "IOD-16-hive-stored-as",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' STORED AS parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT",
+    "sqlstate": "0A000",
+    "message": "[NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] INSERT OVERWRITE DIRECTORY with the Hive format is not supported, if you want to enable it, please set \"spark.sql.catalogImplementation\" to \"hive\". SQLSTATE: 0A000",
+    "parameters": {
+     "cmd": "INSERT OVERWRITE DIRECTORY with the Hive format"
+    }
+   },
+   "conf": {
+    "spark.sql.catalogImplementation": "in-memory"
+   },
+   "source": [
+    "sql/core/.../execution/SparkSqlParser.scala:1379-1397 (visitInsertOverwriteHiveDir)",
+    "sql/core/.../execution/datasources/rules.scala:613-615 (HiveOnlyCheck)",
+    "sql/api/.../parser/SqlBaseParser.g4:597-598"
+   ],
+   "compat": "compatible",
+   "note": "AnalysisException (ExtendedAnalysisException) raised at analysis by HiveOnlyCheck; nothing written. Without a USING clause the statement is the Hive form. The reference spark-shell in apache/spark:4.2.0 defaults to Hive support ON, so these forms SUCCEED there (ran, wrote _SUCCESS + part-<N>-<UUID>-c000[.snappy.parquet]); the golden is the in-memory-catalog session, which is what Krishiv models."
+  },
+  {
+   "id": "IOD-17-hive-row-format",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT",
+    "sqlstate": "0A000",
+    "message": "[NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] INSERT OVERWRITE DIRECTORY with the Hive format is not supported, if you want to enable it, please set \"spark.sql.catalogImplementation\" to \"hive\". SQLSTATE: 0A000",
+    "parameters": {
+     "cmd": "INSERT OVERWRITE DIRECTORY with the Hive format"
+    }
+   },
+   "conf": {
+    "spark.sql.catalogImplementation": "in-memory"
+   },
+   "source": [
+    "sql/core/.../execution/SparkSqlParser.scala:1379-1397 (visitInsertOverwriteHiveDir)",
+    "sql/core/.../execution/datasources/rules.scala:613-615 (HiveOnlyCheck)",
+    "sql/api/.../parser/SqlBaseParser.g4:597-598"
+   ],
+   "compat": "compatible",
+   "note": "AnalysisException (ExtendedAnalysisException) raised at analysis by HiveOnlyCheck; nothing written. Without a USING clause the statement is the Hive form. The reference spark-shell in apache/spark:4.2.0 defaults to Hive support ON, so these forms SUCCEED there (ran, wrote _SUCCESS + part-<N>-<UUID>-c000[.snappy.parquet]); the golden is the in-memory-catalog session, which is what Krishiv models."
+  },
+  {
+   "id": "IOD-18-hive-local",
+   "stmt": "INSERT OVERWRITE LOCAL DIRECTORY '<DIR>' STORED AS parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT",
+    "sqlstate": "0A000",
+    "message": "[NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] INSERT OVERWRITE DIRECTORY with the Hive format is not supported, if you want to enable it, please set \"spark.sql.catalogImplementation\" to \"hive\". SQLSTATE: 0A000",
+    "parameters": {
+     "cmd": "INSERT OVERWRITE DIRECTORY with the Hive format"
+    }
+   },
+   "conf": {
+    "spark.sql.catalogImplementation": "in-memory"
+   },
+   "source": [
+    "sql/core/.../execution/SparkSqlParser.scala:1379-1397 (visitInsertOverwriteHiveDir)",
+    "sql/core/.../execution/datasources/rules.scala:613-615 (HiveOnlyCheck)",
+    "sql/api/.../parser/SqlBaseParser.g4:597-598"
+   ],
+   "compat": "compatible",
+   "note": "AnalysisException (ExtendedAnalysisException) raised at analysis by HiveOnlyCheck; nothing written. Without a USING clause the statement is the Hive form. The reference spark-shell in apache/spark:4.2.0 defaults to Hive support ON, so these forms SUCCEED there (ran, wrote _SUCCESS + part-<N>-<UUID>-c000[.snappy.parquet]); the golden is the in-memory-catalog session, which is what Krishiv models."
+  },
+  {
+   "id": "IOD-19-no-using-no-hive",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT",
+    "sqlstate": "0A000",
+    "message": "[NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] INSERT OVERWRITE DIRECTORY with the Hive format is not supported, if you want to enable it, please set \"spark.sql.catalogImplementation\" to \"hive\". SQLSTATE: 0A000",
+    "parameters": {
+     "cmd": "INSERT OVERWRITE DIRECTORY with the Hive format"
+    }
+   },
+   "conf": {
+    "spark.sql.catalogImplementation": "in-memory"
+   },
+   "source": [
+    "sql/core/.../execution/SparkSqlParser.scala:1379-1397 (visitInsertOverwriteHiveDir)",
+    "sql/core/.../execution/datasources/rules.scala:613-615 (HiveOnlyCheck)",
+    "sql/api/.../parser/SqlBaseParser.g4:597-598"
+   ],
+   "compat": "compatible",
+   "note": "AnalysisException (ExtendedAnalysisException) raised at analysis by HiveOnlyCheck; nothing written. Without a USING clause the statement is the Hive form. The reference spark-shell in apache/spark:4.2.0 defaults to Hive support ON, so these forms SUCCEED there (ran, wrote _SUCCESS + part-<N>-<UUID>-c000[.snappy.parquet]); the golden is the in-memory-catalog session, which is what Krishiv models."
+  },
+  {
+   "id": "IOD-20-using-hive",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING hive SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT",
+    "sqlstate": "0A000",
+    "message": "[NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] INSERT OVERWRITE DIRECTORY with the Hive format is not supported, if you want to enable it, please set \"spark.sql.catalogImplementation\" to \"hive\". SQLSTATE: 0A000",
+    "parameters": {
+     "cmd": "INSERT OVERWRITE DIRECTORY with the Hive format"
+    }
+   },
+   "conf": {
+    "spark.sql.catalogImplementation": "in-memory"
+   },
+   "source": [
+    "sql/core/.../execution/SparkSqlParser.scala:1379-1397 (visitInsertOverwriteHiveDir)",
+    "sql/core/.../execution/datasources/rules.scala:613-615 (HiveOnlyCheck)",
+    "sql/api/.../parser/SqlBaseParser.g4:597-598"
+   ],
+   "compat": "compatible",
+   "note": "AnalysisException (ExtendedAnalysisException) raised at analysis by HiveOnlyCheck; nothing written. Without a USING clause the statement is the Hive form. The reference spark-shell in apache/spark:4.2.0 defaults to Hive support ON, so these forms SUCCEED there (ran, wrote _SUCCESS + part-<N>-<UUID>-c000[.snappy.parquet]); the golden is the in-memory-catalog session, which is what Krishiv models."
+  },
+  {
+   "id": "IOD-21-jdbc",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING jdbc SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_2233",
+    "sqlstate": null,
+    "message": "Only Data Sources providing FileFormat are supported: class org.apache.spark.sql.execution.datasources.jdbc.JdbcRelationProvider.",
+    "parameters": {
+     "providingClass": "class org.apache.spark.sql.execution.datasources.jdbc.JdbcRelationProvider"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:63-67 (onlySupportDataSourcesProvidingFileFormatError)"
+   ],
+   "compat": "compatible",
+   "note": "SparkException raised at execution (run()), no SQLSTATE; no files created"
+  },
+  {
+   "id": "IOD-21-noop",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING noop SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_2233",
+    "sqlstate": null,
+    "message": "Only Data Sources providing FileFormat are supported: class org.apache.spark.sql.execution.datasources.noop.NoopDataSource.",
+    "parameters": {
+     "providingClass": "class org.apache.spark.sql.execution.datasources.noop.NoopDataSource"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:63-67 (onlySupportDataSourcesProvidingFileFormatError)"
+   ],
+   "compat": "compatible",
+   "note": "SparkException raised at execution (run()), no SQLSTATE; no files created"
+  },
+  {
+   "id": "IOD-21-console",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING console SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_2233",
+    "sqlstate": null,
+    "message": "Only Data Sources providing FileFormat are supported: class org.apache.spark.sql.execution.streaming.ConsoleSinkProvider.",
+    "parameters": {
+     "providingClass": "class org.apache.spark.sql.execution.streaming.ConsoleSinkProvider"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:63-67 (onlySupportDataSourcesProvidingFileFormatError)"
+   ],
+   "compat": "compatible",
+   "note": "SparkException raised at execution (run()), no SQLSTATE; no files created"
+  },
+  {
+   "id": "IOD-21-rate",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING rate SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_2233",
+    "sqlstate": null,
+    "message": "Only Data Sources providing FileFormat are supported: class org.apache.spark.sql.execution.streaming.sources.RateStreamProvider.",
+    "parameters": {
+     "providingClass": "class org.apache.spark.sql.execution.streaming.sources.RateStreamProvider"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:63-67 (onlySupportDataSourcesProvidingFileFormatError)"
+   ],
+   "compat": "compatible",
+   "note": "SparkException raised at execution (run()), no SQLSTATE; no files created"
+  },
+  {
+   "id": "IOD-22-unknown-foo",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING foo SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "DATA_SOURCE_NOT_FOUND",
+    "sqlstate": "42K02",
+    "message": "[DATA_SOURCE_NOT_FOUND] Failed to find the data source: foo. Make sure the provider name is correct and the package is properly registered and compatible with your Spark version. SQLSTATE: 42K02",
+    "parameters": {
+     "provider": "foo"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:63-67 (onlySupportDataSourcesProvidingFileFormatError)",
+    "DataSource.lookupDataSource (providingClass)"
+   ],
+   "compat": "compatible",
+   "note": "SparkClassNotFoundException when DataSource.providingClass is resolved in run()"
+  },
+  {
+   "id": "IOD-22-unknown-delta",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING delta SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "DATA_SOURCE_NOT_FOUND",
+    "sqlstate": "42K02",
+    "message": "[DATA_SOURCE_NOT_FOUND] Failed to find the data source: delta. Make sure the provider name is correct and the package is properly registered and compatible with your Spark version. SQLSTATE: 42K02",
+    "parameters": {
+     "provider": "delta"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:63-67 (onlySupportDataSourcesProvidingFileFormatError)",
+    "DataSource.lookupDataSource (providingClass)"
+   ],
+   "compat": "compatible",
+   "note": "SparkClassNotFoundException when DataSource.providingClass is resolved in run()"
+  },
+  {
+   "id": "IOD-22-unknown-memory",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING memory SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "DATA_SOURCE_NOT_FOUND",
+    "sqlstate": "42K02",
+    "message": "[DATA_SOURCE_NOT_FOUND] Failed to find the data source: memory. Make sure the provider name is correct and the package is properly registered and compatible with your Spark version. SQLSTATE: 42K02",
+    "parameters": {
+     "provider": "memory"
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:63-67 (onlySupportDataSourcesProvidingFileFormatError)",
+    "DataSource.lookupDataSource (providingClass)"
+   ],
+   "compat": "compatible",
+   "note": "SparkClassNotFoundException when DataSource.providingClass is resolved in run()"
+  },
+  {
+   "id": "IOD-22-avro",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING avro SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "_LEGACY_ERROR_TEMP_1139",
+    "sqlstate": null,
+    "message": "Failed to find data source: avro. Avro is built-in but external data source module since Spark 2.4. Please deploy the application as per the deployment section of Apache Avro Data Source Guide."
+   },
+   "source": [
+    "DataSource.lookupDataSource"
+   ],
+   "compat": "compatible",
+   "note": "avro is not on the spark-shell classpath here; Krishiv decides separately whether it ships avro"
+  },
+  {
+   "id": "IOD-23-read-self",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT * FROM parquet.`<DIR>`",
+   "expect": {
+    "kind": "error",
+    "class": "FAILED_READ_FILE.FILE_NOT_EXIST",
+    "sqlstate": "KD001",
+    "message": "[FAILED_READ_FILE.FILE_NOT_EXIST] Encountered error while reading file file:///<DIR>/part-00000-<UUID>-c000.snappy.parquet. File does not exist. It is possible the underlying files have been updated. You can explicitly invalidate the cache in Spark by running 'REFRESH TABLE tableName' command in SQL or by recreating the Dataset/DataFrame involved. SQLSTATE: KD001",
+    "parameters": {
+     "path": "file:///<DIR>/part-00000-<UUID>-c000.snappy.parquet"
+    },
+    "directory_after": []
+   },
+   "setup": "directory pre-populated by INSERT OVERWRITE DIRECTORY ... USING parquet SELECT id FROM range(3)",
+   "source": [
+    "no analysis check: HiveOnlyCheck/PreWriteCheck (rules.scala:613-615, 673-676 UNSUPPORTED_INSERT.READ_FROM) apply to InsertIntoStatement on a relation, not to InsertIntoDir",
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "InsertIntoHadoopFsRelationCommand.scala:141 (output path deleted before the query's scan runs)"
+   ],
+   "compat": "compatible",
+   "note": "NOT rejected at analysis. The overwrite deletes the directory, then the scan finds the listed file gone: SparkException at execution. DATA LOSS: the directory is left EMPTY (the old contents are gone, nothing written). Krishiv may choose a stricter analysis-time error but must then mark this case incompatible-by-design."
+  },
+  {
+   "id": "IOD-24-read-self-via-temp-view",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT * FROM q6v",
+   "expect": {
+    "kind": "error",
+    "class": "FAILED_READ_FILE.FILE_NOT_EXIST",
+    "sqlstate": "KD001",
+    "message": "[FAILED_READ_FILE.FILE_NOT_EXIST] Encountered error while reading file file:///<DIR>/part-00000-<UUID>-c000.snappy.parquet. File does not exist. It is possible the underlying files have been updated. You can explicitly invalidate the cache in Spark by running 'REFRESH TABLE tableName' command in SQL or by recreating the Dataset/DataFrame involved. SQLSTATE: KD001",
+    "parameters": {
+     "path": "file:///<DIR>/part-00000-<UUID>-c000.snappy.parquet"
+    },
+    "directory_after": []
+   },
+   "setup": "directory pre-populated by INSERT OVERWRITE DIRECTORY ... USING parquet SELECT id FROM range(3) ; q6v = spark.read.parquet(P) temp view",
+   "source": [
+    "no analysis check: HiveOnlyCheck/PreWriteCheck (rules.scala:613-615, 673-676 UNSUPPORTED_INSERT.READ_FROM) apply to InsertIntoStatement on a relation, not to InsertIntoDir",
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "InsertIntoHadoopFsRelationCommand.scala:141 (output path deleted before the query's scan runs)"
+   ],
+   "compat": "compatible",
+   "note": "NOT rejected at analysis. The overwrite deletes the directory, then the scan finds the listed file gone: SparkException at execution. DATA LOSS: the directory is left EMPTY (the old contents are gone, nothing written). Krishiv may choose a stricter analysis-time error but must then mark this case incompatible-by-design."
+  },
+  {
+   "id": "IOD-25-read-self-other-format",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING csv SELECT * FROM parquet.`<DIR>`",
+   "expect": {
+    "kind": "error",
+    "class": "FAILED_READ_FILE.FILE_NOT_EXIST",
+    "sqlstate": "KD001",
+    "message": "[FAILED_READ_FILE.FILE_NOT_EXIST] Encountered error while reading file file:///<DIR>/part-00000-<UUID>-c000.snappy.parquet. File does not exist. It is possible the underlying files have been updated. You can explicitly invalidate the cache in Spark by running 'REFRESH TABLE tableName' command in SQL or by recreating the Dataset/DataFrame involved. SQLSTATE: KD001",
+    "parameters": {
+     "path": "file:///<DIR>/part-00000-<UUID>-c000.snappy.parquet"
+    },
+    "directory_after": []
+   },
+   "setup": "directory pre-populated by INSERT OVERWRITE DIRECTORY ... USING parquet SELECT id FROM range(3)",
+   "source": [
+    "no analysis check: HiveOnlyCheck/PreWriteCheck (rules.scala:613-615, 673-676 UNSUPPORTED_INSERT.READ_FROM) apply to InsertIntoStatement on a relation, not to InsertIntoDir",
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "InsertIntoHadoopFsRelationCommand.scala:141 (output path deleted before the query's scan runs)"
+   ],
+   "compat": "compatible",
+   "note": "NOT rejected at analysis. The overwrite deletes the directory, then the scan finds the listed file gone: SparkException at execution. DATA LOSS: the directory is left EMPTY (the old contents are gone, nothing written). Krishiv may choose a stricter analysis-time error but must then mark this case incompatible-by-design."
+  },
+  {
+   "id": "IOD-26-read-self-trailing-slash",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>/' USING parquet SELECT * FROM parquet.`<DIR>`",
+   "expect": {
+    "kind": "error",
+    "class": "FAILED_READ_FILE.FILE_NOT_EXIST",
+    "sqlstate": "KD001",
+    "message": "[FAILED_READ_FILE.FILE_NOT_EXIST] Encountered error while reading file file:///<DIR>/part-00000-<UUID>-c000.snappy.parquet. File does not exist. It is possible the underlying files have been updated. You can explicitly invalidate the cache in Spark by running 'REFRESH TABLE tableName' command in SQL or by recreating the Dataset/DataFrame involved. SQLSTATE: KD001",
+    "parameters": {
+     "path": "file:///<DIR>/part-00000-<UUID>-c000.snappy.parquet"
+    },
+    "directory_after": []
+   },
+   "setup": "directory pre-populated by INSERT OVERWRITE DIRECTORY ... USING parquet SELECT id FROM range(3)",
+   "source": [
+    "no analysis check: HiveOnlyCheck/PreWriteCheck (rules.scala:613-615, 673-676 UNSUPPORTED_INSERT.READ_FROM) apply to InsertIntoStatement on a relation, not to InsertIntoDir",
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "InsertIntoHadoopFsRelationCommand.scala:141 (output path deleted before the query's scan runs)"
+   ],
+   "compat": "compatible",
+   "note": "NOT rejected at analysis. The overwrite deletes the directory, then the scan finds the listed file gone: SparkException at execution. DATA LOSS: the directory is left EMPTY (the old contents are gone, nothing written). Krishiv may choose a stricter analysis-time error but must then mark this case incompatible-by-design."
+  },
+  {
+   "id": "IOD-27-read-self-table-at-location",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT * FROM tq6",
+   "expect": {
+    "kind": "error",
+    "class": "FAILED_READ_FILE.FILE_NOT_EXIST",
+    "sqlstate": "KD001",
+    "message": "[FAILED_READ_FILE.FILE_NOT_EXIST] Encountered error while reading file file:///<DIR>/part-00000-<UUID>-c000.snappy.parquet. File does not exist. It is possible the underlying files have been updated. You can explicitly invalidate the cache in Spark by running 'REFRESH TABLE tableName' command in SQL or by recreating the Dataset/DataFrame involved. SQLSTATE: KD001",
+    "parameters": {
+     "path": "file:///<DIR>/part-00000-<UUID>-c000.snappy.parquet"
+    },
+    "directory_after": []
+   },
+   "setup": "directory pre-populated by INSERT OVERWRITE DIRECTORY ... USING parquet SELECT id FROM range(3) ; tq6 = CREATE TABLE ... USING parquet LOCATION P",
+   "source": [
+    "no analysis check: HiveOnlyCheck/PreWriteCheck (rules.scala:613-615, 673-676 UNSUPPORTED_INSERT.READ_FROM) apply to InsertIntoStatement on a relation, not to InsertIntoDir",
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "InsertIntoHadoopFsRelationCommand.scala:141 (output path deleted before the query's scan runs)"
+   ],
+   "compat": "compatible",
+   "note": "NOT rejected at analysis. The overwrite deletes the directory, then the scan finds the listed file gone: SparkException at execution. DATA LOSS: the directory is left EMPTY (the old contents are gone, nothing written). Krishiv may choose a stricter analysis-time error but must then mark this case incompatible-by-design."
+  },
+  {
+   "id": "IOD-28-read-self-pruned",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT * FROM parquet.`<DIR>` WHERE false",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "setup": "directory pre-populated by INSERT OVERWRITE DIRECTORY ... USING parquet SELECT id FROM range(3)",
+   "source": [
+    "no analysis check: HiveOnlyCheck/PreWriteCheck (rules.scala:613-615, 673-676 UNSUPPORTED_INSERT.READ_FROM) apply to InsertIntoStatement on a relation, not to InsertIntoDir",
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "InsertIntoHadoopFsRelationCommand.scala:141 (output path deleted before the query's scan runs)"
+   ],
+   "compat": "compatible",
+   "note": "the optimizer replaces the scan with an empty relation, so nothing is read and the statement succeeds; the directory now holds one empty parquet file (see IOD-31)"
+  },
+  {
+   "id": "IOD-29-read-self-cached",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT * FROM q6iv",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "setup": "directory pre-populated by INSERT OVERWRITE DIRECTORY ... USING parquet SELECT id FROM range(3) ; q6iv is spark.read.parquet(P).cache() + count() first",
+   "source": [
+    "no analysis check: HiveOnlyCheck/PreWriteCheck (rules.scala:613-615, 673-676 UNSUPPORTED_INSERT.READ_FROM) apply to InsertIntoStatement on a relation, not to InsertIntoDir",
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "InsertIntoHadoopFsRelationCommand.scala:141 (output path deleted before the query's scan runs)"
+   ],
+   "compat": "compatible",
+   "note": "served from the in-memory cache, succeeds, directory replaced"
+  },
+  {
+   "id": "IOD-30-read-self-parent",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>/child' USING parquet SELECT * FROM parquet.`<DIR>`",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "child/",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "setup": "directory pre-populated by INSERT OVERWRITE DIRECTORY ... USING parquet SELECT id FROM range(3)",
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "target is a sub-directory of the read path: only child/ is replaced, the read path's files stay; succeeds"
+  },
+  {
+   "id": "IOD-30b-partby",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet PARTITIONED BY (a) SELECT 1 AS a, 2 AS b",
+   "expect": {
+    "kind": "error",
+    "class": "PARSE_SYNTAX_ERROR",
+    "sqlstate": "42601",
+    "message": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'PARTITIONED'. SQLSTATE: 42601 (line 1, pos 50)\n\n== SQL ==\n<sql>\n--------------------------------------------------^^^",
+    "parameters": {
+     "error": "'PARTITIONED'",
+     "hint": ""
+    }
+   },
+   "source": [
+    "sql/api/.../parser/SqlBaseParser.g4:597-598"
+   ],
+   "compat": "compatible",
+   "note": "grammar has only (OPTIONS ...)? after tableProvider; the same error at the keyword for CLUSTERED BY, COMMENT, TBLPROPERTIES. INSERT INTO DIRECTORY fails at the path literal (pos 22)."
+  },
+  {
+   "id": "IOD-31-empty-result",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT 1 AS a WHERE false",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ],
+    "read_back": {
+     "format": "parquet",
+     "schema": "struct<a:int>",
+     "rows": []
+    }
+   },
+   "setup": "directory pre-populated with a parquet file",
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "FileFormatWriter / empty-task write (an empty file per format)"
+   ],
+   "compat": "compatible",
+   "note": "the old contents ARE replaced; one part file with the schema and no rows is written (csv: 0-byte .csv; json: 0-byte .json; text: 0-byte .txt; parquet: 298-byte file with footer). A new directory is created the same way. Probe3."
+  },
+  {
+   "id": "IOD-32-empty-csv-header",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING csv OPTIONS (header 'true') SELECT 1 AS a WHERE false",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.csv"
+    ],
+    "raw_lines": [
+     "a"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "empty result with header=true: the single part file is 2 bytes, the header line 'a\\n' (probe3.out); without header it is 0 bytes"
+  },
+  {
+   "id": "IOD-33-parent-missing",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<TMP>/a/b/c' USING parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "missing ancestors are created; target need not exist"
+  },
+  {
+   "id": "IOD-34-target-is-file",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<TMP>/file' USING parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "setup": "'<TMP>/file' is an existing regular file",
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "the file is deleted and replaced by a directory"
+  },
+  {
+   "id": "IOD-35-relative-path",
+   "stmt": "INSERT OVERWRITE DIRECTORY 'rel_dir' USING parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "relative path resolves against the process working directory (fs working dir), NOT spark.sql.warehouse.dir (probe: cwd /opt/spark/work-dir, warehouse file:/opt/spark/work-dir/spark-warehouse; output landed in cwd/rel_dir)"
+  },
+  {
+   "id": "IOD-36-file-uri",
+   "stmt": "INSERT OVERWRITE DIRECTORY 'file://<TMP>/u' USING parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible"
+  },
+  {
+   "id": "IOD-37-unknown-scheme",
+   "stmt": "INSERT OVERWRITE DIRECTORY 'nosuch://h/p' USING parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "(none: org.apache.hadoop.fs.UnsupportedFileSystemException)",
+    "sqlstate": null,
+    "message": "No FileSystem for scheme \"nosuch\""
+   },
+   "source": [
+    "Hadoop FileSystem.getFileSystem via planForWritingFileFormat DataSource.scala:484-485"
+   ],
+   "compat": "compatible",
+   "note": "not a SparkThrowable; Krishiv maps to its own IO error"
+  },
+  {
+   "id": "IOD-38-no-success-marker",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "conf": {
+    "mapreduce.fileoutputcommitter.marksuccessfuljobs": "false"
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "_SUCCESS is the Hadoop committer marker; this Hadoop conf drops it"
+  },
+  {
+   "id": "IOD-39-dynamic-overwrite-conf",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT 1 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "setup": "directory pre-populated",
+   "conf": {
+    "spark.sql.sources.partitionOverwriteMode": "dynamic"
+   },
+   "source": [
+    "InsertIntoHadoopFsRelationCommand.scala:67-78"
+   ],
+   "compat": "compatible",
+   "note": "no effect: the directory form has no partition columns, so the whole directory is still replaced (dynamicPartitionOverwrite requires partition columns)"
+  },
+  {
+   "id": "IOD-40-unnamed-exprs",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT 1+1, 'x', id*2, count(*) FROM range(2) GROUP BY id",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ],
+    "read_back": {
+     "format": "parquet",
+     "schema": "struct<(1 + 1):int,x:string,(id * 2):bigint,count(1):bigint>",
+     "rows": [
+      [
+       2,
+       "x",
+       0,
+       1
+      ],
+      [
+       2,
+       "x",
+       2,
+       1
+      ]
+     ]
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "file column names are the analyzer's auto-generated names (NOT col1/_c0); parquet accepts these characters (field-name check passes in 4.2.0)"
+  },
+  {
+   "id": "IOD-41-values",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet VALUES (1, 'a'), (2, 'b')",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ],
+    "read_back": {
+     "format": "parquet",
+     "schema": "struct<col1:int,col2:string>",
+     "rows": [
+      [
+       1,
+       "a"
+      ],
+      [
+       2,
+       "b"
+      ]
+     ]
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "VALUES yields col1,col2; WITH ... SELECT (CTE) also accepted"
+  },
+  {
+   "id": "IOD-42-alias-with-space",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT 1 AS `a b`",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.snappy.parquet"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "accepted (no field-name restriction for parquet in 4.2.0)"
+  },
+  {
+   "id": "IOD-43-duplicate-columns-parquet",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING parquet SELECT 1 AS a, 2 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "COLUMN_ALREADY_EXISTS",
+    "sqlstate": "42711",
+    "message": "[COLUMN_ALREADY_EXISTS] The column `a` already exists. Choose another name or rename the existing column. SQLSTATE: 42711",
+    "parameters": {
+     "columnName": "`a`"
+    }
+   },
+   "source": [
+    "DataSource.scala:571 DataSource.validateSchema / SchemaUtils.checkColumnNameDuplication"
+   ],
+   "compat": "compatible"
+  },
+  {
+   "id": "IOD-44-duplicate-columns-csv",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING csv SELECT 1 AS a, 2 AS a",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.csv"
+    ]
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible",
+   "note": "csv has no duplicate-name check on write"
+  },
+  {
+   "id": "IOD-45-text-int-column",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING text SELECT 1 AS a",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE",
+    "sqlstate": "0A000",
+    "message": "[UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE] The Text datasource doesn't support the column `a` of the type \"INT\". SQLSTATE: 0A000",
+    "parameters": {
+     "columnName": "`a`",
+     "columnType": "\"INT\"",
+     "format": "Text"
+    }
+   },
+   "source": [
+    "TextFileFormat.supportDataType via DataSourceUtils.verifySchema, DataSource.scala:563-571"
+   ],
+   "compat": "compatible",
+   "note": "two text columns fail on the first (`a`)"
+  },
+  {
+   "id": "IOD-46-csv-array-column",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING csv SELECT array(1) AS a",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE",
+    "sqlstate": "0A000",
+    "message": "[UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE] The CSV datasource doesn't support the column `a` of the type \"ARRAY<INT>\". SQLSTATE: 0A000",
+    "parameters": {
+     "columnName": "`a`",
+     "columnType": "\"ARRAY<INT>\"",
+     "format": "CSV"
+    }
+   },
+   "source": [
+    "CSVFileFormat.supportDataType"
+   ],
+   "compat": "compatible"
+  },
+  {
+   "id": "IOD-47-json-nested",
+   "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING json SELECT array(1) AS a, named_struct('x',1) AS s, map('k',1) AS m, cast(1.5 as decimal(5,2)) AS d, date'2020-01-02' AS dt",
+   "expect": {
+    "kind": "ok",
+    "result_schema": "struct<>",
+    "result_rows": [],
+    "files": [
+     "_SUCCESS",
+     "part-<N>-<UUID>-c000.json"
+    ],
+    "read_back": {
+     "format": "json",
+     "raw_lines": [
+      "{\"a\":[1],\"s\":{\"x\":1},\"m\":{\"k\":1},\"d\":1.50,\"dt\":\"2020-01-02\"}"
+     ]
+    }
+   },
+   "source": [
+    "sql/core/.../execution/command/InsertIntoDataSourceDirCommand.scala:50-79",
+    "sql/core/.../execution/SparkSqlParser.scala:1333-1365 (visitInsertOverwriteDir)",
+    "sql/core/.../execution/datasources/DataSource.scala:559-572 (planForWriting), 477-515 (planForWritingFileFormat)"
+   ],
+   "compat": "compatible"
+  }
+ ]
+}

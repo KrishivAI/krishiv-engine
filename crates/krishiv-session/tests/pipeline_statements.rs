@@ -96,17 +96,6 @@ fn load_data_on_a_datasource_table() {
 }
 
 #[test]
-fn insert_overwrite_directory_is_refused_until_the_write_path_lands() {
-    let s = session();
-    let e = error(
-        &s,
-        "INSERT OVERWRITE DIRECTORY '/tmp/o1' USING parquet SELECT a FROM nat",
-    );
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.to_string().contains("INSERT OVERWRITE DIRECTORY"), "{e}");
-}
-
-#[test]
 fn unbound_parameters() {
     let s = session();
     let e = error(&s, "SELECT ?");
