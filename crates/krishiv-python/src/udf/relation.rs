@@ -38,7 +38,7 @@ use krishiv_exec::python_relation::{
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::sync::{MutexExt, PyOnceLock};
-use pyo3::types::{PyList, PyTuple, PyType};
+use pyo3::types::{PyDict, PyList, PyTuple, PyType};
 
 use super::interrupt::{Call, CancelOnDrop};
 use super::runtime::{
@@ -358,6 +358,28 @@ impl FrameSource {
                 ),
             })
         })?;
+        if columns.is_empty() {
+            // `from_arrays([], [])` has no length to carry: a zero-column input keeps its row count as a
+            // struct array of empty structs.
+            let pa = py.import("pyarrow").map_err(|e| python_error(py, &e))?;
+            let empty_type = pa
+                .call_method1("struct", (PyList::empty(py),))
+                .map_err(|e| python_error(py, &e))?;
+            let rows = PyList::new(py, (0..batch.num_rows()).map(|_| PyDict::new(py)))
+                .map_err(|e| python_error(py, &e))?;
+            let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("type", empty_type)
+                .map_err(|e| python_error(py, &e))?;
+            let array = pa
+                .call_method("array", (rows,), Some(&kwargs))
+                .map_err(|e| python_error(py, &e))?;
+            return self
+                .batch_type
+                .bind(py)
+                .call_method1("from_struct_array", (array,))
+                .map_err(|e| python_error(py, &e));
+        }
         let columns = PyList::new(py, columns).map_err(|e| python_error(py, &e))?;
         self.batch_type
             .bind(py)

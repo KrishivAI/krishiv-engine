@@ -116,14 +116,21 @@ impl DataFrame {
                 PythonEvalType::CogroupedMapArrow,
             ],
         )?;
-        Ok(self.derive(PlanNode::CoGroupMap {
+        let mut out = self.derive(PlanNode::CoGroupMap {
             left: Arc::clone(&self.plan),
             right: Arc::clone(&other.plan),
             left_keys,
             right_keys,
             udf,
             output,
-        }))
+        });
+        // The right side's hidden tables and lazy checkpoints are owned by the result too, as a join's are.
+        for k in &other.keep {
+            if !out.keep.iter().any(|have| Arc::ptr_eq(have, k)) {
+                out.keep.push(Arc::clone(k));
+            }
+        }
+        Ok(out)
     }
 }
 
