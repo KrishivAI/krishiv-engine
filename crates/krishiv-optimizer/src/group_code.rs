@@ -91,7 +91,7 @@ const MIN_INPUT_RATIO: f64 = 2.0;
 /// [`MAX_GROUPS`] rows by estimate, far below `2^31`).
 const CODE_NAME: &str = "krishiv_group_code";
 
-/// In the default mode (two or more dimensions,
+/// In the multi-dimension mode (two or more dimensions,
 /// `krishiv.optimizer.groupKeyCodeMultiDimension`, design §8) a coded
 /// dimension holds at most this many groups: `dict`'s numbering is one
 /// sorted partition, run on one thread, and with as many groups as a large
@@ -99,7 +99,7 @@ const CODE_NAME: &str = "krishiv_group_code";
 /// the code saves (q24 1.28x cycles at SF10).
 const MULTI_MAX_GROUPS: f64 = 100_000.0;
 
-/// In the default mode the joins must stop carrying at least this many key
+/// In the multi-dimension mode the joins must stop carrying at least this many key
 /// bytes (input rows times the dropped width): the rewrite adds a fixed set
 /// of operators, which a small input does not pay for (TPC-DS q40, 2,328
 /// input rows, 1.14x wall at SF10).
@@ -109,8 +109,8 @@ const MULTI_MIN_DROPPED_BYTES: f64 = 256.0 * 1024.0;
 const CODE_WIDTH: u64 = 8;
 
 /// Codes the dimension group keys of every aggregate where the statistics say
-/// it pays and at least `min_dimensions` dimensions qualify (2 in the default
-/// mode, design §8), entering subquery plans. Also returns one line per aggregate with
+/// it pays and at least `min_dimensions` dimensions qualify (2 in the
+/// multi-dimension mode, design §8), entering subquery plans. Also returns one line per aggregate with
 /// keys from a dimension: what was coded, or why not (`EXPLAIN VERBOSE`).
 pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
@@ -555,10 +555,10 @@ impl<'a> Shape<'a> {
         if rows_i < MIN_INPUT_RATIO * rows_d {
             return Err(format!("[{names}]: the dimension is too large ({gates})"));
         }
-        // The default mode's two cost lines (`strict`, design §8).
+        // The multi-dimension mode's two cost lines (`strict`, design §8).
         if strict && groups > MULTI_MAX_GROUPS {
             return Err(format!(
-                "[{names}]: more than {MULTI_MAX_GROUPS:.0} groups in the default mode ({gates})"
+                "[{names}]: more than {MULTI_MAX_GROUPS:.0} groups in the multi-dimension mode ({gates})"
             ));
         }
         #[expect(
@@ -569,7 +569,7 @@ impl<'a> Shape<'a> {
         if strict && dropped_bytes < MULTI_MIN_DROPPED_BYTES {
             return Err(format!(
                 "[{names}]: the joins would stop carrying {dropped_bytes:.0} key bytes, \
-                 below {MULTI_MIN_DROPPED_BYTES:.0} in the default mode ({gates})"
+                 below {MULTI_MIN_DROPPED_BYTES:.0} in the multi-dimension mode ({gates})"
             ));
         }
         let note = format!("coded [{names}]: {gates}, {width} key bytes dropped");

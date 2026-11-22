@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Plan-time distinct-value samples of the file columns a query compares
 //! with values (P2-T164 unit U6), and of its group keys while
-//! `krishiv.optimizer.groupKeyCode` is on, or, in the default mode
+//! `krishiv.optimizer.groupKeyCode` is on, or, in the multi-dimension mode
 //! (`krishiv.optimizer.groupKeyCodeMultiDimension`), those of aggregates
 //! with keys of two or more dimensions (design P2b D2 §8): which columns
 //! ([`compared_columns`], [`grouped_columns`]) and the call into each opened
@@ -54,7 +54,7 @@ impl QueryCatalog {
         compared_columns(plan, &mut compared);
         // `GroupKeyCode` (design P2b D2) codes an aggregate's dimension keys
         // only on known distinct counts: while it is on, the group keys it
-        // could code are sampled too, in the default mode only those of
+        // could code are sampled too, in the multi-dimension mode only those of
         // aggregates where enough dimensions could qualify.
         if let Some(min_dimensions) = group_key_code(config) {
             let rows = |id: krishiv_plan::AttrId| {
@@ -66,7 +66,7 @@ impl QueryCatalog {
             // `orders`). The sampler approximates that from above: a
             // dimension with a group key in any column `=` / `<=>` of the plan
             // (any join or filter) is neither sampled nor counted. That can
-            // only sample less (and, in the default mode, count fewer
+            // only sample less (and, in the multi-dimension mode, count fewer
             // dimensions), never change rows.
             let joined = equated_columns(plan);
             let may_pay: Vec<GroupKeys> = grouped_columns(plan)
@@ -164,8 +164,8 @@ pub(super) fn files_label(key: &super::FilesKey) -> String {
 /// How many dimensions an aggregate needs for the optimizer to code its group
 /// keys, as the optimizer decides it: one with `krishiv.optimizer.groupKeyCode`
 /// (or `krishiv.experimental.groupKeyCodeForce`, which also switches it on),
-/// two with only `krishiv.optimizer.groupKeyCodeMultiDimension` (the
-/// default), `None` when it codes nothing.
+/// two with only `krishiv.optimizer.groupKeyCodeMultiDimension`, `None`
+/// when it codes nothing (the default).
 fn group_key_code(config: &krishiv_common::config::Config) -> Option<usize> {
     use krishiv_common::config::{ConfigValue, GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION};
     let on = |entry| config.get(entry).and_then(ConfigValue::as_bool) == Some(true);

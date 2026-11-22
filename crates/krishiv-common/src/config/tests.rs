@@ -945,19 +945,19 @@ fn group_key_code_defaults_off_and_parses() {
 }
 
 #[test]
-fn group_key_code_multi_dimension_defaults_on_and_parses() {
+fn group_key_code_multi_dimension_defaults_off_and_parses() {
     let mut c = Config::new();
     assert_eq!(
         c.get(&GROUP_KEY_CODE_MULTI_DIMENSION)
             .and_then(ConfigValue::as_bool),
-        Some(true)
+        Some(false)
     );
-    c.set("krishiv.optimizer.groupKeyCodeMultiDimension", "false")
+    c.set("krishiv.optimizer.groupKeyCodeMultiDimension", "true")
         .unwrap();
     assert_eq!(
         c.get(&GROUP_KEY_CODE_MULTI_DIMENSION)
             .and_then(ConfigValue::as_bool),
-        Some(false)
+        Some(true)
     );
     assert!(
         c.set("krishiv.optimizer.groupKeyCodeMultiDimension", "maybe")

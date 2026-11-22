@@ -593,7 +593,7 @@ fn run(
         });
         // How many qualifying dimensions an aggregate needs to be coded:
         // one with the key on (or forced, or without a session
-        // configuration), two in the default mode
+        // configuration), two in the multi-dimension mode
         // (`krishiv.optimizer.groupKeyCodeMultiDimension`, design §8).
         let min_dimensions = if !options.group_key_code {
             None

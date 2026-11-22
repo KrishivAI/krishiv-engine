@@ -265,9 +265,6 @@ fn group_keys_are_sampled_only_while_group_key_code_is_on() {
     s.conf()
         .set("krishiv.optimizer.groupKeyCode", "false")
         .unwrap();
-    s.conf()
-        .set("krishiv.optimizer.groupKeyCodeMultiDimension", "false")
-        .unwrap();
     assert!(sample_lines(&explain(&s, "COST", &sql)).is_empty());
     s.conf()
         .set("krishiv.optimizer.groupKeyCode", "true")
@@ -338,15 +335,18 @@ fn group_keys_inside_a_subquery_are_sampled() {
     assert!(lines[0].contains("nation`: n_name: sampled "), "{lines:?}");
 }
 
-/// In the default mode (`krishiv.optimizer.groupKeyCode` off,
+/// In the multi-dimension mode (`krishiv.optimizer.groupKeyCode` off,
 /// `krishiv.optimizer.groupKeyCodeMultiDimension` on; design P2b D2 §8) only
 /// the group keys of an aggregate with keys of two or more dimensions that
 /// may pay are sampled: one dimension's keys sample nothing, and a dimension
 /// grouped by its own join key does not count.
 #[test]
-fn the_default_samples_only_aggregates_with_two_dimensions() {
+fn the_multi_dimension_mode_samples_only_aggregates_with_two_dimensions() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path(), true);
+    s.conf()
+        .set("krishiv.optimizer.groupKeyCodeMultiDimension", "true")
+        .unwrap();
     let (orders, nation) = (table(dir.path(), "orders"), table(dir.path(), "nation"));
     let one = format!(
         "SELECT n_name, count(*) FROM {orders} JOIN {nation} ON id % 25 = n_key GROUP BY n_name"

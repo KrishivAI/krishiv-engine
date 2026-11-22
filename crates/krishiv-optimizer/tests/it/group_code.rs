@@ -736,26 +736,27 @@ fn tpch_q16_codes_its_part_keys() {
     insta::assert_snapshot!(text);
 }
 
-/// The default session configuration (`krishiv.optimizer.groupKeyCode` off,
+/// The multi-dimension mode (`krishiv.optimizer.groupKeyCode` off,
 /// `krishiv.optimizer.groupKeyCodeMultiDimension` on; design P2b D2 §8)
 /// codes only aggregates where two or more dimensions qualify, then all of
 /// them; an aggregate with one is refused with a note; with both keys off
-/// nothing is coded. Rows stay the same.
+/// (the default) nothing is coded. Rows stay the same.
 #[test]
-fn the_default_codes_only_aggregates_with_two_dimensions() {
+fn the_multi_dimension_mode_codes_only_aggregates_with_two_dimensions() {
     let ctx = support::ctx_over(catalog());
     let udfs = krishiv_udf_sdk::UdfLibrary::new();
     let stats = Stats::new();
     let two = "SELECT g1, g2, h1, h2, count(*) AS n FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek \
                GROUP BY g1, g2, h1, h2";
     let one = "SELECT g1, g2, count(*) AS n, sum(x) AS s FROM f JOIN d ON fk = dk GROUP BY g1, g2";
-    let default = krishiv_common::config::Config::new();
-    let mut off = krishiv_common::config::Config::new();
-    off.set("krishiv.optimizer.groupKeyCodeMultiDimension", "false")
+    let mut multi = krishiv_common::config::Config::new();
+    multi
+        .set("krishiv.optimizer.groupKeyCodeMultiDimension", "true")
         .unwrap();
+    let off = krishiv_common::config::Config::new();
     for (sql, config, want) in [
-        (two, &default, Some(2)),
-        (one, &default, None),
+        (two, &multi, Some(2)),
+        (one, &multi, None),
         (two, &off, Some(0)),
     ] {
         let plan = support::resolve(sql, &ctx);
@@ -803,18 +804,22 @@ fn the_default_codes_only_aggregates_with_two_dimensions() {
 }
 
 /// No TPC-H aggregate groups by keys of two dimensions that qualify, so the
-/// default mode codes none of the 22 queries (q10, coded with the key on,
+/// multi-dimension mode codes none of the 22 queries (q10, coded with the key on,
 /// was 1.25x at SF100; design §8).
 #[test]
-fn the_default_codes_no_tpch_query() {
+fn the_multi_dimension_mode_codes_no_tpch_query() {
     let ctx = support::ctx();
     let stats = crate::join_order::fixture();
     let udfs = krishiv_udf_sdk::UdfLibrary::new();
-    let default = krishiv_common::config::Config::new();
+    let mut multi = krishiv_common::config::Config::new();
+    multi
+        .set("krishiv.optimizer.groupKeyCodeMultiDimension", "true")
+        .unwrap();
+
     for q in 1..=22 {
         let plan = support::resolve(&support::tpch_sql(q), &ctx);
         let (optimized, steps) =
-            krishiv_optimizer::optimize_traced_with_udfs(&plan, &stats, &udfs, &default).unwrap();
+            krishiv_optimizer::optimize_traced_with_udfs(&plan, &stats, &udfs, &multi).unwrap();
         let notes: Vec<String> = steps
             .into_iter()
             .filter(|s| s.rule == "GroupKeyCode" && !s.note.is_empty())
@@ -835,13 +840,13 @@ fn the_default_codes_no_tpch_query() {
     }
 }
 
-/// The default mode's two cost lines (design §8, from the TPC-DS SF10 A/B):
+/// The multi-dimension mode's two cost lines (design §8, from the TPC-DS SF10 A/B):
 /// a dimension with more than 100,000 groups (q24's `customer`) and an input
 /// too small to pay for the added operators (q40) are not coded there, while
 /// `krishiv.optimizer.groupKeyCode` codes both shapes. All or none: with one
 /// of two dimensions refused, the aggregate stays.
 #[test]
-fn the_default_mode_refuses_many_groups_and_small_inputs() {
+fn the_multi_dimension_mode_refuses_many_groups_and_small_inputs() {
     let ctx = support::ctx_over(catalog());
     let udfs = krishiv_udf_sdk::UdfLibrary::new();
     let sql = "SELECT g1, g2, h1, h2, count(*) AS n FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek \
@@ -852,11 +857,17 @@ fn the_default_mode_refuses_many_groups_and_small_inputs() {
         .set("e", "h2", Some(400));
     let mut small = Stats::new();
     small.rows("f", 3_000);
-    let default = krishiv_common::config::Config::new();
+    let mut default = krishiv_common::config::Config::new();
+    default
+        .set("krishiv.optimizer.groupKeyCodeMultiDimension", "true")
+        .unwrap();
     let mut on = krishiv_common::config::Config::new();
     on.set("krishiv.optimizer.groupKeyCode", "true").unwrap();
     let plan = support::resolve(sql, &ctx);
-    for (stats, why) in [(&many, "groups in the default mode"), (&small, "key bytes")] {
+    for (stats, why) in [
+        (&many, "groups in the multi-dimension mode"),
+        (&small, "key bytes"),
+    ] {
         let (coded_on, _) =
             krishiv_optimizer::optimize_traced_with_udfs(&plan, stats, &udfs, &on).unwrap();
         assert!(
