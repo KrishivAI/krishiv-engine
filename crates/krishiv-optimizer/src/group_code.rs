@@ -100,7 +100,8 @@ const CODE_NAME: &str = "krishiv_group_code";
 const MULTI_MAX_GROUPS: f64 = 100_000.0;
 
 /// In the multi-dimension mode the joins must stop carrying at least this many key
-/// bytes (input rows times the dropped width): the rewrite adds a fixed set
+/// bytes, gross (input rows times the dropped width; the code itself adds back
+/// [`CODE_WIDTH`] bytes per row, so the net saving is smaller): the rewrite adds a fixed set
 /// of operators, which a small input does not pay for (TPC-DS q40, 2,328
 /// input rows, 1.14x wall at SF10).
 const MULTI_MIN_DROPPED_BYTES: f64 = 256.0 * 1024.0;
@@ -253,8 +254,8 @@ impl<'a> Shape<'a> {
     }
 
     /// The coded plan and what was decided, `None` when no key comes from a
-    /// dimension, or why it stays. With `min_dimensions` above 1 (the default
-    /// mode) each dimension also meets the mode's cost lines
+    /// dimension, or why it stays. With `min_dimensions` above 1 (the
+    /// multi-dimension mode) each dimension also meets the mode's cost lines
     /// ([`MULTI_MAX_GROUPS`], [`MULTI_MIN_DROPPED_BYTES`]).
     fn code(
         &self,

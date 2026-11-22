@@ -868,11 +868,23 @@ fn the_multi_dimension_mode_refuses_many_groups_and_small_inputs() {
         (&many, "groups in the multi-dimension mode"),
         (&small, "key bytes"),
     ] {
-        let (coded_on, _) =
+        let (coded_on, on_steps) =
             krishiv_optimizer::optimize_traced_with_udfs(&plan, stats, &udfs, &on).unwrap();
         assert!(
             coded(&coded_on.root().to_string()),
             "{why}: the key on codes it"
+        );
+        // Both dimensions pass the plain gates, so only the mode's line refuses.
+        let on_notes: Vec<_> = on_steps
+            .iter()
+            .filter(|s| s.rule == "GroupKeyCode")
+            .map(|s| s.note.clone())
+            .collect();
+        assert!(
+            on_notes
+                .iter()
+                .any(|n| n.contains("coded [g1, g2]") && n.contains("coded [h1, h2]")),
+            "{why}: {on_notes:?}"
         );
         let (out, steps) =
             krishiv_optimizer::optimize_traced_with_udfs(&plan, stats, &udfs, &default).unwrap();
