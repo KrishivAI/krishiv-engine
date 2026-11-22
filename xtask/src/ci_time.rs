@@ -155,11 +155,10 @@ pub fn delta(name: &str, before: u64, after: u64) -> String {
     let diff = i128::from(after) - i128::from(before);
     let sign = if diff < 0 { '-' } else { '+' };
     let abs = u64::try_from(diff.unsigned_abs()).unwrap_or(u64::MAX);
-    let pct = if before == 0 {
-        0.0
-    } else {
-        diff as f64 * 100.0 / before as f64
-    };
+    if before == 0 {
+        return format!("{name}: {sign}{} (n/a)", fmt_duration(abs));
+    }
+    let pct = diff as f64 * 100.0 / before as f64;
     format!("{name}: {sign}{} ({pct:+.1}%)", fmt_duration(abs))
 }
 
@@ -326,7 +325,7 @@ mod tests {
         assert_eq!(fmt_duration(3723), "1h02m03s");
         assert_eq!(delta("median", 1000, 800), "median: -3m20s (-20.0%)");
         assert_eq!(delta("p90", 600, 660), "p90: +1m00s (+10.0%)");
-        assert_eq!(delta("p90", 0, 60), "p90: +1m00s (+0.0%)");
+        assert_eq!(delta("p90", 0, 60), "p90: +1m00s (n/a)");
     }
 
     #[test]

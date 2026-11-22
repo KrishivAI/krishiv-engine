@@ -175,10 +175,43 @@ fn flaky_tests(log: &str) -> BTreeSet<(String, String)> {
             continue;
         };
         // nextest 0.9.x prints a counter such as `(2/2)` or `(───)` after the duration.
-        let mut words = after.split_whitespace().skip_while(|w| w.starts_with('('));
+        // The counter pads with spaces (`(  2/100)`), so drop everything up to its closing `)`.
+        let after = after.trim_start();
+        let after = if after.starts_with('(') {
+            after.split_once(')').map_or(after, |(_, r)| r)
+        } else {
+            after
+        };
+        let mut words = after.split_whitespace();
         if let (Some(binary), Some(name)) = (words.next(), words.next()) {
             let package = binary.split("::").next().unwrap_or(binary);
             out.insert((package.to_owned(), name.to_owned()));
+        }
+    }
+    out
+}
+
+/// Names of the tests the default profile retries on purpose (`[[profile.default.overrides]]` with `retries`):
+/// they flake by design on loaded runners, so a `FLAKY` line for them is not a finding.
+fn retried_on_purpose(nextest: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let Ok(doc) = toml::from_str::<toml::Table>(nextest) else {
+        return out;
+    };
+    let overrides = doc
+        .get("profile")
+        .and_then(|p| p.get("default"))
+        .and_then(|p| p.get("overrides"))
+        .and_then(toml::Value::as_array);
+    for o in overrides.into_iter().flatten() {
+        if o.get("retries").is_none() {
+            continue;
+        }
+        let filter = o.get("filter").and_then(toml::Value::as_str).unwrap_or("");
+        for part in filter.split("test(=").skip(1) {
+            if let Some((name, _)) = part.split_once(')') {
+                out.insert(name.trim().to_owned());
+            }
         }
     }
     out
@@ -225,9 +258,10 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
             let text = std::fs::read_to_string(log).map_err(|e| format!("{log}: {e}"))?;
             let reg: Registry = toml::from_str(&registry).map_err(|e| e.to_string())?;
             let known: BTreeSet<&str> = reg.test.iter().map(|e| e.name.as_str()).collect();
+            let tolerated = retried_on_purpose(&nextest);
             let new: Vec<_> = flaky_tests(&text)
                 .into_iter()
-                .filter(|(_, n)| !known.contains(n.as_str()))
+                .filter(|(_, n)| !known.contains(n.as_str()) && !tolerated.contains(n))
                 .collect();
             if new.is_empty() {
                 println!("quarantine: no unregistered flaky tests in {log}");
@@ -239,7 +273,7 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
                 );
             }
             return Err(format!(
-                "{} flaky test(s) passed only on a retry and are not in tests/quarantine.toml: open an issue, fix within 3 days or register them with an owner",
+                "{} flaky test(s) passed only on a retry and are not in tests/quarantine.toml: open an issue, fix within 3 days or register them with an owner; the stanza goes with `default-filter = \"not test(=NAME)\"` on the default profile and `test(=NAME)` on the quarantine profile in .config/nextest.toml (cargo xtask quarantine checks both)",
                 new.len()
             ));
         }
@@ -354,15 +388,23 @@ mod tests {
     }
 
     #[test]
+    fn tests_retried_on_purpose_are_read_from_the_default_overrides() {
+        let nx = "[[profile.default.overrides]]\nfilter = \"test(=a) | test(=b_c)\"\nretries = 2\n[[profile.default.overrides]]\nfilter = \"test(=d)\"\nthreads-required = 2\n";
+        let got: Vec<_> = retried_on_purpose(nx).into_iter().collect();
+        assert_eq!(got, ["a", "b_c"]);
+    }
+
+    #[test]
     fn flaky_lines_are_found_with_or_without_colour() {
-        let log = "        FLAKY 2/3 [   0.005s] (2/2) flk flips\n        PASS [   0.1s] a::b ok\n\u{1b}[33m       FLAKY\u{1b}[0m 2/3 [   0.5s] krishiv-session::udaf window_x\n        FLAKY 2/3 [   0.5s] krishiv-exec lib_test\n";
+        let log = "        FLAKY 2/3 [   0.005s] (2/2) flk flips\n        FLAKY 2/3 [   0.005s] (  2/100) pad padded\n        PASS [   0.1s] a::b ok\n\u{1b}[33m       FLAKY\u{1b}[0m 2/3 [   0.5s] krishiv-session::udaf window_x\n        FLAKY 2/3 [   0.5s] krishiv-exec lib_test\n";
         let got: Vec<_> = flaky_tests(log).into_iter().collect();
         assert_eq!(
             got,
             vec![
                 ("flk".to_owned(), "flips".to_owned()),
                 ("krishiv-exec".to_owned(), "lib_test".to_owned()),
-                ("krishiv-session".to_owned(), "window_x".to_owned())
+                ("krishiv-session".to_owned(), "window_x".to_owned()),
+                ("pad".to_owned(), "padded".to_owned())
             ]
         );
     }

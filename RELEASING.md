@@ -102,8 +102,7 @@ Not wired yet (each is a reviewed change by the maintainer, because it edits the
 - dropping `publish = false` and adding versions to the path dependencies of the crates that ship (what
   `publish-dry-run.sh` simulates), and the PyPI and crates.io credentials (a PyPI trusted publisher over OIDC and a
   scoped crates.io token) behind `environment:` gates with required reviewers;
-- a gated release workflow (`workflow_dispatch` only) that downloads the `binaries.yml` artifacts, writes checksums
-  and an SBOM, signs them and drafts the GitHub Release. Its dry-run mode must stop before any upload or tag.
+- drafting the GitHub Release and uploading the `release.yml` bundle to it (signing included). Its dry-run mode must stop before any upload or tag.
 
 Owner actions before the gate are listed in `ops/needs-owner.md` ("Release 0.2.0 channels and pre-publish setup"):
 crates.io keywords and description (drop `datafusion`), the PyPI classifier, the credentials, and the go/no-go.
@@ -205,13 +204,13 @@ Run `cargo xtask release-check [VERSION]` first. It is read-only and prints `ok`
 every crate inherits it, that the release workflows and `docs/concepts/stability.md` exist, that
 `.github/scripts/publish-crates.txt` has no duplicates, names real crates and lists each after its dependencies,
 that the changelog has the section (or `changelog.d` has fragments for `cargo xtask changelog assemble`), and that
-the tag is free. To measure a CI change, save `gh run list --workflow ci.yml --event pull_request --status success
---limit 50 --json databaseId,startedAt,updatedAt,conclusion > before.json` before it merges and again afterwards, then run
+the tag is free in the local checkout (fetch tags first: `git fetch --tags`; the remote is not queried). To measure a CI change, save `gh run list --workflow ci.yml --event pull_request --status success
+--limit 50 --json databaseId,startedAt,updatedAt,conclusion > before.json` before it merges and the same command with `> after.json` afterwards, then run
 `cargo xtask ci-time --compare before.json after.json` (median and p90 of the PR gate). Then, in order (each step after the check is the owner's):
 
 1. `cargo xtask release-check X.Y.Z` is all `ok`; the latest scheduled nightly is green on the commit.
 2. `cargo xtask changelog assemble X.Y.Z`, review the section, merge the release PR.
-3. Run "Release artifacts" (`release.yml`) on main; check `SHA256SUMS` and `gh attestation verify <file>`.
+3. Run "Release artifacts" (`release.yml`) on main; check `SHA256SUMS` and `gh attestation verify <file> --repo KrishivAI/krishiv-engine`.
 4. Sign and push the tag (`git tag -s`, `git verify-tag`).
 5. TestPyPI rehearsal, PyPI, crates.io, then the GitHub Release (see the step-by-step above).
 6. `cargo-semver-checks` (nightly job `semver-checks`) is non-blocking until a release tag exists to compare

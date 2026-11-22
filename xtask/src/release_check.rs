@@ -62,15 +62,40 @@ fn inherits_version(manifest: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// The `krishiv*` crates a manifest depends on at build or run time (not dev-dependencies), by name.
+/// Adds the `krishiv*` packages named by one dependency table; a renamed dependency counts under its
+/// `package` value.
+fn table_deps(table: &toml::Table, out: &mut BTreeSet<String>) {
+    for (key, spec) in table {
+        let package = spec
+            .get("package")
+            .and_then(toml::Value::as_str)
+            .unwrap_or(key);
+        if package.starts_with("krishiv") {
+            out.insert(package.to_owned());
+        }
+    }
+}
+
+/// The `krishiv*` crates a manifest depends on at build or run time (not dev-dependencies), by package
+/// name, including `[target.*.dependencies]` and renamed dependencies.
 fn internal_deps(manifest: &str) -> BTreeSet<String> {
     let Ok(doc) = toml::from_str::<toml::Table>(manifest) else {
         return BTreeSet::new();
     };
     let mut out = BTreeSet::new();
-    for section in ["dependencies", "build-dependencies"] {
+    let sections = ["dependencies", "build-dependencies"];
+    for section in sections {
         if let Some(t) = doc.get(section).and_then(toml::Value::as_table) {
-            out.extend(t.keys().filter(|k| k.starts_with("krishiv")).cloned());
+            table_deps(t, &mut out);
+        }
+    }
+    if let Some(targets) = doc.get("target").and_then(toml::Value::as_table) {
+        for target in targets.values() {
+            for section in sections {
+                if let Some(t) = target.get(section).and_then(toml::Value::as_table) {
+                    table_deps(t, &mut out);
+                }
+            }
         }
     }
     out
@@ -127,6 +152,20 @@ impl Report {
 /// # Errors
 /// Returns the failed checks, or a message when a file cannot be read.
 pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
+    let (version, r) = check(root, flags)?;
+    for l in &r.lines {
+        println!("{l}");
+    }
+    if r.failed == 0 {
+        println!("release-check: {version} is ready to hand to the owner");
+        Ok(())
+    } else {
+        Err(format!("release-check: {} check(s) failed", r.failed))
+    }
+}
+
+/// Runs every check; returns the release version and the report.
+fn check(root: &Path, flags: &[&str]) -> Result<(String, Report), String> {
     let read = |p: &str| std::fs::read_to_string(root.join(p)).map_err(|e| format!("{p}: {e}"));
     let current = workspace_version(&read("Cargo.toml")?)?;
     let version = match flags {
@@ -167,6 +206,16 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
     );
 
     let list = read(".github/scripts/publish-crates.txt").unwrap_or_default();
+    // The publishing scripts treat every non-empty line as a package name, so a comment would block them.
+    let comments: Vec<_> = list
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with('#'))
+        .collect();
+    r.check(
+        comments.is_empty(),
+        format!("publish-crates.txt has no comment lines (the publish scripts read every line as a crate): {comments:?}"),
+    );
     let order: Vec<String> = list
         .lines()
         .map(str::trim)
@@ -197,35 +246,41 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
     );
 
     let changelog = read("CHANGELOG.md").unwrap_or_default();
-    let fragments = std::fs::read_dir(root.join("changelog.d")).map_or(0, |d| {
-        d.filter_map(Result::ok)
-            .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
-            .count()
-    });
+    let fragments = crate::changelog::read_fragments(&root.join("changelog.d"));
+    let (pending, fragment_error) = match &fragments {
+        Ok(f) => (f.len(), String::new()),
+        Err(e) => (0, format!("; {e}")),
+    };
     r.check(
-        has_section(&changelog, &version) || fragments > 0,
+        has_section(&changelog, &version) || pending > 0,
         format!(
-            "CHANGELOG.md has `## {version}` or changelog.d has fragments to assemble ({fragments} pending)"
+            "CHANGELOG.md has `## {version}` or changelog.d has fragments to assemble ({pending} pending{fragment_error})"
         ),
     );
 
     let tag = format!("v{version}");
-    let taken = Command::new("git")
+    let listed = Command::new("git")
         .args(["tag", "--list", &tag])
         .current_dir(root)
         .output()
-        .is_ok_and(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty());
-    r.check(!taken, format!("tag {tag} is not taken locally"));
+        .map_err(|e| format!("git tag --list: {e}"))
+        .and_then(|o| {
+            if o.status.success() {
+                Ok(String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            } else {
+                Err(format!(
+                    "git tag --list exited with {}: {}",
+                    o.status,
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ))
+            }
+        });
+    match listed {
+        Ok(out) => r.check(out.is_empty(), format!("tag {tag} is not taken locally")),
+        Err(e) => r.check(false, format!("tag {tag} could not be checked: {e}")),
+    }
 
-    for l in &r.lines {
-        println!("{l}");
-    }
-    if r.failed == 0 {
-        println!("release-check: {version} is ready to hand to the owner");
-        Ok(())
-    } else {
-        Err(format!("release-check: {} check(s) failed", r.failed))
-    }
+    Ok((version, r))
 }
 
 #[cfg(test)]
@@ -267,6 +322,33 @@ mod tests {
     }
 
     #[test]
+    fn target_specific_and_renamed_dependencies_count() {
+        let m = "[target.'cfg(unix)'.dependencies]\nkrishiv-a = \"1\"\n[dependencies]\nbridge = { package = \"krishiv-b\", version = \"1\" }\nother = { package = \"serde\", version = \"1\" }\n[target.'cfg(unix)'.dev-dependencies]\nkrishiv-c = \"1\"\n";
+        let d: Vec<_> = internal_deps(m).into_iter().collect();
+        assert_eq!(d, ["krishiv-a", "krishiv-b"]);
+    }
+
+    #[test]
+    fn a_comment_in_the_publish_list_fails() {
+        let d = fixture(
+            "0.3.0",
+            "# order\nkrishiv-a\nkrishiv-b\n",
+            "krishiv-a = \"1\"",
+        );
+        assert!(run(d.path(), &[]).is_err());
+    }
+
+    #[test]
+    fn a_readme_alone_is_not_a_pending_fragment() {
+        let d = fixture("0.3.0", "krishiv-a\nkrishiv-b\n", "krishiv-a = \"1\"");
+        std::fs::write(d.path().join("CHANGELOG.md"), "").expect("write");
+        std::fs::write(d.path().join("changelog.d/README.md"), "x").expect("write");
+        assert!(run(d.path(), &[]).is_err());
+        std::fs::write(d.path().join("changelog.d/1.added.md"), "x").expect("write");
+        run(d.path(), &[]).expect("a real fragment is enough");
+    }
+
+    #[test]
     fn dependency_order() {
         let order = vec!["a".to_owned(), "b".to_owned()];
         let mut deps = BTreeMap::new();
@@ -289,6 +371,12 @@ mod tests {
     }
     fn fixture(version: &str, list: &str, b_dep: &str) -> tempfile::TempDir {
         let d = tempfile::tempdir().expect("tempdir");
+        // The tag check needs a repository.
+        let init = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(d.path())
+            .status();
+        assert!(init.is_ok_and(|s| s.success()), "git init");
         let w = |p: &str, t: &str| {
             let f = d.path().join(p);
             std::fs::create_dir_all(f.parent().expect("parent")).expect("mkdir");
@@ -315,11 +403,7 @@ mod tests {
 
     #[test]
     fn a_consistent_tree_passes() {
-        let d = fixture(
-            "0.3.0",
-            "# order\nkrishiv-a\nkrishiv-b\n",
-            "krishiv-a = \"1\"",
-        );
+        let d = fixture("0.3.0", "krishiv-a\nkrishiv-b\n", "krishiv-a = \"1\"");
         run(d.path(), &[]).expect("passes");
         run(d.path(), &["0.3.0"]).expect("passes with the version given");
     }
@@ -334,6 +418,51 @@ mod tests {
         let err = run(d.path(), &["0.4.0"]).expect_err("fails");
         assert!(err.contains("check(s) failed"), "{err}");
         assert!(run(d.path(), &["1", "2"]).is_err());
+    }
+
+    /// The `FAIL` lines of a tree.
+    fn failures(d: &tempfile::TempDir) -> Vec<String> {
+        let (_, r) = check(d.path(), &[]).expect("checks ran");
+        r.lines
+            .into_iter()
+            .filter(|l| l.starts_with("FAIL"))
+            .collect()
+    }
+
+    #[test]
+    fn each_defect_fails_its_own_check() {
+        let one = |fails: Vec<String>, needle: &str| {
+            assert_eq!(fails.len(), 1, "{fails:?}");
+            assert!(fails[0].contains(needle), "{fails:?}");
+        };
+        let d = fixture("0.3.0", "krishiv-b\nkrishiv-a\n", "krishiv-a = \"1\"");
+        one(failures(&d), "dependency order");
+        let d = fixture(
+            "0.3.0",
+            "krishiv-a\nkrishiv-a\nkrishiv-b\n",
+            "krishiv-a = \"1\"",
+        );
+        one(failures(&d), "no duplicates");
+        let d = fixture(
+            "0.3.0",
+            "krishiv-a\nkrishiv-b\nkrishiv-zz\n",
+            "krishiv-a = \"1\"",
+        );
+        one(failures(&d), "only crates in crates/");
+        let d = fixture("0.3.0", "krishiv-a\nkrishiv-b\n", "krishiv-a = \"1\"");
+        std::fs::write(
+            d.path().join("crates/krishiv-a/Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"1.0.0\"\n",
+        )
+        .expect("write");
+        one(failures(&d), "inherits the workspace version");
+        let d = fixture("0.3.0", "krishiv-a\nkrishiv-b\n", "krishiv-a = \"1\"");
+        std::fs::remove_file(d.path().join("RELEASING.md")).expect("rm");
+        one(failures(&d), "RELEASING.md exists");
+        let d = fixture("0.3.0", "krishiv-a\nkrishiv-b\n", "krishiv-a = \"1\"");
+        std::fs::write(d.path().join("CHANGELOG.md"), "").expect("write");
+        std::fs::write(d.path().join("changelog.d/README.md"), "x").expect("write");
+        one(failures(&d), "CHANGELOG.md has");
     }
 
     #[test]
