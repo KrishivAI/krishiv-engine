@@ -221,23 +221,58 @@ pub fn allowance(limit: usize) -> usize {
 /// The process's resident set in bytes (`VmRSS` of `/proc/self/status`),
 /// for [`set_resident_probe`]. `None` off Linux or if it cannot be read.
 /// Allocates nothing: it can run while memory is short.
+///
+/// The open status file is kept with the pid that opened it: `/proc/self`
+/// names the opener, so after a `fork` the inherited file still reads the
+/// parent, and the child reopens its own. A child forked while another
+/// thread held the cache's lock reads without it (opening the file each
+/// time) rather than waiting on a lock no thread will release.
 #[must_use]
 pub fn process_resident_bytes() -> Option<usize> {
     #[cfg(target_os = "linux")]
     {
-        use std::os::unix::fs::FileExt;
-        static STATUS: OnceLock<Option<std::fs::File>> = OnceLock::new();
-        let file = STATUS
-            .get_or_init(|| std::fs::File::open("/proc/self/status").ok())
-            .as_ref()?;
-        let mut buf = [0u8; 4096];
-        let n = file.read_at(&mut buf, 0).ok()?;
-        vm_rss(&buf[..n])
+        use std::sync::{Mutex, TryLockError};
+        static STATUS: Mutex<Option<(u32, std::fs::File)>> = Mutex::new(None);
+        let pid = std::process::id();
+        match STATUS.try_lock() {
+            Ok(mut slot) => read_rss(status_file(&mut slot, pid, SELF_STATUS)?),
+            Err(TryLockError::Poisoned(p)) => {
+                read_rss(status_file(&mut p.into_inner(), pid, SELF_STATUS)?)
+            }
+            Err(TryLockError::WouldBlock) => read_rss(&std::fs::File::open(SELF_STATUS).ok()?),
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
         None
     }
+}
+
+/// The path [`process_resident_bytes`] reads.
+#[cfg(target_os = "linux")]
+const SELF_STATUS: &str = "/proc/self/status";
+
+/// The cached status file for `pid`, opening `path` when the cache is empty
+/// or was filled by another pid (a forked child's inherited file).
+#[cfg(target_os = "linux")]
+fn status_file<'a>(
+    slot: &'a mut Option<(u32, std::fs::File)>,
+    pid: u32,
+    path: &str,
+) -> Option<&'a std::fs::File> {
+    if slot.as_ref().is_none_or(|(owner, _)| *owner != pid) {
+        *slot = std::fs::File::open(path).ok().map(|f| (pid, f));
+    }
+    slot.as_ref().map(|(_, f)| f)
+}
+
+/// The `VmRSS:` of an open status file, read from its start.
+#[cfg(target_os = "linux")]
+fn read_rss(file: &std::fs::File) -> Option<usize> {
+    use std::os::unix::fs::FileExt;
+    let mut buf = [0u8; 4096];
+    let n = file.read_at(&mut buf, 0).ok()?;
+    vm_rss(&buf[..n])
 }
 
 /// The `VmRSS:` value of a `/proc/<pid>/status` text, in bytes.
@@ -378,6 +413,37 @@ mod tests {
         let rss = process_resident_bytes().unwrap();
         // At least the test binary's own pages, and below a terabyte.
         assert!(rss > 1 << 20 && rss < 1 << 40, "{rss}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_status_file_cached_by_another_pid_is_reopened() {
+        // As in a forked child: the cache holds a file the parent (another
+        // pid) opened, here one whose VmRSS is not this process's.
+        let dir = std::env::temp_dir().join(format!("krishiv-rss-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let parent = dir.join("status");
+        std::fs::write(&parent, b"VmRSS:\t 7 kB\n").unwrap();
+        let me = std::process::id();
+        let mut slot = Some((me.wrapping_add(1), std::fs::File::open(&parent).unwrap()));
+
+        // Another pid's file is replaced by this pid's own.
+        let own = status_file(&mut slot, me, SELF_STATUS).unwrap();
+        let rss = read_rss(own).unwrap();
+        assert!(rss > 1 << 20, "{rss}");
+        assert_eq!(slot.as_ref().map(|(p, _)| *p), Some(me));
+
+        // This pid's file is kept, not reopened (the path is not read again).
+        let kept = status_file(&mut slot, me, "/nonexistent/status").unwrap();
+        assert!(read_rss(kept).unwrap() > 1 << 20);
+
+        // An empty cache opens the path for this pid.
+        let mut empty = None;
+        assert_eq!(
+            read_rss(status_file(&mut empty, me, parent.to_str().unwrap()).unwrap()),
+            Some(7 * 1024)
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
