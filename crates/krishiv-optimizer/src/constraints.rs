@@ -671,6 +671,8 @@ impl Memo {
     /// through filters, inner joins, column-only projections and shifts (the
     /// walk of the implied filters of `pushdown`, plus self-join
     /// instances), in pre-order: a node's own, then its inputs' left first.
+    /// A filter right above a common-subexpression projection gives its
+    /// conjuncts with the `cse_*` columns replaced by what they name.
     fn constraints(&mut self, plan: &Arc<LogicalPlan>) -> Conjuncts {
         if let Some((_, c)) = self.constraints.get(&Arc::as_ptr(plan)) {
             return Arc::clone(c);
