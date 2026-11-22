@@ -154,6 +154,26 @@ impl QueryCatalog {
                 continue;
             };
             if options.contains_key(krishiv_plan::TIME_TRAVEL_OPTION) {
+                // Spark refuses only the tables of its session catalog that are v1 file tables. A
+                // declared catalog's table, or a Delta table, can be read at a version there, so
+                // Krishiv's own refusal names the missing feature instead of claiming Spark's.
+                let entry = self.entry_of(name).map(|(_, t)| t);
+                let is_delta = matches!(
+                    entry.as_deref(),
+                    Some(TempTable::Files {
+                        source: ReadSource::Files { format, .. },
+                        ..
+                    }) if crate::delta::handles(format)
+                );
+                if (name.len() > 2 && !name[0].eq_ignore_ascii_case(super::CATALOG))
+                    || self.is_declared_scan(name, scan.version)
+                    || is_delta
+                {
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: "time travel".to_owned(),
+                    }
+                    .into());
+                }
                 // The relation resolved (a missing one failed in analysis): Spark's
                 // `V2SessionCatalog.failTimeTravel` names it in full.
                 let (namespace, table) = match &name[..] {

@@ -541,12 +541,17 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         _ => 0..0,
     };
     // `variant_insert`, `variant_set` and `variant_array_append` are null-intolerant in Spark: a NULL literal
-    // argument folds the call to NULL before the path is parsed. `variant_delete` raises regardless.
-    let folds_to_null = listed != "variant_delete"
-        && args.iter().any(|a| match a {
-            BindArg::Literal(a) => *a.data_type() == DataType::Null || a.is_null(0),
-            BindArg::Column { .. } => false,
-        });
+    // argument folds the call to NULL before the path is parsed. `variant_delete` returns NULL for a NULL
+    // variant (`VariantDelete.eval` checks it before it forces the paths); a NULL path does not fold it.
+    let null_literal = |a: &BindArg| match a {
+        BindArg::Literal(a) => *a.data_type() == DataType::Null || a.is_null(0),
+        BindArg::Column { .. } => false,
+    };
+    let folds_to_null = if listed == "variant_delete" {
+        args.first().is_some_and(null_literal)
+    } else {
+        args.iter().any(null_literal)
+    };
     let checked = bound.ok_or_else(|| bad_types(listed, args)).and_then(|b| {
         if !folds_to_null {
             for i in literal_paths {

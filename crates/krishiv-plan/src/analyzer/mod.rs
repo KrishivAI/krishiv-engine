@@ -166,7 +166,6 @@ pub use catalog::{
 };
 pub use catalog_write::{CatalogWrite, CreateMode, NamespaceInfo, TableInfo};
 pub use char_varchar::DeclaredType;
-pub use coerce::cast_always_refused;
 pub use input_file::bind_input_files;
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use table_change::{

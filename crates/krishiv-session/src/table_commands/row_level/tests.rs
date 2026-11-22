@@ -362,8 +362,15 @@ fn try_run(
     let alias = alias.to_owned();
     let condition = condition.map(str::to_owned);
     block_on(session.on_executor(async move {
-        s.run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments)
-            .await
+        s.run_row_level(
+            op,
+            &quoted,
+            &alias,
+            condition.as_deref(),
+            &assignments,
+            false,
+        )
+        .await
     }))
 }
 

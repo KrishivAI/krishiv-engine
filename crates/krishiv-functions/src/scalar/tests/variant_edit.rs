@@ -347,7 +347,7 @@ fn a_literal_path_is_checked_at_bind_and_a_column_path_per_row() {
             "{name}"
         );
     }
-    // A NULL literal folds insert/set/append to NULL before the path is parsed; `variant_delete` still raises.
+    // A NULL literal folds insert/set/append to NULL before the path is parsed; `variant_delete` is tested below.
     let bad_text = text_col(&[Some("bad")]);
     let null_variant: ArrayRef = variants(&[None]);
     let null_int: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![None::<i32>]));
@@ -369,9 +369,17 @@ fn a_literal_path_is_checked_at_bind_and_a_column_path_per_row() {
         let out = f.invoke(&args, 1).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(show(&out), vec![None], "{name}");
     }
+    let null_v_arg = Arg::Scalar(Arc::clone(&null_variant));
     let null_variant = || BindArg::Literal(Arc::clone(&null_variant));
+    // `variant_delete` over a NULL variant is NULL as well (`VariantDelete.eval` returns before it forces the paths).
+    let f = bind("variant_delete", &[null_variant(), bad_lit()]).expect("folds to NULL");
+    let out = f
+        .invoke(&[null_v_arg, Arg::Scalar(Arc::clone(&bad_text))], 1)
+        .expect("invoke");
+    assert_eq!(show(&out), vec![None]);
+    // A bad path over a variant column still raises.
     assert_eq!(
-        bind("variant_delete", &[null_variant(), bad_lit()])
+        bind("variant_delete", &[arg(&v), bad_lit()])
             .err()
             .map(|e| e.error_class()),
         Some(ErrorClass::InvalidVariantPath)

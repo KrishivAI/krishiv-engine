@@ -243,11 +243,16 @@ pub(super) fn compile(
 ) -> Result<Arc<dyn PhysExpr>> {
     // A null-intolerant variant edit over an argument that is NULL (a NULL literal, possibly cast
     // or parsed) is NULL before its path is parsed, as Spark folds it.
-    if matches!(
-        name.to_ascii_lowercase().trim_start_matches("try_"),
-        "variant_insert" | "variant_set" | "variant_array_append"
-    ) && f.args.iter().any(|a| folds_to_null(a))
-    {
+    let lower = name.to_ascii_lowercase();
+    // `variant_delete` folds only over a NULL variant: a NULL path is skipped, not folded.
+    let folds = match lower.trim_start_matches("try_") {
+        "variant_insert" | "variant_set" | "variant_array_append" => {
+            f.args.iter().any(|a| folds_to_null(a))
+        }
+        "variant_delete" => f.args.first().is_some_and(|a| folds_to_null(a)),
+        _ => false,
+    };
+    if folds {
         let null = crate::planner::eval::Lit::new(&krishiv_plan::Literal::Null(Some(
             f.data_type.clone(),
         )))?;

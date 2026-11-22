@@ -922,16 +922,14 @@ impl Session {
                     // Spark analyzes the subqueries before it finds the target cannot change: a time
                     // travel clause in one is the error then. A target that does not exist is reported first.
                     if refusal.error_class().name() != "TABLE_OR_VIEW_NOT_FOUND" {
-                        self.refuse_time_travel_in_subqueries(changes, original)
-                            .await?;
+                        Box::pin(self.refuse_time_travel_in_subqueries(changes, original)).await?;
                     }
                     return Err(refusal);
                 }
                 name.quoted()
             }
         };
-        self.refuse_time_travel_in_subqueries(changes, original)
-            .await?;
+        Box::pin(self.refuse_time_travel_in_subqueries(changes, original)).await?;
         // Spark analyzes the condition and the new values against the table before it finds that the
         // table cannot change: an unknown column is the error then.
         // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own
@@ -982,10 +980,9 @@ impl Session {
             .catalog
             .check_reference_options(analysis.analyzed.plan.root())?;
         // A table whose provider offers a row-level table runs the statement (PR-DML).
-        // The target's `WITH (...)` options reach the table's scan builder, and no table of the
-        // session catalog takes them: the statement is refused as Spark refuses it for such a table.
+        // The target's `WITH (...)` options reach the table's scan builder: a table without a row-level
+        // table refuses the statement as Spark does, one with it (Delta) refuses the options by name.
         let op = match operation {
-            _ if !changes.options.is_empty() => None,
             "DELETE" => Some(krishiv_exec::planner::RowLevelOperation::Delete),
             "UPDATE TABLE" => Some(krishiv_exec::planner::RowLevelOperation::Update),
             _ => None,
@@ -1014,7 +1011,14 @@ impl Session {
                 .collect();
             let condition = changes.condition.map(slice);
             if let Some(done) = self
-                .run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments)
+                .run_row_level(
+                    op,
+                    &quoted,
+                    &alias,
+                    condition.as_deref(),
+                    &assignments,
+                    !changes.options.is_empty(),
+                )
                 .await?
             {
                 // The table's data changed: what read it is stale (as after an `INSERT`).
@@ -1053,7 +1057,7 @@ impl Session {
             let Some(text) = original.get(q.span.start..q.span.end) else {
                 continue;
             };
-            match plain.analyze_variable_query(text).await {
+            match Box::pin(plain.analyze_variable_query(text)).await {
                 Ok(analysis) => analysis
                     .env
                     .catalog
@@ -1061,7 +1065,37 @@ impl Session {
                 Err(e) if e.error_class().name() == "UNSUPPORTED_FEATURE.TIME_TRAVEL" => {
                     return Err(e);
                 }
-                Err(_) => {}
+                // A correlated subquery does not resolve alone: its relations with the clause are
+                // resolved one by one, as Spark does before it finds the target cannot change.
+                Err(_) => {
+                    let Ok(parsed) = krishiv_sql::parse_query(text, &plain.query_env().parser)
+                    else {
+                        continue;
+                    };
+                    let Ok(lowered) = krishiv_sql::lower(&parsed, krishiv_plan::SourceId(0)) else {
+                        continue;
+                    };
+                    let mut reads = Vec::new();
+                    travel_reads(lowered.root(), &mut reads);
+                    for read in reads {
+                        let plan = Arc::new(krishiv_plan::LogicalPlan::new(
+                            krishiv_plan::PlanNode::Read(read),
+                        ));
+                        let df = DataFrame::new(plain.clone(), plan);
+                        match Box::pin(df.analyzed_in_with_text(plain.query_env(), None)).await {
+                            Err(e)
+                                if e.error_class().name() == "UNSUPPORTED_FEATURE.TIME_TRAVEL" =>
+                            {
+                                return Err(e);
+                            }
+                            Ok(analysis) => analysis
+                                .env
+                                .catalog
+                                .check_reference_options(analysis.analyzed.plan.root())?,
+                            Err(_) => {}
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -1169,4 +1203,22 @@ pub(super) fn layout_of(
         ),
     )?;
     crate::partitions::table_layout(name, columns, partition_by, bucket, case_sensitive)
+}
+
+/// The table reads of the lowered `plan` (subqueries included) that carry a time travel clause.
+fn travel_reads(plan: &krishiv_plan::LogicalPlan, out: &mut Vec<krishiv_plan::ReadSource>) {
+    fn in_expr(e: &Arc<krishiv_plan::Expr>, out: &mut Vec<krishiv_plan::ReadSource>) {
+        if let krishiv_plan::ExprNode::Subquery { plan, .. } = &e.node {
+            travel_reads(plan, out);
+        }
+        e.for_each_child(&mut |c| in_expr(c, out));
+    }
+    if let krishiv_plan::PlanNode::Read(source @ krishiv_plan::ReadSource::Table { options, .. }) =
+        &plan.node
+        && options.contains_key(krishiv_plan::TIME_TRAVEL_OPTION)
+    {
+        out.push(source.clone());
+    }
+    plan.for_each_expr(&mut |e| in_expr(e, out));
+    plan.for_each_child(&mut |c| travel_reads(c, out));
 }

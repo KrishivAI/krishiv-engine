@@ -165,6 +165,7 @@ fn get_json_object_selects_fields_indexes_and_wildcards() {
         Some("not json"),
         Some("{\"a\":\"b\"}"),
         Some("{\"a\":null}"),
+        Some("{\"a]b\":1}"),
     ]);
     let path = strs(&[
         Some("$.a"),
@@ -176,6 +177,8 @@ fn get_json_object_selects_fields_indexes_and_wildcards() {
         Some("$.a"),
         Some("a"),
         Some("$.a"),
+        // A `]` is part of a `.name`, as in Spark's `JsonPathParser.named` (`[^\.\[]+`).
+        Some("$.a]b"),
     ]);
     let got = get_json_object(&json, &path);
     assert_eq!(
@@ -190,6 +193,7 @@ fn get_json_object_selects_fields_indexes_and_wildcards() {
             None,
             None,
             None,
+            Some("1".to_owned()),
         ]
     );
 }

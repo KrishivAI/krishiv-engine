@@ -391,10 +391,7 @@ impl Expander<'_> {
         };
         let travel = options.contains_key(krishiv_plan::TIME_TRAVEL_OPTION);
         // Other options beside the clause still reach the refusal of a view with it (Spark reports the clause).
-        if (!travel
-            && options
-                .keys()
-                .any(|k| k != krishiv_plan::TIME_TRAVEL_OPTION))
+        if (!travel && !options.is_empty())
             || scope
                 .iter()
                 .any(|c| name.len() == 1 && same_name(c, &name[0], self.case_sensitive))

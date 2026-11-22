@@ -414,6 +414,10 @@ fn the_clause_is_refused_for_every_kind_of_relation() {
             "`spark_catalog`.`default`.`tbl`",
         ),
         (
+            "delete from tv where exists (select 1 from tbl@v1 where tbl.id = tv.a)",
+            "`spark_catalog`.`default`.`tbl`",
+        ),
+        (
             &format!("select * from parquet.`{}` version as of 1", dir.display()),
             &format!("`parquet`.`{}`", dir.display()),
         ),
