@@ -54,7 +54,8 @@ def _source(reader: DataSourceReader, ddl: str = "a INT, b STRING") -> DataSourc
 
 
 def _read(spark: SparkSession, reader: DataSourceReader, ddl: str = "a INT, b STRING") -> list[tuple[Any, ...]]:
-    _, table = ds._plan_and_read(spark, _source(reader, ddl), _schema(ddl), "t")
+    _, read = ds._plan_and_read(spark, _source(reader, ddl), _schema(ddl), "t")
+    table = read()
     return [tuple(r.values()) for r in table.to_pylist()]
 
 
