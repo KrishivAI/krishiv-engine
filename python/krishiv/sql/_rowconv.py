@@ -247,6 +247,10 @@ def convert(value: Any, data_type: DataType, zone: Any) -> Any:
                 messageParameters={"expected": str(len(data_type.fields)), "actual": str(len(values))},
                 sqlState="2201E",
             )
+        names = [f.name for f in data_type.fields]
+        if len(set(names)) != len(names):
+            # pyarrow reads a struct from a dict, which cannot hold two fields of one name.
+            raise unsupported_feature(f"createDataFrame with duplicate field names in {data_type.simpleString()}")
         return {f.name: convert(v, f.dataType, zone) for f, v in zip(data_type.fields, values, strict=True)}
     if isinstance(data_type, StringType):
         if isinstance(value, str):

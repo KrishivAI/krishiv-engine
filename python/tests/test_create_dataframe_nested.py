@@ -299,3 +299,9 @@ def test_naive_timestamps_in_a_dst_gap(spark: SparkSession) -> None:
         assert spark.createDataFrame(frame).count() == 2
     finally:
         spark.conf.unset("spark.sql.session.timeZone")
+
+
+def test_duplicate_field_names_in_a_nested_struct_are_refused(spark: SparkSession) -> None:
+    # a dict-based Arrow conversion would silently collapse them
+    with pytest.raises(errors.UnsupportedOperationException):
+        spark.createDataFrame([((1, 2),)], "s struct<a:int,a:int>")
