@@ -1552,12 +1552,12 @@ impl Session {
     /// between puts the directory back.
     async fn rename_table(
         &self,
-        table: &CatalogTable,
+        table: &Arc<CatalogTable>,
         to: &TableName,
     ) -> Result<DataFrame, KrishivError> {
         let to = &self.rename_target(table, to)?;
         let store = &self.state.catalog.store;
-        let mut renamed = table.clone();
+        let mut renamed = (**table).clone();
         renamed.namespace.clone_from(&to.namespace);
         renamed.name.clone_from(&to.name);
         // The canonical directories moved (to, from), to move back on a failure.
@@ -1590,9 +1590,17 @@ impl Session {
         self.state
             .cache
             .invalidate_table(&format!("{}.{}", table.namespace, table.name));
-        store.drop_table(&table.namespace, &table.name);
-        if let Err(e) = store.create_table(renamed, CreateMode::ErrorIfExists) {
-            let _ = store.create_table(table.clone(), CreateMode::Replace);
+        // The entry read, swapped for the renamed one under one store lock: both names or neither,
+        // and no window where a reader finds neither or a restore replaces a newer object.
+        let failed = match store.rename_table_entry(table, renamed) {
+            Ok(Some(_)) => None,
+            Ok(None) => Some(internal(format!(
+                "{} was changed by another statement while this one ran; retry",
+                quoted(&table.namespace, &table.name)
+            ))),
+            Err(e) => Some(e),
+        };
+        if let Some(e) = failed {
             if let Some((target, source)) = moved {
                 self.move_back(&target, &source)?;
             }
