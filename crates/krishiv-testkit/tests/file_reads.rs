@@ -218,6 +218,39 @@ fn directories_list_like_spark() {
         .unwrap();
     let got = env.block_on(r.infer("mock", &paths(&["/w"]), &none));
     assert!(got.is_ok());
+    let listing = env
+        .block_on(r.listing("mock", &paths(&["/w"]), &none))
+        .unwrap();
+    let names: Vec<_> = listing.files.iter().map(|f| f.path.to_string()).collect();
+    assert_eq!(names, ["w/part-0"]);
+    // A directory holding only `_metadata` is no leaf of the layout (`isDataPath`), and a
+    // `_metadata` file is not data.
+    env.write(&fx, "m/k=1/part-0", &a, &[ints(&a)], &[])
+        .unwrap();
+    env.put_raw(&Path::from("m/plain/_metadata"), b"junk".to_vec())
+        .unwrap();
+    env.put_raw(&Path::from("m/k=1/_common_metadata"), b"junk".to_vec())
+        .unwrap();
+    let listing = env
+        .block_on(r.listing("mock", &paths(&["/m"]), &none))
+        .unwrap();
+    let names: Vec<_> = listing.files.iter().map(|f| f.path.to_string()).collect();
+    assert_eq!(names, ["m/k=1/part-0"]);
+    // Partition directories below a plain one are a second base of the layout: a conflict, though
+    // the root's own file carries no partition.
+    env.write(&fx, "n/part-0", &a, &[ints(&a)], &[]).unwrap();
+    env.write(&fx, "n/plain/k=1/part-1", &a, &[ints(&a)], &[])
+        .unwrap();
+    let got = env.block_on(r.infer("mock", &paths(&["/n"]), &none));
+    assert_eq!(class(got).0, ErrorClass::ConflictingDirectoryStructures);
+    // `ignoreInvalidPartitionPaths` skips the plain directory beside partition directories.
+    let mut ignore = BTreeMap::new();
+    ignore.insert(
+        "ignoreInvalidPartitionPaths".to_owned(),
+        OptionValue::from_user("ignoreInvalidPartitionPaths", "true"),
+    );
+    let got = env.block_on(r.infer("mock", &paths(&["/q"]), &ignore));
+    assert!(got.is_ok());
     // Credentials in paths (globs are expanded: see `partition_discovery` in krishiv-session).
     let got = env.block_on(r.infer("mock", &paths(&["s3://user:secret@bucket/k"]), &none));
     assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);

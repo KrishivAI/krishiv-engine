@@ -942,6 +942,7 @@ impl FileReads {
             logged: outer,
             skip_foreign_dirs: mode.skip_foreign_dirs,
             skip_all_dirs: mode.skip_all_dirs,
+            ignore_invalid: mode.ignore_invalid,
         };
         for (names, path) in matched {
             let display = format!("{}/{}", at.display.trim_end_matches('/'), names.join("/"));
@@ -981,6 +982,7 @@ impl FileReads {
             logged: None,
             skip_foreign_dirs: false,
             skip_all_dirs: false,
+            ignore_invalid: self.ignores_invalid_partition_paths(options),
         })
     }
 
@@ -1173,9 +1175,15 @@ impl FileReads {
         let mut seen_inherited = 0;
         let first_out = out.len();
         let mut foreign_dir = false;
+        let mut nested_partitions = false;
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<_> = meta.location.parts().skip(base).collect();
             if below.iter().any(|p| hidden(p.as_ref())) {
+                continue;
+            }
+            // `_metadata` and `_common_metadata` are listed for schema inference but are not data
+            // (`isDataPath`), and a directory holding only them is no leaf of the layout.
+            if below.last().is_some_and(|p| !is_data_path(p.as_ref())) {
                 continue;
             }
             if let Some(files) = &committed {
@@ -1221,12 +1229,19 @@ impl FileReads {
             // `CONFLICTING_DIRECTORY_STRUCTURES`.
             if !mode.recursive && names.iter().any(|d| parse_segment(d).is_none()) {
                 foreign_dir = true;
+                // Partition directories below the foreign one are a second base of the layout.
+                if let Some(at) = names.iter().position(|d| parse_segment(d).is_none()) {
+                    nested_partitions |= names[at + 1..].iter().any(|d| parse_segment(d).is_some());
+                }
                 continue;
             }
             let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
         }
-        if foreign_dir && out[first_out..].iter().any(|(_, segs)| !segs.is_empty()) {
+        if foreign_dir
+            && !mode.ignore_invalid
+            && (nested_partitions || out[first_out..].iter().any(|(_, segs)| !segs.is_empty()))
+        {
             return Err(krishiv_common::error::ConflictingDirectoryStructures {
                 discovered_base_paths: format!("\n\t{}\n", at.display),
             }
@@ -1365,6 +1380,9 @@ struct ListMode {
     /// An unpartitioned catalog table's listing: every subdirectory is
     /// skipped, `name=value` ones too (its files are its root's).
     skip_all_dirs: bool,
+    /// `ignoreInvalidPartitionPaths`: a directory that is not `name=value` beside partition
+    /// directories is skipped without `CONFLICTING_DIRECTORY_STRUCTURES` (Spark 4.2.0).
+    ignore_invalid: bool,
 }
 
 /// The partition columns of a permanent table and the partitions its
@@ -1610,6 +1628,12 @@ fn hidden(name: &str) -> bool {
     exclude && !include
 }
 
+/// Spark's `PartitioningAwareFileIndex.isDataPath`: not a name starting with `_` (unless it holds `=`)
+/// or `.`.
+fn is_data_path(name: &str) -> bool {
+    !(name.starts_with('_') && !name.contains('=') || name.starts_with('.'))
+}
+
 /// A format as Spark names it in messages (`Parquet`, `JSON`).
 fn display_name(format: &str) -> String {
     match format {
@@ -1841,6 +1865,8 @@ mod tests {
         ] {
             assert!(!hidden(name), "{name}");
         }
+        assert!(!is_data_path("_metadata") && !is_data_path("_common_metadata2"));
+        assert!(is_data_path("a.parquet") && is_data_path("_k=1"));
         assert_eq!(display_name("parquet"), "Parquet");
         assert_eq!(display_name("avro"), "Avro");
         assert_eq!(display_name("json"), "JSON");
