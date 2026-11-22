@@ -4,7 +4,7 @@ description: "What Krishiv reads and writes in Iceberg and Delta tables, how to 
 
 # Iceberg and Delta tables, and catalogs
 
-Krishiv reads and writes Apache Iceberg and Delta Lake tables without a JVM. This page covers what each format
+Krishiv reads Apache Iceberg tables and reads and writes Delta Lake tables without a JVM. This page covers what each format
 supports in 0.3, how to declare an external catalog, and how to make a retried write safe.
 
 ## Delta tables
