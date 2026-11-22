@@ -300,7 +300,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`max_by`](max_by.md) | aggregate | yes | Returns the value of `x` associated with the maximum value of `y`. |
 | [`md5`](md5.md) | scalar | yes | Returns an MD5 128-bit checksum as a hex string of `expr`. |
 | [`mean`](mean.md) | aggregate | yes | Returns the mean calculated from values of a group. |
-| [`measure`](measure.md) | - | not yet | this function is used and can only be used to calculate a measure defined in a metric view. |
+| [`measure`](measure.md) | - | yes | this function is used and can only be used to calculate a measure defined in a metric view. |
 | [`median`](median.md) | aggregate | yes | Returns the median of numeric or ANSI interval column `col`. |
 | [`min`](min.md) | aggregate | yes | Returns the minimum value of `expr`. |
 | [`min_by`](min_by.md) | aggregate | yes | Returns the value of `x` associated with the minimum value of `y`. |
@@ -585,4 +585,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-499 of 574 functions are implemented. The 75 that are not are listed in [functions not implemented yet](not-implemented.md).
+500 of 574 functions are implemented. The 74 that are not are listed in [functions not implemented yet](not-implemented.md).

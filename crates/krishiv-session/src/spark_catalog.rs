@@ -487,7 +487,14 @@ impl Catalog<'_> {
     }
 
     fn table_of(t: &CatalogTable) -> Table {
-        let table_type = if t.view.is_some() {
+        // `CatalogImpl.makeTable` gives `tableType.name`.
+        let table_type = if t
+            .view
+            .as_ref()
+            .is_some_and(crate::store::ViewDef::is_metric)
+        {
+            "METRIC_VIEW"
+        } else if t.view.is_some() {
             "VIEW"
         } else if t.managed {
             "MANAGED"

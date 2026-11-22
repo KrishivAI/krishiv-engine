@@ -110,6 +110,7 @@ mod instance;
 mod intervals;
 pub(crate) mod legacy;
 pub mod lineage;
+mod metric_view;
 mod observe;
 mod ops;
 mod pivot;
@@ -133,6 +134,7 @@ pub mod table_functions;
 pub mod testing;
 mod unexecutable;
 mod unpivot;
+mod up_cast;
 mod variables;
 mod variant;
 mod view_ctes;
@@ -168,11 +170,13 @@ pub use catalog_write::{CatalogWrite, CreateMode, NamespaceInfo, TableInfo};
 pub use char_varchar::DeclaredType;
 pub use coerce::cast_always_refused;
 pub use input_file::bind_input_files;
+pub use metric_view::{is_unplannable, refuse_unplannable};
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use table_change::{
     AlterInput, AlterRules, AlteredTable, CatalogCapabilities, ColumnPosition, NamespaceChange,
     TableChange, TypeWidening, apply_changes,
 };
+pub use up_cast::can_up_cast;
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, VariableValue, variable_name};
 pub use view_ctes::{inline_view_ctes, unscoped_read};
 
@@ -695,6 +699,11 @@ pub struct AnalysisContext {
     /// temporary function or variable answers (`SessionCatalog.scala` lines 2427-2441,
     /// `Analyzer.scala` lines 252-254). Empty for an analysis that inlined none.
     pub stored_view_texts: views::DefinerTexts,
+    /// The inlined queries of the temporary views of the plan (SQL, DataFrame and global ones),
+    /// by node identity as [`Self::definer_texts`]: Spark's `View` node, which ends the chain the
+    /// metric-view rule follows from an aggregate to its read, as a permanent view's text does.
+    /// Empty for an analysis that inlined none.
+    pub temp_view_texts: views::DefinerTexts,
 }
 
 /// The context inputs of a resolution: with the input key and the pins,

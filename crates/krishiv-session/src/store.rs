@@ -47,6 +47,27 @@ pub(crate) struct StoreColumn {
     /// `__CHAR_VARCHAR_TYPE_STRING` field metadata). The column's type is `string`: the length lives here only,
     /// and the analyzer reads it for the write check and the padding rule (design P2-T001b).
     pub(crate) char_varchar: Option<String>,
+    /// A metric view's column (P3 4.2-MV): whether it is a dimension or a measure and its
+    /// expression as written (Spark's `metric_view.type` / `metric_view.expr` field metadata).
+    pub(crate) metric: Option<MetricColumn>,
+}
+
+/// [`StoreColumn::metric`]: what a metric view's column is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MetricColumn {
+    /// A dimension or a measure.
+    pub(crate) kind: MetricColumnKind,
+    /// The YAML `expr`, as written.
+    pub(crate) expr: String,
+}
+
+/// A metric view's column kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MetricColumnKind {
+    /// Computed per source row; the view's grouping keys.
+    Dimension,
+    /// An aggregate, read through `measure(..)`.
+    Measure,
 }
 
 impl StoreColumn {
@@ -91,6 +112,7 @@ impl StoreColumn {
             default,
             comment,
             char_varchar,
+            metric: None,
         })
     }
 
@@ -103,6 +125,7 @@ impl StoreColumn {
             default: None,
             comment: None,
             char_varchar: None,
+            metric: None,
         }
     }
 }
@@ -155,6 +178,39 @@ pub(crate) struct ViewDef {
     /// The principal who wrote this version of the text (created, replaced or altered it); kept
     /// with [`Self::revision`].
     pub(crate) author: String,
+    /// A SQL view, or a metric view whose [`Self::sql`] is its YAML body (P3 4.2-MV).
+    pub(crate) kind: ViewKind,
+}
+
+impl ViewDef {
+    /// Whether this is a metric view (Spark's table type `METRIC_VIEW`), whose [`Self::sql`] is YAML.
+    pub(crate) const fn is_metric(&self) -> bool {
+        matches!(self.kind, ViewKind::Metric(_))
+    }
+}
+
+/// [`ViewDef::kind`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ViewKind {
+    /// `CREATE VIEW .. AS query`.
+    Sql,
+    /// `CREATE VIEW .. WITH METRICS LANGUAGE YAML AS $$..$$` (Spark's table type `METRIC_VIEW`). Only
+    /// `sql`, `written`, `namespace`, `path`, `revision` and `author` of the [`ViewDef`] apply; the
+    /// YAML is read again at each read, as Spark does, under the parse options captured here.
+    Metric(MetricViewDef),
+}
+
+/// [`ViewKind::Metric`]: what a metric view keeps beside its YAML text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MetricViewDef {
+    /// The parse options when the view was created (Spark's captured `view.sqlConfig.*` apply only
+    /// while its YAML and expressions are parsed, design note `P3-metric-views.md` §4).
+    pub(crate) parser: krishiv_sql::ParserOptions,
+    /// `spark.sql.ansi.enabled` when the view was created: the operators and casts its YAML
+    /// expressions write (`+`, `/`, `CAST`, which Spark's parser builds with the mode it parses
+    /// under) evaluate in it at every read; functions resolved at a read (`sum`) and the casts the
+    /// analyzer inserts follow the reader's mode (design note `P3-metric-views.md`, golden results 1).
+    pub(crate) ansi: bool,
 }
 
 /// [`ViewDef::functions`]: what a definer view bound when it was created or last altered.
@@ -1008,6 +1064,7 @@ mod tests {
                 default: None,
                 comment: None,
                 char_varchar: None,
+                metric: None,
             }],
             options: BTreeMap::new(),
             properties: BTreeMap::new(),
@@ -1131,6 +1188,7 @@ mod tests {
                 functions: None,
                 revision: 0,
                 author: author.into(),
+                kind: ViewKind::Sql,
             });
             t
         };
