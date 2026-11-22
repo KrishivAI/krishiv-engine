@@ -236,6 +236,34 @@ fn a_409_after_a_foreign_commit_is_rebased() {
     );
 }
 
+/// A landed commit drops the table's cached `loadTable` answer: with a 30 s TTL a writer opened
+/// after a commit starts from the metadata that commit left (no 409, no probe).
+#[test]
+fn a_landed_commit_drops_the_cached_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = write_table(dir.path()).unwrap();
+    let (server, _) = catalog(&table, &[]);
+    let io = LocalIo::new(dir.path()).unwrap();
+    let d = decl(
+        &[
+            ("krishiv.catalog.lake.type", "iceberg-rest"),
+            ("krishiv.catalog.lake.uri", server.base.as_str()),
+            ("krishiv.catalog.lake.storage", "allowed-prefixes"),
+            ("krishiv.catalog.lake.option.write", "true"),
+        ],
+        DeclMode::Embedded,
+    );
+    let deps = deps(DeclMode::Embedded, PrivateAddresses::Allow);
+    IcebergRestFactory.validate(&d, &deps).unwrap();
+    let cat = IcebergRestFactory::build_with_ttl(&d, &deps, Duration::from_secs(30)).unwrap();
+    let first = open(&cat, &io);
+    append(&*first, &[(4, "d")]).unwrap();
+    let second = open(&cat, &io);
+    append(&*second, &[(5, "e")]).unwrap();
+    assert_eq!(commits(&server), 2);
+    assert!(probes(&server).is_empty());
+}
+
 /// Without `option.write` (or with `false`) the tables stay read-only: no write capability, no
 /// writer; a value other than true/false is refused at startup.
 #[test]

@@ -102,6 +102,9 @@ struct Loaded {
 /// A `loadTable` cache key: the identity, the namespace and the table as asked.
 type Key = (IdentityKey, Vec<String>, String);
 
+/// The `loadTable` cache, shared with the commit endpoints of the tables it served.
+type SharedCache = Arc<Mutex<HashMap<Key, (Instant, Arc<Loaded>)>>>;
+
 /// A declared Iceberg REST catalog (module docs).
 #[derive(Debug)]
 pub(crate) struct RestCatalog {
@@ -112,8 +115,8 @@ pub(crate) struct RestCatalog {
     /// `option.write = true`: tables loaded at their current version accept writes.
     writes: bool,
     ttl: Duration,
-    epoch: AtomicU64,
-    cache: Mutex<HashMap<Key, (Instant, Arc<Loaded>)>>,
+    epoch: Arc<AtomicU64>,
+    cache: SharedCache,
 }
 
 impl RestCatalog {
@@ -130,8 +133,8 @@ impl RestCatalog {
             delegated: matches!(decl.auth, CatalogAuth::Delegated { .. }),
             writes,
             ttl,
-            epoch: AtomicU64::new(0),
-            cache: Mutex::new(HashMap::new()),
+            epoch: Arc::new(AtomicU64::new(0)),
+            cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -371,6 +374,8 @@ impl CallerCatalog for RestCatalog {
                 namespace: id.namespace.clone(),
                 table: id.name.clone(),
                 relation: relation.clone(),
+                cache: Arc::clone(&self.cache),
+                epoch: Arc::clone(&self.epoch),
             });
             let table = RestTable {
                 relation,
@@ -546,6 +551,10 @@ pub(crate) struct RestCommitter {
     namespace: Vec<String>,
     table: String,
     relation: String,
+    /// The catalog's `loadTable` cache and epoch: a landed commit drops this table's entries
+    /// (as `REFRESH TABLE` does) so the session's next read and write start from the new metadata.
+    cache: SharedCache,
+    epoch: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for RestCommitter {
@@ -581,6 +590,13 @@ impl RestCommitTransport for RestCommitter {
         );
         match off_workers(move || client.commit_table_as(&caller, &ns, &table, &body)).await {
             Ok(Ok(r)) => {
+                if (200..300).contains(&r.status) {
+                    self.cache
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .retain(|(_, ns, name), _| !(ns == &self.namespace && name == &self.table));
+                    self.epoch.fetch_add(1, Ordering::SeqCst);
+                }
                 let mut reply = TransportReply::new(r.status, r.body);
                 if let Some(wait) = r.retry_after {
                     reply = reply.with_retry_after(wait);
