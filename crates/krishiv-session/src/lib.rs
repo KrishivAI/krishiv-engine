@@ -63,6 +63,7 @@ mod conf;
 mod dataframe;
 mod delta;
 pub mod egress;
+pub mod events;
 mod execute_immediate;
 mod explain;
 mod explain_graph;
