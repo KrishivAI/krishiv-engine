@@ -73,7 +73,7 @@ def test_pivot_with_an_explicit_empty_list_does_not_discover(spark: SparkSession
     frame = spark.createDataFrame([(1, "a")], "g int, p string")
     spark.conf.set("spark.sql.pivotMaxValues", "0")
     try:
-        frame.groupBy("g").pivot("p", []).count()
+        assert frame.groupBy("g").pivot("p", []).count().collect() == [Row(g=1)]
     finally:
         spark.conf.unset("spark.sql.pivotMaxValues")
 
@@ -133,3 +133,17 @@ def test_a_negative_nanosecond_timestamp_floors_to_microseconds(spark: SparkSess
     table = pa.table({"t": pa.array([-1001, None], type=pa.timestamp("ns", tz="UTC"))})
     values = spark.createDataFrame(table).collect()
     assert values[0][0].timestamp() == pytest.approx(-0.000002)
+
+
+def test_an_arrow_map_column_survives_the_python_value_fallback(spark: SparkSession) -> None:
+    import pyarrow as pa
+
+    table = pa.table(
+        {
+            "m": pa.array([[("a", 1)], None], type=pa.map_(pa.string(), pa.int64())),
+            "s": pa.array([{"k": 1}, {"k": 2}], type=pa.struct([("k", pa.int64())])),
+        }
+    )
+    out = spark.createDataFrame(table, "m map<string,bigint>, s map<string,bigint>").collect()
+    assert [r["m"] for r in out] == [{"a": 1}, None]
+    assert [r["s"] for r in out] == [{"k": 1}, {"k": 2}]

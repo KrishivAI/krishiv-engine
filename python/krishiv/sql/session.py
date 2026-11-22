@@ -425,7 +425,8 @@ class SparkSession:
             # e.g. a column of dicts for a ``map`` (Arrow reads them as structs): through Python values.
             from krishiv.sql.row import Row
 
-            rows = [tuple(r.values()) for r in table.to_pylist()]
+            columns = [[_arrow_map_to_dict(v, column.type, pa) for v in column.to_pylist()] for column in table.columns]
+            rows = list(zip(*columns, strict=True)) if columns else [() for _ in range(table.num_rows)]
             return self._from_rows(rows, struct, False, Row)
 
     def _from_rows(
@@ -630,6 +631,23 @@ def _is_pandas(data: Any) -> bool:
 
 
 _pa_type = _rowconv.pa_type
+
+
+def _arrow_map_to_dict(value: Any, arrow_type: Any, pa: Any) -> Any:
+    """``value`` (from ``to_pylist``) with each Arrow map, which Python reads as a list of key/value pairs, turned
+    into a ``dict``, at any depth; nulls stay ``None``."""
+    if value is None:
+        return None
+    if pa.types.is_map(arrow_type):
+        return {
+            _arrow_map_to_dict(k, arrow_type.key_type, pa): _arrow_map_to_dict(v, arrow_type.item_type, pa)
+            for k, v in value
+        }
+    if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type):
+        return [_arrow_map_to_dict(v, arrow_type.value_type, pa) for v in value]
+    if pa.types.is_struct(arrow_type):
+        return {f.name: _arrow_map_to_dict(value[f.name], f.type, pa) for f in arrow_type}
+    return value
 
 
 def _pa_schema(struct: StructType, pa: Any) -> Any:
