@@ -25,6 +25,7 @@ from krishiv.errors import (
     unsupported_feature,
 )
 from krishiv.sql import _convert
+from krishiv.sql import functions as F
 from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
@@ -1438,10 +1439,8 @@ class DataFrame:
         return self.stat.sampleBy(col, fractions, seed)
 
     def describe(self, *cols: str | list[str]) -> DataFrame:
-        """Computes basic statistics for numeric and string columns: count, mean, stddev, min and max.
-
-        .. note:: The engine has no standard-deviation aggregate yet: after checking its
-            arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        """Computes basic statistics for numeric and string columns: count, mean, stddev, min and max,
+        each cell a string (``summary`` names the statistic).
 
         Parameters
         ----------
@@ -1452,14 +1451,12 @@ class DataFrame:
         for name in names:
             if not isinstance(name, str):
                 raise not_expected_type("cols", "str", name)
-        raise unsupported_feature("DataFrame.describe")
+        return self._statistics(["count", "mean", "stddev", "min", "max"], list(names))
 
     def summary(self, *statistics: str | list[str]) -> DataFrame:
         """Computes the given statistics (count, mean, stddev, min, max and percentiles such as
-        ``75%``) for numeric and string columns.
-
-        .. note:: The engine has no standard-deviation or approximate-percentile aggregate yet:
-            after checking its arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        ``75%``) for numeric and string columns, each cell a string. Percentiles are approximate
+        (``percentile_approx``) and only for numeric columns.
 
         Parameters
         ----------
@@ -1470,7 +1467,57 @@ class DataFrame:
         for name in names:
             if not isinstance(name, str):
                 raise not_expected_type("statistics", "list[str]", name)
-        raise unsupported_feature("DataFrame.summary")
+        chosen = list(names) or ["count", "mean", "stddev", "min", "25%", "50%", "75%", "max"]
+        return self._statistics(chosen, [])
+
+    def _statistics(self, stats: list[str], names: list[str]) -> DataFrame:
+        """One row per statistic over the numeric and string columns (all of them, or ``names``)."""
+        numeric = ("tinyint", "smallint", "int", "bigint", "float", "double")
+        kinds = {n: t for n, t in self.dtypes}
+        if names:
+            for n in names:
+                if n not in kinds:
+                    # Resolves the name the way any select does, so the error is the engine's.
+                    self.select(n)
+        columns = names or [n for n, t in kinds.items() if t in numeric or t.startswith("decimal") or t == "string"]
+        parsed: list[tuple[str, str, float | None]] = []
+        for stat in stats:
+            if stat in ("count", "mean", "stddev", "min", "max"):
+                parsed.append((stat, stat, None))
+            elif stat.endswith("%"):
+                try:
+                    pct = float(stat[:-1]) / 100.0
+                except ValueError:
+                    pct = -1.0
+                if not 0.0 <= pct <= 1.0:
+                    raise PySparkValueError(f"{stat} is not a recognised statistic")
+                parsed.append((stat, "percentile", pct))
+            else:
+                raise PySparkValueError(f"{stat} is not a recognised statistic")
+        frames: list[DataFrame] = []
+        for label, fn, pct in parsed:
+            cells: list[Column] = []
+            for n in columns:
+                kind = kinds[n]
+                numeric_col = kind in numeric or kind.startswith("decimal")
+                if fn == "count":
+                    agg = F.count(n)
+                elif fn in ("min", "max"):
+                    agg = F.call_function(fn, n)
+                elif numeric_col and fn == "mean":
+                    agg = F.mean(n)
+                elif numeric_col and fn == "stddev":
+                    agg = F.stddev(n)
+                elif numeric_col and fn == "percentile":
+                    agg = F.percentile_approx(n, pct)
+                else:
+                    agg = F.lit(None)
+                cells.append(agg.cast("string").alias(n))
+            frames.append(self.agg(*cells).select(F.lit(label).alias("summary"), *columns))
+        out = frames[0]
+        for f in frames[1:]:
+            out = out.unionAll(f)
+        return out
 
     def corr(self, col1: str, col2: str, method: str | None = None) -> float:
         """The Pearson correlation of two columns as a double value.
