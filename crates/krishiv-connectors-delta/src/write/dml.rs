@@ -721,7 +721,6 @@ pub(super) async fn stage(
             written.bytes,
             removed.files,
             removed.bytes,
-            removed.with_dv,
             plan.scan_ms,
             rewrite_ms,
         );

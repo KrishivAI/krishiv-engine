@@ -547,6 +547,12 @@ fn write_merge_readback_tables() {
             .find(|x| x["step"] == *name)
             .unwrap();
         let dir = out.join(format!("{scenario}--{name}"));
+        // A table left by an earlier run would be merged twice.
+        assert!(
+            !dir.exists(),
+            "{}: remove the earlier output first",
+            dir.display()
+        );
         copy_dir(&fixtures().join(scenario).join("before"), &dir);
         let session = Session::new().unwrap();
         sql(&session, &statement(step["sql"].as_str().unwrap(), &dir)).unwrap();
@@ -603,7 +609,34 @@ fn spark_reads_tables_after_krishiv_merge() {
             "{key}: {}",
             t["spark_append"]
         );
+        // Spark's append of one row reads back on top of the rows the MERGE left.
+        assert_eq!(
+            t["spark_append"]["rows"].as_u64(),
+            Some(t["rows"].as_array().unwrap().len() as u64 + 1),
+            "{key}"
+        );
     }
+}
+
+/// The spill and temporary files under `spill` (none when it was never made); a directory that
+/// cannot be read fails the test.
+fn spill_files(spill: &Path) -> Vec<PathBuf> {
+    let mut left = Vec::new();
+    if !spill.exists() {
+        return left;
+    }
+    let mut stack = vec![spill.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "spill" || x == "tmp") {
+                left.push(p);
+            }
+        }
+    }
+    left
 }
 
 /// A source of ~60 MiB under a 16 MiB session pool: the copy of the source spills and is read
@@ -631,19 +664,10 @@ fn a_merge_source_larger_than_memory_spills() {
     let (_, out) = sql(&session, &text).unwrap();
     assert_eq!(out, serde_json::json!([[6, 6, 0, 0]]));
     assert_eq!(session.memory_reserved(), 0);
-    // The copy went to the spill directory and went with the statement.
-    let mut left = Vec::new();
-    let mut stack = vec![spill];
-    while let Some(d) = stack.pop() {
-        for e in std::fs::read_dir(&d).into_iter().flatten() {
-            let p = e.unwrap().path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.extension().is_some_and(|x| x == "spill" || x == "tmp") {
-                left.push(p);
-            }
-        }
-    }
+    // The copy went to the spill directory (the runtime opens it for the first query that
+    // spills: nothing else here spills) and went with the statement.
+    assert!(spill.is_dir(), "the source never spilled");
+    let left = spill_files(&spill);
     assert!(left.is_empty(), "{left:?}");
     let rows = table_rows(&dir);
     assert!(
@@ -683,18 +707,7 @@ fn a_merge_cancelled_through_the_session_changes_nothing() {
     assert_eq!(e.sql_state(), Some("HY008"), "{e}");
     assert_eq!(session.memory_reserved(), 0);
     assert_eq!((commits_from(&dir, 0).len(), parquet_files(&dir)), before);
-    let mut left = Vec::new();
-    let mut stack = vec![spill];
-    while let Some(d) = stack.pop() {
-        for e in std::fs::read_dir(&d).into_iter().flatten() {
-            let p = e.unwrap().path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.extension().is_some_and(|x| x == "spill" || x == "tmp") {
-                left.push(p);
-            }
-        }
-    }
+    let left = spill_files(&spill);
     assert!(left.is_empty(), "{left:?}");
 }
 
@@ -740,6 +753,7 @@ fn a_merge_source_option_error_is_the_reads_error() {
     copy_dir(&fixtures().join("unpartitioned").join("before"), &dir);
     let src = csv_source(tmp.path());
     let session = Session::new().unwrap();
+    let before = (table_rows(&dir), commits_from(&dir, 0).len());
     let read = sql(
         &session,
         &format!(
@@ -760,8 +774,8 @@ fn a_merge_source_option_error_is_the_reads_error() {
     .unwrap_err();
     assert_eq!(merge.error_class(), read.error_class(), "{merge} / {read}");
     assert_eq!(merge.to_string(), read.to_string());
-    // The table is unchanged.
-    assert_eq!(table_rows(&dir).as_array().unwrap().len(), 6);
+    // The table is unchanged: the same rows at the same version.
+    assert_eq!((table_rows(&dir), commits_from(&dir, 0).len()), before);
 }
 
 #[test]
@@ -835,4 +849,44 @@ fn an_early_clause_without_a_condition_is_spark_s_class() {
         assert_eq!(e.sql_state(), Some("42613"), "{e}");
     }
     assert_eq!(table_rows(&dir).as_array().unwrap().len(), 6);
+}
+
+/// A quoted top-level column whose name holds a dot is that column, not a nested field: `SET
+/// `a.b` = ..` and `INSERT (`a.b`)` assign it, while `SET st.x = ..` of a struct field stays
+/// refused (#962 review).
+#[test]
+fn a_quoted_column_name_with_a_dot_is_a_top_level_column() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let session = Session::new().unwrap();
+    sql(
+        &session,
+        &format!(
+            "CREATE TABLE t (id BIGINT, `a.b` STRING, st STRUCT<x: INT>) USING delta LOCATION '{}'",
+            dir.display()
+        ),
+    )
+    .unwrap();
+    sql(
+        &session,
+        "INSERT INTO t SELECT 1, 'one', named_struct('x', 1)",
+    )
+    .unwrap();
+    let (_, out) = sql(
+        &session,
+        "MERGE INTO t USING (SELECT CAST(id AS BIGINT) AS id, v FROM VALUES (1, 'uno'), (2, 'dos') \
+         AS s(id, v)) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET `a.b` = s.v \
+         WHEN NOT MATCHED THEN INSERT (id, `a.b`) VALUES (s.id, s.v)",
+    )
+    .unwrap();
+    assert_eq!(out, serde_json::json!([[2, 1, 0, 1]]));
+    let (_, rows) = sql(&session, "SELECT id, `a.b` FROM t ORDER BY id").unwrap();
+    assert_eq!(rows, serde_json::json!([[1, "uno"], [2, "dos"]]));
+    let e = sql(
+        &session,
+        "MERGE INTO t USING (SELECT CAST(1 AS BIGINT) AS id) s ON t.id = s.id \
+         WHEN MATCHED THEN UPDATE SET st.x = 2",
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("nested field"), "{e}");
 }

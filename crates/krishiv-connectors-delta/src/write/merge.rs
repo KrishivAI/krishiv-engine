@@ -185,7 +185,6 @@ impl MergeInfo {
         added_bytes: u64,
         removed_files: u64,
         removed_bytes: u64,
-        removed_with_dv: u64,
         scan_ms: u64,
         rewrite_ms: u64,
     ) -> Vec<(String, u64)> {
@@ -226,8 +225,9 @@ impl MergeInfo {
             ("scanTimeMs", scan_ms),
             ("rewriteTimeMs", rewrite_ms),
             ("numTargetDeletionVectorsAdded", 0),
-            // The removed files that carried a deletion vector (rewritten without one).
-            ("numTargetDeletionVectorsRemoved", removed_with_dv),
+            // delta-spark 4.4.1's copy-on-write MERGE reports 0 even when a removed file carried a
+            // deletion vector (`merge/MERGE.json` `deletion-vectors/update_copy_on_write`).
+            ("numTargetDeletionVectorsRemoved", 0),
             ("numTargetDeletionVectorsUpdated", 0),
         ];
         m.sort_by_key(|(k, _)| *k);
@@ -264,13 +264,11 @@ mod tests {
         .unwrap();
         // 6 written rows: 2 inserted, 1 updated, 3 copied.
         let m: std::collections::HashMap<_, _> =
-            info.metrics(6, 2, 10, 2, 20, 1, 5, 7).into_iter().collect();
+            info.metrics(6, 2, 10, 2, 20, 5, 7).into_iter().collect();
         assert_eq!(m["numTargetRowsCopied"], 3);
         assert_eq!(m["numOutputRows"], 6);
         assert_eq!(m["numTargetRowsDeleted"], 3);
         assert_eq!(m["executionTimeMs"], 15);
-        assert_eq!(m["numTargetDeletionVectorsRemoved"], 1);
-        assert_eq!(m["numTargetDeletionVectorsAdded"], 0);
         let p = info.parameters();
         assert_eq!(p[0].1.as_deref(), Some(r#"["(t.id = s.id)"]"#));
         assert_eq!(

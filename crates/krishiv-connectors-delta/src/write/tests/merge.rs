@@ -24,7 +24,7 @@ use super::super::dml::{
 };
 use super::super::merge::{MERGE_CLAUSES_OPTION, MERGE_COUNTS_OPTION};
 use super::super::test_hooks::{self, Act, Point};
-use super::dml::{ids_left, row_files, the_file_of, two_file_table};
+use super::dml::{row_files, the_file_of, two_file_table};
 use super::streaming::data_files;
 use super::{Env, Leaf, Writing, commit_info, modes_schema, rows};
 use crate::table::DeltaTable;
@@ -122,6 +122,7 @@ fn a_merge_removes_the_touched_file_and_adds_its_rows_and_the_inserts() {
     let files = row_files(&env, &table, RowLevelOperation::Merge);
     let touched = the_file_of(&files, 2);
     let before = env.latest();
+    let before_rows = super::typed_rows(&env.read(&table));
     // `USING (2 'B', 7 'g') ON t.id = s.id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED
     // THEN INSERT *`: id 2 updated, 1 and 3 copied, 7 inserted.
     let rl = merge(
@@ -170,7 +171,23 @@ fn a_merge_removes_the_touched_file_and_adds_its_rows_and_the_inserts() {
         .map(|r| r["path"].as_str().unwrap())
         .collect();
     assert_eq!(removed, [std::str::from_utf8(&touched).unwrap()]);
-    assert_eq!(ids_left(&env), [1, 2, 3, 4, 5, 6, 7]);
+    // Every row as it was but id 2's, which took the source's `v`, plus the insert.
+    let mut want: Vec<serde_json::Value> = before_rows
+        .into_iter()
+        .map(|r| {
+            if r[0] == 2 {
+                serde_json::json!([2, "B", "x"])
+            } else {
+                r
+            }
+        })
+        .collect();
+    want.push(serde_json::json!([7, "g", null]));
+    let mut got = super::typed_rows(&env.read(&env.open().unwrap()));
+    let id = |r: &serde_json::Value| r[0].as_i64().unwrap();
+    want.sort_by_key(id);
+    got.sort_by_key(id);
+    assert_eq!(got, want);
     assert_eq!(result_row(&rl), [2, 1, 0, 1]);
 }
 
@@ -290,12 +307,15 @@ fn a_merge_cancelled_during_its_rewrite_leaves_the_table_unchanged() {
     let touched = the_file_of(&files, 2);
     let (version, before) = (env.latest(), data_files(&env.dir));
     let id = "merge-cancel-during-sink";
+    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen = Arc::clone(&fired);
     test_hooks::set(
         id,
-        Arc::new(|site, query| {
+        Arc::new(move |site, query| {
             if site.point != Point::Sunk {
                 return Act::NONE;
             }
+            seen.store(true, std::sync::atomic::Ordering::SeqCst);
             query.cancel();
             Act::stall(std::time::Duration::from_secs(30))
         }),
@@ -314,7 +334,14 @@ fn a_merge_cancelled_during_its_rewrite_leaves_the_table_unchanged() {
         UPSERT,
         id,
     );
-    assert!(out.is_err());
+    let Err(e) = out else {
+        panic!("a cancelled MERGE committed")
+    };
+    assert!(
+        fired.load(std::sync::atomic::Ordering::SeqCst),
+        "the cancel came from the rewrite's hook"
+    );
+    assert_eq!(e.error_class().name(), "OPERATION_CANCELED", "{e}");
     assert_eq!(env.latest(), version);
     let mut gone = false;
     for _ in 0..100 {
@@ -393,11 +420,12 @@ fn append_only_and_change_data_feed_tables_take_only_inserting_merges() {
     }
 }
 
-/// A `MERGE` that rewrites a file carrying a deletion vector counts it in
-/// `numTargetDeletionVectorsRemoved` (delta-spark's metric; Krishiv rewrites, so it adds none).
-/// The table is delta-spark's `deletion-vectors` fixture: one file of `range(40000)` with a DV.
+/// A `MERGE` that rewrites a file carrying a deletion vector reports no deletion vector removed,
+/// as delta-spark 4.4.1's copy-on-write `MERGE` does (`merge/MERGE.json`
+/// `deletion-vectors/update_copy_on_write`: a removed file with a DV of cardinality 10, metric
+/// `0`). The table is delta-spark's `deletion-vectors` fixture: one file of `range(40000)` with a DV.
 #[test]
-fn a_merge_that_rewrites_a_file_with_a_deletion_vector_counts_it_removed() {
+fn a_merge_that_rewrites_a_file_with_a_deletion_vector_reports_none_removed() {
     let env = Env::fixture("deletion-vectors");
     let table = env.open().unwrap();
     let files = row_files(&env, &table, RowLevelOperation::Merge);
@@ -429,6 +457,6 @@ fn a_merge_that_rewrites_a_file_with_a_deletion_vector_counts_it_removed() {
     let info = commit_info(&env.log(env.latest()));
     let m = &info["operationMetrics"];
     assert_eq!(m["numTargetFilesRemoved"], "1");
-    assert_eq!(m["numTargetDeletionVectorsRemoved"], "1");
+    assert_eq!(m["numTargetDeletionVectorsRemoved"], "0");
     assert_eq!(m["numTargetDeletionVectorsAdded"], "0");
 }

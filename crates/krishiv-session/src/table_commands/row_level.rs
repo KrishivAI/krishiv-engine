@@ -74,7 +74,11 @@ pub(crate) const ALIAS_OPTION: &str = "__krishiv_row_level_alias";
 /// `DEFAULT`).
 #[derive(Debug, Clone)]
 pub(crate) struct Assignment {
+    /// The column's name parts joined by `.` (one part for a top-level column, whose name may
+    /// itself hold a `.` when it was quoted).
     pub(crate) column: String,
+    /// The key names a nested field (more than one name part).
+    pub(crate) nested: bool,
     pub(crate) value: Option<String>,
 }
 

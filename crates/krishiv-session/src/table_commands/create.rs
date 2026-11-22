@@ -982,6 +982,7 @@ impl Session {
                         parts.remove(0);
                     }
                     super::row_level::Assignment {
+                        nested: parts.len() > 1,
                         column: parts.join("."),
                         value: (!crate::command::is_bare_default(value)).then(|| slice(value)),
                     }

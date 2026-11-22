@@ -324,7 +324,7 @@ impl Checks<'_> {
                 ClauseAction::Update(assignments) | ClauseAction::Insert(assignments) => {
                     let insert = matches!(clause.action, ClauseAction::Insert(_));
                     for a in assignments {
-                        if a.column.contains('.') {
+                        if a.nested {
                             return Err(KrishivUnsupportedFeature {
                                 feature: format!("MERGE INTO of the nested field {}", a.column),
                             }

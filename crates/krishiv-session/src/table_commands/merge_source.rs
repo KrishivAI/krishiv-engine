@@ -131,7 +131,6 @@ impl Session {
         let config = SpillConfig::from_config(&state.runtime.config);
         let spill = Arc::clone(&state.runtime.spill);
         let writer: Arc<Mutex<Option<SpillWriter>>> = Arc::default();
-        let mut held = Reservation::new(Arc::clone(&state.memory), consumer);
         let mut stream = df.execute_stream_here(true).await?;
         let mut canonical = None;
         while let Some(batch) = stream.next().await {
@@ -141,6 +140,10 @@ impl Session {
             );
             let batch = Batch::new(crate::carrier::recarried(&batch, &schema)?);
             let bytes = batch.data().get_array_memory_size();
+            // The batch's reservation goes with the batch into the blocking write: dropping
+            // this future (a cancel) while the write still runs keeps its bytes reserved until
+            // the write ends (#962 review).
+            let mut held = Reservation::new(Arc::clone(&state.memory), consumer);
             held.grow(bytes).await.map_err(KrishivError::from)?;
             let (w, s, c) = (Arc::clone(&writer), Arc::clone(&spill), config.clone());
             let scratch = Reservation::new(Arc::clone(&state.memory), consumer);
@@ -157,13 +160,13 @@ impl Session {
                             None => Err(internal("the MERGE source's spill file".to_owned())),
                         }
                     })();
+                    drop(held);
                     drop(tx.send(out));
                 }))
                 .await?;
             rx.await.map_err(|_| {
                 internal("a MERGE source write ended without a result".to_owned())
             })??;
-            held.shrink(bytes);
         }
         let empty = match canonical {
             Some(_) => None,

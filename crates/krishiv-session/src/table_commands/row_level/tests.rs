@@ -369,6 +369,7 @@ fn try_run(
 
 fn set(column: &str, value: &str) -> Assignment {
     Assignment {
+        nested: false,
         column: column.to_owned(),
         value: Some(value.to_owned()),
     }
@@ -407,6 +408,7 @@ fn row_level_update_case_per_row() {
         RowLevelOperation::Update,
         Some("CASE WHEN id = 9 THEN NULL ELSE id > 7 END"),
         vec![Assignment {
+            nested: false,
             column: "id".to_owned(),
             value: Some("id * 100".to_owned()),
         }],
@@ -1276,7 +1278,19 @@ mod merge {
                 )],
             ),
         );
-        assert!(files.ids().contains(&20));
+        assert_eq!(files.ids(), [1, 2, 3, 4, 5, 6, 7, 8, 9, 20]);
+        let s_of_20: Vec<bool> = files
+            .lock()
+            .iter()
+            .flat_map(|(_, b)| {
+                let ids = b.column(0).as_primitive::<Int64Type>();
+                (0..b.num_rows())
+                    .filter(|&i| ids.value(i) == 20)
+                    .map(|i| b.column(1).is_null(i))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(s_of_20, [true], "the inserted row's `s` is NULL");
         // Without the conf the narrow source is an unresolved name.
         block_on(session.sql("SET spark.databricks.delta.schema.autoMerge.enabled = false"))
             .unwrap();

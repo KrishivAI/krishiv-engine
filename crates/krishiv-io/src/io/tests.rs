@@ -709,6 +709,11 @@ fn a_context_without_memory_reserves_nothing_from_the_query() {
             0,
             "the held tail is not charged to the query"
         );
+        assert_eq!(
+            query.peak_reserved(),
+            0,
+            "the read never reserved from the query, not even for a moment"
+        );
         drop(tail);
     });
 }

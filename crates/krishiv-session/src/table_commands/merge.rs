@@ -887,7 +887,7 @@ impl Session {
             ),
             _ => return Err(internal("a MERGE source of an unknown form".to_owned())),
         };
-        let key = |target: &krishiv_sql::ast::ObjectName| {
+        let key = |target: &krishiv_sql::ast::ObjectName| -> (String, bool) {
             // `SET t.c = ..`: the qualifier names the target (its alias or table name).
             let mut parts: Vec<&str> = target.parts.iter().map(|p| p.value.as_str()).collect();
             if parts.len() > 1
@@ -896,7 +896,7 @@ impl Session {
             {
                 parts.remove(0);
             }
-            parts.join(".")
+            (parts.join("."), parts.len() > 1)
         };
         let mut clauses = Vec::with_capacity(m.clauses.len());
         for c in &m.clauses {
@@ -909,10 +909,14 @@ impl Session {
                 MergeAction::Update(assignments) => ClauseAction::Update(
                     assignments
                         .iter()
-                        .map(|a| Assignment {
-                            column: key(&a.target),
-                            value: (!crate::command::is_bare_default(&a.value))
-                                .then(|| slice(a.value.span)),
+                        .map(|a| {
+                            let (column, nested) = key(&a.target);
+                            Assignment {
+                                column,
+                                nested,
+                                value: (!crate::command::is_bare_default(&a.value))
+                                    .then(|| slice(a.value.span)),
+                            }
                         })
                         .collect(),
                 ),
@@ -926,6 +930,7 @@ impl Session {
                         .iter()
                         .zip(values)
                         .map(|(c, v)| Assignment {
+                            nested: c.parts.len() > 1,
                             column: c
                                 .parts
                                 .iter()
