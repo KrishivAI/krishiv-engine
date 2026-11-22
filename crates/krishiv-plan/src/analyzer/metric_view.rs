@@ -49,6 +49,19 @@ const PLANNING_FAILED: &str = "The Spark SQL phase planning failed with an inter
 const UNEVALUABLE: &str = "UnevaluableAggregateFunc.aggBufferAttributes should not be called.";
 
 impl Resolver<'_> {
+    /// A subquery's relation: its own coercions are not the enclosing clause's
+    /// (`implicit_casts`, read by the metric-view clause check).
+    pub(super) fn subquery_rel(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        env: &Arc<super::resolve::Env>,
+    ) -> Result<super::resolve::Rel, AnalysisError> {
+        let casts = self.implicit_casts.get();
+        let rel = self.rel(plan, env);
+        self.implicit_casts.set(casts);
+        rel
+    }
+
     /// A [`PlanNode::MetricViewRead`]: its source resolved, its output the stored columns
     /// (unqualified: a metric view's name never qualifies its columns).
     #[expect(

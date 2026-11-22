@@ -1561,18 +1561,9 @@ impl Session {
         // Every temporary view's text: the metric-view rule stops there, as at a permanent view's.
         let temp_texts =
             krishiv_plan::analyzer::views::DefinerTexts::new(expansion.temp_texts.clone());
-        let trusting_views;
-        let views_analysis = if texts.is_empty() && stored_texts.is_empty() && temp_texts.is_empty()
-        {
-            &env.analysis
-        } else {
-            let mut ctx = env.analysis.clone();
-            ctx.definer_texts = texts.clone();
-            ctx.stored_view_texts = stored_texts.clone();
-            ctx.temp_view_texts = temp_texts.clone();
-            trusting_views = ctx;
-            &trusting_views
-        };
+        let trusting_views =
+            definer::trusting_context(&env.analysis, &texts, &stored_texts, &temp_texts);
+        let views_analysis = trusting_views.as_ref().unwrap_or(&env.analysis);
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
         let (synced, renames) =
@@ -1596,17 +1587,8 @@ impl Session {
         let temp_texts = kept.pop().unwrap_or_default();
         let stored_texts = kept.pop().unwrap_or_default();
         let texts = kept.pop().unwrap_or_default();
-        let trusting;
-        let analysis = if texts.is_empty() && stored_texts.is_empty() && temp_texts.is_empty() {
-            &env.analysis
-        } else {
-            let mut ctx = env.analysis.clone();
-            ctx.definer_texts = texts;
-            ctx.stored_view_texts = stored_texts;
-            ctx.temp_view_texts = temp_texts;
-            trusting = ctx;
-            &trusting
-        };
+        let trusting = definer::trusting_context(&env.analysis, &texts, &stored_texts, &temp_texts);
+        let analysis = trusting.as_ref().unwrap_or(&env.analysis);
         let plan = Plan::try_new(renamed)?;
         // The bodies of the functions the plan calls read views the same way:
         // the policy is asked about them before the analysis' own result (or

@@ -1762,10 +1762,7 @@ impl Resolver<'_> {
                 super::super::python_udtf::refuse_table_argument(kind, e.origin)?;
                 let env = self.sub_env(cx);
                 let saved = std::mem::take(&mut self.lambdas);
-                // A subquery's own coercions are not the clause's (`implicit_casts`, metric views).
-                let casts = self.implicit_casts.get();
-                let rel = self.rel(plan, &env);
-                self.implicit_casts.set(casts);
+                let rel = self.subquery_rel(plan, &env);
                 let stale = std::mem::replace(&mut self.lambdas, saved);
                 debug_assert!(stale.is_empty(), "a subquery leaks lambda scopes");
                 let rel = rel?;
