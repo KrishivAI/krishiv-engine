@@ -63,8 +63,14 @@ ALL_PAGES = [
     ("sql", "#/sql", "Run"),
     ("environment", "#/environment", "krishiv.auth.token"),
 ]
+# The three pages a server console alone has.
+SERVER_PAGES = [
+    ("sessions", "#/sessions", "ADBC Flight SQL"),
+    ("workload", "#/workload", "nightly"),
+    ("advisor", "#/advisor", "event_date"),
+]
 MODE_PAGES = {
-    "server": ALL_PAGES,
+    "server": ALL_PAGES + SERVER_PAGES,
     "embedded": ALL_PAGES,
     "profiles": [p for p in ALL_PAGES if p[0] in ("history", "query-detail")],
 }
@@ -327,11 +333,11 @@ def menu_checks(browser: Browser, origin: str) -> list[str]:
         page, _ = _open(browser, origin, size, True)
         links = page.locator("header nav a").locator("visible=true")
         if (
-            links.count() != 7
+            links.count() != 10
             or page.get_by_role("button", name="Open the menu").is_visible()
         ):
             problems.append(
-                f"menu {size[0]}: the top bar shows {links.count()} of the 7 pages"
+                f"menu {size[0]}: the top bar shows {links.count()} of the 10 pages"
             )
         page.context.close()
     return problems
@@ -414,7 +420,7 @@ def preference_checks(browser: Browser, origin: str) -> list[str]:
             # The page's policy refuses a style a script adds, so the test's own style goes past it.
             page, errors = _open(browser, origin, size, touch, bypass_csp=True)
             page.add_style_tag(content=style)
-            for name, frag, ready in ALL_PAGES:
+            for name, frag, ready in ALL_PAGES + SERVER_PAGES:
                 view = f"{label}, {name} {size[0]}"
                 if not _go(page, frag, ready):
                     problems.append(f"{view}: the page did not show {ready!r}")
