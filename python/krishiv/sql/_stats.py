@@ -63,8 +63,10 @@ def _is_string(dtype: str) -> bool:
 
 
 def _is_orderable(dtype: str) -> bool:
-    """Whether a column of this type may be a sort key: no map, variant or calendar interval at any depth."""
-    return not any(bad in dtype for bad in ("map<", "variant", "calendar")) and dtype not in ("interval", "map")
+    """Whether a column of this type may be a sort key. Spark orders every type but map, variant and calendar
+    interval; the engine also sorts no array or struct key yet, so those are left out of the key too."""
+    bad = ("map<", "array<", "struct<", "variant", "calendar")
+    return not any(b in dtype for b in bad) and dtype not in ("interval", "map")
 
 
 def _spark_type(dtype: str) -> str:
@@ -267,12 +269,16 @@ def approx_quantile(
 
 def _dtype_of(df: DataFrame, name: str) -> str | None:
     """The type of column ``name``, matched as the session's resolver matches names (case-insensitively
-    unless ``spark.sql.caseSensitive`` is on); ``None`` when it is not a top-level column."""
+    unless ``spark.sql.caseSensitive`` is on), else of the reference resolved as a column expression; ``None``
+    when it does not resolve."""
     case_sensitive = (df.sparkSession.conf.get("spark.sql.caseSensitive", "false") or "false").lower() == "true"
     for column, dtype in df.dtypes:
         if column == name or (not case_sensitive and column.lower() == name.lower()):
             return dtype
-    return None
+    try:  # a qualified, nested or quoted reference: resolve it with a schema-only projection
+        return df.select(F.col(name)).dtypes[0][1]
+    except Exception:  # an unresolved name is reported by the caller's own query
+        return None
 
 
 def _require_numeric(df: DataFrame, name: str, what: str) -> None:

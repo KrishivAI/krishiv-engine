@@ -96,5 +96,16 @@ def test_summary_with_a_repeated_statistic_under_last_win(spark: SparkSession) -
 
 
 def test_random_split_keeps_array_and_struct_columns_in_the_sort_key(spark: SparkSession) -> None:
-    frame = spark.createDataFrame([([1], (1,)), ([2], (2,))], "a array<int>, s struct<x:int>")
+    frame = spark.createDataFrame(
+        [([1], (1,)), ([2], (2,))], "a array<int>, s struct<x:int>"
+    )  # the list column is not a sort key
     assert sum(part.count() for part in frame.randomSplit([1.0, 1.0], 7)) == 2
+
+
+def test_stats_refuse_a_string_column_named_by_a_quoted_or_qualified_reference(spark: SparkSession) -> None:
+    frame = spark.createDataFrame([("1", 2), ("3", 4)], "s string, n int").alias("t")
+    for ref in ("`s`", "t.s"):
+        with pytest.raises(Exception, match="not supported"):
+            frame.stat.corr(ref, "n")
+        with pytest.raises(Exception, match="not supported"):
+            frame.stat.approxQuantile(ref, [0.5], 0.0)
