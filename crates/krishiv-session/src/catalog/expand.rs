@@ -4,6 +4,7 @@
 use super::*;
 use crate::sql_functions::CallRule;
 use krishiv_plan::analyzer::views::{ViewExpansion, ViewSecurity};
+use krishiv_plan::{CastMode, Expr, ExprNode};
 
 /// [`expand_temp_views`]: the views on the current expansion path, by
 /// lower-case name, for cycle detection.
@@ -43,6 +44,8 @@ pub(super) struct Expander<'a> {
     /// The stored views inlined so far, each with the definer view whose text holds it (an index
     /// of [`Self::definers`], `None` outside one), for [`Expansion::reached`].
     reached: Vec<(Option<usize>, ReachedView)>,
+    /// The inlined query of each temporary view read, for [`Expansion::temp_texts`].
+    temp_texts: Vec<Arc<LogicalPlan>>,
     /// The stored views whose text the expansion is inside (indexes of [`Self::reached`]).
     open_views: Vec<usize>,
 }
@@ -92,6 +95,7 @@ impl<'a> Expander<'a> {
             in_stored_view: 0,
             keeps: Vec::new(),
             reached: Vec::new(),
+            temp_texts: Vec::new(),
             open_views: Vec::new(),
         }
     }
@@ -113,6 +117,7 @@ impl<'a> Expander<'a> {
             definers: self.definers,
             keeps: self.keeps,
             reached: self.reached.into_iter().map(|(_, v)| v).collect(),
+            temp_texts: self.temp_texts,
         }
     }
 }
@@ -302,6 +307,8 @@ impl Expander<'_> {
                 // reach into it.
                 let input = self.go(Arc::clone(definition), &mut Vec::new());
                 self.path.pop();
+                let input = input?;
+                self.temp_texts.push(Arc::clone(&input));
                 let columns = columns.iter().map(|c| c.name.clone()).collect();
                 // A global view's qualifier is `global_temp.v`, two parts (see `ALIAS_PART_SEP`).
                 let alias = if name.len() == 2 {
@@ -317,7 +324,7 @@ impl Expander<'_> {
                 ));
                 return Ok(Arc::new(
                     LogicalPlan::new(PlanNode::SubqueryAlias {
-                        input: input?,
+                        input,
                         alias,
                         columns,
                     })
@@ -529,6 +536,10 @@ impl Expander<'_> {
             _ => return Ok(Arc::clone(plan)),
         };
         let key = format!("{namespace}.{table_key}");
+        if let crate::store::ViewKind::Metric(def) = &view.kind {
+            // Its `sql` is YAML, never a query.
+            return self.inline_metric(plan, entry, view, def, namespace, table_key, key, stored);
+        }
         if self.path.contains(&key) {
             return Err(InternalError {
                 message: format!("view `{key}` reads itself"),
@@ -680,6 +691,116 @@ impl Expander<'_> {
         ))
     }
 
+    /// A read of the metric view `entry` (Spark's `MetricViewPlaceholder`, design note
+    /// `P3-metric-views.md` §4): its YAML read again under the parse options captured with it, the
+    /// source with its filter expanded in the reader's context (the reader's namespace, path and
+    /// temporary views; inside an ordinary view, that view's namespace and path, as Spark 4.2.1),
+    /// and the dimensions and measures parsed, left for the analyzer's rule.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the parts of the read inline_stored already took apart"
+    )]
+    fn inline_metric(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        entry: &Arc<CatalogTable>,
+        view: &ViewDef,
+        def: &crate::store::MetricViewDef,
+        namespace: &str,
+        table_key: &str,
+        key: String,
+        stored: &StoredViews<'_>,
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        if self.path.contains(&key) {
+            return Err(InternalError {
+                message: format!("view `{key}` reads itself"),
+            }
+            .into());
+        }
+        let mut spec = crate::metric_view::parse_metric_view_yaml(&view.sql, &def.parser)?;
+        crate::metric_view::bare_expressions(&mut spec, &def.parser);
+        let mut text = String::from("SELECT *");
+        spec.push_from(&mut text);
+        let query = krishiv_sql::parse_query(&text, &def.parser).map_err(|e| e.error)?;
+        let lowered = krishiv_sql::lower_identified(
+            &query,
+            (stored.next_source)(),
+            def.parser.case_sensitive,
+            &[],
+        )
+        .map_err(|e| e.error)?;
+        // The source with its filter: below the `SELECT *`.
+        let source = match &lowered.root().node {
+            PlanNode::Project { input, .. } => Arc::clone(input),
+            _ => Arc::clone(lowered.root()),
+        };
+        let source = with_cast_modes(&source, def.ansi);
+        // Its version and its own lookups, for the definer view whose text holds it (review r10 M10),
+        // as a SQL view's; the side table of `analyzer/views.rs` keys by a `SubqueryAlias` this read
+        // has none of, so lineage shows its source as opaque instead (`lineage/walk.rs`).
+        self.reached.push((
+            self.in_definer.last().copied(),
+            ReachedView {
+                view: (entry.namespace.clone(), entry.name.clone()),
+                revision: view.revision,
+                author: view.author.clone(),
+                reads: Vec::new(),
+                query: None,
+            },
+        ));
+        let reached = self.reached.len() - 1;
+        self.open_views.push(reached);
+        self.path.push(key);
+        let source = self.go(source, &mut Vec::new());
+        self.path.pop();
+        self.open_views.pop();
+        let source = source?;
+        if let Some((_, r)) = self.reached.get_mut(reached) {
+            r.query = Some(Arc::clone(&source));
+        }
+        let mut columns = entry.columns.iter();
+        let mut parsed = |c: &crate::metric_view::MetricViewColumn| {
+            let item =
+                krishiv_sql::parse_named_expression(&c.expr, &def.parser).map_err(|e| e.error)?;
+            let expr = krishiv_sql::lower_expression(&item.expr, (stored.next_source)())
+                .map_err(|e| e.error)?;
+            let expr = cast_modes(Arc::new(expr), def.ansi);
+            let stored_column = columns.next();
+            Ok::<_, KrishivError>(krishiv_plan::MetricColumn {
+                name: stored_column.map_or_else(|| c.name.clone(), |s| s.name.clone()),
+                expr,
+                data_type: stored_column
+                    .map_or(krishiv_types::DataType::Null, |s| s.data_type.clone()),
+                nullable: stored_column.is_none_or(|s| s.nullable),
+            })
+        };
+        let dimensions = spec
+            .dimensions
+            .iter()
+            .map(&mut parsed)
+            .collect::<Result<Vec<_>, _>>()?;
+        let measures = spec
+            .measures
+            .iter()
+            .map(&mut parsed)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Arc::new(
+            LogicalPlan::new(PlanNode::MetricViewRead {
+                input: source,
+                name: vec![
+                    CATALOG.to_owned(),
+                    namespace.to_owned(),
+                    table_key.to_owned(),
+                ],
+                dimensions,
+                measures,
+                output: Vec::new(),
+                ansi: Some(def.ansi),
+            })
+            .with_origin(plan.origin),
+        ))
+    }
+
     /// `WITH` query parts (of `origin`) with their views inlined: each
     /// definition expands with only the preceding definitions in scope, as
     /// in Spark, so a body still reads a view of its own name.
@@ -759,3 +880,37 @@ impl Expander<'_> {
 #[cfg(test)]
 #[path = "expand_tests.rs"]
 mod view_side_table;
+
+/// `e` with each `CAST` it writes in the mode `ansi` gives (a metric view's casts take the mode
+/// captured when it was created, as Spark's parser builds them; `TRY_CAST` stays).
+fn cast_modes(e: Arc<Expr>, ansi: bool) -> Arc<Expr> {
+    let done: Result<Arc<Expr>, std::convert::Infallible> = e.transform_up(&mut |x| {
+        Ok(match &x.node {
+            ExprNode::Cast {
+                expr,
+                to,
+                mode: CastMode::Default,
+            } => Arc::new(
+                Expr::new(ExprNode::Cast {
+                    expr: Arc::clone(expr),
+                    to: to.clone(),
+                    mode: if ansi {
+                        CastMode::Ansi
+                    } else {
+                        CastMode::Legacy
+                    },
+                })
+                .with_origin(x.origin),
+            ),
+            _ => x,
+        })
+    });
+    done.unwrap_or_else(|never| match never {})
+}
+
+/// [`cast_modes`] of every expression of `plan` (a metric view's source and filter).
+fn with_cast_modes(plan: &Arc<LogicalPlan>, ansi: bool) -> Arc<LogicalPlan> {
+    let done: Result<Arc<LogicalPlan>, std::convert::Infallible> =
+        Arc::clone(plan).transform_up(&mut |n| n.map_expressions(|e| Ok(cast_modes(e, ansi))));
+    done.unwrap_or_else(|never| match never {})
+}

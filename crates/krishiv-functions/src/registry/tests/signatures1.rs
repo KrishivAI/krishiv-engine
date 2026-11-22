@@ -34,6 +34,11 @@ fn every_definition_is_in_sparks_catalog() {
             // (a golden runs `count(from_avro(..))`), so the registry says so.
             assert!(s.deterministic.is_none() && s.kind.is_none(), "{}", d.name);
             assert!(d.deterministic, "{}", d.name);
+        } else if d.name == "measure" {
+            // Spark's `Measure` is unevaluable outside a metric view, so every probe failed: the catalog has its
+            // arity and first release only. An aggregate to the analyzer.
+            assert!(s.deterministic.is_none() && s.kind.is_none());
+            assert_eq!(d.kind, FunctionKind::Aggregate);
         } else if matches!(
             d.name,
             "hll_sketch_estimate"

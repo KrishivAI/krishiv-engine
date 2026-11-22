@@ -46,9 +46,15 @@
 //!   keys fit in [`MAX_SINK_SLOTS`], and is rebuilt over the rows. After
 //!   [`FIRST_ADAPT_ROWS`] input rows and then every [`ADAPT_ROWS`], it
 //!   switches to **append** (no lookups) when over 95% of the keys are
-//!   unique. Append is permanent, so keys unique only in a driver's first
-//!   rows make partial duplicates after that; the early first decision
-//!   trades that for drivers too small to reach [`ADAPT_ROWS`] (TPC-H q13).
+//!   unique. The early first decision serves drivers too small to reach
+//!   [`ADAPT_ROWS`] (TPC-H q13). An append-only table returns to its fixed
+//!   index at a later decision when over half of the interval's sampled
+//!   run starts (at least 32, about 2,000 run starts at the first sample
+//!   rate) are keys it has seen and the interval's distinct keys fit the
+//!   largest index at load 2/3 ([`RECUR_KEYS`], `Recur::recurs_within`):
+//!   keys unique only in a
+//!   driver's first rows (TPC-DS q22's inventory, the same items every
+//!   week) would otherwise make a partial row per run to the end.
 //!   This is DuckDB's thread-local abandon (fixed-size thread-local tables,
 //!   <https://duckdb.org/2022/03/07/aggregate-hashtable.html>;
 //!   `radix_partitioned_hashtable.cpp`) with its capacities: 2^15 slots
@@ -120,6 +126,9 @@ use crate::rows::{EncodedKeys, FLAT_MAX_BYTES, Hll, RowLayout};
 
 mod direct;
 mod local;
+mod recur;
+
+use recur::Recur;
 
 /// Radix bits of `h` of a partitioned table (DuckDB's initial 4 bits; the
 /// final phase merges ranges of these partitions, see [`final_tasks`]).
@@ -182,6 +191,9 @@ const SINK_SLOTS_FEW_THREADS: usize = 1 << 18;
 /// 3-5 LLC misses a row in a growing table): TPC-DS q67, about 5.8M groups,
 /// ran 8% slower growing to 2^22 slots.
 const MAX_SINK_SLOTS: usize = 1 << 19;
+/// The most distinct keys an interval may hold for an append-only table to
+/// return to its index: what the largest index holds at load 2/3.
+const RECUR_KEYS: usize = MAX_SINK_SLOTS * 2 / 3;
 /// Input rows between append decisions of a fixed index.
 pub(crate) const ADAPT_ROWS: usize = 1 << 20;
 /// Input rows before a fixed index's first append decision. A driver of a
@@ -317,6 +329,10 @@ struct Adapt {
     filled: bool,
     /// The last hash of the previous batch (a run may cross batches).
     last: Option<u64>,
+    /// Sampled run starts, to tell keys that come back from new ones.
+    recur: Recur,
+    /// The fixed index's limit when the table turned append-only.
+    fixed: usize,
 }
 
 /// Share of input rows that must make new rows, once a fixed index has
@@ -495,6 +511,8 @@ impl RowTable {
                 early: false,
                 filled: false,
                 last: None,
+                recur: Recur::new(),
+                fixed: 0,
             }),
             groups: 0,
             rows_in: 0,
@@ -734,7 +752,10 @@ impl RowTable {
             .flatten()
             .map(Hll::bytes)
             .sum::<usize>()
-            + self.adapt.as_ref().map_or(0, |a| a.sketch.bytes())
+            + self
+                .adapt
+                .as_ref()
+                .map_or(0, |a| a.sketch.bytes() + a.recur.bytes())
     }
 
     /// Whether an apply of `n` more rows starts the sketches.
@@ -742,14 +763,30 @@ impl RowTable {
         self.sketching && self.sketches.is_none() && self.groups + n >= SKETCH_ROWS
     }
 
-    /// [`sketch_bytes`](Self::sketch_bytes) after an apply of `n` rows.
-    fn projected_sketch_bytes(&self, n: usize) -> usize {
+    /// [`sketch_bytes`](Self::sketch_bytes) after an apply of `n` rows;
+    /// `run_hashes`: the batch's hashes are one per row (`hashes.len() ==
+    /// n`), the only batches whose apply starts the run-start set.
+    fn projected_sketch_bytes(&self, n: usize, run_hashes: bool) -> usize {
         let new = if self.starts_sketches(n) {
             self.parts.len() * Hll::new(PART_HLL_BITS).bytes()
         } else {
             0
         };
-        self.sketch_bytes() + new
+        let recur = if run_hashes && self.starts_recur(n) {
+            Recur::BYTES
+        } else {
+            0
+        };
+        self.sketch_bytes() + new + recur
+    }
+
+    /// Whether an apply of `n` more rows starts the run-start set: from
+    /// [`SKETCH_ROWS`] input rows, as the sketches (a small table's set
+    /// would cost more than its rows).
+    fn starts_recur(&self, n: usize) -> bool {
+        self.adapt
+            .as_ref()
+            .is_some_and(|a| !a.recur.started() && a.rows + n >= SKETCH_ROWS)
     }
 
     /// Starts the per-partition sketches from the rows so far, if an apply
@@ -835,10 +872,22 @@ impl RowTable {
     /// The mode the next apply runs in: a fixed index turns append-only
     /// after [`FIRST_ADAPT_ROWS`] input rows, then every [`ADAPT_ROWS`], if
     /// nearly every key is unique, and
-    /// grows after it filled ([`grown_limit`](Self::grown_limit)).
+    /// grows after it filled ([`grown_limit`](Self::grown_limit)); an
+    /// append-only one returns to its fixed index at a decision whose
+    /// interval's keys mostly recur and fit the largest index at load 2/3
+    /// ([`Recur::recurs_within`], [`RECUR_KEYS`]).
     fn next_mode(&self) -> Mode {
         let (Mode::Fixed { limit }, Some(a)) = (self.mode, &self.adapt) else {
-            return self.mode;
+            return match (self.mode, &self.adapt) {
+                (Mode::Append, Some(a))
+                    if a.rows >= a.next && a.fixed > 0 && a.recur.recurs_within(RECUR_KEYS) =>
+                {
+                    Mode::Fixed {
+                        limit: Self::restored_limit(a.fixed, a.recur.interval_keys()),
+                    }
+                }
+                _ => self.mode,
+            };
         };
         if a.rows >= a.next {
             // Over the run starts: an input clustered by the key whose
@@ -846,7 +895,7 @@ impl RowTable {
             // rows a key) is appended a row per run, without an index.
             #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
             let rows = a.runs.max(1) as f64;
-            if Self::distinct(a) / rows > 0.95 {
+            if Self::distinct(a) / rows > 0.95 && !a.recur.recurs_within(RECUR_KEYS) {
                 return Mode::Append;
             }
         }
@@ -854,6 +903,15 @@ impl RowTable {
             Some(limit) => Mode::Fixed { limit },
             None => self.mode,
         }
+    }
+
+    /// The limit an append-only table's index returns with: the limit it
+    /// had, or room for the interval's recurring keys at load 2/3 when that
+    /// is more (an index smaller than the working set clears before its
+    /// keys come back), never past [`RECUR_KEYS`] (the largest index).
+    fn restored_limit(fixed: usize, recurring: usize) -> usize {
+        let slots = (recurring.min(RECUR_KEYS) * 3 / 2).next_power_of_two();
+        fixed.max(slots * 2 / 3).min(RECUR_KEYS.max(fixed))
     }
 
     /// The input's distinct keys, estimated from the sample (1/8 of the
@@ -1040,7 +1098,7 @@ impl RowTable {
             .sum();
         rows + self.index_bytes(self.next_mode(), n)
             + self.projected_accs(&p.counts, &p.cols, Self::fold_of(p))
-            + self.projected_sketch_bytes(n)
+            + self.projected_sketch_bytes(n, p.keys.hashes().len() == n)
             + self.direct.as_ref().map_or(0, direct::Direct::bytes)
     }
 
@@ -1070,6 +1128,11 @@ impl RowTable {
     /// Switches the index to `mode` (append-only tables drop it; a fixed
     /// index keeps its keys under a new limit).
     fn switch(&mut self, mode: Mode) {
+        if let (Mode::Append, Mode::Fixed { limit }, Some(a)) =
+            (mode, self.mode, self.adapt.as_mut())
+        {
+            a.fixed = limit;
+        }
         if mode == Mode::Append && self.mode != Mode::Append {
             self.unique &= self.groups == 0;
             self.index = HashTable::new();
@@ -1099,7 +1162,9 @@ impl RowTable {
             // table counts nearly every early row as new; TPC-DS q22 widens
             // best at the end).
             a.next = ADAPT_ROWS;
+            a.recur.next_interval();
         } else if a.rows >= a.next {
+            a.recur.next_interval();
             #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
             let rate = (a.pushed - a.window.1) as f64 / (a.rows - a.window.0).max(1) as f64;
             a.early = !grew && rate >= EARLY_RATE;
@@ -1172,13 +1237,20 @@ impl RowTable {
         self.rows_in = self.rows_in.saturating_add(n);
         self.switch(self.next_mode());
         self.start_sketches(n);
+        let start_recur = self.starts_recur(n);
         if let Some(a) = self.adapt.as_mut() {
             a.rows += n;
             // The direct path's keys are one per batch-local id, not per
             // row (and its append pushes every row): every row counts.
             let hashes = p.keys.hashes();
             if hashes.len() == n {
+                // Only a batch whose run starts are sampled starts the set:
+                // a table on the direct path never reads it.
+                if start_recur {
+                    a.recur.start();
+                }
                 a.runs += run_starts(hashes, a.last);
+                a.recur.add_runs(hashes, a.last);
                 a.last = hashes.last().copied();
             } else {
                 a.runs += n;

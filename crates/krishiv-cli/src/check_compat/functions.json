@@ -289,7 +289,7 @@
  "max_by": "supported",
  "md5": "supported",
  "mean": "supported",
- "measure": "not yet",
+ "measure": "supported",
  "median": "supported",
  "min": "supported",
  "min_by": "supported",

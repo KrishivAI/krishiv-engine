@@ -687,6 +687,28 @@ impl Session {
                     .into());
                 }
                 let table = self.stored_relation(&name).await?;
+                if table
+                    .view
+                    .as_ref()
+                    .is_some_and(crate::store::ViewDef::is_metric)
+                {
+                    // `ShowCreateTableCommand` refuses a metric view; `AS SERDE` reaches Hive's
+                    // printer, which throws a plain `IllegalArgumentException` (4.2.1 golden).
+                    if *serde {
+                        return Err(krishiv_common::error::InternalError {
+                            message: "Unknown table type is found at showCreateHiveTable: \
+                                      CatalogTableType(METRIC_VIEW)"
+                                .to_owned(),
+                        }
+                        .into());
+                    }
+                    return Err(
+                        krishiv_common::error::UnsupportedShowCreateTableOnMetricView {
+                            table_name: format!("`{}`", name.name),
+                        }
+                        .into(),
+                    );
+                }
                 // A view prints the same either way; a data source table has no serde to show,
                 // and Spark's error for it is not modelled yet.
                 if *serde && table.view.is_none() {
@@ -715,6 +737,17 @@ impl Session {
                     return Err(unsupported("SHOW PARTITIONS on a temporary view"));
                 }
                 let table = self.stored_relation(&name).await?;
+                if table
+                    .view
+                    .as_ref()
+                    .is_some_and(crate::store::ViewDef::is_metric)
+                {
+                    return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
+                        operation: "SHOW PARTITIONS".to_owned(),
+                        view_name: name.quoted(),
+                    }
+                    .into());
+                }
                 if table.view.is_some() {
                     return Err(unsupported("SHOW PARTITIONS on a view"));
                 }
@@ -1420,7 +1453,16 @@ impl Session {
             ("Last Access".to_owned(), "UNKNOWN".to_owned()),
             ("Created By".to_owned(), "Spark 4.2.0".to_owned()),
         ];
-        if let Some(view) = &t.view {
+        if let Some(view) = t.view.as_ref().filter(|v| v.is_metric()) {
+            // `CatalogTable.toLinkedHashMap` for `METRIC_VIEW`: the YAML as `View Text` and a
+            // `Language` tag; none of a SQL view's binding rows apply (`interface.scala:713-722`).
+            rows.push(("Type".to_owned(), "METRIC_VIEW".to_owned()));
+            if let Some(c) = &t.comment {
+                rows.push(("Comment".to_owned(), c.clone()));
+            }
+            rows.push(("View Text".to_owned(), view.written.clone()));
+            rows.push(("Language".to_owned(), "YAML".to_owned()));
+        } else if let Some(view) = &t.view {
             rows.push(("Type".to_owned(), "VIEW".to_owned()));
             if let Some(c) = &t.comment {
                 rows.push(("Comment".to_owned(), c.clone()));

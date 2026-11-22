@@ -597,6 +597,14 @@ pub(super) fn aggregates() -> Vec<Spec> {
         // `WITHIN GROUP` forms itself (see `mode_call`); the plain call
         // takes any single value.
         aggregate("mode", Inputs::Any, mode, Aggregate::Mode),
+        // Spark 4.2 metric views (`Measure`): unevaluable; an aggregate over a metric view replaces it
+        // with the measure's expression, and planning refuses one left in a plan.
+        aggregate(
+            "measure",
+            Inputs::Expects(vec![InputType::Any]),
+            min_max,
+            Aggregate::Measure,
+        ),
         // `listagg(expr[, delimiter])`: the analyzer fills a missing
         // delimiter with NULL and lowers `WITHIN GROUP` into the ordering
         // keys (see `listagg_call`); `string_agg` is its alias, resolved
