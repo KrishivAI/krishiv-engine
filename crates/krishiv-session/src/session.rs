@@ -682,6 +682,9 @@ impl Session {
                     targets: &[],
                     values: &[],
                     condition: d.where_clause.as_ref(),
+                    options: &d.options,
+                    more: &[],
+                    sources: &[],
                 };
                 self.exec_row_level_change(&d.table, d.alias.as_ref(), "DELETE", &changes, query)
                     .await
@@ -693,6 +696,9 @@ impl Session {
                     targets: &targets,
                     values: &values,
                     condition: u.where_clause.as_ref(),
+                    options: &u.options,
+                    more: &[],
+                    sources: &[],
                 };
                 self.exec_row_level_change(
                     &u.table,
@@ -1959,4 +1965,5 @@ mod planning;
 mod definer;
 
 mod ran;
+mod search_path;
 pub(crate) use ran::Ran;

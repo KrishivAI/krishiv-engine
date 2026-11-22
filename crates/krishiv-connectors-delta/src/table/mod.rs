@@ -326,6 +326,28 @@ impl DeltaTable {
         Arc::clone(&self.inner.schema)
     }
 
+    /// Whether this version already records the write key `key` (`krishiv.write.idempotencyKey`):
+    /// a `txn` action under [`crate::commit::idempotency_app_id`].
+    ///
+    /// # Errors
+    /// The kernel's errors reading the log, naming the table; `OPERATION_CANCELED`.
+    pub async fn has_idempotency_key(&self, key: &str) -> Result<bool, KrishivError> {
+        let (snapshot, app) = (
+            Arc::clone(&self.inner.snapshot),
+            crate::commit::idempotency_app_id(key),
+        );
+        let root = self.inner.engine.table_root().as_str().to_owned();
+        self.inner
+            .engine
+            .delta_blocking(move |e| -> Result<bool, KrishivError> {
+                snapshot
+                    .get_app_id_version(&app, e)
+                    .map(|v| v.is_some())
+                    .map_err(|err| from_kernel(&err, &root))
+            })
+            .await?
+    }
+
     /// The kernel snapshot.
     #[must_use]
     pub fn snapshot(&self) -> &SnapshotRef {

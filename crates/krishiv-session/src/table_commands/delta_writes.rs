@@ -186,9 +186,10 @@ impl Session {
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let mut request = WriteRequest::new(mode, quoted, Arc::clone(physical.schema()));
         request.options = options;
+        super::row_level::apply_idempotency_key(&analysis.env.config, &mut request.options)?;
         request.write_id = Some(crate::session::job_uuid());
         let plan = physical.into_table_write(scan, TableWriteRequest::Write(request));
-        let mut stream = self.run(&plan, &analysis.env).await?;
+        let mut stream = Box::pin(self.run(&plan, &analysis.env)).await?;
         while let Some(batch) = stream.next().await {
             batch?;
         }
@@ -291,6 +292,20 @@ impl Session {
                     &quoted,
                 )
                 .await;
+        }
+        // A write whose key the table already records writes nothing and succeeds, under any save mode
+        // (as a directory write does): the retry of a keyed `errorifexists` save must not fail.
+        let mut keyed: BTreeMap<String, String> = plain
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION))
+            .cloned()
+            .collect();
+        super::row_level::apply_idempotency_key(&env.config, &mut keyed)?;
+        if let Some(key) = keyed.remove(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION) {
+            let table = env.catalog.delta.open(&source, None).await?;
+            if table.has_idempotency_key(&key).await? {
+                return Ok(());
+            }
         }
         let write_mode = match mode {
             SaveMode::Ignore => return Ok(()),
@@ -426,7 +441,10 @@ impl Session {
             Some(o) => {
                 let read: BTreeMap<String, OptionValue> = o
                     .iter()
-                    .filter(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
+                    .filter(|(k, _)| {
+                        k.eq_ignore_ascii_case("maxRecordsPerFile")
+                            || k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION)
+                    })
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
                 writer_options(plain_options(&read)?.iter().map(|(k, v)| (k, v)))
@@ -509,14 +527,18 @@ fn columns_differ(quoted: &str) -> KrishivError {
     .into()
 }
 
-/// The write options the Delta writer reads from its request (`maxRecordsPerFile`, matched
+/// The write options the Delta writer reads from its request (`maxRecordsPerFile` and the write's
+/// idempotency key, matched
 /// ignoring case as Spark's case-insensitive options are), forwarded as written.
 pub(crate) fn writer_options<'a>(
     options: impl IntoIterator<Item = (&'a String, &'a String)>,
 ) -> BTreeMap<String, String> {
     options
         .into_iter()
-        .filter(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
+        .filter(|(k, _)| {
+            k.eq_ignore_ascii_case("maxRecordsPerFile")
+                || k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION)
+        })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }

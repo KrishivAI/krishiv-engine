@@ -1104,6 +1104,7 @@ fn foreign_op(c: &Case, name: &str, x: i32, id: i64, op: &'static str) -> Foreig
                 branch: "main",
                 write_id: &uuid,
                 query_id: None,
+                idempotency_key: None,
             };
             let a = prepare_attempt(&io, &m, &mut new, ids, ts, MAX)
                 .await

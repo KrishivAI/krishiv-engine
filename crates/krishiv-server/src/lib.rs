@@ -35,7 +35,10 @@ pub mod pages;
 pub mod readiness;
 #[cfg(feature = "tls")]
 pub mod tls;
+mod workload;
 
+#[cfg(feature = "session")]
+pub mod embedded;
 #[cfg(feature = "session")]
 pub mod session_guard;
 #[cfg(feature = "session")]

@@ -311,6 +311,7 @@ impl RowLevelTable for DeltaRowLevel {
             &self.table,
             plan,
             write_id,
+            request.idempotency_key(),
             self.table.retry_limits(),
         ))
     }
@@ -733,6 +734,7 @@ pub(super) async fn stage(
         return Ok(Some(StagedCommit {
             table: table.name().to_owned(),
             write_id: write_id.to_owned(),
+            idempotency_key: None,
             operation: plan.operation(),
             operation_parameters: info.parameters(),
             operation_metrics: metrics
@@ -802,6 +804,7 @@ pub(super) async fn stage(
     Ok(Some(StagedCommit {
         table: table.name().to_owned(),
         write_id: write_id.to_owned(),
+        idempotency_key: None,
         operation: plan.operation(),
         operation_parameters: vec![("predicate".to_owned(), Some(plan.predicate_parameter()))],
         operation_metrics: metrics

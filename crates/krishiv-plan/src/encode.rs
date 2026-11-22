@@ -119,6 +119,8 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::CoGroupMap { .. } => 39,
         PlanNode::PythonTableFunction { .. } => 40,
         PlanNode::CollectMetrics { .. } => 41,
+        PlanNode::ColumnNames { .. } => 42,
+        PlanNode::Tail { .. } => 43,
     }
 }
 
@@ -929,7 +931,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.bool(*global);
                 self.orders(order);
             }
-            PlanNode::Limit { limit, .. } => {
+            PlanNode::Limit { limit, .. } | PlanNode::Tail { limit, .. } => {
                 self.expr(limit);
             }
             PlanNode::SubqueryAlias { alias, columns, .. } => {
@@ -963,6 +965,49 @@ impl<'k, 'a> Encoder<'k, 'a> {
             | PlanNode::PipeOperator { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Repartition { exprs, .. } => self.exprs(exprs),
+            PlanNode::ColumnNames { op, .. } => match op {
+                crate::ColumnNamesOp::ToDf(names) => {
+                    self.u8(0);
+                    self.strs(names);
+                }
+                crate::ColumnNamesOp::Rename(pairs) => {
+                    self.u8(1);
+                    self.len(pairs.len());
+                    for (from, to) in pairs {
+                        self.str(from);
+                        self.str(to);
+                    }
+                }
+                crate::ColumnNamesOp::Drop { names, columns } => {
+                    self.u8(2);
+                    self.strs(names);
+                    self.strs(columns);
+                }
+                crate::ColumnNamesOp::DropNa {
+                    subset,
+                    min_non_nulls,
+                } => {
+                    self.u8(3);
+                    self.strs(subset);
+                    match min_non_nulls {
+                        Some(n) => {
+                            self.u8(1);
+                            self.u32(*n);
+                        }
+                        None => self.u8(0),
+                    }
+                }
+                crate::ColumnNamesOp::Replace { cols, pairs } => {
+                    self.u8(5);
+                    self.strs(cols);
+                    self.exprs(pairs);
+                }
+                crate::ColumnNamesOp::FillNa { cols, values } => {
+                    self.u8(4);
+                    self.strs(cols);
+                    self.exprs(values);
+                }
+            },
             PlanNode::CollectMetrics { name, metrics, .. } => {
                 self.str(name);
                 self.exprs(metrics);

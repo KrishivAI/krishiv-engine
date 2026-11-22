@@ -760,8 +760,42 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         use krishiv_sql::ast::{MergeAction, MergeInsert, MergeMatched, MergeSource};
         let env = self.query_env();
+        // What Spark analyzes before the target: the `ON` and clause expressions' subqueries and a
+        // source that is a subquery (a time travel clause there is the error).
+        let more: Vec<&krishiv_sql::ast::Expr> = std::iter::once(&m.on)
+            .chain(m.clauses.iter().flat_map(|c| {
+                let action: Vec<&krishiv_sql::ast::Expr> = match &c.action {
+                    MergeAction::Update(assignments) => {
+                        assignments.iter().map(|a| &a.value).collect()
+                    }
+                    MergeAction::Insert(MergeInsert::Values { values, .. }) => {
+                        values.iter().collect()
+                    }
+                    _ => Vec::new(),
+                };
+                c.condition.iter().chain(action)
+            }))
+            .collect();
+        let sources: Vec<&krishiv_sql::ast::Query> = match &m.source {
+            MergeSource::Query { query, .. } => vec![&**query],
+            _ => Vec::new(),
+        };
+        let changes = super::RowChanges {
+            targets: &[],
+            values: &[],
+            condition: None,
+            options: &m.options,
+            more: &more,
+            sources: &sources,
+        };
+        // The target's `WITH (...)` options reach no table of the session catalog: refused there.
+        if !m.options.is_empty() {
+            return self
+                .exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, original)
+                .await;
+        }
         let (name, quoted) = self
-            .row_level_target(&m.target, "MERGE INTO TABLE", &env)
+            .row_level_target_checked(&m.target, "MERGE INTO TABLE", &env, &changes, original)
             .await?;
         let slice = |span: krishiv_sql::ast::Span| {
             original
@@ -874,11 +908,6 @@ impl Session {
             self.forget_cached(&name);
             return Ok(done);
         }
-        let changes = super::RowChanges {
-            targets: &[],
-            values: &[],
-            condition: None,
-        };
         self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, original)
             .await
     }

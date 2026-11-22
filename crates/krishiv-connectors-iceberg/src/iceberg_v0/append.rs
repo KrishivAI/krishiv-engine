@@ -87,6 +87,9 @@ pub(crate) const MANIFESTS_REPLACED: &str = "manifests-replaced";
 /// The summary key of a write's idempotency key (ADR 0014 item 5).
 pub(crate) const WRITE_ID_PROP: &str = "krishiv.write-id";
 
+/// The summary key of the caller's idempotency key (`krishiv.write.idempotencyKey`, E34).
+pub(crate) const IDEMPOTENCY_KEY_PROP: &str = "krishiv.idempotency-key";
+
 /// The summary key of the query that wrote a snapshot.
 pub(crate) const QUERY_ID_PROP: &str = "krishiv.query-id";
 
@@ -345,6 +348,10 @@ pub(crate) struct WriteIds<'a> {
     pub(crate) write_id: &'a str,
     /// The query that wrote, when known.
     pub(crate) query_id: Option<&'a str>,
+    /// The caller's idempotency key (E34), recorded in the summary. A snapshot carrying it is
+    /// this write, whatever its write id: a retried statement has a new write id, so the commit
+    /// loop's own-key search matches the key too.
+    pub(crate) idempotency_key: Option<&'a str>,
 }
 
 /// One commit attempt: the request's body and the files written for it.
@@ -607,6 +614,9 @@ pub(crate) async fn prepare(
         env!("CARGO_PKG_VERSION").to_owned(),
     );
     props.insert(WRITE_ID_PROP.to_owned(), ids.write_id.to_owned());
+    if let Some(k) = ids.idempotency_key {
+        props.insert(IDEMPOTENCY_KEY_PROP.to_owned(), k.to_owned());
+    }
     if let Some(q) = ids.query_id {
         props.insert(QUERY_ID_PROP.to_owned(), q.to_owned());
     }
