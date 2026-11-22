@@ -1810,6 +1810,12 @@ fn like_escape_is_exact_over_lcase() {
             "true",
         ),
         ("select '%' collate utf8_lcase like 'E%' escape 'E'", "true"),
+        ("select 'E' collate utf8_lcase like 'EE' escape 'E'", "true"),
+        ("select 'e' collate utf8_lcase like 'EE' escape 'E'", "true"),
+        (
+            "select 'E' collate utf8_lcase ilike 'EE' escape 'E'",
+            "true",
+        ),
         (
             "select 'x' collate utf8_lcase like 'E%' escape 'E'",
             "false",

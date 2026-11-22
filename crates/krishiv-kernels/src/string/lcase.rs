@@ -110,7 +110,7 @@ pub fn like_fold_pattern<O: OffsetSizeTrait>(
         };
         let mut pieces: Vec<char> = Vec::with_capacity(s.len());
         for c in s.chars() {
-            if full {
+            if full && Some(c) != esc {
                 pieces.extend(c.to_lowercase());
             } else {
                 pieces.push(c);
@@ -121,7 +121,12 @@ pub fn like_fold_pattern<O: OffsetSizeTrait>(
             if Some(p) == esc {
                 out.push(p);
                 if let Some(next) = it.next() {
-                    out.push(java_fold(next));
+                    // An escaped escape stays as written: folding it would leave an invalid pair.
+                    out.push(if Some(next) == esc {
+                        next
+                    } else {
+                        java_fold(next)
+                    });
                 }
                 continue;
             }
