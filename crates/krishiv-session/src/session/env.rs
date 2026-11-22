@@ -67,9 +67,15 @@ pub(super) fn attach_analysis(e: AnalysisError, text: Option<&RedactedSql>) -> K
 }
 
 /// The parser options `config` sets.
-pub(super) fn parser_options(config: &Config) -> ParserOptions {
+pub(super) fn parser_options(
+    config: &Config,
+    profile: krishiv_plan::analyzer::SparkProfile,
+) -> ParserOptions {
     let values = conf_values(config, &PARSER_KEYS);
-    ParserOptions::from_conf(|k| values.get(k).map(String::as_str))
+    let mut options = ParserOptions::from_conf(|k| values.get(k).map(String::as_str));
+    // Grammar that differs by Spark version follows the session's profile, not a conf.
+    options.insert_replace_column_list = profile >= krishiv_plan::analyzer::SparkProfile::V4_3;
+    options
 }
 
 /// The values of `keys` that are set or have a default.

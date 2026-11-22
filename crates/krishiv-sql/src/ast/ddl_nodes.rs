@@ -1026,6 +1026,8 @@ pub struct InsertClause {
     pub target_options: Vec<TableOption>,
     /// The target columns; empty for none.
     pub columns: Vec<ColumnName>,
+    /// Source text of the column list written before `REPLACE` (Spark 4.3 grammar); `None` otherwise.
+    pub columns_span: Option<Span>,
     /// `PARTITION (...)`.
     pub partition: Option<PartitionSpec>,
     /// `IF NOT EXISTS` after the partition (Spark rejects it after

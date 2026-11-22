@@ -507,37 +507,62 @@ impl Resolver<'_> {
                 Expr::function("coalesce", vec![(**a).clone(), empty]).with_origin(origin)
             })
             .collect();
-        let mut zipped: Vec<Expr> = arrays
-            .iter()
-            .enumerate()
-            .map(|(i, a)| a.clone().alias(name_of(i)).with_origin(origin))
-            .collect();
-        if ordinality {
-            // `slice(sequence(1, n), 1, n)`: the positions 1..=n, empty for n = 0 (where
-            // `sequence(1, 0)` counts down).
-            let big = |e: Expr| {
-                Expr::new(ExprNode::Cast {
-                    expr: Arc::new(e),
-                    to: DataType::Long,
-                    mode: crate::CastMode::Legacy,
-                })
+        let text = |t: String| Expr::literal(Literal::String(t)).with_origin(origin);
+        let field = |var: &str, name: String| {
+            Expr::function("__subscript", vec![Expr::column([var]), text(name)]).with_origin(origin)
+        };
+        // The 1-based BIGINT position `i` of a lambda's index variable.
+        let position = || {
+            let big = Expr::new(ExprNode::Cast {
+                expr: Arc::new(Expr::column(["i"])),
+                to: DataType::Long,
+                mode: crate::CastMode::Legacy,
+            })
+            .with_origin(origin);
+            Expr::function(
+                "+",
+                vec![big, Expr::literal(Literal::Long(1)).with_origin(origin)],
+            )
+            .with_origin(origin)
+        };
+        let lambda = |params: &[&str], body: Expr| {
+            Expr::lambda(params.iter().map(|p| (*p).to_owned()).collect(), body).with_origin(origin)
+        };
+        // Every array is read once, so a nondeterministic argument gives one value, and `col` keeps the
+        // array's own element nullability (Spark's `Unnest.elementSchema`; `ordinality` is not nullable).
+        let rows = if let [only] = arrays.as_slice() {
+            let mut fields = vec![
+                text("col".to_owned()),
+                Expr::column(["x"]).with_origin(origin),
+            ];
+            if ordinality {
+                fields.extend([text("ordinality".to_owned()), position()]);
+            }
+            let body = Expr::function("named_struct", fields).with_origin(origin);
+            let params: &[&str] = if ordinality { &["x", "i"] } else { &["x"] };
+            Expr::function("transform", vec![only.clone(), lambda(params, body)])
                 .with_origin(origin)
-            };
-            let lit = |n: i32| Expr::literal(Literal::Integer(n)).with_origin(origin);
-            let mut sizes: Vec<Expr> = arrays
+        } else {
+            let zipped: Vec<Expr> = arrays
                 .iter()
-                .map(|a| Expr::function("size", vec![a.clone()]).with_origin(origin))
+                .enumerate()
+                .map(|(i, a)| a.clone().alias(name_of(i)).with_origin(origin))
                 .collect();
-            sizes.push(lit(0));
-            let n = Expr::function("greatest", sizes).with_origin(origin);
-            let sequence =
-                Expr::function("sequence", vec![big(lit(1)), big(n.clone())]).with_origin(origin);
-            let positions = Expr::function("slice", vec![sequence, lit(1), n]).with_origin(origin);
-            zipped.push(positions.alias("ordinality").with_origin(origin));
-        }
-        Ok(Arc::new(
-            Expr::function("arrays_zip", zipped).with_origin(origin),
-        ))
+            let zip = Expr::function("arrays_zip", zipped).with_origin(origin);
+            if ordinality {
+                let mut fields = Vec::new();
+                for i in 0..width {
+                    fields.extend([text(name_of(i)), field("s", name_of(i))]);
+                }
+                fields.extend([text("ordinality".to_owned()), position()]);
+                let body = Expr::function("named_struct", fields).with_origin(origin);
+                Expr::function("transform", vec![zip, lambda(&["s", "i"], body)])
+                    .with_origin(origin)
+            } else {
+                zip
+            }
+        };
+        Ok(Arc::new(rows))
     }
 
     fn generated_columns(

@@ -857,7 +857,10 @@ impl Checker<'_> {
         }
         // Only `REPLACE WHERE` takes a column list; `REPLACE ON` shares its grammar rule.
         if c.replace_on.is_some() && !c.columns.is_empty() {
-            return Err(at(InsertReplaceOnColumnListNotAllowed {}, c.head_span));
+            return Err(at(
+                InsertReplaceOnColumnListNotAllowed {},
+                c.columns_span.unwrap_or(c.head_span),
+            ));
         }
         // Spark rejects a `REPLACE WHERE` alias before it reads the options.
         if c.replace_where.is_some() && c.target_alias.is_some() {

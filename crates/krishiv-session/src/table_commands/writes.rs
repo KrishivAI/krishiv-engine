@@ -135,13 +135,6 @@ impl Session {
         }
         let name = self.table_name(&c.name, &env)?;
         let table = self.table_for_write(&name, "INSERT", &env)?;
-        if c.replace_where.is_some()
-            && !c.columns.is_empty()
-            && self.state.profile < krishiv_plan::analyzer::SparkProfile::V4_3
-        {
-            // A column list before `REPLACE WHERE` is Spark 4.3 grammar.
-            return Err(unsupported("INSERT INTO ... (columns) REPLACE WHERE"));
-        }
         if c.replace_where.is_some() {
             // Spark 4.3.0 runs REPLACE WHERE on DSv2 tables only; a Parquet or Hive table (every table
             // here) fails with this class, with or without a column list
@@ -225,7 +218,6 @@ impl Session {
                 by_name: c.by_name,
                 overwrite: c.overwrite,
                 statics: &statics,
-                replace_where: None,
                 dry,
                 options: None,
             },
@@ -874,7 +866,6 @@ impl Session {
             listed: &[],
             by_name: false,
             overwrite,
-            replace_where: None,
             statics: &[],
             dry: false,
             options: Some(options),
@@ -909,7 +900,6 @@ impl Session {
                     listed: &[],
                     by_name: false,
                     overwrite: false,
-                    replace_where: None,
                     statics: &[],
                     dry: false,
                     options: Some(&spec.options),

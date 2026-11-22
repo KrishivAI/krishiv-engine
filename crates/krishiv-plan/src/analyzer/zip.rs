@@ -58,16 +58,6 @@ fn chain(plan: &Arc<LogicalPlan>) -> Chain {
     }
 }
 
-/// The unresolved plan under its projection chain: what both inputs must share.
-fn unresolved_base(plan: &Arc<LogicalPlan>) -> &Arc<LogicalPlan> {
-    match &plan.node {
-        PlanNode::Project { input, .. } | PlanNode::WithColumns { input, .. } => {
-            unresolved_base(input)
-        }
-        _ => plan,
-    }
-}
-
 /// `e` with each column in `map` replaced by its target.
 fn remap(e: &Arc<Expr>, map: &HashMap<AttrId, BoundColumn>) -> Arc<Expr> {
     if map.is_empty() {
@@ -111,24 +101,16 @@ impl Resolver<'_> {
         let refuse = || AnalysisError::new(ZipPlansNotMergeable {}, o);
         let l = self.child(left, env)?;
         let r = self.child(right, env)?;
-        // The same base: what is under the projections, as written.
+        let (lc, rc) = (chain(&l.plan), chain(&r.plan));
+        // The same base once resolved, as Spark's `ResolveZip` compares them (`sameResult`): the plans under
+        // the projection chains, attribute ids normalised by position. A projection holding an aggregate or
+        // a window resolves to an `Aggregate` or `Window` that stays in the base, so it is told apart.
         let same_base = {
-            let a = Plan::try_new(Arc::clone(unresolved_base(left)));
-            let b = Plan::try_new(Arc::clone(unresolved_base(right)));
+            let a = Plan::try_new(Arc::clone(&lc.base));
+            let b = Plan::try_new(Arc::clone(&rc.base));
             matches!((a, b), (Ok(a), Ok(b)) if a.structurally_eq(&b))
         };
         if !same_base {
-            return Err(refuse());
-        }
-        let (lc, rc) = (chain(&l.plan), chain(&r.plan));
-        // What is under the projections once resolved must be what the base is on its own: a
-        // projection holding an aggregate or a window resolves to an `Aggregate` or `Window`
-        // that a stripped `Project` chain would otherwise hide (Spark compares the resolved bases).
-        let alone = self.child(unresolved_base(left), env)?;
-        let kind = std::mem::discriminant(&chain(&alone.plan).base.node);
-        if std::mem::discriminant(&lc.base.node) != kind
-            || std::mem::discriminant(&rc.base.node) != kind
-        {
             return Err(refuse());
         }
         let (Some(lb), Some(rb)) = (lc.base.resolved_output(), rc.base.resolved_output()) else {
