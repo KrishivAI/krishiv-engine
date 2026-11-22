@@ -43,9 +43,13 @@ fn a_derived_frame_run_shows_the_statement_it_came_from() {
         .sum();
     assert_eq!(rows, 5);
     let got = texts(&s, "SELECT id FROM range%derived-marker%");
-    assert!(
-        got.len() == 1 && got[0].0.is_some() && got[0].1.is_some(),
-        "the derived frame's run has the statement's text and class: {got:?}"
+    assert_eq!(
+        got,
+        [(
+            Some("SELECT id FROM range(0, 50) /*derived-marker*/".to_owned()),
+            Some("READ".to_owned())
+        )],
+        "the derived frame's run has the statement's text and class"
     );
 }
 

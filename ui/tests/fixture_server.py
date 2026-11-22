@@ -582,7 +582,8 @@ class Handler(BaseHTTPRequestHandler):
                 200, {"allowed_origins": [EMBED_PARENT], "hide_attribution": False}
             )
         if url.path.startswith("/api/internal/embed/queries/"):
-            asked = parse_qs(url.query)
+            # Blank values are kept: `session=` names a session (an empty one), which no link was signed for.
+            asked = parse_qs(url.query, keep_blank_values=True)
             # `ok` is a link for the id alone; `ok-session` was signed for EMBED_SESSION, as the server signs a
             # link that names a session, so the read must name it too.
             valid = asked.get("sig") == ["ok"] and "session" not in asked

@@ -214,6 +214,8 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
         for src, valid in (
             (f"{link}-session&session={quote(fixture_server.EMBED_SESSION)}", True),
             (f"{link}-session", False),
+            # An empty qualifier is not "no qualifier": the view sends it and the server refuses it.
+            (f"{link}&session=", False),
         ):
             ctx = browser.new_context(viewport={"width": 1440, "height": 900})
             ctx.route("http://parent.test/**", serve_html(parent_html(src)))
@@ -223,9 +225,7 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
             try:
                 page.frame_locator("#f").get_by_text(want).first.wait_for(timeout=10000)
             except PlaywrightTimeout:
-                problems.append(
-                    f"embed link with a session ({'named' if valid else 'dropped'}): {want!r} is not shown"
-                )
+                problems.append(f"embed link {src!r}: {want!r} is not shown")
             ctx.close()
 
         # 3. Framed from an origin that is not allowed: the browser blocks it (CSP frame-ancestors).
@@ -778,6 +778,8 @@ def filter_checks() -> list[str]:
     problems: list[str] = []
     # One link per listed query; the layout for the other width is in the page too, hidden.
     rows = "main a[href^='#/queries/']:visible"
+    # Zero row links also describes "Loading…" and a failed read: no rows counts only once the list has loaded empty.
+    loaded_empty = "main :text-is('No finished queries match.'):visible"
     with sync_playwright() as p:
         browser = p.chromium.launch()
         for mode in ("server", "embedded"):
@@ -812,6 +814,10 @@ def filter_checks() -> list[str]:
                     field.fill(typed)
                     # Counted through a locator: the console's policy refuses a script given as text.
                     try:
+                        if want == 0:
+                            expect(page.locator(loaded_empty).first).to_be_visible(
+                                timeout=5000
+                            )
                         expect(page.locator(rows)).to_have_count(want, timeout=5000)
                     except AssertionError:
                         got = page.locator(rows).count()
@@ -828,6 +834,10 @@ def filter_checks() -> list[str]:
             ):
                 statement.fill(typed)
                 try:
+                    if want == 0:
+                        expect(page.locator(loaded_empty).first).to_be_visible(
+                            timeout=5000
+                        )
                     expect(page.locator(rows)).to_have_count(want, timeout=5000)
                 except AssertionError:
                     got = page.locator(rows).count()
