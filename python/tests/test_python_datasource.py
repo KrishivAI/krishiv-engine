@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -914,3 +914,42 @@ def test_python_source_matches_parquet(spark: SparkSession, tmp_path: Path) -> N
         got = _canonical(spark.sql(statement.format(t="src")))
         want = _canonical(spark.sql(statement.format(t="pq")))
         assert got == want, statement
+
+
+class Stamps(DataSource):
+    """A source over a TIMESTAMP and a TIMESTAMP_NTZ column that records the filter values."""
+
+    seen: ClassVar[list[Any]] = []
+
+    @classmethod
+    def name(cls) -> str:
+        return "stamps"
+
+    def schema(self) -> str:
+        return "t TIMESTAMP, n TIMESTAMP_NTZ"
+
+    def reader(self, schema: Any) -> DataSourceReader:
+        class R(DataSourceReader):
+            def pushFilters(self, filters: list[Any]) -> Any:
+                Stamps.seen.extend(filters)
+                return filters
+
+            def read(self, partition: InputPartition) -> Any:
+                return iter([])
+
+        return R()
+
+
+def test_timestamp_values_are_aware_utc_and_ntz_values_are_naive(pushdown: SparkSession) -> None:
+    """Spark 4.3.0 (`tests/fixtures/spark-4.3.0/python-datasource-pushdown/timestamp_ltz.json`)."""
+    Stamps.seen.clear()
+    pushdown.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+    pushdown.dataSource.register(Stamps)
+    pushdown.read.format("stamps").load().filter(
+        "t = timestamp '2020-01-01 00:00:00' AND n = timestamp_ntz '2020-01-01 00:00:00'"
+    ).count()
+    values = {f.attribute: f.value for f in Stamps.seen if isinstance(f, EqualTo)}
+    assert values[("t",)] == datetime(2020, 1, 1, 8, 0, tzinfo=UTC)
+    assert values[("t",)].tzinfo is not None
+    assert values[("n",)] == datetime(2020, 1, 1, 0, 0)
+    assert values[("n",)].tzinfo is None

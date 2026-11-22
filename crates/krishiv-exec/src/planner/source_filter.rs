@@ -7,7 +7,7 @@
 use krishiv_io::{ColumnPath, ScalarValue};
 use krishiv_plan::{BoundColumn, Builtin, Expr, ExprNode, Literal, ResolvedExpr};
 
-use super::pushdown::{builtin, cmp_op, value_or_null};
+use super::pushdown::{builtin, cmp_op};
 use crate::operators::{SourceConjunct, SourceFilter};
 
 /// The state of `e` (one conjunct over the columns of `scan`) in Spark's filter translation.
@@ -110,6 +110,17 @@ fn null_rejected<'a>(e: &Expr, scan: &'a [BoundColumn], out: &mut Vec<&'a BoundC
     }
 }
 
+/// A literal as a data source filter value. Unlike file pushdown, a `TIMESTAMP_NTZ` stays apart from a
+/// `TIMESTAMP`: Python gets a naive `datetime` for the one and a UTC-aware one for the other.
+fn source_value(e: &Expr) -> Option<Option<ScalarValue>> {
+    match &e.node {
+        ExprNode::Literal(Literal::TimestampNtz(v)) => {
+            Some(Some(ScalarValue::TimestampNtzMicros(*v)))
+        }
+        _ => super::pushdown::value_or_null(e),
+    }
+}
+
 enum Tr {
     /// A serializable leaf or `Not` of a leaf.
     Leaf(SourceFilter),
@@ -164,7 +175,7 @@ fn translate(e: &Expr, scan: &[BoundColumn]) -> Tr {
                 return Tr::Translated;
             };
             let values: Option<Vec<Option<ScalarValue>>> =
-                list.iter().map(|v| value_or_null(v)).collect();
+                list.iter().map(|v| source_value(v)).collect();
             match values {
                 Some(values) => Tr::Leaf(SourceFilter::In(
                     c,
@@ -195,7 +206,7 @@ fn compare(b: Builtin, l: &Expr, r: &Expr, scan: &[BoundColumn]) -> Tr {
         (None, Some(a)) => (a, l, true),
         _ => return Tr::No,
     };
-    let Some(value) = value_or_null(lit) else {
+    let Some(value) = source_value(lit) else {
         return Tr::No;
     };
     let Attr::Plain(c, _) = attr else {
