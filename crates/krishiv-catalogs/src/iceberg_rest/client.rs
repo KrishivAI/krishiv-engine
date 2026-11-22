@@ -775,16 +775,18 @@ impl RestClient {
             }
             if response.status == 200 {
                 // A location the policy refuses is never handed on, whatever the catalog applied.
+                // A 200 that does not validate is unknown, not committed: the connector probes it.
                 let loaded = types::parse_limited(&response.body, self.config.limits.max_depth)
-                    .and_then(LoadedTable::from_json);
-                if let Ok(t) = &loaded
-                    && let Err(e) = self.check_locations(&what, t)
-                {
-                    return Err(CommitFailure {
+                    .and_then(LoadedTable::from_json)
+                    .map_err(|e| CommitFailure {
+                        sent: true,
+                        reason: format!("a 200 answer that does not validate ({})", e.detail()),
+                    })?;
+                self.check_locations(&what, &loaded)
+                    .map_err(|e| CommitFailure {
                         sent: true,
                         reason: e.to_string(),
-                    });
-                }
+                    })?;
             }
             return Ok(CommitReply {
                 status: response.status,
