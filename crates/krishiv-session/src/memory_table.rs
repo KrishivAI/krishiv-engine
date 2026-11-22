@@ -218,8 +218,17 @@ impl BoundScan for BoundSource {
         None
     }
 
-    fn read(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
-        Ok(Arc::new(self.table.materialize()?))
+    fn read(
+        &self,
+    ) -> futures::future::BoxFuture<'static, krishiv_exec::Result<Arc<dyn ScanPushdown>>> {
+        let table = self.table.clone();
+        Box::pin(async move {
+            // The source runs user code (Python) and blocks: off the async task.
+            let scan = tokio::task::spawn_blocking(move || table.materialize())
+                .await
+                .map_err(|e| internal(format!("a source read panicked: {e}")))??;
+            Ok(Arc::new(scan) as Arc<dyn ScanPushdown>)
+        })
     }
 }
 

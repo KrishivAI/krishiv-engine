@@ -1895,11 +1895,13 @@ impl Session {
                 // goes on when the caller gives up, so the admission permit must outlive it
                 // (see `PendingFold`). The task hands the stream over, or cancels it if the
                 // caller is gone.
-                let submit =
-                    self.state
-                        .runtime
-                        .runner
-                        .submit(physical.clone(), worker, Arc::clone(&query));
+                let submit = self.state.runtime.runner.submit(
+                    physical.clone(),
+                    worker.clone(),
+                    Arc::clone(&query),
+                );
+                let plan = physical.clone();
+                let reading = Arc::clone(&query);
                 let (stream_tx, stream_rx) = tokio::sync::oneshot::channel();
                 let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
                 pending.1 = Some(done_rx);
@@ -1909,7 +1911,18 @@ impl Session {
                         WorkloadClass::Interactive,
                         Box::pin(
                             async move {
-                                let result = submit.await;
+                                // The decided scans read here, on an async task, against the
+                                // query's own cancel: no engine thread waits on user code.
+                                let read = worker
+                                    .fill_reads(&plan, async {
+                                        reading.cancelled().await;
+                                        reading.cancellation()
+                                    })
+                                    .await;
+                                let result = match read {
+                                    Ok(()) => submit.await,
+                                    Err(e) => Err(e),
+                                };
                                 let started = result.is_ok();
                                 if let Err(Ok(stream)) = stream_tx.send(result) {
                                     abandoned.cancel();

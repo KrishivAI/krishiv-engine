@@ -297,9 +297,18 @@ mod planned {
         let session = Session::new().unwrap();
         let seen = register(&session);
         assert_eq!(count(&session, "SELECT count(*) FROM p"), 3);
-        // Nothing serializable (`k + 1 > 2`): the plain read, filtered by the engine.
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "no filter: nothing planned"
+        );
+        // `k + 1 > 2` does not serialize, but Spark infers `IsNotNull(k)` from it and offers that alone.
         assert_eq!(count(&session, "SELECT count(*) FROM p WHERE k + 1 > 2"), 2);
-        assert!(seen.lock().unwrap().is_empty());
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![vec![SourceFilter::IsNotNull(krishiv_io::ColumnPath::new(
+                "k"
+            ))]]
+        );
     }
 
     #[test]

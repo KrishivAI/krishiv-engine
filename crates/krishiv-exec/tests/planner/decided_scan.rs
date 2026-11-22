@@ -99,9 +99,12 @@ impl BoundScan for Bound {
     fn explain(&self, _pushdowns: &ScanPushdowns) -> Option<String> {
         None
     }
-    fn read(&self) -> Result<Arc<dyn ScanPushdown>, KrishivError> {
+    fn read(
+        &self,
+    ) -> futures::future::BoxFuture<'static, Result<Arc<dyn ScanPushdown>, KrishivError>> {
         *self.log.reads.lock().unwrap() += 1;
-        Ok(Arc::clone(&self.inner))
+        let inner = Arc::clone(&self.inner);
+        Box::pin(async move { Ok(inner) })
     }
 }
 

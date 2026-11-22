@@ -92,10 +92,12 @@ pub trait BoundScan: Send + Sync {
     /// The `EXPLAIN` text added to the scan's line.
     fn explain(&self, pushdowns: &ScanPushdowns) -> Option<String>;
     /// Reads the rows for one execution and returns the scan over them, which owns their reservation.
+    /// A future, so no engine thread blocks on user code: the session awaits it, against the query's
+    /// cancellation, before it submits the plan ([`ExecutionReads`]).
     ///
     /// # Errors
     /// Whatever the read raises (for Python, `PYTHON_EXCEPTION`).
-    fn read(&self) -> Result<Arc<dyn ScanPushdown>>;
+    fn read(&self) -> futures::future::BoxFuture<'static, Result<Arc<dyn ScanPushdown>>>;
 }
 
 impl std::fmt::Debug for dyn BoundScan {
@@ -152,25 +154,71 @@ impl std::fmt::Debug for ExecutionReads {
 }
 
 impl ExecutionReads {
-    /// The execution's scan of `id`: the first caller reads (under the lock), the others share it.
+    /// Keeps the scan the execution read for `id`.
     ///
     /// # Errors
-    /// `INTERNAL_ERROR` for a poisoned lock; the read's error.
-    pub fn get_or_read(
-        &self,
-        id: BoundScanId,
-        read: impl FnOnce() -> Result<Arc<dyn ScanPushdown>>,
-    ) -> Result<Arc<dyn ScanPushdown>> {
-        let mut reads = self
-            .0
+    /// `INTERNAL_ERROR` for a poisoned lock.
+    pub fn insert(&self, id: BoundScanId, scan: Arc<dyn ScanPushdown>) -> Result<()> {
+        self.0
             .lock()
-            .map_err(|_| internal("a poisoned execution-reads map".to_owned()))?;
-        if let Some(scan) = reads.get(&id) {
-            return Ok(Arc::clone(scan));
+            .map_err(|_| internal("a poisoned execution-reads map".to_owned()))?
+            .insert(id, scan);
+        Ok(())
+    }
+
+    /// The execution's scan of `id`, shared by its tasks.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a poisoned lock, or when the session did not read `id` before the plan ran.
+    pub fn get(&self, id: BoundScanId) -> Result<Arc<dyn ScanPushdown>> {
+        self.0
+            .lock()
+            .map_err(|_| internal("a poisoned execution-reads map".to_owned()))?
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| internal(format!("a decided scan {} was not read", id.0)))
+    }
+
+    /// Reads every decided scan of `plan` once, in plan order, each against `cancelled` (which ends the
+    /// wait with its error and drops the read, abandoning the user code's call). Ran by the session before
+    /// it submits the plan, on an async task: no engine thread waits on the read.
+    ///
+    /// # Errors
+    /// The first read's error; `cancelled`'s when it completes first; `INTERNAL_ERROR` for an unknown scan.
+    pub async fn fill(
+        &self,
+        plan: &crate::physical::PhysicalPlan,
+        tables: &dyn crate::planner::TableProviderResolver,
+        cancelled: impl std::future::Future<Output = krishiv_common::error::KrishivError>,
+    ) -> Result<()> {
+        fn collect(node: &crate::physical::PhysNode, ids: &mut Vec<BoundScanId>) {
+            if let crate::physical::PhysNode::Scan(s) = node
+                && let Some(d) = &s.decided
+                && !d.is_undecided()
+                && !ids.contains(&d.id)
+            {
+                ids.push(d.id);
+            }
+            for child in node.children() {
+                collect(child, ids);
+            }
         }
-        let scan = read()?;
-        reads.insert(id, Arc::clone(&scan));
-        Ok(scan)
+        let mut ids = Vec::new();
+        for root in plan.roots() {
+            collect(root, &mut ids);
+        }
+        let mut cancelled = std::pin::pin!(cancelled);
+        for id in ids {
+            if self.get(id).is_ok() {
+                continue;
+            }
+            let read = tables.bound_scan(id)?.read();
+            match futures::future::select(read, cancelled.as_mut()).await {
+                futures::future::Either::Left((scan, _)) => self.insert(id, scan?)?,
+                futures::future::Either::Right((error, _)) => return Err(error),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -185,33 +233,12 @@ mod tests {
     }
 
     #[test]
-    fn the_first_task_reads_and_the_others_share() {
+    fn an_unread_scan_is_an_internal_error_and_a_read_is_shared() {
         let reads = ExecutionReads::default();
-        let mut calls = 0;
-        let a = reads
-            .get_or_read(BoundScanId(0), || {
-                calls += 1;
-                Ok(scan())
-            })
-            .expect("first read");
-        let b = reads
-            .get_or_read(BoundScanId(0), || {
-                calls += 1;
-                Ok(scan())
-            })
-            .expect("shared");
-        assert_eq!(calls, 1);
+        assert!(reads.get(BoundScanId(0)).is_err());
+        reads.insert(BoundScanId(0), scan()).expect("insert");
+        let a = reads.get(BoundScanId(0)).expect("read");
+        let b = reads.get(BoundScanId(0)).expect("shared");
         assert!(Arc::ptr_eq(&a, &b));
-    }
-
-    #[test]
-    fn a_failed_read_is_not_kept() {
-        let reads = ExecutionReads::default();
-        assert!(
-            reads
-                .get_or_read(BoundScanId(1), || Err(internal("boom".to_owned())))
-                .is_err()
-        );
-        assert!(reads.get_or_read(BoundScanId(1), || Ok(scan())).is_ok());
     }
 }

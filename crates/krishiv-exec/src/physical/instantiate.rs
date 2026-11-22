@@ -335,6 +335,22 @@ impl WorkerContext {
         self
     }
 
+    /// Reads the decided scans of `plan` for this execution, each against `cancelled`
+    /// ([`crate::operators::ExecutionReads::fill`]). A no-op for a context without execution reads.
+    ///
+    /// # Errors
+    /// The read's error; `cancelled`'s when it completes first.
+    pub async fn fill_reads(
+        &self,
+        plan: &PhysicalPlan,
+        cancelled: impl std::future::Future<Output = krishiv_common::error::KrishivError>,
+    ) -> Result<()> {
+        match &self.execution_reads {
+            Some(reads) => reads.fill(plan, &*self.tables, cancelled).await,
+            None => Ok(()),
+        }
+    }
+
     /// The same context running a partial aggregate, its exchange and its
     /// final aggregate as written (`false`) instead of as one breaker: the
     /// operators a worker runs on each side of a cut exchange, for tests.
@@ -1381,8 +1397,7 @@ impl Instantiation<'_> {
                 let Some(reads) = &self.worker.execution_reads else {
                     return Err(internal("a decided scan outside an execution".to_owned()));
                 };
-                let bound = self.worker.tables.bound_scan(decided.id)?;
-                reads.get_or_read(decided.id, || bound.read())?
+                reads.get(decided.id)?
             }
             None => self.worker.tables.provider(&s.scan)?.scan()?,
         };
