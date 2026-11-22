@@ -330,6 +330,14 @@ pub(crate) fn sample() {
         .filter_map(Weak::upgrade)
         .filter_map(|r| r.limit().map(|l| (r, l)))
         .collect();
+    if limited.is_empty() {
+        // No guarded root (the guard is off, or no pool has a limit): the
+        // whole resident set would count as excess, so there is nothing to
+        // measure and no release to ask for.
+        g.high_water = None;
+        g.backoff = Backoff::NONE;
+        return;
+    }
     let Some(resident) = resident else {
         // Unknown: no cut rather than a stale one.
         g.high_water = None;
