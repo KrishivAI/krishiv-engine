@@ -211,7 +211,7 @@ databaseId,startedAt,updatedAt,conclusion > before.json` before it merges and th
 `> after.json` afterwards, then run `cargo xtask ci-time --compare before.json after.json` (median and p90 of the
 PR gate). Then, in order (each step after the check is the owner's):
 
-1. `cargo xtask release-check X.Y.Z` is all `ok`; the latest scheduled nightly is green on the commit.
+1. `cargo xtask release-bump X.Y.Z` moves the workspace version and every exact internal pin (`--check` writes nothing and fails when a manifest is not at X.Y.Z), then `cargo update --workspace` refreshes the lockfile. `cargo xtask release-check X.Y.Z` is all `ok`; the latest scheduled nightly is green on the commit.
 2. `cargo xtask changelog assemble X.Y.Z`, review the section, merge the release PR.
 3. Run "Release artifacts" (`release.yml`) on main; check `SHA256SUMS` and `gh attestation verify <file> --repo KrishivAI/krishiv-engine`.
 4. Sign and push the tag (`git tag -s`, `git verify-tag`).
