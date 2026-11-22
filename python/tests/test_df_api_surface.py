@@ -483,3 +483,8 @@ def test_with_columns_rejects_resolver_duplicates(spark: SparkSession) -> None:
     df = spark.createDataFrame([(1,)], "a int")
     with pytest.raises(ValueError, match="COLUMN_ALREADY_EXISTS"):
         df.withColumns({"x": F.lit(1), "X": F.lit(2)})
+
+
+def test_pivot_explicit_empty_values_skips_discovery(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(1, "a", 2)], "g int, p string, v int")
+    assert [r.asDict() for r in df.groupBy("g").pivot("p", []).sum("v").collect()] == [{"g": 1}]
