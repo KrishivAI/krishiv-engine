@@ -1321,6 +1321,21 @@ impl Resolver<'_> {
                     ));
                     return Ok(b);
                 }
+                // With `spark.sql.timeType.enabled` off Spark refuses a time function, and any
+                // function outside the pass-through set that is given a `TIME`, before it checks the
+                // argument types.
+                if !self.ctx.conf.time_type
+                    && is_builtin_entry(&entry)
+                    && super::super::unexecutable::refuses_time(
+                        entry.id.name(),
+                        kids[..n].iter().filter_map(|k| k.ty.data_type.as_ref()),
+                    )
+                {
+                    return Err(AnalysisError::new(
+                        krishiv_common::error::UnsupportedTimeType {},
+                        e.origin,
+                    ));
+                }
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // `histogram_numeric(x, nb)`: `nb` is foldable and at least 2
                 // (Spark's `checkInputDataTypes`, after the implicit casts);

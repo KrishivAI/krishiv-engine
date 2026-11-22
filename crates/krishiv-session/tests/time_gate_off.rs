@@ -65,6 +65,8 @@ fn refuses_the_written_type_and_the_time_functions_with_the_key_off() {
         "SELECT to_time('12:00')",
         "SELECT CAST(NULL AS TIME)",
         "SELECT time_trunc('HOUR', TIME'12:34:56')",
+        "SELECT time('1')",
+        "SELECT time_diff('HOUR', 1, TIME'21:30:28')",
     ] {
         assert_eq!(run(&s, q).unwrap_err(), "UNSUPPORTED_TIME_TYPE", "{q}");
     }

@@ -39,11 +39,34 @@ pub(super) fn unsupported(feature: &str) -> KrishivError {
 /// Spark's `SHOW ... LIKE` pattern: `*` matches anything, `|` separates alternatives, the match ignores case.
 pub(crate) fn matches(pattern: &str, name: &str) -> bool {
     // Spark's `StringUtils.filterPattern`: alternatives split on `|` and trimmed, `*` becomes `.*`, the rest is a
-    // case-insensitive regular expression matched against the whole name (`a.s` keeps `abs`). A pattern that is
-    // no regular expression keeps nothing.
-    pattern.split('|').any(|alt| {
-        let re = format!("(?is)^(?:{})$", alt.trim().replace('*', ".*"));
-        regex_lite::Regex::new(&re).is_ok_and(|re| re.is_match(name))
+    // case-insensitive (`(?i)`, so `.` stops at a line break) regular expression matched against the whole
+    // name (`a.s` keeps `abs`). A pattern that is no regular expression keeps nothing. The compiled
+    // alternatives of the last patterns are kept, so a filter over n names compiles them once.
+    thread_local! {
+        static COMPILED: std::cell::RefCell<std::collections::HashMap<String, Vec<regex_lite::Regex>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    COMPILED.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= 16 && !cache.contains_key(pattern) {
+            cache.clear();
+        }
+        cache
+            .entry(pattern.to_owned())
+            .or_insert_with(|| {
+                pattern
+                    .split('|')
+                    .filter_map(|alt| {
+                        regex_lite::Regex::new(&format!(
+                            "(?i)^(?:{})$",
+                            alt.trim().replace('*', ".*")
+                        ))
+                        .ok()
+                    })
+                    .collect()
+            })
+            .iter()
+            .any(|re| re.is_match(name))
     })
 }
 

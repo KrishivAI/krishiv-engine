@@ -86,6 +86,7 @@ impl Session {
         extended: bool,
     ) -> Result<DataFrame, KrishivError> {
         // `builtin.f` and `system.builtin.f` name the same built-in as `f`.
+        let written = parts;
         let parts = match parts {
             [b, f] if b.eq_ignore_ascii_case("builtin") => std::slice::from_ref(f),
             [sy, b, f]
@@ -123,7 +124,9 @@ impl Session {
             return Err(unsupported("DESCRIBE FUNCTION of this built-in"));
         }
         // Found: a function of the session or the catalog; not found: `UNRESOLVED_ROUTINE`.
-        self.catalog().get_function(&parts.join(".")).await?;
+        // (A name written under the `builtin` qualifier that is no built-in is looked up as written, so a
+        // temporary function of the same name is not found through it.)
+        self.catalog().get_function(&written.join(".")).await?;
         Err(unsupported("DESCRIBE FUNCTION of a user-defined function"))
     }
 }

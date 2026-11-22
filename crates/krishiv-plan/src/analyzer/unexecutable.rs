@@ -38,6 +38,24 @@ fn time_passes(name: &str) -> bool {
     )
 }
 
+/// Whether a built-in call is refused with the gate off: a time function, or a call outside the
+/// pass-through set that takes a `TIME` argument.
+pub(super) fn refuses_time<'a>(name: &str, mut args: impl Iterator<Item = &'a DataType>) -> bool {
+    matches!(
+        name,
+        "time"
+            | "time_diff"
+            | "time_trunc"
+            | "make_time"
+            | "try_make_time"
+            | "to_time"
+            | "try_to_time"
+    ) || (!time_passes(name)
+        // Spark checks the argument types of these first (a `TIME` is a valid second argument).
+        && !name.contains("make_timestamp")
+        && args.any(|t| t.any_type(&|x| matches!(x, DataType::Time { .. }))))
+}
+
 fn feature(t: &DataType, time_type: bool) -> Option<&'static str> {
     // The first unevaluable type in the type or inside it (an array
     // element, a map key or value, a struct field).
@@ -366,8 +384,14 @@ pub(super) fn check_known(
                             .chain(f.args.iter().filter_map(|a| expr_type(a)))
                             .collect()
                     }
-                    // A typed `NULL` of the type is the written type (Spark's parser refuses it).
+                    // A typed `NULL` of the type is the written type (Spark's parser refuses it), and so is
+                    // a cast to it, unless it is the one a `TIME '..'` literal binds to.
                     ExprNode::Literal(Literal::Null(Some(t))) => vec![t],
+                    ExprNode::Cast { expr, to, mode }
+                        if !super::exprs::is_time_literal_cast(expr, to, *mode) =>
+                    {
+                        vec![to]
+                    }
                     _ => Vec::new(),
                 };
                 (t, e.origin)
