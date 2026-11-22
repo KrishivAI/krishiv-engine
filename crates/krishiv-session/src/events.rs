@@ -71,7 +71,8 @@ pub struct QueryRef {
 pub struct QueryEvent {
     /// The schema version.
     pub version: SchemaVersion,
-    /// Per query, from 0, gap-free as emitted (a sink may drop events).
+    /// Bus-wide and increasing: one counter per runtime, so the events of one query are ordered by it but
+    /// interleaved queries leave gaps in each other's, and a reused operation id never repeats a `seq`.
     pub seq: u64,
     /// When the event was emitted, milliseconds since the epoch.
     pub emitted_at_ms: i64,
@@ -915,6 +916,8 @@ struct JsonState {
     written: u64,
     /// Bytes of the open segment known to hold only whole lines (flushed).
     committed: u64,
+    /// Events of the batch in hand that an earlier segment's flush made durable.
+    durable: usize,
     segment: u64,
 }
 
@@ -971,9 +974,11 @@ impl JsonLinesSink {
     }
 
     fn open_next(&self, state: &mut JsonState) -> std::io::Result<()> {
-        if let Some(mut f) = state.file.take() {
+        // The old file stays in the state until its flush succeeds, so a failure can still cut its tail.
+        if let Some(f) = state.file.as_mut() {
             f.flush()?;
         }
+        state.file = None;
         if let Some(dir) = self.prefix.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir)?;
         }
@@ -1028,8 +1033,14 @@ impl JsonLinesSink {
         state: &mut JsonState,
         batch: &[Arc<EngineEvent>],
     ) -> std::io::Result<()> {
-        for event in batch {
+        state.durable = 0;
+        for (i, event) in batch.iter().enumerate() {
             if state.file.is_none() || state.written >= self.max_bytes {
+                if let Some(f) = state.file.as_mut() {
+                    f.flush()?;
+                    state.committed = state.written;
+                    state.durable = i;
+                }
                 self.open_next(state)?;
             }
             let mut line = event.to_json().to_string();
@@ -1044,6 +1055,7 @@ impl JsonLinesSink {
             f.flush()?;
         }
         state.committed = state.written;
+        state.durable = batch.len();
         Ok(())
     }
 }
@@ -1055,8 +1067,15 @@ impl EventSink for JsonLinesSink {
 
     fn deliver(&self, batch: &[Arc<EngineEvent>]) {
         if let Err(e) = self.write(batch) {
-            self.failures
-                .fetch_add(batch.len() as u64, Ordering::Relaxed);
+            let durable = self
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .durable;
+            self.failures.fetch_add(
+                batch.len().saturating_sub(durable) as u64,
+                Ordering::Relaxed,
+            );
             tracing::warn!(error = %e, "event file write failed");
         }
     }

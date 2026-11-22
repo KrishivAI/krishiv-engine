@@ -148,6 +148,15 @@ fn text_carries_no_literal_under_the_default_or_keep_policy() {
         )
         .unwrap();
         let events = sink.wait_for_end();
+        let kinds: Vec<_> = events.iter().map(|e| e.kind.tag().name()).collect();
+        assert_eq!(kinds.first(), Some(&"submitted"), "{conf:?}: {kinds:?}");
+        assert_eq!(kinds.last(), Some(&"finished"), "{conf:?}: {kinds:?}");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(&e.kind, QueryEventKind::Submitted { text: Some(_), .. })),
+            "{conf:?}: no statement text delivered"
+        );
         let all = events
             .iter()
             .map(|e| e.to_json().to_string())
@@ -213,25 +222,24 @@ fn the_event_config_keys_shape_the_file_sink_and_the_usage_record() {
     for _ in 0..8 {
         block_on(block_on(s.sql("SELECT 1")).unwrap().collect()).unwrap();
     }
-    let until = Instant::now() + Duration::from_secs(20);
-    let (text, files) = loop {
-        let paths: Vec<_> = std::fs::read_dir(&dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .collect();
-        let text = paths
-            .iter()
-            .filter_map(|p| std::fs::read_to_string(p).ok())
-            .collect::<String>();
-        if text.contains("cfg-compute") && text.contains("\"kind\":\"finished\"")
-            || Instant::now() > until
-        {
-            break (text, paths.len());
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    // Dropping the session and the runtime drains every queued event to the file.
+    drop(s);
+    drop(rt);
+    let paths: Vec<_> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    let text = paths
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .collect::<String>();
+    assert_eq!(
+        paths.len(),
+        2,
+        "rotation keeps exactly two segments: {paths:?}"
+    );
     assert!(text.contains("cfg-compute"), "{text}");
-    assert!(files <= 2, "kept {files} segments");
+    assert!(text.contains("\"kind\":\"finished\""), "{text}");
 }

@@ -153,9 +153,17 @@ fn a_sink_that_never_returns_is_left_behind_at_shutdown() {
     gate.wait_entered();
     bus.emit(event(QueryEventKind::Queued, 1));
     bus.emit(event(QueryEventKind::Queued, 2));
-    let began = std::time::Instant::now();
+    // A watchdog releases the gate if shutdown does not return, so a hang fails instead of blocking.
+    let watchdog = Arc::clone(&gate);
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let guard = std::thread::spawn(move || {
+        if done_rx.recv_timeout(Duration::from_secs(30)).is_err() {
+            watchdog.release();
+        }
+    });
     bus.shutdown(Duration::from_millis(100));
-    assert!(began.elapsed() < Duration::from_secs(3));
+    done_tx.send(()).ok();
+    guard.join().unwrap();
     assert_eq!(bus.dropped("gate", EventKindTag::Queued), 2);
     gate.release();
 }

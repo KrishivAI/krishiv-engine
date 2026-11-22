@@ -20,7 +20,7 @@ with `EngineRuntimeBuilder::event_sink`. With no sink registered no event is bui
 
 A write whose commit fails after its result stream ended gets a second `finished` (state `failed`) with a higher
 `seq`: keep the highest. Error messages are never carried, only the error class; no credential is.
-Every event has `schema` (`krishiv.event.v1`), `minor`, `seq` (per query, from 0), `emitted_at_ms`, `kind` and
+Every event has `schema` (`krishiv.event.v1`), `minor`, `seq` (bus-wide: one counter per runtime, so interleaved queries see gaps and a reused operation id never repeats a `seq`; order the events of a query by `seq`), `emitted_at_ms`, `kind` and
 `query` (`query_id`, `session_id`, `principal`, `delegated_by`, `compute_id`, `trace_id`, `tags`).
 Consumers ignore unknown members and unknown kinds: minor versions only add.
 
@@ -39,7 +39,7 @@ The figures are the `system.queries` row's.
 Each sink has a bounded queue (`krishiv.events.queueCapacity`) and its own thread; emitting never blocks and never
 fails a query. A full queue drops `progress` events first, then the oldest non-terminal event, and a terminal event
 only when nothing else can go; drops are counted (`krishiv.events.dropped`, gauge `krishiv.events.queue_depth`).
-`krishiv.events.dropped` counts queue drops (a full queue, a queue closed because its thread did not start, a queue not drained at shutdown). A sink's own write failures are not counted there: the JSON-lines sink logs them and counts them itself, and a failed write moves it to a new segment, so the failed one may end in a partial line. The contract is: never blocks a query, every queue loss is counted, the final usage is recoverable from
+`krishiv.events.dropped` counts queue drops (a full queue, a queue closed because its thread did not start, a queue not drained at shutdown). A sink's reported write failures are counted there too (`EventSink::lost`: the JSON-lines sink counts the events of a batch it could not write, less those already flushed); a failed write cuts the segment back to its last flushed whole line and moves the sink to a new segment. The contract is: never blocks a query, every queue loss is counted, the final usage is recoverable from
 `system.queries` while the row is held. Dropping a runtime waits up to 5 s per sink for its queue to drain.
 
 Not built yet: `progress` samples, audit events, an OTLP logs sink.
