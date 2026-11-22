@@ -155,9 +155,8 @@ class DataFrame:
         return [(name, type_) for name, type_, _ in self._df.schema()]
 
     def printSchema(self) -> None:
-        print("root")
-        for name, type_, nullable in self._df.schema():
-            print(f" |-- {name}: {type_} (nullable = {str(nullable).lower()})")
+        """Prints the schema as a tree, as Spark does (type names ``integer``, ``long``; nested fields indented)."""
+        print(self.schema.treeString())
 
     # Column access.
     def __getitem__(self, item: Any) -> Any:
@@ -2047,6 +2046,13 @@ class DataFrame:
         if not isinstance(name, str):
             raise not_expected_type("name", "str", name)
         self._df.create_global_temp_view(name, True)
+
+    @property
+    def writeStream(self) -> Any:
+        """Not available in the Python API yet: ``NOT_IMPLEMENTED`` (streaming runs through SQL)."""
+        from krishiv.errors import not_implemented
+
+        raise not_implemented("DataFrame.writeStream")
 
     @property
     def write(self) -> DataFrameWriter:

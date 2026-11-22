@@ -641,7 +641,8 @@ def test_empty_dataframe(spark: SparkSession, capsys: Any) -> None:
     assert capsys.readouterr().out.splitlines() == [
         "root",
         " |-- name: string (nullable = true)",
-        " |-- age: int (nullable = true)",
+        " |-- age: integer (nullable = true)",
+        "",
     ]
     assert spark.emptyDataFrame("name STRING, age INT").columns == ["name", "age"]
     with pytest.raises(errors.PySparkTypeError):

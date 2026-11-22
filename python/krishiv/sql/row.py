@@ -22,6 +22,16 @@ class Row(tuple[Any, ...]):
             return row
         return tuple.__new__(cls, args)
 
+    def __call__(self, *args: Any) -> Row:
+        """A row of field names used as a template: ``Person = Row("name", "age"); Person("Al", 3)``."""
+        if hasattr(self, "__fields__"):
+            raise TypeError("'Row' object is not callable")
+        if len(args) > len(self):
+            raise ValueError(f"Can not create Row with fields {self}, expected {len(self)} values but got {args}")
+        row = tuple.__new__(Row, args)
+        row.__fields__ = list(self)
+        return row
+
     def asDict(self, recursive: bool = False) -> dict[str, Any]:
         """The row as a ``dict``; ``recursive=True`` also converts nested rows, as PySpark does
         (inside lists and dict values too)."""
