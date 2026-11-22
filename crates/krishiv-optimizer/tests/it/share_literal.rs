@@ -134,3 +134,50 @@ fn off_by_default() {
     let out = optimize_with_udfs(&plan, &NoStatistics, &UdfLibrary::new(), &Config::new()).unwrap();
     assert_eq!(scans(out.root(), "store_sales"), 2, "{}", out.root());
 }
+
+/// An aggregate only one instance reads would run on the other literal's
+/// groups: a `sum` (which may overflow under ANSI there) keeps both scans.
+#[test]
+fn a_sum_only_one_instance_reads_keeps_the_instances() {
+    let sql = "WITH c AS (SELECT ss_store_sk, ss_quantity, sum(ss_net_paid) AS s, \
+         count(ss_net_paid) AS n FROM store_sales GROUP BY ss_store_sk, ss_quantity) \
+         SELECT a.ss_store_sk, a.s, b.n FROM c a, c b \
+         WHERE a.ss_store_sk = b.ss_store_sk AND a.ss_quantity = 1 AND b.ss_quantity = 2";
+    let on = optimize(sql, true);
+    assert_eq!(scans(on.root(), "store_sales"), 2, "{}", on.root());
+}
+
+/// Extra items that cannot raise (`count`, `min`, `max` over columns) are
+/// computed for every literal: the instances share.
+#[test]
+fn a_count_or_max_only_one_instance_reads_still_shares() {
+    let sql = "WITH c AS (SELECT ss_store_sk, ss_quantity, sum(ss_net_paid) AS s, \
+         count(ss_net_paid) AS n, max(ss_net_paid) AS m FROM store_sales \
+         GROUP BY ss_store_sk, ss_quantity) \
+         SELECT a.ss_store_sk, a.s, b.s, b.n, b.m FROM c a, c b \
+         WHERE a.ss_store_sk = b.ss_store_sk AND a.ss_quantity = 1 AND b.ss_quantity = 2";
+    let on = optimize(sql, true);
+    assert_eq!(scans(on.root(), "store_sales"), 1, "{}", on.root());
+    fixed_point(&on);
+}
+
+/// A user CTE already named `__shared_lit_0` (kept as a `WITH`: it is
+/// nondeterministic and read twice) keeps its name; the rule's definition
+/// takes the next free one.
+#[test]
+fn a_user_cte_named_like_the_rule_s_keeps_its_name() {
+    let sql = "WITH __shared_lit_0 AS (SELECT rand() AS r), \
+         c AS (SELECT ss_store_sk, ss_quantity, sum(ss_net_paid) AS paid \
+         FROM store_sales GROUP BY ss_store_sk, ss_quantity) \
+         SELECT a.ss_store_sk, a.paid, b.paid, x.r, y.r FROM c a, c b, __shared_lit_0 x, \
+         __shared_lit_0 y \
+         WHERE a.ss_store_sk = b.ss_store_sk AND a.ss_quantity = 1 AND b.ss_quantity = 2";
+    let on = optimize(sql, true);
+    let text = on.root().to_string();
+    assert_eq!(scans(on.root(), "store_sales"), 1, "{text}");
+    assert!(text.contains("CteRef __shared_lit_0 [r#"), "{text}");
+    assert!(
+        text.contains("CteRef __shared_lit_1 [ss_store_sk#"),
+        "{text}"
+    );
+}

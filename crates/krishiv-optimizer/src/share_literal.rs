@@ -31,10 +31,17 @@
 //! the left side of a semi, anti, existence or single join, and `Shift`s.
 //! So `Filter(g = k_i)(D)` keeps exactly the rows instance `i` computes.
 //!
-//! No new error: the instances are equal apart from the literal, so every
-//! row `D` evaluates an expression on is a row some instance evaluated that
-//! expression on (the definition computes the union of the instances' rows
-//! at each node), and `g = k_i` over a column cannot raise.
+//! No new error: below the core aggregate the instances are equal apart from
+//! the literal, so every row `D`'s input evaluates an expression on is a row
+//! some instance evaluated that expression on (the definition computes the
+//! union of the instances' rows at each node), and `g = k_i` over a column
+//! cannot raise. The aggregate list is the exception: `D` computes every
+//! instance's items over every literal's groups, so an item only some
+//! instances output must not raise on the others' groups. Such an item is a
+//! column or a built-in `count`, `min` or `max` whose arguments run on any row
+//! (`runs_on_other_groups`); a `sum`, `avg` or anything else that only some
+//! instances read keeps the group unshared (an ANSI `sum` could overflow on
+//! another literal's rows).
 //!
 //! # When it applies
 //!
@@ -42,7 +49,8 @@
 //! a shifted body without one, as `ShareCte` counts them) whose bodies' cores
 //! are an aggregate grouped by `g` (or a `DISTINCT` / positional `UNION`
 //! with `g` in its output) and are equal once the conjunct is set aside
-//! (an aggregate's output lists may differ: `D` outputs their union), with
+//! (an aggregate's output lists may differ by items that cannot raise: `D`
+//! outputs their union), with
 //! at least two distinct literals. Literals equal in two instances are one
 //! `IN` element; instances that are equal outright are `ShareCte`'s.
 //!
@@ -62,12 +70,15 @@ use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
-    AttrId, BoundColumn, Builtin, Expr, ExprNode, Grouping, JoinKind, Literal, LogicalPlan, Origin,
-    PlanNode, ResolvedExpr, normalized_subtree_hash,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping, JoinKind,
+    Literal, LogicalPlan, Origin, PlanNode, ResolvedExpr, normalized_subtree_hash, runs_on_any_row,
 };
 use krishiv_types::DataType;
 
-use crate::expr::{and_all, builtin, call, column, conjuncts, lit, output_of, recall, strip_alias};
+use crate::expr::{
+    and_all, builtin, call, column, conjuncts, has_outer_reference, lit, output_of, recall,
+    strip_alias,
+};
 use crate::share_cte::{self, Member, Sharer, core, shifts, worth_sharing};
 
 /// `root` with its groups of instances that differ only in a group key's
@@ -120,15 +131,7 @@ pub(crate) fn share(
     // (one `Arc`) wherever an instance reads it, so it is shared when it is
     // referenced and no longer computed in the main query.
     let shared = share_cte::share(Arc::clone(&rewritten), direct)?;
-    let refs = cte_refs(&shared);
-    let main = match &shared.node {
-        PlanNode::WithCte { input, .. } => input,
-        _ => &shared,
-    };
-    let all_shared = expected
-        .iter()
-        .all(|(ids, def)| refs.get(ids).copied().unwrap_or(0) >= 1 && !reaches(main, def));
-    if !all_shared {
+    if !all_shared(&expected, &shared) {
         return Ok(root);
     }
     // Named apart, so the physical planner shares them even where a runtime
@@ -137,10 +140,25 @@ pub(crate) fn share(
     let names: HashMap<Vec<AttrId>, ()> = expected.into_iter().map(|(ids, _)| (ids, ())).collect();
     let mut renamer = Renamer {
         defs: &names,
+        taken: cte_names(&shared),
         names: HashMap::new(),
         done: HashMap::new(),
     };
     renamer.go(shared)
+}
+
+/// Whether `ShareCte` shared every definition in `expected` (its output ids,
+/// the definition) in `shared`: each is referenced and no longer computed in
+/// the main query.
+fn all_shared(expected: &[(Vec<AttrId>, Arc<LogicalPlan>)], shared: &Arc<LogicalPlan>) -> bool {
+    let refs = cte_refs(shared);
+    let main = match &shared.node {
+        PlanNode::WithCte { input, .. } => input,
+        _ => shared,
+    };
+    expected
+        .iter()
+        .all(|(ids, def)| refs.get(ids).copied().unwrap_or(0) >= 1 && !reaches(main, def))
 }
 
 /// The name prefix of the definitions this rule adds: the physical planner
@@ -151,6 +169,9 @@ pub(crate) const LITERAL_PREFIX: &str = "__shared_lit_";
 /// `__shared_lit_<n>`.
 struct Renamer<'a> {
     defs: &'a HashMap<Vec<AttrId>, ()>,
+    /// The names the plan's `WITH`s and references already use: a user CTE
+    /// named `__shared_lit_0` keeps its name and the new ones skip it.
+    taken: HashSet<String>,
     /// Old name to new name.
     names: HashMap<String, String>,
     done: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
@@ -158,11 +179,19 @@ struct Renamer<'a> {
 
 impl Renamer<'_> {
     fn name(&mut self, old: &str) -> String {
-        let n = self.names.len();
-        self.names
-            .entry(old.to_owned())
-            .or_insert_with(|| format!("{LITERAL_PREFIX}{n}"))
-            .clone()
+        if let Some(name) = self.names.get(old) {
+            return name.clone();
+        }
+        let mut n = self.names.len();
+        let name = loop {
+            let name = format!("{LITERAL_PREFIX}{n}");
+            if self.taken.insert(name.clone()) {
+                break name;
+            }
+            n += 1;
+        };
+        self.names.insert(old.to_owned(), name.clone());
+        name
     }
 
     fn go(&mut self, plan: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
@@ -373,6 +402,35 @@ fn rewrite_group(
             grouping,
             aggregates,
         } => {
+            // An item only some instances output runs on the other literals'
+            // groups too, which those instances never computed: only an item
+            // that cannot raise may (`runs_on_other_groups`); otherwise the
+            // lists must be equal.
+            let lists: Vec<HashSet<AttrId>> = group
+                .iter()
+                .filter_map(|&c| match &core(&members[candidates[c].member].body).node {
+                    PlanNode::Aggregate { aggregates, .. } => Some(
+                        aggregates
+                            .iter()
+                            .filter_map(|e| output_of(e).map(|o| o.id))
+                            .collect(),
+                    ),
+                    _ => None,
+                })
+                .collect();
+            for &c in group {
+                if let PlanNode::Aggregate { aggregates, .. } =
+                    &core(&members[candidates[c].member].body).node
+                {
+                    for e in aggregates {
+                        let everywhere =
+                            output_of(e).is_some_and(|o| lists.iter().all(|l| l.contains(&o.id)));
+                        if !everywhere && !runs_on_other_groups(e) {
+                            return None;
+                        }
+                    }
+                }
+            }
             // The union of the instances' outputs, then the key.
             let mut items: Vec<Arc<Expr>> = aggregates.clone();
             let mut ids: HashSet<AttrId> = items
@@ -455,6 +513,27 @@ fn rewrite_group(
     Some((def, readers))
 }
 
+/// Whether an aggregate output item can be computed on groups its instance
+/// did not compute without a new error: a column, or `count`, `min` or `max`
+/// (the built-ins, by identity) whose arguments and `FILTER` run on any row.
+/// `sum` and `avg` can overflow (ANSI) on another literal's rows.
+fn runs_on_other_groups(e: &Arc<Expr>) -> bool {
+    match &strip_alias(e).node {
+        ExprNode::Resolved(ResolvedExpr::Column(_)) => true,
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            f.kind == FunctionKind::Aggregate
+                && f.deterministic
+                && matches!(f.id, FunctionId::Registry { .. })
+                && matches!(f.id.name(), "count" | "min" | "max")
+                && f.args
+                    .iter()
+                    .chain(f.filter.iter())
+                    .all(|a| runs_on_any_row(a, true) && !has_outer_reference(a))
+        }
+        _ => false,
+    }
+}
+
 /// `body` with its core `top` (below the filters and projections at its
 /// top) replaced by `new_top`.
 fn replace_core(
@@ -491,6 +570,34 @@ fn cte_refs(plan: &Arc<LogicalPlan>) -> HashMap<Vec<AttrId>, usize> {
         }
         if let PlanNode::WithCte { ctes, .. } = &p.node {
             stack.extend(ctes.iter().map(|c| Arc::clone(&c.plan)));
+        }
+        p.for_each_expr(&mut |e| stack.extend(crate::restrict::subquery_plans(e)));
+        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    out
+}
+
+/// Every name a `WITH` definition or a `CteRef` in `plan` (and its subquery
+/// plans) uses.
+fn cte_names(plan: &Arc<LogicalPlan>) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![Arc::clone(plan)];
+    while let Some(p) = stack.pop() {
+        if !seen.insert(Arc::as_ptr(&p)) {
+            continue;
+        }
+        match &p.node {
+            PlanNode::CteRef(r) => {
+                out.insert(r.name.clone());
+            }
+            PlanNode::WithCte { ctes, .. } => {
+                for c in ctes {
+                    out.insert(c.name.clone());
+                    stack.push(Arc::clone(&c.plan));
+                }
+            }
+            _ => {}
         }
         p.for_each_expr(&mut |e| stack.extend(crate::restrict::subquery_plans(e)));
         p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
@@ -825,3 +932,6 @@ fn key_literal(c: &Arc<Expr>, g: AttrId) -> Option<(&BoundColumn, &Literal)> {
     }
     pick(a, b, g).or_else(|| pick(b, a, g))
 }
+
+#[cfg(test)]
+mod tests;
