@@ -91,6 +91,20 @@ const MIN_INPUT_RATIO: f64 = 2.0;
 /// [`MAX_GROUPS`] rows by estimate, far below `2^31`).
 const CODE_NAME: &str = "krishiv_group_code";
 
+/// In the default mode (two or more dimensions,
+/// `krishiv.optimizer.groupKeyCodeMultiDimension`, design §8) a coded
+/// dimension holds at most this many groups: `dict`'s numbering is one
+/// sorted partition, run on one thread, and with as many groups as a large
+/// dimension has rows (TPC-DS q24's `customer`, 500,000) it costs more than
+/// the code saves (q24 1.28x cycles at SF10).
+const MULTI_MAX_GROUPS: f64 = 100_000.0;
+
+/// In the default mode the joins must stop carrying at least this many key
+/// bytes (input rows times the dropped width): the rewrite adds a fixed set
+/// of operators, which a small input does not pay for (TPC-DS q40, 2,328
+/// input rows, 1.14x wall at SF10).
+const MULTI_MIN_DROPPED_BYTES: f64 = 256.0 * 1024.0;
+
 /// The dropped keys must be wider than this many bytes (the code's width).
 const CODE_WIDTH: u64 = 8;
 
@@ -239,7 +253,9 @@ impl<'a> Shape<'a> {
     }
 
     /// The coded plan and what was decided, `None` when no key comes from a
-    /// dimension, or why it stays.
+    /// dimension, or why it stays. With `min_dimensions` above 1 (the default
+    /// mode) each dimension also meets the mode's cost lines
+    /// ([`MULTI_MAX_GROUPS`], [`MULTI_MIN_DROPPED_BYTES`]).
     fn code(
         &self,
         est: &mut Estimator<'_>,
@@ -265,7 +281,7 @@ impl<'a> Shape<'a> {
                 continue;
             }
             coded |= is_code(&leaf.plan);
-            match self.qualify(leaf, keys, est, force) {
+            match self.qualify(leaf, keys, est, force, min_dimensions > 1) {
                 Ok(c) => found.push(c),
                 Err(why) => refusals.push(why),
             }
@@ -290,7 +306,9 @@ impl<'a> Shape<'a> {
         // they were, so each still qualifies unless the estimates moved, and a
         // second optimization sees only codes.
         for _ in found {
-            let Some(stacked) = self.code_next(&plan, est, next, row_number, force)? else {
+            let Some(stacked) =
+                self.code_next(&plan, est, next, row_number, force, min_dimensions > 1)?
+            else {
                 break;
             };
             notes.push(stacked.1);
@@ -316,6 +334,7 @@ impl<'a> Shape<'a> {
         next: &mut u64,
         row_number: &FunctionId,
         force: bool,
+        strict: bool,
     ) -> Result<Option<(Arc<LogicalPlan>, String)>, String> {
         let PlanNode::Project {
             input: decode,
@@ -353,7 +372,7 @@ impl<'a> Shape<'a> {
             if keys.is_empty() {
                 continue;
             }
-            if let Ok(c) = inner.qualify(leaf, keys, est, force) {
+            if let Ok(c) = inner.qualify(leaf, keys, est, force, strict) {
                 found = Some(c);
                 break;
             }
@@ -384,6 +403,7 @@ impl<'a> Shape<'a> {
         keys: Vec<BoundColumn>,
         est: &mut Estimator<'_>,
         force: bool,
+        strict: bool,
     ) -> Result<Candidate, String> {
         let names = keys
             .iter()
@@ -534,6 +554,23 @@ impl<'a> Shape<'a> {
         }
         if rows_i < MIN_INPUT_RATIO * rows_d {
             return Err(format!("[{names}]: the dimension is too large ({gates})"));
+        }
+        // The default mode's two cost lines (`strict`, design §8).
+        if strict && groups > MULTI_MAX_GROUPS {
+            return Err(format!(
+                "[{names}]: more than {MULTI_MAX_GROUPS:.0} groups in the default mode ({gates})"
+            ));
+        }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a key width in bytes, far below 2^52"
+        )]
+        let dropped_bytes = rows_i * width as f64;
+        if strict && dropped_bytes < MULTI_MIN_DROPPED_BYTES {
+            return Err(format!(
+                "[{names}]: the joins would stop carrying {dropped_bytes:.0} key bytes, \
+                 below {MULTI_MIN_DROPPED_BYTES:.0} in the default mode ({gates})"
+            ));
         }
         let note = format!("coded [{names}]: {gates}, {width} key bytes dropped");
         Ok(Candidate {

@@ -834,3 +834,48 @@ fn the_default_codes_no_tpch_query() {
         }
     }
 }
+
+/// The default mode's two cost lines (design §8, from the TPC-DS SF10 A/B):
+/// a dimension with more than 100,000 groups (q24's `customer`) and an input
+/// too small to pay for the added operators (q40) are not coded there, while
+/// `krishiv.optimizer.groupKeyCode` codes both shapes. All or none: with one
+/// of two dimensions refused, the aggregate stays.
+#[test]
+fn the_default_mode_refuses_many_groups_and_small_inputs() {
+    let ctx = support::ctx_over(catalog());
+    let udfs = krishiv_udf_sdk::UdfLibrary::new();
+    let sql = "SELECT g1, g2, h1, h2, count(*) AS n FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek \
+               GROUP BY g1, g2, h1, h2";
+    let mut many = Stats::new();
+    many.rows("e", 400_000)
+        .set("e", "h1", Some(400))
+        .set("e", "h2", Some(400));
+    let mut small = Stats::new();
+    small.rows("f", 3_000);
+    let default = krishiv_common::config::Config::new();
+    let mut on = krishiv_common::config::Config::new();
+    on.set("krishiv.optimizer.groupKeyCode", "true").unwrap();
+    let plan = support::resolve(sql, &ctx);
+    for (stats, why) in [(&many, "groups in the default mode"), (&small, "key bytes")] {
+        let (coded_on, _) =
+            krishiv_optimizer::optimize_traced_with_udfs(&plan, stats, &udfs, &on).unwrap();
+        assert!(
+            coded(&coded_on.root().to_string()),
+            "{why}: the key on codes it"
+        );
+        let (out, steps) =
+            krishiv_optimizer::optimize_traced_with_udfs(&plan, stats, &udfs, &default).unwrap();
+        let notes: Vec<_> = steps
+            .iter()
+            .filter(|s| s.rule == "GroupKeyCode" && !s.note.is_empty())
+            .map(|s| s.note.clone())
+            .collect();
+        assert!(!coded(&out.root().to_string()), "{why}: {notes:?}");
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("qualif") || n.contains(why)),
+            "{why}: {notes:?}"
+        );
+    }
+}
