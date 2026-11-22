@@ -12,7 +12,7 @@ with `EngineRuntimeBuilder::event_sink`. With no sink registered no event is bui
 
 | `kind` | When | Extra members |
 |---|---|---|
-| `submitted` | the statement was recorded (a refused one too) | `statement_class`, `text` (masked by `krishiv.system.queryText.literals`, cut to `krishiv.events.textMaxBytes`) |
+| `submitted` | the statement was recorded (a refused one too) | `statement_class`, `text` (always literal-masked, whatever `krishiv.system.queryText.literals` says; cut to `krishiv.events.textMaxBytes`) |
 | `queued` | admission holds the query in its queue | |
 | `started` | admission let it run | `resource_group`, `queued_ns` |
 | `finished` | it ended: `state` is `finished`, `failed` or `denied` | `state`, `usage`, `error_class`, `statement_class`, `result_cache_hit` |
@@ -26,8 +26,9 @@ Consumers ignore unknown members and unknown kinds: minor versions only add.
 
 ## Usage record
 
-`usage` is cumulative since the query started and keyed by `record_id = (query_id, seq)`: the exactly-once key
-for billing. Members: `kind` (`final`), `fidelity` (`exact`), `principal`, `delegated_by`, `session_id`,
+`usage` is cumulative since the query started and keyed by `record_id = (session_id, query_id, seq)` (a caller's operation id is unique only per session). The
+event schema is experimental until the design note's review findings are settled; do not treat `record_id` as a
+billing-grade key yet. Members: `kind` (`final`), `fidelity` (`exact`), `principal`, `delegated_by`, `session_id`,
 `compute_id`, `workload_class`, `resource_group`, `statement_class`, `window_start_ms`, `window_end_ms`,
 `wall_ns` (queue excluded), `queued_ns`, `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`,
 `rows_written`, `files_written`, `spill_bytes`, `spill_files`, `peak_memory_bytes`, `result_cache_hit`.

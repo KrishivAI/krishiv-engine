@@ -712,7 +712,7 @@ pub static EVENTS_TEXT_MAX_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.events.textMaxBytes",
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(4096)),
-    doc: "Most bytes of statement text a `submitted` event carries, cut at a character boundary. The text is masked by `krishiv.system.queryText.literals` first.",
+    doc: "Most bytes of statement text a `submitted` event carries, cut at a character boundary. The text is always literal-masked first.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",

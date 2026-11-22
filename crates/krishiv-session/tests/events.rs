@@ -86,8 +86,8 @@ fn a_finished_query_yields_submitted_started_finished() {
         panic!("not finished");
     };
     assert_eq!(f.state, "finished");
-    assert_eq!(f.usage.record_id.0, events[0].query.query_id);
-    assert_eq!(f.usage.record_id.1, events.last().unwrap().seq);
+    assert_eq!(f.usage.record_id.1, events[0].query.query_id);
+    assert_eq!(f.usage.record_id.2, events.last().unwrap().seq);
     assert!(f.usage.wall_ns.is_some());
     assert_eq!(events[0].query.compute_id, rt.compute_id());
 }
@@ -133,6 +133,29 @@ fn text_carries_no_literal_under_the_mask_policy_and_is_cut() {
         .map(|e| e.to_json().to_string())
         .collect::<String>();
     assert!(!all.contains("sekrit"));
+}
+
+#[test]
+fn text_carries_no_literal_under_the_default_or_keep_policy() {
+    for conf in [
+        &[][..],
+        &[("krishiv.system.queryText.literals", "keep")][..],
+    ] {
+        let (rt, sink) = runtime(conf);
+        let s = session(&rt);
+        block_on(
+            block_on(s.sql("SELECT 'sekrit-value-1234567890' AS c"))
+                .unwrap()
+                .collect(),
+        )
+        .unwrap();
+        let events = sink.wait_for_end();
+        let all = events
+            .iter()
+            .map(|e| e.to_json().to_string())
+            .collect::<String>();
+        assert!(!all.contains("sekrit"), "{conf:?}: {all}");
+    }
 }
 
 #[test]

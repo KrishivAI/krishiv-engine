@@ -8,9 +8,9 @@
 //! events (`Progress` first, then the oldest non-terminal one) and counts them per sink and kind. With no sink
 //! registered the bus is inactive and `QueryHistory` builds no event at all.
 //!
-//! What is not carried: error messages and credentials (the error *class* only), and statement literals
-//! beyond the session's `krishiv.system.queryText.literals` policy (the text is the row's masked, cut text,
-//! cut again to `krishiv.events.textMaxBytes`).
+//! What is not carried: error messages and credentials (the error *class* only), and statement literals:
+//! the text is always masked (`krishiv_sql::mask_literals`), whatever `krishiv.system.queryText.literals`
+//! says for `system.queries`, then cut to `krishiv.events.textMaxBytes`.
 //!
 //! Not built yet (design §6, §3.2, §4.2): `Progress` samples, `AuditEvent`s, the OTLP logs sink, `reads` /
 //! `writes` / `profile` on a finished query, store request counters in the usage record.
@@ -34,6 +34,7 @@ pub const SCHEMA_NAME: &str = "krishiv.event.v1";
 
 /// The version of the event schema: additive fields bump `minor`; anything else is a new `major`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SchemaVersion {
     /// Incompatible changes.
     pub major: u32,
@@ -46,6 +47,7 @@ pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion { major: 1, minor: 0 };
 
 /// Who and what a query event is about.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct QueryRef {
     /// The query's id (the caller's operation id when it gave one).
     pub query_id: String,
@@ -115,6 +117,7 @@ pub enum QueryEventKind {
 
 /// The end of a query that was not cancelled.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct FinishedEvent {
     /// `finished`, `failed` or `denied`.
     pub state: String,
@@ -130,6 +133,7 @@ pub struct FinishedEvent {
 
 /// Whether a usage record is a sample or the exact end figure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UsageKind {
     /// A sample while the query runs.
     Progress,
@@ -142,8 +146,8 @@ pub enum UsageKind {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct UsageRecord {
-    /// `(query_id, seq)`: the exactly-once key.
-    pub record_id: (String, u64),
+    /// `(session_id, query_id, seq)`: the exactly-once key (a caller's operation id is unique only per session).
+    pub record_id: (String, String, u64),
     /// Sample or final.
     pub kind: UsageKind,
     /// The principal charged.
@@ -289,7 +293,7 @@ impl UsageRecord {
     #[must_use]
     pub fn to_json(&self) -> Value {
         json!({
-            "record_id": {"query_id": self.record_id.0, "seq": self.record_id.1},
+            "record_id": {"session_id": self.record_id.0, "query_id": self.record_id.1, "seq": self.record_id.2},
             "kind": match self.kind { UsageKind::Progress => "progress", UsageKind::Final => "final" },
             "principal": self.principal,
             "delegated_by": self.delegated_by,
@@ -749,7 +753,10 @@ impl EventBus {
         let kind = match kind {
             Transition::Submitted => QueryEventKind::Submitted {
                 statement_class: row.statement_class.map(str::to_owned),
-                text: row.text.as_deref().map(|t| cut(t, self.text_max)),
+                text: row
+                    .text
+                    .as_deref()
+                    .map(|t| cut(&krishiv_sql::mask_literals(t), self.text_max)),
             },
             Transition::Queued => QueryEventKind::Queued,
             Transition::Started => QueryEventKind::Started {
@@ -782,7 +789,7 @@ impl EventBus {
 
     fn usage(&self, row: &QueryRow, seq: u64) -> UsageRecord {
         UsageRecord {
-            record_id: (row.id.clone(), seq),
+            record_id: (row.session_id.clone(), row.id.clone(), seq),
             kind: UsageKind::Final,
             principal: row.principal.clone(),
             delegated_by: row.delegated_by.clone(),
@@ -919,12 +926,42 @@ impl JsonLinesSink {
         PathBuf::from(name)
     }
 
+    /// The highest segment number already on disk under the prefix, 0 if none.
+    fn highest_existing_segment(&self) -> u64 {
+        let (Some(dir), Some(stem)) = (self.prefix.parent(), self.prefix.file_name()) else {
+            return 0;
+        };
+        let dir = if dir.as_os_str().is_empty() {
+            std::path::Path::new(".")
+        } else {
+            dir
+        };
+        let head = format!("{}.", stem.to_string_lossy());
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                name.strip_prefix(&head)?
+                    .strip_suffix(".jsonl")?
+                    .parse::<u64>()
+                    .ok()
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     fn open_next(&self, state: &mut JsonState) -> std::io::Result<()> {
         if let Some(mut f) = state.file.take() {
             f.flush()?;
         }
         if let Some(dir) = self.prefix.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir)?;
+        }
+        if state.segment == 0 {
+            // A restart continues after the highest segment a previous run left, so name order stays time order.
+            state.segment = self.highest_existing_segment();
         }
         state.segment += 1;
         let file = std::fs::OpenOptions::new()

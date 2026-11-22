@@ -24,7 +24,7 @@ fn event(kind: QueryEventKind, seq: u64) -> EngineEvent {
 
 fn usage(seq: u64) -> UsageRecord {
     UsageRecord {
-        record_id: ("q".into(), seq),
+        record_id: ("s".into(), "q".into(), seq),
         kind: UsageKind::Final,
         principal: "p".into(),
         delegated_by: None,
@@ -258,6 +258,23 @@ fn the_json_sink_rotates_and_keeps_the_newest_segments() {
             assert_eq!(v["schema"], SCHEMA_NAME);
         }
     }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_restarted_json_sink_continues_after_the_highest_segment() {
+    let dir = std::env::temp_dir().join(format!("krishiv-events-restart-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("ev.000007.jsonl"), "old\n").unwrap();
+    let sink = JsonLinesSink::new(dir.join("ev"), 1_000_000, 5);
+    sink.deliver(&[Arc::new(finished(0))]);
+    sink.flush();
+    assert!(dir.join("ev.000008.jsonl").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("ev.000007.jsonl")).unwrap(),
+        "old\n"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
