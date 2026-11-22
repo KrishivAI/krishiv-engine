@@ -33,11 +33,34 @@ const COMMIT: &str = match option_env!("KRISHIV_GIT_SHA") {
     _ => "unknown",
 };
 
+/// Returns the calling thread's freed memory to the OS: the memory pools' pressure release hook
+/// (`krishiv_memory::set_release_hook`), as `krishiv_alloc::release` is for the CLI.
+#[cfg(feature = "mimalloc")]
+fn release_freed_memory() {
+    // SAFETY: `mi_collect` has no preconditions; it only touches mimalloc's state for the calling
+    // thread and the arenas, and this module's global allocator is mimalloc.
+    unsafe { libmimalloc_sys::mi_collect(true) };
+}
+
+/// The extension module owns its global allocator, so it installs that allocator's policy, as the
+/// CLI does (acceptance SQL-33, SQL-34): under pressure, threads return freed memory; and a limited
+/// root pool (the default limit follows the container) keeps the resident set within its
+/// reservations plus an allowance (`krishiv_memory` resident-set guard), so a process near its
+/// cgroup spills instead of being killed. mimalloc keeps its defaults here: its options can only be
+/// set before the first allocation, which the Python interpreter makes long before this import.
+#[cfg(feature = "mimalloc")]
+fn install_allocator_policy() {
+    krishiv_memory::set_release_hook(release_freed_memory);
+    krishiv_memory::set_resident_probe(krishiv_memory::process_resident_bytes);
+}
+
 /// The `krishiv._native` module.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // No CPU check here: raising from this module on a CPU below the build level would run
     // v3-compiled code on it. `krishiv/_cpu.py` checks first, in pure Python.
+    #[cfg(feature = "mimalloc")]
+    install_allocator_policy();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__allocator__", ALLOCATOR)?;
     m.add("__commit__", COMMIT)?;

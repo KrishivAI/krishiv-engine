@@ -124,11 +124,11 @@ fn main() -> std::process::ExitCode {
     #[cfg(feature = "mimalloc")]
     {
         krishiv_memory::set_release_hook(krishiv_alloc::install());
-        // Under that bounded policy the resident set follows the pools, and
-        // the pools keep it within their reservations plus an allowance.
-        if krishiv_alloc::bounded() {
-            krishiv_memory::set_resident_probe(krishiv_memory::process_resident_bytes);
-        }
+        // Every limited root pool keeps the resident set within its
+        // reservations plus an allowance, the default limit (80% of the
+        // container) included: without the probe, memory the pools do not
+        // track took a 4 GB container over its cgroup (acceptance SQL-34).
+        krishiv_memory::set_resident_probe(krishiv_memory::process_resident_bytes);
     }
     run();
     std::process::ExitCode::SUCCESS

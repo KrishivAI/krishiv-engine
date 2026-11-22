@@ -50,11 +50,17 @@
 //! excess between them by limit.
 //!
 //! The probe belongs to the program that owns the allocator, like the
-//! release hook: the resident set only tracks the pools' reservations when
-//! the allocator returns freed memory promptly (`krishiv_alloc`'s settings
-//! under a limit below its generous threshold). An allocator that keeps
-//! freed memory for a second would make the guard spill for memory that is
-//! about to be returned. Without a probe nothing is sampled or cut.
+//! release hook. The resident set tracks the pools' reservations closely
+//! when the allocator returns freed memory promptly (`krishiv_alloc`'s
+//! settings under a limit below its generous threshold). An allocator that
+//! keeps freed memory for a second (mimalloc's defaults, at a generous
+//! limit or in the Python module) makes the guard cut for memory about to be
+//! returned; the cut also starts a pressure epoch, whose release hook
+//! returns it. The `krishiv` CLI and the Python module install the probe at
+//! every limit anyway: the default limit is 80% of the container, and with
+//! no guard memory the pools do not track took a process over its cgroup
+//! (acceptance SQL-34); a spill costs less than a kill. Without a probe
+//! nothing is sampled or cut.
 
 use std::sync::atomic::{AtomicU64, Ordering as StdOrdering};
 use std::sync::{Arc, OnceLock, Weak};
