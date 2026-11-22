@@ -516,3 +516,86 @@ fn a_request_that_never_left_fails_before_anything_is_sent() {
     assert!(!exists(&c.data()));
     check(&c, &server, &[INIT]);
 }
+
+/// A transport whose `load` answers with a fixed body.
+struct Loader(Vec<u8>);
+
+#[async_trait]
+impl RestCommitTransport for Loader {
+    fn name(&self) -> String {
+        "lake.db.t".to_owned()
+    }
+
+    async fn post_commit(&self, _body: Vec<u8>) -> Result<TransportReply, TransportFailure> {
+        Err(TransportFailure::new(false, "not used"))
+    }
+
+    async fn load(&self, _all_snapshots: bool) -> Result<Vec<u8>, KrishivError> {
+        Ok(self.0.clone())
+    }
+}
+
+fn loader(body: &[u8]) -> RestCommitTable {
+    RestCommitTable::new(
+        Arc::new(Loader(body.to_vec())),
+        TableIdent::from_strs(["db", "t"]).unwrap(),
+    )
+}
+
+/// `load` returns the answer's metadata, and names the table in the error of one that does not
+/// parse; `name` is the transport's.
+#[test]
+fn load_reads_the_metadata_member_and_names_the_table_on_a_bad_answer() {
+    use super::commit::CommitTable;
+    let c = case();
+    let body = serde_json::json!({"metadata": c.base}).to_string();
+    let table = loader(body.as_bytes());
+    assert_eq!(table.name(), "lake.db.t");
+    let m = c.env.rt.block_on(table.load(true)).unwrap();
+    assert_eq!(m.current_snapshot_id(), c.base.current_snapshot_id());
+    let err = c.env.rt.block_on(loader(b"{}").load(false)).unwrap_err();
+    assert!(err.to_string().contains("lake.db.t"), "{err}");
+    assert!(err.to_string().contains("no `metadata` member"), "{err}");
+}
+
+/// A request whose updates hold no `add-snapshot` fails with empty ids rather than panicking.
+#[test]
+fn a_refused_request_without_a_snapshot_has_no_ids() {
+    let updates = [TableUpdate::SetLocation {
+        location: "file:///x".to_owned(),
+    }];
+    assert!(matches!(
+        outcome("lake.db.t", &updates, reply(404, "")),
+        CommitOutcome::Failed(_)
+    ));
+}
+
+/// A subscriber that enables every event and counts them.
+struct Counting(Arc<Mutex<usize>>);
+
+impl tracing::Subscriber for Counting {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        *self.0.lock().unwrap() += 1;
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A refusal that carries a message is logged (shortened), whatever its status maps to.
+#[test]
+fn a_refusal_with_a_message_is_logged() {
+    let events = Arc::new(Mutex::new(0));
+    let o = tracing::subscriber::with_default(Counting(Arc::clone(&events)), || {
+        map(model(403, "ForbiddenException", &"x".repeat(2_000)))
+    });
+    assert!(matches!(o, CommitOutcome::Failed(_)));
+    assert_eq!(*events.lock().unwrap(), 1);
+}
