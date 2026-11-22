@@ -924,3 +924,49 @@ fn a_merge_in_a_script_reads_the_script_s_locals() {
         serde_json::json!([[1, "local"], [4, "local"]])
     );
 }
+
+/// A table made by CTAS keeps a struct field's NOT NULL flag from its query (`named_struct('x', 1)` gives
+/// `x INT NOT NULL`); a MERGE that leaves that column as it is still runs and keeps its values.
+#[test]
+fn a_merge_keeps_a_ctas_struct_column_whose_field_is_not_null() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let session = Session::new().unwrap();
+    sql(
+        &session,
+        &format!(
+            "CREATE TABLE t USING delta LOCATION '{}' AS SELECT * FROM VALUES \
+             (CAST(1 AS BIGINT), 'one', named_struct('x', 1)) AS v(id, s, st)",
+            dir.display()
+        ),
+    )
+    .unwrap();
+    sql(
+        &session,
+        "MERGE INTO t USING (SELECT CAST(1 AS BIGINT) AS id, 'uno' AS v \
+         UNION ALL SELECT CAST(2 AS BIGINT), 'dos') s ON t.id = s.id \
+         WHEN MATCHED THEN UPDATE SET s = s.v \
+         WHEN NOT MATCHED THEN INSERT (id, s, st) VALUES (s.id, s.v, named_struct('x', 2))",
+    )
+    .unwrap();
+    // A fresh session reads it by path (the log's `NOT NULL` field kept, as the catalog table's).
+    assert_eq!(
+        sql(
+            &Session::new().unwrap(),
+            &format!(
+                "SELECT id, s, st.x FROM delta.`{}` ORDER BY id",
+                dir.display()
+            ),
+        )
+        .unwrap()
+        .1,
+        serde_json::json!([[1, "uno", 1], [2, "dos", 2]])
+    );
+    // The read gives the column the table's type: a conditional over it plans as well.
+    assert_eq!(
+        sql(&session, "SELECT if(id = 1, st, st).x FROM t ORDER BY id")
+            .unwrap()
+            .1,
+        serde_json::json!([[1], [2]])
+    );
+}
