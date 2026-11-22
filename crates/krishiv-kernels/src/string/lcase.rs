@@ -567,7 +567,9 @@ mod like_fold_tests {
 
     #[test]
     fn java_fold_is_idempotent_over_the_bmp() {
-        for c in ('\0'..='\u{ffff}').filter_map(|c| {
+        // Miri interprets every step, so it covers only the Latin and Greek blocks.
+        let last = if cfg!(miri) { '\u{03ff}' } else { '\u{ffff}' };
+        for c in ('\0'..=last).filter_map(|c| {
             (c as u32 >= 0xd800 && c as u32 <= 0xdfff)
                 .then_some(c)
                 .map_or(Some(c), |_| None)
