@@ -52,7 +52,6 @@ impl Session {
             {
                 return Err(UnsupportedFeatureShowTableExtendedJsonWithPartition {}.into());
             }
-            self.require_current_profile("SHOW ... AS JSON")?;
             let mut plain = show.clone();
             match &mut plain.kind {
                 ShowKind::Tables { as_json, .. }
@@ -119,16 +118,12 @@ impl Session {
                     let items: Vec<String> = rows
                         .iter()
                         .map(|r| {
+                            // The catalog's own (escaped) names, split as Spark's
+                            // `partitionNameToJson` does: on `/`, then the first `=`.
                             let fields: Vec<String> = r[0]
                                 .split('/')
-                                .filter_map(|kv| kv.split_once('='))
-                                .map(|(k, v)| {
-                                    format!(
-                                        "{}:{}",
-                                        json_str(&crate::partitions::unescape_path_name(k)),
-                                        json_str(&crate::partitions::unescape_path_name(v))
-                                    )
-                                })
+                                .map(|kv| kv.split_once('=').unwrap_or((kv, "")))
+                                .map(|(k, v)| format!("{}:{}", json_str(k), json_str(v)))
                                 .collect();
                             format!("{{{}}}", fields.join(","))
                         })

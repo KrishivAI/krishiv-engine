@@ -96,3 +96,36 @@ fn show_partitions_gives_one_object_per_partition() {
         r#"{"partitions":[{"b":"x"}]}"#
     );
 }
+
+#[test]
+fn show_partitions_keeps_the_catalogs_escaped_names() {
+    let s = session();
+    block_on(async {
+        s.sql("INSERT INTO j3 VALUES (2, 'a:b')")
+            .await?
+            .collect()
+            .await
+    })
+    .expect("insert");
+    assert_eq!(
+        json(&s, "SHOW PARTITIONS j3 AS JSON"),
+        r#"{"partitions":[{"b":"a%3Ab"},{"b":"x"}]}"#
+    );
+}
+
+#[test]
+fn as_json_is_a_syntax_error_before_spark_4_3() {
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_2)
+        .build()
+        .expect("session");
+    for sql in [
+        "SHOW TABLES AS JSON",
+        "SHOW TABLE EXTENDED LIKE 'x' AS JSON",
+        "SHOW PARTITIONS t AS JSON",
+        "SHOW TABLE EXTENDED LIKE 'x' PARTITION (b='x') AS JSON",
+    ] {
+        let e = block_on(async { s.sql(sql).await?.collect().await }).expect_err(sql);
+        assert_eq!(e.error_class().name(), "PARSE_SYNTAX_ERROR", "{sql}");
+    }
+}

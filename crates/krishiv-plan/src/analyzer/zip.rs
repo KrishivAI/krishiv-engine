@@ -76,6 +76,33 @@ fn remap(e: &Arc<Expr>, map: &HashMap<AttrId, BoundColumn>) -> Arc<Expr> {
     done.unwrap_or_else(|never| match never {})
 }
 
+/// Whether `e` calls a random function without a seed: Spark gives each such call a seed of its own
+/// (`ResolveRandomSeed`), so two of them are never one producer even when they read alike.
+fn has_unseeded_random(e: &Arc<Expr>) -> bool {
+    let mut found = false;
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        if let crate::walk::Node::Expr(x) = n
+            && let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
+            && let crate::FunctionId::Registry { name, .. } = &f.id
+        {
+            // The argument count a call has when it names its seed.
+            let seeded_at = match name.as_str() {
+                "rand" | "random" | "randn" => Some(1),
+                "shuffle" | "randstr" => Some(2),
+                "uniform" => Some(3),
+                "uuid" => None,
+                _ => return std::ops::ControlFlow::Continue(()),
+            };
+            if seeded_at.is_none_or(|n| f.args.len() < n) {
+                found = true;
+                return std::ops::ControlFlow::Break(());
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    found
+}
+
 /// The ids of the columns `e` reads, those a correlated subquery inside it reads from outside included.
 fn reads(e: &Arc<Expr>) -> Vec<AttrId> {
     let mut out = Vec::new();
@@ -148,14 +175,10 @@ impl Resolver<'_> {
         let all = lc.aliases.iter().chain(&rc.aliases).map(|(o, b)| (o, b));
         for (output, body) in all {
             let body = remap(&remap(body, &map), &survivors);
-            // Equal bodies are one producer when the body is deterministic or both are the same alias (a
-            // parent both sides share); two independently written `rand()`s stay two (Spark gives each its
-            // own seed).
-            let det = crate::raises::is_deterministic(&body);
-            match kept
-                .iter()
-                .find(|(o, b)| **b == *body && (det || o.id == output.id))
-            {
+            // Equal bodies are one producer, as `ResolveZip` dedups by canonicalized child. A seedless
+            // `rand()` has a seed of its own, so two independently written ones stay two.
+            let apart = has_unseeded_random(&body);
+            match kept.iter().find(|(_, b)| !apart && **b == *body) {
                 Some((first, _)) => {
                     survivors.insert(output.id, first.clone());
                 }
@@ -264,11 +287,7 @@ impl Resolver<'_> {
         // A DataFrame reference to either input (`left["a"]`) still resolves: the inputs' carriers stay,
         // their columns read as the merged plan names them.
         let named = |a: &Attr| {
-            let col = map
-                .get(&a.col.id)
-                .or_else(|| survivors.get(&a.col.id))
-                .cloned()
-                .unwrap_or_else(|| a.col.clone());
+            let col = map.get(&a.col.id).cloned().unwrap_or_else(|| a.col.clone());
             Attr { col, ..a.clone() }
         };
         let mut carriers = (*res.carriers).clone();

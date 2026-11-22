@@ -329,7 +329,7 @@ impl Parser<'_> {
             let list_at = self.pos;
             match self.paren_list(Self::column_name) {
                 Ok(c) if self.kw_at(0, "REPLACE") && !self.kw_at(1, "USING") => {
-                    if !self.opts.insert_replace_column_list {
+                    if !self.opts.spark_4_3_grammar {
                         // Spark 4.2 reads `(id, name)` as the insert's own list and fails at `REPLACE`.
                         let at = self.pos;
                         self.far = at;

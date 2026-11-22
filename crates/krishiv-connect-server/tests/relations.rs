@@ -987,3 +987,130 @@ async fn zip_keeps_a_reference_to_an_input_dataframe_resolvable() {
         strings(&[&["10"], &["10"], &["20"]])
     );
 }
+
+/// `rand(seed) AS name`.
+fn rand_seeded_as(name: &str, seed: i32) -> pb::Expression {
+    use pb::expression::{Alias, ExprType, Literal, UnresolvedFunction, literal::LiteralType};
+    pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Alias(Box::new(Alias {
+            expr: Some(Box::new(pb::Expression {
+                common: None,
+                expr_type: Some(ExprType::UnresolvedFunction(UnresolvedFunction {
+                    function_name: "rand".to_owned(),
+                    arguments: vec![pb::Expression {
+                        common: None,
+                        expr_type: Some(ExprType::Literal(Literal {
+                            literal_type: Some(LiteralType::Integer(seed)),
+                            data_type: None,
+                        })),
+                    }],
+                    is_distinct: false,
+                    is_user_defined_function: false,
+                    is_internal: None,
+                })),
+            })),
+            name: vec![name.to_owned()],
+            metadata: None,
+        }))),
+    }
+}
+
+/// `left + right AS name` over two columns.
+fn add_columns(left: &str, right: &str, name: &str) -> pb::Expression {
+    use pb::expression::{Alias, ExprType, UnresolvedFunction};
+    pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Alias(Box::new(Alias {
+            expr: Some(Box::new(pb::Expression {
+                common: None,
+                expr_type: Some(ExprType::UnresolvedFunction(UnresolvedFunction {
+                    function_name: "+".to_owned(),
+                    arguments: vec![attr(left), attr(right)],
+                    is_distinct: false,
+                    is_user_defined_function: false,
+                    is_internal: None,
+                })),
+            })),
+            name: vec![name.to_owned()],
+            metadata: None,
+        }))),
+    }
+}
+
+fn cell_number(cell: &str) -> f64 {
+    cell.parse().expect("a number")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_merges_one_seeded_producer_and_keeps_different_seeds_apart() {
+    let server = start().await;
+    // Different seeds are different producers.
+    let rows = run(
+        &server,
+        zip(
+            project(source(), vec![rand_seeded_as("x", 1)]),
+            project(source(), vec![rand_seeded_as("y", 2)]),
+        ),
+    )
+    .await
+    .expect("runs");
+    assert!(rows.iter().all(|r| r[0] != r[1]), "{rows:?}");
+    // The same seeded producer on both sides is computed once: `x = r + r` reads the merged `r`.
+    let left = project(source(), vec![rand_seeded_as("r", 7)]);
+    let right = project(
+        project(source(), vec![rand_seeded_as("r", 7)]),
+        vec![add_columns("r", "r", "x")],
+    );
+    let rows = run(&server, zip(left, right)).await.expect("runs");
+    assert_eq!(rows.len(), 3);
+    for r in &rows {
+        assert!(
+            (cell_number(&r[1]) - 2.0 * cell_number(&r[0])).abs() < 1e-12,
+            "{r:?}"
+        );
+    }
+    // A chain `withColumn("r", rand(7)).withColumn("x", r + r)` zipped with a plain select.
+    let chain = project(
+        project(source(), vec![attr("id"), rand_seeded_as("r", 7)]),
+        vec![attr("r"), add_columns("r", "r", "x")],
+    );
+    let rows = run(&server, zip(chain, project(source(), vec![attr("id")])))
+        .await
+        .expect("runs");
+    for r in &rows {
+        assert!(
+            (cell_number(&r[1]) - 2.0 * cell_number(&r[0])).abs() < 1e-12,
+            "{r:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_resolves_a_right_reference_to_a_deduplicated_column_by_its_own_name() {
+    let server = start().await;
+    // `l` computes `a + 1` as `x` in an inner layer only; `r["y"]` is the same value under another name.
+    let inner = project(source(), vec![attr("id"), plus("a", 1, "x")]);
+    let left = project(inner, vec![attr("id")]);
+    let mut right = project(source(), vec![plus("a", 1, "y")]);
+    right.common = Some(pb::RelationCommon {
+        plan_id: Some(9),
+        ..Default::default()
+    });
+    let by_plan = pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::UnresolvedAttribute(
+            pb::expression::UnresolvedAttribute {
+                unparsed_identifier: "y".to_owned(),
+                plan_id: Some(9),
+                is_metadata_column: None,
+            },
+        )),
+    };
+    assert_eq!(
+        run(&server, project(zip(left, right), vec![by_plan]))
+            .await
+            .expect("runs"),
+        strings(&[&["11"], &["11"], &["21"]])
+    );
+}

@@ -75,7 +75,7 @@ pub(super) fn parser_options(
     let values = conf_values(config, &PARSER_KEYS);
     let mut options = ParserOptions::from_conf(|k| values.get(k).map(String::as_str));
     // Grammar that differs by Spark version follows the session's profile, not a conf.
-    options.insert_replace_column_list = profile >= krishiv_plan::analyzer::SparkProfile::V4_3;
+    options.spark_4_3_grammar = profile >= krishiv_plan::analyzer::SparkProfile::V4_3;
     options
 }
 

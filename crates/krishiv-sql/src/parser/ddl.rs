@@ -911,7 +911,8 @@ impl<'s> Parser<'s> {
 
     /// `[AS JSON]` closing a `SHOW TABLES`, `SHOW TABLE EXTENDED` or `SHOW PARTITIONS`.
     fn show_as_json(&mut self) -> bool {
-        if self.kw_at(0, "AS") && self.kw_at(1, "JSON") {
+        // Spark 4.3 grammar only: under 4.2 `AS` is a syntax error at the end of the statement.
+        if self.opts.spark_4_3_grammar && self.kw_at(0, "AS") && self.kw_at(1, "JSON") {
             self.pos += 2;
             true
         } else {

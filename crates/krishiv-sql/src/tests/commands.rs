@@ -15,7 +15,7 @@ mod property_keys;
 /// The options of a Spark 4.3 session (the grammar of `UNNEST` in `FROM` and `REPLACE` column lists).
 fn v43() -> ParserOptions {
     ParserOptions {
-        insert_replace_column_list: true,
+        spark_4_3_grammar: true,
         ..ParserOptions::default()
     }
 }

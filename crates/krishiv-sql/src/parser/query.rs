@@ -1261,7 +1261,7 @@ impl Parser<'_> {
             }
         } else if self.kw_at(0, "JSON_TABLE") && self.sym_at(1, Sym::LParen) {
             self.json_table()?
-        } else if self.opts.insert_replace_column_list
+        } else if self.opts.spark_4_3_grammar
             && self.kw_at(0, "UNNEST")
             && self.sym_at(1, Sym::LParen)
         {
