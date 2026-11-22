@@ -25,5 +25,7 @@
   "delta-dml": "Changing rows in a Delta table",
   "asof-join": "As-of joins",
   "query-events": "Query events",
-  "python-udf-tenants": "Python UDFs per tenant"
+  "python-udf-tenants": "Python UDFs per tenant",
+  "vector-search": "Vector search with SQL",
+  "python-table-functions": "Python table functions"
 }
