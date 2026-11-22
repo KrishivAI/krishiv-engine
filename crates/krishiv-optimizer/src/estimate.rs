@@ -459,7 +459,7 @@ impl<'a> Estimator<'a> {
                     RelStats::unknown(rows, ids())
                 }
             }
-            PlanNode::Limit { input, limit } => {
+            PlanNode::Limit { input, limit } | PlanNode::Tail { input, limit } => {
                 let est = RelStats::clone(&self.plan(input));
                 let n = limit_value(limit).map_or(est.rows, to_f64);
                 let rows = est.rows.min(n);

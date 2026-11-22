@@ -92,6 +92,7 @@ mod repartition;
 mod restrict;
 mod semi_order;
 mod share_cte;
+mod share_scan;
 mod stats;
 mod sum_rewrite;
 mod win_magic;
@@ -101,8 +102,9 @@ use std::sync::Arc;
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
     EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
-    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE,
-    SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND, SEMI_ANTI_JOIN_ORDER,
+    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES,
+    SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -186,6 +188,11 @@ pub struct Options {
     /// statistics say it pays. Needs statistics; a session configuration,
     /// when given, can switch it off.
     pub eager_aggregation: bool,
+    /// Grouping sets aggregate their input before the expansion repeats it
+    /// (`eager`, module `expand`), where no join takes the calls. Runs with
+    /// eager aggregation; a session configuration, when given, can switch it
+    /// off.
+    pub pre_aggregate_expand: bool,
     /// Late payload joins (`late_payload`): a dimension's payload columns
     /// join above the semi and anti joins that never read them. Needs
     /// statistics; a session configuration, when given, can switch it off.
@@ -204,6 +211,11 @@ pub struct Options {
     /// direct members, P3 W1 shape (b)). Runs only when
     /// `krishiv.optimizer.shareRepeatedSubtrees` is also on.
     pub share_repeated_subtrees: bool,
+    /// A table scan read only by filters is read once under the disjunction
+    /// of their predicates (`share_scan`). Needs statistics; runs only with a
+    /// session configuration where `krishiv.optimizer.shareFilteredScans` and
+    /// `krishiv.sql.optimizer.shareCteInstances` are on.
+    pub share_filtered_scans: bool,
     /// Group-key codes (`group_code`, design P2b D2): an aggregate's keys
     /// from one dimension travel as one integer code. Needs statistics; a
     /// session configuration, when given, must also switch it on
@@ -227,10 +239,12 @@ impl Default for Options {
             cse: true,
             stats_propagation: true,
             eager_aggregation: true,
+            pre_aggregate_expand: true,
             late_payload_join: true,
             payload_above_aggregate: true,
             subquery_as_window: true,
             share_repeated_subtrees: true,
+            share_filtered_scans: true,
             group_key_code: true,
             derived_keys_above: true,
             inferred_join_filters: true,
@@ -579,8 +593,15 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(true)
             });
+        let expand = options.pre_aggregate_expand
+            && udfs.is_none_or(|(_, config)| {
+                config
+                    .get(&PRE_AGGREGATE_EXPAND)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
         let root = match stats {
-            Some(stats) if eager => eager_pass(&root, stats, options, joins, &mut t)?,
+            Some(stats) if eager => eager_pass(&root, stats, options, expand, joins, &mut t)?,
             _ => root,
         };
         // After eager aggregation (which may pre-empt it) and the final join
@@ -679,7 +700,7 @@ fn run(
                     }
                     let mut ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, joins, &mut t)?;
+                        ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
                     }
                     if coded {
                         let (after, notes) = group_code::rewrite(
@@ -728,7 +749,7 @@ fn run(
                     // the shape eager aggregation reads (where its gates allow,
                     // the aggregate then runs by the dimension's key below it).
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, joins, &mut t)?;
+                        ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
                     }
                     prune_and_tidy(&ordered, Some(stats), &mut t)?
                 }
@@ -791,6 +812,22 @@ fn run(
         let root = if share {
             t.once("ShareCte", &root, |r| {
                 share_cte::share(Arc::clone(r), direct)
+            })?
+        } else {
+            root
+        };
+        // A scan read only by filters is read once (`share_scan`, TPC-DS q28).
+        let scans = share
+            && options.share_filtered_scans
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&SHARE_FILTERED_SCANS)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
+        let root = if scans {
+            t.once("ShareFilteredScan", &root, |r| {
+                share_scan::share(Arc::clone(r), stats.unwrap_or(&NoStatistics))
             })?
         } else {
             root
@@ -913,10 +950,12 @@ fn eager_pass(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
     options: &Options,
+    expand: bool,
     joins: join_order::Settings,
     t: &mut Trace,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let (after, notes) = eager::rewrite(Arc::clone(root), stats, options.stats_propagation)?;
+    let (after, notes) =
+        eager::rewrite(Arc::clone(root), stats, options.stats_propagation, expand)?;
     t.notes("EagerAggregate", &after, notes);
     // The moved aggregate changes what its join's inputs estimate, and so
     // their canonical order.

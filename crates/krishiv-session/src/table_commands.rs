@@ -116,6 +116,12 @@ pub(crate) struct RowChanges<'a> {
     pub(crate) values: &'a [&'a krishiv_sql::ast::Expr],
     /// The `WHERE` condition.
     pub(crate) condition: Option<&'a krishiv_sql::ast::Expr>,
+    /// The target's `WITH (...)` options.
+    pub(crate) options: &'a [krishiv_sql::ast::TableOption],
+    /// More expressions whose subqueries Spark analyzes first (a `MERGE`'s `ON` and clause conditions).
+    pub(crate) more: &'a [&'a krishiv_sql::ast::Expr],
+    /// Queries Spark analyzes first (a `MERGE` source that is a subquery).
+    pub(crate) sources: &'a [&'a krishiv_sql::ast::Query],
 }
 
 /// The scalar subqueries anywhere in the expression.
@@ -127,6 +133,21 @@ fn scalar_subqueries<'a>(
         out.push(q);
     }
     e.for_each_child(&mut |c| scalar_subqueries(c, out));
+}
+
+/// Every subquery (scalar, `IN` and `EXISTS`) anywhere in the expression.
+pub(crate) fn all_subqueries<'a>(
+    e: &'a krishiv_sql::ast::Expr,
+    out: &mut Vec<&'a krishiv_sql::ast::Query>,
+) {
+    match &e.kind {
+        krishiv_sql::ast::ExprKind::Subquery(q) | krishiv_sql::ast::ExprKind::Exists(q) => {
+            out.push(q);
+        }
+        krishiv_sql::ast::ExprKind::InSubquery { query, .. } => out.push(query),
+        _ => {}
+    }
+    e.for_each_child(&mut |c| all_subqueries(c, out));
 }
 
 fn unsupported(feature: &str) -> KrishivError {
@@ -191,7 +212,7 @@ impl TableName {
         Ok(Self {
             namespace,
             name,
-            written: format!("`{}`", parts.join("`.`")),
+            written: krishiv_common::names::quote_parts(parts),
             bare,
         })
     }
@@ -201,10 +222,11 @@ impl TableName {
     }
 
     /// Spark's `TABLE_OR_VIEW_NOT_FOUND` for this name: as written, with the search path.
-    pub(crate) fn not_found(&self) -> KrishivError {
+    /// `search_path` is the session's ([`Session::search_path`]).
+    pub(crate) fn not_found(&self, search_path: String) -> KrishivError {
         TableOrViewNotFound {
             relation_name: self.written.clone(),
-            search_path: crate::catalog::search_path(),
+            search_path,
         }
         .into()
     }
@@ -587,6 +609,11 @@ impl Session {
             ids,
         )
         .map_err(|e| e.error)?;
+        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        let case_sensitive = env.analysis.conf.case_sensitive;
+        let analysis = df.analyzed_in(env.clone()).await?;
+        env.catalog
+            .check_reference_options(analysis.analyzed.plan.root())?;
         if let Some(temp) = crate::catalog::reads_temporary(
             &self.state.catalog,
             plan.root(),
@@ -598,9 +625,6 @@ impl Session {
                 "VIEW",
             ));
         }
-        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        let case_sensitive = env.analysis.conf.case_sensitive;
-        let analysis = df.analyzed_in(env.clone()).await?;
         self.refuse_session_objects(&name.quoted(), plan.root(), &env)
             .await?;
         let query_columns: Vec<String> = analysis
@@ -706,6 +730,7 @@ impl Session {
                 // The store sets the version (review r10 M10).
                 revision: 0,
                 author: self.state.principal.name.clone(),
+                kind: crate::store::ViewKind::Sql,
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -982,6 +1007,7 @@ impl Session {
                     default: None,
                     comment: None,
                     char_varchar: None,
+                    metric: None,
                 })
             })
             .collect()
@@ -1011,7 +1037,7 @@ impl Session {
         } else {
             Err(TableOrViewNotFound {
                 relation_name: format!("`{}`.`{name}`", crate::catalog::GLOBAL_NAMESPACE),
-                search_path: crate::catalog::search_path(),
+                search_path: self.search_path(),
             }
             .into())
         })
@@ -1042,14 +1068,28 @@ impl Session {
             }
             Some(t) => Err(WrongCommandForObjectType {
                 operation: "DROP VIEW".to_owned(),
-                required_type: "VIEW".to_owned(),
-                object_name: format!("{}.{}", name.namespace, name.name),
+                // Spark 4.2 drops either view kind and names both (`ddl.scala`); earlier
+                // releases have no metric view (3.5.7 and 4.1.0 gate goldens).
+                required_type: match self.state.profile {
+                    krishiv_plan::analyzer::SparkProfile::V3_5
+                    | krishiv_plan::analyzer::SparkProfile::V4_0
+                    | krishiv_plan::analyzer::SparkProfile::V4_1 => "VIEW",
+                    _ => "VIEW or METRIC_VIEW",
+                }
+                .to_owned(),
+                // `CatalogTable.qualifiedName`, with the catalog (all releases).
+                object_name: format!(
+                    "{}.{}.{}",
+                    crate::catalog::CATALOG,
+                    name.namespace,
+                    name.name
+                ),
                 found_type: if t.managed { "MANAGED" } else { "EXTERNAL" }.to_owned(),
                 alternative: "DROP TABLE".to_owned(),
             }
             .into()),
             None if if_exists => Ok(()),
-            None => Err(name.not_found()),
+            None => Err(self.drop_view_not_found(&name.namespace, &name.name)),
         }
     }
 
@@ -1080,7 +1120,7 @@ impl Session {
             );
         }
         let Some(existing) = self.state.catalog.store.table(&name.namespace, &name.name) else {
-            return Err(name.not_found());
+            return Err(name.not_found(self.search_path()));
         };
         if existing.view.is_none() {
             return Err(krishiv_common::error::ExpectViewNotTableUseAlterTable {
@@ -1088,6 +1128,17 @@ impl Session {
                 operation: "ALTER VIEW".to_owned(),
             }
             .into());
+        }
+        let metric = existing
+            .view
+            .as_ref()
+            .is_some_and(crate::store::ViewDef::is_metric);
+        if let (true, AlterViewAction::RenameTo { name: to, .. }) = (metric, &a.action) {
+            // A metric view keeps its kind, YAML and column metadata under the new name (4.2.1
+            // golden). A plain view's rename is not built yet.
+            return self
+                .rename_table(&existing, &self.table_name(to, &env)?)
+                .await;
         }
         let mut changed = (*existing).clone();
         match &a.action {
@@ -1103,6 +1154,10 @@ impl Session {
                     ids,
                 )
                 .map_err(|e| e.error)?;
+                let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+                let analysis = df.analyzed_in(env.clone()).await?;
+                env.catalog
+                    .check_reference_options(analysis.analyzed.plan.root())?;
                 if let Some(temp) = crate::catalog::reads_temporary(
                     &self.state.catalog,
                     plan.root(),
@@ -1114,8 +1169,6 @@ impl Session {
                         "VIEW",
                     ));
                 }
-                let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-                let analysis = df.analyzed_in(env.clone()).await?;
                 self.refuse_session_objects(&name.quoted(), plan.root(), &env)
                     .await?;
                 crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
@@ -1160,6 +1213,12 @@ impl Session {
                     // A new text: the store gives it a new version (review r10 M10).
                     revision: 0,
                     author: self.state.principal.name.clone(),
+                    // Spark's `AlterViewAsCommand` keeps the table type: a metric view's text
+                    // becomes the query, read later as YAML (4.2.1 golden).
+                    kind: existing
+                        .view
+                        .as_ref()
+                        .map_or(crate::store::ViewKind::Sql, |v| v.kind.clone()),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {
@@ -1242,7 +1301,7 @@ impl Session {
                         let (ty, declared) = t.to_column_type()?;
                         ColumnChange::Type(ty, declared)
                     }
-                    ChangeColumnAction::Comment(c) => ColumnChange::Comment(c.clone()),
+                    ChangeColumnAction::Comment(c) => ColumnChange::Comment(Some(c.clone())),
                     ChangeColumnAction::First | ChangeColumnAction::After(_) => {
                         ColumnChange::Position
                     }
@@ -1259,7 +1318,7 @@ impl Session {
                 ..
             } => {
                 let change = match action {
-                    AlterColumnAction::Comment(c) => ColumnChange::Comment(c.clone()),
+                    AlterColumnAction::Comment(c) => ColumnChange::Comment(Some(c.clone())),
                     AlterColumnAction::SetNotNull | AlterColumnAction::DropNotNull => {
                         ColumnChange::Nullability
                     }
@@ -1267,6 +1326,33 @@ impl Session {
                     _ => return Err(unsupported("ALTER COLUMN ... SET DEFAULT")),
                 };
                 self.change_column(&mut changed, column, change, &env)?;
+            }
+            AlterTableAction::CommentOnColumns { columns, .. } => {
+                // `AlterTableChangeColumnCommentsCommand`: every column is resolved first, then a column
+                // named twice is refused.
+                let mut resolved = Vec::with_capacity(columns.len());
+                for (column, _) in columns {
+                    resolved.push(resolve_column(&changed, column, &env)?);
+                }
+                for (i, at) in resolved.iter().enumerate() {
+                    if resolved[..i].contains(at) {
+                        return Err(krishiv_common::error::NotSupportedChangeSameColumn {
+                            table: name.quoted(),
+                            field_name: krishiv_common::names::quote_parts(&[changed.columns[*at]
+                                .name
+                                .clone()]),
+                        }
+                        .into());
+                    }
+                }
+                for (column, comment) in columns {
+                    self.change_column(
+                        &mut changed,
+                        column,
+                        ColumnChange::Comment(comment.clone()),
+                        &env,
+                    )?;
+                }
             }
             AlterTableAction::RenameColumn { from, .. } => {
                 resolve_column(&changed, from, &env)?;
@@ -1391,7 +1477,7 @@ impl Session {
             {
                 return Err(current.change_type_error(name.quoted(), &t, declared.as_deref()));
             }
-            ColumnChange::Comment(c) => current.comment = Some(c),
+            ColumnChange::Comment(c) => current.comment = c,
             ColumnChange::DropDefault => current.default = None,
             _ => {}
         }
@@ -1417,13 +1503,77 @@ impl Session {
                 // Spark's error for a view here is not recorded in the goldens yet.
                 return Err(unsupported("COMMENT ON TABLE of a view"));
             }
+            if let AlterTableAction::CommentOnColumns { list_form, .. } = &a.action {
+                return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
+                    operation: if *list_form {
+                        "COMMENT ON TABLE ... COLUMN"
+                    } else {
+                        "COMMENT ON COLUMN"
+                    }
+                    .to_owned(),
+                    view_name: name.quoted(),
+                }
+                .into());
+            }
+            let metric = self
+                .state
+                .catalog
+                .store
+                .table(&name.namespace, &name.name)
+                .and_then(|t| t.view.as_ref().map(crate::store::ViewDef::is_metric))
+                .unwrap_or(false);
+            // The partition commands resolve a table by name (`UnresolvedTable`, `AstBuilder`);
+            // a metric view there is refused with no alternative (4.2.1 golden).
+            let partition_operation = match a.action {
+                AlterTableAction::AddPartition { .. } => Some("ALTER TABLE ... ADD PARTITION ..."),
+                AlterTableAction::DropPartition { .. } => {
+                    Some("ALTER TABLE ... DROP PARTITION ...")
+                }
+                AlterTableAction::RenamePartition { .. } => {
+                    Some("ALTER TABLE ... RENAME TO PARTITION")
+                }
+                AlterTableAction::RecoverPartitions => Some("ALTER TABLE ... RECOVER PARTITIONS"),
+                _ => None,
+            };
+            if let (true, Some(operation)) = (metric, partition_operation) {
+                return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
+                    operation: operation.to_owned(),
+                    view_name: name.quoted(),
+                }
+                .into());
+            }
             return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
-                operation: "`ALTER TABLE`".to_owned(),
-                view_name: name.quoted(),
+                // Spark quotes the operation for a plain view only (4.2.1 goldens).
+                operation: if metric {
+                    "ALTER TABLE"
+                } else {
+                    "`ALTER TABLE`"
+                }
+                .to_owned(),
+                // ... and names a metric view as written, a plain one fully qualified.
+                view_name: if metric {
+                    match &a.table {
+                        DdlName::Parts(n) => n
+                            .parts
+                            .iter()
+                            .map(|p| format!("`{}`", p.value.replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join("."),
+                        _ => format!("`{}`", name.name.replace('`', "``")),
+                    }
+                } else {
+                    name.quoted()
+                },
             }
             .into());
         }
-        let operation = if matches!(a.action, AlterTableAction::SetComment(_)) {
+        let operation = if let AlterTableAction::CommentOnColumns { list_form, .. } = &a.action {
+            if *list_form {
+                "COMMENT ON TABLE ... COLUMN"
+            } else {
+                "COMMENT ON COLUMN"
+            }
+        } else if matches!(a.action, AlterTableAction::SetComment(_)) {
             "COMMENT ON TABLE"
         } else {
             "ALTER TABLE"
@@ -1473,12 +1623,12 @@ impl Session {
     /// between puts the directory back.
     async fn rename_table(
         &self,
-        table: &CatalogTable,
+        table: &Arc<CatalogTable>,
         to: &TableName,
     ) -> Result<DataFrame, KrishivError> {
         let to = &self.rename_target(table, to)?;
         let store = &self.state.catalog.store;
-        let mut renamed = table.clone();
+        let mut renamed = (**table).clone();
         renamed.namespace.clone_from(&to.namespace);
         renamed.name.clone_from(&to.name);
         // The canonical directories moved (to, from), to move back on a failure.
@@ -1511,9 +1661,17 @@ impl Session {
         self.state
             .cache
             .invalidate_table(&format!("{}.{}", table.namespace, table.name));
-        store.drop_table(&table.namespace, &table.name);
-        if let Err(e) = store.create_table(renamed, CreateMode::ErrorIfExists) {
-            let _ = store.create_table(table.clone(), CreateMode::Replace);
+        // The entry read, swapped for the renamed one under one store lock: both names or neither,
+        // and no window where a reader finds neither or a restore replaces a newer object.
+        let failed = match store.rename_table_entry(table, renamed) {
+            Ok(Some(_)) => None,
+            Ok(None) => Some(internal(format!(
+                "{} was changed by another statement while this one ran; retry",
+                quoted(&table.namespace, &table.name)
+            ))),
+            Err(e) => Some(e),
+        };
+        if let Some(e) = failed {
             if let Some((target, source)) = moved {
                 self.move_back(&target, &source)?;
             }
@@ -1527,7 +1685,8 @@ impl Session {
 enum ColumnChange {
     /// The type and the `CHAR(n)` / `VARCHAR(n)` string the new type was written with.
     Type(DataType, Option<String>),
-    Comment(String),
+    /// The new comment; `None` removes it.
+    Comment(Option<String>),
     Position,
     Nullability,
     DropDefault,
@@ -1547,6 +1706,10 @@ fn table_writer(
         writer = writer.partition_by(&table.layout.partition_columns);
     }
     for (k, v) in &table.options {
+        // A key stored before this rule would deduplicate every later write.
+        if k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION) {
+            continue;
+        }
         writer = writer.option(k, v);
     }
     // Stored when an admin (or a `Manage` holder) created or altered the table: not asked again.
@@ -1812,6 +1975,7 @@ mod writes;
 mod create;
 #[cfg(feature = "delta")]
 mod delta;
+mod metric_view;
 #[cfg(feature = "delta")]
 pub(crate) use delta::{delta_write_refused, is_delta_table};
 #[cfg(feature = "delta")]

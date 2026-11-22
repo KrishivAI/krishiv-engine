@@ -529,6 +529,57 @@ fn append_into_a_partitioned_table_and_again() {
     append_twice(true);
 }
 
+/// E34: a statement retried with a new write id and the same `krishiv.write.idempotencyKey`
+/// appends once and leaves no file; another key appends.
+#[test]
+fn a_retried_append_with_the_same_idempotency_key_commits_once() {
+    let env = env();
+    let t = create(&env, ixn_schema(), false, &[]);
+    let catalog = Catalog::new(&t);
+    let keyed = |id: &str, key: &str| {
+        let mut r = request(Some(id));
+        r.options
+            .insert("krishiv.write.idempotencyKey".to_owned(), key.to_owned());
+        r
+    };
+    let append = |req: &WriteRequest, rows: std::ops::Range<i64>| {
+        let p = provider(&env, &catalog.location(), &catalog);
+        let sink = p.writer(req).unwrap();
+        let input = Batches::new(
+            input_schema(),
+            vec![Batch::new(range(rows.start, rows.end))],
+        );
+        let (out, pool, _runner) = run(&env, sink, input, None);
+        out.unwrap();
+        assert_eq!(pool.reserved(), 0);
+    };
+    append(&keyed("w-1", "job-7"), 0..10);
+    let m = catalog.metadata();
+    assert_eq!(
+        m.current_snapshot()
+            .unwrap()
+            .summary()
+            .additional_properties
+            .get(super::append::IDEMPOTENCY_KEY_PROP)
+            .map(String::as_str),
+        Some("job-7")
+    );
+    let files = parquet_files(&env, false).len();
+
+    append(&keyed("w-2", "job-7"), 0..10);
+    assert_eq!(catalog.metadata().snapshots().count(), 1);
+    assert_eq!(
+        parquet_files(&env, true).len(),
+        files,
+        "the retry's files are gone"
+    );
+    assert_eq!(read_back(&env, &catalog), expected(0..10));
+
+    append(&keyed("w-3", "job-8"), 10..20);
+    assert_eq!(catalog.metadata().snapshots().count(), 2);
+    assert_eq!(read_back(&env, &catalog), expected(0..20));
+}
+
 /// `ixn_schema` with `id` required.
 pub(super) fn required_id_schema() -> iceberg::spec::Schema {
     iceberg::spec::Schema::builder()

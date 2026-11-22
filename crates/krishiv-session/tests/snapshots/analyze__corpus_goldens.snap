@@ -394,10 +394,10 @@ error KRISHIV_UNSUPPORTED_FEATURE
 
 -- DropView: DROP VIEW v
 {"schema_version":"krishiv.analyze.v1",
-"statement_class":"SESSION",
+"statement_class":"DDL",
 "explain":null,
 "partial":false,
-"securables":[],
+"securables":[{"kind":"view","name":["spark_catalog","default","v"],"display":"view `spark_catalog`.`default`.`v`","privilege":"DROP","columns":[]}],
 "output_schema":[],
 "lineage":[],
 "filters":[],
@@ -667,6 +667,17 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "filters":[],
 "warnings":[]}
 
+-- CreateMetricView: CREATE VIEW db.mv WITH METRICS LANGUAGE YAML AS $$version: 0.1$$
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":true,
+"securables":[{"kind":"namespace","name":["spark_catalog","db"],"display":"namespace `spark_catalog`.`db`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
 -- DropPermanentView: DROP VIEW db.v
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"DDL",
@@ -738,6 +749,18 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "warnings":[]}
 
 -- AlterTable::ChangeColumn: ALTER TABLE t CHANGE COLUMN a COMMENT 'c'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::CommentOnColumns: COMMENT ON COLUMN t.a IS 'c'
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"DDL",
 "explain":null,
@@ -1168,7 +1191,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"BROWSE","columns":[]}],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"function","type":"string","type_json":"\"string\"","nullable":false,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -1249,7 +1272,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"function_desc","type":"string","type_json":"\"string\"","nullable":false,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}

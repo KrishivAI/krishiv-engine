@@ -233,6 +233,7 @@ impl Walk {
                 | PlanNode::Sort { .. }
                 | PlanNode::Limit { .. }
                 | PlanNode::Offset { .. }
+                | PlanNode::Tail { .. }
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
                 | PlanNode::JoinHint { .. }
@@ -302,8 +303,10 @@ impl Walk {
                     }
                 }
                 // Unresolved forms: nothing proves what they read. A Python UDF over a relation
-                // (map, grouped and cogrouped map, table function) sees every column of it.
+                // (map, grouped and cogrouped map, table function) sees every column of it, and so
+                // does a metric-view read no aggregate rewrote (its expressions are unresolved).
                 PlanNode::Read(_)
+                | PlanNode::MetricViewRead { .. }
                 | PlanNode::MapPartitions { .. }
                 | PlanNode::GroupMap { .. }
                 | PlanNode::CoGroupMap { .. }

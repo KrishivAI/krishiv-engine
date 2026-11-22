@@ -367,6 +367,7 @@ impl Display for NodeLine<'_> {
             }
             PlanNode::Limit { limit, .. } => write!(f, "Limit {}", Text(limit)),
             PlanNode::Offset { offset, .. } => write!(f, "Offset {}", Text(offset)),
+            PlanNode::Tail { limit, .. } => write!(f, "Tail {}", Text(limit)),
             PlanNode::SubqueryAlias { alias, columns, .. } => {
                 let parts: Vec<String> = alias
                     .split(crate::plan::ALIAS_PART_SEP)
@@ -454,6 +455,23 @@ impl Display for NodeLine<'_> {
                     Name(std::slice::from_ref(name)),
                     List(metrics)
                 )
+            }
+            PlanNode::MetricViewRead {
+                name,
+                dimensions,
+                measures,
+                output,
+                ..
+            } => {
+                write!(f, "MetricViewRead {} [", Name(name))?;
+                for (i, c) in dimensions.iter().chain(measures).enumerate() {
+                    write!(f, "{}{} = {}", sep(i), c.name, Text(&c.expr))?;
+                }
+                f.write_str("], [")?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
             }
             PlanNode::JoinHint { strategy, .. } => {
                 write!(f, "JoinHint (strategy={})", strategy.name())

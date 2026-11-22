@@ -487,7 +487,14 @@ impl Catalog<'_> {
     }
 
     fn table_of(t: &CatalogTable) -> Table {
-        let table_type = if t.view.is_some() {
+        // `CatalogImpl.makeTable` gives `tableType.name`.
+        let table_type = if t
+            .view
+            .as_ref()
+            .is_some_and(crate::store::ViewDef::is_metric)
+        {
+            "METRIC_VIEW"
+        } else if t.view.is_some() {
             "VIEW"
         } else if t.managed {
             "MANAGED"
@@ -645,22 +652,22 @@ impl Catalog<'_> {
             && let Some(stored) = self.session.state.catalog.store.table(ns, &table.name)
             && self.session.hidden(&Session::relation_securable(&stored))
         {
-            return Err(Self::table_not_found(name));
+            return Err(self.table_not_found(name));
         }
         Ok(table)
     }
 
     /// `TABLE_OR_VIEW_NOT_FOUND` for `name`.
-    fn table_not_found(name: &str) -> KrishivError {
+    fn table_not_found(&self, name: &str) -> KrishivError {
         krishiv_common::error::TableOrViewNotFound {
             relation_name: quoted(name),
-            search_path: crate::catalog::search_path(),
+            search_path: self.session.search_path(),
         }
         .into()
     }
 
     fn lookup_table(&self, name: &str) -> Result<Table, KrishivError> {
-        let not_found = || Self::table_not_found(name);
+        let not_found = || self.table_not_found(name);
         let catalog = &self.session.state.catalog;
         let cs = self.case_sensitive();
         let p = parts(name);
@@ -763,7 +770,7 @@ impl Catalog<'_> {
             .ok_or_else(|| -> KrishivError {
                 krishiv_common::error::TableOrViewNotFound {
                     relation_name: quoted(name),
-                    search_path: crate::catalog::search_path(),
+                    search_path: self.session.search_path(),
                 }
                 .into()
             })?;
@@ -821,6 +828,21 @@ impl Catalog<'_> {
         database: Option<&str>,
         pattern: Option<&str>,
     ) -> Result<Vec<Function>, KrishivError> {
+        Ok(self
+            .list_functions_tagged(database, pattern)
+            .await?
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect())
+    }
+
+    /// `list_functions_in`, each function with whether it is a built-in (its origin, not its name: a session
+    /// function may share a built-in's name).
+    pub(crate) async fn list_functions_tagged(
+        &self,
+        database: Option<&str>,
+        pattern: Option<&str>,
+    ) -> Result<Vec<(Function, bool)>, KrishivError> {
         self.authorize_as("SHOW FUNCTIONS").await?;
         let db = match database {
             Some(d) => self.get_database(d).await?.name,
@@ -828,9 +850,9 @@ impl Catalog<'_> {
         };
         // A stored function is listed only to a principal that may see it (P3-T062 §2.4).
         let mut out = Vec::new();
-        for f in self.functions(&db, pattern) {
+        for (f, builtin) in self.functions_tagged(&db, pattern) {
             if self.function_listed(&f).await {
-                out.push(f);
+                out.push((f, builtin));
             }
         }
         Ok(out)
@@ -854,11 +876,27 @@ impl Catalog<'_> {
     }
 
     fn functions(&self, db: &str, pattern: Option<&str>) -> Vec<Function> {
+        self.functions_tagged(db, pattern)
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect()
+    }
+
+    fn functions_tagged(&self, db: &str, pattern: Option<&str>) -> Vec<(Function, bool)> {
+        let profile = self.session.state.profile;
         let keep = |n: &str| pattern.is_none_or(|p| crate::introspection::matches(p, n));
         let mut out: Vec<Function> = krishiv_functions::registry::builtins()
             .functions()
             .into_iter()
-            .filter(|d| keep(d.name))
+            // Only the names Spark itself lists: the engine's internal helpers (`__subscript`, ...) and the
+            // grammar-owned `timestampadd` are no catalog functions.
+            .filter(|d| {
+                keep(d.name)
+                    && profile >= d.since
+                    && krishiv_functions::registry::builtins()
+                        .spark_function(d.name)
+                        .is_some()
+            })
             .map(|d| Function {
                 name: d.name.to_owned(),
                 catalog: None,
@@ -914,7 +952,10 @@ impl Catalog<'_> {
             }
         }
         out[builtin..].sort_by(|a, b| a.name.cmp(&b.name));
-        out
+        out.into_iter()
+            .enumerate()
+            .map(|(i, f)| (f, i < builtin))
+            .collect()
     }
 
     /// The function `name`.
@@ -926,7 +967,7 @@ impl Catalog<'_> {
         let not_found = || -> KrishivError {
             krishiv_common::error::UnresolvedRoutine {
                 routine_name: quoted(name),
-                search_path: crate::catalog::search_path(),
+                search_path: self.session.search_path(),
             }
             .into()
         };

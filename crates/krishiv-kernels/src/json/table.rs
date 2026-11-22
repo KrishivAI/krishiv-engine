@@ -5,11 +5,11 @@
 //! `JSON_TABLE(input, 'row path' COLUMNS (...))` becomes a `posexplode` of [`json_table_rows`] with each column read
 //! from the row text by [`json_table_value`] / [`json_table_exists`] and cast to the column type. Paths are the
 //! simple wildcard-free ones (`$`, `.key`, `['key']`, `[n]`), plus one trailing `[*]` on the row path, which makes a
-//! row of each element of the array it follows (a value that is no array has no rows).
+//! row of each element of the array it follows (a value that is no array has no rows, or an error under `ERROR ON ERROR`).
 //!
 //! Spark's behaviour, from a 4.3.0 run: the input must be one well-formed JSON value and nothing else (single
-//! quotes allowed); a NULL or blank input has no rows, a malformed one has none either unless `ERROR ON ERROR`
-//! (`MALFORMED_RECORD_IN_PARSING`); a missing row path has no rows; the first of duplicate keys wins. A column's
+//! quotes allowed); a NULL, blank or malformed input has no rows unless `ERROR ON ERROR`
+//! (`MALFORMED_RECORD_IN_PARSING`, as does a value a trailing `[*]` follows that is no array); a missing row path has no rows; the first of duplicate keys wins. A column's
 //! value is NULL for a missing path or a JSON `null`, a string bare, anything else as compact JSON whose numbers
 //! print as Java's `BigDecimal.toString` does (`1.50` stays, `1e2` is `1E+2`, `-0` is `0`). A path exists even
 //! when its value is `null`.
@@ -170,16 +170,25 @@ pub fn json_table_rows(
     let mut items = StringViewBuilder::new();
     let mut offsets = vec![0_i32];
     for i in 0..json.len() {
-        if json.is_valid(i) && !json.value(i).trim().is_empty() {
+        let malformed = |text: &str| -> KrishivError {
+            MalformedRecordInParsingWithoutSuggestion {
+                bad_record: text.to_owned(),
+                fail_fast_mode: "FAILFAST".to_owned(),
+            }
+            .into()
+        };
+        if json.is_null(i) {
+            if error_on_error {
+                return Err(malformed("null"));
+            }
+        } else if json.value(i).trim().is_empty() {
+            if error_on_error {
+                return Err(malformed(json.value(i)));
+            }
+        } else {
             let text = json.value(i);
             match parse_document(text) {
-                None if error_on_error => {
-                    return Err(MalformedRecordInParsingWithoutSuggestion {
-                        bad_record: text.to_owned(),
-                        fail_fast_mode: "FAILFAST".to_owned(),
-                    }
-                    .into());
-                }
+                None if error_on_error => return Err(malformed(text)),
                 None => {}
                 Some(doc) => match (navigate(&doc, &steps), wildcard) {
                     (Some(Owned::Array(elements)), true) => {
@@ -187,6 +196,8 @@ pub fn json_table_rows(
                             items.append_value(render_string(e));
                         }
                     }
+                    // A value the `[*]` follows that is no array is malformed for Spark; a missing one has no rows.
+                    (Some(_), true) if error_on_error => return Err(malformed(text)),
                     (Some(node), false) => items.append_value(render_string(node)),
                     _ => {}
                 },
@@ -316,6 +327,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn error_on_error_raises_for_null_blank_and_non_array_row_values() {
+        let class = krishiv_common::error::ErrorClass::MalformedRecordInParsingWithoutSuggestion;
+        for (input, path) in [
+            (None, "$[*]"),
+            (Some(""), "$[*]"),
+            (Some("  "), "$[*]"),
+            (Some(r#"{"a":1}"#), "$[*]"),
+            (Some(r#"{"a":1}"#), "$.a[*]"),
+        ] {
+            let e = json_table_rows(&StringArray::from(vec![input]), path, true).unwrap_err();
+            assert_eq!(e.error_class(), class, "{input:?} {path}");
+            // Without the clause the same inputs have no rows: one valid, empty list.
+            let out = json_table_rows(&StringArray::from(vec![input]), path, false)
+                .unwrap_or_else(|e| panic!("{input:?} {path}: {e}"));
+            let lists = arrow_array::cast::AsArray::as_list::<i32>(&out);
+            assert_eq!(lists.len(), 1, "{input:?} {path}");
+            assert!(lists.is_valid(0), "{input:?} {path}");
+            assert_eq!(lists.value(0).len(), 0, "{input:?} {path}");
+        }
+        // A missing container has no rows, even with ERROR ON ERROR.
+        for path in ["$.b[*]", "$.b"] {
+            let out = json_table_rows(&StringArray::from(vec![r#"{"a":1}"#]), path, true).unwrap();
+            assert_eq!(out.len(), 1);
+            assert_eq!(
+                arrow_array::cast::AsArray::as_list::<i32>(&out)
+                    .value(0)
+                    .len(),
+                0
+            );
+        }
+    }
+
     fn value(row: &str, path: &str) -> Option<String> {
         let out = json_table_value(
             &StringArray::from(vec![row]),
@@ -326,6 +370,31 @@ mod tests {
             .next()
             .flatten()
             .map(str::to_owned)
+    }
+
+    /// The unusual key spellings the SQL lowering accepts select the key written, and `EXISTS` agrees.
+    #[test]
+    fn unusual_key_spellings_select_their_keys() {
+        for (key, path) in [
+            ("c'd", "$.c'd"),
+            ("a b", "$.a b"),
+            ("a]b", "$.a]b"),
+            ("a b", "$['a b']"),
+        ] {
+            let doc = format!("{{{key:?}:7,\"other\":8}}");
+            assert_eq!(value(&doc, path).as_deref(), Some("7"), "{path}");
+            let exists = json_table_exists(
+                &StringArray::from(vec![doc.as_str()]),
+                &StringArray::from(vec![path]),
+            );
+            assert!(
+                arrow_array::cast::AsArray::as_boolean(&exists).value(0),
+                "{path}"
+            );
+            assert_eq!(value("{\"other\":8}", path), None, "{path}");
+        }
+        let nested = r#"{"a b":{"c":9}}"#;
+        assert_eq!(value(nested, "$['a b'].c").as_deref(), Some("9"));
     }
 
     #[test]

@@ -148,6 +148,13 @@ async fn a_query_of_another_session_cannot_be_cancelled_and_an_own_one_can() {
     let their_id = running_id(&other, "theirs").await;
     assert!(!source.cancel(&their_id).await.unwrap());
     assert!(!source.cancel("not-an-id").await.unwrap());
+    // Naming the other session does not reach its query either.
+    assert!(
+        !source
+            .cancel_in_session(&their_id, other.id())
+            .await
+            .unwrap()
+    );
     assert!(
         !their_task.is_finished(),
         "the other session's query was cancelled"
@@ -170,7 +177,11 @@ async fn a_query_of_another_session_cannot_be_cancelled_and_an_own_one_can() {
         own.sql(&sql).await.unwrap().collect().await
     });
     let own_id = running_id(&mine, "own").await;
-    assert!(source.cancel(&own_id).await.unwrap());
+    assert!(
+        !source.cancel_in_session(&own_id, other.id()).await.unwrap(),
+        "the console's own query, asked for as another session's"
+    );
+    assert!(source.cancel_in_session(&own_id, mine.id()).await.unwrap());
     let err = tokio::time::timeout(Duration::from_secs(10), own_task)
         .await
         .unwrap()
@@ -214,6 +225,44 @@ async fn spark_catalog_is_listed_whatever_the_sessions_current_catalog() {
     assert_eq!(listed(&source, &["spark_catalog", "default"]).await, tables);
     // The current catalog's own schemas are another list.
     assert_ne!(listed(&source, &["system"]).await, schemas);
+}
+
+/// A temporary view is listed under every schema but has a one-part name: its columns are read by that name.
+/// A table of the schema with the same name comes first, as the three-part name the page asked for names it.
+#[tokio::test]
+async fn the_catalog_lists_the_columns_of_a_temporary_view() {
+    let (mine, _other) = two_sessions();
+    run(
+        &mine,
+        "CREATE TEMPORARY VIEW only_a_view AS SELECT 1 AS from_the_view",
+    )
+    .await;
+    run(
+        &mine,
+        "CREATE TABLE shadowed (from_the_table INT) USING parquet",
+    )
+    .await;
+    run(
+        &mine,
+        "CREATE TEMPORARY VIEW shadowed AS SELECT 1 AS from_the_view",
+    )
+    .await;
+    let source = EmbeddedSource::new(&mine).unwrap();
+    for (name, column) in [
+        ("only_a_view", "from_the_view"),
+        ("shadowed", "from_the_table"),
+    ] {
+        let columns = listed(&source, &["spark_catalog", "default", name]).await;
+        assert_eq!(columns, [column], "{name}");
+    }
+    // A name that is neither is still an error, and the first statement's.
+    let path = ["spark_catalog", "default", "no_such_table"].map(str::to_owned);
+    let missing = source.catalog(&path).await.unwrap_err();
+    assert!(
+        missing.message.contains("no_such_table"),
+        "{}",
+        missing.message
+    );
 }
 
 #[tokio::test]
@@ -304,6 +353,25 @@ async fn the_environment_is_the_sessions_settings() {
 }
 
 #[tokio::test]
+async fn the_console_lists_its_one_session_and_ends_none() {
+    let (mine, other) = two_sessions();
+    let source = EmbeddedSource::new(&mine).unwrap();
+    let sessions = source.rows(SystemTable::Sessions).await.unwrap();
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert_eq!(sessions[0]["session_id"], mine.id());
+    // The groups are a server's, and so is the advice folded from every session's queries; this process has
+    // no operator, so no session is ended from here.
+    for table in [SystemTable::ResourceGroups, SystemTable::PartitionAdvice] {
+        assert!(source.rows(table).await.unwrap().is_empty(), "{table:?}");
+    }
+    for id in [other.id(), mine.id()] {
+        assert_eq!(source.close_session(id).await.unwrap(), None);
+    }
+    run(&other, "SELECT 1").await;
+    run(&mine, "SELECT 1").await;
+}
+
+#[tokio::test]
 async fn a_closed_session_serves_nothing() {
     let (mine, _) = two_sessions();
     let source = EmbeddedSource::new(&mine).unwrap();
@@ -313,6 +381,7 @@ async fn a_closed_session_serves_nothing() {
         SystemTable::Operators,
         SystemTable::Memory,
         SystemTable::Caches,
+        SystemTable::Sessions,
     ] {
         let e = source.rows(table).await.unwrap_err();
         assert!(e.to_string().contains("closed"), "{e}");
@@ -396,4 +465,32 @@ async fn a_dropped_handle_stops_the_server_and_leaves_the_session_open() {
     assert!(tokio::net::TcpStream::connect(addr).await.is_err());
     assert!(!mine.is_closed());
     run(&mine, "SELECT 1").await;
+}
+
+/// The embedded console's read of the memory pools is two statements: the session's query ids, then the
+/// pools. Its read of the queries is one.
+#[tokio::test]
+async fn a_read_runs_no_more_statements_than_it_needs() {
+    let (mine, other) = two_sessions();
+    run(&mine, "SELECT 1 AS own").await;
+    let source = EmbeddedSource::new(&mine).unwrap();
+    let console = || async {
+        let batches = other
+            .sql("SELECT principal FROM system.queries")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        krishiv_server::session_source::batches_to_rows(&batches)
+            .iter()
+            .filter(|r| r["principal"] == krishiv_server::session_source::UI_PRINCIPAL)
+            .count()
+    };
+    let before = console().await;
+    source.rows(SystemTable::Memory).await.unwrap();
+    assert_eq!(console().await, before + 2);
+    let listed = source.rows(SystemTable::Queries).await.unwrap();
+    assert_eq!(console().await, before + 3);
+    assert_eq!(texts(&listed), ["SELECT 1 AS own"]);
 }

@@ -327,25 +327,115 @@ fn a_value_of_another_type_is_cast_to_variant() {
     assert_eq!(show(&out), vec![Some(r#"{"a":1,"b":"x"}"#.to_owned())]);
 }
 
-/// Spark checks the paths of `variant_delete` even for a NULL variant; `variant_insert` returns NULL first.
+/// Spark parses a foldable path once, before any row (so a bad literal raises over NULL variants and over no rows);
+/// a column path is parsed per row, after the NULL checks (so a bad one over a NULL variant is NULL).
 #[test]
-fn delete_validates_its_paths_for_a_null_variant() {
+fn a_literal_path_is_checked_at_bind_and_a_column_path_per_row() {
+    let bad_lit: BindArg = BindArg::Literal(text_col(&[Some("bad")]));
     let v = variants(&[None]);
-    let bad = text_col(&[Some("$[-1]")]);
+    let val = variants(&[Some("1")]);
+    let doc0 = variants(&[Some("{}")]);
+    let bind = |name: &str, args: &[BindArg]| bind_scalar(name, args, &BindOptions::default());
+    for (name, args) in [
+        ("variant_delete", vec![arg(&v), bad_lit.clone()]),
+        ("variant_insert", vec![arg(&v), bad_lit.clone(), arg(&val)]),
+        ("variant_set", vec![arg(&v), bad_lit, arg(&val)]),
+    ] {
+        assert_eq!(
+            bind(name, &args).err().map(|e| e.error_class()),
+            Some(ErrorClass::InvalidVariantPath),
+            "{name}"
+        );
+    }
+    // A NULL literal folds insert/set/append to NULL before the path is parsed; `variant_delete` still raises.
+    let bad_text = text_col(&[Some("bad")]);
+    let null_variant: ArrayRef = variants(&[None]);
+    let null_int: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![None::<i32>]));
+    let bad_lit = || BindArg::Literal(Arc::clone(&bad_text));
+    let lit = |a: &ArrayRef| (BindArg::Literal(Arc::clone(a)), Arg::Scalar(Arc::clone(a)));
+    let (bad, null_v, null_i) = (lit(&bad_text), lit(&null_variant), lit(&null_int));
+    let col = |a: &ArrayRef| (arg(a), Arg::Array(Arc::clone(a)));
+    for (name, cases) in [
+        (
+            "variant_insert",
+            vec![null_v.clone(), bad.clone(), col(&val)],
+        ),
+        ("variant_set", vec![null_v.clone(), bad.clone(), col(&val)]),
+        ("variant_array_append", vec![null_v, bad.clone(), col(&val)]),
+        ("variant_insert", vec![col(&doc0), bad, null_i]),
+    ] {
+        let (binds, args): (Vec<BindArg>, Vec<Arg>) = cases.into_iter().unzip();
+        let f = bind(name, &binds).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let out = f.invoke(&args, 1).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(show(&out), vec![None], "{name}");
+    }
+    let null_variant = || BindArg::Literal(Arc::clone(&null_variant));
+    assert_eq!(
+        bind("variant_delete", &[null_variant(), bad_lit()])
+            .err()
+            .map(|e| e.error_class()),
+        Some(ErrorClass::InvalidVariantPath)
+    );
+    // The name in the message is the listed one, `try_` included.
+    let err =
+        bind("try_variant_insert", &[arg(&doc0), bad_lit(), arg(&val)]).expect_err("bad path");
+    assert!(err.to_string().contains("`try_variant_insert`"), "{err}");
+    // A column path over a NULL variant is NULL, whatever it holds.
+    let bad = text_col(&[Some("bad")]);
     assert_eq!(
         run("variant_delete", &[&v, &bad], None).map(|o| show(&o).remove(0)),
-        Err(ErrorClass::InvalidVariantPath)
-    );
-    let good = text_col(&[Some("$.a")]);
-    assert_eq!(
-        run("variant_delete", &[&v, &good], None).map(|o| show(&o).remove(0)),
         Ok(None)
     );
-    let val = variants(&[Some("1")]);
     assert_eq!(
         run("variant_insert", &[&v, &bad, &val], None).map(|o| show(&o).remove(0)),
         Ok(None)
     );
+    // ... and over a non-NULL variant it raises.
+    let doc = variants(&[Some("{}")]);
+    assert_eq!(
+        run("variant_delete", &[&doc, &bad], None).map(|o| show(&o).remove(0)),
+        Err(ErrorClass::InvalidVariantPath)
+    );
+}
+
+/// The message of the one row of `name(parse_json(v), path, parse_json(val))`.
+fn edit_message(name: &str, v: &str, path: &str, val: &str) -> String {
+    let (v, p, val) = (
+        variants(&[Some(v)]),
+        text_col(&[Some(path)]),
+        variants(&[Some(val)]),
+    );
+    let cols = [&v, &p, &val];
+    let binds: Vec<BindArg> = cols.iter().map(|c| arg(c)).collect();
+    let args: Vec<Arg> = cols.iter().map(|c| Arg::Array(Arc::clone(c))).collect();
+    let f = bind_scalar(name, &binds, &BindOptions::default()).unwrap();
+    f.invoke(&args, 1).unwrap_err().to_string()
+}
+
+#[test]
+fn a_type_mismatch_names_the_path_as_spark_renders_it() {
+    let m = |v, p| edit_message("variant_insert", v, p, "2");
+    assert!(m(r#"{"a":1}"#, "$.a.x").contains("at '$.a'"), "plain key");
+    assert!(
+        m(r#"{"a.b":1}"#, "$['a.b'].c").contains("at '$['a.b']'"),
+        "dotted key"
+    );
+    assert!(
+        m(r#"{"":1}"#, "$[''].c").contains("at '$['']'"),
+        "empty key"
+    );
+    assert!(
+        m(r#"{"a b":1}"#, "$['a b'].c").contains("at '$.a b'"),
+        "space stays dotted"
+    );
+}
+
+#[test]
+fn the_size_limit_names_the_calling_function() {
+    let m = edit_message("variant_insert", "[1]", "$[2000000000]", "1");
+    assert!(m.contains("`variant_insert`"), "{m}");
+    let m = edit_message("variant_set", "[]", "$[30000000]", "1");
+    assert!(m.contains("`variant_set`"), "{m}");
 }
 
 /// A path that creates more levels than the variant parser's depth bound, or an index past the size limit, is
@@ -357,6 +447,11 @@ fn a_created_value_past_the_size_limit_is_refused() {
     assert_eq!(r, Err(ErrorClass::VariantSizeLimit), "deep");
     assert_eq!(
         edit("variant_set", "[1]", "$[100000000]", "1", None),
+        Err(ErrorClass::VariantSizeLimit)
+    );
+    // An existing array padded past the limit: refused before any filler null is written.
+    assert_eq!(
+        edit("variant_insert", "[1]", "$[2000000000]", "1", None),
         Err(ErrorClass::VariantSizeLimit)
     );
 }

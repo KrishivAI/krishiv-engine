@@ -49,11 +49,12 @@ pub use lakehouse::{
     CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS, DELTA_MAX_COMMIT_ATTEMPTS,
     DELTA_SNAPSHOT_CACHE_MAX_BYTES, ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_MANIFEST_CACHE_BYTES,
     ICEBERG_WRITE_MAX_OPEN_FILES, ICEBERG_WRITE_STATISTICS_ENABLED, WRITE_COMMIT_RETRY_TIMEOUT,
+    WRITE_IDEMPOTENCY_KEY,
 };
 pub use optimizer::{
     DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER,
-    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use runtime_filter::{
@@ -70,6 +71,7 @@ pub use server::*;
 pub use sql_session::{
     ANSI_ENABLED, CTE_PRECEDENCE_POLICY, MAP_KEY_DEDUP_POLICY, SCHEMA_LEVEL_COLLATIONS_ENABLED,
     SESSION_TIME_ZONE, SQL_DEFAULT_PATH, SQL_PATH_ENABLED, STORE_ASSIGNMENT_POLICY,
+    TIME_TRAVEL_AT_SYNTAX_ENABLED,
 };
 pub use ui_embed::{
     UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS, UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL,
@@ -83,6 +85,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SESSION_TIME_ZONE,
     &SQL_PATH_ENABLED,
     &SCHEMA_LEVEL_COLLATIONS_ENABLED,
+    &TIME_TRAVEL_AT_SYNTAX_ENABLED,
     &SQL_DEFAULT_PATH,
     &STORE_ASSIGNMENT_POLICY,
     &CTE_PRECEDENCE_POLICY,
@@ -159,6 +162,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &DERIVED_KEYS_ABOVE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
+    &SHARE_FILTERED_SCANS,
     &SEMI_ANTI_JOIN_ORDER,
     &SPILL_DIR,
     &WORKLOAD_RESOURCE_GROUPS_FILE,
@@ -186,6 +190,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &DELTA_MAX_COMMIT_ATTEMPTS,
     &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
     &WRITE_COMMIT_RETRY_TIMEOUT,
+    &WRITE_IDEMPOTENCY_KEY,
     &CATALOG_MAX_METADATA_BYTES,
     &ICEBERG_MANIFEST_CACHE_BYTES,
     &ICEBERG_WRITE_MAX_OPEN_FILES,
@@ -250,6 +255,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
     &EAGER_AGGREGATION,
+    &PRE_AGGREGATE_EXPAND,
     &ARROW_MAX_RECORDS_PER_BATCH,
     &ARROW_PYSPARK_VALIDATE_SCHEMA,
     &PYTHON_UDF_ARROW_ENABLED,
@@ -1713,6 +1719,23 @@ pub static NDV_SAMPLING_TIMEOUT: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Grouping sets aggregate their input before the expansion
+/// (`krishiv.optimizer.preAggregateExpand`).
+pub static PRE_AGGREGATE_EXPAND: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.preAggregateExpand",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Where an aggregate reads an expansion (GROUP BY ROLLUP, CUBE and GROUPING SETS, and the \
+          rewrite of several DISTINCT calls), aggregate the input rows into their finest groups before \
+          each row is repeated once per projection, and merge those groups' states per projection. \
+          Only calls whose result cannot depend on row order are moved; it runs with \
+          krishiv.optimizer.eagerAggregation. Results are the same either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
     spark_alias: None,
 };
 

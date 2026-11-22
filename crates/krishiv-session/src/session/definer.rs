@@ -513,6 +513,25 @@ impl krishiv_plan::analyzer::CatalogResolver for ViewCatalogs {
     }
 }
 
+/// The analysis context that trusts the inlined texts by identity: the definer views' queries
+/// (read as their definers), every permanent view's and every temporary view's text; `None` when
+/// the query inlined none, so the session's own context is used as it is.
+pub(super) fn trusting_context(
+    base: &krishiv_plan::analyzer::AnalysisContext,
+    definers: &krishiv_plan::analyzer::views::DefinerTexts,
+    stored: &krishiv_plan::analyzer::views::DefinerTexts,
+    temp: &krishiv_plan::analyzer::views::DefinerTexts,
+) -> Option<krishiv_plan::analyzer::AnalysisContext> {
+    if definers.is_empty() && stored.is_empty() && temp.is_empty() {
+        return None;
+    }
+    let mut ctx = base.clone();
+    ctx.definer_texts = definers.clone();
+    ctx.stored_view_texts = stored.clone();
+    ctx.temp_view_texts = temp.clone();
+    Some(ctx)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

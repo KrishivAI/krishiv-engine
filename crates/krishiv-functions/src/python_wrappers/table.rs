@@ -33,6 +33,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "PySpark has it in `pyspark.sql.protobuf.functions`, not `pyspark.sql.functions`",
     ),
     ("make_time", "TIME has no Python mapping yet (P2-T181)"),
+    (
+        "measure",
+        "metric views (Spark 4.2): read through SQL or `F.expr` for now",
+    ),
     ("time", "TIME has no Python mapping yet (P2-T181)"),
     ("current_time", "TIME has no Python mapping yet (P2-T181)"),
     (
@@ -142,6 +146,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (
         "__trim_collated",
         "the analyzer's trim family over `UTF8_LCASE` and `_RTRIM` strings",
+    ),
+    (
+        "__like_fold",
+        "the analyzer's `like` and `ilike` over `UTF8_LCASE` strings",
+    ),
+    (
+        "__like_fold_pattern",
+        "the analyzer's `like ... escape` pattern over `UTF8_LCASE` strings",
     ),
     (
         "__replace_lcase",
