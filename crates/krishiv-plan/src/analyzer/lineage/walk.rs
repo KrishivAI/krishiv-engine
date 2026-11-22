@@ -438,6 +438,7 @@ impl<'a> Walker<'a> {
             PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
             | PlanNode::SecurityBarrier { input, .. }
+            | PlanNode::Tail { input, .. }
             | PlanNode::JoinHint { input, .. }
             // `TABLESAMPLE` keeps some input rows, by a draw that reads no column (`BUCKET .. ON col` is refused
             // before a `Sample` is built). Its fields are listed so a new one, a column above all, is decided here.
@@ -687,6 +688,7 @@ impl<'a> Walker<'a> {
             | PlanNode::Sql { .. }
             | PlanNode::WithColumns { .. }
             | PlanNode::Hint { .. }
+            | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::SetOp { .. }
             | PlanNode::Pivot { .. }

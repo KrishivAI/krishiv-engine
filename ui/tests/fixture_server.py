@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Serves the built UI and a fixture `/api/internal/*`, for the page snapshot check and for looking at the pages.
 
-    python ui/tests/fixture_server.py [--port 0]    # prints the port; the token is `fixture`
+    python ui/tests/fixture_server.py [--port 0] [--mode server|embedded|profiles] [--role operator|admin]
+    # prints the address; the token is `fixture`
 
 The routes and JSON shapes are those of `krishiv_server::internal`; the data is `fixtures.json`. The event stream
-sends the live list once a second, as the real one does.
+sends the live list once a second, as the real one does. `--mode` chooses which console the fixture is: `embedded`
+reports one session and lists only its queries; `profiles` has the history and a query's page and refuses the rest,
+as the real sources do. One more query has a page, in every mode: the stored profile of TPC-H Q9 (`Q9_ID`).
 """
 
 from __future__ import annotations
@@ -55,6 +58,8 @@ DEEP_LINKS = (
     "health",
     "queries",
     "history",
+    "sessions",
+    "workload",
     "resources",
     "catalog",
     "sql",
@@ -85,7 +90,13 @@ ENVIRONMENT = {
 CATALOG = {
     "catalogs": [{"name": "spark_catalog"}, {"name": XSS}],
     "spark_catalog": {"schemas": [{"name": "default"}]},
-    "default": {"tables": [{"name": "orders"}, {"name": "lineitem"}]},
+    "default": {
+        "tables": [
+            {"name": "orders", "is_temporary": False},
+            {"name": "lineitem", "is_temporary": False},
+            {"name": "recent_orders", "is_temporary": True},
+        ]
+    },
     "orders": {
         "columns": [
             {"name": "o_orderkey", "data_type": "bigint"},
@@ -93,15 +104,291 @@ CATALOG = {
         ]
     },
 }
+# The sessions of a server's clients (`system.sessions`), as `/api/internal/sessions` orders them: the open ones
+# first, each part by its last activity. The ids are the `session_id` of the fixture's queries.
+SESSION_A = "01932a40-2b00-7b01-8001-5e55100000a1"
+SESSION_B = "01932a40-2b00-7b01-8001-5e55100000b2"
+SESSION_C = "01932a40-2b00-7b01-8001-5e55100000c3"
+SESSION_XSS = "01932a40-2b00-7b01-8001-5e55100000d4"
+MINUTE = 60_000_000
+
+
+def fresh_sessions() -> list[dict]:
+    """The sessions as they are before any is ended; times count back from now, so "ago" texts are short."""
+    now = int(time.time() * 1_000_000)
+    base = {
+        "transport": "connect",
+        "current_catalog": "spark_catalog",
+        "current_namespace": "default",
+        "tags": {},
+        "queries_running": 0,
+        "queries_started": 0,
+        "closed_at": None,
+        "close_reason": None,
+        "delegated_by": None,
+    }
+    return [
+        base
+        | {
+            "session_id": SESSION_A,
+            "principal": "ann",
+            "client_type": "_SPARK_CONNECT_PYTHON spark/4.2.0 os/linux python/3.12",
+            "state": "active",
+            "created_at": now - 90 * MINUTE,
+            "last_active_at": now - 5_000_000,
+            "tags": {"team": "risk", "nightly": ""},
+            "queries_running": 1,
+            "queries_started": 14,
+        },
+        base
+        | {
+            "session_id": SESSION_B,
+            "principal": "bob",
+            "client_type": "ADBC Flight SQL",
+            "transport": "flight_sql",
+            "state": "active",
+            "created_at": now - 30 * MINUTE,
+            "last_active_at": now - 2 * MINUTE,
+            "current_namespace": "sales",
+            "queries_running": 1,
+            "queries_started": 3,
+            "delegated_by": "bi-gateway",
+        },
+        base
+        | {
+            "session_id": SESSION_XSS,
+            "principal": XSS,
+            "client_type": XSS,
+            "state": "active",
+            "created_at": now - 10 * MINUTE,
+            "last_active_at": now - 9 * MINUTE,
+            "tags": {XSS: XSS},
+            # The session the console's editor runs in: the console cannot end it.
+            "endable": False,
+        },
+        base
+        | {
+            "session_id": SESSION_C,
+            "principal": "cy",
+            "client_type": "krishiv-cli/0.2.1",
+            "state": "expired",
+            "created_at": now - 300 * MINUTE,
+            "last_active_at": now - 200 * MINUTE,
+            "closed_at": now - 140 * MINUTE,
+            "close_reason": "idle_timeout",
+            "queries_started": 1,
+        },
+    ]
+
+
+# A server's resource groups (`system.resource_groups`), a parent before its children. `root.etl` is at its
+# concurrency limit and `root.etl.nightly` at its queue limit; `root.adhoc` was removed and still runs a query.
+def group(group_id: str, parent: str | None, **over: object) -> dict:
+    return {
+        "group_id": group_id,
+        "parent_id": parent,
+        "state": "active",
+        "scheduling_policy": "weighted_fair",
+        "scheduling_weight": 1,
+        "priority": 0,
+        "workload_class": "interactive",
+        "hard_concurrency_limit": 16,
+        "max_queued": 100,
+        "soft_memory_limit_bytes": None,
+        "per_query_memory_limit_bytes": None,
+        "scan_quota_bytes": None,
+        "scan_quota_period_s": None,
+        "running": 0,
+        "queued": 0,
+        "memory_reserved_bytes": 0,
+        "scan_bytes_in_window": None,
+        "scan_window_resets_at": None,
+    } | over
+
+
+GROUPS = [
+    group(
+        "root",
+        None,
+        soft_memory_limit_bytes=16 << 30,
+        running=7,
+        queued=5,
+        memory_reserved_bytes=9 << 30,
+    ),
+    group(
+        "root.interactive",
+        "root",
+        scheduling_weight=3,
+        hard_concurrency_limit=8,
+        per_query_memory_limit_bytes=2 << 30,
+        running=2,
+        memory_reserved_bytes=1 << 30,
+    ),
+    group(
+        "root.etl",
+        "root",
+        scheduling_policy="query_priority",
+        priority=2,
+        workload_class="batch",
+        hard_concurrency_limit=4,
+        max_queued=20,
+        soft_memory_limit_bytes=12 << 30,
+        scan_quota_bytes=500 << 30,
+        scan_quota_period_s=86400,
+        scan_bytes_in_window=120 << 30,
+        scan_window_resets_at=1_795_300_000_000_000,
+        running=4,
+        queued=5,
+        memory_reserved_bytes=7 << 30,
+    ),
+    group(
+        "root.etl.nightly",
+        "root.etl",
+        workload_class="batch",
+        hard_concurrency_limit=2,
+        max_queued=5,
+        running=2,
+        queued=5,
+        memory_reserved_bytes=3 << 30,
+    ),
+    group(
+        "root.adhoc",
+        "root",
+        state="removed",
+        hard_concurrency_limit=2,
+        max_queued=0,
+        running=1,
+        memory_reserved_bytes=1 << 30,
+    ),
+]
 # Editor runs: a statement containing `sleep` stays running until it is cancelled.
 RUNS: dict[str, dict] = {}
+MODES = ("server", "embedded", "profiles")
+SESSION_ID = "01932a40-1a00-7a01-8001-5e5510000001"
+# What a console over stored profiles answers: the history, a query's page and the health the page reads its mode from.
+# TPC-H Q9 as a stored profile: the document the Python viewer's tests read, at SF 0.01.
+Q9_ID = "01932a40-1a00-7a01-8001-000000000009"
+# A query whose plan arrives with the third answer; the count of answers so far.
+LATE_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000b"
+LATE_PLAN_ASKED = [0]
+# A query the fixture answers with no plan tree.
+NO_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000a"
+NO_PLAN_ASKED = [0]
+Q9_PROFILE = json.loads(
+    (
+        HERE.parent.parent / "python" / "tests" / "fixtures" / "q09-profile.json"
+    ).read_text()
+)
+# A profile's metric -> the operator column the page reads, as `ProfilesSource::from_profiles` names them.
+OPERATOR_METRICS = {
+    "drivers": "drivers",
+    "rows_in": "rows_in",
+    "rows_out": "rows_out",
+    "compute_ns": "compute_time_ns",
+    "blocked_io_ns": "blocked_on_io_ns",
+    "blocked_memory_ns": "blocked_on_memory_ns",
+    "blocked_sink_ns": "blocked_on_sink_ns",
+    "peak_reserved_bytes": "peak_reserved_bytes",
+    "spilled_bytes": "spilled_bytes",
+}
+PROFILES_ROUTES = (
+    "/api/internal/health",
+    "/api/internal/history",
+    "/api/internal/queries/",
+    "/api/internal/compare",
+)
 
 
-def route(path: str) -> object | None:
+def history(query: str) -> list[dict]:
+    """The history under the page's filters, as `krishiv_server::internal` applies them: any part of the client's
+    name, a tag by its key or as `key=value`."""
+    asked = {k: v[0] for k, v in parse_qs(query).items()}
+    client, tag = asked.get("client", "").lower(), asked.get("tag", "")
+    session = asked.get("session", "")
+    return [
+        q
+        for q in DATA["history"]
+        if client in (q.get("client_type") or "").lower()
+        and (not session or q.get("session_id") == session)
+        and (
+            not tag
+            or any(tag in (k, f"{k}={v}") for k, v in (q.get("tags") or {}).items())
+        )
+    ]
+
+
+def stored_detail(query_id: str, profile: dict, sql: str) -> dict:
+    """A query's page from its stored profile, as the console over stored profiles answers it: the profile's
+    operators in id order (each with its plan node and role), the one with the most compute time and the
+    profile's plan tree. A stored profile without a `usage` member has
+    no CPU time, peak memory or row count, and the page says so. This run has no warning: nothing spilled, no
+    driver did most of an operator's work and nothing waited for memory."""
+    operators = [
+        {
+            "operator_id": o["id"],
+            "node_id": o["node"],
+            "name": o["name"],
+            "role": o["role"],
+        }
+        | {column: o["metrics"][metric] for column, metric in OPERATOR_METRICS.items()}
+        for o in sorted(profile["operators"], key=lambda o: o["id"])
+    ]
+    hot = max(operators, key=lambda o: o["compute_ns"])
+    return {
+        "query": {
+            "query_id": query_id,
+            "state": "finished",
+            "principal": "ann",
+            "query_text": sql,
+            "submitted_at": 1793988000000000,
+            "wall_ns": profile["query"]["wall_time_ns"],
+            "cpu_ns": None,
+            "peak_memory_bytes": None,
+            "rows_produced": None,
+            "spill_bytes": None,
+            "bytes_read": None,
+        },
+        "operators": operators,
+        "hot_operator": {
+            "operator_id": hot["operator_id"],
+            "operator": hot["name"],
+            "compute_ns": hot["compute_ns"],
+        },
+        # The server sends a node's id, name and children, never its detail text.
+        "plan": [
+            {"id": n["id"], "name": n["name"], "children": n["children"]}
+            for n in profile["plan"]
+        ],
+        "warnings": [],
+    }
+
+
+Q9_DETAIL = stored_detail(
+    Q9_ID,
+    Q9_PROFILE,
+    (HERE.parent.parent / "bench" / "queries" / "tpch" / "q09.sql").read_text().strip(),
+)
+
+
+def route(
+    path: str,
+    mode: str = "server",
+    role: str = "admin",
+    query: str = "",
+    sessions: list[dict] | None = None,
+    groups: list[dict] | None = None,
+) -> object | None:
     d = DATA
     parts = path.split("/")
+    if mode == "profiles" and not path.startswith(PROFILES_ROUTES):
+        return None
+    # Every client's sessions and the resource groups are a server's: the other consoles have neither page.
+    if path == "/api/internal/sessions" and mode == "server":
+        return {"sessions": sessions or [], "truncated": False}
+    if path == "/api/internal/groups" and mode == "server":
+        return {"groups": groups or []}
     if path == "/api/internal/environment":
-        return ENVIRONMENT
+        return ENVIRONMENT if role == "admin" else None
     if path == "/api/internal/catalog/catalogs":
         return {"catalogs": CATALOG["catalogs"]}
     if len(parts) == 6 and parts[5] == "schemas":
@@ -113,13 +400,31 @@ def route(path: str) -> object | None:
     if path.startswith("/api/internal/sql/") and parts[-1] in RUNS:
         return RUNS[parts[-1]]
     if path == "/api/internal/health":
-        return d["health"]
+        return d["health"] | {
+            "mode": mode,
+            "session_id": SESSION_ID if mode == "embedded" else None,
+            "role": role,
+        }
     if path == "/api/internal/queries":
         return {"queries": d["live"]}
     if path == "/api/internal/history":
-        return {"queries": d["history"]}
+        return {"queries": history(query)}
     if path == "/api/internal/resources":
         return {"memory": d["resources"]["memory"], "caches": d["health"]["caches"]}
+    if path == f"/api/internal/queries/{Q9_ID}":
+        return Q9_DETAIL
+    if path == f"/api/internal/queries/{NO_PLAN_ID}":
+        # An ended query whose plan the source will never have (a server with no history store, a query
+        # trimmed out of it): the page is told not to wait.
+        NO_PLAN_ASKED[0] += 1
+        return d["detail"] | {"plan": None, "plan_pending": False}
+    if path == f"/api/internal/queries/{LATE_PLAN_ID}":
+        # A query that has just ended: its profile is written a moment later, so the first answers carry no
+        # plan and a later one does.
+        LATE_PLAN_ASKED[0] += 1
+        return d["detail"] | (
+            {} if LATE_PLAN_ASKED[0] > 2 else {"plan": None, "plan_pending": True}
+        )
     if path.startswith("/api/internal/queries/"):
         return d["detail"]
     return None
@@ -130,6 +435,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *_: object) -> None:
         pass
+
+    @property
+    def mode(self) -> str:
+        return self.server.mode  # type: ignore[attr-defined]
+
+    @property
+    def role(self) -> str:
+        return self.server.role  # type: ignore[attr-defined]
 
     def end_headers(self) -> None:
         self.send_header("Content-Security-Policy", self.csp)
@@ -142,6 +455,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
+
+    def cookie_name(self) -> str:
+        """The session cookie's name carries the port, as the server's does: cookies are not kept per port.
+
+        The port is the listener's own, never text from the request (the real server takes it from a `Host`
+        header it has already checked against its allowlist).
+        """
+        return f"krishiv_ui_token_{int(self.server.server_address[1])}"
 
     def do_GET(self) -> None:
         url = urlparse(self.path)
@@ -159,7 +480,7 @@ class Handler(BaseHTTPRequestHandler):
             authorised = (
                 self.headers.get("Authorization") == f"Bearer {TOKEN}"
                 or f"token={TOKEN}" in url.query
-                or f"krishiv_ui_token={TOKEN}" in self.headers.get("Cookie", "")
+                or f"{self.cookie_name()}={TOKEN}" in self.headers.get("Cookie", "")
             )
             if not authorised:
                 return self.send_json(
@@ -169,16 +490,24 @@ class Handler(BaseHTTPRequestHandler):
                         "message": "a valid UI token is required",
                     },
                 )
-            if url.path == "/api/internal/events":
+            self.server.asked.append(url.path)  # type: ignore[attr-defined]
+            if url.path == "/api/internal/health" and self.server.health_failures > 0:  # type: ignore[attr-defined]
+                self.server.health_failures -= 1  # type: ignore[attr-defined]
+                return self.send_json(
+                    503,
+                    {"error": "unavailable", "message": "the console is starting"},
+                )
+            if url.path == "/api/internal/events" and self.mode != "profiles":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 try:
                     while True:
-                        self.wfile.write(
-                            f"event: environment\ndata: {json.dumps(ENVIRONMENT)}\n\n".encode()
-                        )
+                        if self.role == "admin":
+                            self.wfile.write(
+                                f"event: environment\ndata: {json.dumps(ENVIRONMENT)}\n\n".encode()
+                            )
                         self.wfile.write(
                             f"event: queries\ndata: {json.dumps({'queries': DATA['live']})}\n\n".encode()
                         )
@@ -186,7 +515,22 @@ class Handler(BaseHTTPRequestHandler):
                         time.sleep(1)
                 except (BrokenPipeError, ConnectionResetError):
                     return None
-            body = route(url.path)
+            if url.path == "/api/internal/environment" and self.role != "admin":
+                return self.send_json(
+                    403,
+                    {
+                        "error": "forbidden",
+                        "message": "the principal's role does not allow this",
+                    },
+                )
+            body = route(
+                url.path,
+                self.mode,
+                self.role,
+                url.query,
+                self.server.sessions,  # type: ignore[attr-defined]
+                self.server.groups,  # type: ignore[attr-defined]
+            )
             return (
                 self.send_json(200, body)
                 if body is not None
@@ -235,7 +579,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204)
             self.send_header(
                 "Set-Cookie",
-                f"krishiv_ui_token={TOKEN}; HttpOnly; SameSite=Strict; Path=/api/internal",
+                f"{self.cookie_name()}={TOKEN}; HttpOnly; SameSite=Strict; Path=/api/internal",
             )
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -254,6 +598,20 @@ class Handler(BaseHTTPRequestHandler):
                     "error": f"cannot parse {XSS}",
                     "error_class": "PARSE_SYNTAX_ERROR",
                 }
+            elif "wide" in sql:
+                # A result wider and longer than a phone's screen, with one value far longer than a line.
+                RUNS[run_id] = {
+                    "state": "finished",
+                    "columns": [f"a_long_column_name_{i}" for i in range(12)],
+                    "rows": [
+                        [
+                            "lorem ipsum " * 50 if (r, c) == (0, 1) else r * 1000 + c
+                            for c in range(12)
+                        ]
+                        for r in range(40)
+                    ],
+                    "truncated": False,
+                }
             else:
                 RUNS[run_id] = {
                     "state": "finished",
@@ -262,6 +620,29 @@ class Handler(BaseHTTPRequestHandler):
                     "truncated": False,
                 }
             return self.send_json(202, {"run_id": run_id})
+        if path.startswith("/api/internal/sessions/") and path.endswith("/close"):
+            # Ends an open session as the real server does: its row stays, as a killed one.
+            session_id = path.split("/")[-2]
+            for s in self.server.sessions:  # type: ignore[attr-defined]
+                if s["session_id"] == session_id and s["state"] == "active":
+                    cancelled = s["queries_running"]
+                    s |= {
+                        "state": "killed",
+                        "close_reason": "admin_kill",
+                        "closed_at": int(time.time() * 1_000_000),
+                        "queries_running": 0,
+                    }
+                    self.server.closed.append(session_id)  # type: ignore[attr-defined]
+                    return self.send_json(
+                        200, {"closed": True, "queries_cancelled": cancelled}
+                    )
+            return self.send_json(
+                404,
+                {
+                    "error": "not_open",
+                    "message": "no open session with that id can be ended here",
+                },
+            )
         if path.startswith("/api/internal/sql/") and path.endswith("/cancel"):
             run_id = path.split("/")[-2]
             if RUNS.get(run_id, {}).get("state") == "running":
@@ -271,13 +652,37 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"cancelled": True})
 
 
-def serve(port: int = 0) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+def serve(
+    port: int = 0,
+    mode: str = "server",
+    role: str = "admin",
+    health_failures: int = 0,
+    groups: bool = True,
+) -> ThreadingHTTPServer:
+    """The fixture server as a console of `mode` for a caller of `role` (the settings are the administrator's);
+    `asked` collects the `/api/internal/*` paths pages requested. The first `health_failures` requests for the
+    health answer 503, as a console that is let in before its server can answer. Each server has its own
+    sessions (`closed` collects the ids of the ones a page ended); without `groups` it is a server started
+    with no resource-group file."""
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server.mode = mode  # type: ignore[attr-defined]
+    server.role = role  # type: ignore[attr-defined]
+    server.asked = []  # type: ignore[attr-defined]
+    server.health_failures = health_failures  # type: ignore[attr-defined]
+    server.sessions = fresh_sessions()  # type: ignore[attr-defined]
+    server.closed = []  # type: ignore[attr-defined]
+    server.groups = GROUPS if groups else []  # type: ignore[attr-defined]
+    return server
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=0)
-    server = serve(ap.parse_args().port)
+    ap.add_argument("--mode", choices=MODES, default="server")
+    ap.add_argument("--role", choices=("operator", "admin"), default="admin")
+    args = ap.parse_args()
+    server = serve(args.port, args.mode, args.role)
     print(f"http://127.0.0.1:{server.server_address[1]}/?token={TOKEN}", flush=True)
     server.serve_forever()

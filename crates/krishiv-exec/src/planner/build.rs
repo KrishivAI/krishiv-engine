@@ -602,6 +602,7 @@ impl<'a> Planner<'a> {
                 metrics,
             } => self.collect_metrics(input, name, metrics),
             PlanNode::Offset { input, offset } => self.limit(input, limit_value(offset)?, u64::MAX),
+            PlanNode::Tail { input, limit } => self.tail(input, limit_value(limit)?),
             PlanNode::Sort {
                 input,
                 order,
@@ -941,6 +942,24 @@ impl<'a> Planner<'a> {
         };
         let input = self.require(input, Distribution::Single)?;
         Ok(Self::skip_rows(input, skip, n))
+    }
+
+    /// The last `n` rows of `input` in plan order (`Dataset.tail`): one
+    /// partition, one driver, the rows kept by [`Tail`](crate::operators::Tail).
+    fn tail(&mut self, input: &Arc<LogicalPlan>, n: u64) -> Result<Planned> {
+        let input = self.plan(input)?;
+        let input = self.require(input, Distribution::Single)?;
+        let schema = Arc::clone(&input.schema);
+        let layout = input.layout.clone();
+        let mut planned = input.wrap(
+            |input| PhysNode::Tail { input, limit: n },
+            schema,
+            layout,
+            ("Tail", n.to_string()),
+        );
+        // A filter above a tail would change which rows it keeps.
+        planned.sites.clear();
+        Ok(planned)
     }
 
     /// The `Limit` operator over `input`.

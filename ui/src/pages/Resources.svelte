@@ -2,7 +2,9 @@
   import { createQuery } from "@tanstack/svelte-query";
   import { api, type CacheRow, type MemoryRow } from "../api";
   import { bytes, count, percent } from "../format";
+  import { consoleInfo } from "../console.svelte";
   import ResponsiveTable, { type Column } from "$lib/components/responsive-table.svelte";
+  import { keyOf } from "$lib/utils";
 
   const q = createQuery<{ memory: MemoryRow[]; caches: CacheRow[] }>(() => ({
     queryKey: ["resources"],
@@ -28,25 +30,6 @@
     { key: "rate", label: "Hit rate", num: true },
   ];
 
-  // Every session registers its own relation-cache pool under the same path, so a path can repeat: the key
-  // carries the occurrence number, or Svelte refuses the duplicate key and the page never renders.
-  function uniqueKeys<T>(rows: T[], key: (r: T) => string): Map<T, string> {
-    const seen = new Map<string, number>();
-    const keys = new Map<T, string>();
-    for (const r of rows) {
-      const base = key(r);
-      const n = seen.get(base) ?? 0;
-      seen.set(base, n + 1);
-      keys.set(r, `${base}#${n}`);
-    }
-    return keys;
-  }
-
-  function keyOf<T>(rows: T[], key: (r: T) => string): (r: T) => string {
-    const keys = uniqueKeys(rows, key);
-    return (r) => keys.get(r) ?? key(r);
-  }
-
   function memoryCell(r: MemoryRow, key: string): string {
     switch (key) {
       case "path": return r.path;
@@ -71,6 +54,9 @@
 </script>
 
 <h1 class="mb-4">Resources</h1>
+{#if consoleInfo.mode === "embedded"}
+  <p class="mb-3 text-muted-foreground">Memory pools and caches of this process; query pools are this session's.</p>
+{/if}
 {#if q.isPending}
   <p class="text-muted-foreground">Loading…</p>
 {:else if q.isError}

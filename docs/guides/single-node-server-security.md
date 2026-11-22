@@ -27,6 +27,7 @@ Each role may do this:
 | `/metrics` (Prometheus scrape) | yes | yes | yes |
 | Console pages that show queries | no | yes | yes |
 | Cancel a query from the console | no | yes | yes |
+| The console's Environment page (the server's settings, secrets hidden) | no | no | yes |
 
 Some routes stay open without a token: `/healthz` and `/readyz`.
 

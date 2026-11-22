@@ -1,6 +1,14 @@
 {
   "entries": [
     {
+      "id": "time_trunc#07c01b94d36c/ansi_on",
+      "reason": "SELECT time_trunc(map('a', 1), TIME'09:32:05.359') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_trunc#07c01b94d36c/ansi_off",
+      "reason": "SELECT time_trunc(map('a', 1), TIME'09:32:05.359') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
       "id": "time_trunc#0c0385fde199/ansi_on",
       "reason": "SELECT time_trunc('HOUR', array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
@@ -41,6 +49,14 @@
       "reason": "SELECT time_trunc('HOUR', CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
+      "id": "time_trunc#3d1d2c195b11/ansi_on",
+      "reason": "SELECT time_trunc(named_struct('a', 1, 'b', 'x'), TIME'09:32:05.359') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_trunc#3d1d2c195b11/ansi_off",
+      "reason": "SELECT time_trunc(named_struct('a', 1, 'b', 'x'), TIME'09:32:05.359') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
       "id": "time_trunc#49dedac3508c/ansi_on",
       "reason": "SELECT time_trunc('HOUR', true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
@@ -55,6 +71,14 @@
     {
       "id": "time_trunc#86431233aa59/ansi_off",
       "reason": "SELECT time_trunc('HOUR', CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_trunc#87672f635a1d/ansi_on",
+      "reason": "SELECT time_trunc(array(1, 2), TIME'09:32:05.359') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_trunc#87672f635a1d/ansi_off",
+      "reason": "SELECT time_trunc(array(1, 2), TIME'09:32:05.359') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time_trunc#8a2a1359cf66/ansi_on",

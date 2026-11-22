@@ -233,6 +233,7 @@ impl Walk {
                 | PlanNode::Sort { .. }
                 | PlanNode::Limit { .. }
                 | PlanNode::Offset { .. }
+                | PlanNode::Tail { .. }
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
                 | PlanNode::SecurityBarrier { .. }
@@ -312,6 +313,7 @@ impl Walk {
                 | PlanNode::Sql { .. }
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
+                | PlanNode::ColumnNames { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::Distinct { .. }
                 | PlanNode::SetOp { .. }

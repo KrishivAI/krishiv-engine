@@ -108,7 +108,9 @@ use krishiv_common::error::{
     KrishivUnsupportedFeature,
 };
 
-use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare};
+use super::append::{
+    Attempt, IDEMPOTENCY_KEY_PROP, NewManifests, WRITE_ID_PROP, WriteIds, prepare,
+};
 use super::filter::FilterError;
 use super::scan::{read_manifest_files, snapshot_refs};
 use super::statistics_file::skipped;
@@ -655,18 +657,27 @@ impl Loop<'_> {
     /// `snapshots=all` load holds the branch's ancestry and every other
     /// snapshot), deterministically: the snapshot of this write's id when it
     /// carries this write's key, else the lowest id carrying the key (a
-    /// replayed write, R:S1).
+    /// replayed write, R:S1). Nothing in a replaced table (another UUID than
+    /// S0's): a replacement carrying this write's key or id is not this
+    /// table, and [`Self::check_rebase`] refuses it next.
     ///
     /// # Errors
     /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` when this write's snapshot id is
     /// taken by a snapshot of another (or no) write key and the key is
     /// nowhere (R:N3): never "committed".
     fn found<'m>(&self, m: &'m TableMetadata) -> Result<Option<&'m Snapshot>, End> {
+        if m.uuid().to_string() != self.s0_uuid {
+            return Ok(None);
+        }
         let ours = |s: &Snapshot| {
-            s.summary()
-                .additional_properties
+            let props = &s.summary().additional_properties;
+            props
                 .get(WRITE_ID_PROP)
                 .is_some_and(|w| w == self.ids.write_id)
+                || self
+                    .ids
+                    .idempotency_key
+                    .is_some_and(|k| props.get(IDEMPOTENCY_KEY_PROP).is_some_and(|v| v == k))
         };
         let by_id = m.snapshot_by_id(self.snapshot_id).map(AsRef::as_ref);
         if let Some(s) = by_id.filter(|s| ours(s)) {
@@ -792,12 +803,26 @@ impl Loop<'_> {
     /// snapshot (it cannot be read back) nothing is deleted, as Java; nor
     /// when it is another id's (a replayed write) and a request of this one
     /// ever had an unknown answer, so it may still land (R:S1; settled or
-    /// not, review of the P1 fix finding 1).
+    /// not, review of the P1 fix finding 1). A replay under another id with
+    /// every answer known (the same key committed by a concurrent run, found
+    /// after a conflict) deletes everything this write produced, data and
+    /// delete files included: none of its requests is in the table, nor can
+    /// one land.
     async fn clean_committed(&self, m: &TableMetadata, new: &NewManifests) {
         let Ok(Some(found)) = self.found(m) else {
             return;
         };
-        if found.snapshot_id() != self.snapshot_id && self.ever_unknown {
+        if found.snapshot_id() != self.snapshot_id {
+            if !self.ever_unknown {
+                let named: HashSet<&str> = m.snapshots().map(|s| s.manifest_list()).collect();
+                let lists: Vec<String> = self
+                    .lists
+                    .iter()
+                    .filter(|l| !named.contains(l.as_str()))
+                    .cloned()
+                    .collect();
+                delete_all(self.cx.io, new, &lists).await;
+            }
             return;
         }
         let keep = found.manifest_list();

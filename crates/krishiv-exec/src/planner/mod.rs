@@ -74,7 +74,9 @@ pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, SpilledTable, TableProvider,
     TableProviderResolver,
 };
-pub use write::{TableCapabilities, WriteMode, WriteRequest};
+pub use write::{
+    IDEMPOTENCY_KEY_OPTION, TableCapabilities, WriteMode, WriteRequest, idempotency_key_option,
+};
 
 use crate::error::Result;
 pub use crate::physical::PhysicalPlan;
