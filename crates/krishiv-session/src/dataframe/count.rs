@@ -39,6 +39,8 @@ impl DataFrame {
             .as_ref()
             .map(|a| Arc::clone(&a.env))
             .or_else(|| self.statement.clone());
+        // Spans only for the `sql` frame itself: a derived frame's statement is its parent's text.
+        frame.statement_spans = self.statement.is_none();
         let mut stream = frame.execute_stream().await?;
         let mut rows = 0_u64;
         while let Some(batch) = stream.next().await {
