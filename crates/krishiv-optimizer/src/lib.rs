@@ -102,10 +102,10 @@ use std::sync::Arc;
 
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
-    EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
-    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND, SEMI_ANTI_JOIN_ORDER,
-    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES,
-    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    EAGER_AGGREGATION, GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION, JOIN_COST, JOIN_DP_LIMIT,
+    JOIN_ENUMERATOR, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND,
+    SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS,
+    SHARE_LITERAL_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -613,21 +613,42 @@ fn run(
         let forced = udfs.is_some_and(|(_, config)| {
             krishiv_common::experimental::is_enabled(config, "groupKeyCodeForce")
         });
-        let coded = options.group_key_code
-            && (forced
-                || udfs.is_none_or(|(_, config)| {
-                    config
-                        .get(&GROUP_KEY_CODE)
-                        .and_then(ConfigValue::as_bool)
-                        .unwrap_or(false)
-                }));
+        // How many qualifying dimensions an aggregate needs to be coded:
+        // one with the key on (or forced, or without a session
+        // configuration), two in the multi-dimension mode
+        // (`krishiv.optimizer.groupKeyCodeMultiDimension`, design §8).
+        let min_dimensions = if !options.group_key_code {
+            None
+        } else if forced {
+            Some(1)
+        } else {
+            match udfs {
+                None => Some(1),
+                Some((_, config)) => {
+                    let on = |entry| {
+                        config
+                            .get(entry)
+                            .and_then(ConfigValue::as_bool)
+                            .unwrap_or(false)
+                    };
+                    if on(&GROUP_KEY_CODE) {
+                        Some(1)
+                    } else if on(&GROUP_KEY_CODE_MULTI_DIMENSION) {
+                        Some(2)
+                    } else {
+                        None
+                    }
+                }
+            }
+        };
         let root = match stats {
-            Some(stats) if coded => {
+            Some(stats) if let Some(min_dimensions) = min_dimensions => {
                 let (after, notes) = group_code::rewrite(
                     Arc::clone(&root),
                     stats,
                     options.stats_propagation,
                     forced,
+                    min_dimensions,
                 )?;
                 t.step("GroupKeyCode", 1, "GroupKeyCode", &root, &after);
                 t.notes("GroupKeyCode", &after, notes);
@@ -703,12 +724,13 @@ fn run(
                     if eager {
                         ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
                     }
-                    if coded {
+                    if let Some(min_dimensions) = min_dimensions {
                         let (after, notes) = group_code::rewrite(
                             Arc::clone(&ordered),
                             stats,
                             options.stats_propagation,
                             forced,
+                            min_dimensions,
                         )?;
                         t.step("GroupKeyCode", 1, "GroupKeyCode", &ordered, &after);
                         t.notes("GroupKeyCode", &after, notes);

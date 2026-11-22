@@ -985,6 +985,27 @@ fn group_key_code_defaults_off_and_parses() {
 }
 
 #[test]
+fn group_key_code_multi_dimension_defaults_off_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&GROUP_KEY_CODE_MULTI_DIMENSION)
+            .and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    c.set("krishiv.optimizer.groupKeyCodeMultiDimension", "true")
+        .unwrap();
+    assert_eq!(
+        c.get(&GROUP_KEY_CODE_MULTI_DIMENSION)
+            .and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert!(
+        c.set("krishiv.optimizer.groupKeyCodeMultiDimension", "maybe")
+            .is_err()
+    );
+}
+
+#[test]
 fn group_key_code_force_is_experimental_and_off() {
     let mut c = Config::new();
     assert!(!crate::experimental::is_enabled(&c, "groupKeyCodeForce"));
