@@ -402,6 +402,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
     (
+        "krishiv.optimizer.shareFilteredScans",
+        &SHARE_FILTERED_SCANS,
+    ),
+    (
         "krishiv.runtimeFilter.bloom.maxBytes",
         &RUNTIME_FILTER_BLOOM_MAX_BYTES,
     ),
