@@ -89,18 +89,19 @@ fn want(case: &Case, probe: &[Row], build: &[Row], run: Run) -> Vec<String> {
 /// Runs `case` (one `k1` key) as `run` says; also returns the probe's
 /// `direct_probe_rows` (absent, so 0, when the index did not run).
 async fn run_direct(case: &Case, probe: &[Row], build: &[Row], run_as: Run) -> (Vec<String>, u64) {
-    let (rows, direct, _) = run_counted(case, probe, build, run_as).await;
+    let (rows, direct, _, _) = run_counted(case, probe, build, run_as).await;
     (rows, direct)
 }
 
 /// [`run_direct`] with the build rows whose payload was decoded once
-/// (`direct_payload_rows`).
+/// (`direct_payload_rows`) and the rows the one-pass inner probe emitted
+/// (`direct_inner_rows`, perf lever C).
 async fn run_counted(
     case: &Case,
     probe: &[Row],
     build: &[Row],
     run_as: Run,
-) -> (Vec<String>, u64, u64) {
+) -> (Vec<String>, u64, u64, u64) {
     let root = root(64 * MIB);
     let (_manager, scope) = spill();
     let config = ExecConfig {
@@ -137,6 +138,7 @@ async fn run_counted(
         render(&out),
         metric(&q, "HashJoinProbe", "direct_probe_rows"),
         metric(&q, "HashJoinProbe", "direct_payload_rows"),
+        metric(&q, "HashJoinProbe", "direct_inner_rows"),
     )
 }
 
@@ -407,7 +409,7 @@ async fn the_payload_cap_keeps_the_direct_index_either_way() {
             c.row_layout = true;
             for build in [&big, &small] {
                 let what = format!("{join_type:?} filter {filter} view {view} {}", build.len());
-                let (got, direct, payload) = run_counted(
+                let (got, direct, payload, inner) = run_counted(
                     &c,
                     &probe,
                     build,
@@ -426,6 +428,57 @@ async fn the_payload_cap_keeps_the_direct_index_either_way() {
                     0
                 };
                 assert_eq!(payload, want, "{what}: rows decoded once");
+                // Only the unique, decoded build of an inner join without a
+                // filter takes the one-pass probe, for each output row.
+                let one_pass = want > 0 && join_type == JoinType::Inner && !filter;
+                let rows = got.len() as u64;
+                assert_eq!(inner, if one_pass { rows } else { 0 }, "{what}: one pass");
+                assert!(!one_pass || rows > 0, "{what}: the probe matches");
+            }
+        }
+    }
+}
+
+/// The one-pass inner probe (perf lever C) runs only over unique build
+/// keys: a decoded build with a duplicate key walks its chains, and both
+/// match the oracle, with and without a fused probe selection, `Int32` keys
+/// and `Utf8View` payloads.
+#[tokio::test]
+async fn the_one_pass_inner_probe_needs_unique_build_keys() {
+    let unique: Vec<Row> = (-5..30_i64)
+        .map(|k| r(Some(k), Some(LONG), k))
+        .chain([r(None, Some("n"), 1)])
+        .collect();
+    let mut dup = unique.clone();
+    dup.push(r(Some(7), Some("again"), 2));
+    let probe = keyed(
+        &(0..80)
+            .map(|i| Some((i * 7) % 45 - 10))
+            .chain([None, Some(1_000)])
+            .collect::<Vec<_>>(),
+    );
+    let mut c = case(JoinType::Inner, 1, false, false);
+    c.row_layout = true;
+    for fused in [false, true] {
+        for (int32, view) in [(false, false), (true, false), (false, true)] {
+            for build in [&unique, &dup] {
+                let run_as = Run {
+                    on: true,
+                    int32,
+                    fused,
+                    view,
+                };
+                let what = format!("{run_as:?} dup {}", build.len() > unique.len());
+                let (got, direct, payload, inner) = run_counted(&c, &probe, build, run_as).await;
+                assert_eq!(got, want(&c, &probe, build, run_as), "{what}");
+                assert!(direct > 0, "{what}: direct");
+                // An inner join keeps no NULL-key build row.
+                let keyed = build.iter().filter(|r| r.k1.is_some()).count();
+                assert_eq!(payload, keyed as u64, "{what}: decoded once");
+                let rows = got.len() as u64;
+                let expect = if build.len() == unique.len() { rows } else { 0 };
+                assert!(rows > 0, "{what}: the probe matches");
+                assert_eq!(inner, expect, "{what}: one pass");
             }
         }
     }

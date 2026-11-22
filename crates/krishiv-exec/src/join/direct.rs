@@ -309,22 +309,34 @@ impl DirectPayload {
     pub(crate) fn columns(&self, build: &[(usize, u32)]) -> Result<Option<Vec<ArrayRef>>> {
         let mut ids = Vec::with_capacity(build.len());
         for &(p, r) in build {
-            match (self.base.get(p).copied().flatten(), self.len.get(p)) {
-                (Some(start), Some(&n)) if r < n => ids.push(start + r),
-                _ => return Ok(None),
+            match self.id(p, r) {
+                Some(id) => ids.push(id),
+                None => return Ok(None),
             }
         }
-        let ids = UInt32Array::from(ids);
-        let columns = self
-            .columns
+        self.take(&UInt32Array::from(ids)).map(Some)
+    }
+
+    /// The decoded row of build row `r` of partition `p`, when it is one.
+    #[inline]
+    pub(crate) fn id(&self, p: usize, r: u32) -> Option<u32> {
+        match (self.base.get(p).copied().flatten(), self.len.get(p)) {
+            (Some(start), Some(&n)) if r < n => Some(start + r),
+            _ => None,
+        }
+    }
+
+    /// The build columns of the decoded rows `ids` (each one from
+    /// [`id`](Self::id)).
+    pub(crate) fn take(&self, ids: &UInt32Array) -> Result<Vec<ArrayRef>> {
+        self.columns
             .iter()
             .map(|c| {
-                arrow_select::take::take(c.as_ref(), &ids, None)
+                arrow_select::take::take(c.as_ref(), ids, None)
                     .map(compact_sparse)
                     .map_err(|e| crate::error::internal(e.to_string()))
             })
-            .collect::<Result<_>>()?;
-        Ok(Some(columns))
+            .collect()
     }
 
     /// The number of decoded rows (every row of every table).

@@ -106,6 +106,12 @@ pub(crate) struct Cursor {
     /// The build's payload decoded once (a direct probe of a small build,
     /// perf lever P3): build columns are taken from it, not decoded.
     payload: Option<Arc<DirectPayload>>,
+    /// An unweighted inner join without a filter or a single-match check
+    /// over a direct build whose keys are unique, with its payload decoded
+    /// (perf lever C): each probe row has at most one pair and nothing
+    /// reads the match state, so [`Self::next_direct_inner`] emits the
+    /// pairs in one pass, taking build rows from the payload by id.
+    direct_inner: bool,
 }
 
 impl Cursor {
@@ -152,6 +158,17 @@ impl Cursor {
                     .add(Counter::ProbeTableNs, nanos(started.elapsed()));
                 shared.counters.add(Counter::DirectProbeRows, n as u64);
                 let matches = heads.iter().filter(|&&h| h != NONE).count();
+                let payload = d.payload().cloned();
+                let direct_inner = payload.is_some()
+                    && shared.join_type == JoinType::Inner
+                    && shared.filter.is_none()
+                    && !shared.single_match
+                    && batch.is_unweighted()
+                    && tables
+                        .by_part()
+                        .iter()
+                        .flatten()
+                        .all(|t| t.is_unique() && t.arena().is_unweighted());
                 let cursor = Self {
                     batch,
                     sel,
@@ -162,7 +179,8 @@ impl Cursor {
                     pos: 0,
                     chain: NONE,
                     rows: hashing.rows(),
-                    payload: d.payload().cloned(),
+                    payload,
+                    direct_inner,
                 };
                 return Ok((cursor, Vec::new()));
             }
@@ -234,6 +252,7 @@ impl Cursor {
             chain: NONE,
             rows: hashing.rows(),
             payload: None,
+            direct_inner: false,
         };
         Ok((cursor, deferred))
     }
@@ -246,6 +265,11 @@ impl Cursor {
         limit: usize,
         partition: u32,
     ) -> Result<(Option<Batch>, bool)> {
+        if self.direct_inner
+            && let Some(payload) = self.payload.clone()
+        {
+            return self.next_direct_inner(shared, tables, &payload, limit, partition);
+        }
         let n = self.state.len();
         let quick = !shared.join_type.emits_build() && shared.filter.is_none();
         // Semi / anti candidates produce no rows, so they need no output
@@ -300,6 +324,60 @@ impl Cursor {
             ));
         }
         Ok((self.tail(shared)?, true))
+    }
+
+    /// [`next`](Self::next) of a [`direct_inner`](Self::direct_inner)
+    /// cursor: one pass over the heads, each match one pair whose build row
+    /// is taken from the payload, no chain walk and no match state (an
+    /// inner join emits no tail). A head the payload does not hold (never
+    /// expected) hands the rest of the batch, from this call's first row,
+    /// to the general path.
+    fn next_direct_inner(
+        &mut self,
+        shared: &Shared,
+        tables: &Tables<'_>,
+        payload: &DirectPayload,
+        limit: usize,
+        partition: u32,
+    ) -> Result<(Option<Batch>, bool)> {
+        let n = self.heads.len();
+        let start = self.pos;
+        let room = limit.min(self.matches);
+        let mut probe = Vec::with_capacity(room);
+        let mut ids = Vec::with_capacity(room);
+        let started = Instant::now();
+        while probe.len() < limit && self.pos < n {
+            let i = self.pos;
+            let head = self.heads[i];
+            if head != NONE {
+                let Some(id) = payload.id(usize::from(self.parts[i]), head) else {
+                    self.direct_inner = false;
+                    self.pos = start;
+                    return self.next(shared, tables, limit, partition);
+                };
+                probe.push(u32::try_from(i).unwrap_or(u32::MAX));
+                ids.push(id);
+            }
+            self.pos += 1;
+        }
+        shared
+            .counters
+            .add(Counter::ProbeTableNs, nanos(started.elapsed()));
+        if probe.is_empty() {
+            return Ok((None, true));
+        }
+        shared
+            .counters
+            .add(Counter::DirectInnerRows, probe.len() as u64);
+        let build_cols = payload.take(&UInt32Array::from(ids))?;
+        let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), &probe)?)?;
+        let taken = self.compact_selected(taken)?;
+        let m = probe.len();
+        let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
+        columns.extend(build_cols);
+        let out = Batch::with_weights(record(&shared.schema, columns, m)?, Weights::Const(1))
+            .map_err(|e| internal(e.to_string()))?;
+        Ok((Some(out), false))
     }
 
     /// Joins candidate pairs: applies the filter, marks matches and builds
