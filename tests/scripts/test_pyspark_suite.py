@@ -239,7 +239,7 @@ def test_ratchet_with_no_committed_summary_and_report_only_with_min_rate(tmp_pat
     ns.min_rate = 50.0
     with pytest.raises(SystemExit) as failed:
         cli.cmd_ratchet(ns)
-    assert failed.value.code not in (0, None)
+    assert failed.value.code == 1
     ns.report_only = True
     cli.cmd_ratchet(ns)  # report-only silences the floor too
     ns.version = "4.0.5"
