@@ -118,6 +118,20 @@ fn reads(e: &Arc<Expr>) -> Vec<AttrId> {
     out
 }
 
+/// The ids of the columns a correlated subquery inside `e` reads from outside it.
+fn outer_reads(e: &Arc<Expr>) -> Vec<AttrId> {
+    let mut out = Vec::new();
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        if let crate::walk::Node::Expr(x) = n
+            && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &x.node
+        {
+            out.push(c.id);
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    out
+}
+
 impl Resolver<'_> {
     /// A `Zip` as described in the module docs. Out of line: it keeps the recursive `node` frame small.
     #[inline(never)]
@@ -139,7 +153,7 @@ impl Resolver<'_> {
         let same_base = {
             let a = Plan::try_new(Arc::clone(&lc.base));
             let b = Plan::try_new(Arc::clone(&rc.base));
-            matches!((a, b), (Ok(a), Ok(b)) if a.structurally_eq(&b))
+            matches!((a, b), (Ok(a), Ok(b)) if a.structurally_eq_modulo_attr_ids(&b))
         };
         if !same_base {
             return Err(refuse());
@@ -183,6 +197,17 @@ impl Resolver<'_> {
                     survivors.insert(output.id, first.clone());
                 }
                 None => kept.push((output.clone(), body)),
+            }
+        }
+        // `remap` rewrites the columns of an expression, not those a correlated subquery inside it reads
+        // from outside (`OuterColumn`). A right-side subquery reading a column that was renamed to the left
+        // base's, or an alias merged into a survivor, would keep a stale id: refused, never answered wrong.
+        let moved =
+            |id: &AttrId| survivors.contains_key(id) || map.get(id).is_some_and(|to| to.id != *id);
+        let right_exprs = rc.aliases.iter().map(|(_, b)| b).chain(&r_top);
+        for e in right_exprs {
+            if outer_reads(e).iter().any(moved) {
+                return Err(refuse());
             }
         }
         // One layer per dependency depth.

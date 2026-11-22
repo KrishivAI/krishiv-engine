@@ -211,6 +211,23 @@ impl Plan {
         self.canonical_encoding() == other.canonical_encoding()
     }
 
+    /// [`structurally_eq`](Self::structurally_eq) with attribute ids
+    /// compared by position, as Spark's `sameResult` does: each id stands
+    /// for the order in which the encoding first meets it, so two
+    /// independently resolved `range(0, 3)` plans are equal.
+    #[must_use]
+    pub fn structurally_eq_modulo_attr_ids(&self, other: &Self) -> bool {
+        let encode = |p: &Self| {
+            let mut keys = Keys {
+                renumber: Some(HashMap::new()),
+                ..Keys::default()
+            };
+            let (root, _) = keys.plan(p.root(), &[], 0);
+            (keys.records, root)
+        };
+        encode(self) == encode(other)
+    }
+
     /// The structural hash of every distinct relation of the main query
     /// (not of subquery plans), in pre-order, root first; a relation shared
     /// by several parents appears once. All are computed in one bottom-up
@@ -279,6 +296,9 @@ struct Keys {
     /// Identity mode (see [`identity_keys`]): `plan_id`s are encoded as
     /// themselves, not by where their carriers are.
     absolute: bool,
+    /// Attribute ids renumbered by first appearance (see
+    /// [`Plan::structurally_eq_modulo_attr_ids`]); `None` keeps them as they are.
+    renumber: Option<HashMap<u64, u64>>,
     /// Whether a relation's subtree (subquery plans included) holds a
     /// `plan_id` reference: only then does its key depend on the enclosing
     /// operators, so a subtree without one is encoded once.
@@ -1316,7 +1336,14 @@ impl<'k, 'a> Encoder<'k, 'a> {
     }
 
     fn bound(&mut self, c: &BoundColumn) {
-        self.put(&c.id.0.to_le_bytes());
+        let id = match &mut self.keys.renumber {
+            Some(seen) => {
+                let next = seen.len() as u64;
+                *seen.entry(c.id.0).or_insert(next)
+            }
+            None => c.id.0,
+        };
+        self.put(&id.to_le_bytes());
         self.str(&c.name);
         self.data_type(&c.data_type);
         self.bool(c.nullable);

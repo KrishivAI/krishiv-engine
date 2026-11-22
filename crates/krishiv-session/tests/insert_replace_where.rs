@@ -8,6 +8,12 @@ use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 
 fn class_of(profile: SparkProfile, sql: &str) -> String {
+    let (message, _) = refused(profile, sql);
+    message
+}
+
+/// The refusal as its message and its debug form (which names the class).
+fn refused(profile: SparkProfile, sql: &str) -> (String, String) {
     let s = Session::builder()
         .profile(profile)
         .build()
@@ -20,7 +26,7 @@ fn class_of(profile: SparkProfile, sql: &str) -> String {
     })
     .expect("create");
     let err = block_on(async { s.sql(sql).await?.collect().await }).expect_err("refused");
-    err.to_string()
+    (err.to_string(), format!("{err:?}"))
 }
 
 #[test]
@@ -28,8 +34,9 @@ fn replace_where_on_a_file_table_is_refused_by_profile() {
     let sql = "insert into tbl replace where id = 1 values (1, 'a')";
     let new = class_of(SparkProfile::V4_3, sql);
     assert!(new.contains("UNSUPPORTED_FEATURE.TABLE_OPERATION"), "{new}");
-    let old = class_of(SparkProfile::V4_2, sql);
+    let (old, debug) = refused(SparkProfile::V4_2, sql);
     assert!(old.contains("Cannot write into v1 table"), "{old}");
+    assert!(debug.contains("LegacyErrorTemp1012"), "{debug}");
 }
 
 #[test]

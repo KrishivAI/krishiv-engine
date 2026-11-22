@@ -525,7 +525,7 @@ fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
             .starts_with("refs%2fconvert%2f");
     if converted {
         return Err(unsupported(format!(
-            "{scheme} revisions such as `@{revision}` (the converted-Parquet branch is not readable; \
+            "{scheme} converted-Parquet revisions (the branch is not readable; \
              name a file of the dataset's own branch, tag or commit: \
              hf://datasets/<org>/<name>[@revision]/<path to a file>)"
         )));

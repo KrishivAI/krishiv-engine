@@ -324,9 +324,9 @@ impl Parser<'_> {
         // does, and is one only when `REPLACE` follows it (else it is the insert's own list).
         let mut columns_before = Vec::new();
         let mut columns_span = None;
-        if !by_name_before && self.sym_at(0, Sym::LParen) && !self.query_follows(1) {
+        if !by_name_before && self.sym_at(0, Sym::LParen) {
             let cp = self.checkpoint();
-            let list_at = self.pos;
+            let list_at = self.start();
             match self.paren_list(Self::column_name) {
                 Ok(c) if self.kw_at(0, "REPLACE") && !self.kw_at(1, "USING") => {
                     if !self.opts.spark_4_3_grammar {

@@ -59,11 +59,16 @@ impl Session {
                 | ShowKind::Partitions { as_json, .. } => *as_json = false,
                 _ => {}
             }
-            let batches = self
-                .exec_show_catalog(&plain, original)
-                .await?
-                .collect()
-                .await?;
+            let listing = match &plain.kind {
+                ShowKind::TableExtended {
+                    namespace, pattern, ..
+                } => {
+                    self.show_table_extended(namespace.as_ref(), pattern, None, original, true)
+                        .await?
+                }
+                _ => self.exec_show_catalog(&plain, original).await?,
+            };
+            let batches = listing.collect().await?;
             let mut rows: Vec<Vec<String>> = Vec::new();
             for b in &batches {
                 for i in 0..b.num_rows() {

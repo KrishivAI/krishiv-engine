@@ -1114,3 +1114,20 @@ async fn zip_resolves_a_right_reference_to_a_deduplicated_column_by_its_own_name
         strings(&[&["11"], &["11"], &["21"]])
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_merges_two_independent_range_inputs() {
+    let server = start().await;
+    let range = || {
+        relation(RelType::Range(pb::Range {
+            start: Some(0),
+            end: 3,
+            step: 1,
+            num_partitions: None,
+        }))
+    };
+    assert_eq!(
+        run(&server, zip(range(), range())).await.expect("runs"),
+        strings(&[&["0", "0"], &["1", "1"], &["2", "2"]])
+    );
+}

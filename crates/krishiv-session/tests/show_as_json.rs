@@ -129,3 +129,20 @@ fn as_json_is_a_syntax_error_before_spark_4_3() {
         assert_eq!(e.error_class().name(), "PARSE_SYNTAX_ERROR", "{sql}");
     }
 }
+
+#[test]
+fn show_table_extended_lists_a_dataframe_temporary_view() {
+    // Spark 4.3 classifies a temporary view directly, with or without SQL text.
+    let s = session();
+    block_on(async {
+        s.sql("SELECT 1 AS x")
+            .await?
+            .create_or_replace_temp_view("dfv")
+            .await
+    })
+    .expect("view");
+    assert_eq!(
+        json(&s, "SHOW TABLE EXTENDED LIKE 'dfv' AS JSON"),
+        r#"{"tables":[{"name":"dfv","catalog":"spark_catalog","namespace":[],"type":"VIEW","isTemporary":true}]}"#
+    );
+}

@@ -1074,8 +1074,11 @@ fn hf_directories_globs_and_the_parquet_branch_get_clear_errors() {
     let e = parse_object_url("hf://datasets/acme/tiny@~parquet/default/train/0000.parquet")
         .unwrap_err();
     let text = e.to_string();
+    // The message names no revision: a revision can carry a query-string token.
     assert!(
-        text.contains("@~parquet") && text.contains("not readable"),
+        text.contains("converted-Parquet")
+            && text.contains("not readable")
+            && !text.contains("~parquet"),
         "{text}"
     );
     // The `%2F`-escaped form of the same branch gets the same message, not the path-shape one.
@@ -1085,4 +1088,9 @@ fn hf_directories_globs_and_the_parquet_branch_get_clear_errors() {
     .unwrap_err();
     let text = e.to_string();
     assert!(text.contains("not readable"), "{text}");
+    let e = parse_object_url(
+        "hf://datasets/acme/tiny@refs%2Fconvert%2Fparquet?token=hf_secret/t.parquet",
+    )
+    .unwrap_err();
+    assert!(!e.to_string().contains("hf_secret"), "{e}");
 }

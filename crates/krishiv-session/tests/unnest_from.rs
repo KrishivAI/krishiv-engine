@@ -10,13 +10,6 @@ fn run(sql: &str) -> Vec<arrow_array::RecordBatch> {
     block_on(async { s.sql(sql).await?.collect().await }).expect("runs")
 }
 
-fn rows(sql: &str) -> usize {
-    run(sql)
-        .iter()
-        .map(arrow_array::RecordBatch::num_rows)
-        .sum()
-}
-
 #[test]
 fn ordinality_is_not_nullable_and_col_follows_the_arrays_own_nullability() {
     let batches = run("select * from unnest(array(1, 2)) with ordinality");
@@ -41,10 +34,21 @@ fn a_nondeterministic_argument_is_evaluated_once() {
             arrow_array::cast::as_primitive_array::<arrow_array::types::Int64Type>(b[0].column(i))
                 .value(0)
         };
+        assert!(col(0) >= 1, "slice keeps at least one element: {b:?}");
         assert_eq!((col(0), col(0)), (col(1), col(2)), "{b:?}");
     }
-    assert_eq!(
-        rows("select * from unnest(array(1, 2), array('a')) with ordinality"),
-        2
+    // The shorter array pads with NULL; ordinality counts 1, 2.
+    let b = run(
+        "select col0, col1, ordinality from unnest(array(1, 2), array('a')) with ordinality \
+         order by ordinality",
     );
+    let cell = |i: usize, r: usize| {
+        arrow_cast::display::array_value_to_string(b[0].column(i), r).expect("cell")
+    };
+    assert_eq!(b[0].num_rows(), 2, "{b:?}");
+    let got: Vec<[String; 3]> = (0..2)
+        .map(|r| [cell(0, r), cell(1, r), cell(2, r)])
+        .collect();
+    let want = [["1", "a", "1"], ["2", "", "2"]].map(|r| r.map(str::to_owned));
+    assert_eq!(got, want);
 }

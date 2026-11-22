@@ -497,8 +497,14 @@ impl Session {
                 partition,
                 ..
             } => {
-                self.show_table_extended(namespace.as_ref(), pattern, partition.as_ref(), original)
-                    .await
+                self.show_table_extended(
+                    namespace.as_ref(),
+                    pattern,
+                    partition.as_ref(),
+                    original,
+                    false,
+                )
+                .await
             }
             ShowKind::Views {
                 namespace, pattern, ..
@@ -755,12 +761,13 @@ impl Session {
     /// `SHOW TABLE EXTENDED [IN ns] LIKE pattern [PARTITION (...)]` (Spark's `ShowTablesCommand`): one row per
     /// table or temporary view the pattern keeps, its `information` the relation's `simpleString`; with a
     /// partition, the pattern is the one table's name and the row describes that partition.
-    async fn show_table_extended(
+    pub(super) async fn show_table_extended(
         &self,
         namespace: Option<&DdlName>,
         pattern: &ShowPattern,
         partition: Option<&PartitionSpec>,
         original: &str,
+        names_only: bool,
     ) -> Result<DataFrame, KrishivError> {
         self.require_current_profile("SHOW TABLE EXTENDED")?;
         let ns = self.show_namespace(namespace).await?;
@@ -874,6 +881,11 @@ impl Session {
                     text: Some(text),
                     ..
                 } => (columns, Some(text)),
+                // The JSON form lists names and kinds only, which a DataFrame view has too.
+                _ if names_only => {
+                    rows.push(vec![s(""), s(&name), s("true"), s("")]);
+                    continue;
+                }
                 _ => {
                     return Err(unsupported(
                         "SHOW TABLE EXTENDED of a temporary view over a DataFrame",
