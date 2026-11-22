@@ -241,3 +241,13 @@ fn asof_join_right_subquery_reads_match_condition_as_an_alias() {
     let j = join(sql);
     assert!(matches!(j.constraint, JoinConstraint::AsOf(_)), "{j:?}");
 }
+
+/// Inside parentheses the as-of right side is not that side: `MATCH_CONDITION` there is an
+/// ordinary alias again.
+#[test]
+fn asof_right_side_parenthesized_relation_clears_the_flag() {
+    let sql = "SELECT * FROM l AS l ASOF JOIN (r MATCH_CONDITION (x)) AS rr \
+               MATCH_CONDITION (l.x >= rr.x)";
+    let j = join(sql);
+    assert!(matches!(j.constraint, JoinConstraint::AsOf(_)), "{j:?}");
+}

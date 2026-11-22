@@ -53,7 +53,7 @@ Paths are relative to this crate.
   (`SetExprKind::Pipe`: input plus a flat `PipeOp` list; pipes bind below set operators; `lower/pipe.rs`) lower,
   each behind a `PipeOperator` boundary. `TABLESAMPLE` lowers `n ROWS` to a limit and `PERCENT` / `BUCKET x OUT OF y` (with
   `REPEATABLE`) to `PlanNode::Sample` (goldens `tests/fixtures/spark-4.2.0/tablesample.json`, `src/tests/sample.rs`);
-  `SYSTEM` is `KRISHIV_UNSUPPORTED_FEATURE`, as are `COLLATE`, `NEAREST BY`, Spark 4.3's `ASOF JOIN` (parsed with its
+  `SYSTEM` is `KRISHIV_UNSUPPORTED_FEATURE`, as are `COLLATE`, `NEAREST BY`, Spark 4.3's `ASOF JOIN` while `spark.sql.join.asofJoin.enabled` is off (`UNSUPPORTED_FEATURE.ASOF_JOIN`; enabled, it lowers to `PlanNode::AsOfJoin`; parsed with its
   `AstBuilder` checks in `validate/relation.rs`: the `spark.sql.join.asofJoin.enabled` gate, `ParserOptions::asof_join`, and the match operator), `TABLE(...)` arguments,
   `IDENTIFIER(...)` (names, function names, identifier literals unless `legacy_identifier_clause`), variant paths
   and `TRANSFORM`.
