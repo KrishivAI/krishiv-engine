@@ -109,3 +109,27 @@ def test_stats_refuse_a_string_column_named_by_a_quoted_or_qualified_reference(s
             frame.stat.corr(ref, "n")
         with pytest.raises(Exception, match="not supported"):
             frame.stat.approxQuantile(ref, [0.5], 0.0)
+
+
+def test_ntz_value_with_an_offset_keeps_its_wall_clock(spark: SparkSession) -> None:
+    import datetime as dt
+
+    value = dt.datetime(2024, 1, 15, 12, 0, tzinfo=dt.timezone(dt.timedelta(hours=2)))
+    frame = spark.createDataFrame([(value,)], "t timestamp_ntz")
+    assert frame.collect()[0][0] == dt.datetime(2024, 1, 15, 12, 0)
+
+
+def test_pivot_accepts_none_among_explicit_values(spark: SparkSession) -> None:
+    frame = spark.createDataFrame([(1, "a", 1), (1, None, 2)], "g int, p string, v int")
+    rows = frame.groupBy("g").pivot("p", [None, "a"]).sum("v").collect()
+    assert len(rows) == 1
+    assert 2 in tuple(rows[0])
+    assert 1 in tuple(rows[0])
+
+
+def test_a_negative_nanosecond_timestamp_floors_to_microseconds(spark: SparkSession) -> None:
+    import pyarrow as pa
+
+    table = pa.table({"t": pa.array([-1001, None], type=pa.timestamp("ns", tz="UTC"))})
+    values = spark.createDataFrame(table).collect()
+    assert values[0][0].timestamp() == pytest.approx(-0.000002)

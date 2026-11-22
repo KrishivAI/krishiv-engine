@@ -270,7 +270,8 @@ def convert(value: Any, data_type: DataType, zone: Any) -> Any:
                 return value.astimezone(datetime.UTC)
             return value
         if isinstance(data_type, TimestampNTZType):
-            return value.astimezone(zone()).replace(tzinfo=None) if value.tzinfo is not None else value
+            # As PySpark's TimestampNTZType.toInternal: the wall-clock fields, the offset is dropped.
+            return value.replace(tzinfo=None)
     if isinstance(value, array.array):
         return list(value)
     return value
@@ -280,6 +281,14 @@ def _arrow_unsupported(arrow_type: Any) -> PySparkTypeError:
     return PySparkTypeError(
         errorClass="UNSUPPORTED_DATA_TYPE_FOR_ARROW_CONVERSION", messageParameters={"data_type": str(arrow_type)}
     )
+
+
+def _truncating_cast(pc: Any, pa: Any, column: Any, target: Any) -> Any:
+    """Cast ``column`` to ``target``; a nanosecond timestamp is floored to microseconds first (Spark floors, Arrow's
+    truncating cast rounds toward zero, so -1001 ns would become -1 us rather than -2)."""
+    if pa.types.is_timestamp(column.type) and column.type.unit == "ns" and pa.types.is_timestamp(target):
+        column = pc.floor_temporal(column, unit="microsecond")
+    return pc.cast(column, options=pc.CastOptions(target_type=target, allow_time_truncate=True))
 
 
 def normalize_arrow_type(t: Any, pa: Any) -> Any:
@@ -347,7 +356,7 @@ def normalize_arrow_table(
         return table
     # Nanosecond times lose their sub-microsecond part (Spark has no finer type); other casts stay checked.
     cast = [
-        c if c.type.equals(f.type) else pc.cast(c, options=pc.CastOptions(target_type=f.type, allow_time_truncate=True))
+        c if c.type.equals(f.type) else _truncating_cast(pc, pa, c, f.type)
         for c, f in zip(table.columns, schema, strict=True)
     ]
     return pa.table(cast, schema=schema)

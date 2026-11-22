@@ -274,7 +274,7 @@ class GroupedData:
             if not isinstance(values, list):
                 raise not_expected_type("values", "list", values)
             for v in values:
-                if not isinstance(v, bool | int | float | str):
+                if v is not None and not isinstance(v, bool | int | float | str):
                     raise not_expected_type("values", "list of bool, int, float or str", v)
         if self._pivoted:
             raise AnalysisException(
