@@ -173,6 +173,9 @@ impl UiSource for Fake {
                 .lock()
                 .unwrap()
                 .push(format!("{query_id}@{session_id}"));
+            if self.fail {
+                return Err(UiError::new("the engine is unavailable"));
+            }
             Ok(query_id == "q-dup" && matches!(session_id, "s-a" | "s-b"))
         })
     }
@@ -869,4 +872,38 @@ async fn cancel_ends_only_the_named_sessions_query_and_refuses_an_id_two_session
         *fake.cancelled.lock().unwrap(),
         ["q-dup@s-b", "q-dup@s-c", "q-solo", "q-old"]
     );
+}
+
+#[tokio::test]
+async fn a_failing_source_fails_a_cancel_as_json_with_or_without_a_session() {
+    let (addr, fake) = start(true).await;
+    // Without a session the running queries are read first, and that read fails.
+    let (status, _, body) = request(addr, "POST", "/api/internal/queries/q-run/cancel", true).await;
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(body["error"], "source_failed");
+    assert!(fake.cancelled.lock().unwrap().is_empty());
+    let path = "/api/internal/queries/q-run/cancel?session=s-busy";
+    let (status, _, body) = request(addr, "POST", path, true).await;
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(body["error"], "source_failed");
+}
+
+/// A source that implements only what the trait requires.
+struct Plain;
+
+impl UiSource for Plain {
+    fn rows(&self, _table: SystemTable) -> UiFuture<'_, Vec<Row>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn cancel<'a>(&'a self, _query_id: &'a str) -> UiFuture<'a, bool> {
+        Box::pin(async { Ok(true) })
+    }
+}
+
+#[tokio::test]
+async fn a_source_that_does_not_tell_sessions_apart_cancels_nothing_in_a_named_session() {
+    // The default is not the unqualified cancel: that would end another session's query of the same id.
+    assert!(Plain.cancel("q").await.unwrap());
+    assert!(!Plain.cancel_in_session("q", "s").await.unwrap());
 }
