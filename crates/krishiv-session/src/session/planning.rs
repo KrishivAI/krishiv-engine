@@ -3,6 +3,15 @@
 
 use super::*;
 
+/// Now, as microseconds since the epoch.
+fn query_start_micros() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_micros()).ok())
+        .unwrap_or_default()
+}
+
 impl Session {
     /// The physical plan of `analyzed`, once the files it scans are
     /// listed and their footers read.
@@ -67,6 +76,9 @@ impl Session {
         inspected: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
         let start = self.query_start.unwrap_or_else(query_start_micros);
+        // A metric-view read no aggregate rewrote, or a `measure(..)` left over, is analyzable but
+        // never plannable (design note `P3-metric-views.md` §4).
+        krishiv_plan::analyzer::refuse_unplannable(analyzed.plan.root())?;
         // A recursive CTE runs as an operator of the physical plan; the
         // session only tells each loop how many rows its readers need.
         let limited;

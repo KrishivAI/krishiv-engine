@@ -661,6 +661,7 @@ impl Session {
             Statement::CreatePermanentView(v) if !v.temporary && !v.global => {
                 (O::View(&v.name), true)
             }
+            Statement::CreateMetricView(v) => (O::View(&v.name), true),
             Statement::CreateNamespace(n) => (O::Namespace(&n.name), true),
             Statement::CreateFunction(f) if !f.temporary => (O::Function(&f.name), true),
             Statement::DropTable(d) => (O::Table(&d.name), false),

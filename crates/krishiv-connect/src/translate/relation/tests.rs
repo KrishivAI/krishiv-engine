@@ -670,6 +670,58 @@ fn join_errors() {
     assert!(message(&join_with).contains("join_data_type"));
 }
 
+fn as_of_join_of(join_type: &str, direction: &str, using: &[&str]) -> Relation {
+    relation(RelType::AsOfJoin(Box::new(pb::AsOfJoin {
+        left: boxed(read_table("l")),
+        right: boxed(read_table("r")),
+        left_as_of: Some(attr("lt")),
+        right_as_of: Some(attr("rt")),
+        join_expr: Some(func("==", vec![attr("a"), attr("b")])),
+        using_columns: using.iter().map(|c| (*c).to_owned()).collect(),
+        join_type: join_type.to_owned(),
+        tolerance: None,
+        allow_exact_matches: true,
+        direction: direction.to_owned(),
+    })))
+}
+
+#[test]
+fn as_of_joins_translate_as_joinasof_reads_them() {
+    use krishiv_plan::AsOfDirection;
+    for (join_type, kind) in [
+        ("inner", JoinKind::Inner),
+        ("left", JoinKind::LeftOuter),
+        ("LEFT_OUTER", JoinKind::LeftOuter),
+    ] {
+        for (direction, want) in [
+            ("backward", AsOfDirection::Backward),
+            ("Forward", AsOfDirection::Forward),
+            ("nearest", AsOfDirection::Nearest),
+        ] {
+            let PlanNode::AsOfJoin {
+                kind: k,
+                condition,
+                as_of,
+                ..
+            } = node(&as_of_join_of(join_type, direction, &[]))
+            else {
+                panic!("not an as-of join")
+            };
+            assert_eq!(k, kind, "{join_type}");
+            assert!(matches!(condition, JoinCondition::On(_)));
+            assert_eq!(as_of.direction, want, "{direction}");
+            assert!(as_of.allow_exact && !as_of.as_written && as_of.tolerance.is_none());
+        }
+    }
+    for bad in [
+        as_of_join_of("right", "backward", &[]),
+        as_of_join_of("inner", "sideways", &[]),
+        as_of_join_of("inner", "backward", &["k"]),
+    ] {
+        assert_eq!(code(&bad), ErrorClass::KrishivUnsupportedFeature);
+    }
+}
+
 // ---- sort ------------------------------------------------------------------------------------
 
 fn order(name: &str, direction: i32, nulls: i32) -> expression::SortOrder {

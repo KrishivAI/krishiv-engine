@@ -931,3 +931,24 @@ fn an_inner_join_below_a_left_join_keeps_its_input_order() {
          WHERE (x1.c1 IS NOT NULL AND NOT (x1.c0 <> x4.a))",
     );
 }
+
+/// Seed 14415185471139882126 of `random_queries_reach_the_lowest_operator` (#930 run
+/// 44990348007): a filter above an aggregate over a `FULL JOIN` whose `ON` holds a one-side
+/// conjunct.
+#[test]
+fn a_filter_over_a_full_join_aggregate_reaches_a_fixed_point() {
+    let sql = "SELECT * FROM (SELECT x1.c1 AS c0, x1.c0 AS c1 FROM (SELECT x2.c1 AS c0, \
+               count(*) AS c1 FROM (SELECT x3.c + 1 AS c0, x3.c AS c1 FROM t AS x3 FULL JOIN \
+               t AS x4 ON x3.c = x4.c AND coalesce(x3.b, 'x') = 'z') AS x2 \
+               WHERE (x2.c0 IN (2, 3) AND x2.c0 = x2.c1) GROUP BY x2.c1) AS x1 \
+               WHERE x1.c1 < -2) ORDER BY c0, c1 LIMIT 4";
+    let plan = support::resolve(sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+}

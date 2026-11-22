@@ -2,7 +2,7 @@
  {
   "file": "job00.py",
   "line": 6,
-  "name": "xpath_long",
+  "name": "xpath_number",
   "status": "not yet"
  },
  {
@@ -14,13 +14,13 @@
  {
   "file": "job00.py",
   "line": 8,
-  "name": "tuple_difference_double",
+  "name": "tuple_difference_integer",
   "status": "not yet"
  },
  {
   "file": "job00.py",
   "line": 9,
-  "name": "reflect",
+  "name": "schema_of_avro",
   "status": "not yet"
  },
  {
@@ -38,7 +38,7 @@
  {
   "file": "job02.py",
   "line": 7,
-  "name": "theta_intersection_agg",
+  "name": "theta_sketch_agg",
   "status": "not yet"
  },
  {
@@ -62,13 +62,13 @@
  {
   "file": "job04.py",
   "line": 6,
-  "name": "sentences",
+  "name": "theta_difference",
   "status": "not yet"
  },
  {
   "file": "job05.py",
   "line": 6,
-  "name": "tuple_difference_integer",
+  "name": "tuple_difference_theta_double",
   "status": "not yet"
  },
  {
@@ -86,13 +86,13 @@
  {
   "file": "job06.py",
   "line": 8,
-  "name": "tuple_sketch_summary_integer",
+  "name": "tuple_sketch_theta_double",
   "status": "not yet"
  },
  {
   "file": "job06.py",
   "line": 9,
-  "name": "xpath_number",
+  "name": "xpath_short",
   "status": "not yet"
  },
  {
@@ -116,7 +116,7 @@
  {
   "file": "job08.py",
   "line": 7,
-  "name": "xpath",
+  "name": "xpath_boolean",
   "status": "not yet"
  },
  {
@@ -128,19 +128,19 @@
  {
   "file": "job09.py",
   "line": 5,
-  "name": "tuple_union_double",
+  "name": "tuple_union_integer",
   "status": "not yet"
  },
  {
   "file": "job09.py",
   "line": 6,
-  "name": "tuple_intersection_double",
+  "name": "tuple_intersection_integer",
   "status": "not yet"
  },
  {
   "file": "job09.py",
   "line": 8,
-  "name": "xpath_int",
+  "name": "xpath_long",
   "status": "not yet"
  },
  {
@@ -182,7 +182,7 @@
  {
   "file": "job12.py",
   "line": 9,
-  "name": "theta_union",
+  "name": "theta_union_agg",
   "status": "not yet"
  },
  {
@@ -200,7 +200,7 @@
  {
   "file": "job13.py",
   "line": 9,
-  "name": "xpath",
+  "name": "xpath_boolean",
   "status": "not yet"
  },
  {
@@ -218,7 +218,7 @@
  {
   "file": "job14.py",
   "line": 8,
-  "name": "tuple_intersection_agg_integer",
+  "name": "tuple_intersection_double",
   "status": "not yet"
  },
  {
@@ -230,25 +230,25 @@
  {
   "file": "job15.py",
   "line": 7,
-  "name": "xpath_number",
+  "name": "xpath_short",
   "status": "not yet"
  },
  {
   "file": "job16.py",
   "line": 5,
-  "name": "try_reflect",
+  "name": "tuple_difference_double",
   "status": "not yet"
  },
  {
   "file": "job16.py",
   "line": 7,
-  "name": "schema_of_variant_agg",
+  "name": "sentences",
   "status": "not yet"
  },
  {
   "file": "job17.py",
   "line": 5,
-  "name": "tuple_sketch_agg_double",
+  "name": "tuple_sketch_agg_integer",
   "status": "not yet"
  },
  {
@@ -260,13 +260,13 @@
  {
   "file": "job18.py",
   "line": 7,
-  "name": "theta_sketch_agg",
+  "name": "theta_sketch_estimate",
   "status": "not yet"
  },
  {
   "file": "job18.py",
   "line": 8,
-  "name": "try_reflect",
+  "name": "tuple_difference_double",
   "status": "not yet"
  },
  {
@@ -290,13 +290,13 @@
  {
   "file": "job20.py",
   "line": 5,
-  "name": "tuple_union_double",
+  "name": "tuple_union_integer",
   "status": "not yet"
  },
  {
   "file": "job20.py",
   "line": 7,
-  "name": "try_reflect",
+  "name": "tuple_difference_double",
   "status": "not yet"
  },
  {
@@ -314,7 +314,7 @@
  {
   "file": "job21.py",
   "line": 9,
-  "name": "sentences",
+  "name": "theta_difference",
   "status": "not yet"
  },
  {
@@ -344,7 +344,7 @@
  {
   "file": "job24.py",
   "line": 8,
-  "name": "tuple_difference_integer",
+  "name": "tuple_difference_theta_double",
   "status": "not yet"
  },
  {
@@ -356,13 +356,13 @@
  {
   "file": "job25.py",
   "line": 9,
-  "name": "tuple_sketch_estimate_integer",
+  "name": "tuple_sketch_summary_double",
   "status": "not yet"
  },
  {
   "file": "job26.py",
   "line": 5,
-  "name": "theta_intersection",
+  "name": "theta_intersection_agg",
   "status": "not yet"
  },
  {
@@ -410,13 +410,13 @@
  {
   "file": "q00.sql",
   "line": 4,
-  "name": "tuple_difference_theta_double",
+  "name": "tuple_difference_theta_integer",
   "status": "not yet"
  },
  {
   "file": "q01.sql",
   "line": 4,
-  "name": "tuple_difference_theta_double",
+  "name": "tuple_difference_theta_integer",
   "status": "not yet"
  },
  {
@@ -434,19 +434,19 @@
  {
   "file": "q02.sql",
   "line": 4,
-  "name": "xpath_number",
+  "name": "xpath_short",
   "status": "not yet"
  },
  {
   "file": "q02.sql",
   "line": 5,
-  "name": "xpath_float",
+  "name": "xpath_int",
   "status": "not yet"
  },
  {
   "file": "q02.sql",
   "line": 6,
-  "name": "theta_sketch_estimate",
+  "name": "theta_union",
   "status": "not yet"
  },
  {
@@ -458,19 +458,19 @@
  {
   "file": "q03.sql",
   "line": 3,
-  "name": "theta_union",
+  "name": "theta_union_agg",
   "status": "not yet"
  },
  {
   "file": "q03.sql",
   "line": 4,
-  "name": "tuple_union_agg_double",
+  "name": "tuple_union_agg_integer",
   "status": "not yet"
  },
  {
   "file": "q04.sql",
   "line": 2,
-  "name": "tuple_intersection_agg_integer",
+  "name": "tuple_intersection_double",
   "status": "not yet"
  },
  {
@@ -518,7 +518,7 @@
  {
   "file": "q07.sql",
   "line": 6,
-  "name": "theta_union",
+  "name": "theta_union_agg",
   "status": "not yet"
  },
  {
@@ -536,7 +536,7 @@
  {
   "file": "q09.sql",
   "line": 3,
-  "name": "schema_of_variant_agg",
+  "name": "sentences",
   "status": "not yet"
  },
  {
@@ -566,7 +566,7 @@
  {
   "file": "q10.sql",
   "line": 7,
-  "name": "xpath_short",
+  "name": "xpath_string",
   "status": "not yet"
  },
  {
@@ -596,13 +596,13 @@
  {
   "file": "q14.sql",
   "line": 2,
-  "name": "tuple_sketch_summary_integer",
+  "name": "tuple_sketch_theta_double",
   "status": "not yet"
  },
  {
   "file": "q14.sql",
   "line": 4,
-  "name": "tuple_difference_integer",
+  "name": "tuple_difference_theta_double",
   "status": "not yet"
  },
  {
@@ -626,7 +626,7 @@
  {
   "file": "q16.sql",
   "line": 3,
-  "name": "theta_union_agg",
+  "name": "try_reflect",
   "status": "not yet"
  },
  {
@@ -638,31 +638,31 @@
  {
   "file": "q18.sql",
   "line": 2,
-  "name": "xpath_number",
+  "name": "xpath_short",
   "status": "not yet"
  },
  {
   "file": "q19.sql",
   "line": 2,
-  "name": "measure",
+  "name": "python_worker_logs",
   "status": "not yet"
  },
  {
   "file": "q20.sql",
   "line": 2,
-  "name": "theta_union_agg",
+  "name": "try_reflect",
   "status": "not yet"
  },
  {
   "file": "q20.sql",
   "line": 3,
-  "name": "theta_intersection_agg",
+  "name": "theta_sketch_agg",
   "status": "not yet"
  },
  {
   "file": "q20.sql",
   "line": 4,
-  "name": "tuple_difference_integer",
+  "name": "tuple_difference_theta_double",
   "status": "not yet"
  },
  {
@@ -686,7 +686,7 @@
  {
   "file": "q21.sql",
   "line": 6,
-  "name": "tuple_sketch_summary_double",
+  "name": "tuple_sketch_summary_integer",
   "status": "not yet"
  },
  {
@@ -710,7 +710,7 @@
  {
   "file": "q24.sql",
   "line": 4,
-  "name": "schema_of_avro",
+  "name": "schema_of_variant_agg",
   "status": "not yet"
  },
  {
@@ -722,7 +722,7 @@
  {
   "file": "q25.sql",
   "line": 3,
-  "name": "tuple_sketch_estimate_double",
+  "name": "tuple_sketch_estimate_integer",
   "status": "not yet"
  },
  {
@@ -734,7 +734,7 @@
  {
   "file": "q25.sql",
   "line": 6,
-  "name": "tuple_difference_integer",
+  "name": "tuple_difference_theta_double",
   "status": "not yet"
  },
  {
@@ -758,19 +758,19 @@
  {
   "file": "q28.sql",
   "line": 3,
-  "name": "tuple_sketch_estimate_double",
+  "name": "tuple_sketch_estimate_integer",
   "status": "not yet"
  },
  {
   "file": "q28.sql",
   "line": 4,
-  "name": "theta_union_agg",
+  "name": "try_reflect",
   "status": "not yet"
  },
  {
   "file": "q29.sql",
   "line": 4,
-  "name": "xpath_number",
+  "name": "xpath_short",
   "status": "not yet"
  }
 ]

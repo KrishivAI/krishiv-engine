@@ -436,9 +436,8 @@ impl DataFrameWriter {
         let session = df.session.clone();
         session
             .on_executor(async move {
-                df.session
-                    .exec_insert_into(&df, &table, mode, &options)
-                    .await
+                // Boxed: the insert's future holds a whole analysis.
+                Box::pin(df.session.exec_insert_into(&df, &table, mode, &options)).await
             })
             .await
     }
