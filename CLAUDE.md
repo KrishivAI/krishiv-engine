@@ -32,6 +32,7 @@ cargo hack check --each-feature --workspace --locked   # features stay additive
 cargo xtask layering                             # L0–L7 layer rule (xtask/layers.toml)
 cargo xtask quarantine [--list|--flaky LOG]     # --flaky: fail on nextest FLAKY tests (passed only on retry) not in the registry; flaky-test registry tests/quarantine.toml vs .config/nextest.toml; a test is quarantined at most 3 days (owner, issue, deadline), then fixed or removed
 cargo xtask release-check [VERSION]              # read-only release preflight (version, publish list order, changelog, workflows, tag); RELEASING.md "Release checklist"
+cargo xtask ci-time [--file F | --compare BEFORE AFTER]   # PR-gate wall time (median, p90) from gh run list; save lists before/after a CI change and compare
 cargo xtask connect-coverage [--check]          # docs/reference/connect/coverage.md + tests/connect/coverage.json from crates/krishiv-connect/src/coverage.rs
 cargo xtask docs-config | docs-errors            # regenerate config / error-class docs
 cargo xtask docs-sql | docs-python | docs-rust [--check]   # docs/reference/{sql/functions,python,rust}/ (docs-rust needs nightly rustdoc + `cargo install rustdoc-md --version 0.2.0 --locked`; the docs-reference nightly job diffs them); docs-config docs/reference/config/index.md

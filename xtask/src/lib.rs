@@ -7,6 +7,7 @@ pub mod admin_api;
 pub mod budgets;
 pub mod changelog;
 pub mod ci;
+pub mod ci_time;
 pub mod codeql_proxy;
 pub mod compat;
 pub mod connect_coverage;
