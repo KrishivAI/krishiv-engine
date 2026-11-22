@@ -45,8 +45,8 @@ use crate::ast::{
     SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier, SetVariable, SetVariableKind,
     SkewSpec, SortItem, Span, Statement, StructField, TableAlias, TableConstraint,
     TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption, TableSample,
-    TemporalClause, TemporalKind, TimeZone, TransformKind, TransformOutput, TransformSelect,
-    Unpivot, UnpivotColumns, Use, UsingArgument, Values, ViewColumn, With,
+    TemporalClause, TemporalFault, TemporalKind, TimeZone, TransformKind, TransformOutput,
+    TransformSelect, Unpivot, UnpivotColumns, Use, UsingArgument, Values, ViewColumn, With,
 };
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};

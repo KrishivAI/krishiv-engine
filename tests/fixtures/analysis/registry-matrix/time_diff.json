@@ -1,0 +1,350 @@
+{
+  "entries": [
+    {
+      "id": "time_diff#0791b3d3ee67/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#0791b3d3ee67/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#090e0b2cb9da/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', X'01') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#090e0b2cb9da/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', X'01') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#127b6938aa73/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', 1.5D) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#127b6938aa73/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', 1.5D) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#14b323c36764/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#14b323c36764/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#1e242ed2c853/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#1e242ed2c853/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#240fa884bd44/ansi_on",
+      "reason": "SELECT time_diff('HOUR', CAST(1.5 AS DECIMAL(38,18)), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#240fa884bd44/ansi_off",
+      "reason": "SELECT time_diff('HOUR', CAST(1.5 AS DECIMAL(38,18)), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#3ad3ed15b6e3/ansi_on",
+      "reason": "SELECT time_diff('HOUR', named_struct('a', 1, 'b', 'x'), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#3ad3ed15b6e3/ansi_off",
+      "reason": "SELECT time_diff('HOUR', named_struct('a', 1, 'b', 'x'), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#3e5c4bba5cc9/ansi_on",
+      "reason": "SELECT time_diff('HOUR', CAST(1.5 AS FLOAT), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#3e5c4bba5cc9/ansi_off",
+      "reason": "SELECT time_diff('HOUR', CAST(1.5 AS FLOAT), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#482e8f85170b/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', 1L) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#482e8f85170b/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', 1L) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#49f9449b0d3b/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', '1') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#49f9449b0d3b/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', '1') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#4e71889f49b9/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#4e71889f49b9/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#54e466d28fc6/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', DATE'2024-02-29') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#54e466d28fc6/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', DATE'2024-02-29') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#571db92b42e7/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#571db92b42e7/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#5a2ca704f2d1/ansi_on",
+      "reason": "SELECT time_diff(map('a', 1), TIME'20:30:29', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#5a2ca704f2d1/ansi_off",
+      "reason": "SELECT time_diff(map('a', 1), TIME'20:30:29', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#5e3776375f84/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', CAST(1 AS TINYINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#5e3776375f84/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', CAST(1 AS TINYINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#6636a4f48b25/ansi_on",
+      "reason": "SELECT time_diff('HOUR', 1, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#6636a4f48b25/ansi_off",
+      "reason": "SELECT time_diff('HOUR', 1, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#69dc9aa9a70e/ansi_on",
+      "reason": "SELECT time_diff('HOUR', 1.5D, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#69dc9aa9a70e/ansi_off",
+      "reason": "SELECT time_diff('HOUR', 1.5D, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#7193e2ceac48/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', 1) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#7193e2ceac48/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', 1) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#786cd8c63a15/ansi_on",
+      "reason": "SELECT time_diff('HOUR', true, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#786cd8c63a15/ansi_off",
+      "reason": "SELECT time_diff('HOUR', true, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#7a8a5548d2ef/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', 'abc') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#7a8a5548d2ef/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', 'abc') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#7bee618794c6/ansi_on",
+      "reason": "SELECT time_diff('HOUR', array(1, 2), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#7bee618794c6/ansi_off",
+      "reason": "SELECT time_diff('HOUR', array(1, 2), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#7c8f48bdb530/ansi_on",
+      "reason": "SELECT time_diff('HOUR', 1L, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#7c8f48bdb530/ansi_off",
+      "reason": "SELECT time_diff('HOUR', 1L, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#819c28d37ead/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#819c28d37ead/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#83b80473afe7/ansi_on",
+      "reason": "SELECT time_diff('HOUR', CAST(1 AS TINYINT), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#83b80473afe7/ansi_off",
+      "reason": "SELECT time_diff('HOUR', CAST(1 AS TINYINT), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#864694af6ea7/ansi_on",
+      "reason": "SELECT time_diff('HOUR', X'01', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#864694af6ea7/ansi_off",
+      "reason": "SELECT time_diff('HOUR', X'01', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#94149aaac014/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#94149aaac014/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#a45eac119f68/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#a45eac119f68/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#a8abc324447f/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#a8abc324447f/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#aacc0a7d67be/ansi_on",
+      "reason": "SELECT time_diff('HOUR', 'abc', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#aacc0a7d67be/ansi_off",
+      "reason": "SELECT time_diff('HOUR', 'abc', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#ad7a42345e2b/ansi_on",
+      "reason": "SELECT time_diff('HOUR', INTERVAL '1-2' YEAR TO MONTH, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#ad7a42345e2b/ansi_off",
+      "reason": "SELECT time_diff('HOUR', INTERVAL '1-2' YEAR TO MONTH, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#af9774bc982a/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#af9774bc982a/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#bb03fc09faf3/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', CAST(1 AS SMALLINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#bb03fc09faf3/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', CAST(1 AS SMALLINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#beb522dee773/ansi_on",
+      "reason": "SELECT time_diff('HOUR', CAST(1 AS SMALLINT), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#beb522dee773/ansi_off",
+      "reason": "SELECT time_diff('HOUR', CAST(1 AS SMALLINT), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#bfa9796c3ec9/ansi_on",
+      "reason": "SELECT time_diff(named_struct('a', 1, 'b', 'x'), TIME'20:30:29', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#bfa9796c3ec9/ansi_off",
+      "reason": "SELECT time_diff(named_struct('a', 1, 'b', 'x'), TIME'20:30:29', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#c586b08c4b35/ansi_on",
+      "reason": "SELECT time_diff(array(1, 2), TIME'20:30:29', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#c586b08c4b35/ansi_off",
+      "reason": "SELECT time_diff(array(1, 2), TIME'20:30:29', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#d43e42868486/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIMESTAMP'2024-02-29 12:34:56.123456', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#d43e42868486/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIMESTAMP'2024-02-29 12:34:56.123456', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#d7ab31325917/ansi_on",
+      "reason": "SELECT time_diff('HOUR', '1', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#d7ab31325917/ansi_off",
+      "reason": "SELECT time_diff('HOUR', '1', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#d8d5946d6384/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#d8d5946d6384/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#ddd201a5eb09/ansi_on",
+      "reason": "SELECT time_diff('HOUR', CAST(1.5 AS DECIMAL(10,2)), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#ddd201a5eb09/ansi_off",
+      "reason": "SELECT time_diff('HOUR', CAST(1.5 AS DECIMAL(10,2)), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#deb589896d9a/ansi_on",
+      "reason": "SELECT time_diff('HOUR', map('a', 1), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#deb589896d9a/ansi_off",
+      "reason": "SELECT time_diff('HOUR', map('a', 1), TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#e69c13026313/ansi_on",
+      "reason": "SELECT time_diff('HOUR', DATE'2024-02-29', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#e69c13026313/ansi_off",
+      "reason": "SELECT time_diff('HOUR', DATE'2024-02-29', TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#e99ef44ca88a/ansi_on",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#e99ef44ca88a/ansi_off",
+      "reason": "SELECT time_diff('HOUR', TIME'20:30:29', CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#e9a82db2c30e/ansi_on",
+      "reason": "SELECT time_diff('HOUR', INTERVAL '1 02:03:04' DAY TO SECOND, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "time_diff#e9a82db2c30e/ansi_off",
+      "reason": "SELECT time_diff('HOUR', INTERVAL '1 02:03:04' DAY TO SECOND, TIME'21:30:28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "time_diff"
+}

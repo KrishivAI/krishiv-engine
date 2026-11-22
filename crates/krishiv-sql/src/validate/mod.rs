@@ -47,12 +47,14 @@ mod pipeline;
 mod relation;
 mod sample;
 mod script;
+mod spans;
 mod transform;
 mod types;
 
 use std::collections::HashSet;
 
 use self::keys::{duplicate_key, key_text, misvalued_keys, reserved_namespace_properties};
+use self::spans::{context_children_text, property_list_span};
 use krishiv_common::error::{
     CreateTableColumnDescriptorDuplicate, DescribeJsonNotExtended, DuplicateClauses,
     DuplicatedCteNames, FeatureNotEnabled, IdentityColumnsDuplicatedSequenceGeneratorOption,
@@ -84,11 +86,11 @@ use crate::ast::{
     PartitionFieldKind, PartitionSpec, Query, RefreshKind, Relation, RelationExt, RowFormat,
     RowFormatKind, SchemaBindingClause, Select, SelectItem, SetExpr, SetExprKind, SetVariableKind,
     Show, ShowKind, SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind,
-    TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause, Truncate, Update,
-    UpdateAssignment, WindowRef, WindowSpec, With,
+    TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause, TemporalFault,
+    Truncate, Update, UpdateAssignment, WindowRef, WindowSpec, With,
 };
 use crate::error::{self, ParseError};
-use crate::lexer::{Sym, TokenKind, tokenize};
+use crate::lexer::tokenize;
 
 type R = Result<(), ParseError>;
 
@@ -766,6 +768,9 @@ impl Checker<'_> {
                 self.partition_values(Some(partition))?;
                 non_optional(partition)
             }
+            AlterTableAction::CommentOnColumns { columns, .. } => {
+                columns.iter().try_for_each(|(c, _)| self.column_name(c))
+            }
             AlterTableAction::SetLocation(_)
             | AlterTableAction::SetComment(_)
             | AlterTableAction::RecoverPartitions => Ok(()),
@@ -1423,6 +1428,21 @@ impl Checker<'_> {
     ) -> R {
         if let Some(t) = temporal {
             self.expr(&t.value)?;
+            match &t.fault {
+                Some(TemporalFault::AtSyntaxDisabled(span)) => {
+                    return Err(error::time_travel_at_syntax(*span));
+                }
+                Some(TemporalFault::InvalidAtTimestamp(digits, span)) => {
+                    return Err(error::invalid_time_travel_timestamp_format(
+                        digits.clone(),
+                        *span,
+                    ));
+                }
+                Some(TemporalFault::Multiple(span)) => {
+                    return Err(error::multiple_time_travel_spec(*span));
+                }
+                None => {}
+            }
         }
         self.property_keys(options)?;
         let missing = misvalued_keys(options, true);
@@ -1821,58 +1841,6 @@ fn foldable(e: &Expr) -> bool {
         }
         _ => false,
     }
-}
-
-/// The clause at `span` as Spark's `validateRowFormatFileFormat` prints a context: its children's
-/// `getText` joined by spaces. The first `tokens` tokens are children of their own, as is each
-/// token after them outside brackets (`ROW FORMAT SERDE 'x'`, `FIELDS TERMINATED BY ','`); a
-/// bracketed list (`SERDEPROPERTIES (...)`'s), or with `tokens` set everything after the first
-/// `tokens` (a `STORED BY` storage handler), is one child whose text drops the whitespace.
-fn context_children_text(sql: &str, span: Span, tokens: usize) -> String {
-    let text = span.text(sql);
-    let mut children: Vec<String> = Vec::new();
-    let mut depth = 0_usize;
-    for (i, t) in tokenize(text)
-        .iter()
-        .filter(|t| !t.kind.is_trivia())
-        .enumerate()
-    {
-        let token = t.span.text(text);
-        let glued = i > tokens || depth > 0;
-        match t.kind {
-            TokenKind::Sym(Sym::LParen) => depth += 1,
-            TokenKind::Sym(Sym::RParen) => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        match children.last_mut() {
-            Some(last) if glued => last.push_str(token),
-            _ => children.push(token.to_owned()),
-        }
-    }
-    children.join(" ")
-}
-
-/// The parenthesized list from `first` to `last` (the first and last options of a property list):
-/// the `(` before the first through the `)` after the last, where Spark reports an error raised
-/// inside `visitPropertyList`. The options themselves when a comment hides a parenthesis.
-fn property_list_span(sql: &str, first: Span, last: Span) -> Span {
-    let paren = |t: &crate::lexer::Token, sym| t.kind == TokenKind::Sym(sym);
-    let start = sql
-        .get(..first.start)
-        .and_then(|before| {
-            tokenize(before)
-                .into_iter()
-                .rev()
-                .find(|t| !t.kind.is_trivia())
-        })
-        .filter(|t| paren(t, Sym::LParen))
-        .map_or(first.start, |t| t.span.start);
-    let end = sql
-        .get(last.end..)
-        .and_then(|after| tokenize(after).into_iter().find(|t| !t.kind.is_trivia()))
-        .filter(|t| paren(t, Sym::RParen))
-        .map_or(last.end, |t| last.end + t.span.end);
-    Span::new(start, end)
 }
 
 /// Spark's `visitNonOptionalPartitionSpec` (`ALTER TABLE` ADD, DROP, RENAME and SET LOCATION of a partition):

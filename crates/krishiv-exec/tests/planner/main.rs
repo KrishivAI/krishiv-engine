@@ -43,6 +43,7 @@ mod runtime_filters;
 mod scan_instance;
 mod scan_row_drop;
 mod semantics;
+mod share_scan;
 mod share_subtree;
 mod shared;
 mod splits;

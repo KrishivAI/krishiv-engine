@@ -206,6 +206,30 @@ fn bucketing_is_refused_as_spark_refuses_it() {
     assert_eq!(count(&s, "t"), count(&s, "people"));
 }
 
+/// E34: an explicit idempotency key on the `saveAsTable` that creates a file table is not stored with
+/// the table: a later append without a key adds its rows.
+#[test]
+fn a_creation_key_is_not_kept_in_the_files_tables_options() {
+    let s = session();
+    let n = count(&s, "people");
+    block_on(
+        s.table("people")
+            .write()
+            .option("krishiv.write.idempotencyKey", "job-1")
+            .save_as_table("keyed_files"),
+    )
+    .unwrap();
+    assert_eq!(count(&s, "keyed_files"), n);
+    block_on(
+        s.table("people")
+            .write()
+            .mode("append")
+            .save_as_table("keyed_files"),
+    )
+    .unwrap();
+    assert_eq!(count(&s, "keyed_files"), 2 * n);
+}
+
 #[test]
 fn text_writes_one_string_column_and_orc_is_unsupported() {
     let s = session();
