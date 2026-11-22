@@ -305,3 +305,174 @@ fn a_raw_sketch_column_is_projected_by_its_bytes_for_union_and_intersection() {
         }
     }
 }
+
+/// A union's fold decodes its whole input (`theta::from_bytes`, eight bytes a retained hash) whatever the union's own
+/// lgNomEntries: the projection covers the decoded input, not a table capped at the union's size.
+#[test]
+fn a_union_fold_is_projected_by_the_decoded_input_not_by_its_own_table() {
+    let mut big = theta::new_sketch(20, "theta_sketch_agg").unwrap();
+    for v in 0..1_000_000_i64 {
+        theta::update_long(&mut big, v);
+    }
+    let bytes = theta::to_bytes(&theta::compact(&mut big));
+    let decoded = theta::from_bytes(&bytes, "theta_union_agg")
+        .unwrap()
+        .num_retained()
+        * 8;
+    for (op, states) in [
+        (ThetaSketchOp::Union(12), false),
+        (ThetaSketchOp::Union(12), true),
+        (ThetaSketchOp::Sketch(12), true),
+    ] {
+        let mut acc = ThetaSketchAcc::new(op).unwrap();
+        acc.resize(1);
+        let room = acc.projected(0, 1, states, bytes.len()) - acc.size();
+        assert!(
+            room >= decoded,
+            "{op:?} states {states}: {room} < {decoded} decoded bytes"
+        );
+    }
+}
+
+/// A sketch at its largest table holding `2^lgNom` hashes rebuilds on its next distinct hash (in `recharge`'s trim):
+/// the rebuild holds the retained entries, up to one more table, beside the table. The projection reserves that
+/// scratch whatever room the table has left.
+#[test]
+fn a_raw_batch_that_can_rebuild_a_full_sketch_reserves_the_rebuild_scratch() {
+    let lg = 10_u8;
+    let table = 8_usize << (lg + 1);
+    let mut acc = ThetaSketchAcc::new(ThetaSketchOp::Sketch(lg)).unwrap();
+    acc.resize(1);
+    let values: Vec<Option<i64>> = (0..20_000).map(Some).collect();
+    acc.update(&vec![0; values.len()], &longs(&values), |_| true)
+        .unwrap();
+    let Slot::Updatable(s) = &acc.slots[0] else {
+        panic!("a sketch group")
+    };
+    assert_eq!(s.num_retained(), 1 << lg, "trimmed to its nominal size");
+    assert!(s.estimated_size() >= table, "at its largest table");
+    let room = acc.projected(0, 1, false, 0) - acc.size();
+    assert!(room >= table, "{room} < {table} rebuild bytes");
+}
+
+/// A batch that cannot take any sketch past `2^lgNom` hashes cannot rebuild one, so it reserves no rebuild scratch.
+#[test]
+fn a_raw_batch_that_cannot_rebuild_reserves_no_rebuild_scratch() {
+    let lg = 20_u8;
+    let table = 8_usize << (lg + 1);
+    let mut acc = ThetaSketchAcc::new(ThetaSketchOp::Sketch(lg)).unwrap();
+    acc.resize(1);
+    acc.update(&[0, 0], &longs(&[Some(1), Some(2)]), |_| true)
+        .unwrap();
+    let room = acc.projected(0, 1, false, 0) - acc.size();
+    assert!(
+        room < table / 8,
+        "{room} bytes for one row of a small sketch"
+    );
+}
+
+/// `state_bound` bounds the serialized state of every slot kind, so a batch cut by it never overflows its column.
+#[test]
+fn the_state_bound_covers_the_serialized_state() {
+    let values: Vec<Option<i64>> = (0..50_000).map(Some).collect();
+    let mut a = ThetaSketchAcc::new(ThetaSketchOp::Sketch(12)).unwrap();
+    a.resize(3);
+    let ids: Vec<u32> = (0..values.len()).map(|i| u32::from(i % 7 == 0)).collect();
+    a.update(&ids, &longs(&values), |_| true).unwrap();
+    let state = a.state(&[0]).unwrap().remove(0);
+    let state = state.as_any().downcast_ref::<BinaryArray>().unwrap();
+    // Group 2 becomes a union with pending raw rows.
+    a.merge(&[2], state).unwrap();
+    a.update(&[2, 2], &longs(&[Some(-1), Some(-2)]), |_| true)
+        .unwrap();
+    let mut i = ThetaSketchAcc::new(ThetaSketchOp::Intersection).unwrap();
+    i.resize(2);
+    i.merge(&[0], state).unwrap();
+    for (acc, groups) in [(&a, 3_u32), (&i, 2)] {
+        for g in 0..groups {
+            let bytes = acc.bytes(g).unwrap().len();
+            assert!(
+                acc.state_bound(g) >= bytes,
+                "group {g}: {} < {bytes}",
+                acc.state_bound(g)
+            );
+        }
+    }
+}
+
+/// A union at its largest table can rebuild on any fold, however small the input: the projection of a state batch
+/// reserves one table of rebuild scratch beside the decoded input.
+#[test]
+fn a_fold_into_a_full_union_reserves_the_rebuild_scratch() {
+    let lg = 10_u8;
+    let table = 8_usize << (lg + 1);
+    let mut acc = ThetaSketchAcc::new(ThetaSketchOp::Union(lg)).unwrap();
+    acc.resize(1);
+    for part in 0..3_i64 {
+        let mut s = theta::new_sketch(16, "theta_sketch_agg").unwrap();
+        for v in 0..20_000_i64 {
+            theta::update_long(&mut s, part * 1_000_000 + v);
+        }
+        let bytes = theta::to_bytes(&theta::compact(&mut s));
+        let col: ArrayRef = Arc::new(BinaryArray::from_iter_values([bytes]));
+        acc.update(&[0], &col, |_| true).unwrap();
+    }
+    assert!(acc.peak >= table, "the union is at its largest table");
+    let mut one = theta::new_sketch(lg.into(), "theta_sketch_agg").unwrap();
+    theta::update_long(&mut one, -1);
+    let small = theta::to_bytes(&theta::compact(&mut one)).len();
+    let room = acc.projected(0, 1, false, small) - acc.size();
+    assert!(room >= table, "{room} < {table} rebuild bytes");
+}
+
+/// A batch of partial states is cut by the states' bound bytes (at least one group), and an aggregate with no
+/// large state takes every group.
+#[test]
+fn a_state_batch_is_cut_by_its_bound_bytes() {
+    use super::super::accumulator::{Accumulator, state_prefix};
+    use super::super::{AggregateExpr, AggregateFunction};
+    use arrow_schema::DataType;
+
+    let expr = AggregateExpr::new(
+        AggregateFunction::ThetaSketchAgg { lg_nom: 12 },
+        0,
+        DataType::Int64,
+        "t".to_owned(),
+    );
+    let mut acc = Accumulator::new(&expr, false).unwrap();
+    acc.resize(4);
+    let values: Vec<Option<i64>> = (0..40_000).map(Some).collect();
+    let groups: Vec<u32> = (0..values.len())
+        .map(|i| u32::try_from(i % 4).unwrap_or(0))
+        .collect();
+    let arg = longs(&values);
+    acc.update(&groups, &[arg], &krishiv_types::batch::Weights::Const(1))
+        .unwrap();
+    let each = acc.state_bound(0);
+    assert!(each > 8 << 12, "a full sketch: {each}");
+    let ids = [0, 1, 2, 3];
+    let mut used = 0;
+    assert_eq!(
+        state_prefix(
+            std::slice::from_ref(&acc),
+            &ids,
+            &mut used,
+            2 * each + each / 2
+        ),
+        2
+    );
+    assert_eq!(used, 2 * each);
+    assert_eq!(
+        state_prefix(std::slice::from_ref(&acc), &ids, &mut 0, 0),
+        1,
+        "at least one"
+    );
+    assert_eq!(
+        state_prefix(std::slice::from_ref(&acc), &ids, &mut 1, 0),
+        0,
+        "a batch already full"
+    );
+    let count = AggregateExpr::new(AggregateFunction::Count, 0, DataType::Int64, "c".to_owned());
+    let count = Accumulator::new(&count, false).unwrap();
+    assert_eq!(state_prefix(&[count], &ids, &mut 0, 0), 4);
+}

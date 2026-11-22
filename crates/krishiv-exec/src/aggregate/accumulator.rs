@@ -610,6 +610,15 @@ impl Accumulator {
         self
     }
 
+    /// An upper bound of group `g`'s partial-state bytes where a state can be large (the Theta sketches, whose
+    /// `binary` column must stay under 2 GiB); 0 for the other accumulators. See [`state_prefix`].
+    pub(crate) fn state_bound(&self, g: u32) -> usize {
+        match &self.kind {
+            Kind::ThetaSketch(h) => h.state_bound(g),
+            _ => 0,
+        }
+    }
+
     /// Bytes one group's state takes (heap bytes of string values aside).
     pub(crate) fn group_bytes(&self) -> usize {
         self.vecs().iter().map(|&(_, _, e)| e).sum()
@@ -1177,6 +1186,36 @@ impl Accumulator {
             Kind::Udf(ref u) => u.state_len(),
         }
     }
+}
+
+/// The bound bytes of one batch of partial states ([`state_prefix`]): a batch of large sketches is cut well before
+/// the 2 GiB a `binary` column's 32-bit offsets hold, and before its unreserved bytes outgrow the merge's headroom.
+pub(crate) const STATE_BATCH_BYTES: usize = 64 << 20;
+
+/// How many of `ids`, from the front, join a batch of partial states that already holds `used` bound bytes
+/// ([`Accumulator::state_bound`] summed over `accs`) and stays within `cap`; at least one when the batch is empty.
+/// Adds the bytes of those taken to `used`. Without an accumulator of large states every id is taken.
+pub(crate) fn state_prefix(
+    accs: &[Accumulator],
+    ids: &[u32],
+    used: &mut usize,
+    cap: usize,
+) -> usize {
+    if !accs.iter().any(|a| matches!(a.kind, Kind::ThetaSketch(_))) {
+        return ids.len();
+    }
+    for (n, &g) in ids.iter().enumerate() {
+        let bytes = accs
+            .iter()
+            .map(|a| a.state_bound(g))
+            .fold(0, usize::saturating_add);
+        let next = used.saturating_add(bytes);
+        if next > cap && *used > 0 {
+            return n;
+        }
+        *used = next;
+    }
+    ids.len()
 }
 
 mod small_fold;

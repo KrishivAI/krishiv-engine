@@ -1294,8 +1294,8 @@ impl HashAggregate {
             inner.merged = 0;
             return Ok(Step::Yield);
         }
-        let end = (inner.merged + CHUNK).min(src.len());
-        let ids = src.ids(inner.merged..end);
+        let ids = src.state_ids(inner.merged..(inner.merged + CHUNK).min(src.len()));
+        let end = inner.merged + ids.len();
         let p = dst.prepare(&Batch::new(src.state_batch(&ids)?), true)?;
         let granted: usize = inner.granted.iter().map(Reservation::size).sum();
         let want = dst.projected(&p)? + dst.transient(&p);

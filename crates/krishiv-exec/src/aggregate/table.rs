@@ -577,6 +577,25 @@ impl Table {
         }
     }
 
+    /// The ids of the groups at positions `range`, cut where their partial states pass
+    /// [`STATE_BATCH_BYTES`](super::accumulator::STATE_BATCH_BYTES): at least one group.
+    pub(crate) fn state_ids(&self, range: Range<usize>) -> Vec<u32> {
+        match self {
+            Self::Keys(t) => {
+                let mut ids = self.ids(range);
+                let n = super::accumulator::state_prefix(
+                    &t.accs,
+                    &ids,
+                    &mut 0,
+                    super::accumulator::STATE_BATCH_BYTES,
+                );
+                ids.truncate(n);
+                ids
+            }
+            Self::Rows(t) => t.state_ids(range),
+        }
+    }
+
     pub(crate) fn state_batch(&self, ids: &[u32]) -> Result<RecordBatch> {
         match self {
             Self::Keys(t) => t.state_batch(ids),

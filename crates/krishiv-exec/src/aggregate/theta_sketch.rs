@@ -128,6 +128,15 @@ impl Slot {
         })
     }
 
+    /// The hashes the sketch that raw rows go into holds (the group's own, or the pending one of a union).
+    fn raw_retained(&self) -> usize {
+        match self {
+            Self::Updatable(s) => s.num_retained(),
+            Self::Union(_, Some(p)) => p.num_retained(),
+            Self::Union(_, None) | Self::Intersection(_) => 0,
+        }
+    }
+
     /// The compact sketch of the state; `None` for an intersection that saw no sketch.
     fn compact(&self, lg: u8) -> Result<Option<CompactThetaSketch>> {
         match self {
@@ -157,6 +166,8 @@ pub(crate) struct ThetaSketchAcc {
     charges: Vec<usize>,
     total: usize,
     peak: usize,
+    /// The most hashes a group's raw sketch held after a batch (`Slot::raw_retained`), as `peak` is the largest charge.
+    retained: usize,
     /// What a fresh group's state is charged (measured on a real one).
     new_group: usize,
     /// A failure to build a group's state in `resize`, raised when the group is first used.
@@ -181,6 +192,7 @@ impl ThetaSketchAcc {
             charges: Vec::new(),
             total: 0,
             peak: 0,
+            retained: 0,
             new_group: 0,
             fault: None,
         };
@@ -234,6 +246,7 @@ impl ThetaSketchAcc {
             self.charges.truncate(n);
             self.total = self.charges.iter().sum();
             self.peak = self.charges.iter().copied().max().unwrap_or(0);
+            self.retained = self.slots.iter().map(Slot::raw_retained).max().unwrap_or(0);
         }
     }
 
@@ -272,6 +285,12 @@ impl ThetaSketchAcc {
     /// state is charged, plus `FRESH_BYTES_PER_ROW` for each row it may take, up to a full table. States: a folded
     /// sketch adds at most `TABLE_BYTES_PER_STATE_BYTE` times its bytes (a union also at most a full table), and an
     /// intersection's table follows its first input, so it is bounded by the input and not by lgNomEntries.
+    ///
+    /// Rebuild scratch: a table at its largest size rebuilds when it passes `2^lgNom` hashes (in `recharge`'s trim, or
+    /// at 15/16 load inside an insert), and while it does it holds its retained hashes (at most one more table) beside
+    /// the table. Rebuilds run one at a time, so a batch reserves one table of scratch, apart from the room the tables
+    /// have left: raw rows when some raw sketch can pass `2^lgNom` hashes in this batch, states (a union's fold) up to
+    /// the largest table the batch can reach.
     pub(crate) fn projected(
         &self,
         new: usize,
@@ -301,7 +320,9 @@ impl ThetaSketchAcc {
             } else {
                 0
             };
-            (landing, fresh, 0)
+            let rebuild = rows.saturating_add(self.retained) > 1_usize << self.lg_nom();
+            let scratch = if rebuild { table(full) } else { 0 };
+            (landing.saturating_add(scratch), fresh, 0)
         } else {
             let input = state_bytes
                 .saturating_mul(TABLE_BYTES_PER_STATE_BYTE)
@@ -311,7 +332,12 @@ impl ThetaSketchAcc {
             } else {
                 input
             };
-            (both, 0, input)
+            let scratch = if capped {
+                full.min(self.peak.saturating_add(both))
+            } else {
+                0
+            };
+            (both.saturating_add(scratch), 0, input)
         };
         self.size()
             .saturating_add(fresh_floor)
@@ -354,6 +380,7 @@ impl ThetaSketchAcc {
             self.total = self.total.saturating_sub(*c).saturating_add(now);
             *c = now;
             self.peak = self.peak.max(now);
+            self.retained = self.retained.max(s.raw_retained());
         }
     }
 
@@ -561,6 +588,16 @@ impl ThetaSketchAcc {
             .compact(self.lg_nom())?
             .map(|c| theta::to_bytes(&c))
             .unwrap_or_default())
+    }
+
+    /// An upper bound of the bytes of group `g`'s partial state: its charge. A compact sketch is at most eight bytes
+    /// a retained hash plus a header, its hashes fit the table(s) charged, and the header fits `OVERHEAD`.
+    pub(crate) fn state_bound(&self, g: u32) -> usize {
+        self.charges
+            .get(usize::try_from(g).unwrap_or(usize::MAX))
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(OVERHEAD)
     }
 
     /// The partial state of groups `ids`: the sketch bytes as `binary`.
