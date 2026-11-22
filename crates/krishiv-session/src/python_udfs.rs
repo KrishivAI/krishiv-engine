@@ -903,6 +903,8 @@ mod tests {
         let held = hold.lock().expect("lock");
         let (started_tx, started_rx) = mpsc::channel();
         let call_hold = Arc::clone(&hold);
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let call_finished = Arc::clone(&finished);
         let canceller = {
             let actions = Arc::clone(&actions);
             std::thread::spawn(move || {
@@ -917,6 +919,7 @@ mod tests {
                 run_python_source_call(move || {
                     let _ = started_tx.send(());
                     drop(call_hold.lock());
+                    call_finished.store(true, std::sync::atomic::Ordering::SeqCst);
                     Ok(())
                 })
             })
@@ -925,11 +928,25 @@ mod tests {
         }));
         canceller.join().expect("canceller");
         assert!(out.is_err(), "the cancel ends the call");
+        // The error is the cancel's own: the user code is still blocked, it has not returned one.
+        assert!(
+            !finished.load(std::sync::atomic::Ordering::SeqCst),
+            "the caller returned while the user code was still running"
+        );
         assert!(
             began.elapsed() < std::time::Duration::from_secs(5),
             "the caller did not wait for the user code"
         );
         drop(held);
+        // The thread runs on to its end after the cancel.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !finished.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the call never finished"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     /// Calls beyond the bound wait for a permit: with every permit held by blocked calls, one more

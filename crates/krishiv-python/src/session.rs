@@ -293,7 +293,9 @@ impl PySession {
         );
         let source = python_batch_source(read);
         let planner = plan.map(|plan| {
-            std::sync::Arc::new(PythonPlanner { plan }) as std::sync::Arc<dyn SourcePlanner>
+            std::sync::Arc::new(PythonPlanner {
+                plan: std::sync::Arc::new(plan),
+            }) as std::sync::Arc<dyn SourcePlanner>
         });
         self.inner
             .register_planned_source(&name, label, schema, source, planner)
@@ -656,7 +658,7 @@ fn python_batch_source(read: Py<PyAny>) -> krishiv_session::BatchSource {
 
 /// A source's planning in Python: `reader()`, `pushFilters` and `partitions()`.
 struct PythonPlanner {
-    plan: Py<PyAny>,
+    plan: std::sync::Arc<Py<PyAny>>,
 }
 
 impl SourcePlanner for PythonPlanner {
@@ -667,7 +669,8 @@ impl SourcePlanner for PythonPlanner {
         // User Python, on a thread of its own: no engine thread waits holding the GIL, and the
         // statement's cancel ends the wait at once.
         let filters = filters.to_vec();
-        let plan = Python::attach(|py| self.plan.clone_ref(py));
+        // Cloned as an `Arc`: a `Py` clone needs the GIL on this thread, which a cancel could not interrupt.
+        let plan = std::sync::Arc::clone(&self.plan);
         krishiv_session::run_python_source_call(move || {
             Python::attach(|py| {
                 let offered = filters
