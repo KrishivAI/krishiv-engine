@@ -38,27 +38,22 @@ pub(crate) fn and_all(parts: Vec<&Expr>) -> Option<Expr> {
     })
 }
 
-/// The `IsNotNull(column)` conjuncts Spark's `InferFiltersFromConstraints` adds for the scan columns
-/// `e` (one conjunct) compares or matches: null-rejecting comparisons and `LIKE`, not `<=>`, `IS NULL`
-/// or `IN`. Written order of the operands.
+/// The `IsNotNull(column)` conjuncts Spark's `InferFiltersFromConstraints` adds for the nullable scan
+/// columns `e` (one conjunct) rejects nulls of (`constructIsNotNullConstraints`): every attribute under
+/// a chain of null-intolerant expressions (comparisons, `LIKE`, arithmetic, casts), not `<=>`,
+/// `IS NULL`, `IN`, `AND` or `OR`. First-appearance order.
 pub(crate) fn inferred_not_null(e: &Expr, scan: &[BoundColumn]) -> Vec<Expr> {
-    let Some((b, args)) = builtin(e) else {
-        return Vec::new();
-    };
-    if !matches!(
-        b,
-        Builtin::Eq | Builtin::Lt | Builtin::LtEq | Builtin::Gt | Builtin::GtEq | Builtin::Like
-    ) {
-        return Vec::new();
-    }
-    args.into_iter()
-        .filter(|a| attribute(a, scan).is_some())
-        .map(|a| {
+    let mut found: Vec<&BoundColumn> = Vec::new();
+    null_rejected(e, scan, &mut found);
+    found
+        .into_iter()
+        .map(|b| {
+            let column = Expr::new(ExprNode::Resolved(ResolvedExpr::Column(b.clone())));
             Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
                 krishiv_plan::ResolvedFunction {
                     id: krishiv_plan::FunctionId::Builtin(Builtin::IsNotNull),
                     kind: krishiv_plan::FunctionKind::Scalar,
-                    args: vec![std::sync::Arc::new(a.clone())],
+                    args: vec![std::sync::Arc::new(column)],
                     distinct: false,
                     filter: None,
                     within_group: Vec::new(),
@@ -69,6 +64,50 @@ pub(crate) fn inferred_not_null(e: &Expr, scan: &[BoundColumn]) -> Vec<Expr> {
             )))
         })
         .collect()
+}
+
+/// Collects the nullable scan columns `e` is NULL without (Spark's `scanNullIntolerantAttribute`).
+fn null_rejected<'a>(e: &Expr, scan: &'a [BoundColumn], out: &mut Vec<&'a BoundColumn>) {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+            if let Some(b) = scan.iter().find(|s| s.id == c.id)
+                && b.nullable
+                && !out.iter().any(|o| o.id == b.id)
+            {
+                out.push(b);
+            }
+        }
+        ExprNode::Cast { expr, .. } | ExprNode::Collate { expr, .. } => {
+            null_rejected(expr, scan, out);
+        }
+        _ => {
+            if let Some((b, args)) = builtin(e)
+                && matches!(
+                    b,
+                    Builtin::Eq
+                        | Builtin::Lt
+                        | Builtin::LtEq
+                        | Builtin::Gt
+                        | Builtin::GtEq
+                        | Builtin::Add
+                        | Builtin::Subtract
+                        | Builtin::Multiply
+                        | Builtin::Divide
+                        | Builtin::Remainder
+                        | Builtin::IntegralDivide
+                        | Builtin::Negative
+                        | Builtin::Like
+                        | Builtin::ILike
+                        | Builtin::RLike
+                        | Builtin::Concat
+                )
+            {
+                for a in args {
+                    null_rejected(a, scan, out);
+                }
+            }
+        }
+    }
 }
 
 enum Tr {
@@ -403,5 +442,27 @@ mod tests {
             SourceConjunct::Translated
         );
         assert_eq!(classify(&c(&x), &scan), SourceConjunct::Untranslated);
+    }
+
+    #[test]
+    fn not_null_is_inferred_for_every_nullable_attribute_under_a_null_intolerant_chain() {
+        let x = x();
+        let mut y = col(2, "y", DataType::Integer);
+        y.nullable = false;
+        let scan = [x.clone(), y.clone()];
+        let names = |e: &Expr| -> Vec<String> {
+            inferred_not_null(e, &scan)
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        };
+        // `x % 5 = 1` rejects null x; the non-nullable y is skipped.
+        let rem = call(Builtin::Remainder, vec![c(&x), int(5)]);
+        assert_eq!(names(&call(Builtin::Eq, vec![rem, int(1)])).len(), 1);
+        let both = call(Builtin::Eq, vec![c(&x), c(&y)]);
+        assert_eq!(names(&both).len(), 1);
+        // `<=>`, `IS NULL` and `OR` reject nothing.
+        assert!(names(&call(Builtin::EqNullSafe, vec![c(&x), int(1)])).is_empty());
+        assert!(names(&call(Builtin::IsNull, vec![c(&x)])).is_empty());
     }
 }
