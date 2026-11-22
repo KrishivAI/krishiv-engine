@@ -311,7 +311,7 @@ impl ThetaSketchAcc {
             } else {
                 input
             };
-            (both, 0, table(input))
+            (both, 0, input)
         };
         self.size()
             .saturating_add(fresh_floor)
