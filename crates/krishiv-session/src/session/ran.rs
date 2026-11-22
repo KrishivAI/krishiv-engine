@@ -16,6 +16,16 @@ struct Command {
     class: &'static str,
     /// Whether a query took the text: the command has its row.
     listed: std::sync::atomic::AtomicBool,
+    /// The statement's slot for the id of the row a query of it began (`sql_ran` adds no refused row then).
+    row: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+/// The command a query begun with no text of its own is listed under.
+pub(super) struct Listing {
+    pub(super) text: Arc<str>,
+    pub(super) class: &'static str,
+    /// Where the id of the query's row goes: the query is the statement's listed run.
+    pub(super) row: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// `work` under the command the calling task is running, if any: a task the command starts for a query of
@@ -28,11 +38,15 @@ pub(super) fn in_running_command<F: Future>(work: F) -> impl Future<Output = F::
 }
 
 /// The text and class of the command the calling task is running, for a query begun with no text of its own.
-pub(super) fn command_statement() -> Option<(Arc<str>, &'static str)> {
+pub(super) fn command_statement() -> Option<Listing> {
     COMMAND
         .try_with(|c| {
             c.listed.store(true, Ordering::Relaxed);
-            (Arc::clone(&c.text), c.class)
+            Listing {
+                text: Arc::clone(&c.text),
+                class: c.class,
+                row: Arc::clone(&c.row),
+            }
         })
         .ok()
 }
@@ -142,6 +156,7 @@ impl Session {
             text: Arc::from(redacted.as_str()),
             class: class.name(),
             listed: std::sync::atomic::AtomicBool::new(false),
+            row: Arc::clone(&env.row),
         });
         // Boxed, as `sql_here_marked`'s future is: the scope is one more nested future level.
         let run = Box::pin(self.run_statement(statement, env, query, &redacted));

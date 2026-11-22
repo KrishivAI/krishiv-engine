@@ -747,7 +747,7 @@ impl Session {
             Some(_) => None,
         };
         let (text, class) = match &command {
-            Some((text, class)) => (Some(&**text), Some(*class)),
+            Some(c) => (Some(&*c.text), Some(c.class)),
             None => (env.text.as_deref(), env.statement_class),
         };
         let log_id = self.state.queries.begin_as(
@@ -760,6 +760,10 @@ impl Session {
         // The request tags join the row's tags at once, so a queued query shows them too.
         self.stamp_row(&log_id);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        // The command's listed run: a failure of it is this row, and the statement gets no refused row.
+        if let Some(c) = &command {
+            *c.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        }
         let permit = self.admit(&log_id, env, exempt).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }

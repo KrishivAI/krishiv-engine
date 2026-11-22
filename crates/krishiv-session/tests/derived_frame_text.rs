@@ -200,3 +200,42 @@ fn a_write_run_through_a_row_cap_is_listed_once_with_its_text_on_the_write() {
         )]
     );
 }
+
+/// A write that fails while it runs is listed once: the run that failed, with the statement's text and class.
+/// The statement gets no second, refused row beside it.
+#[test]
+fn a_write_that_fails_while_it_runs_is_listed_once_with_its_text() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE TABLE zf (a INT) USING parquet")).unwrap();
+    let failed = block_on(s.sql_with(
+        "INSERT INTO zf SELECT CAST('x' AS INT)",
+        krishiv_session::QueryOptions::new().tags(["ui-run-12"]),
+    ));
+    assert!(failed.is_err(), "the conversion fails while the write runs");
+    assert_eq!(
+        tagged(&s, "ui-run-12"),
+        [Some(
+            "INSERT INTO zf SELECT CAST('x' AS INT) | WRITE".to_owned()
+        )]
+    );
+    assert_eq!(
+        strings(
+            &s,
+            "SELECT CAST(state AS STRING) FROM system.queries WHERE tags['ui-run-12'] IS NOT NULL"
+        ),
+        [Some("failed".to_owned())]
+    );
+    // A statement refused before any query of it began still has its refused row, with the text.
+    let refused = block_on(s.sql_with(
+        "INSERT INTO no_such_table VALUES (1)",
+        krishiv_session::QueryOptions::new().tags(["ui-run-13"]),
+    ));
+    assert!(refused.is_err());
+    assert_eq!(
+        strings(
+            &s,
+            "SELECT CAST(query_text AS STRING) FROM system.queries WHERE tags['ui-run-13'] IS NOT NULL"
+        ),
+        [Some("INSERT INTO no_such_table VALUES (1)".to_owned())]
+    );
+}
