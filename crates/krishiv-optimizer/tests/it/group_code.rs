@@ -735,3 +735,91 @@ fn tpch_q16_codes_its_part_keys() {
     );
     insta::assert_snapshot!(text);
 }
+
+/// The default session configuration (`krishiv.optimizer.groupKeyCode` off,
+/// `krishiv.optimizer.groupKeyCodeMultiDimension` on; design P2b D2 §8)
+/// codes only aggregates where two or more dimensions qualify, then all of
+/// them; an aggregate with one is refused with a note; with both keys off
+/// nothing is coded. Rows stay the same.
+#[test]
+fn the_default_codes_only_aggregates_with_two_dimensions() {
+    let ctx = support::ctx_over(catalog());
+    let udfs = krishiv_udf_sdk::UdfLibrary::new();
+    let stats = Stats::new();
+    let two = "SELECT g1, g2, h1, h2, count(*) AS n FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek \
+               GROUP BY g1, g2, h1, h2";
+    let one = "SELECT g1, g2, count(*) AS n, sum(x) AS s FROM f JOIN d ON fk = dk GROUP BY g1, g2";
+    let default = krishiv_common::config::Config::new();
+    let mut off = krishiv_common::config::Config::new();
+    off.set("krishiv.optimizer.groupKeyCodeMultiDimension", "false")
+        .unwrap();
+    for (sql, config, want) in [
+        (two, &default, Some(2)),
+        (one, &default, None),
+        (two, &off, Some(0)),
+    ] {
+        let plan = support::resolve(sql, &ctx);
+        let (once, steps) =
+            krishiv_optimizer::optimize_traced_with_udfs(&plan, &stats, &udfs, config).unwrap();
+        let text = once.root().to_string();
+        let notes: Vec<_> = steps
+            .iter()
+            .filter(|s| s.rule == "GroupKeyCode" && !s.note.is_empty())
+            .map(|s| s.note.clone())
+            .collect();
+        match want {
+            Some(n) => {
+                assert_eq!(coded(&text), n > 0, "{sql}: {notes:?}\n{text}");
+                if n > 0 {
+                    assert_eq!(notes.len(), 1, "{sql}: {notes:?}");
+                    assert_eq!(notes[0].matches("coded [").count(), n, "{notes:?}");
+                } else {
+                    assert!(notes.is_empty(), "{sql}: {notes:?}");
+                }
+            }
+            None => {
+                assert!(!coded(&text), "{sql}: {notes:?}\n{text}");
+                assert!(
+                    notes.iter().any(|n| n.contains(
+                        "1 dimension qualifies (krishiv.optimizer.groupKeyCodeMultiDimension \
+                         codes 2 or more)"
+                    )),
+                    "{sql}: {notes:?}"
+                );
+            }
+        }
+        let (twice, _) =
+            krishiv_optimizer::optimize_traced_with_udfs(&once, &stats, &udfs, config).unwrap();
+        assert!(twice.structurally_eq(&once), "{sql}: a fixed point");
+        for seed in [3, 11] {
+            let db = db(seed);
+            assert_eq!(
+                eval::rows(&db, once.root()),
+                eval::rows(&db, plan.root()),
+                "{sql} (seed {seed})"
+            );
+        }
+    }
+}
+
+/// No TPC-H aggregate groups by keys of two dimensions that qualify, so the
+/// default mode codes none of the 22 queries (q10, coded with the key on,
+/// was 1.25x at SF100; design §8).
+#[test]
+fn the_default_codes_no_tpch_query() {
+    let ctx = support::ctx();
+    let stats = crate::join_order::fixture();
+    let udfs = krishiv_udf_sdk::UdfLibrary::new();
+    let default = krishiv_common::config::Config::new();
+    for q in 1..=22 {
+        let plan = support::resolve(&support::tpch_sql(q), &ctx);
+        let (optimized, steps) =
+            krishiv_optimizer::optimize_traced_with_udfs(&plan, &stats, &udfs, &default).unwrap();
+        let notes: Vec<String> = steps
+            .into_iter()
+            .filter(|s| s.rule == "GroupKeyCode" && !s.note.is_empty())
+            .map(|s| s.note)
+            .collect();
+        assert!(!coded(&optimized.root().to_string()), "q{q}: {notes:?}");
+    }
+}

@@ -95,13 +95,15 @@ const CODE_NAME: &str = "krishiv_group_code";
 const CODE_WIDTH: u64 = 8;
 
 /// Codes the dimension group keys of every aggregate where the statistics say
-/// it pays, entering subquery plans. Also returns one line per aggregate with
+/// it pays and at least `min_dimensions` dimensions qualify (2 in the default
+/// mode, design §8), entering subquery plans. Also returns one line per aggregate with
 /// keys from a dimension: what was coded, or why not (`EXPLAIN VERBOSE`).
 pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
     force: bool,
+    min_dimensions: usize,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let Some(row_number) = row_number() else {
         return Ok((root, Vec::new()));
@@ -119,7 +121,7 @@ pub(crate) fn rewrite(
         let Some(shape) = Shape::of(&p) else {
             return Ok(p);
         };
-        match shape.code(&mut est, &mut next, &row_number, force) {
+        match shape.code(&mut est, &mut next, &row_number, force, min_dimensions) {
             Ok(None) => Ok(p),
             Ok(Some((coded, note))) => {
                 notes.push(note);
@@ -132,6 +134,17 @@ pub(crate) fn rewrite(
         }
     })?;
     Ok((out, notes))
+}
+
+/// Why an aggregate with `n` qualifying dimensions stays in a mode that codes
+/// `min` or more.
+fn few_dimensions(n: usize, min: usize) -> String {
+    let what = if n == 1 {
+        "dimension qualifies"
+    } else {
+        "dimensions qualify"
+    };
+    format!("{n} {what} (krishiv.optimizer.groupKeyCodeMultiDimension codes {min} or more)")
 }
 
 /// The column under a `__collation_key` group key of the aggregate `p`, if
@@ -233,6 +246,7 @@ impl<'a> Shape<'a> {
         next: &mut u64,
         row_number: &FunctionId,
         force: bool,
+        min_dimensions: usize,
     ) -> Result<Option<(Arc<LogicalPlan>, String)>, String> {
         let mut leaves = Vec::new();
         walk(self.input, true, &mut Vec::new(), &mut leaves);
@@ -259,6 +273,9 @@ impl<'a> Shape<'a> {
         if coded {
             return Err("a key is already a code".to_owned());
         }
+        if !found.is_empty() && found.len() < min_dimensions {
+            return Err(few_dimensions(found.len(), min_dimensions));
+        }
         let mut found = found.into_iter();
         let Some(c) = found.next() else {
             return match refusals.into_iter().next() {
@@ -278,6 +295,11 @@ impl<'a> Shape<'a> {
             };
             notes.push(stacked.1);
             plan = stacked.0;
+        }
+        // A stacked step that stopped qualifying (the estimates moved) leaves
+        // fewer coded than the mode asks: the aggregate stays as it was.
+        if notes.len() < min_dimensions {
+            return Err(few_dimensions(notes.len(), min_dimensions));
         }
         Ok(Some((plan, notes.join("; "))))
     }

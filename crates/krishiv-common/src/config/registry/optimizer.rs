@@ -154,6 +154,23 @@ pub static GROUP_KEY_CODE: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Whether, with `krishiv.optimizer.groupKeyCode` off, the group-key code still applies to an aggregate whose
+/// keys come from two or more dimensions that qualify (P2b D2 §8).
+pub static GROUP_KEY_CODE_MULTI_DIMENSION: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.groupKeyCodeMultiDimension",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal. With `krishiv.optimizer.groupKeyCode` off, still code the group keys of an \
+          aggregate whose keys come from two or more dimension tables that each qualify (TPC-DS \
+          q47's `item` and `store`), all of them in one pass; an aggregate with keys of one \
+          dimension is left as it is. Has no effect when `krishiv.optimizer.groupKeyCode` is on. \
+          Results are the same either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
 /// Experimental: the group-key code applies wherever the plan's shape qualifies, without the statistics test
 /// (a measurement switch for P2b D2's timed A/B).
 pub static EXPERIMENTAL_GROUP_KEY_CODE_FORCE: ConfigEntry = ConfigEntry {

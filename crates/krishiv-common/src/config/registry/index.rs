@@ -689,6 +689,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
     ),
     (
+        "krishiv.optimizer.groupKeyCodeMultiDimension",
+        &GROUP_KEY_CODE_MULTI_DIMENSION,
+    ),
+    (
         "spark.sql.execution.arrow.maxRecordsPerBatch",
         &ARROW_MAX_RECORDS_PER_BATCH,
     ),

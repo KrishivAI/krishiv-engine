@@ -77,6 +77,11 @@ fn config_with(on: bool, extra: &[(&str, &str)]) -> Config {
         if on { "true" } else { "false" },
     )
     .unwrap();
+    // The group-key code's default mode would code the two-dimension shapes
+    // first; these tests see the rule alone (the interplay is
+    // `with_the_group_key_code_on_too_the_plan_is_a_fixed_point`).
+    c.set("krishiv.optimizer.groupKeyCodeMultiDimension", "false")
+        .unwrap();
     for (k, v) in extra {
         c.set(k, v).unwrap();
     }

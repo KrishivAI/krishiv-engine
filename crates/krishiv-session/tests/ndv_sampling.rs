@@ -265,6 +265,9 @@ fn group_keys_are_sampled_only_while_group_key_code_is_on() {
     s.conf()
         .set("krishiv.optimizer.groupKeyCode", "false")
         .unwrap();
+    s.conf()
+        .set("krishiv.optimizer.groupKeyCodeMultiDimension", "false")
+        .unwrap();
     assert!(sample_lines(&explain(&s, "COST", &sql)).is_empty());
     s.conf()
         .set("krishiv.optimizer.groupKeyCode", "true")
@@ -333,4 +336,45 @@ fn group_keys_inside_a_subquery_are_sampled() {
     let lines = sample_lines(&explain(&s, "COST", &sql));
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].contains("nation`: n_name: sampled "), "{lines:?}");
+}
+
+/// In the default mode (`krishiv.optimizer.groupKeyCode` off,
+/// `krishiv.optimizer.groupKeyCodeMultiDimension` on; design P2b D2 §8) only
+/// the group keys of an aggregate with keys of two or more dimensions that
+/// may pay are sampled: one dimension's keys sample nothing.
+#[test]
+fn the_default_samples_only_aggregates_with_two_dimensions() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), true);
+    let (orders, nation) = (table(dir.path(), "orders"), table(dir.path(), "nation"));
+    let one = format!(
+        "SELECT n_name, count(*) FROM {orders} JOIN {nation} ON id % 25 = n_key GROUP BY n_name"
+    );
+    assert!(sample_lines(&explain(&s, "COST", &one)).is_empty());
+    // A second dimension of its own (a self-join reads one shared scan).
+    let r = block_on(
+        s.sql("SELECT id AS r_key, concat('REGION', CAST(id AS STRING)) AS r_name FROM range(5)"),
+    )
+    .unwrap();
+    block_on(
+        r.write()
+            .parquet(dir.path().join("region").to_str().unwrap()),
+    )
+    .unwrap();
+    let region = table(dir.path(), "region");
+    let two = format!(
+        "SELECT n_name, r_name, count(*) FROM {orders} JOIN {nation} ON id % 25 = n_key \
+         JOIN {region} ON id % 5 = r_key GROUP BY n_name, r_name"
+    );
+    let lines = sample_lines(&explain(&s, "COST", &two));
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("nation`: n_name: sampled "))
+            && lines
+                .iter()
+                .any(|l| l.contains("region`: r_name: sampled ")),
+        "{lines:?}"
+    );
 }
