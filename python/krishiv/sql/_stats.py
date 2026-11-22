@@ -345,12 +345,14 @@ def frequent_items(df: DataFrame, cols: list[str], support: float) -> DataFrame:
         fields.append(StructField(f"{name}_freqItems", ArrayType(column.schema.fields[0].dataType, True), False))
         counts: dict[Any, int] = {}
         originals: dict[Any, Any] = {}
-        for rows_read, (value,) in enumerate(column.toLocalIterator(), start=1):
-            if rows_read > FREQ_ITEMS_MAX_ROWS:
-                raise unsupported_feature(
-                    f"DataFrame.freqItems over more than {FREQ_ITEMS_MAX_ROWS} rows (it counts in the driver, "
-                    "one Python step per row)"
-                )
+        # Read one row past the cap, so an input over it is refused without collecting all of it.
+        rows = column.limit(FREQ_ITEMS_MAX_ROWS + 1).collect()
+        if len(rows) > FREQ_ITEMS_MAX_ROWS:
+            raise unsupported_feature(
+                f"DataFrame.freqItems over more than {FREQ_ITEMS_MAX_ROWS} rows (it counts in the driver, "
+                "one Python step per row)"
+            )
+        for (value,) in rows:
             _count_item(counts, originals, value, size)
         result.append(list(originals.values()))
         plain = plain and all(v is None or isinstance(v, bool | int | float | str) for v in originals.values())
