@@ -14,6 +14,7 @@
 //! several workers merge ([`QueryProfile::merge`]) as their metrics do.
 
 mod facts_json;
+mod ids;
 mod json;
 mod scans;
 mod text;
@@ -27,6 +28,7 @@ use krishiv_common::error::{KrishivError, KrishivInvalidProfileDocument};
 use crate::metrics::QueryMetrics;
 use crate::physical::{PhysNode, PhysicalPlan, SHARED_PLAN, WITH_SHARED};
 use crate::planner::{ExplainNode, NodeFacts};
+pub use ids::dense_ids;
 use std::sync::Arc;
 
 pub use scans::{ProfileScan, ScanColumn, profile_scans};
@@ -92,16 +94,47 @@ impl ProfileNode {
             })
             .collect();
         let root = annotate(plan.root(), plan.explain(), &mut next);
-        if children.is_empty() {
-            return root;
+        let mut tree = if children.is_empty() {
+            root
+        } else {
+            children.push(root);
+            Self {
+                id: None,
+                name: WITH_SHARED.to_owned(),
+                detail: String::new(),
+                children,
+                facts: None,
+            }
+        };
+        tree.dense_ids();
+        tree
+    }
+
+    /// Renumbers the planner's high expression ids across every node's
+    /// detail, as `EXPLAIN` does (one numbering for the whole tree).
+    fn dense_ids(&mut self) {
+        const SEP: char = '\u{1}';
+        let mut joined = String::new();
+        self.walk(&mut |n| {
+            joined.push_str(&n.detail);
+            joined.push(SEP);
+        });
+        let dense = dense_ids(&joined);
+        if dense == joined {
+            return;
         }
-        children.push(root);
-        Self {
-            id: None,
-            name: WITH_SHARED.to_owned(),
-            detail: String::new(),
-            children,
-            facts: None,
+        let mut parts = dense.split(SEP);
+        self.walk_mut(&mut |n| {
+            if let Some(d) = parts.next() {
+                d.clone_into(&mut n.detail);
+            }
+        });
+    }
+
+    fn walk_mut(&mut self, f: &mut impl FnMut(&mut Self)) {
+        f(self);
+        for c in &mut self.children {
+            c.walk_mut(f);
         }
     }
 
