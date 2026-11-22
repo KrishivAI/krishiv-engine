@@ -10,6 +10,7 @@
 //! (`count("course")`) from taking it out of the grouping; a grouping key an aggregate reads is
 //! grouped by a hidden copy and renamed back.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature};
@@ -28,14 +29,22 @@ pub(super) struct Pivoting {
     values: Vec<PivotValue>,
 }
 
-/// The unresolved column references under `e`, and whether a `*` is under it.
+/// The unresolved column references under `e`, and whether a `*` is under it. Each distinct node is
+/// visited once: expressions are DAGs, and a shared child would otherwise be walked once per path.
 fn references(e: &Expr, out: &mut Vec<Expr>, star: &mut bool) {
-    match &e.node {
-        ExprNode::Column(_) => out.push(e.clone()),
-        ExprNode::Star(_) => *star = true,
-        _ => {}
+    let mut seen: HashSet<*const Expr> = HashSet::new();
+    let mut stack: Vec<&Expr> = vec![e];
+    while let Some(e) = stack.pop() {
+        if !seen.insert(std::ptr::from_ref(e)) {
+            continue;
+        }
+        match &e.node {
+            ExprNode::Column(_) => out.push(e.clone()),
+            ExprNode::Star(_) => *star = true,
+            _ => {}
+        }
+        e.for_each_child(&mut |child| stack.push(child));
     }
-    e.for_each_child(&mut |child| references(child, out, star));
 }
 
 /// The last name part of a bare or aliased column, the name its output has.
@@ -116,17 +125,20 @@ impl GroupedData {
             // Narrowing the input by a dotted name would flatten `s.x` and drop the struct `s`.
             return self.refuse("a pivot aggregate that reads a nested field or qualified column");
         }
-        let read_names: Vec<String> = read
-            .iter()
-            .filter_map(output_name)
-            .map(|n| n.to_lowercase())
-            .collect();
+        let case_sensitive = self
+            .df
+            .session
+            .conf()
+            .get("spark.sql.caseSensitive")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        let fold = |n: String| if case_sensitive { n } else { n.to_lowercase() };
+        let read_names: Vec<String> = read.iter().filter_map(output_name).map(fold).collect();
         let names: Vec<Option<String>> = self.keys.iter().map(output_name).collect();
         let clash: Vec<bool> = names
             .iter()
             .map(|n| {
                 n.as_ref()
-                    .is_some_and(|n| read_names.contains(&n.to_lowercase()))
+                    .is_some_and(|n| read_names.contains(&fold(n.clone())))
             })
             .collect();
         let any_clash = clash.iter().any(|c| *c);
@@ -149,7 +161,7 @@ impl GroupedData {
         kept.push(Arc::new(p.column.clone().alias(PIVOT_COPY)));
         let mut seen: Vec<String> = Vec::new();
         for r in read {
-            let Some(name) = output_name(&r).map(|n| n.to_lowercase()) else {
+            let Some(name) = output_name(&r).map(fold) else {
                 continue;
             };
             if !seen.contains(&name) {

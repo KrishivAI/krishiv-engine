@@ -74,7 +74,14 @@ _ARRAY_CODES: dict[str, Callable[[], DataType]] = {
     "f": FloatType,
     "d": DoubleType,
     "u": StringType,
+    # unsigned codes widen to the next signed type, as PySpark does
+    "B": ShortType,
+    "H": IntegerType,
 }
+if array.array("I").itemsize == 4:  # same width as ``int`` is 4 on every supported platform
+    _ARRAY_CODES["I"] = LongType
+if array.array("L").itemsize == 4:
+    _ARRAY_CODES["L"] = LongType
 
 
 def infer_type(value: Any, timestamp_ntz: bool = False) -> DataType:

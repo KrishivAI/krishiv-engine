@@ -151,8 +151,9 @@ class DataFrameReader:
             "modifiedBefore": modifiedBefore,
             "modifiedAfter": modifiedAfter,
         }
-        # As PySpark's shortcuts: an option given as ``None`` (or the default ``wholetext``) is not set.
-        given = {k: v for k, v in options.items() if v is not None and not (k == "wholetext" and v is False)}
+        # As PySpark's shortcuts: an option given as ``None`` is not set; ``wholetext=False`` is forwarded so it
+        # resets an earlier ``True`` on a reused reader.
+        given = {k: v for k, v in options.items() if v is not None}
         return self.load(paths, format="text", **given)
 
     def table(self, tableName: str) -> DataFrame:
@@ -368,6 +369,7 @@ class DataFrameWriter:
         from krishiv.sql import datasource
         from krishiv.sql.datasource import CaseInsensitiveDict
 
+        self._refuse_cluster_by()
         entry = datasource.registered(self._df._session, self._format) if self._format_set else None
         if entry is not None:
             opts = CaseInsensitiveDict(self._options)

@@ -740,7 +740,7 @@ fn check_function(
 /// Whether `qualifier` names the built-in catalog (`builtin` or
 /// `system.builtin`, case-insensitively): such a call reaches built-ins
 /// only.
-pub(super) fn is_builtin_qualifier(qualifier: &[String]) -> bool {
+pub(crate) fn is_builtin_qualifier(qualifier: &[String]) -> bool {
     matches!(qualifier, [q] if q.eq_ignore_ascii_case("builtin"))
         || matches!(qualifier, [s, b]
         if s.eq_ignore_ascii_case("system") && b.eq_ignore_ascii_case("builtin"))

@@ -487,11 +487,11 @@ class StructType(DataType):
     def fieldNames(self) -> list[str]:
         return list(self.names)
 
-    def treeString(self, level: int | None = None) -> str:
-        """The schema as the indented tree ``printSchema`` prints, to ``level`` levels (all by default and for
-        ``level <= 0``, as Spark)."""
+    def treeString(self, maxDepth: int | None = None) -> str:
+        """The schema as the indented tree ``printSchema`` prints, to ``maxDepth`` levels (all by default and for
+        ``maxDepth <= 0``, as Spark)."""
         lines = ["root"]
-        _tree_fields(self, " |", 1, level if level is not None and level > 0 else 2**31 - 1, lines)
+        _tree_fields(self, " |", 1, maxDepth if maxDepth is not None and maxDepth > 0 else 2**31 - 1, lines)
         return "\n".join(lines) + "\n"
 
     def simpleString(self) -> str:
@@ -876,10 +876,18 @@ def _tree_type_name(t: DataType) -> str:
     return value if isinstance(value, str) else t.typeName()
 
 
+def _escape_label(label: str) -> str:
+    """``label`` with control characters escaped, so a field name never splits the tree across lines."""
+    return "".join(
+        c if c.isprintable() or c == " " else {"\n": "\\n", "\t": "\\t", "\r": "\\r"}.get(c, f"\\x{ord(c):02x}")
+        for c in label
+    )
+
+
 def _tree_type(
     t: DataType, label: str, nullable_note: str, prefix: str, depth: int, limit: int, out: list[str]
 ) -> None:
-    out.append(f"{prefix}-- {label}: {_tree_type_name(t)}{nullable_note}")
+    out.append(f"{prefix}-- {_escape_label(label)}: {_tree_type_name(t)}{nullable_note}")
     if depth >= limit:
         return
     child = prefix + "    |"

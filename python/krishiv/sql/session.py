@@ -25,7 +25,7 @@ from krishiv.sql.catalog import CatalogMetadata, Column, Database, Function, Tab
 from krishiv.sql.conf import RuntimeConfig, _warn_if_cluster_setting
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.readwriter import DataFrameReader
-from krishiv.sql.types import DataType, StructField, StructType
+from krishiv.sql.types import DataType, StructField, StructType, TimestampNTZType
 from krishiv.storagelevel import StorageLevel
 
 # The class's `_native` property hides the module in annotations written inside it.
@@ -401,7 +401,11 @@ class SparkSession:
         :func:`krishiv.sql._rowconv.normalize_arrow_table`), then renamed by a list of
         names or cast to an explicit schema."""
         ntz = (self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ") or "").strip().upper() == "TIMESTAMP_NTZ"
-        table = _rowconv.normalize_arrow_table(table, pa, None if ntz else _session_zone(self))
+        wall_clock: frozenset[int] = frozenset()
+        if schema is not None and not isinstance(schema, list | tuple):
+            targets = self._explicit_schema(schema).fields
+            wall_clock = frozenset(i for i, f in enumerate(targets) if isinstance(f.dataType, TimestampNTZType))
+        table = _rowconv.normalize_arrow_table(table, pa, None if ntz else _session_zone(self), wall_clock)
         if isinstance(schema, list | tuple):
             _refuse_duplicate_names([str(n) for n in schema])
         elif schema is None:

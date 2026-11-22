@@ -30,7 +30,8 @@ Aggregates the whole DataFrame as one group (shorthand for `df.groupBy().agg(...
 **Examples**
 
 ```python
->>> df.agg(F.max("age"))
+>>> df.agg(F.max("age")).collect()
+[Row(max(age)=5)]
 ```
 
 ### `alias`
@@ -745,7 +746,8 @@ whole DataFrame is one group.
 **Examples**
 
 ```python
->>> df.groupBy("dept").agg(F.avg("salary"))
+>>> df.groupBy("name").agg(F.avg("age")).orderBy("name").collect()
+[Row(name='Alice', avg(age)=2.0), Row(name='Bob', avg(age)=5.0)]
 ```
 
 ### `groupingSets`
@@ -908,7 +910,9 @@ join type `how` (`inner` by default).
 **Examples**
 
 ```python
->>> df.join(other, on="id", how="left")
+>>> other = spark.createDataFrame([("Alice", "NL")], ["name", "country"])
+>>> df.join(other, on="name", how="left").orderBy("name").collect()
+[Row(name='Alice', age=2, country='NL'), Row(name='Bob', age=5, country=None)]
 ```
 
 ### `limit`
@@ -1035,7 +1039,8 @@ Sorts by `cols` (names or Columns); `ascending` is a bool or one bool per column
 **Examples**
 
 ```python
->>> df.orderBy(F.col("age").desc())
+>>> df.orderBy(F.col("age").desc()).collect()
+[Row(age=5, name='Bob'), Row(age=2, name='Alice')]
 ```
 
 ### `persist`
@@ -1372,7 +1377,8 @@ Projects `cols` (names, Columns or `"*"`) into a new DataFrame.
 **Examples**
 
 ```python
->>> df.select("name", (F.col("age") + 1).alias("next_age"))
+>>> df.select("name", (F.col("age") + 1).alias("next_age")).collect()
+[Row(name='Alice', next_age=3), Row(name='Bob', next_age=6)]
 ```
 
 ### `selectExpr`
@@ -1875,7 +1881,8 @@ Adds the column `colName` computed by `col`, or replaces the one of that name.
 **Examples**
 
 ```python
->>> df.withColumn("age2", F.col("age") * 2)
+>>> df.withColumn("age2", F.col("age") * 2).collect()
+[Row(age=2, name='Alice', age2=4), Row(age=5, name='Bob', age2=10)]
 ```
 
 ### `withColumnRenamed`

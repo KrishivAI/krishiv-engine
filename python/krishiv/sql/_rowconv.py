@@ -316,24 +316,41 @@ def normalize_arrow_type(t: Any, pa: Any) -> Any:
     return t
 
 
-def normalize_arrow_table(table: Any, pa: Any, zone: str | None = None) -> Any:
+def normalize_arrow_table(
+    table: Any, pa: Any, zone: str | None = None, wall_clock: frozenset[int] = frozenset()
+) -> Any:
     """``table`` cast column by column to the types of :func:`normalize_arrow_type` (all nullable).
 
     A column of naive timestamps is a ``timestamp`` (local time, as Spark reads it) when ``zone``
-    names the session time zone, else a ``timestamp_ntz``."""
+    names the session time zone, else a ``timestamp_ntz``. The columns at the indexes in ``wall_clock``
+    (an explicit ``timestamp_ntz`` target) keep their wall-clock values and are never localized."""
     import pyarrow.compute as pc
 
     columns = []
-    for column in table.columns:
-        if zone is not None and pa.types.is_timestamp(column.type) and column.type.tz is None:
+    for index, column in enumerate(table.columns):
+        if (
+            zone is not None
+            and index not in wall_clock
+            and pa.types.is_timestamp(column.type)
+            and column.type.tz is None
+        ):
             # A time in a DST gap moves forward and an ambiguous one is the earlier, as java.time reads it.
             column = pc.assume_timezone(  # ty: ignore[unresolved-attribute]
                 column, zone, ambiguous="earliest", nonexistent="latest"
             )
         columns.append(column)
+    if not columns:
+        return table  # a table with no columns can still have rows: rebuilding it would drop them
     table = pa.table(columns, names=table.column_names)
     schema = pa.schema([pa.field(f.name, normalize_arrow_type(f.type, pa), nullable=True) for f in table.schema])
-    return table if table.schema.equals(schema) else table.cast(schema)
+    if table.schema.equals(schema):
+        return table
+    # Nanosecond times lose their sub-microsecond part (Spark has no finer type); other casts stay checked.
+    cast = [
+        c if c.type.equals(f.type) else pc.cast(c, options=pc.CastOptions(target_type=f.type, allow_time_truncate=True))  # ty: ignore[unresolved-attribute]
+        for c, f in zip(table.columns, schema, strict=True)
+    ]
+    return pa.table(cast, schema=schema)
 
 
 def arrow_array(values: list[Any], arrow_type: Any, pa: Any, null_on_error: bool) -> Any:

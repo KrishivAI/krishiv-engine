@@ -232,7 +232,8 @@ class DataFrame:
 
         Examples
         --------
-        >>> df.select("name", (F.col("age") + 1).alias("next_age"))
+        >>> df.select("name", (F.col("age") + 1).alias("next_age")).collect()
+        [Row(name='Alice', next_age=3), Row(name='Bob', next_age=6)]
         """
         picked: list[Any] = []
         for c in _flatten(cols):
@@ -268,7 +269,8 @@ class DataFrame:
 
         Examples
         --------
-        >>> df.withColumn("age2", F.col("age") * 2)
+        >>> df.withColumn("age2", F.col("age") * 2).collect()
+        [Row(age=2, name='Alice', age2=4), Row(age=5, name='Bob', age2=10)]
         """
         if not isinstance(col, Column):
             raise not_expected_type("col", "Column", col)
@@ -425,7 +427,8 @@ class DataFrame:
 
         Examples
         --------
-        >>> df.groupBy("dept").agg(F.avg("salary"))
+        >>> df.groupBy("name").agg(F.avg("age")).orderBy("name").collect()
+        [Row(name='Alice', avg(age)=2.0), Row(name='Bob', avg(age)=5.0)]
         """
         return GroupedData(self._df.group_by([_named(c) for c in _flatten(cols)]), self)
 
@@ -436,7 +439,8 @@ class DataFrame:
 
         Examples
         --------
-        >>> df.agg(F.max("age"))
+        >>> df.agg(F.max("age")).collect()
+        [Row(max(age)=5)]
         """
         return self.groupBy().agg(*exprs)
 
@@ -451,7 +455,9 @@ class DataFrame:
 
         Examples
         --------
-        >>> df.join(other, on="id", how="left")
+        >>> other = spark.createDataFrame([("Alice", "NL")], ["name", "country"])
+        >>> df.join(other, on="name", how="left").orderBy("name").collect()
+        [Row(name='Alice', age=2, country='NL'), Row(name='Bob', age=5, country=None)]
         """
         if not isinstance(other, DataFrame):
             raise not_expected_type("other", "DataFrame", other)
@@ -491,7 +497,8 @@ class DataFrame:
 
         Examples
         --------
-        >>> df.orderBy(F.col("age").desc())
+        >>> df.orderBy(F.col("age").desc()).collect()
+        [Row(age=5, name='Bob'), Row(age=2, name='Alice')]
         """
         keys = _flatten(cols)
         orders = ascending if isinstance(ascending, list) else [ascending] * len(keys)

@@ -156,6 +156,7 @@ pub use access::{
     allowed, authorize, authorize_quietly, authorize_reported, authorize_secret_refs,
     insufficient_permissions, namespace_parts, secret_scopes, table_ident,
 };
+pub(crate) use bind::is_builtin_qualifier;
 pub use builtins::BuiltinFunctions;
 pub use catalog::{
     AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, BuiltinTableFunctions,

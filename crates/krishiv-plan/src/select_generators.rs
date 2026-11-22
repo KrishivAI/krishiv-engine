@@ -9,6 +9,7 @@
 //! generator nested in another expression stays in place for the analyzer to refuse
 //! (`UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS`).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::{
@@ -51,19 +52,25 @@ fn generator_call(item: &Expr) -> Option<Call> {
     })
 }
 
-/// Whether `e` calls a built-in aggregate function outside a window.
+/// Whether `e` calls a built-in aggregate function outside a window. A call counts only when it
+/// is unqualified or qualified `builtin` / `system.builtin`, as the analyzer resolves it: `session.sum(x)` and
+/// `ns.sum(x)` are UDF calls. Each distinct node is visited once (expressions are DAGs).
 fn has_aggregate(e: &Expr) -> bool {
-    if matches!(e.node, ExprNode::Window(_)) {
-        return false;
+    let mut seen: HashSet<*const Expr> = HashSet::new();
+    let mut stack: Vec<&Expr> = vec![e];
+    while let Some(e) = stack.pop() {
+        if !seen.insert(std::ptr::from_ref(e)) || matches!(e.node, ExprNode::Window(_)) {
+            continue;
+        }
+        if let ExprNode::Function(call) = &e.node
+            && (call.qualifier.is_empty() || crate::analyzer::is_builtin_qualifier(&call.qualifier))
+            && crate::analyzer::BuiltinFunctions::is_aggregate(&call.name)
+        {
+            return true;
+        }
+        e.for_each_child(&mut |c| stack.push(c));
     }
-    if let ExprNode::Function(call) = &e.node
-        && crate::analyzer::BuiltinFunctions::is_aggregate(&call.name)
-    {
-        return true;
-    }
-    let mut found = false;
-    e.for_each_child(&mut |c| found = found || has_aggregate(c));
-    found
+    false
 }
 
 fn star(qualifier: Vec<String>, origin: Origin) -> Arc<Expr> {

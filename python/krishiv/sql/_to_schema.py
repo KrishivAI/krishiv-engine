@@ -91,9 +91,14 @@ def _assignable(have: DataType, want: DataType) -> bool:
     if isinstance(have, _DATETIME) and isinstance(want, _DATETIME):
         return True
     if isinstance(have, ArrayType) and isinstance(want, ArrayType):
-        return _assignable(have.elementType, want.elementType)
+        # a nullable element cannot go into a target that forbids nulls
+        return (want.containsNull or not have.containsNull) and _assignable(have.elementType, want.elementType)
     if isinstance(have, MapType) and isinstance(want, MapType):
-        return _assignable(have.keyType, want.keyType) and _assignable(have.valueType, want.valueType)
+        return (
+            (want.valueContainsNull or not have.valueContainsNull)
+            and _assignable(have.keyType, want.keyType)
+            and _assignable(have.valueType, want.valueType)
+        )
     return False
 
 

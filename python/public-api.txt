@@ -1867,7 +1867,7 @@ StructType.def add(self, field: str | StructField, data_type: str | DataType | N
 StructType.def fieldNames(self) -> list[str]
 StructType.def jsonValue(self) -> dict[str, Any]
 StructType.def simpleString(self) -> str
-StructType.def treeString(self, level: int | None=None) -> str
+StructType.def treeString(self, maxDepth: int | None=None) -> str
 TimestampNTZType.@classmethod def typeName(cls) -> str
 VarcharType.def __init__(self, length: int) -> None
 VarcharType.def __repr__(self) -> str

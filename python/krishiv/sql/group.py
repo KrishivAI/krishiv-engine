@@ -284,7 +284,7 @@ class GroupedData:
                 sqlState="42614",
             )
         column = F.col(pivot_col)
-        literals = [F.lit(v) for v in values] if values else self._distinct_values(pivot_col)
+        literals = self._distinct_values(pivot_col) if values is None else [F.lit(v) for v in values]
         pivoted = GroupedData(self._grouped.pivot(column._c, [v._c for v in literals]), self._source)
         pivoted._pivoted = True
         return pivoted

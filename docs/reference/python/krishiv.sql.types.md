@@ -429,11 +429,11 @@ def simpleString(self) -> str
 ### `treeString`
 
 ```python
-def treeString(self, level: int | None=None) -> str
+def treeString(self, maxDepth: int | None=None) -> str
 ```
 
-The schema as the indented tree `printSchema` prints, to `level` levels (all by default and for
-`level <= 0`, as Spark).
+The schema as the indented tree `printSchema` prints, to `maxDepth` levels (all by default and for
+`maxDepth <= 0`, as Spark).
 
 ### `typeName`
 

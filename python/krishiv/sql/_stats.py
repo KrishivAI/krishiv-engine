@@ -135,7 +135,7 @@ def _statistic_column(statistic: str, name: str, dtype: str) -> Column:
     lowered = statistic.lower()
     fraction = _percentile(statistic)
     if fraction is not None:
-        base = column if dtype in _NUMERIC else column.cast("double")
+        base = column if _is_numeric(dtype) else column.cast("double")
         if dtype == "string":
             base = as_double
         agg = F.percentile_approx(base, fraction, 10000)
@@ -191,9 +191,12 @@ def summary_frame(df: DataFrame, statistics: tuple[str, ...]) -> DataFrame:
 def describe_frame(df: DataFrame, cols: tuple[str, ...]) -> DataFrame:
     """``df.describe(*cols)``: ``summary`` of count, mean, stddev, min and max over the named columns."""
     if cols:
-        lowered = [c.lower() for c in cols]
+        from krishiv.sql.dataframe import _case_sensitive
+
+        case_sensitive = _case_sensitive(df.sparkSession)
+        keyed = [c if case_sensitive else c.lower() for c in cols]
         for c in cols:
-            if lowered.count(c.lower()) > 1:
+            if keyed.count(c if case_sensitive else c.lower()) > 1:
                 raise AnalysisException(
                     f"[AMBIGUOUS_REFERENCE] Reference `{c}` is ambiguous, could be: [`{c}`, `{c}`]. SQLSTATE: 42704",
                     errorClass="AMBIGUOUS_REFERENCE",
@@ -225,7 +228,9 @@ def approx_quantile(
             raise _require(
                 f"Quantile calculation for column {name} with data type {_spark_type(dtype)} is not supported."
             )
-    accuracy = _INT_MAX if relative_error == 0 else min(_INT_MAX, math.ceil(1.0 / relative_error))
+    if not columns:
+        return []
+    accuracy = _INT_MAX if relative_error == 0 else int(min(float(_INT_MAX), math.ceil(1.0 / relative_error)))
     # One scalar aggregate for each column and probability (the engine takes no array of percentages).
     aggregates = []
     for i, name in enumerate(columns):
@@ -365,15 +370,28 @@ def check_seed(seed: int) -> int:
     return seed
 
 
+def _sample_column(df: DataFrame) -> str:
+    """A name for the temporary draw column that no column of ``df`` has, under the session's case rule."""
+    from krishiv.sql.dataframe import _case_sensitive
+
+    fold = (lambda n: n) if _case_sensitive(df.sparkSession) else str.lower
+    taken = {fold(c) for c in df.columns}
+    name = _SAMPLE_COLUMN
+    while fold(name) in taken:
+        name += "_"
+    return name
+
+
 def sample_range(df: DataFrame, lower: float, upper: float, seed: int) -> DataFrame:
     """The rows whose ``rand(seed)`` draw is in ``[lower, upper)``: Spark's ``SampleExec`` without replacement.
     The draw comes from ``XORShiftRandom(seed + partition)``, one per row in row order."""
-    drawn = df.select(F.col("*"), F.rand(check_seed(seed)).alias(_SAMPLE_COLUMN))
-    draw = F.col(_SAMPLE_COLUMN)
+    sample = _sample_column(df)
+    drawn = df.select(F.col("*"), F.rand(check_seed(seed)).alias(sample))
+    draw = F.col(f"`{sample}`")
     keep = (draw >= F.lit(lower)) & (draw < F.lit(upper)) if lower > 0.0 else draw < F.lit(upper)
     if upper - lower <= 0.0:
         keep = F.lit(False)
-    return drawn.filter(keep).drop(_SAMPLE_COLUMN)
+    return drawn.filter(keep).drop(sample)
 
 
 def sample(df: DataFrame, with_replacement: bool, fraction: float, seed: int) -> DataFrame:
@@ -403,8 +421,9 @@ def stratified_sample(df: DataFrame, strata: Column, fractions: list[tuple[Any, 
         hit = strata == F.lit(stratum)
         fraction = F.when(hit, F.lit(wanted)) if fraction is None else fraction.when(hit, F.lit(wanted))
     chosen = F.lit(0.0) if fraction is None else fraction.otherwise(F.lit(0.0))
-    drawn = df.select(F.col("*"), F.rand(check_seed(seed)).alias(_SAMPLE_COLUMN))
-    return drawn.filter(F.col(_SAMPLE_COLUMN) < chosen).drop(_SAMPLE_COLUMN)
+    sample = _sample_column(df)
+    drawn = df.select(F.col("*"), F.rand(check_seed(seed)).alias(sample))
+    return drawn.filter(F.col(f"`{sample}`") < chosen).drop(sample)
 
 
 def random_split(df: DataFrame, weights: list[float], seed: int) -> list[DataFrame]:
