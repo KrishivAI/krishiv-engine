@@ -67,6 +67,11 @@ PAGES = [
         "#/workload",
         ["Workload", "interactive", "nightly", "by priority · 2", "4 / 4", "removed"],
     ),
+    (
+        "advisor",
+        "#/advisor",
+        ["Advisor", "Partition by", "event_date", "100 of 120", "83.1%"],
+    ),
     ("resources", "#/resources", ["Memory", "Caches", "root/query-1"]),
     ("catalog", "#/catalog", ["Catalog", "spark_catalog", "Schemas", "Tables"]),
     ("sql", "#/sql", ["SQL", "Run", "Cancel"]),
@@ -600,9 +605,11 @@ MODE_PAGES = {
         ("#/resources", ["Memory pools and caches of this process"], []),
         ("#/sql", ["Statements run in your session", "Run"], []),
         ("#/environment", ["The settings of this session", "***"], []),
-        # The sessions of every client and the resource groups are a server's: their addresses open the first page.
+        # The sessions of every client, the resource groups and the advice folded from every principal's
+        # queries are a server's: their addresses open the first page.
         ("#/sessions", ["This process and the session"], ["End session"]),
         ("#/workload", ["This process and the session"], ["Scheduling"]),
+        ("#/advisor", ["This process and the session"], ["Partition by"]),
     ],
     # Every address but a query's own page opens the history: the mode has no other page.
     "profiles": [
@@ -613,6 +620,7 @@ MODE_PAGES = {
         ("#/environment", ["DIVIDE_BY_ZERO"], ["Secrets show"]),
         ("#/sessions", ["DIVIDE_BY_ZERO"], ["End session"]),
         ("#/workload", ["DIVIDE_BY_ZERO"], ["Scheduling"]),
+        ("#/advisor", ["DIVIDE_BY_ZERO"], ["Partition by"]),
         (
             "#/queries/01932a40-1a00-7a01-8001-aaaaaaaaaa02",
             ["HashJoin", "← History"],
@@ -629,6 +637,7 @@ PROFILES_NEVER = (
     "/resources",
     "/sessions",
     "/groups",
+    "/advice",
 )
 
 
@@ -690,8 +699,8 @@ def mode_checks() -> list[str]:
                         problems.append(
                             f"profiles: the menu lists {links}, not only History"
                         )
-                    # Every page but a query's own, and but the two a server alone has.
-                    if mode == "embedded" and len(links) != len(PAGES) - 3:
+                    # Every page but a query's own, and but the three a server alone has.
+                    if mode == "embedded" and len(links) != len(PAGES) - 4:
                         problems.append(f"embedded: the menu lists {links}")
                     tail = fixture_server.SESSION_ID[-8:]
                     if mode == "embedded" and tail not in page.inner_text("header"):
@@ -704,7 +713,7 @@ def mode_checks() -> list[str]:
                 problems += [
                     f"embedded: the page asked for {path}"
                     for path in sorted(set(server.asked))
-                    if path.endswith(("/sessions", "/groups"))
+                    if path.endswith(("/sessions", "/groups", "/advice"))
                 ]
             if mode == "profiles":
                 problems += [
@@ -952,6 +961,134 @@ def workload_checks() -> list[str]:
             problems.append("workload: a server with no groups does not say so")
         if page.locator("main table, main ul li").count():
             problems.append("workload: a server with no groups shows a list")
+        browser.close()
+    server.shutdown()
+    return problems
+
+
+def advisor_checks() -> list[str]:
+    """A server console's Advisor page and the session a query's link carries: one row a table with its best
+    column and the other candidates, a filter over the tables, the history read when the page opens and when
+    asked (never on a timer), a server with no advice saying so; and a listed query's page and its Cancel name
+    the row's session."""
+    problems: list[str] = []
+    server = fixture_server.serve()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    rows = "main table tbody tr:visible:not(:has(td[colspan]))"
+    advice_path = "/api/internal/advice"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
+        page.locator("header nav a").first.wait_for(timeout=10000)
+
+        def count(what: str, want: int) -> None:
+            try:
+                expect(page.locator(rows)).to_have_count(want, timeout=5000)
+            except AssertionError:
+                got = page.locator(rows).count()
+                problems.append(f"{what}: {got} rows, not {want}")
+
+        page.evaluate("window.location.hash = '#/advisor'")
+        tables = fixture_server.ADVICE
+        count("advisor: one row a table", len(tables))
+        first = page.locator(rows).first.inner_text()
+        for shown in (
+            "spark_catalog.default.events",
+            "event_date",
+            "100 of 120",
+            "365",
+        ):
+            if shown not in first:
+                problems.append(f"advisor: the first table's row lacks {shown!r}")
+        others = page.locator("main table [data-other-candidates] li").all_inner_texts()
+        if (
+            len(others) != 2
+            or "region · 20 queries · 3 partitions · 11.1%" not in others[0]
+        ):
+            problems.append(f"advisor: the other candidates are {others}")
+        # A share too small for one decimal still reads as a number, not as markup or an exponent.
+        if len(others) == 2 and "0.1%" not in others[1]:
+            problems.append(f"advisor: a small share reads {others[1]!r}")
+        filter_box = page.get_by_label("Filter", exact=True)
+        for typed, want in (("ORDERS", 1), ("spark_catalog", 2), ("no-such-table", 0)):
+            filter_box.fill(typed)
+            count(f"advisor: the filter {typed!r}", want)
+            said = page.locator("[data-advice-count]").inner_text()
+            if said != f"{want} of {len(tables)} tables shown":
+                problems.append(f"advisor: {typed!r} says {said!r}")
+        if not shows(page, ["No table matches."], "main"):
+            problems.append("advisor: an empty filtered list is not said to be one")
+        filter_box.fill("")
+        count("advisor: the tables again", len(tables))
+        # Reading the advice reads the history store: once for the page, and once more only when asked.
+        page.wait_for_timeout(2500)
+        if server.asked.count(advice_path) != 1:
+            problems.append(
+                f"advisor: the page read the advice {server.asked.count(advice_path)} times unasked"
+            )
+        page.get_by_role("button", name="Read the history again").click()
+        try:
+            page.wait_for_function(
+                "() => !document.querySelector('main button[disabled]')", timeout=5000
+            )
+        except PlaywrightTimeout:
+            problems.append("advisor: the page never finished reading again")
+        if server.asked.count(advice_path) != 2:
+            problems.append("advisor: asking again did not read the advice once more")
+        if page.evaluate("window.__xss"):
+            problems.append("advisor: markup in a column's name ran")
+
+        # A listed query's page and its Cancel name the row's session: two sessions may share a query id.
+        page.evaluate("window.location.hash = '#/queries'")
+        bob = page.locator(rows).filter(has_text="bob")
+        bob.get_by_role("button", name="Cancel").click()
+        want = f"/cancel?session={fixture_server.SESSION_B}"
+        if not shows(page, ["Cancelled "], "main"):
+            problems.append("queries: Cancel never answered")
+        if len(server.cancels) != 1 or not server.cancels[0].endswith(want):
+            problems.append(f"queries: Cancel asked for {server.cancels}")
+        bob.locator("a[href^='#/queries/']").click()
+        if not shows(page, ["Operators"], "main"):
+            problems.append("queries: a row's link does not open the query's page")
+        want = f"?session={fixture_server.SESSION_B}"
+        if not server.query_reads or not all(
+            r.endswith(want) for r in server.query_reads
+        ):
+            problems.append(f"queries: the query's page read {server.query_reads}")
+        # A row with no session (a profile stored before a restart) links the id alone, as before.
+        del server.query_reads[:]
+        page.evaluate(f"window.location.hash = '#/queries/{QID}'")
+        page.wait_for_timeout(500)
+        if (
+            not shows(page, ["Operators"], "main")
+            or any("?" in r for r in server.query_reads)
+            or not server.query_reads
+        ):
+            problems.append(
+                f"queries: a link without a session read {server.query_reads}"
+            )
+        problems += [f"advisor: page error: {e}" for e in errors]
+        browser.close()
+    server.shutdown()
+
+    # A server whose history has no advice: the page says where advice comes from and shows no table.
+    server = fixture_server.serve(advice=False)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.goto(
+            f"http://127.0.0.1:{server.server_address[1]}/?token=fixture#/advisor"
+        )
+        try:
+            page.locator("[data-no-advice]").wait_for(timeout=10000)
+        except PlaywrightTimeout:
+            problems.append("advisor: a server with no advice does not say so")
+        if page.locator("main table, main ul li, main input").count():
+            problems.append("advisor: a server with no advice shows a list or a filter")
         browser.close()
     server.shutdown()
     return problems
@@ -1374,14 +1511,15 @@ if __name__ == "__main__":
     found += start_checks()
     found += filter_checks()
     found += workload_checks()
+    found += advisor_checks()
     found += heatmap_checks(f"http://127.0.0.1:{server.server_address[1]}")
     found += q9_checks(shots)
     found += responsive_checks(shots / "responsive" if shots is not None else None)
     print(
         "\n".join(found)
         if found
-        else "ui pages: ok (10 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, deep links, embed, "
-        "embedded and profiles consoles, operator, history filters, sessions and workload, the plan heatmap, "
+        else "ui pages: ok (11 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, deep links, embed, "
+        "embedded and profiles consoles, operator, history filters, sessions and workload, the advisor and session links, the plan heatmap, "
         "TPC-H Q9's profile, "
         "responsive: 3 consoles x 13 screen sizes, touch targets, SQL editor on a phone, text size, motion)"
     )

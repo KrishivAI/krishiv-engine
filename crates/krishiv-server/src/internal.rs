@@ -51,6 +51,8 @@ pub enum SystemTable {
     Sessions,
     /// `system.resource_groups`: the workload groups with their limits and live counters.
     ResourceGroups,
+    /// `system.partition_advice`: the partition columns the query history suggests, per table.
+    PartitionAdvice,
 }
 
 /// A source failed to read a table or act on a query. Carries the engine's Spark error class and SQLSTATE
@@ -118,6 +120,18 @@ pub trait UiSource: Send + Sync + 'static {
     /// Cancels the query as an operator's kill (the `admin` reason: the query fails with
     /// `KRISHIV_QUERY_KILLED`); `false` when it is not running.
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool>;
+
+    /// [`Self::cancel`] limited to the query `query_id` of session `session_id`: a query another session runs
+    /// under the same id (a client chooses its operation ids) is left running. `false` when that session runs
+    /// no such query, and from a source that does not tell sessions apart.
+    fn cancel_in_session<'a>(
+        &'a self,
+        query_id: &'a str,
+        session_id: &'a str,
+    ) -> UiFuture<'a, bool> {
+        let _ = (query_id, session_id);
+        Box::pin(async { Ok(false) })
+    }
 
     /// Ends session `session_id` as an operator's kill: its running queries fail with `KRISHIV_QUERY_KILLED`
     /// and the session's next call is refused. The number of queries cancelled; `None` when no open session
@@ -326,6 +340,7 @@ pub fn router_with_ui_policy(
             post(crate::workload::close_session),
         )
         .route("/api/internal/groups", get(crate::workload::groups))
+        .route("/api/internal/advice", get(crate::advice::advice))
         .route("/api/internal/events", get(events))
         .route("/api/internal/catalog/catalogs", get(pages::catalogs))
         .route(
@@ -865,15 +880,27 @@ fn hot_operator(operators: &[Row]) -> Value {
         })
 }
 
-async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Response {
+/// `GET /api/internal/queries/{id}[?session=]`: one query's page. Two sessions may run a query under one id
+/// (a client chooses its operation ids), so a list's link names the row's session; without one the first
+/// query of that id answers.
+async fn query_detail(State(s): State<UiState>, Path(id): Path<String>, uri: Uri) -> Response {
+    detail(&s, &id, filter_param(&uri, "session").as_deref()).await
+}
+
+/// Whether a `system.queries` row is query `id`, of session `session` when one is named.
+fn is_query(row: &Row, id: &str, session: Option<&str>) -> bool {
+    text(row, "query_id") == id && session.is_none_or(|s| text(row, "session_id") == s)
+}
+
+async fn detail(s: &UiState, id: &str, session: Option<&str>) -> Response {
     let (queries, operators) = match (
-        table(&s, SystemTable::Queries).await,
-        table(&s, SystemTable::Operators).await,
+        table(s, SystemTable::Queries).await,
+        table(s, SystemTable::Operators).await,
     ) {
         (Ok(q), Ok(o)) => (q, o),
         (Err(e), _) | (_, Err(e)) => return *e,
     };
-    let Some(query) = queries.iter().find(|r| text(r, "query_id") == id) else {
+    let Some(query) = queries.iter().find(|r| is_query(r, id, session)) else {
         return error(
             StatusCode::NOT_FOUND,
             "no_such_query",
@@ -1034,7 +1061,7 @@ async fn embed_query(
     let sig = query_param(raw.as_deref(), "sig");
     match (exp, sig) {
         (Some(exp), Some(sig)) if s.policy.embed().verify(&id, exp, &sig, now_secs()) => {
-            query_detail(State(s), Path(id)).await
+            detail(&s, &id, None).await
         }
         _ => error(
             StatusCode::UNAUTHORIZED,
@@ -1044,14 +1071,36 @@ async fn embed_query(
     }
 }
 
-/// `POST /api/internal/queries/{id}/cancel`: an operator's kill of a running query; a query that was
-/// cancelled is one audit record.
+/// `POST /api/internal/queries/{id}/cancel[?session=]`: an operator's kill of a running query; a query that
+/// was cancelled is one audit record. With `session` only that session's query ends. Without it, an id that
+/// several sessions are running is refused (409): the caller must say whose query it means.
 async fn cancel(
     State(s): State<UiState>,
     caller: Option<Extension<Caller>>,
     Path(id): Path<String>,
+    uri: Uri,
 ) -> Response {
-    match s.source.cancel(&id).await {
+    let session = filter_param(&uri, "session");
+    let done = match &session {
+        Some(session) => s.source.cancel_in_session(&id, session).await,
+        None => {
+            let rows = match table(&s, SystemTable::Queries).await {
+                Ok(r) => r,
+                Err(e) => return *e,
+            };
+            let mut running = rows.iter().filter(|r| is_live(r) && is_query(r, &id, None));
+            let first = running.next().map(|r| text(r, "session_id"));
+            if running.any(|r| Some(text(r, "session_id")) != first) {
+                return error(
+                    StatusCode::CONFLICT,
+                    "ambiguous_query",
+                    "more than one session runs a query with that id: name the session",
+                );
+            }
+            s.source.cancel(&id).await
+        }
+    };
+    match done {
         Ok(true) => {
             let caller = caller.map(|c| c.0);
             tracing::info!(
@@ -1061,6 +1110,7 @@ async fn cancel(
                 surface = "ui",
                 action = "cancel_query",
                 query = %id,
+                session = session.as_deref().unwrap_or(""),
                 "query cancelled"
             );
             json_response(StatusCode::OK, &json!({"cancelled": true}))

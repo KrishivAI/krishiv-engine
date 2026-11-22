@@ -9,6 +9,7 @@
   import Id from "$lib/components/id.svelte";
   import ResponsiveTable, { type Column } from "$lib/components/responsive-table.svelte";
   import { cn, keyOf } from "$lib/utils";
+  import { queryHref } from "../routes";
 
   let stateFilter = $state("");
   let principal = $state("");
@@ -158,7 +159,7 @@
         <label class="mr-2 inline-flex min-h-11 min-w-11 items-center justify-center align-middle">
           <input class="size-5 accent-[var(--k-silver)]" type="checkbox" checked={picked.includes(r.query_id)} onchange={() => toggle(r.query_id)} aria-label={`Select ${oneLine(r.query_text, 40)} (${r.query_id.slice(-8)}) for comparison`} />
         </label>
-        <a class="inline-flex min-h-11 min-w-11 items-center align-middle underline underline-offset-4" href={`#/queries/${encodeURIComponent(r.query_id)}`}>{oneLine(r.query_text, 90)}</a>
+        <a class="inline-flex min-h-11 min-w-11 items-center align-middle underline underline-offset-4" href={queryHref(r.query_id, r.session_id)}>{oneLine(r.query_text, 90)}</a>
         <div><Id id={r.query_id} /></div>
         {#if tagsOf(r).length}
           <div class="mono text-xs break-all text-muted-foreground">{tagsOf(r).join(" · ")}</div>

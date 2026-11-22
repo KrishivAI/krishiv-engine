@@ -148,6 +148,13 @@ async fn a_query_of_another_session_cannot_be_cancelled_and_an_own_one_can() {
     let their_id = running_id(&other, "theirs").await;
     assert!(!source.cancel(&their_id).await.unwrap());
     assert!(!source.cancel("not-an-id").await.unwrap());
+    // Naming the other session does not reach its query either.
+    assert!(
+        !source
+            .cancel_in_session(&their_id, other.id())
+            .await
+            .unwrap()
+    );
     assert!(
         !their_task.is_finished(),
         "the other session's query was cancelled"
@@ -170,7 +177,11 @@ async fn a_query_of_another_session_cannot_be_cancelled_and_an_own_one_can() {
         own.sql(&sql).await.unwrap().collect().await
     });
     let own_id = running_id(&mine, "own").await;
-    assert!(source.cancel(&own_id).await.unwrap());
+    assert!(
+        !source.cancel_in_session(&own_id, other.id()).await.unwrap(),
+        "the console's own query, asked for as another session's"
+    );
+    assert!(source.cancel_in_session(&own_id, mine.id()).await.unwrap());
     let err = tokio::time::timeout(Duration::from_secs(10), own_task)
         .await
         .unwrap()
@@ -348,14 +359,11 @@ async fn the_console_lists_its_one_session_and_ends_none() {
     let sessions = source.rows(SystemTable::Sessions).await.unwrap();
     assert_eq!(sessions.len(), 1, "{sessions:?}");
     assert_eq!(sessions[0]["session_id"], mine.id());
-    // The groups are a server's; this process has no operator, so no session is ended from here.
-    assert!(
-        source
-            .rows(SystemTable::ResourceGroups)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    // The groups are a server's, and so is the advice folded from every session's queries; this process has
+    // no operator, so no session is ended from here.
+    for table in [SystemTable::ResourceGroups, SystemTable::PartitionAdvice] {
+        assert!(source.rows(table).await.unwrap().is_empty(), "{table:?}");
+    }
     for id in [other.id(), mine.id()] {
         assert_eq!(source.close_session(id).await.unwrap(), None);
     }

@@ -92,7 +92,7 @@ and the Python wheel both carry it (a build from source needs the `ui` feature, 
 | Shows | the one session that started it | every session of every client | the queries a history folder holds |
 | Listens on | `127.0.0.1`, a free port | the admin port (`--port`, default `8080`) | `127.0.0.1`, a free port (`--port`) |
 | Who may open it | whoever has the URL with its token | a token, by role | whoever has the URL with its token |
-| Pages | all but Sessions and Workload | all; Environment for an administrator only | History and a query's page |
+| Pages | all but Sessions, Workload and Advisor | all; Environment for an administrator only | History and a query's page |
 
 **In your process.** `krishiv.ui()` starts the console of the active session, prints its URL and returns a handle
 (`url`, `port`, `token`, `stop()`); `krishiv::ui(&session)` returns the same handle in Rust and prints nothing, so
@@ -115,7 +115,9 @@ what its holder sees (the table in [single-node server security](single-node-ser
 sees and cancels every query and runs SQL as the signed-in user in a session of its own, and only an administrator
 opens Environment, where secrets show as `***`. The History page filters by state, principal, client (any part of
 the name a client reports, such as `python`), tag (`team` or `team=risk`) and session; the Queries page has one
-filter box over the running queries (principal, client, tag, text or id).
+filter box over the running queries (principal, client, tag, text or id). A client chooses its operation ids, so
+two sessions can run queries under one id: a query's link and its **Cancel** carry the row's session
+(`/queries/<id>?session=<session id>`), and Cancel ends that session's query only.
 
 The Sessions page lists the sessions of every client: who opened each, with which client and over which protocol,
 its current catalog and namespace, when it was last active and how many queries it runs and has started (the
@@ -127,6 +129,14 @@ console's own editor runs in is listed and cannot be ended from the page. The Wo
 the resource groups of `krishiv.workload.resourceGroups.file`, each under its parent, with what runs and waits
 against its limits, its memory in use and its scan quota; a server started without that file admits every query
 as it arrives, and the page says so.
+
+The Advisor page lists the partition advice of `system.partition_advice`: for each table the query history
+covers, the column its finished queries filter on by equality that would let them skip the most data, with how
+many of the table's queries filter on it, how many partitions it would make and the share of bytes it is expected
+to save; other candidate columns follow in the same row. `EXPLAIN` prints the same advice for the tables a query
+reads. The advice comes from the stored history, so a server needs `krishiv.history.path` to have any, and the
+page reads it when opened and on **Read the history again**, not on a timer. Nothing is applied: to follow a
+suggestion, write the table again partitioned by the column.
 
 A server's history is kept in memory unless `krishiv.history.path` names a folder. With it, each finished query's
 profile is stored there, and a restarted server lists the newest 1,000 stored queries again. A query from before
