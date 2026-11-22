@@ -21,5 +21,6 @@
   "flight-sql": "Arrow Flight SQL",
   "metric-views": "Metric views",
   "time-types": "The TIME type",
-  "python-data-sources": "Python data sources"
+  "python-data-sources": "Python data sources",
+  "delta-dml": "Changing rows in a Delta table"
 }
