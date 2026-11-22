@@ -401,9 +401,12 @@ impl Session {
                 .map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment));
         }
         let _ = reads_target;
+        let key = target
+            .options
+            .and_then(|o| super::explicit_key(o, |v: &OptionValue| v.as_plain()));
         if dry {
             // Every check of the write, without writing.
-            return self.check_table_write(table, &df, overwrite).await;
+            return self.check_table_write(table, &df, overwrite, key).await;
         }
         let mode = if overwrite { "overwrite" } else { "append" };
         // A RENAME or DROP PARTITION waits until these rows are written and their partitions registered (it could
@@ -419,7 +422,9 @@ impl Session {
         } else {
             None
         };
-        let written = self.write_table_rows(table, &df, mode, &mut None).await;
+        let written = self
+            .write_table_rows(table, &df, mode, key, &mut None)
+            .await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
         self.forget_column_stats(name);
@@ -1006,9 +1011,10 @@ impl Session {
         table: &CatalogTable,
         df: &DataFrame,
         mode: &str,
+        key: Option<&str>,
         pre: &mut Option<Admitted>,
     ) -> Result<Vec<String>, KrishivError> {
-        table_writer(table, df, mode)?
+        table_writer(table, df, mode, key)?
             .save_reporting(&table.location.display().to_string(), pre.take())
             .await
     }
@@ -1019,9 +1025,10 @@ impl Session {
         table: &CatalogTable,
         df: &DataFrame,
         overwrite: bool,
+        key: Option<&str>,
     ) -> Result<(), KrishivError> {
         let mode = if overwrite { "overwrite" } else { "append" };
-        table_writer(table, df, mode)?
+        table_writer(table, df, mode, key)?
             .check_save(&table.location.display().to_string())
             .await
     }

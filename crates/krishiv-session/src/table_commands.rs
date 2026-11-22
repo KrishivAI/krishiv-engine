@@ -1605,11 +1605,23 @@ enum ColumnChange {
     DropDefault,
 }
 
-/// The writer of `df` into `table` with `mode`; into a bucketed table each row goes to its bucket's file.
+/// The explicit idempotency key among a write's options, if any.
+fn explicit_key<'a, V: 'a>(
+    options: impl IntoIterator<Item = (&'a String, &'a V)>,
+    plain: impl Fn(&'a V) -> Option<&'a str>,
+) -> Option<&'a str> {
+    options
+        .into_iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION))
+        .and_then(|(_, v)| plain(v))
+}
+
+/// The writer of `df` into `table` with `mode`; `key` is the write's own idempotency key. Into a bucketed table each row goes to its bucket's file.
 fn table_writer(
     table: &CatalogTable,
     df: &DataFrame,
     mode: &str,
+    key: Option<&str>,
 ) -> Result<crate::dataframe::DataFrameWriter, KrishivError> {
     let mut writer = df.write().format(&table.provider).mode(mode);
     if let Some(bucket) = &table.layout.bucket {
@@ -1624,6 +1636,10 @@ fn table_writer(
             continue;
         }
         writer = writer.option(k, v);
+    }
+    // The key of this one write (never the stored options').
+    if let Some(key) = key {
+        writer = writer.option(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION, key);
     }
     // Stored when an admin (or a `Manage` holder) created or altered the table: not asked again.
     Ok(writer.options_are_the_tables())
@@ -1684,11 +1700,7 @@ struct InsertTarget<'a> {
     /// Checked through to the rows it would write, not written.
     dry: bool,
     /// The writer's options (`writeTo(..).option(..)`, `saveAsTable`'s): a Delta append reads
-    /// `maxRecordsPerFile` from them; `None` for SQL.
-    #[cfg_attr(
-        not(feature = "delta"),
-        expect(dead_code, reason = "read by the Delta write path only")
-    )]
+    /// `maxRecordsPerFile` from them, a file table's write the idempotency key; `None` for SQL.
     options: Option<&'a BTreeMap<String, OptionValue>>,
 }
 
