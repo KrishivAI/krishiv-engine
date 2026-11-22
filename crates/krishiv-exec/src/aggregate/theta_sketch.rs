@@ -306,11 +306,9 @@ impl ThetaSketchAcc {
             if capped { bytes.min(ceiling) } else { bytes }
         };
         let fresh_floor = new.saturating_mul(self.new_group);
-        let room = self
-            .slots
-            .len()
-            .saturating_mul(ceiling)
-            .saturating_sub(self.total);
+        // The room raw rows can grow their own table into: a group's raw table is capped at `ceiling`, and a merged
+        // union already held does not use that room, so `total` (which counts the unions) is not subtracted.
+        let room = self.slots.len().saturating_mul(ceiling);
         let (landing, fresh, transient) = if raw {
             let per_row = table(self.peak.saturating_mul(GROWTH).saturating_add(OVERHEAD));
             let landing = rows.saturating_mul(per_row).min(room);
@@ -339,7 +337,20 @@ impl ThetaSketchAcc {
             };
             (both.saturating_add(scratch), 0, input)
         };
+        // `reserve` grows both vectors before the fold; a vector that must grow allocates its new buffer while the
+        // old one is still held (`Vec::reserve` doubles).
+        let needed = self.slots.len().saturating_add(new);
+        let grow = |cap: usize, elem: usize| {
+            if needed > cap {
+                needed.max(cap.saturating_mul(2)).saturating_mul(elem)
+            } else {
+                0
+            }
+        };
+        let vectors = grow(self.slots.capacity(), std::mem::size_of::<Slot>())
+            .saturating_add(grow(self.charges.capacity(), std::mem::size_of::<usize>()));
         self.size()
+            .saturating_add(vectors)
             .saturating_add(fresh_floor)
             .saturating_add(landing)
             .saturating_add(fresh)

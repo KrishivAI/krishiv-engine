@@ -260,6 +260,11 @@ pub fn from_bytes(bytes: &[u8], function: &str) -> Result<CompactThetaSketch, Kr
         }
         .into());
     }
+    // A version-3 image must carry the READ_ONLY (0x02) and COMPACT (0x08) flags, as Spark's wrapper requires; the
+    // library decodes one without them. Version 1/2 (legacy) and 4 (compressed) images use other flag layouts.
+    if bytes.get(1) == Some(&3) && bytes.get(5).is_none_or(|f| f & 0x0a != 0x0a) {
+        return Err(invalid_buffer(function));
+    }
     CompactThetaSketch::deserialize(bytes).map_err(|_| invalid_buffer(function))
 }
 
@@ -402,6 +407,15 @@ mod tests {
         let back = from_bytes(&to_bytes(&of(&[7])), F).unwrap();
         assert_eq!(estimate(&back), 1);
         assert!(from_bytes(b"not a sketch", F).is_err());
+        // A version-3 image without the COMPACT or READ_ONLY flag is refused, as Spark's wrapper refuses it.
+        let plain = of(&[7, 8]).serialize();
+        assert_eq!(plain[1], 3);
+        assert!(from_bytes(&plain, F).is_ok());
+        for flag in [0x08_u8, 0x02] {
+            let mut bad = plain.clone();
+            bad[5] &= !flag;
+            assert!(from_bytes(&bad, F).is_err(), "flag {flag:#x}");
+        }
         assert!(from_bytes(&[], F).is_err());
         // An HLL preamble (family 7) is a sketch of another family.
         let hll = [2_u8, 1, 7, 12, 0, 0, 0, 0];
