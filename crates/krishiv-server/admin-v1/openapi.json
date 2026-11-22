@@ -55,13 +55,52 @@
         },
         "type": "object"
       },
+      "ConfigEntry": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "settableBy": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "withheld": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "ConfigProblem": {
+        "properties": {
+          "errorClass": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "DrainRequest": {
         "properties": {
           "exitWhenDrained": {
             "type": "boolean"
           },
           "gracePeriod": {
-            "$ref": "#/components/schemas/google.protobuf.Duration"
+            "example": "5s",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
           },
           "requestId": {
             "type": "string"
@@ -143,6 +182,34 @@
         },
         "type": "object"
       },
+      "GetConfigRequest": {
+        "properties": {
+          "pageSize": {
+            "type": "integer"
+          },
+          "pageToken": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetConfigResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ConfigEntry"
+            },
+            "type": "array"
+          },
+          "nextPageToken": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "GetDrainStatusRequest": {
         "properties": {},
         "type": "object"
@@ -169,6 +236,28 @@
           },
           "ready": {
             "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "GetResourceGroupConfigRequest": {
+        "properties": {},
+        "type": "object"
+      },
+      "GetResourceGroupConfigResponse": {
+        "properties": {
+          "document": {
+            "type": "string"
+          },
+          "etag": {
+            "type": "string"
+          },
+          "fileEtag": {
+            "type": "string"
+          },
+          "loadedAt": {
+            "format": "date-time",
+            "type": "string"
           }
         },
         "type": "object"
@@ -248,6 +337,31 @@
               "$ref": "#/components/schemas/Query"
             },
             "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ListResourceGroupsRequest": {
+        "properties": {
+          "pageSize": {
+            "type": "integer"
+          },
+          "pageToken": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ListResourceGroupsResponse": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceGroup"
+            },
+            "type": "array"
+          },
+          "nextPageToken": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -341,6 +455,125 @@
         },
         "type": "object"
       },
+      "ReloadResourceGroupConfigRequest": {
+        "properties": {
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ReloadResourceGroupConfigResponse": {
+        "properties": {
+          "etag": {
+            "type": "string"
+          },
+          "loadedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ReplaceResourceGroupConfigRequest": {
+        "properties": {
+          "document": {
+            "type": "string"
+          },
+          "etag": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ReplaceResourceGroupConfigResponse": {
+        "properties": {
+          "etag": {
+            "type": "string"
+          },
+          "loadedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ResourceGroup": {
+        "properties": {
+          "configEtag": {
+            "type": "string"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "hardConcurrencyLimit": {
+            "type": "integer"
+          },
+          "loadedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "maxQueued": {
+            "type": "integer"
+          },
+          "memoryReservedBytes": {
+            "format": "int64",
+            "type": "string"
+          },
+          "parentId": {
+            "type": "string"
+          },
+          "perQueryMemoryLimitBytes": {
+            "format": "int64",
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "queued": {
+            "type": "integer"
+          },
+          "running": {
+            "type": "integer"
+          },
+          "scanBytesInWindow": {
+            "format": "int64",
+            "type": "string"
+          },
+          "scanQuotaBytes": {
+            "format": "int64",
+            "type": "string"
+          },
+          "scanQuotaPeriodS": {
+            "format": "int64",
+            "type": "string"
+          },
+          "scanWindowResetsAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "schedulingPolicy": {
+            "type": "string"
+          },
+          "schedulingWeight": {
+            "type": "integer"
+          },
+          "softMemoryLimitBytes": {
+            "format": "int64",
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "workloadClass": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "ResumeServingRequest": {
         "properties": {
           "requestId": {
@@ -408,12 +641,65 @@
           }
         },
         "type": "object"
+      },
+      "SetConfigDefaultsRequest": {
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "set": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "unset": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SetConfigDefaultsResponse": {
+        "properties": {
+          "setCount": {
+            "type": "integer"
+          },
+          "unsetCount": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ValidateResourceGroupConfigRequest": {
+        "properties": {
+          "document": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ValidateResourceGroupConfigResponse": {
+        "properties": {
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/ConfigProblem"
+            },
+            "type": "array"
+          },
+          "valid": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
       }
     }
   },
   "info": {
     "title": "krishiv.admin.v1",
-    "version": "3"
+    "version": "4"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -426,6 +712,98 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GetCapabilitiesResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/config": {
+      "get": {
+        "operationId": "GetConfig",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/config/defaults": {
+      "patch": {
+        "operationId": "SetConfigDefaults",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetConfigDefaultsRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetConfigDefaultsResponse"
                 }
               }
             },
@@ -723,6 +1101,192 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GetReadinessResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/resourceGroups": {
+      "get": {
+        "operationId": "ListResourceGroups",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResourceGroupsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/resourceGroups/config": {
+      "get": {
+        "operationId": "GetResourceGroupConfig",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetResourceGroupConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      },
+      "put": {
+        "operationId": "ReplaceResourceGroupConfig",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceResourceGroupConfigRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplaceResourceGroupConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/resourceGroups/config:reload": {
+      "post": {
+        "operationId": "ReloadResourceGroupConfig",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReloadResourceGroupConfigRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReloadResourceGroupConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/resourceGroups/config:validate": {
+      "post": {
+        "operationId": "ValidateResourceGroupConfig",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateResourceGroupConfigRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateResourceGroupConfigResponse"
                 }
               }
             },
