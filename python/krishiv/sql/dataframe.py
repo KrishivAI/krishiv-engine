@@ -228,6 +228,12 @@ class DataFrame:
         return _convert.repr_html_string(columns, cells)
 
     def select(self, *cols: ColumnsOrNames) -> DataFrame:
+        """Projects ``cols`` (names, Columns or ``"*"``) into a new DataFrame.
+
+        Examples
+        --------
+        >>> df.select("name", (F.col("age") + 1).alias("next_age"))
+        """
         picked: list[Any] = []
         for c in _flatten(cols):
             if isinstance(c, _RegexColumn):
@@ -258,11 +264,18 @@ class DataFrame:
     where = filter
 
     def withColumn(self, colName: str, col: Column) -> DataFrame:
+        """Adds the column ``colName`` computed by ``col``, or replaces the one of that name.
+
+        Examples
+        --------
+        >>> df.withColumn("age2", F.col("age") * 2)
+        """
         if not isinstance(col, Column):
             raise not_expected_type("col", "Column", col)
         return self._new(self._df.with_column(colName, col._c))
 
     def alias(self, alias: str) -> DataFrame:
+        """Returns this DataFrame under the name ``alias``, for qualifying columns in a join."""
         return self._new(self._df.alias(alias))
 
     def cache(self) -> DataFrame:
@@ -407,11 +420,24 @@ class DataFrame:
         return self._df.is_cached()
 
     def groupBy(self, *cols: ColumnsOrNames) -> GroupedData:
+        """Groups the DataFrame by ``cols`` (names or Columns) so aggregates can be applied; with no columns the
+        whole DataFrame is one group.
+
+        Examples
+        --------
+        >>> df.groupBy("dept").agg(F.avg("salary"))
+        """
         return GroupedData(self._df.group_by([_named(c) for c in _flatten(cols)]), self)
 
     groupby = groupBy
 
     def agg(self, *exprs: Column) -> DataFrame:
+        """Aggregates the whole DataFrame as one group (shorthand for ``df.groupBy().agg(...)``).
+
+        Examples
+        --------
+        >>> df.agg(F.max("age"))
+        """
         return self.groupBy().agg(*exprs)
 
     def join(
@@ -420,6 +446,13 @@ class DataFrame:
         on: str | list[str] | Column | list[Column] | None = None,
         how: str | None = None,
     ) -> DataFrame:
+        """Joins this DataFrame with ``other`` on ``on`` (a column name, a list of names or a condition) using the
+        join type ``how`` (``inner`` by default).
+
+        Examples
+        --------
+        >>> df.join(other, on="id", how="left")
+        """
         if not isinstance(other, DataFrame):
             raise not_expected_type("other", "DataFrame", other)
         kind = _HOW.get((how or "inner").lower())
@@ -450,9 +483,16 @@ class DataFrame:
         )
 
     def crossJoin(self, other: DataFrame) -> DataFrame:
+        """The Cartesian product of this DataFrame and ``other``."""
         return self.join(other, how="cross")
 
     def orderBy(self, *cols: ColumnsOrNames, ascending: bool | list[bool] = True) -> DataFrame:
+        """Sorts by ``cols`` (names or Columns); ``ascending`` is a bool or one bool per column.
+
+        Examples
+        --------
+        >>> df.orderBy(F.col("age").desc())
+        """
         keys = _flatten(cols)
         orders = ascending if isinstance(ascending, list) else [ascending] * len(keys)
         if len(orders) != len(keys):
@@ -488,6 +528,7 @@ class DataFrame:
             raise _pyspark_error(e) from e
 
     def limit(self, num: int) -> DataFrame:
+        """Keeps the first ``num`` rows."""
         if not isinstance(num, int):
             raise not_expected_type("num", "int", num)
         return self._new(self._df.limit(num))
@@ -1973,15 +2014,18 @@ class DataFrame:
         return _convert.rows_of(table)
 
     def take(self, num: int) -> list[Row]:
+        """The first ``num`` rows as a list."""
         return self.limit(num).collect()
 
     def head(self, n: int | None = None) -> Row | list[Row] | None:
+        """The first ``n`` rows: a single :class:`Row` (or ``None``) when ``n`` is omitted, else a list."""
         if n is None:
             rows = self.take(1)
             return rows[0] if rows else None
         return self.take(n)
 
     def first(self) -> Row | None:
+        """The first row, or ``None`` when the DataFrame is empty."""
         return cast("Row | None", self.head())
 
     def count(self) -> int:

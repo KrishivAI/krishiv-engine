@@ -159,6 +159,7 @@ def count(col: ColumnOrName) -> Column:
 
 
 def count_distinct(col: ColumnOrName, *cols: ColumnOrName) -> Column:
+    """The number of distinct non-NULL values of ``col`` (of the combination of ``cols`` when several)."""
     return Column(_native.count_distinct([_named(c, "col") for c in (col, *cols)]))
 
 
@@ -267,6 +268,7 @@ def try_make_interval(
 
 
 def concat(*cols: ColumnOrName) -> Column:
+    """Concatenates the string (or binary, or array) columns ``cols``; the result is NULL if any input is NULL."""
     return _call("concat", *[_named(c, "cols") for c in cols])
 
 
@@ -295,10 +297,12 @@ def when(condition: Column, value: Any) -> Column:
 
 
 def asc(col: ColumnOrName) -> Column:
+    """A sort expression ordering ``col`` ascending, NULLs first."""
     return Column(_named(col, "col")).asc()
 
 
 def desc(col: ColumnOrName) -> Column:
+    """A sort expression ordering ``col`` descending, NULLs last."""
     return Column(_named(col, "col")).desc()
 
 

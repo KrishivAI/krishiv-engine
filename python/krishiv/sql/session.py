@@ -818,6 +818,78 @@ class Catalog:
             raise not_expected_type("viewName", "str", viewName)
         return self._session._native.drop_temp_view(viewName)
 
+    def dropGlobalTempView(self, viewName: str) -> bool:
+        """Drops the global temporary view ``viewName`` (of ``global_temp``); whether it existed."""
+        if not isinstance(viewName, str):
+            raise not_expected_type("viewName", "str", viewName)
+        qualified = f"global_temp.{viewName}"
+        if not self._session.catalog.tableExists(qualified):
+            return False
+        self._session.sql(f"DROP VIEW {qualified}")
+        return True
+
+    def createTable(
+        self,
+        tableName: str,
+        path: str | None = None,
+        source: str | None = None,
+        schema: StructType | None = None,
+        description: str | None = None,
+        **options: str,
+    ) -> DataFrame:
+        """Creates a table over the data at ``path`` (an external table) or, with no ``path``, an empty managed
+        one, and returns it as a DataFrame. ``source`` defaults to ``spark.sql.sources.default``; ``schema``
+        gives the columns, else the source infers them. An existing table fails as ``CREATE TABLE`` does."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        if path is not None and not isinstance(path, str):
+            raise not_expected_type("path", "str", path)
+        if source is not None and not isinstance(source, str):
+            raise not_expected_type("source", "str", source)
+        if schema is not None and not isinstance(schema, StructType):
+            raise not_expected_type("schema", "StructType", schema)
+        if description is not None and not isinstance(description, str):
+            raise not_expected_type("description", "str", description)
+
+        def quote(text: str) -> str:
+            return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+        fmt = source or self._session.conf.get("spark.sql.sources.default", "parquet")
+        columns = ""
+        if schema is not None:
+            cols = ", ".join(
+                "`" + f.name.replace("`", "``") + "` " + f.dataType.simpleString() + ("" if f.nullable else " NOT NULL")
+                for f in schema.fields
+            )
+            columns = f" ({cols})"
+        opts = ""
+        if options:
+            opts = " OPTIONS (" + ", ".join(f"{quote(str(k))} {quote(str(v))}" for k, v in options.items()) + ")"
+        location = f" LOCATION {quote(path)}" if path is not None else ""
+        comment = f" COMMENT {quote(description)}" if description is not None else ""
+        self._session.sql(f"CREATE TABLE {tableName}{columns} USING {fmt}{opts}{comment}{location}")
+        return self._session.table(tableName)
+
+    def createExternalTable(
+        self,
+        tableName: str,
+        path: str | None = None,
+        source: str | None = None,
+        schema: StructType | None = None,
+        **options: str,
+    ) -> DataFrame:
+        """Deprecated alias of :meth:`createTable` (deprecated since Spark 2.2)."""
+        warnings.warn(
+            "createExternalTable is deprecated since Spark 2.2, use createTable instead.", FutureWarning, stacklevel=2
+        )
+        return self.createTable(tableName, path, source, schema, None, **options)
+
+    def recoverPartitions(self, tableName: str) -> None:
+        """Recovers all the partitions of the table found in its location (``MSCK REPAIR TABLE``)."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        self._session.sql(f"MSCK REPAIR TABLE {tableName}")
+
     def registerFunction(self, name: str, f: Any, returnType: Any = None) -> Any:
         """An alias for ``spark.udf.register`` (deprecated since 2.3.0, ``pyspark/sql/catalog.py:1272``)."""
         warnings.warn("Deprecated in 2.3.0. Use spark.udf.register instead.", FutureWarning, stacklevel=2)

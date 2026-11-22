@@ -37,11 +37,14 @@ def _warn_if_cluster_setting(key: str, value: str, stacklevel: int) -> None:
 
 
 class RuntimeConfig:
+    """``spark.conf``: get, set and unset the session's configuration."""
+
     def __init__(self, session: _native.Session, spark: SparkSession | None = None) -> None:
         self._session = session
         self._spark = spark
 
     def get(self, key: str, default: object = _UNSET) -> str | None:
+        """The value of ``key``, or ``default`` when it is unset (fails when there is no default)."""
         value = self._session.conf_get(key)
         if value is not None:
             return value
@@ -56,6 +59,7 @@ class RuntimeConfig:
         return None if default is None else str(default)
 
     def set(self, key: str, value: str | int | bool) -> None:
+        """Sets the configuration ``key`` for this session."""
         if not isinstance(value, str | int | bool):
             raise not_expected_type("value", "str, int or bool", value)
         text = ("true" if value else "false") if isinstance(value, bool) else str(value)
@@ -66,6 +70,7 @@ class RuntimeConfig:
         self._session.conf_set(key, text)
 
     def unset(self, key: str) -> None:
+        """Resets ``key`` to its default."""
         self._session.conf_unset(key)
 
     def isModifiable(self, key: str) -> bool:

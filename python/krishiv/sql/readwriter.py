@@ -46,6 +46,11 @@ def _schema_type_error(schema: object) -> PySparkTypeError:
 
 
 class DataFrameReader:
+    """Reads files and tables into DataFrames.
+
+    ``spark.read.format(...).option(...).load(path)``, or the ``csv``, ``json`` and ``parquet`` shorthands.
+    """
+
     def __init__(self, session: SparkSession) -> None:
         self._session = session
         self._format = "parquet"
@@ -54,6 +59,7 @@ class DataFrameReader:
         self._schema: tuple[str | None, str | None] = (None, None)
 
     def format(self, source: str) -> DataFrameReader:
+        """Sets the data source format (``parquet``, ``csv``, ``json`` ...)."""
         _refuse_jdbc(source)
         self._format = source
         return self
@@ -72,15 +78,18 @@ class DataFrameReader:
         return self
 
     def option(self, key: str, value: object) -> DataFrameReader:
+        """Adds one reader option."""
         self._options.append((key, _option_text(value)))
         return self
 
     def options(self, **options: object) -> DataFrameReader:
+        """Adds several reader options."""
         for key, value in options.items():
             self.option(key, value)
         return self
 
     def load(self, path: str | list[str] | None = None, format: str | None = None, **options: object) -> DataFrame:
+        """Reads ``path`` in the configured format."""
         if format is not None:
             self.format(format)
         schema = options.pop("schema", None)
@@ -111,12 +120,15 @@ class DataFrameReader:
         return DataFrame(native, self._session)
 
     def parquet(self, *paths: str) -> DataFrame:
+        """Reads Parquet file(s) at ``paths``."""
         return self.load(list(paths), format="parquet")
 
     def csv(self, path: str | list[str], **options: object) -> DataFrame:
+        """Reads CSV file(s) at ``path``."""
         return self.load(path, format="csv", **options)
 
     def json(self, path: str | list[str], **options: object) -> DataFrame:
+        """Reads JSON-lines file(s) at ``path``."""
         return self.load(path, format="json", **options)
 
     def text(

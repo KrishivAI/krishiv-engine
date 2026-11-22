@@ -46,6 +46,11 @@ def _numeric(names: list[str], dtypes: list[tuple[str, str]], strict: bool) -> l
 
 
 class GroupedData:
+    """The result of :meth:`DataFrame.groupBy`, :meth:`DataFrame.rollup` or :meth:`DataFrame.cube`.
+
+    Apply aggregates with :meth:`agg` or the shorthands (``count``, ``sum``, ``avg`` ...).
+    """
+
     def __init__(self, native: _native.GroupedData, df: DataFrame) -> None:
         self._grouped = native
         self._source = df
