@@ -14,6 +14,7 @@
   import Resources from "./pages/Resources.svelte";
   import Sessions from "./pages/Sessions.svelte";
   import Workload from "./pages/Workload.svelte";
+  import Advisor from "./pages/Advisor.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import Id from "$lib/components/id.svelte";
@@ -87,13 +88,14 @@
     return listenForTheme(config.then((c) => c.allowed_origins));
   });
 
-  const route = $derived(parseRoute(window.location.pathname, hash));
+  const route = $derived(parseRoute(window.location.pathname, hash, window.location.search));
   const labels: Record<string, string> = {
     health: "Health",
     queries: "Queries",
     history: "History",
     sessions: "Sessions",
     workload: "Workload",
+    advisor: "Advisor",
     resources: "Resources",
     catalog: "Catalog",
     sql: "SQL",
@@ -136,7 +138,7 @@
       <source media="(prefers-color-scheme: dark)" srcset={markDark} />
       <img class="h-6 w-auto" src={markLight} alt="Krishiv" />
     </picture>
-    <!-- Nine links do not fit one row on a tablet or at a large text size: the row wraps and the bar grows. -->
+    <!-- Ten links do not fit one row on a tablet or at a large text size: the row wraps and the bar grows. -->
     <nav class="hidden min-w-0 flex-wrap gap-0.5 md:flex" aria-label="Pages">
       {#each links as [id, label]}
         <a href={`#/${id}`} class={linkClass(id, true)} aria-current={page === id ? "page" : undefined}>{label}</a>
@@ -199,7 +201,7 @@
       </p>
       <Button onclick={() => open(false)}>Try again</Button>
     {:else if page === "queries" && route.id}
-      <QueryDetail id={route.id} />
+      <QueryDetail id={route.id} session={route.session} />
     {:else if page === "queries"}
       <Queries />
     {:else if page === "history"}
@@ -208,6 +210,8 @@
       <Sessions />
     {:else if page === "workload"}
       <Workload />
+    {:else if page === "advisor"}
+      <Advisor />
     {:else if page === "resources"}
       <Resources />
     {:else if page === "catalog"}
