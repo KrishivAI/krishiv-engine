@@ -7,18 +7,20 @@
 //! projection stays above the policy filter, and a leakproof conjunct on an unmasked column did
 //! move in.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::{Principal, PrincipalKey, PrincipalKind};
-use krishiv_optimizer::optimize;
+use krishiv_optimizer::{Options, optimize, optimize_with_options};
 use krishiv_plan::analyzer::{Securable, TableIdent};
 use krishiv_plan::{
-    AttrId, BoundColumn, Expr, ExprNode, FunctionId, FunctionKind, LogicalPlan, Plan, PlanNode,
-    PolicyRef, ReadSource, ResolvedExpr, ResolvedFunction, leakproof,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, LogicalPlan, Plan,
+    PlanNode, PolicyRef, ReadSource, ResolvedExpr, ResolvedFunction, leakproof,
 };
 use krishiv_types::DataType;
 
-use crate::support;
+use crate::qerror;
+use crate::support::{self, data, eval};
 
 fn udf(name: &str, args: Vec<Arc<Expr>>, data_type: DataType) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
@@ -72,8 +74,10 @@ fn policy() -> PolicyRef {
 /// `plan` with its `abs(..)` calls turned into `leak(..)` and every scan of `t` behind a barrier
 /// masking the columns named in `masked`.
 ///
-/// Every table goes behind a barrier when `all`, its policy over its `c` or first column.
-fn guarded_tables(plan: &Plan, masked: &[&str], all: bool) -> Arc<LogicalPlan> {
+/// Every table goes behind a barrier when `all`, its policy over its `c` or first column. With
+/// `plant`, each barrier sits under a `Filter(isnotnull(leak(key)))` (the key unmasked), a leak
+/// that keeps every row and must stay above the barrier.
+fn guarded_tables(plan: &Plan, masked: &[&str], all: bool, plant: bool) -> Arc<LogicalPlan> {
     let mut next = 1_000_000_u64;
     Arc::clone(plan.root())
         .transform_up(&mut |p| {
@@ -114,11 +118,29 @@ fn guarded_tables(plan: &Plan, masked: &[&str], all: bool) -> Arc<LogicalPlan> {
             };
             let scan = LogicalPlan::new(PlanNode::Scan(inner));
             let filtered = scan.filter(udf("policy", vec![col(&key)], DataType::Boolean));
+            let masked_key = masked.contains(&key.name.as_str());
             let masked = LogicalPlan::new(PlanNode::Project {
                 input: Arc::new(filtered),
                 exprs: items,
             });
-            Ok::<_, std::convert::Infallible>(Arc::new(masked.security_barrier(policy())))
+            let barrier = masked.security_barrier(policy());
+            if !plant || masked_key {
+                return Ok(Arc::new(barrier));
+            }
+            let leak = udf("leak", vec![col(&key)], key.data_type.clone());
+            Ok::<_, std::convert::Infallible>(Arc::new(barrier.filter(Arc::new(Expr::new(
+                ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+                    id: FunctionId::Builtin(Builtin::IsNotNull),
+                    kind: FunctionKind::Scalar,
+                    args: vec![leak],
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: DataType::Boolean,
+                    nullable: false,
+                    deterministic: true,
+                })),
+            )))))
         })
         .unwrap_or_else(|e| match e {})
 }
@@ -254,7 +276,7 @@ fn run(sql: &str, masked: &[&str]) -> (Arc<LogicalPlan>, Vec<String>) {
 
 fn run_over(sql: &str, masked: &[&str], all: bool) -> (Arc<LogicalPlan>, Vec<String>) {
     let plan = support::resolve(sql, &support::ctx());
-    let guarded = Plan::try_new(guarded_tables(&plan, masked, all)).unwrap();
+    let guarded = Plan::try_new(guarded_tables(&plan, masked, all, false)).unwrap();
     let once = optimize(&guarded).unwrap();
     let twice = optimize(&once).unwrap();
     assert!(
@@ -397,4 +419,110 @@ fn every_tpch_query_keeps_its_barriers_whole() {
     }
     // Leakproof filters (dates, keys, flags) do move in.
     assert!(moved > 20, "{moved}");
+}
+
+/// The key columns of every policy call under `p` (the guarded scans' keys).
+fn policy_keys(p: &Arc<LogicalPlan>) -> HashSet<AttrId> {
+    let mut all = Vec::new();
+    nodes(p, &mut all);
+    fn walk(e: &Expr, keys: &mut HashSet<AttrId>) {
+        if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
+            && is_udf(e, "policy")
+            && let Some(ExprNode::Resolved(ResolvedExpr::Column(c))) =
+                f.args.first().map(|a| &a.node)
+        {
+            keys.insert(c.id);
+        }
+        e.for_each_child(&mut |c| walk(c, keys));
+    }
+    let mut keys = HashSet::new();
+    for n in &all {
+        n.for_each_expr(&mut |e| walk(e, &mut keys));
+    }
+    keys
+}
+
+/// The invariant at run time (§7.3, run-time half): every TPC-H query the interpreter runs, with
+/// every table behind a barrier whose policy rejects the rows with a key that is a multiple of 7
+/// and a leak planted above each barrier, optimized (with and without statistics, to the fixed
+/// point and once more), returns the unoptimized barrier plan's rows, and no expression that is
+/// not leakproof runs on a row the policy rejects (the interpreter's tagged rows panic).
+#[test]
+fn every_tpch_query_returns_the_barrier_rows_under_a_rejecting_policy() {
+    let db = data::tpch(7, qerror::scale());
+    let stats = qerror::stats_of(&db);
+    let (mut compared, mut nonempty) = (0, 0);
+    for q in 1..=22 {
+        let plan = support::resolve(&support::tpch_sql(q), &support::ctx());
+        let guarded = Plan::try_new(guarded_tables(
+            &plan,
+            &["c_comment", "o_comment", "p_name"],
+            true,
+            true,
+        ))
+        .unwrap();
+        let keys = policy_keys(guarded.root());
+        // The unoptimized plan's own run checks the same rule (its leaks sit above the barriers).
+        let want = eval::rows_guarded(&db, guarded.root(), &keys);
+        compared += 1;
+        nonempty += usize::from(!want.is_empty());
+        let plain = optimize(&guarded).unwrap();
+        let with_stats = optimize_with_options(&guarded, &stats, &Options::default()).unwrap();
+        for (arm, once) in [("plain", plain), ("statistics", with_stats)] {
+            let twice = optimize_with_options(&once, &stats, &Options::default()).unwrap();
+            for p in [&once, &twice] {
+                let got = eval::rows_guarded(&db, p.root(), &keys);
+                assert_eq!(got.len(), want.len(), "q{q} {arm}\n{p}");
+                assert_eq!(got, want, "q{q} {arm}");
+            }
+        }
+    }
+    assert_eq!(compared, 22);
+    assert!(nonempty >= 15, "{nonempty} of 22 queries return rows");
+}
+
+fn builtin(op: Builtin, args: Vec<Arc<Expr>>, nullable: bool) -> Arc<Expr> {
+    Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            id: FunctionId::Builtin(op),
+            kind: FunctionKind::Scalar,
+            args,
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+            data_type: DataType::Boolean,
+            nullable,
+            deterministic: true,
+        },
+    ))))
+}
+
+/// The run-time check itself: a leak merged into the policy's `Filter` (what a broken pushdown
+/// arm would produce) runs on the rows the policy rejects, and the interpreter refuses it, even
+/// though the leak keeps every row and the policy's conjunct comes first.
+#[test]
+#[should_panic(expected = "not leakproof runs on a row the policy rejects")]
+fn a_leak_beside_the_policy_fails_at_run_time() {
+    let plan = support::resolve("SELECT a FROM t", &support::ctx());
+    let guarded = guarded_tables(&plan, &[], false, false)
+        .transform_up(&mut |p| {
+            let PlanNode::Filter { input, predicate } = &p.node else {
+                return Ok::<_, std::convert::Infallible>(p);
+            };
+            let PlanNode::Scan(scan) = &input.node else {
+                return Ok(p);
+            };
+            let a = col(&scan.output[0]);
+            let leak = builtin(
+                Builtin::IsNotNull,
+                vec![udf("leak", vec![a], DataType::Integer)],
+                false,
+            );
+            let both = builtin(Builtin::And, vec![Arc::clone(predicate), leak], true);
+            Ok(Arc::new(LogicalPlan::clone(input).filter(both)))
+        })
+        .unwrap_or_else(|e| match e {});
+    let keys = policy_keys(&guarded);
+    assert_eq!(keys.len(), 1);
+    eval::rows_guarded(&data::small(3), &guarded, &keys);
 }
