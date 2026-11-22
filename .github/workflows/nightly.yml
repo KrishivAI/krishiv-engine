@@ -727,6 +727,8 @@ jobs:
           VERSION: ${{ matrix.version }}
         run: |
           cd tests/scripts
+          # The server's Python workers default to `python3`: put the version venv first on PATH.
+          export PATH="$RUNNER_TEMP/venv/bin:$PATH"
           "$RUNNER_TEMP/venv/bin/python" -m pyspark_suite run --version "$VERSION" --checkout "$RUNNER_TEMP/spark" \
             --out "$RUNNER_TEMP/out" --port 15002 --server-cmd "$GITHUB_WORKSPACE/target/release/krishiv" server --port 0 --connect-port 15002
       # `run --out` leaves the committed summary alone; the ratchet compares the fresh one with it.

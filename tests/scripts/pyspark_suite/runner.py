@@ -55,6 +55,7 @@ def stage_tests(checkout: Path) -> Path:
         capture_output=True,
         text=True,
         cwd="/",
+        env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
     )
     if probe.returncode:
         raise RuntimeError(f"pyspark is not installed in the version venv: {probe.stderr.strip()}")

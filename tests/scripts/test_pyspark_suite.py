@@ -211,11 +211,13 @@ def test_ratchet_cli_fails_on_lost_pass_or_low_rate(tmp_path, monkeypatch):
 
     run({})  # same list: ok
     run({"passed_ids": ["a", "b", "c"]})  # gained a pass: ok
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as lost:
         run({"passed_ids": ["a"]})  # lost b
+    assert lost.value.code == 1
     run({"passed_ids": ["a"]}, ro=True)  # report-only never fails
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as low:
         run({}, min_rate=90.0)  # under the floor
+    assert low.value.code == 1
     with pytest.raises(SystemExit):
         run({"source": "static"})  # not a run
 
