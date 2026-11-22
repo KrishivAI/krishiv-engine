@@ -140,7 +140,7 @@ impl SessionSource {
     /// tables; a query in both is shown as the runtime has it.
     #[must_use]
     pub fn with_stored_history(mut self, stored: &[krishiv_session::StoredProfile]) -> Self {
-        // The console's own reads are stored like any query (about two a second while a page is open): they
+        // The console's own reads are stored like any query (about one a second while a page is open): they
         // are dropped before the cut, or they would take every place in it.
         let users = newest_per_query(stored.iter().filter(|p| !of_console(p)));
         let newest = &users[users.len().saturating_sub(MAX_STORED_QUERIES)..];
@@ -183,29 +183,19 @@ impl SessionSource {
             .collect())
     }
 
-    /// Adds `client_type` to each query row: what the client of the query's session said it is
-    /// (`system.sessions`). A query whose session is no longer listed has none.
-    async fn add_client_types(&self, queries: &mut [Row]) -> Result<(), UiError> {
-        let sql = "SELECT session_id, client_type FROM system.sessions";
+    /// The ids of the queries session `session_id` ran, read with one narrow statement.
+    pub(crate) async fn query_ids_of(
+        &self,
+        session_id: &str,
+    ) -> Result<std::collections::HashSet<String>, UiError> {
+        let sql = "SELECT query_id, session_id FROM system.queries";
         let df = self.session.sql_boxed(sql).await.map_err(ui_error)?;
         let batches = df.collect_boxed().await.map_err(ui_error)?;
-        let clients: std::collections::HashMap<String, Value> = batches_to_rows(&batches)
-            .into_iter()
-            .filter_map(|mut s| match s.remove("session_id") {
-                Some(Value::String(id)) => Some((id, s.remove("client_type")?)),
-                _ => None,
-            })
-            .collect();
-        for query in queries {
-            let client = query
-                .get("session_id")
-                .and_then(Value::as_str)
-                .and_then(|id| clients.get(id));
-            if let Some(client) = client {
-                query.insert("client_type".to_owned(), client.clone());
-            }
-        }
-        Ok(())
+        Ok(batches_to_rows(&batches)
+            .iter()
+            .filter(|r| r.get("session_id").and_then(Value::as_str) == Some(session_id))
+            .filter_map(|r| query_id(r).map(str::to_owned))
+            .collect())
     }
 
     /// The session `caller` runs statements in, built on first use.
@@ -223,9 +213,11 @@ impl SessionSource {
         let key = self.owner_key(caller).unwrap_or_default();
         let mut sessions = lock(&self.sessions);
         // A session's policy is fixed for its life: a caller whose role differs from the one its session was built
-        // with (a group claim that moved) gets a new session, as the Connect session manager gives.
+        // with (a group claim that moved) gets a new session, as the Connect session manager gives. So does a
+        // caller whose session was ended (the Sessions page, an idle sweep): the editor keeps working.
         if let Some((role, s)) = sessions.get(&key)
             && *role == who.role
+            && !s.is_closed()
         {
             return Ok((key, s.clone()));
         }
@@ -431,6 +423,8 @@ fn table_name(table: SystemTable) -> &'static str {
         SystemTable::Operators => "operators",
         SystemTable::Memory => "memory",
         SystemTable::Caches => "caches",
+        SystemTable::Sessions => "sessions",
+        SystemTable::ResourceGroups => "resource_groups",
     }
 }
 
@@ -597,16 +591,39 @@ fn only_temporary(listing: &[Row], t: &str) -> bool {
     named.peek().is_some() && named.all(|temporary| temporary)
 }
 
+/// `system.queries` with the `client_type` of each query's session.
+const QUERIES_WITH_CLIENT: &str = "SELECT q.*, s.client_type FROM system.queries q \
+     LEFT JOIN system.sessions s ON q.session_id = s.session_id";
+
 impl UiSource for SessionSource {
     fn rows(&self, table: SystemTable) -> UiFuture<'_, Vec<Row>> {
         Box::pin(async move {
-            let sql = format!("SELECT * FROM system.{}", table_name(table));
+            // A query row carries `client_type`: what the client of the query's session said it is
+            // (`system.sessions`), null when the session is no longer listed. One statement reads both.
+            let sql = if table == SystemTable::Queries {
+                QUERIES_WITH_CLIENT.to_owned()
+            } else {
+                format!("SELECT * FROM system.{}", table_name(table))
+            };
             let df = self.session.sql_boxed(&sql).await.map_err(ui_error)?;
             let batches = df.collect_boxed().await.map_err(ui_error)?;
             let mut rows = batches_to_rows(&batches);
             if table == SystemTable::Queries {
+                // The runtime mints a session's id, so `system.sessions` holds one row per id and the join
+                // answers each query once. Two sessions may run a query under one operation id (the client
+                // chooses it, per session): both are listed.
                 rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
-                self.add_client_types(&mut rows).await?;
+            }
+            // The console's own session is not a client's. The session the editor runs in is listed (what
+            // it runs shows on it) and marked: `close_session` refuses it, so the page offers no action.
+            if table == SystemTable::Sessions {
+                rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
+                let editor = self.anonymous.id();
+                for row in &mut rows {
+                    if row.get("session_id").and_then(Value::as_str) == Some(editor) {
+                        row.insert("endable".to_owned(), Value::Bool(false));
+                    }
+                }
             }
             if self.stored.is_none()
                 || !matches!(table, SystemTable::Queries | SystemTable::Operators)
@@ -684,6 +701,19 @@ impl UiSource for SessionSource {
                 return Ok(false);
             };
             Ok(self.runtime.cancel(&id, CancelReason::Admin))
+        })
+    }
+
+    fn close_session<'a>(&'a self, session_id: &'a str) -> UiFuture<'a, Option<usize>> {
+        Box::pin(async move {
+            // The console reads through its own session, and the editor of an unidentified caller runs in one
+            // shared session: ending either would break the console for everyone, so neither can be ended here.
+            // Any other session ends as an operator's kill (`killed` / `admin_kill`), the caller's own editor
+            // session included: the console does not know which session is the caller's.
+            if session_id == self.session.id() || session_id == self.anonymous.id() {
+                return Ok(None);
+            }
+            Ok(self.runtime.kill_session(session_id, CancelReason::Admin))
         })
     }
 
@@ -1027,7 +1057,10 @@ impl UiSource for ProfilesSource {
             Ok(match table {
                 SystemTable::Queries => self.queries.clone(),
                 SystemTable::Operators => self.operators.clone(),
-                SystemTable::Memory | SystemTable::Caches => Vec::new(),
+                SystemTable::Memory
+                | SystemTable::Caches
+                | SystemTable::Sessions
+                | SystemTable::ResourceGroups => Vec::new(),
             })
         })
     }

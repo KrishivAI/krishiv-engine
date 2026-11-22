@@ -22,7 +22,7 @@ use arrow_schema::DataType;
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::variant::{
     Edit, PathSegment, Schema, VariantColumn, VariantColumnBuilder, apply, cast_values, edit_path,
-    extract, parse_path_or_raise, strip_nulls,
+    extract, named_in, parse_path_or_raise, strip_nulls,
 };
 use krishiv_types::DataType as SparkType;
 use krishiv_types::variant::{VariantBuilder, VariantRef};
@@ -299,7 +299,7 @@ fn edit_rows(
             EditKind::Set(create) => Edit::Set(val, create),
             EditKind::Append => Edit::Append(val),
         };
-        match apply(root, &steps, edit)? {
+        match apply(root, &steps, edit).map_err(|e| named_in(e, name))? {
             Ok(Some((m, v))) => out.append(&m, &v),
             Ok(None) => match col.raw(i) {
                 Some((m, v)) => out.append(m, v),
@@ -330,10 +330,6 @@ fn delete_rows(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivError> {
     let mut out = VariantColumnBuilder::with_capacity(col.len());
     for i in 0..col.len() {
         let Some(root) = col.get(i)? else {
-            // Spark checks the paths of `variant_delete` even for a NULL variant.
-            for path in paths.iter().flatten().filter(|p| !p.is_null(i)) {
-                edit_path(path.value(i), "variant_delete", false)?;
-            }
             out.append_null();
             continue;
         };
@@ -344,7 +340,9 @@ fn delete_rows(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivError> {
                 Some((m, v)) => VariantRef::new(m, v)?,
                 None => root,
             };
-            if let Ok(Some(next)) = apply(at, &steps, Edit::Delete)? {
+            if let Ok(Some(next)) =
+                apply(at, &steps, Edit::Delete).map_err(|e| named_in(e, "variant_delete"))?
+            {
                 current = Some(next);
             }
         }
@@ -529,5 +527,35 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         }
         _ => None,
     };
-    Some((listed, bound.ok_or_else(|| bad_types(listed, args))))
+    // Spark parses a foldable path once per expression, before any row: a bad literal path raises at bind, even
+    // over NULL variants or no rows. A column path is parsed per row, after the NULL checks.
+    let allow_root = listed.ends_with("variant_array_append");
+    let literal_paths = match listed {
+        "variant_delete" => 1..args.len(),
+        "variant_insert"
+        | "try_variant_insert"
+        | "variant_set"
+        | "try_variant_set"
+        | "variant_array_append"
+        | "try_variant_array_append" => 1..2,
+        _ => 0..0,
+    };
+    // `variant_insert`, `variant_set` and `variant_array_append` are null-intolerant in Spark: a NULL literal
+    // argument folds the call to NULL before the path is parsed. `variant_delete` raises regardless.
+    let folds_to_null = listed != "variant_delete"
+        && args.iter().any(|a| match a {
+            BindArg::Literal(a) => *a.data_type() == DataType::Null || a.is_null(0),
+            BindArg::Column { .. } => false,
+        });
+    let checked = bound.ok_or_else(|| bad_types(listed, args)).and_then(|b| {
+        if !folds_to_null {
+            for i in literal_paths {
+                if let Some(Some(path)) = string_literal(args, i) {
+                    edit_path(&path, listed, allow_root)?;
+                }
+            }
+        }
+        Ok(b)
+    });
+    Some((listed, checked))
 }

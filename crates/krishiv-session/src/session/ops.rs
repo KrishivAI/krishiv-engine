@@ -455,6 +455,23 @@ impl Session {
             // An overwrite deletes what it replaces here: from now on a cancel
             // reaches the write through its query, not by dropping it (`action.rs`).
             crate::action::commit_point();
+            if super::writes::key_already_committed(&env.config, &options, &io, &store, &at).await?
+            {
+                return Ok(Vec::new());
+            }
+            // A key the directory cannot record (no commit log) is refused before `begin`, which deletes
+            // a single file an overwrite replaces.
+            super::writes::refuse_unlogged_key_early(
+                &env.config,
+                &options,
+                &self.state.commit_log_probes,
+                &io,
+                &store,
+                &at,
+                &job,
+                mode,
+            )
+            .await?;
             let Some(write) = DirectoryWrite::begin(
                 &io,
                 store.clone(),
@@ -470,20 +487,17 @@ impl Session {
             };
             // Boxed: the statement futures are on the recursion of nested
             // scripts, so a larger write future would overflow their stack.
-            let write = if Box::pin(uses_commit_log(
+            let write = Box::pin(logged_or_plain(
+                write,
                 &env.config,
                 &self.state.commit_log_probes,
                 &io,
                 &store,
                 &at,
                 &job,
+                &options,
             ))
-            .await?
-            {
-                Box::pin(write.logged(&io)).await?
-            } else {
-                write
-            };
+            .await?;
             let plan = physical.into_write(WritePlan {
                 format: format.name().to_owned(),
                 // The session's conf fallbacks travel with the plan: a

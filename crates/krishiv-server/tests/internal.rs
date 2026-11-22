@@ -31,6 +31,7 @@ fn rows(v: Value) -> Vec<Row> {
 
 struct Fake {
     cancelled: Mutex<Vec<String>>,
+    closed: Mutex<Vec<String>>,
     fail: bool,
     /// How many times the live-query table was read.
     reads: std::sync::atomic::AtomicUsize,
@@ -52,13 +53,13 @@ impl UiSource for Fake {
             }
             Ok(match table {
                 SystemTable::Queries => rows(json!([
-                    {"query_id": "q-run", "state": "running", "principal": "ann", "submitted_at": 2_000,
+                    {"query_id": "q-run", "state": "running", "principal": "ann", "submitted_at": 2_000, "session_id": "s-busy",
                      "query_text": "SELECT 1 FROM t WHERE pw = 's3cr3t-canary'", "secret_option": "hunter2", "workers": 1},
                     {"query_id": "q-wait", "state": "queued", "principal": "bob", "submitted_at": 1_000},
-                    {"query_id": "q-a", "state": "finished", "principal": "ann", "submitted_at": 100,
+                    {"query_id": "q-a", "state": "finished", "principal": "ann", "submitted_at": 100, "session_id": "s-old",
                      "client_type": "_SPARK_CONNECT_PYTHON spark/4.2.0", "tags": {"team": "risk", "nightly": ""},
                      "wall_ns": 1_000, "peak_memory_bytes": 10, "rows_produced": 5, "spill_bytes": 0},
-                    {"query_id": "q-b", "state": "finished", "principal": "ann", "submitted_at": 200,
+                    {"query_id": "q-b", "state": "finished", "principal": "ann", "submitted_at": 200, "session_id": "s-old",
                      "client_type": "krishiv-cli", "tags": {"team": "ads", "krishiv-ui-run-7": ""},
                      "wall_ns": 1_500, "peak_memory_bytes": 30, "rows_produced": 5, "spill_bytes": 7,
                      "hints": [{"code": "SPILL", "node_id": 2, "operator_id": 2, "message": "HashJoin spilled 4.0 KiB"}]},
@@ -91,7 +92,45 @@ impl UiSource for Fake {
                     {"worker_id": "local", "cache": "block", "entries": 0, "bytes": 0, "hits": 0, "misses": 0},
                     {"worker_id": "local", "cache": "huge", "entries": 1, "bytes": 1, "hits": 9_223_372_036_854_775_807_i64, "misses": 5}
                 ])),
+                SystemTable::Sessions => rows(json!([
+                    {"session_id": "s-old", "principal": "ann", "state": "closed", "transport": "connect",
+                     "created_at": 10, "last_active_at": 900, "closed_at": 950, "close_reason": "release_session",
+                     "tags": {}, "queries_running": 0, "queries_started": 4},
+                    {"session_id": "s-idle", "principal": "bob", "state": "active", "transport": "connect",
+                     "client_type": "krishiv-cli", "created_at": 20, "last_active_at": 100,
+                     "tags": {"team": "risk", "krishiv-ui-run-3": ""}, "queries_running": 0, "queries_started": 1,
+                     "current_catalog": "spark_catalog", "current_namespace": "default", "secret_option": "hunter2"},
+                    {"session_id": "s-busy", "principal": "ann", "state": "active", "transport": "flight_sql",
+                     "created_at": 30, "last_active_at": 800, "tags": {}, "queries_running": 2, "queries_started": 9},
+                    {"session_id": "s-gone", "principal": "cy", "state": "expired", "transport": "connect",
+                     "created_at": 5, "last_active_at": 990, "closed_at": 995, "tags": {}, "queries_running": 0,
+                     "queries_started": 0}
+                ])),
+                SystemTable::ResourceGroups => rows(json!([
+                    {"group_id": "root", "parent_id": null, "state": "active", "scheduling_policy": "weighted_fair",
+                     "scheduling_weight": 1, "priority": 0, "workload_class": "interactive",
+                     "hard_concurrency_limit": 8, "max_queued": 100, "soft_memory_limit_bytes": 1000,
+                     "running": 3, "queued": 1, "memory_reserved_bytes": 400, "internal_note": "hunter2"},
+                    {"group_id": "root.etl", "parent_id": "root", "state": "active",
+                     "scheduling_policy": "query_priority", "scheduling_weight": 2, "priority": 1,
+                     "workload_class": "batch", "hard_concurrency_limit": 2, "max_queued": 10,
+                     "running": 2, "queued": 1, "memory_reserved_bytes": 300},
+                    {"group_id": "root.adhoc", "parent_id": "root", "state": "removed",
+                     "scheduling_policy": "weighted_fair", "scheduling_weight": 1, "priority": 0,
+                     "workload_class": "interactive", "hard_concurrency_limit": 4, "max_queued": 10,
+                     "running": 1, "queued": 0, "memory_reserved_bytes": 100}
+                ])),
             })
+        })
+    }
+
+    fn close_session<'a>(&'a self, session_id: &'a str) -> UiFuture<'a, Option<usize>> {
+        Box::pin(async move {
+            self.closed.lock().unwrap().push(session_id.to_owned());
+            if self.fail {
+                return Err(UiError::new("the engine is unavailable"));
+            }
+            Ok((session_id == "s-busy").then_some(2))
         })
     }
 
@@ -106,6 +145,7 @@ impl UiSource for Fake {
 async fn start(fail: bool) -> (std::net::SocketAddr, Arc<Fake>) {
     let fake = Arc::new(Fake {
         cancelled: Mutex::new(Vec::new()),
+        closed: Mutex::new(Vec::new()),
         fail,
         reads: std::sync::atomic::AtomicUsize::new(0),
     });
@@ -158,6 +198,8 @@ async fn every_internal_endpoint_needs_the_token() {
         "/api/internal/queries",
         "/api/internal/history",
         "/api/internal/events",
+        "/api/internal/sessions",
+        "/api/internal/groups",
     ] {
         let (status, _, body) = request(addr, "GET", path, false).await;
         assert_eq!(status, 401, "{path}");
@@ -481,6 +523,29 @@ async fn nothing_that_changes_state_accepts_a_token_in_the_address_or_a_cookie()
         fake.cancelled.lock().unwrap().is_empty(),
         "nothing was cancelled"
     );
+    for (name, extra, path) in [
+        ("no token", "", "/api/internal/sessions/s-busy/close"),
+        (
+            "token in the address",
+            "",
+            &format!("/api/internal/sessions/s-busy/close?token={TOKEN}"),
+        ),
+        (
+            "token in a cookie",
+            &format!("Cookie: krishiv_ui_token={TOKEN}\r\n"),
+            "/api/internal/sessions/s-busy/close",
+        ),
+    ] {
+        let mut s = TcpStream::connect(addr).await.unwrap();
+        s.write_all(format!("POST {path} HTTP/1.1\r\nHost: localhost\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).await.unwrap();
+        assert!(out.starts_with("HTTP/1.1 401"), "{name}: {out}");
+    }
+    assert!(
+        fake.closed.lock().unwrap().is_empty(),
+        "no session was ended"
+    );
 }
 
 async fn open_stream(addr: std::net::SocketAddr) -> TcpStream {
@@ -565,4 +630,109 @@ async fn several_open_tabs_share_one_read_of_the_live_queries_a_period() {
         reads <= 3,
         "6 tabs caused {reads} reads of the live queries; they should share one a period"
     );
+}
+
+#[tokio::test]
+async fn sessions_list_the_open_ones_first_by_last_activity_with_only_allowlisted_columns() {
+    let (addr, _) = start(false).await;
+    let body = get(addr, "/api/internal/sessions").await;
+    let ids: Vec<&str> = body["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["session_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        ["s-busy", "s-idle", "s-gone", "s-old"],
+        "open first, then ended; each part by its last activity, newest first"
+    );
+    assert_eq!(body["truncated"], false);
+    let idle = &body["sessions"][1];
+    assert_eq!(idle["client_type"], "krishiv-cli");
+    assert_eq!(idle["current_namespace"], "default");
+    assert_eq!(
+        idle["tags"],
+        json!({"team": "risk"}),
+        "the editor's own tag is the console's bookkeeping"
+    );
+    assert!(
+        idle.get("secret_option").is_none(),
+        "a column outside the allowlist does not reach the page"
+    );
+    assert!(!body.to_string().contains("hunter2"));
+    assert_eq!(body["sessions"][3]["close_reason"], "release_session");
+}
+
+#[tokio::test]
+async fn groups_keep_the_tables_order_and_only_allowlisted_columns() {
+    let (addr, _) = start(false).await;
+    let body = get(addr, "/api/internal/groups").await;
+    let groups = body["groups"].as_array().unwrap();
+    let ids: Vec<&str> = groups
+        .iter()
+        .map(|g| g["group_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        ["root", "root.etl", "root.adhoc"],
+        "a parent before its children, as the table lists them (not sorted by name)"
+    );
+    assert_eq!(groups[0]["hard_concurrency_limit"], 8);
+    assert_eq!(groups[0]["running"], 3);
+    assert_eq!(groups[1]["parent_id"], "root");
+    assert_eq!(groups[2]["state"], "removed");
+    assert!(!body.to_string().contains("hunter2"));
+}
+
+#[tokio::test]
+async fn closing_a_session_reaches_the_source_and_reports_what_was_cancelled() {
+    let (addr, fake) = start(false).await;
+    let (status, _, body) =
+        request(addr, "POST", "/api/internal/sessions/s-busy/close", true).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, json!({"closed": true, "queries_cancelled": 2}));
+    let (status, _, body) = request(addr, "POST", "/api/internal/sessions/s-old/close", true).await;
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(body["error"], "not_open");
+    assert_eq!(*fake.closed.lock().unwrap(), ["s-busy", "s-old"]);
+    // Reading is not closing.
+    let (status, ..) = request(addr, "GET", "/api/internal/sessions/s-busy/close", true).await;
+    assert_eq!(status, 405);
+    assert_eq!(fake.closed.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_failing_source_fails_the_session_and_group_routes_as_json() {
+    let (addr, _) = start(true).await;
+    for path in ["/api/internal/sessions", "/api/internal/groups"] {
+        let (status, _, body) = request(addr, "GET", path, true).await;
+        assert_eq!(status, 500, "{path}");
+        assert_eq!(body["error"], "source_failed", "{path}");
+    }
+    let (status, _, body) =
+        request(addr, "POST", "/api/internal/sessions/s-busy/close", true).await;
+    assert_eq!(status, 500);
+    assert_eq!(body["error"], "source_failed");
+}
+
+#[tokio::test]
+async fn the_lists_name_a_session_and_history_filters_by_it_but_the_query_page_does_not() {
+    let (addr, _) = start(false).await;
+    let live = get(addr, "/api/internal/queries").await;
+    assert_eq!(live["queries"][1]["query_id"], "q-run");
+    assert_eq!(live["queries"][1]["session_id"], "s-busy");
+    let of = get(addr, "/api/internal/history?session=s-old").await;
+    let ids: Vec<&str> = of["queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| q["query_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["q-b", "q-a"]);
+    let none = get(addr, "/api/internal/history?session=nobody").await;
+    assert_eq!(none["queries"], json!([]));
+    // A signed embed link reads a query's page with no session: the id of the client's session stays out.
+    let detail = get(addr, "/api/internal/queries/q-b").await;
+    assert!(detail["query"].get("session_id").is_none(), "{detail}");
 }

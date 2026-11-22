@@ -1562,7 +1562,8 @@ impl Session {
         {
             return Err(krishiv_common::error::TableOrViewNotFound {
                 relation_name: format!("`{}`", parts.join("`.`")),
-                search_path: crate::catalog::search_path(),
+                // From the query's own snapshot, not the session as it is now.
+                search_path: crate::catalog::render_search_path(&env.catalog.sql_path_snapshot()),
             }
             .into());
         }

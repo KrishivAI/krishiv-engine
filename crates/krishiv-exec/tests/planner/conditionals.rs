@@ -361,6 +361,45 @@ fn conditional_if_and_coalesce_over_rows() {
     );
 }
 
+/// `CASE` over rows, in both modes. Branches that cannot raise run on the
+/// whole batch (first true condition wins, a NULL condition is not true); a
+/// branch that may raise still runs only on the rows it takes, so an untaken
+/// `1/0` raises nothing under ANSI and a taken one does.
+#[test]
+fn case_over_rows_whole_batch_and_lazy() {
+    for ansi in [true, false] {
+        let cx = conditional_cx(ansi);
+        assert_eq!(
+            rows(
+                &cx,
+                "SELECT CASE WHEN c2 = 0 THEN c1 WHEN c1 > 1 THEN 10 END FROM conditional_t"
+            ),
+            ["1.0", "10.0", "NULL", "NaN"]
+        );
+        assert_eq!(
+            rows(
+                &cx,
+                "SELECT CASE WHEN c1 IS NULL THEN 'n' WHEN c2 = 1 THEN 'one' ELSE 'zero' END \
+                 FROM conditional_t"
+            ),
+            ["n", "one", "zero", "zero"]
+        );
+        assert_eq!(
+            rows(
+                &cx,
+                "SELECT CASE WHEN c2 >= 0 THEN c2 ELSE 1/0 END FROM conditional_t"
+            ),
+            ["0.0", "0.0", "1.0", "1.0"]
+        );
+    }
+    fails(
+        &conditional_cx(true),
+        "SELECT CASE WHEN c2 = 0 THEN 1 / c2 ELSE c2 END FROM conditional_t",
+        ErrorClass::DivideByZero,
+        Some("22012"),
+    );
+}
+
 /// The golden `having` [48]: `COALESCE` in `GROUP BY` and `HAVING`.
 #[test]
 fn conditional_coalesce_in_group_by_and_having() {
