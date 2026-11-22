@@ -1180,7 +1180,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"BROWSE","columns":[]}],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"function","type":"string","type_json":"\"string\"","nullable":false,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -1261,7 +1261,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"function_desc","type":"string","type_json":"\"string\"","nullable":false,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}

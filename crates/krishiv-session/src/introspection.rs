@@ -25,11 +25,11 @@ use crate::table_commands::TableName;
 
 type Cell = Option<String>;
 
-fn s(v: impl Into<String>) -> Cell {
+pub(super) fn s(v: impl Into<String>) -> Cell {
     Some(v.into())
 }
 
-fn unsupported(feature: &str) -> KrishivError {
+pub(super) fn unsupported(feature: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: feature.to_owned(),
     }
@@ -38,31 +38,12 @@ fn unsupported(feature: &str) -> KrishivError {
 
 /// Spark's `SHOW ... LIKE` pattern: `*` matches anything, `|` separates alternatives, the match ignores case.
 pub(crate) fn matches(pattern: &str, name: &str) -> bool {
-    // `reach[j]`: the pattern so far matches the first `j` characters of the name. O(pattern x name), so a
-    // pattern like `*a*a*a*` cannot blow up.
-    fn glob(p: &[char], n: &[char]) -> bool {
-        let mut reach = vec![false; n.len() + 1];
-        reach[0] = true;
-        for &c in p {
-            if c == '*' {
-                for j in 1..=n.len() {
-                    reach[j] = reach[j] || reach[j - 1];
-                }
-            } else {
-                for j in (1..=n.len()).rev() {
-                    reach[j] = reach[j - 1] && n[j - 1] == c;
-                }
-                reach[0] = false;
-            }
-        }
-        reach[n.len()]
-    }
-    let name: Vec<char> = name.to_lowercase().chars().collect();
+    // Spark's `StringUtils.filterPattern`: alternatives split on `|` and trimmed, `*` becomes `.*`, the rest is a
+    // case-insensitive regular expression matched against the whole name (`a.s` keeps `abs`). A pattern that is
+    // no regular expression keeps nothing.
     pattern.split('|').any(|alt| {
-        glob(
-            &alt.trim().to_lowercase().chars().collect::<Vec<_>>(),
-            &name,
-        )
+        let re = format!("(?is)^(?:{})$", alt.trim().replace('*', ".*"));
+        regex_lite::Regex::new(&re).is_ok_and(|re| re.is_match(name))
     })
 }
 
@@ -401,7 +382,10 @@ impl Session {
     }
 
     /// The namespace a `SHOW ... IN name` names, else the current one.
-    async fn show_namespace(&self, name: Option<&DdlName>) -> Result<String, KrishivError> {
+    pub(crate) async fn show_namespace(
+        &self,
+        name: Option<&DdlName>,
+    ) -> Result<String, KrishivError> {
         let env = self.query_env();
         let ns = match name {
             Some(n) => self.namespace_name(n, &env)?,
@@ -736,6 +720,26 @@ impl Session {
                 }
                 self.show_partitions(&table, partition.as_ref(), original)
                     .await
+            }
+            ShowKind::Functions {
+                scope,
+                system,
+                namespace,
+                pattern,
+                legacy_pattern,
+                ..
+            } => {
+                // A one-part scope that is not USER, SYSTEM or ALL was kept by the parser: Spark refuses it.
+                if scope.is_some() {
+                    return Err(unsupported("SHOW FUNCTIONS with this scope"));
+                }
+                self.show_functions(
+                    *system,
+                    namespace.as_ref(),
+                    pattern.as_ref(),
+                    legacy_pattern.as_ref(),
+                )
+                .await
             }
             _ => Err(unsupported("this SHOW command")),
         }
@@ -1269,7 +1273,11 @@ impl Session {
                 self.ordered_frame(cols::DESCRIBE_NAMESPACE, &[], rows)
                     .await
             }
-            _ => Err(unsupported("DESCRIBE FUNCTION")),
+            DescribeKind::Function { extended, name, .. } => {
+                let parts = crate::access::ddl_parts(name, &env)?;
+                self.describe_function(&parts, *extended).await
+            }
+            _ => Err(unsupported("DESCRIBE")),
         }
     }
 

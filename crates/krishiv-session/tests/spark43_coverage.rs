@@ -25,7 +25,6 @@ use serde_json::Value;
 const PENDING: &[(&str, &str)] = &[
     ("fn_localtime", "UNRESOLVED_ROUTINE"),
     ("fn_localtime_precision_error", "UNRESOLVED_ROUTINE"),
-    ("fn_time_disabled", "UNSUPPORTED_TIME_TYPE"),
     ("fn_time_precision_9_disabled", "UNSUPPORTED_TIME_PRECISION"),
     (
         "fn_timestamp_nanos_disabled",
