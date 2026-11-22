@@ -57,8 +57,9 @@ impl Resolver<'_> {
                 targets.push(Some(DataType::String));
                 continue;
             }
+            // A NULL-typed output column (`select null`) is untyped: it takes the left type.
             let out = Arg {
-                ty: Some(&a.col.data_type),
+                ty: Some(&a.col.data_type).filter(|t| !matches!(t, DataType::Null)),
                 nullable: a.col.nullable,
                 literal: None,
             };
