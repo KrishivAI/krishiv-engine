@@ -24,7 +24,8 @@
     session || (embed && session === "") ? `${sep}session=${encodeURIComponent(session)}` : "";
 
   const q = createQuery<QueryDetail>(() => ({
-    queryKey: ["query", id, session ?? ""],
+    // An absent qualifier and an empty one are different requests, so different entries.
+    queryKey: ["query", id, session ?? null],
     queryFn: () =>
       api<QueryDetail>(
         embed

@@ -35,6 +35,8 @@ struct Fake {
     fail: bool,
     /// Two sessions each run a query under the id `q-dup`.
     dup: bool,
+    /// Set by a test: the next read of the queries does not list session `s-b`'s run of `q-fin` yet.
+    late: std::sync::atomic::AtomicBool,
     /// How many times the live-query table was read.
     reads: std::sync::atomic::AtomicUsize,
 }
@@ -54,22 +56,33 @@ impl UiSource for Fake {
                 ));
             }
             if dup && table == SystemTable::Queries {
-                return Ok(rows(json!([
+                let late = self.late.swap(false, std::sync::atomic::Ordering::SeqCst);
+                let mut listed = rows(json!([
                     {"query_id": "q-dup", "state": "running", "principal": "ann", "submitted_at": 10, "session_id": "s-a",
                      "query_text": "SELECT a FROM t"},
                     {"query_id": "q-dup", "state": "running", "principal": "bob", "submitted_at": 20, "session_id": "s-b",
                      "query_text": "SELECT b FROM t"},
                     {"query_id": "q-solo", "state": "running", "principal": "bob", "submitted_at": 30, "session_id": "s-b"},
                     {"query_id": "q-old", "state": "finished", "principal": "ann", "submitted_at": 1, "session_id": "s-a"},
-                    {"query_id": "q-old", "state": "running", "principal": "cy", "submitted_at": 40, "session_id": "s-c"}
-                ])));
+                    {"query_id": "q-old", "state": "running", "principal": "cy", "submitted_at": 40, "session_id": "s-c"},
+                    {"query_id": "q-fin", "state": "finished", "principal": "ann", "submitted_at": 50, "session_id": "s-a"},
+                    {"query_id": "q-fin", "state": "finished", "principal": "bob", "submitted_at": 60, "session_id": "s-b"},
+                    {"query_id": "q-one", "state": "finished", "principal": "ann", "submitted_at": 70, "session_id": "s-a"}
+                ]));
+                if late {
+                    listed.retain(|r| r["query_id"] != "q-fin" || r["session_id"] != "s-b");
+                }
+                return Ok(listed);
             }
             if dup && table == SystemTable::Operators {
                 // No session on an operator row: the two `q-dup` runs' rows cannot be told apart.
                 return Ok(rows(json!([
                     {"query_id": "q-dup", "operator_id": 1, "name": "ScanOfAnn", "drivers": 1, "compute_ns": 5},
                     {"query_id": "q-dup", "operator_id": 1, "name": "ScanOfBob", "drivers": 1, "compute_ns": 900},
-                    {"query_id": "q-solo", "operator_id": 1, "name": "Scan", "drivers": 1, "compute_ns": 7}
+                    {"query_id": "q-solo", "operator_id": 1, "name": "Scan", "drivers": 1, "compute_ns": 7},
+                    {"query_id": "q-fin", "operator_id": 1, "name": "ScanOfAnn", "drivers": 1, "compute_ns": 5},
+                    {"query_id": "q-fin", "operator_id": 1, "name": "ScanOfBob", "drivers": 1, "compute_ns": 900},
+                    {"query_id": "q-one", "operator_id": 1, "name": "Scan", "drivers": 1, "compute_ns": 7}
                 ])));
             }
             Ok(match table {
@@ -156,6 +169,15 @@ impl UiSource for Fake {
         })
     }
 
+    fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
+        // The store keeps a plan by query id alone: `q-fin`'s is whichever session's run was written last.
+        let id = query.get("query_id").and_then(Value::as_str);
+        let stored = matches!(id, Some("q-fin" | "q-one"));
+        Box::pin(
+            async move { Ok(stored.then(|| json!([{"id": 0, "name": "Scan", "children": []}]))) },
+        )
+    }
+
     fn close_session<'a>(&'a self, session_id: &'a str) -> UiFuture<'a, Option<usize>> {
         Box::pin(async move {
             self.closed.lock().unwrap().push(session_id.to_owned());
@@ -206,6 +228,7 @@ async fn start_with(fail: bool, dup: bool) -> (std::net::SocketAddr, Arc<Fake>) 
         closed: Mutex::new(Vec::new()),
         fail,
         dup,
+        late: std::sync::atomic::AtomicBool::new(false),
         reads: std::sync::atomic::AtomicUsize::new(0),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -886,6 +909,34 @@ async fn advice_is_grouped_by_table_in_the_tables_order_with_only_allowlisted_co
     // Advice is read, never applied.
     let (status, ..) = request(addr, "POST", "/api/internal/advice", true).await;
     assert_eq!(status, 405);
+}
+
+/// An ended query has operator rows and a stored plan, both kept by query id alone. When two sessions ran
+/// the id neither is given, also when the other session's run is listed only after the page's first read.
+#[tokio::test]
+async fn an_ended_query_whose_id_two_sessions_ran_gets_no_operators_and_no_plan() {
+    let (addr, fake) = start_dup().await;
+    // The control: one session ran the id, and its operators and plan are given.
+    let one = get(addr, "/api/internal/queries/q-one?session=s-a").await;
+    assert_eq!(
+        one["plan"],
+        json!([{"id": 0, "name": "Scan", "children": []}]),
+        "{one}"
+    );
+    assert_eq!(one["operators"].as_array().unwrap().len(), 1, "{one}");
+    assert_eq!(one["operators_withheld"], false, "{one}");
+    for late in [false, true] {
+        fake.late.store(late, std::sync::atomic::Ordering::SeqCst);
+        let fin = get(addr, "/api/internal/queries/q-fin?session=s-a").await;
+        assert_eq!(fin["query"]["principal"], "ann", "late {late}: {fin}");
+        assert_eq!(fin["plan"], Value::Null, "late {late}: {fin}");
+        assert_eq!(fin["operators"], json!([]), "late {late}: {fin}");
+        assert_eq!(fin["hot_operator"], Value::Null, "late {late}: {fin}");
+        assert_eq!(fin["plan_pending"], false, "late {late}: {fin}");
+        assert_eq!(fin["operators_withheld"], true, "late {late}: {fin}");
+        assert!(!fin.to_string().contains("ScanOf"), "late {late}: {fin}");
+        assert!(!fake.late.load(std::sync::atomic::Ordering::SeqCst));
+    }
 }
 
 #[tokio::test]

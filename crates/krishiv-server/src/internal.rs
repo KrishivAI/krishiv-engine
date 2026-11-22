@@ -971,9 +971,12 @@ async fn detail(s: &UiState, id: &str, session: Option<&str>) -> Response {
     };
     // Operator rows and stored plans are kept by query id alone. When another session ran a query under this
     // id they would be both runs', and a signed link is for one session's query: neither run's are given.
-    let shared = queries
-        .iter()
-        .any(|r| text(r, "query_id") == id && text(r, "session_id") != text(query, "session_id"));
+    let other_run = |rows: &[Row]| {
+        rows.iter().any(|r| {
+            text(r, "query_id") == id && text(r, "session_id") != text(query, "session_id")
+        })
+    };
+    let mut shared = other_run(&queries);
     let mut ops: Vec<Row> = operators
         .into_iter()
         .filter(|r| !shared && text(r, "query_id") == id)
@@ -982,7 +985,7 @@ async fn detail(s: &UiState, id: &str, session: Option<&str>) -> Response {
     // A source with no plan for the query leaves the page its flat operator list. A query that has not ended
     // has no stored plan, and its page asks again every second: the store is not searched for it.
     let ended = !matches!(text(query, "state"), "running" | "queued");
-    let plan = if !ended || shared {
+    let mut plan = if !ended || shared {
         None
     } else {
         s.source
@@ -993,6 +996,20 @@ async fn detail(s: &UiState, id: &str, session: Option<&str>) -> Response {
             .as_ref()
             .and_then(plan_nodes)
     };
+    // Another session may have begun a run of the id after the queries were read, and the operators or the
+    // plan read since may be that run's. A run has its operators and its plan only once it is listed, so
+    // the queries as they are now name it: they are read again whenever there is something to give.
+    if !shared && (!ops.is_empty() || plan.is_some()) {
+        match table(s, SystemTable::Queries).await {
+            Ok(now) if other_run(&now) => {
+                shared = true;
+                ops.clear();
+                plan = None;
+            }
+            Ok(_) => {}
+            Err(e) => return *e,
+        }
+    }
     json_response(
         StatusCode::OK,
         &json!({
