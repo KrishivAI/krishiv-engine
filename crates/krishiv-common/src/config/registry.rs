@@ -32,6 +32,7 @@ mod runtime_filter;
 mod runtime_filter_bloom;
 mod server;
 mod sql_session;
+mod ui_embed;
 pub use access::{
     ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
 };
@@ -48,11 +49,12 @@ pub use lakehouse::{
     CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS, DELTA_MAX_COMMIT_ATTEMPTS,
     DELTA_SNAPSHOT_CACHE_MAX_BYTES, ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_MANIFEST_CACHE_BYTES,
     ICEBERG_WRITE_MAX_OPEN_FILES, ICEBERG_WRITE_STATISTICS_ENABLED, WRITE_COMMIT_RETRY_TIMEOUT,
+    WRITE_IDEMPOTENCY_KEY,
 };
 pub use optimizer::{
     DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER,
-    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use runtime_filter::{
@@ -69,6 +71,10 @@ pub use server::*;
 pub use sql_session::{
     ANSI_ENABLED, CTE_PRECEDENCE_POLICY, MAP_KEY_DEDUP_POLICY, SCHEMA_LEVEL_COLLATIONS_ENABLED,
     SESSION_TIME_ZONE, SQL_DEFAULT_PATH, SQL_PATH_ENABLED, STORE_ASSIGNMENT_POLICY,
+    TIME_TRAVEL_AT_SYNTAX_ENABLED,
+};
+pub use ui_embed::{
+    UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS, UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -79,6 +85,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SESSION_TIME_ZONE,
     &SQL_PATH_ENABLED,
     &SCHEMA_LEVEL_COLLATIONS_ENABLED,
+    &TIME_TRAVEL_AT_SYNTAX_ENABLED,
     &SQL_DEFAULT_PATH,
     &STORE_ASSIGNMENT_POLICY,
     &CTE_PRECEDENCE_POLICY,
@@ -132,6 +139,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &HISTORY_MAX_BYTES,
     &UI_ENABLED,
     &UI_ALLOWED_HOSTS,
+    &UI_ALLOWED_ORIGINS,
+    &UI_EMBED_HIDE_ATTRIBUTION,
+    &UI_EMBED_LINK_TTL,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
     &QUERY_MAX_EXECUTION_TIME,
@@ -152,6 +162,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &DERIVED_KEYS_ABOVE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
+    &SHARE_FILTERED_SCANS,
     &SEMI_ANTI_JOIN_ORDER,
     &SPILL_DIR,
     &WORKLOAD_RESOURCE_GROUPS_FILE,
@@ -179,6 +190,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &DELTA_MAX_COMMIT_ATTEMPTS,
     &DELTA_SNAPSHOT_CACHE_MAX_BYTES,
     &WRITE_COMMIT_RETRY_TIMEOUT,
+    &WRITE_IDEMPOTENCY_KEY,
     &CATALOG_MAX_METADATA_BYTES,
     &ICEBERG_MANIFEST_CACHE_BYTES,
     &ICEBERG_WRITE_MAX_OPEN_FILES,
@@ -664,24 +676,6 @@ pub static HISTORY_MAX_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(256 << 20)),
     doc: "Most bytes the profile history under `krishiv.history.path` keeps. When a new file \
           takes the store past this, the oldest files go first, so the newest queries stay.",
-    scope: Scope::Cluster,
-    settable_by: SettableBy::Startup,
-    version_added: "0.3.0",
-    spark_alias: None,
-};
-
-/// The names the web UI answers to (P3-T050, threat model T-W5, DNS rebinding).
-pub static UI_ALLOWED_HOSTS: ConfigEntry = ConfigEntry {
-    key: "krishiv.ui.allowedHosts",
-    value_type: ValueType::String,
-    default: None,
-    doc: "Comma-separated host names (no ports; an IPv6 address in brackets) the web UI's \
-          `/api/internal` routes answer to, by the request's `Host` header, so a page on \
-          another name that resolves to this server cannot read it (DNS rebinding). A server \
-          bound to a loopback address always also answers to `localhost`, `127.0.0.1` and \
-          `[::1]`. A server bound to another address checks the `Host` header only when this is \
-          set (it already requires authentication, and TLS for bearer methods). The \
-          environment variable `KRISHIV_UI_ALLOWED_HOSTS` adds names to the list.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",

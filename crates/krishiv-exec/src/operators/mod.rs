@@ -44,10 +44,12 @@ pub(crate) mod select;
 mod sort;
 mod spilled_scan;
 pub(crate) mod table_write;
+mod tail;
 mod union;
 
 pub use expand::{Expand, NullOf};
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
+pub(crate) use file_scan::spark_dir_text;
 pub use file_scan::{
     FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN, PathRoots, ROW_FILE_COLUMN,
     ROW_POSITION_COLUMN,
@@ -75,6 +77,7 @@ use scan::{ScanGlobal, ScanLocal};
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};
 pub(crate) use sort::{KeyEncoder, blocking, data_bytes, owned_rows};
 pub use spilled_scan::SpilledScan;
+pub(crate) use tail::Tail;
 pub use union::UnionAlign;
 
 use crate::error::{Result, internal};

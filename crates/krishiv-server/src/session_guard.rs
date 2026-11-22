@@ -58,6 +58,7 @@ fn requirement(access: Access) -> Option<(Securable, Privilege)> {
         Access::Metrics => Some((system("metrics"), Privilege::Monitor)),
         Access::Monitor => Some((system("system"), Privilege::Monitor)),
         Access::Operate => Some((system("queries"), Privilege::Operate)),
+        Access::Manage => Some((system("settings"), Privilege::Manage)),
     }
 }
 
@@ -192,7 +193,7 @@ mod tests {
 
     #[tokio::test]
     async fn roles_meet_the_matrix() {
-        use Access::{Authenticated as Any, Metrics, Monitor, Operate};
+        use Access::{Authenticated as Any, Manage, Metrics, Monitor, Operate};
         for (token, access, expected) in [
             ("viewer", Any, Ok(())),
             ("viewer", Metrics, Ok(())),
@@ -202,6 +203,9 @@ mod tests {
             ("operator", Monitor, Ok(())),
             ("operator", Operate, Ok(())),
             ("admin", Operate, Ok(())),
+            ("viewer", Manage, Err(Refusal::Denied)),
+            ("operator", Manage, Err(Refusal::Denied)),
+            ("admin", Manage, Ok(())),
             ("none", Any, Ok(())),
             ("none", Metrics, Err(Refusal::Denied)),
         ] {

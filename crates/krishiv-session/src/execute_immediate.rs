@@ -170,7 +170,7 @@ impl Session {
                     .await?
             }
             statement => {
-                let class = krishiv_sql::classify_with(&statement, &env.parser);
+                let class = self.statement_class(&statement, &env);
                 // The text of the statement does not see a running script's locals (Spark's
                 // `EXECUTE IMMEDIATE` runs it apart from the script); its arguments did.
                 let plain = self.with_locals(Vec::new());
@@ -245,7 +245,7 @@ impl Session {
             let Some(key) = variable_key(name) else {
                 return Err(crate::command::unresolved_variable(
                     name,
-                    crate::variables::RESOLVE_SEARCH_PATH,
+                    &self.search_path(),
                     text,
                 ));
             };
@@ -379,6 +379,23 @@ impl Session {
         batch: &RecordBatch,
         row: usize,
     ) -> Result<String, KrishivError> {
+        self.bind_parameters_spanned(sql, batch, row)
+            .map(|(text, _)| text)
+    }
+
+    /// [`Self::bind_parameters`], with the byte range of each marker's value in the bound text,
+    /// in marker order (what [`crate::parameter_types::marker_types`] matches the analyzed plan's
+    /// literals against).
+    ///
+    /// # Errors
+    /// As [`Self::bind_parameters`].
+    #[cfg(feature = "unstable-ir")]
+    pub fn bind_parameters_spanned(
+        &self,
+        sql: &str,
+        batch: &RecordBatch,
+        row: usize,
+    ) -> Result<(String, Vec<std::ops::Range<usize>>), KrishivError> {
         let env = self.query_env();
         let escaped = env.parser.escaped_string_literals;
         let mut args = Vec::with_capacity(batch.num_columns());
@@ -391,7 +408,7 @@ impl Session {
                 shown: batch.schema().field(column).name().clone(),
             });
         }
-        bind(
+        bind_spanned(
             sql,
             &args,
             env.analysis.conf.case_sensitive,
@@ -412,6 +429,16 @@ fn bind(
     case_sensitive: bool,
     double_quoted_identifiers: bool,
 ) -> Result<String, KrishivError> {
+    bind_spanned(sql, args, case_sensitive, double_quoted_identifiers).map(|(text, _)| text)
+}
+
+/// [`bind`], with the byte range of each marker's value in the result, in marker order.
+fn bind_spanned(
+    sql: &str,
+    args: &[Argument],
+    case_sensitive: bool,
+    double_quoted_identifiers: bool,
+) -> Result<(String, Vec<std::ops::Range<usize>>), KrishivError> {
     let markers = krishiv_sql::parameter_markers(sql, double_quoted_identifiers);
     let named = markers.iter().filter(|m| m.name.is_some()).count();
     if named > 0 && named < markers.len() {
@@ -442,6 +469,7 @@ fn bind(
         }
     }
     let mut out = String::with_capacity(sql.len());
+    let mut spans = Vec::with_capacity(markers.len());
     let mut at = 0;
     for (ordinal, m) in markers.iter().enumerate() {
         out.push_str(sql.get(at..m.start).unwrap_or_default());
@@ -457,16 +485,20 @@ fn bind(
             }
             .into());
         };
-        pad_value(&mut out, &arg.sql, sql.get(m.end..).unwrap_or_default());
+        spans.push(pad_value(
+            &mut out,
+            &arg.sql,
+            sql.get(m.end..).unwrap_or_default(),
+        ));
         at = m.end;
     }
     out.push_str(sql.get(at..).unwrap_or_default());
-    Ok(out)
+    Ok((out, spans))
 }
 
 /// Appends `value` to `out` so that it stays a token of its own: a space where the text around it
-/// would otherwise join it (`5-?` with `-3`, `?FROM`).
-fn pad_value(out: &mut String, value: &str, rest: &str) {
+/// would otherwise join it (`5-?` with `-3`, `?FROM`); returns where `value` went.
+fn pad_value(out: &mut String, value: &str, rest: &str) -> std::ops::Range<usize> {
     let word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '\'' | '"' | '`');
     if out
         .chars()
@@ -475,10 +507,13 @@ fn pad_value(out: &mut String, value: &str, rest: &str) {
     {
         out.push(' ');
     }
+    let start = out.len();
     out.push_str(value);
+    let span = start..out.len();
     if rest.chars().next().is_some_and(|c| word(c) || c == '-') {
         out.push(' ');
     }
+    span
 }
 
 /// `value` as SQL text that reads back as the same value and type, or an unsupported-feature
@@ -746,6 +781,22 @@ mod tests {
         // With escapedStringLiterals a quote or backslash cannot be written back.
         assert!(render_literal(&Literal::String("a'b".into()), true).is_err());
         assert!(render_literal(&Literal::String("plain".into()), true).is_ok());
+    }
+
+    #[test]
+    fn bound_values_are_where_their_spans_say() {
+        let arg = |sql: &str| Argument {
+            name: None,
+            explicit: false,
+            sql: sql.to_owned(),
+            shown: String::new(),
+        };
+        let sql = "SELECT 5-?, ?FROM t WHERE d <= ?";
+        let (text, spans) =
+            bind_spanned(sql, &[arg("-3"), arg("NULL"), arg("'x'")], false, false).unwrap();
+        assert_eq!(text, "SELECT 5- -3, NULL FROM t WHERE d <= 'x'");
+        let values: Vec<&str> = spans.iter().map(|r| &text[r.clone()]).collect();
+        assert_eq!(values, ["-3", "NULL", "'x'"]);
     }
 
     #[test]

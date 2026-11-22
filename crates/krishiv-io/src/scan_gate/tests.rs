@@ -222,13 +222,22 @@ fn the_budget_makes_a_stream_wait_for_another_streams_unit() {
         let mut a = env.stream(&file, &req, &pool, &gate).await;
         a.next_batch().await.unwrap().unwrap();
         assert_eq!((gate.active(), gate.bytes()), (1, shares[0]));
+        // Granted at once: no wait, exactly (the fast path is not timed).
+        assert_eq!(a.gate_wait_ns(), 0);
         let mut b = env.stream(&file, &req, &pool, &gate).await;
-        let waiting =
-            tokio::spawn(async move { b.next_batch().await.unwrap().unwrap().num_rows() });
+        assert_eq!(b.gate_wait_ns(), 0);
+        let waiting = tokio::spawn(async move {
+            let rows = b.next_batch().await.unwrap().unwrap().num_rows();
+            (rows, b.gate_wait_ns())
+        });
         settle().await;
         assert!(!waiting.is_finished(), "b waits for a's unit");
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         drop(a);
-        assert_eq!(waiting.await.unwrap(), 4_096);
+        let (rows, waited) = waiting.await.unwrap();
+        assert_eq!(rows, 4_096);
+        // The wait is reported (the scan's `decode_gate_wait_ns`).
+        assert!(waited >= 1_000_000_000, "b waited {waited} ns");
         assert_eq!(gate.overcommitted(), 0);
     });
 }
@@ -455,5 +464,26 @@ fn prefetch_is_held_within_its_byte_budget() {
         assert!(peaks[1] <= peaks[0] + budget, "{peaks:?}");
         // A large budget prefetches more than the small one did.
         assert!(peaks[2] >= peaks[1], "{peaks:?}");
+    });
+}
+
+/// `try_acquire` grants what needs no wait and leaves the share alone
+/// otherwise; only the latter is timed as a decode-gate wait.
+#[test]
+fn try_acquire_grants_only_what_needs_no_wait() {
+    let env = Env::new();
+    env.rt.block_on(async {
+        let (_root, pool) = query_pool(None);
+        let gate = ScanGate::new(&pool, 1 << 20);
+        let (a, b) = (gate.stream_id(), gate.stream_id());
+        assert!(gate.try_acquire(a, 768 << 10));
+        assert_eq!(gate.bytes(), 768 << 10);
+        // Past the budget while `a` is active: `b` would have to wait.
+        assert!(!gate.try_acquire(b, 512 << 10));
+        assert_eq!((gate.bytes(), gate.active()), (768 << 10, 1));
+        gate.shrink(a, 0);
+        assert!(gate.try_acquire(b, 512 << 10));
+        gate.shrink(b, 0);
+        assert_eq!((gate.active(), gate.reserved()), (0, 0));
     });
 }

@@ -22,7 +22,7 @@ use arrow_flight::{
 };
 use futures::stream::{self, Peekable, Stream};
 use krishiv_common::error::{InvalidHandleFormat, KrishivError};
-use krishiv_session::auth::Authenticated;
+use krishiv_session::auth::{Authenticated, BasicHeader, basic_header};
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -221,21 +221,32 @@ impl FlightSqlService for FlightSqlServer {
     type FlightService = Self;
 
     /// Authenticates like any RPC (`AuthLayer`) and answers with the caller's bearer token in
-    /// the `authorization` header, which both drivers send back (design §3.1). Creates no session.
+    /// the `authorization` header, which both drivers send back (design §3.1; for a `Basic`
+    /// login, its password). Creates no session.
     async fn do_handshake(
         &self,
         request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<Response<HandshakeStream>, Status> {
         let result = self.admit_new(&request).map(|_| {
-            let bearer = request
+            let header = request
                 .metadata()
                 .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .filter(|v| {
-                    v.get(..7)
-                        .is_some_and(|s| s.eq_ignore_ascii_case("bearer "))
-                })
-                .and_then(|v| v.parse().ok());
+                .and_then(|v| v.to_str().ok());
+            // A `Basic` login answers its password as the bearer token (P3-T101 note §3.1):
+            // Arrow's clients send that from then on (`authenticateBasicToken`).
+            let bearer = header.and_then(|v| match basic_header(v) {
+                BasicHeader::Credentials(b) => {
+                    let mut text = format!("Bearer {}", b.password());
+                    let value = text.parse().ok();
+                    krishiv_common::secret::wipe(&mut text);
+                    value
+                }
+                _ => v
+                    .get(..7)
+                    .is_some_and(|s| s.eq_ignore_ascii_case("bearer "))
+                    .then(|| v.parse().ok())
+                    .flatten(),
+            });
             let out: HandshakeStream = Box::pin(stream::iter([Ok(HandshakeResponse {
                 protocol_version: 0,
                 payload: Default::default(),

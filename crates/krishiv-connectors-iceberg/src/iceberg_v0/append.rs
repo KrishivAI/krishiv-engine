@@ -45,15 +45,18 @@ use std::sync::Arc;
 
 use iceberg::io::FileIO;
 use iceberg::spec::{
-    DataFile, FormatVersion, ManifestFile, ManifestListWriter, Operation, Snapshot,
-    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, StatisticsFile, Summary,
-    TableMetadata, UNASSIGNED_SEQUENCE_NUMBER,
+    DataContentType, DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestFile,
+    ManifestListWriter, Operation, Snapshot, SnapshotReference, SnapshotRetention,
+    SnapshotSummaryCollector, StatisticsFile, Summary, TableMetadata, UNASSIGNED_SEQUENCE_NUMBER,
 };
 use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 
 use super::data_file::check_partition;
-use super::filter::{FilterContext, FilterError, Removals, filter_manifests, overwrite_summary};
+use super::filter::{
+    FilterContext, FilterError, Removals, add_delete_files, filter_manifests, merge_summary,
+    overwrite_summary,
+};
 use super::merge::{MergeConfig, MergeContext, arrange};
 use super::rolling::{ManifestNames, SpecManifests};
 use super::scan::{read_manifest_files, snapshot_refs};
@@ -83,6 +86,9 @@ pub(crate) const MANIFESTS_REPLACED: &str = "manifests-replaced";
 
 /// The summary key of a write's idempotency key (ADR 0014 item 5).
 pub(crate) const WRITE_ID_PROP: &str = "krishiv.write-id";
+
+/// The summary key of the caller's idempotency key (`krishiv.write.idempotencyKey`, E34).
+pub(crate) const IDEMPOTENCY_KEY_PROP: &str = "krishiv.idempotency-key";
 
 /// The summary key of the query that wrote a snapshot.
 pub(crate) const QUERY_ID_PROP: &str = "krishiv.query-id";
@@ -144,6 +150,15 @@ pub(crate) struct NewManifests {
     /// The locations of the data files the manifests list, deleted when the
     /// write fails with every outcome known (design note §7.4).
     pub(crate) data_files: Vec<String>,
+    /// The locations of the delete files the manifests list (a row delta's,
+    /// PR-36c; a Puffin file once), cleaned up as `data_files`.
+    pub(crate) delete_files: Vec<String>,
+    /// A position delete file (not a DV) among them: a rebase onto a v3
+    /// table refuses it (Java's "Must use DVs for position deletes in V3").
+    pub(crate) position_delete_file: Option<String>,
+    /// A `RowDelta` (merge-on-read, `row_delta.rs`): its operation is
+    /// Java's `BaseRowDelta.operation`.
+    pub(crate) row_delta: bool,
     /// The merged manifests written by any attempt (only the first merges,
     /// `merge.rs`) and the manifests an overwrite's filter rewrote
     /// (`filter.rs`, every attempt): kept when the committed list names
@@ -194,14 +209,34 @@ pub(crate) async fn write_new_manifests(
 ) -> Result<NewManifests, KrishivError> {
     let schema = Arc::clone(metadata.current_schema());
     let dir = metadata_dir(metadata);
+    // A row delta's delete files (PR-36c) go into delete manifests after
+    // the data manifests.
+    let (files, deletes): (Vec<_>, Vec<_>) = files
+        .into_iter()
+        .partition(|(_, f)| f.content_type() == DataContentType::Data);
     let data_files = files
         .iter()
         .map(|(_, f)| f.file_path().to_owned())
         .collect();
-    let mut by_spec: BTreeMap<i32, Vec<DataFile>> = BTreeMap::new();
-    for (spec_id, f) in files {
-        by_spec.entry(spec_id).or_default().push(f);
+    let mut delete_files: Vec<String> = Vec::new();
+    let mut position_delete_file = None;
+    for (_, f) in &deletes {
+        if !delete_files.iter().any(|p| p == f.file_path()) {
+            delete_files.push(f.file_path().to_owned());
+        }
+        if f.file_format() != DataFileFormat::Puffin && position_delete_file.is_none() {
+            position_delete_file = Some(f.file_path().to_owned());
+        }
     }
+    let group = |files: Vec<(i32, DataFile)>| {
+        let mut by_spec: BTreeMap<i32, Vec<DataFile>> = BTreeMap::new();
+        for (spec_id, f) in files {
+            by_spec.entry(spec_id).or_default().push(f);
+        }
+        by_spec
+    };
+    let by_spec = group(files);
+    let deletes_by_spec = group(deletes);
     let mut summary = SnapshotSummaryCollector::default();
     summary.set_partition_summary_limit(partition_summary_limit(metadata));
     // Java's `changed-partition-count` counts every partition path, the
@@ -209,8 +244,8 @@ pub(crate) async fn write_new_manifests(
     let mut changed: HashSet<String> = HashSet::new();
     // Every file is checked before any manifest is written, so a bad file
     // leaves no manifest behind (review 36a N9).
-    let mut specs = Vec::with_capacity(by_spec.len());
-    for (spec_id, files) in &by_spec {
+    let mut delete_paths: Vec<(String, &DataFile)> = Vec::new();
+    for (spec_id, files) in by_spec.iter().chain(&deletes_by_spec) {
         let spec = metadata.partition_spec_by_id(*spec_id).ok_or_else(|| {
             internal(format!(
                 "a data file of partition spec {spec_id}, which the table lacks"
@@ -218,9 +253,12 @@ pub(crate) async fn write_new_manifests(
         })?;
         for f in files {
             check_partition(spec, &schema, f.partition())?;
-            changed.insert(spec.partition_to_path(f.partition(), Arc::clone(&schema)));
+            let path = spec.partition_to_path(f.partition(), Arc::clone(&schema));
+            if f.content_type() != DataContentType::Data {
+                delete_paths.push((path.clone(), f));
+            }
+            changed.insert(path);
         }
-        specs.push(Arc::clone(spec));
     }
     let target_size_bytes = MergeConfig::from_properties(metadata.properties())?.target_size_bytes;
     let mut names = ManifestNames {
@@ -229,21 +267,39 @@ pub(crate) async fn write_new_manifests(
         written,
     };
     let mut manifests = Vec::new();
-    for (spec, files) in specs.iter().zip(by_spec.into_values()) {
-        for f in &files {
-            summary.add_file(f, Arc::clone(&schema), Arc::clone(spec));
+    let mut added_deletes = HashMap::new();
+    add_delete_files(&mut added_deletes, &delete_paths);
+    for (content, groups) in [
+        (ManifestContentType::Data, by_spec),
+        (ManifestContentType::Deletes, deletes_by_spec),
+    ] {
+        for (spec_id, files) in groups {
+            let spec = metadata.partition_spec_by_id(spec_id).ok_or_else(|| {
+                internal(format!(
+                    "a data file of partition spec {spec_id}, which the table lacks"
+                ))
+            })?;
+            if content == ManifestContentType::Data {
+                for f in &files {
+                    summary.add_file(f, Arc::clone(&schema), Arc::clone(spec));
+                }
+            }
+            let writer = SpecManifests {
+                io,
+                version: metadata.format_version(),
+                schema: &schema,
+                spec,
+                snapshot_id,
+                target_size_bytes,
+                content,
+            };
+            manifests.extend(writer.write(&mut names, files).await?);
         }
-        let writer = SpecManifests {
-            io,
-            version: metadata.format_version(),
-            schema: &schema,
-            spec,
-            snapshot_id,
-            target_size_bytes,
-        };
-        manifests.extend(writer.write(&mut names, files).await?);
     }
     let mut added = summary.build();
+    // The delete files' values (Java's `SnapshotSummary.addedFile`: a DV
+    // sized by its blob), which iceberg-rust's collector would count wrong.
+    merge_summary(&mut added, &added_deletes);
     // Java's `SnapshotSummary.Builder.build`: the count always, and
     // `partition-summaries-included` when partition summaries were written.
     added.insert(
@@ -260,6 +316,9 @@ pub(crate) async fn write_new_manifests(
         manifests,
         added,
         data_files,
+        delete_files,
+        position_delete_file,
+        row_delta: false,
         merged: Vec::new(),
         statistics: None,
         statistics_files: Vec::new(),
@@ -289,6 +348,10 @@ pub(crate) struct WriteIds<'a> {
     pub(crate) write_id: &'a str,
     /// The query that wrote, when known.
     pub(crate) query_id: Option<&'a str>,
+    /// The caller's idempotency key (E34), recorded in the summary. A snapshot carrying it is
+    /// this write, whatever its write id: a retried statement has a new write id, so the commit
+    /// loop's own-key search matches the key too.
+    pub(crate) idempotency_key: Option<&'a str>,
 }
 
 /// One commit attempt: the request's body and the files written for it.
@@ -551,6 +614,9 @@ pub(crate) async fn prepare(
         env!("CARGO_PKG_VERSION").to_owned(),
     );
     props.insert(WRITE_ID_PROP.to_owned(), ids.write_id.to_owned());
+    if let Some(k) = ids.idempotency_key {
+        props.insert(IDEMPOTENCY_KEY_PROP.to_owned(), k.to_owned());
+    }
     if let Some(q) = ids.query_id {
         props.insert(QUERY_ID_PROP.to_owned(), q.to_owned());
     }
@@ -647,6 +713,21 @@ async fn attempt_statistics_file(
 /// overwrite Java's `BaseOverwriteFiles.operation` (module docs of
 /// [`prepare`]).
 fn operation(new: &NewManifests) -> Operation {
+    if new.row_delta {
+        // `BaseRowDelta.operation` (`BaseRowDelta.java:50-60`): removed
+        // delete files do not count; an empty row delta is `overwrite`.
+        let adds_data = !new.data_files.is_empty();
+        let adds_deletes = !new.delete_files.is_empty();
+        let deletes_data = new
+            .removals
+            .as_ref()
+            .is_some_and(Removals::deletes_data_files);
+        return match (adds_data, adds_deletes, deletes_data) {
+            (true, false, false) => Operation::Append,
+            (false, true, _) => Operation::Delete,
+            _ => Operation::Overwrite,
+        };
+    }
     let Some(removals) = &new.removals else {
         return Operation::Append;
     };

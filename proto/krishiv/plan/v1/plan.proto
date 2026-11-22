@@ -188,6 +188,8 @@ message Node {
     CollectMetricsNode collect_metrics = 33;
     // feature: python_udtf
     PythonUdtfNode python_udtf = 34;
+    // feature: tail
+    TailNode tail = 35;
   }
 }
 
@@ -272,6 +274,13 @@ message SampleNode {
   double lower = 2;
   double upper = 3;
   int64 seed = 4;
+}
+
+// feature: tail
+// `Dataset.tail`: the last `limit` rows of `input` in plan order.
+message TailNode {
+  uint32 input = 1;
+  uint64 limit = 2;
 }
 
 // feature: observe
@@ -1126,6 +1135,17 @@ message WritePlan {
   // feature: write_column_types
   // Input columns whose Spark type their Arrow type doesn't say.
   repeated WriteColumnType column_types = 9;
+  // feature: write_bucketed
+  // Bucketed output: the input column with each row's bucket id, and the columns each bucket is sorted by.
+  WriteBucket bucket = 10;
+}
+
+// feature: write_bucketed
+message WriteBucket {
+  // feature: write_bucketed
+  uint64 column = 1;
+  // feature: write_bucketed
+  repeated uint64 sort_by = 2;
 }
 
 // feature: write_column_types
@@ -1451,6 +1471,8 @@ message DataType {
     KIND_COLLATED_STRING = 22;
     // feature: variant_type
     KIND_VARIANT = 23;
+    // feature: udt_type
+    KIND_UDT = 24;
   }
   Kind kind = 1;
   // `KIND_DECIMAL` and `KIND_TIME` only.
@@ -1458,8 +1480,10 @@ message DataType {
   // `KIND_DECIMAL` only.
   uint32 scale = 3;
   // feature: nested_types
-  // `KIND_NESTED` only: an array, map or struct type as Spark's JSON form
+  // `KIND_NESTED`: an array, map or struct type as Spark's JSON form
   // (`DataType.json`), which keeps nullability and field metadata.
+  // `KIND_UDT`: the user-defined type as Spark's JSON form (class names and
+  // the storage type).
   string json = 4;
   // feature: geo_types
   // `KIND_GEOMETRY` and `KIND_GEOGRAPHY` only: the SRID, -1 for `ANY`.

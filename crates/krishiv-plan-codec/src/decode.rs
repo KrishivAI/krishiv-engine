@@ -391,18 +391,16 @@ fn expr_children(m: &pb::Expr) -> impl Iterator<Item = u32> + '_ {
 /// `i` as an index into a table of `len` entries.
 fn slot(i: u32, len: usize) -> Result<usize> {
     let at = usize::try_from(i).map_err(|_| corrupt("an index out of range"))?;
-    if at < len {
-        Ok(at)
-    } else {
-        Err(corrupt("a reference to a later or missing entry"))
-    }
+    (at < len)
+        .then_some(at)
+        .ok_or_else(|| corrupt("a reference to a later or missing entry"))
 }
 
-fn usize_of(v: u64) -> Result<usize> {
+pub(crate) fn usize_of(v: u64) -> Result<usize> {
     usize::try_from(v).map_err(|_| corrupt("a count or index out of range"))
 }
 
-fn usizes(v: &[u64]) -> Result<Vec<usize>> {
+pub(crate) fn usizes(v: &[u64]) -> Result<Vec<usize>> {
     v.iter().map(|i| usize_of(*i)).collect()
 }
 
@@ -534,6 +532,7 @@ impl Decoder {
                 offset: l.offset,
                 limit: l.limit,
             },
+            Kind::Tail(t) => crate::decode_tail::tail(self.boxed(t.input)?, t),
             Kind::Sample(s) => {
                 // The planner writes finite bounds with `0 <= lower <= upper`,
                 // or `lower = 0` over a negative `upper`: a fraction within
@@ -1713,6 +1712,7 @@ fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
                 Ok((usize_of(c.column)?, spark_type(t)?))
             })
             .collect::<Result<_>>()?,
+        bucket: crate::decode_bucket::bucket_of(m.bucket.as_ref())?,
     })
 }
 
@@ -1744,6 +1744,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         CalendarInterval => DataType::CalendarInterval,
         CollatedString => collated_string(t)?,
         Variant => DataType::Variant,
+        Udt => crate::decode_udt::udt(t)?,
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),
@@ -1764,7 +1765,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
     {
         return Err(corrupt("a type parameter on a type that has none"));
     }
-    if !data_type.is_nested() && !t.json.is_empty() {
+    if !data_type.is_nested() && !matches!(data_type, DataType::Udt(_)) && !t.json.is_empty() {
         return Err(corrupt("a JSON form on a type that is not nested"));
     }
     if !matches!(data_type, DataType::CollatedString(_)) && !t.collation.is_empty() {

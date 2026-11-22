@@ -47,8 +47,8 @@ use krishiv_connect::proto::v4_3::command::CommandType;
 use krishiv_connect::proto::v4_3::ml_command::Command as MlCommandType;
 use krishiv_plan::analyzer::insufficient_permissions;
 use krishiv_session::auth::{
-    AuthFailure, Authenticated, Authenticator, Credentials, DeniedCounts, Method, Role, RolePolicy,
-    ServerAuth, Surface,
+    AuthFailure, Authenticated, Authenticator, BasicHeader, Credentials, DeniedCounts, Method,
+    Role, RolePolicy, ServerAuth, Surface, basic_header,
 };
 use krishiv_session::{
     PathPrefixPolicy, PolicyVersion, Privilege, Securable, Session, StatementClass, Transport,
@@ -180,18 +180,31 @@ impl ConnectAuth {
             );
             return Err(failure_status(AuthFailure::Missing));
         };
+        let mut values = headers.get_all(AUTHORIZATION).iter();
+        // `Ok(None)`: no header; `Err(())`: one that cannot be used (two entries: which one a
+        // proxy or the client meant is unknown; not text).
+        let header: Result<Option<&str>, ()> = match (values.next(), values.next()) {
+            (None, _) => Ok(None),
+            (Some(value), None) => value.to_str().map(Some).map_err(|_| ()),
+            (Some(_), Some(_)) => Err(()),
+        };
+        // `Basic` is decoded on the Flight SQL surface only (P3-T101 note §3.1, owner item 5);
+        // anywhere else it stays a malformed `Bearer` header. Declared before the credentials
+        // that borrow it.
+        let basic = match header {
+            Ok(Some(text)) if surface == Surface::FlightSql => basic_header(text),
+            _ => BasicHeader::NotBasic,
+        };
         let mut credentials = Credentials::new(peer, surface);
         credentials.peer_leaf = peer_leaf;
-        let mut values = headers.get_all(AUTHORIZATION).iter();
-        match (values.next(), values.next()) {
-            (None, _) => {}
+        match (header, &basic) {
+            (Ok(None), _) => {}
+            (Err(()), _) | (Ok(Some(_)), BasicHeader::Malformed) => credentials.malformed = true,
+            (Ok(Some(_)), BasicHeader::Credentials(b)) => credentials = credentials.with_basic(b),
             // One header, readable as text: its `Bearer` token, if it is one.
-            (Some(value), None) => match value.to_str() {
-                Ok(text) => credentials = credentials.with_authorization_header(text),
-                Err(_) => credentials.malformed = true,
-            },
-            // Two `authorization` entries: which one a proxy or the client meant is unknown.
-            (Some(_), Some(_)) => credentials.malformed = true,
+            (Ok(Some(text)), BasicHeader::NotBasic) => {
+                credentials = credentials.with_authorization_header(text);
+            }
         }
         let caller = authenticator
             .authenticate(&credentials)

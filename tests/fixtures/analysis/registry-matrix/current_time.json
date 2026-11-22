@@ -9,36 +9,12 @@
       "reason": "SELECT current_time(1.5D) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
-      "id": "current_time#15b9889d0bdf/ansi_on",
-      "reason": "SELECT current_time(1+1) | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#15b9889d0bdf/ansi_off",
-      "reason": "SELECT current_time(1+1) | UNSUPPORTED_TIME_TYPE"
-    },
-    {
       "id": "current_time#171b5dc886a6/ansi_on",
       "reason": "SELECT current_time(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
     },
     {
       "id": "current_time#171b5dc886a6/ansi_off",
       "reason": "SELECT current_time(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
-    },
-    {
-      "id": "current_time#248a56b72c08/ansi_on",
-      "reason": "SELECT current_time(1L) | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#248a56b72c08/ansi_off",
-      "reason": "SELECT current_time(1L) | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#28b87cadc727/ansi_on",
-      "reason": "SELECT current_time(1) | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#28b87cadc727/ansi_off",
-      "reason": "SELECT current_time(1) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "current_time#3715e946a67d/ansi_on",
@@ -57,36 +33,12 @@
       "reason": "SELECT current_time(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
     },
     {
-      "id": "current_time#476fbdcd9642/ansi_on",
-      "reason": "SELECT current_time | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#476fbdcd9642/ansi_off",
-      "reason": "SELECT current_time | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#51ddcb41b3fd/ansi_on",
-      "reason": "SELECT current_time() | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#51ddcb41b3fd/ansi_off",
-      "reason": "SELECT current_time() | UNSUPPORTED_TIME_TYPE"
-    },
-    {
       "id": "current_time#565723fba269/ansi_on",
       "reason": "SELECT current_time(CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "current_time#565723fba269/ansi_off",
       "reason": "SELECT current_time(CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
-    },
-    {
-      "id": "current_time#5f32bbbd7798/ansi_on",
-      "reason": "SELECT current_time(0) | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#5f32bbbd7798/ansi_off",
-      "reason": "SELECT current_time(0) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "current_time#5f3dbfc08322/ansi_on",
@@ -103,14 +55,6 @@
     {
       "id": "current_time#6087fbe30a9a/ansi_off",
       "reason": "SELECT current_time(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
-    },
-    {
-      "id": "current_time#64bcbd36181c/ansi_on",
-      "reason": "SELECT current_time(CAST(1 AS TINYINT)) | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#64bcbd36181c/ansi_off",
-      "reason": "SELECT current_time(CAST(1 AS TINYINT)) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "current_time#7ddb3c7ee4de/ansi_on",
@@ -151,22 +95,6 @@
     {
       "id": "current_time#c976f6038def/ansi_off",
       "reason": "SELECT current_time(DATE'2024-02-29') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
-    },
-    {
-      "id": "current_time#d4272779a8bf/ansi_on",
-      "reason": "SELECT current_time(3) | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#d4272779a8bf/ansi_off",
-      "reason": "SELECT current_time(3) | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#db7ab38aadbb/ansi_on",
-      "reason": "SELECT current_time(CAST(1 AS SMALLINT)) | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "current_time#db7ab38aadbb/ansi_off",
-      "reason": "SELECT current_time(CAST(1 AS SMALLINT)) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "current_time#dc4869cd5cda/ansi_on",

@@ -100,11 +100,19 @@ _OVERWRITE = textwrap.dedent(
         pass
     # Once the write has begun a cancel fails it and the table is gone (as Spark's V1 overwrite); what
     # must never show is a partial table: the old rows or the new ones.
-    try:
-        n = spark.sql("SELECT count(*) AS n FROM t").collect()[0]["n"]
-    except Exception as e:
-        assert "TABLE_OR_VIEW_NOT_FOUND" in str(e), e
-        n = 0
+    # One Ctrl-C was sent; a slow runner can deliver its re-armed raise at the first statement after the
+    # handler, so the read retries once on a KeyboardInterrupt.
+    n = None
+    for _ in range(2):
+        try:
+            n = spark.sql("SELECT count(*) AS n FROM t").collect()[0]["n"]
+        except KeyboardInterrupt:
+            continue
+        except Exception as e:
+            assert "TABLE_OR_VIEW_NOT_FOUND" in str(e), e
+            n = 0
+        break
+    assert n is not None
     print(f"rows {n}", flush=True)
     assert n in (0, 5, 50000000), n
     """

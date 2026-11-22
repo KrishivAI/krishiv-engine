@@ -36,7 +36,8 @@ use krishiv_common::config::{
     CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
     METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
     SERVER_READINESS_FAILURE_THRESHOLD, SERVER_READINESS_INTERVAL, SERVER_READINESS_REQUIRED,
-    SERVER_READINESS_TIMEOUT, SERVER_SHUTDOWN_TIMEOUT, UI_ALLOWED_HOSTS, UI_ENABLED,
+    SERVER_READINESS_TIMEOUT, SERVER_SHUTDOWN_TIMEOUT, UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS,
+    UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -710,8 +711,9 @@ fn admin_router(
         krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
     );
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {
-        let mut source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
+        let source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
             .map_err(|e| e.to_string())?;
+        let mut source = with_stored_history(source, config);
         if let Some(denials) = denials {
             // The editor runs a statement as the authenticated caller, in the session a Spark Connect session of
             // that caller gets: the same role matrix and path confinement.
@@ -738,12 +740,34 @@ fn admin_router(
             .unwrap_or("")
             .to_owned();
         let from_env = std::env::var("KRISHIV_UI_ALLOWED_HOSTS").unwrap_or_default();
+        // Who may frame the embeddable views (T071): invalid origins stop the start, as a bad host would not.
+        let origins = krishiv_server::embed::parse_origins(
+            config
+                .get(&UI_ALLOWED_ORIGINS)
+                .and_then(ConfigValue::as_str)
+                .unwrap_or(""),
+        )?;
+        let embed = krishiv_server::embed::EmbedPolicy::new(
+            origins,
+            config
+                .get(&UI_EMBED_HIDE_ATTRIBUTION)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(false),
+            match config.get(&UI_EMBED_LINK_TTL) {
+                Some(ConfigValue::Duration(d)) => *d,
+                _ => match UI_EMBED_LINK_TTL.default {
+                    Some(ConfigValue::Duration(d)) => d,
+                    _ => std::time::Duration::from_secs(300),
+                },
+            },
+        );
         let policy = krishiv_server::pages::UiPolicy::for_listener(
             bound.ip().is_loopback(),
             configured.split(',').chain(from_env.split(',')),
         )
         // The session cookie holds the bearer token: over TLS it never travels in the clear.
-        .secure_cookie(tls);
+        .secure_cookie(tls)
+        .with_embed(embed);
         krishiv_server::internal::router_with_ui_policy(Arc::new(source), guard, policy)
     } else {
         krishiv_server::api_router()
@@ -765,6 +789,31 @@ fn admin_router(
         app,
         krishiv_server::admin::HttpLimits::default(),
     ))
+}
+
+/// `source` with the history of earlier runs of the server, read from the store this run writes to
+/// (`krishiv.history.path`). A store that does not read costs the old history, not the server.
+#[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
+fn with_stored_history(
+    source: krishiv_server::session_source::SessionSource,
+    config: &Config,
+) -> krishiv_server::session_source::SessionSource {
+    let Some(dir) = config
+        .get(&krishiv_common::config::HISTORY_PATH)
+        .and_then(ConfigValue::as_str)
+        .filter(|p| !p.is_empty())
+    else {
+        return source;
+    };
+    match krishiv_session::read_profile_history(std::path::Path::new(dir)) {
+        Ok(stored) => source.with_stored_history(&stored),
+        Err(e) => {
+            eprintln!(
+                "warning: the stored query history was not read ({e}); the console lists this run only"
+            );
+            source
+        }
+    }
 }
 
 /// Whether `/metrics` is on and behind the admin token: it is open only on

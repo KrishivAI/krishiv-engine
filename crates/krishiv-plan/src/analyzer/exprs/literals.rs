@@ -4,6 +4,19 @@
 use super::*;
 use krishiv_kernels::cast::{TimestampText, timestamp_text};
 
+/// The cast a `TIME '..'` literal binds to (an explicit `Ansi` string cast to `TIME(6)`, never what the parser
+/// writes): it passes the `spark.sql.timeType.enabled` gate again, so a plan analyzed once analyzes to itself.
+pub(in crate::analyzer) fn is_time_literal_cast(
+    inner: &Expr,
+    to: &DataType,
+    mode: CastMode,
+) -> bool {
+    mode == CastMode::Ansi
+        && *to == (DataType::Time { precision: 6 })
+        && matches!(&inner.node, ExprNode::Literal(Literal::String(v))
+            if krishiv_kernels::cast::parse_time(v).is_some())
+}
+
 pub(in crate::analyzer) fn literal_type(v: &Literal) -> Option<DataType> {
     v.data_type()
 }
@@ -323,8 +336,24 @@ pub(super) fn bad_cast(
     mode: CastMode,
     zone: Option<SessionZone>,
 ) -> AnalysisError {
+    // A `JSON_TABLE` column: Spark checks the column's cast in `JsonTable.checkInputDataTypes` and names the
+    // whole call (the lowering passes its text as the read's last argument), whatever the refusal.
+    let shown_arg = arg.shown();
+    if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &shown_arg.node
+        && let FunctionId::Registry { name, .. } = &f.id
+        && name.starts_with("__json_table_")
+        && let Some(ExprNode::Literal(Literal::String(call))) = f.args.get(2).map(|a| &a.node)
+    {
+        let error = cast_mismatch(
+            BadCast::Without,
+            format!("\"{call}\""),
+            quoted_type(arg.ty.data_type.as_ref()),
+            quoted_type(Some(to)),
+        );
+        return AnalysisError::new(error, origin);
+    }
     let shown = ExprNode::Cast {
-        expr: arg.shown(),
+        expr: shown_arg,
         to: to.clone(),
         mode,
     };

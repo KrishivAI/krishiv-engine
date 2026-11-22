@@ -682,6 +682,9 @@ impl Session {
                     targets: &[],
                     values: &[],
                     condition: d.where_clause.as_ref(),
+                    options: &d.options,
+                    more: &[],
+                    sources: &[],
                 };
                 self.exec_row_level_change(&d.table, d.alias.as_ref(), "DELETE", &changes, query)
                     .await
@@ -693,6 +696,9 @@ impl Session {
                     targets: &targets,
                     values: &values,
                     condition: u.where_clause.as_ref(),
+                    options: &u.options,
+                    more: &[],
+                    sources: &[],
                 };
                 self.exec_row_level_change(
                     &u.table,
@@ -704,10 +710,31 @@ impl Session {
                 .await
             }
             Statement::Merge(m) => {
+                let more: Vec<&krishiv_sql::ast::Expr> = std::iter::once(&m.on)
+                    .chain(m.clauses.iter().flat_map(|c| {
+                        let action: Vec<&krishiv_sql::ast::Expr> = match &c.action {
+                            krishiv_sql::ast::MergeAction::Update(assignments) => {
+                                assignments.iter().map(|a| &a.value).collect()
+                            }
+                            krishiv_sql::ast::MergeAction::Insert(
+                                krishiv_sql::ast::MergeInsert::Values { values, .. },
+                            ) => values.iter().collect(),
+                            _ => Vec::new(),
+                        };
+                        c.condition.iter().chain(action)
+                    }))
+                    .collect();
+                let sources: Vec<&krishiv_sql::ast::Query> = match &m.source {
+                    krishiv_sql::ast::MergeSource::Query { query, .. } => vec![&**query],
+                    _ => Vec::new(),
+                };
                 let changes = crate::table_commands::RowChanges {
                     targets: &[],
                     values: &[],
                     condition: None,
+                    options: &m.options,
+                    more: &more,
+                    sources: &sources,
                 };
                 self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
                     .await
@@ -1684,12 +1711,18 @@ impl Session {
 
     /// `error`, when it is a memory error of a query whose spill directory could not be set up,
     /// as that failure (the memory error stays its cause): the query may have needed to spill
-    /// (PY-078). Applied below the metrics fold, so `system.queries` and the caller agree.
+    /// (PY-078). A refused reservation and an arbitration abort are both such errors: which
+    /// one ends a query that cannot spill depends on timing. Applied below the metrics fold,
+    /// so `system.queries` and the caller agree.
     fn name_spill_failure(
         error: KrishivError,
         failure: &std::sync::Mutex<Option<KrishivError>>,
     ) -> KrishivError {
-        if error.error_class() != krishiv_common::error::ErrorClass::UnableToAcquireMemory {
+        use krishiv_common::error::ErrorClass;
+        if !matches!(
+            error.error_class(),
+            ErrorClass::UnableToAcquireMemory | ErrorClass::KrishivQueryAbortedOutOfMemory
+        ) {
             return error;
         }
         let found = failure
@@ -1961,4 +1994,5 @@ mod planning;
 mod definer;
 
 mod ran;
+mod search_path;
 pub(crate) use ran::Ran;

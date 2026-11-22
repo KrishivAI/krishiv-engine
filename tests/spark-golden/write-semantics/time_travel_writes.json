@@ -1,0 +1,363 @@
+{
+ "format_version": 1,
+ "spark_tag": "v4.3.0",
+ "status": "unverified-by-run",
+ "generator": "tests/scripts/gen_write_semantics_goldens.py",
+ "note": "Expected values are derived from the v4.3.0 source and suite assertions. The generator (tests/scripts/gen_write_semantics_goldens.py) never rewrites this file: it writes the run's 'observed' blocks to tests/fixtures/spark-4.3.0/write-semantics/. Where a run differs from the source-derived text, 'expect' is edited by hand to the run's result and the old text kept (see README.md).",
+ "cases": [
+  {
+   "id": "TT-sql-insert-both-keys",
+   "target": "testcat.ns1.ns2.table",
+   "how": "SQL: INSERT INTO testcat.ns1.ns2.table WITH ('versionAsOf' = 'v1', 'timestampAsOf' = '2021-01-01') VALUES (1, 'a')",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`ns1`.`ns2`.`table`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1839-1870"
+   ],
+   "note": "catalog name is part of relationId; written with the identifier AS RESOLVED, always fully qualified"
+  },
+  {
+   "id": "TT-sql-insert-version-only",
+   "target": "testcat.ns1.ns2.table",
+   "how": "SQL: INSERT INTO ... WITH ('versionAsOf' = 'v1') VALUES (1,'a')",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`ns1`.`ns2`.`table`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "sql/catalyst/.../analysis/RelationResolution.scala:165-176,248-258"
+   ],
+   "note": "either key alone is enough (Seq(timestampKey, versionKey).exists(options.containsKey), CatalogV2Util.scala:605-610); derived, suite uses both keys"
+  },
+  {
+   "id": "TT-sql-insert-timestamp-only",
+   "target": "testcat.ns1.ns2.table",
+   "how": "SQL: INSERT INTO ... WITH ('timestampAsOf' = '2021-01-01') VALUES (1,'a')",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`ns1`.`ns2`.`table`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")"
+   ],
+   "note": "derived; the rejection happens before the timestamp is parsed, so an unparseable timestamp value gives the same error rather than INVALID_TIME_TRAVEL_TIMESTAMP_EXPR (RelationResolution.scala:166-176 'without parsing the options as a read time-travel specification first')"
+  },
+  {
+   "id": "TT-key-case-insensitive",
+   "target": "testcat.ns1.ns2.table",
+   "how": "SQL: INSERT INTO ... WITH ('VERSIONASOF' = 'v1') VALUES (1,'a')",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`ns1`.`ns2`.`table`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "options are a CaseInsensitiveStringMap (AstBuilder.scala:4858-4863)"
+   ],
+   "note": "derived"
+  },
+  {
+   "id": "TT-custom-key-config",
+   "target": "testcat.ns1.ns2.table",
+   "how": "conf spark.sql.timeTravelVersionKey=snap; SQL: INSERT INTO ... WITH ('snap' = '1') VALUES (1,'a')",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`ns1`.`ns2`.`table`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "SQLConf.scala:7723-7735 (spark.sql.timeTravelTimestampKey default timestampAsOf; spark.sql.timeTravelVersionKey default versionAsOf)"
+   ],
+   "note": "derived; and with that conf set, 'versionAsOf' is no longer a time-travel key"
+  },
+  {
+   "id": "TT-non-time-travel-option-ok",
+   "target": "testcat.ns1.ns2.table",
+   "how": "SQL: INSERT INTO ... WITH ('split-size' = '5') VALUES (1,'a')",
+   "expect": {
+    "kind": "ok"
+   },
+   "source": [
+    "sql/catalyst/.../analysis/RelationResolution.scala:165-176",
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1520-1560"
+   ],
+   "note": "other options are accepted and go to the table/write"
+  },
+  {
+   "id": "TT-dfwriterv2-append",
+   "target": "testcat.ns1.ns2.table",
+   "how": "df.writeTo(t).option('versionAsOf','v1').option('timestampAsOf','2021-01-01').append()",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`ns1`.`ns2`.`table`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1850-1851"
+   ]
+  },
+  {
+   "id": "TT-dfwriter-insertInto",
+   "target": "testcat.ns1.ns2.table",
+   "how": "df.write.option(...).insertInto(t)",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`ns1`.`ns2`.`table`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1853-1856",
+    "sql/core/.../classic/DataFrameWriter.scala:361-370"
+   ]
+  },
+  {
+   "id": "TT-dfwriter-saveAsTable-append",
+   "target": "testcat.ns1.ns2.table",
+   "how": "df.write.option(...).mode('append').saveAsTable(t)",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`ns1`.`ns2`.`table`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1857-1861",
+    "DataFrameWriter.scala:508"
+   ]
+  },
+  {
+   "id": "TT-dfwriterv2-create-new-table",
+   "target": "testcat.ns1.ns2.new_table (does not exist)",
+   "how": "df.writeTo(new_table).option(...).create()",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`ns1`.`ns2`.`new_table`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1862-1865",
+    "sql/catalyst/.../analysis/ResolveCatalogs.scala:130-141"
+   ],
+   "note": "rejected even though the table is new"
+  },
+  {
+   "id": "TT-dfwriterv2-replace",
+   "target": "testcat.ns1.ns2.table",
+   "how": "df.writeTo(t).option(...).replace()",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`ns1`.`ns2`.`table`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1866-1869"
+   ]
+  },
+  {
+   "id": "TT-dfwriterv2-createOrReplace",
+   "target": "testcat.ns1.ns2.table",
+   "how": "df.writeTo(t).option(...).createOrReplace()",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`ns1`.`ns2`.`table`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1870-1873"
+   ]
+  },
+  {
+   "id": "TT-save-with-catalog-options",
+   "target": "testcat.t1 (SupportsCatalogOptions source)",
+   "how": "spark.range(1).write.format(f).option('name','t1').option('catalog','testcat').option('versionAsOf','v1').option('timestampAsOf','2021-01-01').save()",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`testcat`.`t1`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "sql/core/src/test/.../connector/SupportsCatalogOptionsSuite.scala:464-476"
+   ]
+  },
+  {
+   "id": "TT-temp-view-target",
+   "target": "temp_view",
+   "how": "df.writeTo('temp_view').option(...).append()",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`temp_view`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../connector/catalog/CatalogV2Util.scala:595-610 (rejectTimeTravelOptionsForWrite: relationId = toSQLId(ident.toQualifiedNameParts(catalog)))",
+    "common/utils/.../error-conditions.json:9036-9040 (\"Time travel on the relation: <relationId>.\")",
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1880-1896",
+    "sql/catalyst/.../analysis/RelationResolution.scala:495-509 (resolveTempView: toSQLId(identifier))"
+   ],
+   "note": "no catalog qualifier for a temp view"
+  },
+  {
+   "id": "TT-missing-insertInto-target",
+   "target": "ns1.ns2.missing (does not exist)",
+   "how": "df.write.option('versionAsOf','v1').insertInto(missing)",
+   "expect": {
+    "kind": "error",
+    "class": "TABLE_OR_VIEW_NOT_FOUND",
+    "sqlstate": "42P01",
+    "params": {
+     "relationName": "`ns1`.`ns2`.`missing`"
+    }
+   },
+   "source": [
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1898-1908"
+   ],
+   "note": "table-not-found wins over time travel (the load fails first); sqlstate 42P01 is from the class table, not the suite"
+  },
+  {
+   "id": "TT-v1-spark-catalog-sql",
+   "target": "spark_catalog.default.t (parquet, v1)",
+   "how": "SQL: INSERT INTO t WITH ('versionAsOf' = '1') VALUES (1)",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`spark_catalog`.`default`.`t`"
+    }
+   },
+   "source": [
+    "sql/catalyst/.../analysis/RelationResolution.scala:248-258 (tryResolvePersistent rejects whenever writePrivileges != null, for any catalog including the session catalog)"
+   ],
+   "note": "derived from the source only (no suite covers a SQL write to a V1 table with time-travel options); must be oracle-checked",
+   "setup": [
+    "CREATE TABLE t (a INT) USING parquet"
+   ],
+   "stmt": "INSERT INTO t WITH ('versionAsOf' = '1') VALUES (1)"
+  },
+  {
+   "id": "TT-v1-dataframe-write-ignored",
+   "target": "spark_catalog.default.t (csv, v1)",
+   "how": "df.write.format(v2Format).option('versionAsOf','1').insertInto('t') ; ...mode(Ignore).saveAsTable('t')",
+   "expect": {
+    "kind": "ok",
+    "note": "options silently ignored; table unchanged for Ignore"
+   },
+   "source": [
+    "sql/core/src/test/.../connector/DataSourceV2DataFrameSessionCatalogSuite.scala:102-125",
+    "DataFrameWriter.scala:364-365 (V1Table -> insertIntoCommand(TableIdentifier) before rejectTimeTravelOptionsForWrite), :500-503"
+   ],
+   "note": "V1 fallback precedes the check and the V1 InsertIntoStatement carries no options; contrast with TT-v1-spark-catalog-sql"
+  },
+  {
+   "id": "TT-ctas-rtas-sql-options-are-properties",
+   "target": "testcat.ns1.ns2.table",
+   "how": "SQL: CREATE TABLE t USING foo OPTIONS ('versionAsOf'='v1') AS SELECT ...; REPLACE TABLE ... OPTIONS ('timestampAsOf'='2021-01-01') AS SELECT ...",
+   "expect": {
+    "kind": "ok",
+    "note": "keys stored as table properties 'versionAsOf' and 'option.versionAsOf'; NOT rejected"
+   },
+   "source": [
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1910-1927"
+   ],
+   "note": "the rejection applies to the DataFrame-writer/WITH write-option path, not to SQL OPTIONS on CTAS/RTAS"
+  },
+  {
+   "id": "TT-read-syntax-on-write-not-grammar",
+   "target": "any",
+   "how": "INSERT INTO t VERSION AS OF 1 ...",
+   "expect": {
+    "kind": "error",
+    "class": "PARSE_SYNTAX_ERROR",
+    "sqlstate": "42601"
+   },
+   "source": [
+    "SqlBaseParser.g4:598-603 (insertInto has optionsClause but no timeTravel clause)"
+   ],
+   "note": "no VERSION/TIMESTAMP AS OF clause exists on write targets; only WITH(...) options and DataFrame options reach the check. The '@v123' name suffix (TIME_TRAVEL_AT_SYNTAX_ENABLED, SQLConf.scala:7737-7746) on a write target: not examined, unverified"
+  },
+  {
+   "id": "TT-explicit-spec-internal",
+   "target": "statecat.ns.table",
+   "how": "RelationResolution.resolveRelation(write target, Some(AsOfVersion('v1')))",
+   "expect": {
+    "kind": "error",
+    "class": "UNSUPPORTED_FEATURE.TIME_TRAVEL",
+    "sqlstate": "0A000",
+    "params": {
+     "relationId": "`statecat`.`ns`.`table`"
+    }
+   },
+   "source": [
+    "sql/core/src/test/.../connector/DataSourceV2OptionSuite.scala:1563-1587",
+    "sql/catalyst/.../analysis/RelationResolution.scala:253-258"
+   ],
+   "note": "internal API test (SPARK-58389); shows the qualified relationId for the session's current catalog"
+  }
+ ]
+}

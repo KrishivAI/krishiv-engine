@@ -358,3 +358,70 @@ fn time_and_spatial_kinds() {
         assert_eq!(e.error_class(), ErrorClass::StInvalidSridValue);
     }
 }
+
+fn udt_proto(
+    ty: &str,
+    jvm: Option<&str>,
+    py: Option<&str>,
+    serialized: Option<&str>,
+    sql: Option<Proto>,
+) -> Proto {
+    use dt::Udt;
+    Proto {
+        kind: Some(Kind::Udt(Box::new(Udt {
+            r#type: ty.to_owned(),
+            jvm_class: jvm.map(str::to_owned),
+            python_class: py.map(str::to_owned),
+            serialized_python_class: serialized.map(str::to_owned),
+            sql_type: sql.map(Box::new),
+        }))),
+    }
+}
+
+/// P3-T079: a Connect UDT is the engine's, with Spark's checks (`toCatalystUDT`).
+#[test]
+fn a_connect_udt_maps_with_its_classes_and_storage_type() {
+    let int = Proto {
+        kind: Some(Kind::Integer(dt::Integer::default())),
+    };
+    let jvm = Some("org.apache.spark.ml.linalg.VectorUDT");
+    let py = Some("pyspark.ml.linalg.VectorUDT");
+    let got = data_type(&udt_proto("udt", jvm, py, None, Some(int.clone()))).unwrap();
+    let krishiv_types::DataType::Udt(u) = got else {
+        panic!("not a UDT");
+    };
+    assert_eq!(u.sql_type(), &krishiv_types::DataType::Integer);
+    assert_eq!(u.python_class(), py);
+    assert_eq!(u.jvm_class(), jvm);
+    // A JVM UDT with no Python class.
+    let got = data_type(&udt_proto("udt", jvm, None, None, Some(int.clone()))).unwrap();
+    assert!(matches!(&got, krishiv_types::DataType::Udt(u) if u.python_class().is_none()));
+    // A Python-only UDT needs all three of its fields.
+    let got = data_type(&udt_proto("udt", None, py, Some("gAWV"), Some(int.clone()))).unwrap();
+    assert!(
+        matches!(&got, krishiv_types::DataType::Udt(u) if u.serialized_python_class() == Some("gAWV"))
+    );
+    for incomplete in [
+        udt_proto("udt", None, py, None, Some(int.clone())),
+        udt_proto("udt", None, None, Some("gAWV"), Some(int.clone())),
+        udt_proto("udt", None, py, Some("gAWV"), None),
+        udt_proto("udt", None, None, None, Some(int.clone())),
+    ] {
+        let e = data_type(&incomplete).expect_err("a Python-only UDT with a field missing");
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::ConnectInvalidPlanPythonUdtMissingFields
+        );
+    }
+    let e = data_type(&udt_proto("struct", jvm, py, None, Some(int))).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanUdtTypeFieldInvalid
+    );
+    // The documented divergence: a JVM UDT with no storage type (Spark would load the class).
+    let e = data_type(&udt_proto("udt", jvm, py, None, None)).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet
+    );
+}

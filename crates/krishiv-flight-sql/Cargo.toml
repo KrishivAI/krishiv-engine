@@ -17,6 +17,7 @@ krishiv-connect-server = { path = "../krishiv-connect-server", version = "=0.2.1
 krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
 krishiv-session = { path = "../krishiv-session", version = "=0.2.1", features = ["unstable-ir"] }
 krishiv-sql = { path = "../krishiv-sql", version = "=0.2.1" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 arrow-array.workspace = true
 arrow-flight = { workspace = true, features = ["flight-sql"] }
 arrow-schema.workspace = true

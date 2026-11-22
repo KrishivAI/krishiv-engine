@@ -4,7 +4,8 @@
 //! Spark run) runs here on the same file tree and must give Spark's reported schema (names, types, nullability) and
 //! rows (each column cast to STRING in UTC, sorted), or its error: the condition and message parameters, or, for a
 //! failure Spark raises from a task, the condition chain. `KNOWN_GAPS` lists the cases not matched yet, each with
-//! its reason; they must still differ, so a fix removes them from the list.
+//! its reason; they must still differ, so a fix removes them from the list. `BY_DESIGN` lists the cases an ADR
+//! decided to differ on; they must still differ too.
 #![expect(clippy::unwrap_used, reason = "test code")]
 
 use std::collections::BTreeMap;
@@ -21,14 +22,43 @@ use serde_json::{Value, json};
 /// Cases not matched yet, with the reason; each must still differ from Spark.
 const KNOWN_GAPS: &[(&str, &str)] = &[
     (
+        "partition directory under a plain directory",
+        "partition discovery: the engine refuses a plain directory under the root (KRISHIV_UNSUPPORTED_FEATURE); \
+         Spark stops at it as the leaf directory's base path, so two base paths are \
+         CONFLICTING_DIRECTORY_STRUCTURES",
+    ),
+    (
+        "partition directory under a plain directory, ignoreInvalidPartitionPaths option",
+        "the same refusal as above; with the option Spark skips the base-path check and reads both files",
+    ),
+];
+
+/// Cases that differ from Spark by decision, with the ADR.
+const BY_DESIGN: &[(&str, &str)] = &[
+    (
         "sql view partition value added after create",
-        "Spark's `CREATE TEMPORARY VIEW .. USING` resolves the relation once, so its file index keeps the listing \
-         of CREATE (until REFRESH); the engine lists the path again on each query and reads k=3 too",
+        "ADR 0023 (update 2026-10-19): a file-backed temporary view lists its path again for every query; Spark's \
+         `CreateTempViewUsing` keeps the listing of CREATE until REFRESH TABLE",
     ),
     (
         "sql view partition column added after create",
-        "as above: the new listing has a k=3/j=1 directory, so discovery fails with \
-         CONFLICTING_DIRECTORY_STRUCTURES where Spark reads the files of CREATE",
+        "ADR 0023, as above: with the new listing discovery fails (CONFLICTING_PARTITION_COLUMN_NAMES)",
+    ),
+    (
+        "sql view inferred, partition value added after create",
+        "ADR 0023, as above",
+    ),
+    (
+        "sql view file added to a partition after create",
+        "ADR 0023, as above",
+    ),
+    (
+        "sql view partition directory deleted after create",
+        "ADR 0023, as above: the engine reads the files left; Spark fails with FAILED_READ_FILE.FILE_NOT_EXIST",
+    ),
+    (
+        "dataframe view partition value added after create",
+        "ADR 0023, as above: a DataFrame view over a read keeps listing too (Spark keeps the frame's file index)",
     ),
 ];
 
@@ -188,7 +218,35 @@ fn review_layout(s: &Session, root: &Path) {
     ] {
         parquet(s, "SELECT 'v' AS v", &root.join(format!("{tree}/p/k={k}")));
     }
-    for tree in ["pva", "pvb"] {
+    // Discovered base paths (CONFLICTING_DIRECTORY_STRUCTURES and its message).
+    for (sql, dir) in [
+        ("SELECT 'v1' AS v", "cdb/p/x/k=1"),
+        ("SELECT 'v2' AS v", "cdb/p/k=2"),
+        ("SELECT 'v1' AS v", "cda/p/k=1/j=1"),
+        ("SELECT 'v2' AS v", "cda/p/k=2"),
+        ("SELECT 'v0' AS v", "cdc/p"),
+        ("SELECT 'v1' AS v", "cdc/p/k=1"),
+        ("SELECT 1 AS a", "cdm/p"),
+        ("SELECT 'v1' AS b", "cdm/p/k=1"),
+        ("SELECT 'v1' AS v", "cde/a/k=1"),
+        ("SELECT 'v2' AS v", "cde/b/k=2"),
+        ("SELECT 'v1' AS v", "cdg/p/k=1/j=1"),
+        ("SELECT 'v2' AS v", "cdg/p/k=2/j=1"),
+        ("SELECT 'v1' AS v", "cdf/p/k=1"),
+        ("SELECT 'v2' AS v", "cdf/p/j=2"),
+    ] {
+        parquet(s, sql, &root.join(dir));
+    }
+    // Non-ASCII directory names made by the file system, as Spark's writer leaves them on disk.
+    std::fs::create_dir_all(root.join("cdu/p")).unwrap();
+    for (sql, plain, dir) in [
+        ("SELECT 'v1' AS v", "cdu/w1", "cdu/p/\u{c9}=1"),
+        ("SELECT 'v2' AS v", "cdu/w2", "cdu/p/\u{e9}=2"),
+    ] {
+        parquet(s, sql, &root.join(plain));
+        std::fs::rename(root.join(plain), root.join(dir)).unwrap();
+    }
+    for tree in ["pva", "pvb", "pvc", "pvd", "pve", "pvf", "pvg", "pvh"] {
         for k in ["1", "2"] {
             parquet(
                 s,
@@ -399,8 +457,151 @@ fn review_cases(add: &mut impl FnMut(String, Read)) {
             "pvb/p/k=3/j=1",
         ),
     ] {
-        add(case.to_owned(), Read::ViewThenAdd { name, path, added });
+        add(
+            case.to_owned(),
+            Read::ViewThen {
+                name,
+                path,
+                columns: "(v STRING, k INT) ",
+                change: Change::Add(added),
+                refresh: false,
+            },
+        );
     }
+    // What else the listing of CREATE keeps, and REFRESH TABLE.
+    let view = |name, path, columns, change, refresh| Read::ViewThen {
+        name,
+        path,
+        columns,
+        change,
+        refresh,
+    };
+    let typed = "(v STRING, k INT) ";
+    add(
+        "sql view inferred, partition value added after create".into(),
+        view("v12", "pvc/p", "", Change::Add("pvc/p/k=3"), false),
+    );
+    add(
+        "sql view file added to a partition after create".into(),
+        view("v13", "pvd/p", typed, Change::AddFile("pvd/p/k=1"), false),
+    );
+    add(
+        "sql view refreshed after a partition value added".into(),
+        view("v14", "pve/p", typed, Change::Add("pve/p/k=3"), true),
+    );
+    add(
+        "sql view partition directory deleted after create".into(),
+        view("v15", "pvf/p", typed, Change::Delete("pvf/p/k=2"), false),
+    );
+    add(
+        "sql view refreshed after a partition column added".into(),
+        view("v16", "pvg/p", typed, Change::Add("pvg/p/k=3/j=1"), true),
+    );
+    add(
+        "dataframe view partition value added after create".into(),
+        Read::FrameViewThenAdd {
+            name: "v17",
+            path: "pvh/p",
+            added: "pvh/p/k=3",
+        },
+    );
+    add(
+        "partition directory under a plain directory".into(),
+        Read::Files {
+            format: "parquet",
+            path: "cdb/p".into(),
+            schema: None,
+            built: false,
+            options: Vec::new(),
+        },
+    );
+    add(
+        "partition directories of two depths".into(),
+        Read::Files {
+            format: "parquet",
+            path: "cda/p".into(),
+            schema: None,
+            built: false,
+            options: Vec::new(),
+        },
+    );
+    let parquet_with = |paths: &[&str], options: &[(&'static str, &'static str)]| Read::Paths {
+        format: "parquet",
+        paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+        options: options.to_vec(),
+    };
+    let parquet_at = |paths: &[&str]| parquet_with(paths, &[]);
+    add(
+        "files at the root beside a partition directory".into(),
+        parquet_at(&["cdc/p"]),
+    );
+    add(
+        "two partitioned roots".into(),
+        parquet_at(&["cde/a", "cde/b"]),
+    );
+    add(
+        "a glob over partition directories".into(),
+        parquet_at(&["cdg/p/k={1,2}"]),
+    );
+    add(
+        "a glob matching one partition directory".into(),
+        parquet_at(&["cdg/p/k={1,3}"]),
+    );
+    add(
+        "partition column names differ".into(),
+        parquet_at(&["cdf/p"]),
+    );
+    // `ignoreInvalidPartitionPaths` (option, else the conf) skips the base-path check only.
+    let ignore = [("ignoreInvalidPartitionPaths", "true")];
+    for (name, paths) in [
+        ("two partitioned roots", &["cde/a", "cde/b"][..]),
+        ("a glob over partition directories", &["cdg/p/k={1,2}"][..]),
+        (
+            "partition directory under a plain directory",
+            &["cdb/p"][..],
+        ),
+        (
+            "files at the root beside a partition directory",
+            &["cdc/p"][..],
+        ),
+        ("partition column names differ", &["cdf/p"][..]),
+    ] {
+        add(
+            format!("{name}, ignoreInvalidPartitionPaths option"),
+            parquet_with(paths, &ignore),
+        );
+    }
+    // The conf comes from the fixture's `conf`.
+    add(
+        "two partitioned roots, ignoreInvalidPartitionPaths conf".into(),
+        parquet_at(&["cde/a", "cde/b"]),
+    );
+    add(
+        "two partitioned roots, option false over conf true".into(),
+        parquet_with(
+            &["cde/a", "cde/b"],
+            &[("ignoreInvalidPartitionPaths", "false")],
+        ),
+    );
+    add(
+        "files at the root beside a partition directory, mergeSchema".into(),
+        parquet_with(&["cdm/p"], &[("mergeSchema", "true")]),
+    );
+    add(
+        "partition column names differing in non-ASCII case".into(),
+        parquet_at(&["cdu/p"]),
+    );
+}
+
+/// What a case changes under a view's path after `CREATE TEMPORARY VIEW`.
+#[derive(Clone, Copy)]
+enum Change {
+    /// A Parquet directory with `v = 'v3'` written here.
+    Add(&'static str),
+    /// A Parquet file with `v = 'v3'` moved into this directory.
+    AddFile(&'static str),
+    /// This directory deleted.
+    Delete(&'static str),
 }
 
 /// How a case reads.
@@ -414,11 +615,26 @@ enum Read {
         built: bool,
         options: Vec<(&'static str, &'static str)>,
     },
+    /// `spark.read.options(..).format(..).load(paths)`, no schema.
+    Paths {
+        format: &'static str,
+        paths: Vec<String>,
+        options: Vec<(&'static str, &'static str)>,
+    },
     /// The read, then a filter.
     Where(Box<Read>, &'static str),
-    /// `CREATE TEMPORARY VIEW v (v STRING, k INT) USING parquet OPTIONS (path ..)`, then a Parquet file with
-    /// `v = 'v3'` written to `added`, then `SELECT * FROM v`.
-    ViewThenAdd {
+    /// `CREATE TEMPORARY VIEW v <columns>USING parquet OPTIONS (path ..)`, then `change`, then (with `refresh`)
+    /// `REFRESH TABLE v`, then `SELECT * FROM v`.
+    ViewThen {
+        name: &'static str,
+        path: &'static str,
+        columns: &'static str,
+        change: Change,
+        refresh: bool,
+    },
+    /// `spark.read.parquet(path).createOrReplaceTempView(v)`, then a Parquet directory with `v = 'v3'` written to
+    /// `added`, then `SELECT * FROM v`.
+    FrameViewThenAdd {
         name: &'static str,
         path: &'static str,
         added: &'static str,
@@ -819,6 +1035,25 @@ fn built_schema(ddl: &str) -> StructType {
     }))
 }
 
+/// Makes `change` under `root`.
+fn apply(s: &Session, root: &Path, change: Change) {
+    match change {
+        Change::Add(added) => parquet(s, "SELECT 'v3' AS v", &root.join(added)),
+        Change::AddFile(dir) => {
+            let staged = root.join(format!("{dir}_new"));
+            parquet(s, "SELECT 'v3' AS v", &staged);
+            let part = std::fs::read_dir(&staged)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+                .unwrap();
+            std::fs::rename(part, root.join(dir).join("added.parquet")).unwrap();
+            std::fs::remove_dir_all(staged).unwrap();
+        }
+        Change::Delete(dir) => std::fs::remove_dir_all(root.join(dir)).unwrap(),
+    }
+}
+
 /// The frame a case reads.
 fn frame(s: &Session, root: &Path, r: &Read) -> Result<DataFrame, KrishivError> {
     let abs = |p: &str| root.join(p).to_str().unwrap().to_owned();
@@ -846,6 +1081,17 @@ fn frame(s: &Session, root: &Path, r: &Read) -> Result<DataFrame, KrishivError> 
             }
             Ok(reader.format(format).load([abs(path)]))
         }
+        Read::Paths {
+            format,
+            paths,
+            options,
+        } => {
+            let mut reader = s.read();
+            for (k, v) in options {
+                reader = reader.option(k, v);
+            }
+            Ok(reader.format(format).load(paths.iter().map(|p| abs(p))))
+        }
         Read::Where(r, condition) => frame(s, root, r)?.filter_expr(condition),
         Read::View {
             name,
@@ -860,12 +1106,30 @@ fn frame(s: &Session, root: &Path, r: &Read) -> Result<DataFrame, KrishivError> 
             )))?;
             block_on(s.sql(&format!("SELECT * FROM {name}")))
         }
-        Read::ViewThenAdd { name, path, added } => {
+        Read::ViewThen {
+            name,
+            path,
+            columns,
+            change,
+            refresh,
+        } => {
             block_on(s.sql(&format!("DROP VIEW IF EXISTS {name}")))?;
             block_on(s.sql(&format!(
-                "CREATE TEMPORARY VIEW {name} (v STRING, k INT) USING parquet OPTIONS (path '{}')",
+                "CREATE TEMPORARY VIEW {name} {columns}USING parquet OPTIONS (path '{}')",
                 abs(path)
             )))?;
+            apply(s, root, *change);
+            if *refresh {
+                block_on(s.sql(&format!("REFRESH TABLE {name}")))?;
+            }
+            block_on(s.sql(&format!("SELECT * FROM {name}")))
+        }
+        Read::FrameViewThenAdd { name, path, added } => {
+            block_on(
+                s.read()
+                    .parquet([abs(path)])
+                    .create_or_replace_temp_view(name),
+            )?;
             parquet(s, "SELECT 'v3' AS v", &root.join(added));
             block_on(s.sql(&format!("SELECT * FROM {name}")))
         }
@@ -933,7 +1197,15 @@ fn outcome(s: &Session, root: &Path, r: &Read) -> Value {
             let params: BTreeMap<&str, String> = e
                 .message_parameters()
                 .iter()
-                .map(|(k, v)| (*k, v.replace(root.to_str().unwrap(), "<root>")))
+                // Spark prints discovered base paths lower-cased; its temporary root is lower case.
+                .map(|(k, v)| {
+                    let root = root.to_str().unwrap();
+                    (
+                        *k,
+                        v.replace(root, "<root>")
+                            .replace(&root.to_lowercase(), "<root>"),
+                    )
+                })
                 .collect();
             let chain: Vec<String> = std::iter::once(&e)
                 .chain(e.causes())
@@ -944,6 +1216,40 @@ fn outcome(s: &Session, root: &Path, r: &Read) -> Value {
     }
 }
 
+/// Message parameters as sets of lines without list numbers: Spark lists partition directories in hash
+/// order, so two runs of the generator print the same lines in other orders (and number the column lists
+/// as they come). So this compares neither the numbering nor which list a leaf path belongs to; the exact
+/// form (numbers, shorter lists' leaves first) is pinned by `krishiv-io`'s `discover.rs` unit test only.
+fn unordered(params: Option<&Value>) -> Option<BTreeMap<String, Vec<String>>> {
+    let params = params?.as_object()?;
+    Some(
+        params
+            .iter()
+            .map(|(k, v)| {
+                let mut lines: Vec<String> = v
+                    .as_str()
+                    .unwrap_or_default()
+                    .split('\n')
+                    .map(|l| {
+                        let l = l.trim();
+                        match l.split_once(": ") {
+                            Some((head, rest))
+                                if head.starts_with("Partition column name list #") =>
+                            {
+                                rest.to_owned()
+                            }
+                            _ => l.to_owned(),
+                        }
+                    })
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                lines.sort();
+                (k.clone(), lines)
+            })
+            .collect(),
+    )
+}
+
 /// Whether `got` matches the fixture case `want`: schema and rows, or the error at the level the fixture recorded.
 fn matches(want: &Value, got: &Value) -> bool {
     if let Some(class) = want.get("error_class") {
@@ -952,6 +1258,13 @@ fn matches(want: &Value, got: &Value) -> bool {
         }
         if let Some(chain) = want.get("error_chain") {
             return got.get("error_chain") == Some(chain);
+        }
+        if matches!(
+            class.as_str(),
+            Some("CONFLICTING_DIRECTORY_STRUCTURES" | "CONFLICTING_PARTITION_COLUMN_NAMES")
+        ) {
+            return unordered(got.get("message_parameters"))
+                == unordered(want.get("message_parameters"));
         }
         return got.get("message_parameters") == want.get("message_parameters");
     }
@@ -999,7 +1312,7 @@ fn reads_with_a_user_schema_match_spark() {
             }
             continue;
         }
-        let gap = KNOWN_GAPS.iter().any(|(n, _)| n == name);
+        let gap = KNOWN_GAPS.iter().chain(BY_DESIGN).any(|(n, _)| n == name);
         match (ok, gap) {
             (false, false) => failures.push(format!("{name}\n  want {want}\n  got  {got}")),
             (true, true) => gaps_matched.push(name.clone()),
@@ -1008,7 +1321,7 @@ fn reads_with_a_user_schema_match_spark() {
     }
     assert!(
         gaps_matched.is_empty(),
-        "now matching Spark, remove from KNOWN_GAPS: {gaps_matched:?}"
+        "now matching Spark, remove from KNOWN_GAPS (or BY_DESIGN): {gaps_matched:?}"
     );
     assert!(
         failures.is_empty(),

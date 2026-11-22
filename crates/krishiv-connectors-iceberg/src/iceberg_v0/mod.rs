@@ -5,6 +5,7 @@
 pub(crate) mod append;
 pub(crate) mod commit;
 pub(crate) mod data_file;
+pub(crate) mod delete_write;
 pub(crate) mod deletes;
 pub(crate) mod eq_deletes;
 pub(crate) mod filter;
@@ -12,10 +13,12 @@ pub(crate) mod lazy;
 pub(crate) mod lineage;
 pub(crate) mod manifest_cache;
 pub(crate) mod merge;
+pub(crate) mod mor_sink;
 pub(crate) mod overwrite;
 pub(crate) mod provider;
 pub(crate) mod puffin_stats;
 pub(crate) mod rolling;
+pub(crate) mod row_delta;
 pub(crate) mod row_level;
 pub(crate) mod scan;
 pub(crate) mod sink;
@@ -58,6 +61,12 @@ mod lineage_tests;
 #[cfg(test)]
 mod merge_tests;
 #[cfg(test)]
+mod mor_fault_tests;
+#[cfg(test)]
+mod mor_sink_tests;
+#[cfg(test)]
+mod mor_tests;
+#[cfg(test)]
 mod oracle_tests;
 #[cfg(test)]
 mod overwrite_tests;
@@ -79,6 +88,8 @@ mod statistics_tests;
 mod table_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod type_golden_tests;
 #[cfg(test)]
 mod validate_tests;
 #[cfg(test)]

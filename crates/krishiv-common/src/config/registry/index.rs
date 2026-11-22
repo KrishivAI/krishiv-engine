@@ -49,9 +49,11 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.zstd.level", &SPILL_ZSTD_LEVEL),
     ("krishiv.sql.ansi.enabled", &ANSI_ENABLED),
     ("krishiv.sql.path.enabled", &SQL_PATH_ENABLED),
+    ("krishiv.ui.embed.linkTtl", &UI_EMBED_LINK_TTL),
     ("krishiv.flightSql.enabled", &FLIGHT_SQL_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
+    ("krishiv.ui.allowedOrigins", &UI_ALLOWED_ORIGINS),
     ("krishiv.catalog.maxColumns", &CATALOG_MAX_COLUMNS),
     ("krishiv.deterministicOrder", &DETERMINISTIC_ORDER),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
@@ -85,6 +87,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
     ("krishiv.resultCache.maxBytes", &RESULT_CACHE_MAX_BYTES),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
+    ("krishiv.write.idempotencyKey", &WRITE_IDEMPOTENCY_KEY),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.exec.agg.outputFilter", &EXEC_AGG_OUTPUT_FILTER),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
@@ -172,6 +175,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ),
     ("krishiv.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     ("krishiv.sql.files.commitProtocol", &FILES_COMMIT_PROTOCOL),
+    (
+        "krishiv.ui.embed.hideAttribution",
+        &UI_EMBED_HIDE_ATTRIBUTION,
+    ),
     (
         "krishiv.write.commitRetryTimeout",
         &WRITE_COMMIT_RETRY_TIMEOUT,
@@ -395,6 +402,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
     (
+        "krishiv.optimizer.shareFilteredScans",
+        &SHARE_FILTERED_SCANS,
+    ),
+    (
         "krishiv.runtimeFilter.bloom.maxBytes",
         &RUNTIME_FILTER_BLOOM_MAX_BYTES,
     ),
@@ -453,6 +464,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.legacy.statisticalAggregate",
         &LEGACY_STATISTICAL_AGGREGATE,
+    ),
+    (
+        "spark.sql.timeTravel.atSyntax.enabled",
+        &TIME_TRAVEL_AT_SYNTAX_ENABLED,
     ),
     (
         "krishiv.advisor.missingStats.minQError",
@@ -557,6 +572,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.optimizer.shareCteInstances",
         &SHARE_CTE_INSTANCES,
+    ),
+    (
+        "krishiv.sql.timeTravel.atSyntax.enabled",
+        &TIME_TRAVEL_AT_SYNTAX_ENABLED,
     ),
     (
         "spark.sql.avro.datetimeRebaseModeInRead",

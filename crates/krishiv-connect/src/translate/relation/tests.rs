@@ -5,11 +5,11 @@ use std::collections::BTreeMap;
 
 use krishiv_common::error::ErrorClass;
 use krishiv_common::secret::OptionValue;
-use krishiv_plan::PlanNode;
+use krishiv_plan::{ColumnNamesOp, PlanNode};
 
 use super::super::testing::{
-    attr, boxed, conf, expr, fails, func, lit, read_files, read_table, relation, show, translate,
-    with_id,
+    attr, attr_with, boxed, conf, expr, fails, func, lit, read_files, read_table, relation, show,
+    translate, with_id,
 };
 use super::super::{TranslateConf, translate_relation};
 use super::*;
@@ -279,6 +279,11 @@ fn project_filter_limit_and_alias() {
         offset: 3,
     })));
     assert_eq!(show(&offset), "Offset 3\n+- Read t\n");
+    let tail = relation(RelType::Tail(Box::new(pb::Tail {
+        input: input(),
+        limit: 4,
+    })));
+    assert_eq!(show(&tail), "Tail 4\n+- Read t\n");
     let alias = relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
         input: input(),
         alias: "x".into(),
@@ -894,9 +899,7 @@ fn a_relations_plan_id_becomes_its_origin() {
 fn unsupported_relations_are_named() {
     for (kind, name) in [
         (RelType::ShowString(Box::default()), "SHOW_STRING(20)"),
-        (RelType::ToDf(Box::default()), "TO_DF(18)"),
         (RelType::Transpose(Box::default()), "TRANSPOSE(42)"),
-        (RelType::Drop(Box::default()), "DROP(21)"),
         (RelType::WithRelations(Box::default()), "WITH_RELATIONS(41)"),
     ] {
         let r = relation(kind);
@@ -1409,6 +1412,213 @@ fn repartition_by_expression_plans_as_distribute_by() {
 }
 
 #[test]
+fn repartition_and_coalesce_plan_as_their_hints() {
+    let rel = |shuffle: Option<bool>| {
+        relation(RelType::Repartition(Box::new(pb::Repartition {
+            input: star_input(),
+            num_partitions: 4,
+            shuffle,
+        })))
+    };
+    // `shuffle` is `optional bool`, default false: Spark reads it with `getShuffle`, so unset is `coalesce`.
+    let (translated, parsed) = plans(&rel(None), "SELECT /*+ COALESCE(4) */ * FROM t");
+    assert_eq!(translated, parsed);
+    let (translated, parsed) = plans(&rel(Some(true)), "SELECT /*+ REPARTITION(4) */ * FROM t");
+    assert_eq!(translated, parsed);
+    let (translated, parsed) = plans(&rel(Some(false)), "SELECT /*+ COALESCE(4) */ * FROM t");
+    assert_eq!(translated, parsed);
+}
+
+#[test]
+fn na_replace_flattens_the_pairs_for_the_analyzer() {
+    let long = |v: i64| pb::expression::Literal {
+        literal_type: Some(pb::expression::literal::LiteralType::Long(v)),
+        data_type: None,
+    };
+    let rel = relation(RelType::Replace(Box::new(pb::NaReplace {
+        input: input(),
+        cols: vec!["a".into()],
+        replacements: vec![pb::na_replace::Replacement {
+            old_value: Some(long(1)),
+            new_value: Some(long(10)),
+        }],
+    })));
+    let PlanNode::ColumnNames { op, .. } = node(&rel) else {
+        panic!("not a ColumnNames node")
+    };
+    let ColumnNamesOp::Replace { cols, pairs } = op else {
+        panic!("not a Replace op")
+    };
+    assert!(cols == ["a"] && pairs.len() == 2);
+    let pairs: Vec<String> = pairs.iter().map(|e| format!("{e:?}")).collect();
+    assert!(
+        pairs[0].contains("Long(1)") && !pairs[0].contains("Long(10)"),
+        "{pairs:?}"
+    );
+    assert!(pairs[1].contains("Long(10)"), "{pairs:?}");
+}
+
+#[test]
+fn na_fill_and_na_drop_translate_and_check_their_values() {
+    let long = |v: i64| pb::expression::Literal {
+        literal_type: Some(pb::expression::literal::LiteralType::Long(v)),
+        data_type: None,
+    };
+    let fill = |cols: Vec<&str>, values: Vec<pb::expression::Literal>| {
+        relation(RelType::FillNa(Box::new(pb::NaFill {
+            input: input(),
+            cols: cols.into_iter().map(String::from).collect(),
+            values,
+        })))
+    };
+    let PlanNode::ColumnNames { op, .. } = node(&fill(vec!["a"], vec![long(1)])) else {
+        panic!("not a ColumnNames node")
+    };
+    assert!(matches!(op, ColumnNamesOp::FillNa { .. }));
+    assert_eq!(
+        code(&fill(vec!["a"], vec![])),
+        ErrorClass::ConnectInvalidPlanNaFillValuesEmpty
+    );
+    assert_eq!(
+        code(&fill(vec!["a"], vec![long(1), long(2)])),
+        ErrorClass::ConnectInvalidPlanNaFillValuesLengthMismatch
+    );
+    let drop = relation(RelType::DropNa(Box::new(pb::NaDrop {
+        input: input(),
+        cols: vec!["a".into()],
+        min_non_nulls: Some(2),
+    })));
+    let PlanNode::ColumnNames { op, .. } = node(&drop) else {
+        panic!("not a ColumnNames node")
+    };
+    assert_eq!(
+        op,
+        ColumnNamesOp::DropNa {
+            subset: vec!["a".into()],
+            min_non_nulls: Some(2)
+        }
+    );
+}
+
+#[test]
+fn cov_and_corr_plan_as_one_row_aggregates_named_for_the_statistic() {
+    for (rel, expected) in [
+        (
+            relation(RelType::Cov(Box::new(pb::StatCov {
+                input: input(),
+                col1: "a".into(),
+                col2: "b".into(),
+            }))),
+            "cov",
+        ),
+        (
+            relation(RelType::Corr(Box::new(pb::StatCorr {
+                input: input(),
+                col1: "a".into(),
+                col2: "b".into(),
+                method: Some("pearson".into()),
+            }))),
+            "corr",
+        ),
+    ] {
+        let PlanNode::Aggregate {
+            grouping,
+            aggregates,
+            ..
+        } = node(&rel)
+        else {
+            panic!("not an Aggregate node")
+        };
+        assert!(matches!(grouping, Grouping::GroupBy(k) if k.is_empty()));
+        assert!(matches!(&aggregates[0].node, ExprNode::Alias { name, .. } if name == expected));
+    }
+}
+
+#[test]
+fn cov_reads_its_columns_as_attribute_references() {
+    let rel = relation(RelType::Cov(Box::new(pb::StatCov {
+        input: input(),
+        col1: "t.x".into(),
+        col2: "`a.b`".into(),
+    })));
+    let PlanNode::Aggregate { aggregates, .. } = node(&rel) else {
+        panic!("not an Aggregate node")
+    };
+    // The two argument columns of covar_samp, under the alias and the zero fill: `t.x` is the
+    // qualified reference ["t", "x"], the quoted name the single part "a.b".
+    let mut seen: Vec<Vec<String>> = Vec::new();
+    fn columns(e: &krishiv_plan::Expr, out: &mut Vec<Vec<String>>) {
+        if let krishiv_plan::ExprNode::Column(c) = &e.node {
+            out.push(c.name.clone());
+        }
+        e.for_each_child(&mut |child| columns(child, out));
+    }
+    columns(&aggregates[0], &mut seen);
+    assert_eq!(
+        seen,
+        vec![vec!["t".to_owned(), "x".to_owned()], vec!["a.b".to_owned()]]
+    );
+}
+
+#[test]
+fn corr_refuses_a_method_other_than_pearson() {
+    let rel = relation(RelType::Corr(Box::new(pb::StatCorr {
+        input: input(),
+        col1: "a".into(),
+        col2: "b".into(),
+        method: Some("spearman".into()),
+    })));
+    assert_eq!(code(&rel), ErrorClass::KrishivUnsupportedFeature);
+}
+
+#[test]
+fn sample_by_plans_a_filter_drawing_rand_for_every_row() {
+    let stratum = |n: i32| pb::expression::Literal {
+        literal_type: Some(LiteralType::Integer(n)),
+        data_type: None,
+    };
+    let sample_by = |fraction: f64| {
+        relation(RelType::SampleBy(Box::new(pb::StatSampleBy {
+            input: input(),
+            col: Some(attr("k")),
+            fractions: vec![pb::stat_sample_by::Fraction {
+                stratum: Some(stratum(1)),
+                fraction,
+            }],
+            seed: Some(7),
+        })))
+    };
+    let rel = sample_by(0.5);
+    let PlanNode::Filter { predicate, .. } = node(&rel) else {
+        panic!("not a Filter node")
+    };
+    let text = format!("{predicate:?}");
+    // rand(7) < CASE WHEN k = 1 THEN 0.5 ELSE 0.0 END, in this order.
+    let in_order = [
+        "name: \"<\"",
+        "name: \"rand\"",
+        "Literal(Long(7))",
+        "name: \"when\"",
+        "name: \"==\"",
+        "name: [\"k\"]",
+        "Literal(Integer(1))",
+        "Literal(Double(0.5))",
+        "Literal(Double(0.0))",
+    ];
+    let mut at = 0;
+    for part in in_order {
+        let found = text[at..]
+            .find(part)
+            .unwrap_or_else(|| panic!("{part} after {at}: {text}"));
+        at += found + part.len();
+    }
+    assert_eq!(
+        code(&sample_by(1.5)),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+}
+
+#[test]
 fn unpivot_plans_as_unpivot_include_nulls() {
     let rel = relation(RelType::Unpivot(Box::new(pb::Unpivot {
         input: input(),
@@ -1437,4 +1647,124 @@ fn unpivot_plans_as_unpivot_include_nulls() {
         );
         assert_eq!(line(&translated, prefix), line(&parsed, prefix), "{prefix}");
     }
+}
+
+// ---- column-name arms: to_df, with_columns_renamed, drop ----------------------------------------
+
+fn column_names_op(rel: &Relation) -> ColumnNamesOp {
+    let PlanNode::ColumnNames { op, .. } = node(rel) else {
+        panic!("not a ColumnNames node")
+    };
+    op
+}
+
+#[test]
+fn to_df_keeps_the_names_in_order() {
+    let rel = relation(RelType::ToDf(Box::new(pb::ToDf {
+        input: input(),
+        column_names: vec!["x".into(), "y".into()],
+    })));
+    assert_eq!(
+        column_names_op(&rel),
+        ColumnNamesOp::ToDf(vec!["x".into(), "y".into()])
+    );
+}
+
+#[test]
+fn with_columns_renamed_reads_the_list_then_the_old_map() {
+    let listed = relation(RelType::WithColumnsRenamed(Box::new(
+        pb::WithColumnsRenamed {
+            input: input(),
+            rename_columns_map: [("ignored".to_owned(), "x".to_owned())].into(),
+            renames: vec![pb::with_columns_renamed::Rename {
+                col_name: "a".into(),
+                new_col_name: "b".into(),
+            }],
+        },
+    )));
+    assert_eq!(
+        column_names_op(&listed),
+        ColumnNamesOp::Rename(vec![("a".into(), "b".into())])
+    );
+    let mapped = relation(RelType::WithColumnsRenamed(Box::new(
+        pb::WithColumnsRenamed {
+            input: input(),
+            rename_columns_map: [("a".to_owned(), "b".to_owned())].into(),
+            renames: vec![],
+        },
+    )));
+    assert_eq!(
+        column_names_op(&mapped),
+        ColumnNamesOp::Rename(vec![("a".into(), "b".into())])
+    );
+}
+
+#[test]
+fn drop_takes_names_and_plain_columns_and_refuses_other_expressions() {
+    let rel = relation(RelType::Drop(Box::new(pb::Drop {
+        input: input(),
+        columns: vec![attr("a")],
+        column_names: vec!["b".into()],
+    })));
+    assert_eq!(
+        column_names_op(&rel),
+        ColumnNamesOp::Drop {
+            names: vec!["b".into()],
+            columns: vec!["a".into()],
+        }
+    );
+    let drop_of = |e: Expression| {
+        relation(RelType::Drop(Box::new(pb::Drop {
+            input: input(),
+            columns: vec![e],
+            column_names: vec![],
+        })))
+    };
+    // A literal, a qualified column and a column tied to a DataFrame drop by attribute in Spark.
+    for e in [
+        lit(LiteralType::Integer(1)),
+        attr("t.a"),
+        attr_with("a", Some(7)),
+    ] {
+        assert_eq!(code(&drop_of(e)), ErrorClass::KrishivUnsupportedFeature);
+    }
+}
+
+#[test]
+fn a_rename_map_whose_result_depends_on_entry_order_is_refused() {
+    let map = |entries: &[(&str, &str)]| {
+        relation(RelType::WithColumnsRenamed(Box::new(
+            pb::WithColumnsRenamed {
+                input: input(),
+                rename_columns_map: entries
+                    .iter()
+                    .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+                    .collect(),
+                renames: vec![],
+            },
+        )))
+    };
+    // A chain, a new name equal to another key ignoring case, and two keys equal ignoring case.
+    for entries in [
+        &[("b", "c"), ("a", "b")][..],
+        &[("a", "B"), ("b", "x")][..],
+        &[("A", "x"), ("a", "y")][..],
+    ] {
+        assert_eq!(
+            code(&map(entries)),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{entries:?}"
+        );
+    }
+    // A case-only rename and a no-op depend on nothing.
+    for entries in [&[("name", "Name")][..], &[("a", "a")][..]] {
+        assert!(
+            matches!(column_names_op(&map(entries)), ColumnNamesOp::Rename(_)),
+            "{entries:?}"
+        );
+    }
+    assert_eq!(
+        column_names_op(&map(&[("a", "x"), ("b", "y")])),
+        ColumnNamesOp::Rename(vec![("a".into(), "x".into()), ("b".into(), "y".into())])
+    );
 }

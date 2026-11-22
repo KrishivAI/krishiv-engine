@@ -613,6 +613,10 @@ jobs:
   # Miri compiles: those crates, their path dependency krishiv-common, the
   # root Cargo.toml/Cargo.lock, rust-toolchain.toml or this workflow (and
   # always on the nightly run of main).
+  # The Miri steps were one job that took 23 to 45 minutes on pull requests: the krishiv-kernels step
+  # alone ran up to 41 minutes, so the bridge steps behind it were cancelled by the job timeout
+  # (#895). The bridges (krishiv-python's stream_ffi, krishiv-arrow-bridge) are a job of their own,
+  # so each has its own time budget and a slow kernels run no longer cancels them.
   miri-kernels:
     # Not in the merge queue (about 33 minutes; it ran on the pull request, and the nightly
     # run covers main). The check still reports there: a skipped job satisfies it.
@@ -653,6 +657,44 @@ jobs:
       - name: Miri (unit, property and doc tests; reduced cases under cfg(miri))
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-kernels --locked
+
+  miri-bridges:
+    # Not in the merge queue (about 8 minutes; it ran on the pull request, and the nightly
+    # run covers main). The check still reports there: a skipped job satisfies it.
+    if: github.event_name != 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Path gate
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run=true
+          if [ "$EVENT" = "pull_request" ]; then
+            if ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
+              | grep -qE '^(crates/krishiv-kernels/|crates/krishiv-python/|crates/krishiv-arrow-bridge/|crates/krishiv-common/|\.github/workflows/ci\.yml$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
+              run=false
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "miri-bridges: run=$run"
+      # Dated nightly: Miri ships only on nightly; pinning keeps runs reproducible.
+      - name: Nightly toolchain with Miri
+        if: steps.gate.outputs.run == 'true'
+        run: rustup toolchain install nightly-2026-08-12 --profile minimal --component miri,rust-src
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.gate.outputs.run == 'true'
       - name: Miri (Arrow C stream bridge of krishiv-python)
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi --locked
@@ -797,7 +839,7 @@ jobs:
             coverage: true
           - name: cp314t
             python: "3.14t"
-            maturin_args: "--no-default-features --features mimalloc,cloud"
+            maturin_args: "--no-default-features --features mimalloc,cloud,ui"
             wheel_tag: cp314t
             coverage: false
     name: wheels (${{ matrix.name }})
@@ -850,6 +892,14 @@ jobs:
             if [ "$COVERAGE" = "true" ]; then exit 1; fi
             echo "::notice::mypy has no install for this interpreter; the stub checks are skipped"
           fi
+          # P2-T096: python/tests/test_notebooks.py runs the notebooks under python/tests/notebooks with
+          # nbval (each cell's output must equal the stored one); it skips when nbval or ipykernel is
+          # absent. Required on the coverage leg, as mypy is.
+          if ! uv pip install --python "$RUNNER_TEMP/venv/bin/python" --only-binary :all: "nbval==0.11.0" "ipykernel==7.4.0"; then
+            if [ "$COVERAGE" = "true" ]; then exit 1; fi
+            echo "::notice::nbval or ipykernel has no install for this interpreter; the notebook check is skipped"
+          fi
+          if [ "$COVERAGE" = "true" ]; then export KRISHIV_REQUIRE_NBVAL=1; fi
           # The Arrow PyCapsule consumers the bridge tests run against, from
           # binary wheels only. All are required on abi3; Polars and DuckDB
           # publish no free-threaded wheels yet, so on cp314t a missing one
@@ -1312,6 +1362,7 @@ jobs:
       - docs
       - release-dry-run
       - miri-kernels
+      - miri-bridges
       - wheels
       - wheels-targets
       - wheels-ok

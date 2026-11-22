@@ -774,17 +774,21 @@ fn session_user_and_local_timestamp() {
         &ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
     );
     assert!(!schema.field(0).is_nullable());
-    // `current_time` is a TIME: refused while the type is gated off.
+    // `current_time` is a TIME: with the type gated off Spark still projects
+    // it (SQL-26), but refuses a time function applied to it.
     for sql in [
         "SELECT current_time() FROM events",
         "SELECT current_time(3) FROM events",
     ] {
-        assert_eq!(
-            sql_error(&s, sql).error_class(),
-            ErrorClass::UnsupportedTimeType,
+        assert!(
+            block_on(async { s.sql(sql).await?.collect().await }).is_ok(),
             "{sql}"
         );
     }
+    assert_eq!(
+        sql_error(&s, "SELECT hour(current_time()) FROM events").error_class(),
+        ErrorClass::UnsupportedTimeType
+    );
     // A region zone reads the bundled database: the wall clock is the
     // instant shifted by the zone's offset then (-05:00 or -04:00 in New
     // York).

@@ -151,7 +151,7 @@ pub(super) fn parse_path(path: &str) -> Option<Vec<Step>> {
             b'.' => {
                 i = i.saturating_add(1);
                 let start = i;
-                while i < bytes.len() && !matches!(bytes[i], b'.' | b'[' | b']') {
+                while i < bytes.len() && !matches!(bytes[i], b'.' | b'[') {
                     i = i.saturating_add(1);
                 }
                 if start == i {

@@ -64,7 +64,8 @@
       "submitted_at": 1793990000000000,
       "rows_read": 41200000,
       "bytes_read": 3865470566,
-      "peak_memory_bytes": 1610612736
+      "peak_memory_bytes": 1610612736,
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000a1"
     },
     {
       "query_id": "01932a4e-9b44-7e02-8a10-5d7a3c9e2f02",
@@ -75,7 +76,8 @@
       "submitted_at": 1793990012000000,
       "rows_read": 9800000,
       "bytes_read": 905969664,
-      "peak_memory_bytes": 2415919104
+      "peak_memory_bytes": 2415919104,
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000b2"
     },
     {
       "query_id": "01932a4f-0011-7c33-b2aa-71e4f0d3a903",
@@ -83,7 +85,8 @@
       "principal": "ann",
       "statement_class": "query",
       "query_text": "SELECT * FROM events WHERE ts > now() - INTERVAL 1 DAY",
-      "submitted_at": 1793990020000000
+      "submitted_at": 1793990020000000,
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000a1"
     }
   ],
   "history": [
@@ -98,7 +101,13 @@
       "rows_produced": 1,
       "cpu_ns": 9200000000,
       "spill_bytes": 0,
-      "bytes_read": 7516192768
+      "bytes_read": 7516192768,
+      "client_type": "_SPARK_CONNECT_PYTHON spark/4.2.0 os/linux python/3.12",
+      "tags": {
+        "team": "risk",
+        "nightly": ""
+      },
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000a1"
     },
     {
       "query_id": "01932a40-1a00-7a01-8001-aaaaaaaaaa02",
@@ -111,7 +120,12 @@
       "rows_produced": 1,
       "cpu_ns": 12100000000,
       "spill_bytes": 134217728,
-      "bytes_read": 7516192768
+      "bytes_read": 7516192768,
+      "client_type": "krishiv-cli/0.2.1",
+      "tags": {
+        "team": "ads"
+      },
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000a1"
     },
     {
       "query_id": "01932a40-1a00-7a01-8001-aaaaaaaaaa03",
@@ -121,7 +135,9 @@
       "error_class": "DIVIDE_BY_ZERO",
       "submitted_at": 1793987000000000,
       "wall_ns": 3200000,
-      "peak_memory_bytes": 1048576
+      "peak_memory_bytes": 1048576,
+      "client_type": null,
+      "tags": {}
     },
     {
       "query_id": "01932a40-1a00-7a01-8001-aaaaaaaaaa04",
@@ -131,7 +147,12 @@
       "cancel_reason": "admin",
       "submitted_at": 1793986000000000,
       "wall_ns": 41000000000,
-      "peak_memory_bytes": 5368709120
+      "peak_memory_bytes": 5368709120,
+      "client_type": "ADBC Flight SQL",
+      "tags": {
+        "team": "risk"
+      },
+      "session_id": "01932a40-2b00-7b01-8001-5e55100000c3"
     }
   ],
   "detail": {
@@ -147,60 +168,126 @@
       "rows_produced": 5,
       "spill_bytes": 134217728,
       "bytes_read": 7516192768,
-      "hints": [{"code": "SPILL", "node_id": 2, "operator_id": 2, "message": "HashJoin spilled 128 MiB; give the query more memory."}]
+      "hints": [
+        {
+          "code": "SPILL",
+          "node_id": 2,
+          "operator_id": 2,
+          "message": "HashJoin spilled 128 MiB; give the query more memory."
+        }
+      ]
     },
     "operators": [
       {
         "operator_id": 0,
+        "node_id": null,
         "name": "Result",
+        "role": "sink",
         "drivers": 1,
         "rows_in": 5,
-        "rows_out": 5,
+        "rows_out": 0,
         "compute_ns": 20000,
         "blocked_io_ns": 0,
         "blocked_memory_ns": 0,
         "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 0,
         "spilled_bytes": 0
       },
       {
         "operator_id": 1,
+        "node_id": 0,
         "name": "HashAggregate",
+        "role": "sink",
         "drivers": 4,
         "rows_in": 15000000,
-        "rows_out": 5,
-        "compute_ns": 600000000,
+        "rows_out": 0,
+        "compute_ns": 400000000,
         "blocked_io_ns": 0,
         "blocked_memory_ns": 20000000,
         "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 50000000,
         "spilled_bytes": 0
       },
       {
         "operator_id": 2,
-        "name": "HashJoin",
+        "node_id": 0,
+        "name": "HashAggregate",
+        "role": "source",
         "drivers": 4,
-        "rows_in": 75000000,
-        "rows_out": 15000000,
-        "compute_ns": 1700000000,
+        "rows_in": 0,
+        "rows_out": 5,
+        "compute_ns": 200000000,
         "blocked_io_ns": 0,
-        "blocked_memory_ns": 300000000,
+        "blocked_memory_ns": 0,
         "blocked_sink_ns": 0,
-        "spilled_bytes": 134217728
+        "peak_reserved_bytes": 30000000,
+        "spilled_bytes": 0
       },
       {
         "operator_id": 3,
-        "name": "Scan lineitem",
+        "node_id": 2,
+        "name": "HashJoinBuild",
+        "role": "sink",
+        "drivers": 4,
+        "rows_in": 15000000,
+        "rows_out": 0,
+        "compute_ns": 500000000,
+        "blocked_io_ns": 0,
+        "blocked_memory_ns": 300000000,
+        "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 100000000,
+        "spilled_bytes": 134217728
+      },
+      {
+        "operator_id": 4,
+        "node_id": 2,
+        "name": "HashJoinProbe",
+        "role": "operator",
+        "drivers": 4,
+        "rows_in": 60000000,
+        "rows_out": 15000000,
+        "compute_ns": 1200000000,
+        "blocked_io_ns": 0,
+        "blocked_memory_ns": 0,
+        "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 0,
+        "spilled_bytes": 0
+      },
+      {
+        "operator_id": 5,
+        "node_id": 3,
+        "name": "Filter",
+        "role": "operator",
+        "drivers": 4,
+        "rows_in": 75000000,
+        "rows_out": 60000000,
+        "compute_ns": 90000000,
+        "blocked_io_ns": 0,
+        "blocked_memory_ns": 0,
+        "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 0,
+        "spilled_bytes": 0
+      },
+      {
+        "operator_id": 6,
+        "node_id": 4,
+        "name": "FileScan",
+        "role": "source",
         "drivers": 4,
         "rows_in": 0,
-        "rows_out": 60000000,
+        "rows_out": 75000000,
         "compute_ns": 410000000,
         "blocked_io_ns": 900000000,
         "blocked_memory_ns": 0,
         "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 150000000,
         "spilled_bytes": 0
       },
       {
-        "operator_id": 4,
-        "name": "Scan orders",
+        "operator_id": 7,
+        "node_id": 5,
+        "name": "FileScan",
+        "role": "source",
         "drivers": 1,
         "rows_in": 0,
         "rows_out": 15000000,
@@ -208,14 +295,71 @@
         "blocked_io_ns": 120000000,
         "blocked_memory_ns": 0,
         "blocked_sink_ns": 0,
+        "peak_reserved_bytes": 0,
         "spilled_bytes": 0
       }
     ],
     "hot_operator": {
-      "operator_id": 2,
-      "operator": "HashJoin",
-      "compute_ns": 1700000000
-    }
+      "operator_id": 4,
+      "operator": "HashJoinProbe",
+      "compute_ns": 1200000000
+    },
+    "plan": [
+      {
+        "id": 0,
+        "name": "HashAggregate",
+        "children": [
+          1
+        ]
+      },
+      {
+        "id": 1,
+        "name": "Exchange",
+        "children": [
+          2
+        ]
+      },
+      {
+        "id": 2,
+        "name": "HashJoin",
+        "children": [
+          3,
+          5,
+          9
+        ]
+      },
+      {
+        "id": 3,
+        "name": "Filter",
+        "children": [
+          4
+        ]
+      },
+      {
+        "id": 4,
+        "name": "FileScan",
+        "children": []
+      },
+      {
+        "id": null,
+        "name": "Subquery",
+        "children": [
+          6
+        ]
+      },
+      {
+        "id": null,
+        "name": "SharedPlan",
+        "children": [
+          7
+        ]
+      },
+      {
+        "id": 5,
+        "name": "FileScan",
+        "children": []
+      }
+    ]
   },
   "resources": {
     "memory": [

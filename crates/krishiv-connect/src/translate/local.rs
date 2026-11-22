@@ -13,7 +13,8 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use krishiv_common::error::{
-    ConnectInvalidPlanSchemaRequiredForLocalRelation, KrishivError, KrishivUnsupportedFeature,
+    ConnectInvalidPlanCannotParse, ConnectInvalidPlanSchemaRequiredForLocalRelation, KrishivError,
+    KrishivUnsupportedFeature,
 };
 use krishiv_plan::LocalRelation;
 use krishiv_types::StructType;
@@ -37,6 +38,8 @@ pub enum LocalRequest {
         /// The hash the client names.
         hash: String,
     },
+    /// `Relation.catalog`: a call of `spark.catalog` the host runs, answering its result rows.
+    Catalog(super::catalog::CatalogCall),
 }
 
 /// Where the translator gets its local relations from.
@@ -148,14 +151,45 @@ impl Eq for LocalRelations {}
 /// `CONNECT_INVALID_PLAN.SCHEMA_REQUIRED_FOR_LOCAL_RELATION` for neither, the parse error of a
 /// schema that is neither DDL nor JSON.
 pub(super) fn inline_request(l: &pb::LocalRelation) -> Result<LocalRequest, KrishivError> {
-    let schema = l.schema.as_deref().map(parse_local_schema).transpose()?;
-    if l.data.is_none() && schema.is_none() {
+    let (data, schema) = inline_parts(l.data.clone(), l.schema.as_deref())?;
+    Ok(LocalRequest::Inline { data, schema })
+}
+
+/// The data and parsed schema of a `LocalRelation`, as [`inline_request`] checks them.
+fn inline_parts(
+    data: Option<Vec<u8>>,
+    schema: Option<&str>,
+) -> Result<(Option<Vec<u8>>, Option<StructType>), KrishivError> {
+    let schema = schema.map(parse_local_schema).transpose()?;
+    if data.is_none() && schema.is_none() {
         return Err(ConnectInvalidPlanSchemaRequiredForLocalRelation {}.into());
     }
-    Ok(LocalRequest::Inline {
-        data: l.data.clone(),
-        schema,
-    })
+    Ok((data, schema))
+}
+
+/// The inline relation (Arrow IPC data, parsed schema) a `CachedLocalRelation`'s `cache/<hash>`
+/// artifact holds in `bytes`: a serialized `LocalRelation`, read as an inline one (Spark's `transformCachedLocalRelation`
+/// parses the block and calls `transformLocalRelation`). The host takes the bytes only from the
+/// requesting session's own artifacts, never from the relation store (design P3-T012a §1,
+/// "Security: a client hash never reaches the relation store").
+///
+/// # Errors
+/// `CONNECT_INVALID_PLAN.CANNOT_PARSE` for bytes that are not a `LocalRelation` (Spark raises an
+/// unclassed protobuf parse error there), and the errors of an inline relation.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a flat message (bytes and string fields), checked by `flat_message` first"
+)]
+pub fn cached_request(bytes: &[u8]) -> Result<(Option<Vec<u8>>, Option<StructType>), KrishivError> {
+    use prost::Message as _;
+    crate::wire::flat_message(bytes)?;
+    let relation = pb::LocalRelation::decode(bytes).map_err(|e| {
+        KrishivError::from(ConnectInvalidPlanCannotParse {
+            error_msg: format!("the cached local relation does not decode: {e}"),
+        })
+    })?;
+    // The decoded payload is moved, not copied again.
+    inline_parts(relation.data, relation.schema.as_deref())
 }
 
 #[cfg(test)]
