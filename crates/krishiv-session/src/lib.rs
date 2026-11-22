@@ -71,6 +71,7 @@ pub mod grants;
 mod history;
 mod identifier_clause;
 mod introspection;
+mod introspection_functions;
 #[cfg(test)]
 mod lineage_tests;
 #[cfg(feature = "unstable-ir")]
@@ -92,8 +93,6 @@ mod partitions;
 mod plan_round_trip;
 mod profile;
 mod profile_history;
-mod show_json;
-mod time_travel;
 pub use profile_history::{StoredProfile, read_history as read_profile_history};
 mod python_udfs;
 mod query_fold;

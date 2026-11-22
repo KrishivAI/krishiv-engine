@@ -67,8 +67,8 @@ AlterTable::DropColumns	DDL	ALTER TABLE t DROP COLUMN b
 AlterTable::RenameColumn	DDL	ALTER TABLE t RENAME COLUMN a TO b
 AlterTable::RenameTo	DDL	ALTER TABLE t RENAME TO u
 AlterTable::ChangeColumn	DDL	ALTER TABLE t CHANGE COLUMN a COMMENT 'c'
+AlterTable::CommentOnColumns	DDL	COMMENT ON COLUMN t.a IS 'c'
 AlterTable::AlterColumn	DDL	ALTER TABLE t ALTER COLUMN a SET NOT NULL
-AlterTable::AlterColumn	DDL	COMMENT ON COLUMN d.t.a IS NULL
 AlterTable::SetTblProperties	DDL	ALTER TABLE t SET TBLPROPERTIES ('k' = 'v')
 AlterTable::UnsetTblProperties	DDL	ALTER TABLE t UNSET TBLPROPERTIES ('k')
 AlterTable::SetSerdeProperties	DDL	ALTER TABLE t SET SERDEPROPERTIES ('k' = 'v')

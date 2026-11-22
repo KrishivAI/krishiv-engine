@@ -362,15 +362,8 @@ fn try_run(
     let alias = alias.to_owned();
     let condition = condition.map(str::to_owned);
     block_on(session.on_executor(async move {
-        s.run_row_level(
-            op,
-            &quoted,
-            &alias,
-            condition.as_deref(),
-            &assignments,
-            None,
-        )
-        .await
+        s.run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments)
+            .await
     }))
 }
 
@@ -489,6 +482,49 @@ fn row_level_refusal_unchanged() {
 }
 
 #[test]
+fn a_session_idempotency_key_is_refused_on_row_level_writes() {
+    let files = Files::new();
+    let (session, name) = session(&files);
+    session
+        .conf()
+        .set("krishiv.write.idempotencyKey", "job-1")
+        .unwrap();
+    let e = try_run(
+        &session,
+        &name,
+        RowLevelOperation::Delete,
+        "t",
+        Some("id = 1"),
+        vec![],
+    )
+    .expect_err("refused");
+    assert!(e.message().contains("idempotencyKey"), "{e}");
+    assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn a_session_idempotency_key_is_refused_on_merge_on_read_writes() {
+    let files = Files::new();
+    files.mor.store(true, Ordering::Relaxed);
+    let (session, name) = session(&files);
+    session
+        .conf()
+        .set("krishiv.write.idempotencyKey", "job-1")
+        .unwrap();
+    let e = try_run(
+        &session,
+        &name,
+        RowLevelOperation::Delete,
+        "t",
+        Some("id = 1"),
+        vec![],
+    )
+    .expect_err("refused");
+    assert!(e.message().contains("idempotencyKey"), "{e}");
+    assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+}
+
+#[test]
 fn row_level_counts_output() {
     // A table without an output: no rows, no columns.
     let files = Files::new();
@@ -565,33 +601,6 @@ fn assignments_are_checked_before_anything_runs() {
         ErrorClass::KrishivUnsupportedFeature
     );
     assert_eq!(files.commits.load(Ordering::Relaxed), 0);
-}
-
-#[test]
-fn with_options_on_a_row_level_table_are_refused_not_ignored() {
-    let files = Files::new();
-    let (session, _) = session(&files);
-    for (op, operation) in [
-        (RowLevelOperation::Delete, "DELETE"),
-        (RowLevelOperation::Update, "UPDATE TABLE"),
-    ] {
-        let s = session.clone();
-        let e = block_on(session.on_executor(async move {
-            s.run_row_level(op, "`t`", "t", Some("t.id = 1"), &[], Some(operation))
-                .await
-        }))
-        .unwrap_err();
-        assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
-    }
-    assert_eq!(files.commits.load(Ordering::Relaxed), 0);
-    run(
-        &session,
-        "t",
-        RowLevelOperation::Delete,
-        Some("t.id = 1"),
-        vec![],
-    );
-    assert_eq!(files.commits.load(Ordering::Relaxed), 1);
 }
 
 #[test]

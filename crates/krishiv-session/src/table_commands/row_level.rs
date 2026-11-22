@@ -123,7 +123,6 @@ impl Session {
         alias: &str,
         condition: Option<&str>,
         assignments: &[Assignment],
-        with_options: Option<&str>,
     ) -> Result<Option<DataFrame>, KrishivError> {
         let plain = self.with_locals(Vec::new());
         // A table that cannot be planned keeps the statement's old refusal (a v1 table's error
@@ -146,14 +145,8 @@ impl Session {
         let Some(table) = provider.row_level(op) else {
             return Ok(None);
         };
-        // Spark hands `WITH (options)` to the connector's scan and write; none is wired here, so a
-        // statement that would run refuses them rather than ignore them.
-        if let Some(operation) = with_options {
-            return Err(krishiv_common::error::KrishivUnsupportedFeature {
-                feature: format!("WITH (options) on {operation} of a table with row-level changes"),
-            }
-            .into());
-        }
+        // Refused here, before any scan or path split and for merge-on-read tables alike (E34).
+        refuse_idempotency_key(&probe.env.config)?;
         // A Delta table's root as delta-spark's errors name it (`file:/..`), for a table by path
         // and for a catalog table over a Delta location alike (its scan keeps the table's name).
         #[cfg(feature = "delta")]
@@ -765,3 +758,60 @@ fn the_delta_connector_reads_the_same_option_keys() {
 
 #[cfg(test)]
 mod tests;
+
+/// Row-level (DML) writes do not take `krishiv.write.idempotencyKey` yet (E34): a set key is refused
+/// instead of deduplicating on some table formats only.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` when the session setting names a key.
+pub(super) fn refuse_idempotency_key(
+    config: &krishiv_common::config::Config,
+) -> Result<(), KrishivError> {
+    match config
+        .get(&krishiv_common::config::WRITE_IDEMPOTENCY_KEY)
+        .and_then(krishiv_common::config::ConfigValue::as_str)
+    {
+        Some(_) => Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "krishiv.write.idempotencyKey on UPDATE, DELETE or MERGE; unset it for this statement"
+                .to_owned(),
+        }
+        .into()),
+        None => Ok(()),
+    }
+}
+
+/// Puts `krishiv.write.idempotencyKey` into a write's `options` when it names none (the per-write
+/// option wins over the session setting). E34.
+///
+/// # Errors
+/// `INVALID_CONF_VALUE` for an empty key.
+#[cfg(feature = "delta")]
+pub(super) fn apply_idempotency_key(
+    config: &krishiv_common::config::Config,
+    options: &mut std::collections::BTreeMap<String, String>,
+) -> Result<(), KrishivError> {
+    use krishiv_exec::planner::{IDEMPOTENCY_KEY_OPTION, idempotency_key_option};
+    let key = match idempotency_key_option(options) {
+        Some(k) => k,
+        None => {
+            match config
+                .get(&krishiv_common::config::WRITE_IDEMPOTENCY_KEY)
+                .and_then(krishiv_common::config::ConfigValue::as_str)
+            {
+                Some(k) => k.to_owned(),
+                None => return Ok(()),
+            }
+        }
+    };
+    if key.is_empty() {
+        return Err(krishiv_common::error::KrishivInvalidConfigValue {
+            key: IDEMPOTENCY_KEY_OPTION.to_owned(),
+            value: key,
+            reason: "an idempotency key must not be empty".to_owned(),
+        }
+        .into());
+    }
+    options.retain(|k, _| !k.eq_ignore_ascii_case(IDEMPOTENCY_KEY_OPTION));
+    options.insert(IDEMPOTENCY_KEY_OPTION.to_owned(), key);
+    Ok(())
+}

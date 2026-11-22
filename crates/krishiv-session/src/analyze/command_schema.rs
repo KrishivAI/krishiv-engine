@@ -66,6 +66,11 @@ const fn c(name: &'static str) -> CommandColumn {
     CommandColumn::new(name)
 }
 
+/// `SHOW FUNCTIONS`.
+pub(crate) const SHOW_FUNCTIONS: &[CommandColumn] = &[c("function")];
+/// `DESCRIBE FUNCTION`.
+pub(crate) const DESCRIBE_FUNCTION: &[CommandColumn] = &[c("function_desc")];
+
 /// `SHOW TABLES`.
 pub(crate) const SHOW_TABLES: &[CommandColumn] =
     &[c("namespace"), c("tableName"), c("isTemporary")];
@@ -88,8 +93,6 @@ pub(crate) const SHOW_CREATE_TABLE: &[CommandColumn] = &[c("createtab_stmt")];
 pub(crate) const SHOW_TBLPROPERTIES: &[CommandColumn] = &[c("key"), c("value")];
 /// `SHOW PARTITIONS`.
 pub(crate) const SHOW_PARTITIONS: &[CommandColumn] = &[c("partition")];
-/// `SHOW ... AS JSON` (Spark 4.3).
-pub(crate) const SHOW_JSON: &[CommandColumn] = &[c("json_metadata")];
 /// `SHOW CATALOGS`.
 pub(crate) const SHOW_CATALOGS: &[CommandColumn] = &[c("catalog")];
 /// `SHOW CURRENT NAMESPACE`.
@@ -130,7 +133,6 @@ pub(crate) const SET_VERBOSE: &[CommandColumn] =
 /// statement; `None` for any other statement.
 pub(crate) fn command_schema(statement: &Statement) -> Option<Vec<OutputColumn>> {
     let columns: &[CommandColumn] = match statement {
-        Statement::Show(s) if s.as_json => SHOW_JSON,
         Statement::Show(s) => show_columns(&s.kind)?,
         Statement::Describe(d) => describe_columns(&d.kind)?,
         Statement::Explain(_) => EXPLAIN,
@@ -176,8 +178,8 @@ fn show_columns(kind: &ShowKind) -> Option<&'static [CommandColumn]> {
         ShowKind::Partitions { .. } => SHOW_PARTITIONS,
         ShowKind::Catalogs { .. } => SHOW_CATALOGS,
         ShowKind::CurrentNamespace { .. } => SHOW_CURRENT_NAMESPACE,
-        // `SHOW FUNCTIONS` (refused by the session, `KRISHIV_UNSUPPORTED_FEATURE`) and kinds added later have no
-        // result schema here.
+        ShowKind::Functions { .. } => SHOW_FUNCTIONS,
+        // Kinds added later have no result schema here.
         _ => return None,
     })
 }
@@ -198,7 +200,8 @@ fn describe_columns(kind: &DescribeKind) -> Option<&'static [CommandColumn]> {
         }
         DescribeKind::Namespace { .. } => DESCRIBE_NAMESPACE,
         DescribeKind::Query { .. } => DESCRIBE_TABLE,
-        // `DESCRIBE FUNCTION` (refused by the session, `KRISHIV_UNSUPPORTED_FEATURE`) and kinds added later.
+        DescribeKind::Function { .. } => DESCRIBE_FUNCTION,
+        // Kinds added later.
         _ => return None,
     })
 }

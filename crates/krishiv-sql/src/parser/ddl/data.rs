@@ -319,6 +319,20 @@ impl Parser<'_> {
         } else {
             false
         };
+        // `INTO t [alias] [WITH (..)] (a, b) REPLACE WHERE|ON ...` (Spark 4.3): the column list
+        // goes where `BY NAME` goes, and not before `REPLACE USING`.
+        let mut replace_columns: Vec<ColumnName> = Vec::new();
+        if !by_name_before && self.sym_at(0, Sym::LParen) {
+            let at = self.checkpoint();
+            let listed = self.paren_list(Self::column_name);
+            match listed {
+                Ok(cols) if self.kw_at(0, "REPLACE") && !self.kw_at(1, "USING") => {
+                    self.commit(at);
+                    replace_columns = cols;
+                }
+                _ => self.restore(at),
+            }
+        }
         if self.kw_at(0, "REPLACE") {
             let replace_kw_at = self.pos;
             self.pos += 1;
@@ -344,7 +358,7 @@ impl Parser<'_> {
                     name,
                     target_alias,
                     target_options,
-                    columns: Vec::new(),
+                    columns: replace_columns,
                     partition: None,
                     if_not_exists: false,
                     replace_where,
@@ -376,7 +390,7 @@ impl Parser<'_> {
                     name,
                     target_alias,
                     target_options,
-                    columns: Vec::new(),
+                    columns: replace_columns,
                     partition: None,
                     if_not_exists: false,
                     replace_where: None,
@@ -408,7 +422,7 @@ impl Parser<'_> {
                     name,
                     target_alias,
                     target_options,
-                    columns: Vec::new(),
+                    columns: replace_columns,
                     partition: None,
                     if_not_exists: false,
                     replace_where: None,
@@ -508,7 +522,7 @@ impl Parser<'_> {
         Ok(query)
     }
 
-    /// `DELETE FROM name [AS alias] [WITH (options)] [WHERE ...]`.
+    /// `DELETE FROM name [AS alias] [WHERE ...]`.
     pub(super) fn delete_command(&mut self) -> PR<Statement> {
         self.nested(|p| {
             let start = p.start();
@@ -523,15 +537,15 @@ impl Parser<'_> {
             p.command_end()?;
             Ok(Statement::Delete(Delete {
                 table,
-                alias,
                 options,
+                alias,
                 where_clause,
                 span,
             }))
         })
     }
 
-    /// `UPDATE name [AS alias] [WITH (options)] SET ... [WHERE ...]`.
+    /// `UPDATE name [AS alias] SET ... [WHERE ...]`.
     pub(super) fn update_command(&mut self) -> PR<Statement> {
         self.nested(|p| {
             let start = p.start();
@@ -549,8 +563,8 @@ impl Parser<'_> {
             p.command_end()?;
             Ok(Statement::Update(Box::new(Update {
                 table,
-                alias,
                 options,
+                alias,
                 assignments,
                 where_clause,
                 span,
@@ -579,7 +593,7 @@ impl Parser<'_> {
             p.expect_kw("INTO")?;
             let target = p.ddl_name()?;
             let target_alias = p.stmt_alias("USING")?;
-            let target_options = p.table_options()?;
+            let options = p.table_options()?;
             p.expect_kw("USING")?;
             let source = p.merge_source()?;
             p.expect_kw("ON")?;
@@ -595,13 +609,12 @@ impl Parser<'_> {
                 return Self::fatal(ParseError {
                     error: MergeWithoutWhen {}.into(),
                     span,
-                    relation: None,
                 });
             }
             Ok(Statement::Merge(Box::new(Merge {
                 target,
+                options,
                 target_alias,
-                target_options,
                 source,
                 on,
                 clauses,
@@ -624,7 +637,6 @@ impl Parser<'_> {
             })
         } else {
             let name = self.ddl_name()?;
-            // Spark 4.3: `USING identifierReference optionsClause? tableAlias`; the options come before the alias.
             let options = self.table_options()?;
             let alias = self.stmt_alias("ON")?;
             Ok(MergeSource::Table {

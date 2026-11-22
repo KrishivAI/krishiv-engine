@@ -32,7 +32,7 @@ use futures::{StreamExt, TryStreamExt};
 use krishiv_common::error::{InvalidSaveMode, PathAlreadyExists};
 use object_store::path::Path;
 
-use crate::commit_log::{AddedFile, CommitLog, CommitMode, LOG_DIR, LogEntry};
+use crate::commit_log::{AddedFile, CommitLog, CommitMode, Keyed, LOG_DIR, LogEntry};
 use crate::error::Result;
 use crate::format::FileFormat;
 use crate::io::{IoContext, StoreId};
@@ -99,6 +99,8 @@ pub struct DirectoryWrite {
     overwrite: bool,
     /// The commit log state, when the write goes through the log.
     log: Option<LogState>,
+    /// The caller's idempotency key (E34), recorded in the log entry.
+    idempotency_key: Option<Box<str>>,
 }
 
 /// What a logged write read before it started.
@@ -176,6 +178,7 @@ impl DirectoryWrite {
             partitioned: false,
             overwrite: matches!(mode, SaveMode::Overwrite),
             log: None,
+            idempotency_key: None,
         }))
     }
 
@@ -214,6 +217,7 @@ impl DirectoryWrite {
                 mode: CommitMode::Append,
                 add: adopted,
                 remove: Vec::new(),
+                idempotency_key: None,
             };
             // Version 0 only: a writer that loses this race drops its listing and reads the winner's
             // snapshot (its files may have been replaced since it listed them).
@@ -229,6 +233,16 @@ impl DirectoryWrite {
             visible: snap.files.into_keys().collect(),
         });
         Ok(self)
+    }
+
+    /// Records the caller's idempotency key (`krishiv.write.idempotencyKey`) in the commit: a
+    /// log that already has a commit with the key makes this write a no-op at [`Self::commit`]
+    /// (its files are deleted and no file is returned). Only a logged write can be deduplicated.
+    #[must_use]
+    pub fn with_idempotency_key(mut self, key: Option<String>) -> Self {
+        // Boxed: the write sits in the statement futures, which are near their size limit.
+        self.idempotency_key = key.map(String::into_boxed_str);
+        self
     }
 
     fn commit_log<'a>(&self, io: &'a IoContext) -> CommitLog<'a> {
@@ -399,8 +413,20 @@ impl DirectoryWrite {
                 },
                 add,
                 remove,
+                idempotency_key: self.idempotency_key.as_deref().map(str::to_owned),
             };
-            self.commit_log(io).commit(state.base, &entry).await?;
+            if let Keyed::Replayed(version) =
+                Box::pin(self.commit_log(io).commit_keyed(state.base, &entry)).await?
+            {
+                // The statement committed before: this attempt's files are all orphans.
+                tracing::info!(
+                    version,
+                    "write skipped: its idempotency key is already committed"
+                );
+                self.delete_orphans(io, &std::collections::HashSet::new())
+                    .await?;
+                return Ok(Vec::new());
+            }
         }
         // The (lazy) delete futures are built first: a stream mapping
         // through a borrowing closure makes this future unprovably `Send`

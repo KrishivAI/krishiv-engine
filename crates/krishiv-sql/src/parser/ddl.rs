@@ -138,9 +138,10 @@ impl<'s> Parser<'s> {
         // Spark's `tableAlias` takes any identifier but the clause keyword
         // that follows (`UPDATE t c1 = 2` names `t` `c1`, then wants
         // `SET`).
-        // `WITH (` opens the table options of Spark 4.3 (`UPDATE t WITH (k = v) SET ...`), not an alias.
-        let options = self.kw_at(0, "WITH") && self.sym_at(1, Sym::LParen);
-        if self.is_ident_at(0, true) && !self.kw_at(0, terminator) && !options {
+        if self.is_ident_at(0, true)
+            && !self.kw_at(0, terminator)
+            && !(self.kw_at(0, "WITH") && self.sym_at(1, Sym::LParen))
+        {
             return self.any_ident().map(Some);
         }
         Ok(None)
@@ -202,32 +203,55 @@ impl<'s> Parser<'s> {
                 }));
             }
             if p.eat_kw("COLUMN") {
-                // Spark 4.3: `COMMENT ON COLUMN [catalog.][db.]table.column IS 'comment' | NULL`.
-                let at = p.start();
-                let mut name = p.table_name()?;
-                let last = name.parts.pop().filter(|_| !name.parts.is_empty());
-                name.span = p.span_from(at);
+                // `COMMENT ON COLUMN table.column IS ...` (Spark 4.3): the last part is the column.
+                let written = p.ddl_name()?;
+                let name_span = written.span();
+                let DdlName::Parts(mut parts) = written else {
+                    return p.fail();
+                };
+                if parts.parts.len() < 2 {
+                    return Self::fatal(error::comment_on_column_incorrect_identifier(name_span));
+                }
+                let Some(column) = parts.parts.pop() else {
+                    return p.fail();
+                };
+                if let Some(last) = parts.parts.last() {
+                    parts.span.end = last.span.end;
+                }
                 p.expect_kw("IS")?;
+                // `IS NULL` removes the comment; `IS ''` sets the empty one.
                 let comment = p.comment_value()?;
                 let span = p.span_from(start);
                 p.command_end()?;
-                // Spark's AstBuilder checks the name's length after the whole statement parsed.
-                let Some(last) = last else {
-                    return Self::fatal(error::comment_on_column_incorrect_identifier(span));
-                };
-                let action = AlterColumnAction::CommentOn(comment);
                 return Ok(Statement::AlterTable(Box::new(AlterTable {
-                    table: DdlName::Parts(name),
-                    action: AlterTableAction::AlterColumn {
-                        name: ColumnName::Ident(last),
-                        action,
-                        span,
+                    table: DdlName::Parts(parts),
+                    action: AlterTableAction::CommentOnColumns {
+                        columns: vec![(ColumnName::Ident(column), comment)],
+                        list_form: false,
                     },
                     span,
                 })));
             }
             p.expect_kw("TABLE")?;
             let table = p.ddl_name()?;
+            if p.eat_kw("COLUMN") {
+                // `COMMENT ON TABLE t COLUMN (c1 IS 'x', c2 IS NULL, ...)` (Spark 4.3).
+                let columns = p.paren_list(|p| {
+                    let column = p.column_name()?;
+                    p.expect_kw("IS")?;
+                    Ok((column, p.comment_value()?))
+                })?;
+                let span = p.span_from(start);
+                p.command_end()?;
+                return Ok(Statement::AlterTable(Box::new(AlterTable {
+                    table,
+                    action: AlterTableAction::CommentOnColumns {
+                        columns,
+                        list_form: true,
+                    },
+                    span,
+                })));
+            }
             p.expect_kw("IS")?;
             let comment = p.comment_value()?;
             let span = p.span_from(start);
@@ -879,36 +903,9 @@ impl<'s> Parser<'s> {
             let start = p.start();
             p.expect_kw("SHOW")?;
             let kind = p.show_kind()?;
-            // Spark 4.3: `SHOW TABLES | TABLE EXTENDED | PARTITIONS ... AS JSON`.
-            let as_json = matches!(
-                kind,
-                ShowKind::Tables { .. }
-                    | ShowKind::TableExtended { .. }
-                    | ShowKind::Partitions { .. }
-            ) && p.kw_at(0, "AS")
-                && p.kw_at(1, "JSON");
-            if as_json {
-                p.pos += 2;
-                if matches!(
-                    &kind,
-                    ShowKind::TableExtended {
-                        partition: Some(_),
-                        ..
-                    }
-                ) {
-                    // Raised once the statement parsed to its end (a stray token is a syntax error).
-                    let span = p.span_from(start);
-                    p.command_end()?;
-                    return Self::fatal(error::show_table_extended_json_with_partition(span));
-                }
-            }
             let span = p.span_from(start);
             p.command_end()?;
-            Ok(Statement::Show(Show {
-                kind,
-                as_json,
-                span,
-            }))
+            Ok(Statement::Show(Show { kind, span }))
         })
     }
 
@@ -1430,7 +1427,6 @@ impl<'s> Parser<'s> {
                             }
                             .into(),
                             span: p.span_from(start),
-                            relation: None,
                         });
                     }
                     path
@@ -1554,7 +1550,6 @@ impl<'s> Parser<'s> {
                         }
                         .into(),
                         span,
-                        relation: None,
                     });
                 }
             };

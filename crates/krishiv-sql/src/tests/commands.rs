@@ -28,6 +28,44 @@ fn checked(sql: &str) -> ast::Statement {
     }
 }
 
+/// The written column names of an `INSERT` column list.
+fn column_texts(sql: &str, columns: &[ast::ColumnName]) -> Vec<String> {
+    columns
+        .iter()
+        .map(|c| match c {
+            ast::ColumnName::Ident(i) => i.span.text(sql).to_owned(),
+            other => panic!("{sql}: not a plain column: {other:?}"),
+        })
+        .collect()
+}
+
+/// The written `key = value` pairs of table options.
+fn option_texts(sql: &str, options: &[ast::TableOption]) -> Vec<(String, String)> {
+    options
+        .iter()
+        .map(|o| {
+            (
+                o.key.span.text(sql).to_owned(),
+                o.value
+                    .as_ref()
+                    .map(|v| v.span.text(sql).to_owned())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+fn s(texts: &[&str]) -> Vec<String> {
+    texts.iter().map(|t| (*t).to_owned()).collect()
+}
+
+fn pairs(texts: &[(&str, &str)]) -> Vec<(String, String)> {
+    texts
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect()
+}
+
 fn err(sql: &str) -> ParseError {
     parse_statement(sql, &ParserOptions::default()).unwrap_err()
 }
@@ -867,11 +905,6 @@ fn insert_errors() {
             "INSERT INTO t PARTITION (p=1) REPLACE WHERE a = 1 SELECT 1",
             "'REPLACE'",
             30..37,
-        ),
-        (
-            "INSERT INTO t (a) REPLACE WHERE a = 1 SELECT 1",
-            "'REPLACE'",
-            18..25,
         ),
         ("FROM s SELECT * FROM s", "'FROM'", 16..20),
         (
@@ -1717,4 +1750,140 @@ fn describe_checks_follow_sparks_order() {
             "{sql}"
         );
     }
+}
+
+/// Spark 4.3 takes a column list before `REPLACE` (Spark 4.2 stopped at the `REPLACE`, so the
+/// 4.2 probe above no longer lists it); the 4.3 coverage fixture has it raise `TABLE_OPERATION`.
+#[test]
+fn insert_replace_takes_a_column_list() {
+    for (sql, columns) in [
+        ("INSERT INTO t (a) REPLACE WHERE a = 1 SELECT 1", &["a"][..]),
+        (
+            "INSERT INTO t (a, b) REPLACE ON t.a = s.a SELECT 1, 2",
+            &["a", "b"],
+        ),
+        (
+            "INSERT INTO t WITH ('k' = 'v') (a, b) REPLACE WHERE a = 1 SELECT 1, 2",
+            &["a", "b"],
+        ),
+        (
+            "INSERT INTO t AS x (a, b) REPLACE ON x.a = 1 SELECT 1, 2",
+            &["a", "b"],
+        ),
+    ] {
+        let ast::Statement::Insert(insert) = checked(sql) else {
+            panic!("{sql}: not an insert");
+        };
+        assert_eq!(
+            column_texts(sql, &insert.clauses[0].columns),
+            s(columns),
+            "{sql}"
+        );
+    }
+}
+
+/// A column list is not taken before `REPLACE USING`, nor after `BY NAME`.
+#[test]
+fn insert_replace_using_takes_no_column_list() {
+    for sql in [
+        "INSERT INTO t (a) REPLACE USING (a) SELECT 1",
+        "INSERT INTO t BY NAME (a) REPLACE WHERE a = 1 SELECT 1",
+    ] {
+        assert_eq!(
+            err(sql).error.error_class(),
+            ErrorClass::ParseSyntaxError,
+            "{sql}"
+        );
+    }
+}
+
+/// `WITH (...)` after the target of `DELETE`, `UPDATE` and `MERGE` (Spark 4.3) is kept in the tree.
+#[test]
+fn dml_targets_keep_their_options() {
+    let ast::Statement::Delete(d) = checked("DELETE FROM t WITH ('k' = 'v') WHERE a = 1") else {
+        panic!("not a delete");
+    };
+    let sql = "DELETE FROM t WITH ('k' = 'v') WHERE a = 1";
+    assert_eq!(option_texts(sql, &d.options), pairs(&[("'k'", "'v'")]));
+    let sql = "UPDATE t WITH ('k' = 'v') SET a = 1";
+    let ast::Statement::Update(u) = checked(sql) else {
+        panic!("not an update");
+    };
+    assert_eq!(option_texts(sql, &u.options), pairs(&[("'k'", "'v'")]));
+    let sql = "MERGE INTO t WITH ('k' = 'v') USING s ON t.a = s.a WHEN MATCHED THEN DELETE";
+    let ast::Statement::Merge(m) = checked(sql) else {
+        panic!("not a merge");
+    };
+    assert_eq!(option_texts(sql, &m.options), pairs(&[("'k'", "'v'")]));
+}
+
+/// The alias comes before the options (Spark: `tableAlias optionsClause?`), and `MERGE`'s source
+/// takes options before its alias.
+#[test]
+fn dml_option_clauses_follow_the_alias() {
+    let sql = "DELETE FROM t AS x WITH ('k' = 'v') WHERE x.a = 1";
+    let ast::Statement::Delete(d) = checked(sql) else {
+        panic!("not a delete");
+    };
+    assert_eq!(d.alias.as_ref().map(|a| a.value.as_str()), Some("x"));
+    assert_eq!(option_texts(sql, &d.options), pairs(&[("'k'", "'v'")]));
+    let sql = "UPDATE t x WITH ('k' = 'v') SET a = 1";
+    let ast::Statement::Update(u) = checked(sql) else {
+        panic!("not an update");
+    };
+    assert_eq!(u.alias.as_ref().map(|a| a.value.as_str()), Some("x"));
+    assert_eq!(option_texts(sql, &u.options), pairs(&[("'k'", "'v'")]));
+    let sql = "MERGE INTO t x WITH ('k' = 'v') USING s WITH ('j' = 'w') y ON x.a = y.a WHEN MATCHED THEN DELETE";
+    let ast::Statement::Merge(m) = checked(sql) else {
+        panic!("not a merge");
+    };
+    assert_eq!(m.target_alias.as_ref().map(|a| a.value.as_str()), Some("x"));
+    assert_eq!(option_texts(sql, &m.options), pairs(&[("'k'", "'v'")]));
+    let ast::MergeSource::Table { options, alias, .. } = &m.source else {
+        panic!("not a table source");
+    };
+    assert_eq!(alias.as_ref().map(|a| a.value.as_str()), Some("y"));
+    assert_eq!(option_texts(sql, options), pairs(&[("'j'", "'w'")]));
+    for sql in [
+        "UPDATE t WITH ('k' = 'v') x SET a = 1",
+        "DELETE FROM t WITH ('k' = 'v') AS x",
+    ] {
+        assert_eq!(
+            err(sql).error.error_class(),
+            ErrorClass::ParseSyntaxError,
+            "{sql}"
+        );
+    }
+}
+
+/// The query context of the `@` suffix errors is Spark's (`PlanParserSuite`): the clause alone for
+/// `MULTIPLE_TIME_TRAVEL_SPEC`, the name and the suffix for the other two.
+#[test]
+fn time_travel_suffix_errors_point_at_spark_s_fragments() {
+    let e = err("SELECT * FROM t@20190129003758000 VERSION AS OF 2");
+    assert_eq!(e.error.error_class(), ErrorClass::MultipleTimeTravelSpec);
+    assert_eq!((e.span.start, e.span.end), (34, 49));
+    let e = err("SELECT * FROM t@123");
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::InvalidTimeTravelTimestampFormat
+    );
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("timestamp", "123".to_owned()),
+            ("format", "yyyyMMddHHmmssSSS".to_owned())
+        ]
+    );
+    assert_eq!((e.span.start, e.span.end), (14, 19));
+    let off = ParserOptions {
+        time_travel_at_syntax: false,
+        ..ParserOptions::default()
+    };
+    let e = parse_statement("SELECT * FROM t@v1", &off).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::UnsupportedFeatureTimeTravelAtSyntax
+    );
+    assert_eq!((e.span.start, e.span.end), (14, 18));
 }
