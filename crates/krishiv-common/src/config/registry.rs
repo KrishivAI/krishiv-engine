@@ -724,7 +724,7 @@ pub static EVENTS_QUEUE_CAPACITY: ConfigEntry = ConfigEntry {
     key: "krishiv.events.queueCapacity",
     value_type: ValueType::PositiveInt,
     default: Some(ConfigValue::Int(10_000)),
-    doc: "Events one event sink may hold waiting for its delivery thread. A full queue drops events (counted in `krishiv_events_dropped_total`) and never slows a query.",
+    doc: "Events one event sink may hold waiting for its delivery thread. A full queue drops events (counted in the gauge `krishiv_events_dropped`) and never slows a query.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",

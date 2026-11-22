@@ -435,6 +435,7 @@ impl Queue {
     fn push(&self, event: &Arc<EngineEvent>) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.closed {
+            self.drops.add(event.tag(), 1);
             return;
         }
         if state.events.len() >= self.capacity {
@@ -698,7 +699,7 @@ impl EventBus {
             .sum()
     }
 
-    /// Events dropped by every sink, all kinds (`krishiv_events_dropped_total`).
+    /// Events dropped by every sink, all kinds (`krishiv_events_dropped`).
     #[must_use]
     pub fn dropped_total(&self) -> u64 {
         self.sinks
