@@ -85,6 +85,8 @@ pub(crate) fn join(base: &Url, segments: &[&str]) -> Result<Url, RestError> {
 const NO_SUCH_NAMESPACE: &[&str] = &["NoSuchNamespaceException"];
 /// The 404 types that mean a table (or its namespace) does not exist.
 const NO_SUCH_TABLE: &[&str] = &["NoSuchTableException", "NoSuchNamespaceException"];
+/// The `absent` kinds that make every 404 of the route itself absence, whatever its error model.
+const ANY_404: &[&str] = &["*"];
 
 /// The longest `next-page-token` accepted; a token is an opaque cursor, not a payload.
 const MAX_PAGE_TOKEN_BYTES: usize = 4096;
@@ -372,7 +374,8 @@ impl RestClient {
             let mut response = self.http.call(request, deadline)?;
             let result = match response.status {
                 200 => types::parse_limited(&response.body, self.config.limits.max_depth).map(Some),
-                401 if table_token.is_some() => {
+                // Iceberg REST 1.12 lets a catalog answer an expired token with 419 as well as 401.
+                401 | 419 if table_token.is_some() => {
                     *table_token = None;
                     wipe_bytes(&mut response.body);
                     continue;
@@ -384,9 +387,10 @@ impl RestClient {
                     retried = true;
                     continue;
                 }
-                404 if types::error_model(&response.body)
-                    .0
-                    .is_some_and(|k| absent.contains(&k.as_str())) =>
+                404 if absent == ANY_404
+                    || types::error_model(&response.body)
+                        .0
+                        .is_some_and(|k| absent.contains(&k.as_str())) =>
                 {
                     Ok(None)
                 }
@@ -930,17 +934,15 @@ impl RestClient {
                 &url,
                 &[],
                 deadline,
-                NO_SUCH_TABLE,
+                // Any 404 of the credentials route itself is `None`, not only a `NoSuch*` one: the caller reloads
+                // the table, which tells whether it is really gone (a catalog may advertise the route and answer it
+                // with a plain 404). A 404 of anything else on the way (the token endpoint) stays a failure.
+                ANY_404,
             )?
             .map(types::credentials)
             .transpose()
         };
-        // Any 404 of the credentials route is `None`, not only a `NoSuch*` one: the caller reloads the table, which
-        // tells whether it is really gone (a catalog may advertise the route and answer it with a plain 404).
-        let found = match run() {
-            Err(RestError::Status { status: 404, .. }) => None,
-            r => r.map_err(self.fail(&what))?,
-        };
+        let found = run().map_err(self.fail(&what))?;
         let Some(creds) = found else {
             return Ok(None);
         };

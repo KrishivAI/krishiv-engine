@@ -141,6 +141,12 @@ impl RestCatalog {
         ttl: Duration,
         writes: bool,
     ) -> Self {
+        let instance = {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        };
+        let vended = VendedCache::global();
+        vended.register_instance(instance);
         Self {
             name: decl.name.clone(),
             client,
@@ -150,11 +156,8 @@ impl RestCatalog {
             ttl,
             epoch: Arc::new(AtomicU64::new(0)),
             cache: Arc::new(Mutex::new(HashMap::new())),
-            vended: VendedCache::global(),
-            instance: {
-                static NEXT: AtomicU64 = AtomicU64::new(0);
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            },
+            vended,
+            instance,
         }
     }
 

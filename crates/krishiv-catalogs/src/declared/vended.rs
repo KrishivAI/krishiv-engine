@@ -27,6 +27,7 @@
 //!   catalog, of the catalog alone otherwise; `delegated_by` is left out.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, SystemTime};
 
@@ -57,6 +58,9 @@ pub(crate) struct VendedAnswer {
     config: BTreeMap<String, SecretString>,
     location: String,
     fetched: SystemTime,
+    /// When the answer was received, in the order of the process (a counter, never the wall clock): which of two
+    /// answers is newer, whatever the clock did between them. `fetched` stays the base of the default expiry.
+    received: u64,
     /// The table's own bearer token from the `loadTable` answer (§4.1), when the catalog sent one.
     table_token: Option<SecretString>,
     /// [`VendedCache::drops`] read before the `loadTable` request this answer came from: the answer is offered
@@ -105,6 +109,10 @@ impl VendedAnswer {
             config: keep_credentials(config),
             location,
             fetched: SystemTime::now(),
+            received: {
+                static NEXT: AtomicU64 = AtomicU64::new(0);
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            },
         }
     }
 
@@ -138,9 +146,10 @@ type Entry = (Arc<VendedAnswer>, u64, SystemTime);
 struct State {
     entries: HashMap<Key, Entry>,
     tick: u64,
-    /// Catalog instances that were dropped: an answer fetched for one by a query still running is never kept.
-    /// Instance ids are never reused, so this only grows by one id per dropped catalog.
-    dead: HashSet<u64>,
+    /// The catalog instances alive ([`VendedCache::register_instance`] until [`VendedCache::drop_instance`]): an
+    /// answer for any other (one fetched by a query still running when its catalog was dropped) is never kept. It
+    /// holds only live catalogs, so recreating runtimes does not grow it.
+    live: HashSet<u64>,
     /// Moved by every `REFRESH TABLE` ([`VendedCache::drop_table`]): a refresh fetched across one is not kept.
     drops: u64,
 }
@@ -151,7 +160,7 @@ impl State {
     }
 
     fn put(&mut self, key: Key, answer: Arc<VendedAnswer>, expires: SystemTime, max: usize) {
-        if self.dead.contains(&key.0) {
+        if !self.live.contains(&key.0) {
             return;
         }
         let now = SystemTime::now();
@@ -251,7 +260,7 @@ impl VendedCache {
         let newer = state
             .entries
             .get(&key)
-            .is_none_or(|(held, _, _)| held.fetched < answer.fetched);
+            .is_none_or(|(held, _, _)| held.received < answer.received);
         if newer {
             state.put(key, answer, expires, max);
         }
@@ -293,7 +302,7 @@ impl VendedCache {
         let now = SystemTime::now();
         if let Some((held, _, held_expires)) = state.entries.get(&key)
             && *held_expires > now
-            && held.fetched > answer.fetched
+            && held.received > answer.received
         {
             return Arc::clone(held);
         }
@@ -301,10 +310,15 @@ impl VendedCache {
         answer
     }
 
+    /// Makes the catalog `instance` alive: its answers may be kept until [`Self::drop_instance`].
+    pub(crate) fn register_instance(&self, instance: u64) {
+        self.lock().live.insert(instance);
+    }
+
     /// Drops every answer of the catalog `instance` (the catalog was dropped); none is kept for it later.
     pub(crate) fn drop_instance(&self, instance: u64) {
         let mut state = self.lock();
-        state.dead.insert(instance);
+        state.live.remove(&instance);
         state.entries.retain(|(i, _, _, _), _| *i != instance);
     }
 

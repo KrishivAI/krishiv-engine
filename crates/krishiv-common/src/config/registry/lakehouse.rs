@@ -180,7 +180,8 @@ pub static CATALOG_VENDED_DEFAULT_TTL: ConfigEntry = ConfigEntry {
           `gcs.oauth2.token-expires-at`, `adls.sas-token-expires-at-ms.<host>`). After it the \
           credential is fetched again from the catalog. A credential that stops working earlier is \
           refreshed once and the request retried. A value below twice `krishiv.io.credentials.refreshSkew` \
-          is allowed: the credential is then refreshed after half its lifetime.",
+          is allowed: the credential is then refreshed after half its lifetime. Must be positive: \
+          `0s` refuses startup when a catalog has `storage = vended`.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",
@@ -194,7 +195,9 @@ pub static CATALOG_VENDED_MAX_ENTRIES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Int(10_000)),
     doc: "Most vended storage credentials the server keeps across all declared catalogs, one per \
           caller identity and table. The least recently used is dropped first and fetched again \
-          from the catalog on its next use; an entry is also dropped when its credential expires.",
+          from the catalog on its next use. An expired entry is never used again, but it leaves \
+          memory only at the next lookup or insert of the cache: while no query uses a vended \
+          catalog, an expired credential can stay in memory.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",

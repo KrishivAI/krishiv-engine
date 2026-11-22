@@ -33,6 +33,15 @@ fn key_of(instance: u64, identity: IdentityKey, table: &str) -> Key {
     (instance, identity, vec!["db".to_owned()], table.to_owned())
 }
 
+/// A cache with the catalog instances the tests key by (0 to 15) alive.
+fn test_cache() -> VendedCache {
+    let cache = VendedCache::default();
+    for instance in 0..16 {
+        cache.register_instance(instance);
+    }
+    cache
+}
+
 const TTL: Duration = Duration::from_secs(3600);
 
 fn answer(location: &str) -> Arc<VendedAnswer> {
@@ -43,16 +52,19 @@ fn answer(location: &str) -> Arc<VendedAnswer> {
     ))
 }
 
-/// An answer for `location` fetched at `fetched`.
+/// An answer for `location` fetched at `fetched`, received in the order of `fetched` (as with a steady clock).
 fn answer_fetched(location: &str, fetched: SystemTime) -> Arc<VendedAnswer> {
     let mut a = VendedAnswer::new(Vec::new(), BTreeMap::new(), location.to_owned());
     a.fetched = fetched;
+    a.received = fetched
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
     Arc::new(a)
 }
 
 #[test]
 fn vended_cache_per_identity() {
-    let cache = VendedCache::default();
+    let cache = test_cache();
     let (ana, bob) = (
         IdentityKey::of("cat", &user("ana", None)),
         IdentityKey::of("cat", &user("bob", None)),
@@ -89,7 +101,7 @@ fn vended_cache_per_identity() {
 /// A `loadTable` answer replaces the held one only when it was fetched later.
 #[test]
 fn vended_cache_keeps_the_newer_answer() {
-    let cache = VendedCache::default();
+    let cache = test_cache();
     let k = || key(IdentityKey::of("cat", &user("ana", None)), "t");
     let now = SystemTime::now();
     let older = answer_fetched("s3://b/old", now - Duration::from_secs(10));
@@ -101,9 +113,43 @@ fn vended_cache_keeps_the_newer_answer() {
     assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/new");
 }
 
+/// Which answer is newer follows the order they were received in, not the wall clock: a replacement fetched after
+/// the clock stepped back still replaces, and a refresh still publishes over it.
+#[test]
+fn vended_cache_orders_answers_by_receipt_not_by_the_clock() {
+    let cache = test_cache();
+    let k = || key(IdentityKey::of("cat", &user("ana", None)), "t");
+    let first = answer("s3://b/first");
+    let mut second = VendedAnswer::new(Vec::new(), BTreeMap::new(), "s3://b/second".to_owned());
+    second.fetched = first.fetched - Duration::from_secs(60);
+    let second = Arc::new(second);
+    cache.put_if_newer(k(), first, TTL, 10);
+    cache.put_if_newer(k(), second, TTL, 10);
+    assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/second");
+    let mut third = VendedAnswer::new(Vec::new(), BTreeMap::new(), "s3://b/third".to_owned());
+    third.fetched -= Duration::from_secs(120);
+    let published = cache.publish(k(), Arc::new(third), TTL, 10, cache.drops());
+    assert_eq!(published.location(), "s3://b/third");
+}
+
+/// The live set holds only catalogs not yet dropped: registering and dropping many leaves nothing behind.
+#[test]
+fn vended_cache_forgets_dropped_instances() {
+    let cache = VendedCache::default();
+    for instance in 100..1100 {
+        cache.register_instance(instance);
+        cache.drop_instance(instance);
+    }
+    assert_eq!(cache.lock().live.len(), 0);
+    // An unregistered instance keeps nothing either.
+    let ana = IdentityKey::of("cat", &user("ana", None));
+    cache.put(key_of(5000, ana, "t"), answer("s3://b/t"), TTL, 10);
+    assert_eq!(cache.len(), 0);
+}
+
 #[test]
 fn vended_cache_bounded() {
-    let cache = VendedCache::default();
+    let cache = test_cache();
     let id = |n: &str| key(IdentityKey::of("cat", &user(n, None)), "t");
     cache.put(id("a"), answer("s3://b/a"), TTL, 2);
     cache.put(id("b"), answer("s3://b/b"), TTL, 2);
@@ -151,7 +197,7 @@ fn ms(t: SystemTime) -> u128 {
 /// in `get` and in any later `put`, so expired secrets do not stay in the process until LRU eviction.
 #[test]
 fn vended_cache_drops_expired_entries() {
-    let cache = VendedCache::default();
+    let cache = test_cache();
     let id = |n: &str| key(IdentityKey::of("cat", &user(n, None)), "t");
     let soon = || ms(SystemTime::now() + Duration::from_millis(300));
     let future = ms(SystemTime::now() + Duration::from_secs(3600));
@@ -183,7 +229,7 @@ fn vended_cache_drops_expired_entries() {
 /// what its own key held.
 #[test]
 fn vended_cache_full_keeps_live_entries_over_an_expired_answer() {
-    let cache = VendedCache::default();
+    let cache = test_cache();
     let id = |n: &str| key(IdentityKey::of("cat", &user(n, None)), "t");
     let past = ms(SystemTime::now() - Duration::from_secs(1));
     let future = ms(SystemTime::now() + Duration::from_secs(3600));
@@ -203,7 +249,7 @@ fn vended_cache_full_keeps_live_entries_over_an_expired_answer() {
 /// An answer fetched for a dropped catalog instance (a query running across the drop) is never kept.
 #[test]
 fn vended_cache_keeps_nothing_for_a_dropped_instance() {
-    let cache = VendedCache::default();
+    let cache = test_cache();
     let ana = IdentityKey::of("cat", &user("ana", None));
     cache.put(key_of(7, ana.clone(), "t"), answer("s3://b/t"), TTL, 10);
     cache.drop_instance(7);
@@ -325,7 +371,7 @@ fn data_file_outside_vended_prefix_refused() {
 /// refresh began keeps the refreshed answer out of the cache (it serves only the refresh that fetched it).
 #[test]
 fn vended_cache_publish_keeps_the_newer_and_respects_refresh_table() {
-    let cache = VendedCache::default();
+    let cache = test_cache();
     let k = || key(IdentityKey::of("cat", &user("ana", None)), "t");
     let now = SystemTime::now();
     let late = answer_fetched("s3://b/late", now);
@@ -368,7 +414,7 @@ fn vended_cache_publish_keeps_the_newer_and_respects_refresh_table() {
 /// and run after it) is kept nowhere; one requested after it is kept (review 7e24f4a71 F1).
 #[test]
 fn vended_cache_keeps_no_load_answer_across_refresh_table() {
-    let cache = VendedCache::default();
+    let cache = test_cache();
     let k = || key(IdentityKey::of("cat", &user("ana", None)), "t");
     let loaded = |location: &str, drops: u64| {
         let mut a = VendedAnswer::new(Vec::new(), BTreeMap::new(), location.to_owned());
@@ -455,7 +501,7 @@ fn token_fixture(
         Arc::new(super::super::table::EmbeddedLocations::default()),
     )
     .unwrap();
-    let cache = Arc::new(VendedCache::default());
+    let cache = Arc::new(test_cache());
     let table = super::VendedTable {
         cache: Arc::clone(&cache),
         key: key_of(1, IdentityKey::server("lake".to_owned()), "t"),

@@ -33,7 +33,7 @@ use std::time::Duration;
 use krishiv_common::config::{
     CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
     CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE, CATALOG_MAX_METADATA_BYTES,
-    CATALOG_REQUEST_TIMEOUT, Config, ConfigValue,
+    CATALOG_REQUEST_TIMEOUT, CATALOG_VENDED_DEFAULT_TTL, Config, ConfigValue,
 };
 use krishiv_common::error::KrishivError;
 use krishiv_common::principal::Principal;
@@ -46,8 +46,8 @@ use krishiv_plan::analyzer::{BoxFuture, Catalog, NameForm, Securable, TableIdent
 
 use crate::auth::{InboundCredential, Method};
 use crate::catalog_decl::{
-    CATALOG_PREFIX, CatalogAuth, CatalogDecl, CatalogDeclarations, CatalogType, DeclMode,
-    Delegation,
+    CATALOG_PREFIX, CatalogAuth, CatalogDecl, CatalogDeclarations, CatalogStorage, CatalogType,
+    DeclMode, Delegation,
 };
 
 /// Who a declared catalog answers: for a `delegated` catalog the catalog,
@@ -556,6 +556,24 @@ impl CatalogDeps {
     }
 }
 
+/// Refuses a zero `krishiv.catalog.vendedDefaultTtl` for a runtime with a vended catalog: a credential the catalog
+/// gives no expiry for would expire as it is fetched, and every refetch again.
+fn check_vended_ttl(config: &Config) -> Result<(), KrishivError> {
+    let ttl = config
+        .get(&CATALOG_VENDED_DEFAULT_TTL)
+        .and_then(ConfigValue::as_duration);
+    if ttl.is_some_and(|t| t.is_zero()) {
+        return Err(krishiv_common::error::KrishivInvalidConfigValue {
+            value: "'0s'".to_owned(),
+            key: format!("\"{}\"", CATALOG_VENDED_DEFAULT_TTL.key),
+            reason: "a catalog with storage = vended needs a positive default credential lifetime"
+                .to_owned(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 /// The catalogs a runtime is built with: the declaration keys, where they come from and the
 /// factories of this build (see the module docs).
 #[must_use]
@@ -843,6 +861,9 @@ impl CatalogRegistry {
                 )));
             };
             check_secrets(&decl)?;
+            if decl.storage == CatalogStorage::Vended {
+                check_vended_ttl(config)?;
+            }
             factory.validate(&decl, &deps)?;
             catalogs.insert(
                 decl.name.clone(),

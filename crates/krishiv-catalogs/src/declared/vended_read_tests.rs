@@ -107,6 +107,34 @@ fn session(server: &Server, s3: &S3Server) -> Session {
     Session::builder().runtime(runtime).build().unwrap()
 }
 
+/// A zero `krishiv.catalog.vendedDefaultTtl` refuses a runtime with a vended catalog at startup (a credential without
+/// an expiry would expire as fetched); a positive override builds.
+#[test]
+fn a_zero_vended_default_ttl_is_refused_at_startup() {
+    let build = |ttl: &str| {
+        let setup = CatalogSetup::new(DeclMode::Embedded)
+            .factory(Arc::new(IcebergRestFactory))
+            .setting("krishiv.catalog.lake.type", "iceberg-rest")
+            .setting("krishiv.catalog.lake.uri", "http://127.0.0.1:9/")
+            .setting("krishiv.catalog.lake.storage", "vended");
+        EngineRuntime::builder()
+            .catalogs(setup)
+            .config("krishiv.catalog.vendedDefaultTtl", ttl)
+            .build()
+    };
+    let err = build("0s").unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivInvalidConfigValue,
+        "{err}"
+    );
+    assert!(
+        err.to_string().contains("krishiv.catalog.vendedDefaultTtl"),
+        "{err}"
+    );
+    assert!(build("30s").is_ok());
+}
+
 /// The sorted ids of `SELECT id FROM lake.db.t`.
 fn ids(s: &Session) -> Vec<i64> {
     let batches =

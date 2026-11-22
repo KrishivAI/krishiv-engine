@@ -870,3 +870,83 @@ fn a_dropped_client_inside_a_runtime_does_not_panic() {
         .unwrap();
     runtime.block_on(async move { drop(client) });
 }
+
+/// The config that advertises the credentials route.
+const CREDENTIALS_CONFIG: &str = r#"{"defaults": {}, "overrides": {},
+    "endpoints": ["GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"]}"#;
+
+/// Iceberg REST 1.12 answers an expired token with 419 as well as 401: a 419 for the table token is retried once
+/// with the caller's token, and the table token is dropped.
+#[test]
+fn a_419_for_the_table_token_falls_back_to_the_caller_s_token() {
+    let server = serve(|r| {
+        match path(r) {
+        "/v1/config" => Reply::Json(200, CREDENTIALS_CONFIG.into()),
+        "/v1/namespaces/db/tables/t/credentials"
+            if r.header("authorization") == Some("Bearer table-token") =>
+        {
+            Reply::Json(419, "{}".into())
+        }
+        "/v1/namespaces/db/tables/t/credentials" => Reply::Json(
+            200,
+            r#"{"storage-credentials": [{"prefix": "s3://b/t", "config": {"s3.access-key-id": "AKIA"}}]}"#
+                .into(),
+        ),
+        _ => Reply::Json(404, "{}".into()),
+    }
+    });
+    let token = SecretString::new("table-token");
+    let mut table_token = Some(&token);
+    let creds = client_with(config_for(&server))
+        .load_credentials_for(
+            &super::RestCaller::server(),
+            &mut table_token,
+            &ns(&["db"]),
+            "t",
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(creds[0].prefix, "s3://b/t");
+    assert!(table_token.is_none(), "the refused table token is dropped");
+    // Another refusal of the caller's token stays an error.
+    let server = serve(|r| match path(r) {
+        "/v1/config" => Reply::Json(200, CREDENTIALS_CONFIG.into()),
+        _ => Reply::Json(419, "{}".into()),
+    });
+    let e = client_with(config_for(&server))
+        .load_credentials(&ns(&["db"]), "t")
+        .unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
+}
+
+/// A plain 404 of the credentials route is absence (the caller reloads the table); a 404 of the token endpoint on
+/// the way is the failure it is, not absence.
+#[test]
+fn only_a_404_of_the_credentials_route_is_absence() {
+    let server = serve(|r| match path(r) {
+        "/v1/config" => Reply::Json(200, CREDENTIALS_CONFIG.into()),
+        _ => Reply::Json(404, "{}".into()),
+    });
+    let found = client_with(config_for(&server))
+        .load_credentials(&ns(&["db"]), "t")
+        .unwrap();
+    assert!(found.is_none());
+
+    let issued = Arc::new(AtomicUsize::new(0));
+    let n = Arc::clone(&issued);
+    let server = serve(move |r| match path(r) {
+        // The first token is good for the config; its renewal finds no token endpoint.
+        "/v1/oauth/tokens" if n.fetch_add(1, Ordering::SeqCst) == 0 => Reply::Json(
+            200,
+            r#"{"access_token": "tok0", "token_type": "bearer", "expires_in": 3600}"#.into(),
+        ),
+        "/v1/oauth/tokens" => Reply::Json(404, "{}".into()),
+        "/v1/config" => Reply::Json(200, CREDENTIALS_CONFIG.into()),
+        _ => Reply::Json(401, "{}".into()),
+    });
+    let e = client_with(client_credentials(&server, None))
+        .load_credentials(&ns(&["db"]), "t")
+        .unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure, "{e}");
+    assert_eq!(issued.load(Ordering::SeqCst), 2, "the renewal was asked");
+}
