@@ -102,9 +102,9 @@ use std::sync::Arc;
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
     EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
-    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND, SEMI_ANTI_JOIN_ORDER,
-    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES,
-    SUBQUERY_AS_WINDOW,
+    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN,
+    SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS,
+    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -231,6 +231,12 @@ pub struct Options {
     /// `=` keys, in every place the rule runs (after the rewrite batch, in
     /// join ordering's loop, after restriction).
     pub inferred_join_filters: bool,
+    /// Preserved-side semi joins (`restrict`, TPC-DS q40/q80): the preserved
+    /// side of an outer join is reduced by a key-only semi join with a
+    /// filtered input an inner join above joins it to. Needs statistics; a
+    /// session configuration, when given, can switch it off
+    /// (`krishiv.optimizer.preservedSideSemiJoin`).
+    pub preserved_side_semi_join: bool,
 }
 
 impl Default for Options {
@@ -248,6 +254,7 @@ impl Default for Options {
             group_key_code: true,
             derived_keys_above: true,
             inferred_join_filters: true,
+            preserved_side_semi_join: true,
         }
     }
 }
@@ -539,7 +546,12 @@ fn run(
         // is ordered with its tree, so a second optimization finds nothing new.
         let estimates = stats.unwrap_or(&NoStatistics);
         let mut root = t.once("Restrict", &root, |r| {
-            restrict::restrict(Arc::clone(r), estimates, options.stats_propagation)
+            restrict::restrict(
+                Arc::clone(r),
+                estimates,
+                options.stats_propagation,
+                stats.is_some() && options.preserved_side_semi_join && joins.preserved_side,
+            )
         })?;
         if let Some(stats) = stats {
             root = order_and_restrict(root, stats, options, joins, &mut t)?;
@@ -897,6 +909,12 @@ fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
         {
             s.semi_anti_order = on;
         }
+        if let Some(on) = config
+            .get(&PRESERVED_SIDE_SEMI_JOIN)
+            .and_then(ConfigValue::as_bool)
+        {
+            s.preserved_side = on;
+        }
     }
     s
 }
@@ -984,14 +1002,24 @@ fn order_and_restrict(
         let (ordered, trees) = join_order::reorder(&root, stats, propagate, joins);
         notes = trees;
         t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
+        // Sorting a semi-join stack changes what the tree above it estimates
+        // (a stack's estimate depends on its order: a restriction's stack,
+        // TPC-DS q80), so a round that sorted one orders again.
+        let mut sorted_stack = false;
         let ordered = if joins.semi_anti_order {
             let sorted = semi_order::reorder(Arc::clone(&ordered), stats, propagate)?;
             t.step("JoinOrder", round, "SemiAntiOrder", &ordered, &sorted);
+            sorted_stack = !Arc::ptr_eq(&sorted, &ordered);
             sorted
         } else {
             ordered
         };
-        let restricted = restrict::restrict(Arc::clone(&ordered), stats, propagate)?;
+        let restricted = restrict::restrict(
+            Arc::clone(&ordered),
+            stats,
+            propagate,
+            options.preserved_side_semi_join && joins.preserved_side,
+        )?;
         t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
         // A filter ordering or restriction leaves can reject the NULL rows of an outer join's
         // null-supplied side (an equality implied across two joins, `a = c` from `a = b` and
@@ -1029,7 +1057,7 @@ fn order_and_restrict(
             &rewritten,
             &inferred,
         );
-        let mut done = Arc::ptr_eq(&inferred, &ordered);
+        let mut done = Arc::ptr_eq(&inferred, &ordered) && !sorted_stack;
         // Pushed down and merged before ordering reads them again, so the
         // next round sees the inputs a second `optimize` would see.
         root = if Arc::ptr_eq(&inferred, &rewritten) {
