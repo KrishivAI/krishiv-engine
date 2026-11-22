@@ -15,20 +15,22 @@ SQL client can run SQL and receive Arrow batches without a Spark client. The bin
 With the Arrow Flight SQL JDBC driver:
 
 ```text
-jdbc:arrow-flight-sql://host:15002?useEncryption=false&token=<token>
-jdbc:arrow-flight-sql://host:15002?useEncryption=false&user=<name>&password=<token>
+jdbc:arrow-flight-sql://host:15002?useEncryption=true&token=<token>
+jdbc:arrow-flight-sql://host:15002?useEncryption=true&user=<principal>&password=<token>
 ```
 
 A bearer `token` and HTTP Basic authentication (`user` and `password`, where the password is a token) both work, with
 the same tokens and TLS settings as the rest of the server (see
-[Securing a single-node server](single-node-server-security.md)). Use `useEncryption=true` when the server has TLS.
+[Securing a single-node server](single-node-server-security.md)). `useEncryption=false` sends the token in plaintext: use it only against a local server you trust. With Basic
+authentication, `user` must be the principal the token is configured for; a valid token with another user is
+rejected.
 
 From Python with ADBC:
 
 ```python
 import adbc_driver_flightsql.dbapi as flight
 
-with flight.connect("grpc://localhost:15002", db_kwargs={"username": "me", "password": "<token>"}) as conn:
+with flight.connect("grpc://localhost:15002", db_kwargs={"username": "<principal>", "password": "<token>"}) as conn:
     with conn.cursor() as cur:
         cur.execute("SELECT 1 AS one")
         print(cur.fetch_arrow_table())
@@ -42,12 +44,14 @@ with flight.connect("grpc://localhost:15002", db_kwargs={"username": "me", "pass
 - **Metadata**: catalogs, schemas, tables (with schemas on request), table types, primary and foreign keys, SQL info,
   XDBC type info, and session options.
 - **Sessions**: a call with no session gets a short-lived one (`krishiv.flightSql.provisionalTtl`); a client that
-  keeps its session cookie keeps its session settings.
+  keeps its session cookie keeps its session settings. The ADBC driver does not keep cookies unless you enable its cookie
+  middleware option, so session settings changed by one statement do not reach the next one without it.
 
 ## Limits
 
-These keep one client from holding the server's memory. Every one is a startup setting; a request over a limit fails
-with a Flight status that names the setting.
+These keep one client from holding the server's memory. Every one is a startup setting; a request over a limit is
+refused with a Flight status that names the setting. At a handle limit, a new handle can instead succeed by evicting an
+idle statement ticket, and the evicted ticket can then no longer be fetched.
 
 | Setting | Default | Limits |
 |---|---|---|

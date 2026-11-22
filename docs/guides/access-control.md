@@ -10,10 +10,13 @@ In server mode, who can read or change what is decided by an **access-policy pro
 | Provider | Decides | Default when |
 |---|---|---|
 | `grants` | data objects (tables, views, columns, namespaces, functions, paths, secrets, connections) by `GRANT` and `REVOKE`; the role matrix still decides the server's own objects; an admin passes every data check | authentication is configured |
-| `roles` | everything, by the role matrix (`viewer`, `operator`, `admin`) | no authentication |
+| `roles` | everything on authenticated routes, by the role matrix (`viewer`, `operator`, `admin`) | no authentication |
 
-Path confinement (`krishiv.io.local.allowedRoots`, `krishiv.io.objectStore.allowedPrefixes`) applies first under
-every provider. `catalog`, `external` and provider lists are refused for now.
+Without authentication a session has no access policy at all: it allows everything. Configure authentication before you rely on either provider.
+
+On a server with authentication, path confinement (`krishiv.io.local.allowedRoots`,
+`krishiv.io.objectStore.allowedPrefixes`) applies first under every provider; a server without authentication does not
+confine paths. `catalog`, `external` and provider lists are refused for now.
 
 ## Grant and revoke
 
@@ -35,13 +38,16 @@ GRANT ROLE analysts TO user:ana;
 ```
 
 `WITH GRANT OPTION` lets the grantee pass a privilege on; `REVOKE GRANT OPTION FOR` takes that right away and keeps
-the privilege. Revoking it on a table clears the flag on the table's columns too.
+the privilege. Revoking it on a table clears the flag on the table's columns too. The grant option alone does not let a principal
+issue `GRANT`: the role matrix must also allow the statement, so a `viewer` who holds a privilege with grant option
+cannot pass it on.
 
-`SHOW GRANTS` (a Krishiv extension, 7 columns) lists grants; `SHOW GRANTS ON TABLE t` narrows it to one object. A listing of tables, views or functions shows only the ones the caller may see.
+`SHOW GRANTS` (a Krishiv extension, 7 columns) lists grants; `SHOW GRANTS ON TABLE t` narrows it to one object. Without the `Monitor` privilege both return only the caller's own
+effective grants, so an empty result is not an audit that nobody else has access. A listing of tables, views or functions shows only the ones the caller may see.
 
 ## Views and functions
 
-A view runs with its **invoker's** rights by default. `SQL SECURITY DEFINER` makes it run with its owner's rights, so
+A view runs with its **invoker's** rights by default. `SQL SECURITY DEFINER` makes it run with its definer's rights, so
 a view can expose some columns or rows of a table its readers cannot read:
 
 ```sql
@@ -49,6 +55,9 @@ CREATE OR REPLACE VIEW sales.my_orders SQL SECURITY DEFINER AS
 SELECT id, total FROM sales.orders WHERE owner = 'ana';
 GRANT SELECT ON VIEW sales.my_orders TO user:ana;
 ```
+
+The definer is whoever last created or altered the view: `ALTER VIEW ... AS` makes the alterer the definer, even when
+another principal owns the view. Grant and revoke on that principal.
 
 Dropping a view (`DROP VIEW`) needs the `DROP` privilege on it, as `DROP FUNCTION` does on a function.
 

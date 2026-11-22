@@ -35,9 +35,8 @@ An Iceberg table is read through a [declared catalog](#declare-a-catalog) (`SELE
 Reads cover position deletes, deletion vectors and equality deletes.
 
 Writing Iceberg tables is not available from SQL or the DataFrame API in 0.3: `INSERT`, `CREATE TABLE ... USING iceberg`
-and the other writes do not reach the Iceberg writer yet. The connector itself implements appends, overwrites
-(whole table, by filter, dynamic), merge-on-read `DELETE` and `UPDATE`, and commits through an Iceberg REST catalog;
-those are for Rust embedders of the connector, not session statements.
+and the other writes do not reach the Iceberg writer yet. The connector has internal implementations of appends, overwrites and merge-on-read `DELETE` and `UPDATE`, but no
+public path opens a table with a committer in 0.3, so a table stays read-only.
 
 ## Declare a catalog
 
