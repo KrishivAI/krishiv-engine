@@ -64,6 +64,7 @@ use crate::variables::SessionVariables;
 
 mod context;
 mod lifecycle;
+mod traits;
 #[cfg(feature = "unstable-ir")]
 pub use lifecycle::{SqlOutcome, SqlQuery};
 #[cfg(test)]
@@ -71,15 +72,6 @@ mod run_task;
 
 /// The store id of the local file system.
 pub(crate) const LOCAL_STORE: &str = "file";
-
-/// Now, as microseconds since the epoch.
-fn query_start_micros() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| i64::try_from(d.as_micros()).ok())
-        .unwrap_or_default()
-}
 
 /// A stream of result batches; dropping it cancels the query.
 pub type RecordBatchStream = BoxStream<'static, Result<RecordBatch, KrishivError>>;
@@ -131,15 +123,6 @@ pub struct Session {
     pub(crate) inbound_baggage: Arc<[(String, String)]>,
     /// The authentication of the request that started the statement, for delegated catalogs.
     pub(crate) request_inbound: Option<crate::catalog_registry::Inbound>,
-}
-
-impl fmt::Debug for Session {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Session")
-            .field("profile", &self.state.profile)
-            .field("principal", &self.state.principal.name)
-            .finish_non_exhaustive()
-    }
 }
 
 pub(crate) struct SessionState {
@@ -210,19 +193,6 @@ pub(crate) struct SessionState {
     pub(crate) denials: std::sync::OnceLock<(Arc<crate::auth::DeniedCounts>, crate::auth::Surface)>,
     /// How the latest RPC authenticated and its user token, for delegated catalogs (P3-T067).
     pub(crate) inbound: Mutex<Option<crate::catalog_registry::Inbound>>,
-}
-
-impl Drop for SessionState {
-    fn drop(&mut self) {
-        self.runtime.sessions.retire(self.number, || {
-            crate::sessions::SessionRow::of(
-                self,
-                Some(crate::sessions::End::Closed("client_gone")),
-                0,
-            )
-        });
-        self.runtime.forget_session(self.number);
-    }
 }
 
 /// Builds a [`Session`].
