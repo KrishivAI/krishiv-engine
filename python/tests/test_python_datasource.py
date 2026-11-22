@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, ClassVar
@@ -953,3 +954,49 @@ def test_timestamp_values_are_aware_utc_and_ntz_values_are_naive(pushdown: Spark
     assert values[("t",)].tzinfo is not None
     assert values[("n",)] == datetime(2020, 1, 1, 0, 0)
     assert values[("n",)].tzinfo is None
+
+
+_ORACLE = Path(__file__).resolve().parents[2] / "tests/fixtures/spark-4.3.0/python-datasource-pushdown/classic.json"
+_FILTER_CASES = json.loads(_ORACLE.read_text())["filter_cases"]
+
+
+class Probe(DataSource):
+    """A source of the schema in option `type` (column `x`) that records what pushFilters saw, takes nothing."""
+
+    seen: ClassVar[list[str]] = []
+
+    @classmethod
+    def name(cls) -> str:
+        return "probe"
+
+    def schema(self) -> str:
+        return f"x {self.options['type']}"
+
+    def reader(self, schema: Any) -> DataSourceReader:
+        class R(DataSourceReader):
+            def pushFilters(self, filters: list[Any]) -> Any:
+                Probe.seen.append(repr(list(filters)))
+                return filters
+
+            def read(self, partition: InputPartition) -> Any:
+                return iter(())
+
+        return R()
+
+
+_NO_SCHEMA = ("struct<", "array<", "interval")
+
+
+@pytest.mark.parametrize("case", _FILTER_CASES, ids=lambda c: c["sql_filter"])
+def test_filters_reach_the_source_as_spark_4_3_sends_them(pushdown: SparkSession, case: dict[str, Any]) -> None:
+    if "collate" in case["sql_filter"]:
+        pytest.xfail("collated comparison is not supported yet")
+    if "3 / 2" in case["sql_filter"]:
+        pytest.xfail("the optimizer does not fold a literal division, so the value never reaches the source")
+    if any(case["sql_type"].startswith(t) or t in case["sql_type"] for t in _NO_SCHEMA):
+        pytest.xfail("a Python source with a struct, array or interval column is not readable yet (createDataFrame)")
+    Probe.seen.clear()
+    pushdown.dataSource.register(Probe)
+    df = pushdown.read.format("probe").option("type", case["sql_type"]).load()
+    df.filter(case["sql_filter"]).count()
+    assert Probe.seen == case["filters_repr"]

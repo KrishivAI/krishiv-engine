@@ -711,7 +711,7 @@ fn filter_spec<'py>(py: Python<'py>, filter: &SourceFilter) -> PyResult<Bound<'p
                 .iter()
                 .map(|v| scalar(py, v))
                 .collect::<PyResult<Vec<_>>>()?;
-            leaf("In", p, PyTuple::new(py, values)?.into_any())
+            leaf("In", p, pyo3::types::PyList::new(py, values)?.into_any())
         }
         SourceFilter::IsNull(p) => leaf("IsNull", p, py.None().into_bound(py)),
         SourceFilter::IsNotNull(p) => leaf("IsNotNull", p, py.None().into_bound(py)),

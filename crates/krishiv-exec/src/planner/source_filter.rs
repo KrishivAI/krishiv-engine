@@ -111,11 +111,22 @@ fn null_rejected<'a>(e: &'a Expr, scan: &[BoundColumn], out: &mut Vec<&'a Expr>)
         ExprNode::Cast { expr, .. } | ExprNode::Collate { expr, .. } => {
             null_rejected(expr, scan, out);
         }
+        ExprNode::Resolved(ResolvedExpr::Function(krishiv_plan::ResolvedFunction {
+            id: krishiv_plan::FunctionId::Registry { name, .. },
+            args,
+            ..
+        })) if matches!(name.as_str(), "lower" | "upper" | "lcase" | "ucase") => {
+            // Spark's `ILIKE` is `lower(x) LIKE lower(p)`; the case functions are null-intolerant.
+            for a in args {
+                null_rejected(a, scan, out);
+            }
+        }
         _ => {
             if let Some((b, args)) = builtin(e)
                 && matches!(
                     b,
                     Builtin::Eq
+                        | Builtin::Not
                         | Builtin::Lt
                         | Builtin::LtEq
                         | Builtin::Gt
