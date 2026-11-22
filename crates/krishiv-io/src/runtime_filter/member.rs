@@ -6,7 +6,7 @@
 //! |---|---|---|
 //! | dense integers (`count = max - min + 1`) | the range alone: exact | two compares |
 //! | ≤ [`SMALL_SET_MAX`] | [`Small`]: compared against every member, no hash | a few compares |
-//! | ≤ [`EXACT_SET_MAX`] integers over at most [`DENSE_MAX_BITS`] values | [`Exact::Dense`]: a bit per value of the range | one load |
+//! | ≤ [`EXACT_SET_MAX`] integers over at most [`DENSE_MAX_BITS`] values, the bits at most [`DENSE_SIZE_FACTOR`] times a hash set's bytes (or under [`DENSE_FREE_BYTES`]) | [`Exact::Dense`]: a bit per value of the range | one load |
 //! | ≤ [`EXACT_SET_MAX`] (`krishiv.runtimeFilter.exactSet.maxValues`) | [`Exact`]: a hash set probed with `h` | one hash, one probe |
 //! | more | a split-block Bloom filter probed with `h` | one hash, one block |
 //!
@@ -42,6 +42,19 @@ pub const EXACT_SET_MAX: usize = 4096;
 /// Dimension surrogate keys (TPC-DS `hd_demo_sk` 1-7,200, `d_date_sk`
 /// 73,049 values, `i_item_sk` at SF10 102,000) fit; study 44 F1.
 pub(crate) const DENSE_MAX_BITS: u64 = 1 << 20;
+
+/// A bit set is chosen only while its bytes are at most this many times
+/// the hash set's (about [`HASH_SET_BYTES_PER_KEY`] a key), so a few
+/// sparse keys never cost 128 KiB per copy: q34's 1,028 of 7,200 take
+/// 904 B (a hash set ~9 KiB), 314 dates of 73,049 9.1 KiB (~2.8 KiB).
+pub(crate) const DENSE_SIZE_FACTOR: usize = 16;
+
+/// Bits up to this size are always taken (one or two pages).
+pub(crate) const DENSE_FREE_BYTES: usize = 4096;
+
+/// A hash set's bytes per key, as [`Exact`]'s `heap_bytes` counts an
+/// integer set (9 a slot, about one slot a key).
+pub(crate) const HASH_SET_BYTES_PER_KEY: usize = 9;
 
 /// How a key type's values are held by the exact forms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,7 +126,8 @@ pub(crate) enum Small {
     Bytes(Box<[Box<[u8]>]>),
 }
 
-/// An exact hash set, placed by the row hash `h`.
+/// An exact set: a hash set placed by the row hash `h`, or (integers
+/// over a short range) a bit per value.
 #[derive(Clone)]
 pub(crate) enum Exact {
     /// Integers and float bits.
@@ -138,7 +152,8 @@ pub(crate) struct Dense {
 
 impl Dense {
     /// The bit set of `values` (distinct), unless they span more than
-    /// [`DENSE_MAX_BITS`] values or are empty.
+    /// [`DENSE_MAX_BITS`] values, the bits outgrow the size rule
+    /// ([`DENSE_SIZE_FACTOR`], [`DENSE_FREE_BYTES`]) or there are none.
     pub(crate) fn of(values: &[i64]) -> Option<Self> {
         let lo = *values.iter().min()?;
         let hi = *values.iter().max()?;
@@ -147,6 +162,10 @@ impl Dense {
             return None;
         }
         let words = usize::try_from(span.div_ceil(64)).ok()?;
+        let hashed = values.len().saturating_mul(HASH_SET_BYTES_PER_KEY);
+        if words * 8 > DENSE_FREE_BYTES.max(hashed.saturating_mul(DENSE_SIZE_FACTOR)) {
+            return None;
+        }
         let mut bits = vec![0u64; words].into_boxed_slice();
         for &v in values {
             let d = v.wrapping_sub(lo).cast_unsigned();
@@ -169,6 +188,11 @@ impl Dense {
             .ok()
             .and_then(|i| self.bits.get(i))
             .is_some_and(|w| (w >> (d & 63)) & 1 == 1)
+    }
+
+    /// How many members.
+    pub(crate) fn len(&self) -> usize {
+        self.len
     }
 
     /// The members, ascending.
@@ -247,7 +271,7 @@ pub(crate) enum Member {
     Range,
     /// A small exact set.
     Small(Small),
-    /// An exact hash set.
+    /// An exact set: hashed, or a bit set for short integer ranges.
     Exact(Exact),
     /// A Bloom filter.
     Bloom(RuntimeBloom),

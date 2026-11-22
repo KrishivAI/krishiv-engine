@@ -274,7 +274,7 @@ fn put_exact(out: &mut Vec<u8>, e: &Exact) {
         }
         // The members, as `Int` writes them: a reader rebuilds the bit set.
         Exact::Dense(d) => {
-            put_u32(out, d.values().count());
+            put_u32(out, d.len());
             d.values()
                 .for_each(|x| out.extend_from_slice(&x.to_le_bytes()));
         }

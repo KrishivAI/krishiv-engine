@@ -130,6 +130,30 @@ fn keyed(kind: u8, v: &[Option<i32>]) -> (ArrayRef, ArrayRef) {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(160))]
+    /// A bit set anywhere in `i64` (near both ends too) keeps exactly its
+    /// keys, before and after the codec and a merge of two halves.
+    #[test]
+    fn bit_sets_are_exact_anywhere(
+        lo in prop_oneof![Just(i64::MIN), Just(i64::MAX - 5_000), Just(-2_500i64), any::<i64>()],
+        offsets in proptest::collection::btree_set(0i64..5_000, 9..200),
+        probe in proptest::collection::vec(-20i64..5_020, 0..300),
+    ) {
+        let base = lo.min(i64::MAX - 5_000);
+        let keys: Vec<i64> = offsets.iter().map(|&d| base + d).collect();
+        let options = KeyFilterOptions::default();
+        let f = filter(&Int64Array::from(keys.clone()), options);
+        let probe: Vec<i64> = probe.iter().map(|&d| base.saturating_add(d)).collect();
+        let want: Vec<bool> = probe.iter().map(|k| keys.contains(k)).collect();
+        let column = Int64Array::from(probe);
+        prop_assert_eq!(&pass(&f, &column), &want);
+        prop_assert_eq!(&pass(&round_trip(&f), &column), &want);
+        let half = keys.len() / 2;
+        let a = filter(&Int64Array::from(keys[..half].to_vec()), options);
+        let b = filter(&Int64Array::from(keys[half..].to_vec()), options);
+        let m = a.merge(&b, &options).unwrap_or_else(|e| panic!("{e}"));
+        prop_assert_eq!(&pass(&m, &column), &want);
+    }
+
     /// Every form keeps every probe row whose key a producer stored; the
     /// exact forms (range of dense integers, small set, hash set) keep no
     /// other; NULL rows pass exactly when a NULL key was kept; and the
@@ -204,7 +228,7 @@ proptest! {
 fn short_integer_ranges_are_bit_sets() {
     let o = KeyFilterOptions::default();
     let dense_cost = 1.0;
-    // TPC-DS q34's shape: 1,040 of 1-7,200 (`hd_demo_sk`).
+    // About TPC-DS q34's shape (1,040 of `hd_demo_sk` 1-7,200): 1,028 keys.
     let keys: Vec<i64> = (1..=7_200).filter(|k| k % 7 == 0).collect();
     let f = filter(&Int64Array::from(keys.clone()), o);
     assert_eq!(f.form(), FilterForm::HashSet(keys.len()));
@@ -223,38 +247,39 @@ fn short_integer_ranges_are_bit_sets() {
         .map(|&k| keys.contains(&i64::from(k)))
         .collect();
     assert_eq!(pass(&f, &Int32Array::from(narrow)), want);
-    // Negative keys and a span of exactly `DENSE_MAX_BITS` values.
+    // Negative keys and a span of exactly `DENSE_MAX_BITS` values, with
+    // enough keys (1,003) for 128 KiB to pass the size rule.
     let top = i64::try_from(super::member::DENSE_MAX_BITS).unwrap_or_else(|e| panic!("{e}")) - 1;
-    let edge = Int64Array::from(vec![-5, -3, 1, 2, 3, 4, 5, 9, top - 5]);
-    let f = filter(&edge, o);
+    let edge = |last: i64| {
+        let mut k: Vec<i64> = vec![-5, -3];
+        k.extend((1..=1_000).map(|i| 2 * i));
+        k.push(last);
+        Int64Array::from(k)
+    };
+    let f = filter(&edge(top - 5), o);
     assert!((f.row_cost_ns() - dense_cost).abs() < 1e-9);
-    assert_eq!(
-        pass(
-            &f,
-            &Int64Array::from(vec![
-                -6,
-                -5,
-                -4,
-                -3,
-                9,
-                top - 5,
-                top - 4,
-                i64::MIN,
-                i64::MAX
-            ])
-        ),
-        [false, true, false, true, true, true, false, false, false]
-    );
-    round_trip(&f);
+    let probe = vec![-6, -5, -4, -3, 2, 3, top - 5, top - 4, i64::MIN, i64::MAX];
+    let want = [
+        false, true, false, true, true, false, true, false, false, false,
+    ];
+    assert_eq!(pass(&f, &Int64Array::from(probe.clone())), want);
+    assert_eq!(pass(&round_trip(&f), &Int64Array::from(probe)), want);
     // One value more is hashed.
-    let f = filter(
-        &Int64Array::from(vec![-5, -3, 1, 2, 3, 4, 5, 9, top - 4]),
-        o,
-    );
+    let f = filter(&edge(top - 4), o);
     assert!(f.row_cost_ns() > dense_cost);
     assert_eq!(
         pass(&f, &Int64Array::from(vec![top - 4, top - 5])),
         [true, false]
+    );
+    // The size rule: 9 keys take a bit set up to 4 KiB of bits (32,768
+    // values), not 12.5 KiB (a hash set of 9 is ~81 B, x16 below 4 KiB).
+    let sparse = |step: i64| Int64Array::from_iter_values((0..9).map(|i| i * step));
+    assert!((filter(&sparse(4_000), o).row_cost_ns() - dense_cost).abs() < 1e-9);
+    let wide = filter(&sparse(12_500), o);
+    assert!(wide.row_cost_ns() > dense_cost);
+    assert_eq!(
+        pass(&wide, &Int64Array::from(vec![0, 12_500, 12_499, 100_000])),
+        [true, true, false, true]
     );
     // Spans past `i64` and float bit patterns are not bit sets.
     let ends = Int64Array::from(vec![i64::MIN, 0, 1, 2, 3, 4, 5, 6, 7, i64::MAX]);
