@@ -1078,4 +1078,11 @@ fn hf_directories_globs_and_the_parquet_branch_get_clear_errors() {
         text.contains("@~parquet") && text.contains("not readable"),
         "{text}"
     );
+    // The `%2F`-escaped form of the same branch gets the same message, not the path-shape one.
+    let e = parse_object_url(
+        "hf://datasets/acme/tiny@refs%2Fconvert%2Fparquet/default/train/0000.parquet",
+    )
+    .unwrap_err();
+    let text = e.to_string();
+    assert!(text.contains("not readable"), "{text}");
 }

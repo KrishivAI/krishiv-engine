@@ -518,7 +518,12 @@ fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
             && t.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
-    if revision.starts_with('~') {
+    // `@~parquet` and its long form `@refs%2Fconvert%2Fparquet` (the `%2F` keeps the slashes inside one segment).
+    let converted = revision.starts_with('~')
+        || revision
+            .to_ascii_lowercase()
+            .starts_with("refs%2fconvert%2f");
+    if converted {
         return Err(unsupported(format!(
             "{scheme} revisions such as `@{revision}` (the converted-Parquet branch is not readable; \
              name a file of the dataset's own branch, tag or commit: \
