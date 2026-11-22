@@ -298,6 +298,9 @@ impl<'a> Shape<'a> {
         }
         // A stacked step that stopped qualifying (the estimates moved) leaves
         // fewer coded than the mode asks: the aggregate stays as it was.
+        // (No test reaches this: with fixture statistics a dimension that
+        // qualified on the original aggregate also qualifies on the coded
+        // one, whose input rows and the dimension's estimates are the same.)
         if notes.len() < min_dimensions {
             return Err(few_dimensions(notes.len(), min_dimensions));
         }

@@ -146,8 +146,9 @@ pub static GROUP_KEY_CODE: ConfigEntry = ConfigEntry {
           table (TPC-H q16's `p_brand, p_type, p_size`) group by one integer code made on the \
           dimension's side, and read the columns back from the dimension's distinct values above \
           the aggregate, so the joins below it carry the code instead of the columns. Applies only \
-          when statistics say it pays. Results are the same either way. Off until its timed \
-          A/B passes.",
+          when statistics say it pays. Results are the same either way. Off by default (one \
+          coded dimension can cost more than it saves); aggregates with keys of two or more \
+          dimensions are coded by default through `krishiv.optimizer.groupKeyCodeMultiDimension`.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.2.0",

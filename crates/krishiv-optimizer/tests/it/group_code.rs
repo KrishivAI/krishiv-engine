@@ -821,5 +821,16 @@ fn the_default_codes_no_tpch_query() {
             .map(|s| s.note)
             .collect();
         assert!(!coded(&optimized.root().to_string()), "q{q}: {notes:?}");
+        // q16 codes its `part` keys with the key on (`tpch_q16_codes_its_part_keys`):
+        // here the one dimension is refused by name.
+        if q == 16 {
+            assert!(
+                notes.iter().any(|n| n.contains(
+                    "1 dimension qualifies (krishiv.optimizer.groupKeyCodeMultiDimension \
+                     codes 2 or more)"
+                )),
+                "q16: {notes:?}"
+            );
+        }
     }
 }

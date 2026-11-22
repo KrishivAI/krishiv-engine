@@ -61,9 +61,13 @@ impl QueryCatalog {
                 let scan = scans.iter().find(|s| s.3.iter().any(|(i, _)| *i == id))?;
                 Some(self.opened(&scan.0)?.statistics()?.rows)
             };
-            // A dimension whose group keys include a column it is equi-joined
-            // on is refused by the rule (condition 1: TPC-H q10's
-            // `customer`, q18's `orders`), so it is not sampled.
+            // The rule refuses a dimension whose group keys include its own
+            // join's key (condition 1: TPC-H q10's `customer`, q18's
+            // `orders`). The sampler approximates that from above: a
+            // dimension with a group key in any column `=` / `<=>` of the plan
+            // (any join or filter) is neither sampled nor counted. That can
+            // only sample less (and, in the default mode, count fewer
+            // dimensions), never change rows.
             let joined = equated_columns(plan);
             let may_pay: Vec<GroupKeys> = grouped_columns(plan)
                 .into_iter()
@@ -319,10 +323,6 @@ fn subquery_plans(e: &Arc<Expr>, out: &mut Vec<Arc<LogicalPlan>>) {
     }
 }
 
-/// The attribute ids an equality or `IN` in a `Filter` condition of `plan`
-/// (subquery plans included) compares with a deterministic expression that
-/// reads no column: the columns whose distinct count decides the
-/// comparison's selectivity (P2-T164 U6).
 /// The columns of `plan` (subquery plans left out) that an `=` or `<=>`
 /// between two columns reads, in a filter or a join condition: the equi-join
 /// keys, whatever form the query wrote the join in.
@@ -368,6 +368,10 @@ fn equated_columns(plan: &LogicalPlan) -> std::collections::HashSet<krishiv_plan
     out
 }
 
+/// The attribute ids an equality or `IN` in a `Filter` condition of `plan`
+/// (subquery plans included) compares with a deterministic expression that
+/// reads no column: the columns whose distinct count decides the
+/// comparison's selectivity (P2-T164 U6).
 fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
     // Plans and expressions are DAGs: every node is visited once.
     walk(plan, out, &mut std::collections::HashSet::new());
