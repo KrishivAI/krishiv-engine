@@ -146,6 +146,10 @@ pub struct ParserOptions {
     /// `spark.sql.timeTravel.atSyntax.enabled` (on by default): a table name may carry an `@v123` or
     /// `@yyyyMMddHHmmssSSS` time travel suffix.
     pub time_travel_at_syntax: bool,
+    /// Spark 4.3 grammar: `INSERT INTO t (columns) REPLACE ...` takes a column list before `REPLACE`.
+    /// Off (Spark 4.2), the list is the insert's own and the statement fails at `REPLACE` with
+    /// `PARSE_SYNTAX_ERROR`. Not a Spark config: the session sets it from its profile.
+    pub insert_replace_column_list: bool,
 }
 
 impl Default for ParserOptions {
@@ -194,6 +198,7 @@ impl ParserOptions {
             ),
             schema_level_collations: on("spark.sql.collation.schemaLevel.enabled", false),
             time_travel_at_syntax: on("spark.sql.timeTravel.atSyntax.enabled", true),
+            insert_replace_column_list: false,
         }
     }
 }

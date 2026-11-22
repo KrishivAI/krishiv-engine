@@ -790,3 +790,126 @@ async fn zip_of_different_sources_is_not_mergeable() {
         .expect_err("refused");
     assert_eq!(error_class(&status), "ZIP_PLANS_NOT_MERGEABLE");
 }
+
+fn call(function: &str, arg: pb::Expression, name: &str) -> pb::Expression {
+    use pb::expression::{Alias, ExprType, UnresolvedFunction};
+    let call = pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::UnresolvedFunction(UnresolvedFunction {
+            function_name: function.to_owned(),
+            arguments: vec![arg],
+            is_distinct: false,
+            is_user_defined_function: false,
+            is_internal: None,
+        })),
+    };
+    pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Alias(Box::new(Alias {
+            expr: Some(Box::new(call)),
+            name: vec![name.to_owned()],
+            metadata: None,
+        }))),
+    }
+}
+
+fn aggregate(
+    input: pb::Relation,
+    keys: Vec<pb::Expression>,
+    aggs: Vec<pb::Expression>,
+) -> pb::Relation {
+    relation(RelType::Aggregate(Box::new(pb::Aggregate {
+        input: Some(Box::new(input)),
+        group_type: pb::aggregate::GroupType::Groupby as i32,
+        grouping_expressions: keys,
+        aggregate_expressions: aggs,
+        pivot: None,
+        grouping_sets: Vec::new(),
+    })))
+}
+
+fn renamed(input: pb::Relation, from: &str, to: &str) -> pb::Relation {
+    relation(RelType::WithColumnsRenamed(Box::new(
+        pb::WithColumnsRenamed {
+            input: Some(Box::new(input)),
+            rename_columns_map: [(from.to_owned(), to.to_owned())].into(),
+            renames: Vec::new(),
+        },
+    )))
+}
+
+fn dropped(input: pb::Relation, column: &str) -> pb::Relation {
+    relation(RelType::Drop(Box::new(pb::Drop {
+        input: Some(Box::new(input)),
+        columns: Vec::new(),
+        column_names: vec![column.to_owned()],
+    })))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_sees_through_a_rename_and_a_drop_on_either_side() {
+    let server = start().await;
+    // DataFrameZipSuite "withColumnRenamed on both sides" and a drop against a select.
+    let both = zip(renamed(source(), "id", "id1"), renamed(source(), "a", "a1"));
+    assert_eq!(
+        run(&server, both).await.expect("runs"),
+        strings(&[
+            &["1", "10", "100", "1", "10", "100"],
+            &["1", "10", "100", "1", "10", "100"],
+            &["2", "20", "NULL", "2", "20", "NULL"],
+        ])
+    );
+    let drop_select = zip(dropped(source(), "b"), project(source(), vec![attr("a")]));
+    assert_eq!(
+        run(&server, drop_select).await.expect("runs"),
+        strings(&[&["1", "10", "10"], &["1", "10", "10"], &["2", "20", "20"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_layers_a_chain_of_projections_and_keeps_a_shared_producer_once() {
+    let server = start().await;
+    // Several layers on one side: `a2` reads `a1`, which reads the base.
+    let left = project(
+        project(source(), vec![attr("id"), plus("a", 1, "a1")]),
+        vec![plus("a1", 1, "a2")],
+    );
+    let right = project(source(), vec![plus("a", 5, "a5")]);
+    assert_eq!(
+        run(&server, zip(left, right)).await.expect("runs"),
+        strings(&[&["12", "15"], &["12", "15"], &["22", "25"]])
+    );
+    // The same producer under two names is computed once and keeps both names' values.
+    let x = project(source(), vec![plus("a", 1, "x")]);
+    let y = project(source(), vec![plus("a", 1, "y")]);
+    assert_eq!(
+        run(&server, zip(x, y)).await.expect("runs"),
+        strings(&[&["11", "11"], &["11", "11"], &["21", "21"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_refuses_an_aggregate_against_the_plan_it_aggregates() {
+    let server = start().await;
+    let maxima = || vec![call("max", attr("id"), "m"), call("max", attr("a"), "n")];
+    let left = aggregate(source(), Vec::new(), maxima());
+    let right = project(source(), vec![attr("id"), attr("a")]);
+    let status = run(&server, zip(left, right)).await.expect_err("refused");
+    assert_eq!(error_class(&status), "ZIP_PLANS_NOT_MERGEABLE");
+    // Two aggregates over a grouped DataFrame: the outer one is not the grouped DataFrame itself.
+    let grouped = || {
+        aggregate(
+            source(),
+            vec![attr("id")],
+            vec![call("sum", attr("a"), "s")],
+        )
+    };
+    let outer = aggregate(
+        grouped(),
+        Vec::new(),
+        vec![call("max", attr("id"), "id"), call("max", attr("s"), "s")],
+    );
+    let inner = project(grouped(), vec![attr("id"), attr("s")]);
+    let status = run(&server, zip(outer, inner)).await.expect_err("refused");
+    assert_eq!(error_class(&status), "ZIP_PLANS_NOT_MERGEABLE");
+}

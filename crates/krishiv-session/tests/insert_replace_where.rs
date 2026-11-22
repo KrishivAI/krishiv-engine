@@ -49,8 +49,15 @@ fn a_column_list_before_replace_where_is_4_3_grammar() {
     let sql = "insert into tbl (id, name) replace where id = 1 values (1, 'a')";
     let new = class_of(SparkProfile::V4_3, sql);
     assert!(new.contains("UNSUPPORTED_FEATURE.TABLE_OPERATION"), "{new}");
+    // Spark 4.2 reads `(id, name)` as the insert's own list and fails at `REPLACE`.
     let old = class_of(SparkProfile::V4_2, sql);
-    assert!(old.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{old}");
+    assert!(old.contains("PARSE_SYNTAX_ERROR"), "{old}");
+    assert!(old.to_lowercase().contains("'replace'"), "{old}");
+    let on = class_of(
+        SparkProfile::V4_2,
+        "insert into tbl (id) replace on tbl.id = 1 values (1)",
+    );
+    assert!(on.contains("PARSE_SYNTAX_ERROR"), "{on}");
 }
 
 #[test]

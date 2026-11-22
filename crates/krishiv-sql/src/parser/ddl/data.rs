@@ -287,6 +287,7 @@ impl Parser<'_> {
                 target_alias: None,
                 target_options,
                 columns,
+                columns_span: None,
                 partition,
                 if_not_exists,
                 replace_where: None,
@@ -319,18 +320,29 @@ impl Parser<'_> {
         } else {
             false
         };
-        // `INTO t [alias] [WITH (..)] (a, b) REPLACE WHERE|ON ...` (Spark 4.3): the column list
-        // goes where `BY NAME` goes, and not before `REPLACE USING`.
-        let mut replace_columns: Vec<ColumnName> = Vec::new();
-        if !by_name_before && self.sym_at(0, Sym::LParen) {
-            let at = self.checkpoint();
-            let listed = self.paren_list(Self::column_name);
-            match listed {
-                Ok(cols) if self.kw_at(0, "REPLACE") && !self.kw_at(1, "USING") => {
-                    self.commit(at);
-                    replace_columns = cols;
+        // `INSERT INTO t (a, b) REPLACE WHERE ..` (Spark 4.3): a column list goes where `BY NAME`
+        // does, and is one only when `REPLACE` follows it (else it is the insert's own list).
+        let mut columns_before = Vec::new();
+        let mut columns_span = None;
+        if !by_name_before && self.sym_at(0, Sym::LParen) && !self.query_follows(1) {
+            let cp = self.checkpoint();
+            let list_at = self.pos;
+            match self.paren_list(Self::column_name) {
+                Ok(c) if self.kw_at(0, "REPLACE") && !self.kw_at(1, "USING") => {
+                    if !self.opts.insert_replace_column_list {
+                        // Spark 4.2 reads `(id, name)` as the insert's own list and fails at `REPLACE`.
+                        let at = self.pos;
+                        self.far = at;
+                        self.matched = None;
+                        self.extra = None;
+                        self.missing = None;
+                        return Err(Fail::Syntax);
+                    }
+                    columns_span = Some(self.span_from(list_at));
+                    self.commit(cp);
+                    columns_before = c;
                 }
-                _ => self.restore(at),
+                _ => self.restore(cp),
             }
         }
         if self.kw_at(0, "REPLACE") {
@@ -358,7 +370,8 @@ impl Parser<'_> {
                     name,
                     target_alias,
                     target_options,
-                    columns: replace_columns,
+                    columns: columns_before,
+                    columns_span,
                     partition: None,
                     if_not_exists: false,
                     replace_where,
@@ -390,7 +403,8 @@ impl Parser<'_> {
                     name,
                     target_alias,
                     target_options,
-                    columns: replace_columns,
+                    columns: columns_before,
+                    columns_span,
                     partition: None,
                     if_not_exists: false,
                     replace_where: None,
@@ -422,7 +436,8 @@ impl Parser<'_> {
                     name,
                     target_alias,
                     target_options,
-                    columns: replace_columns,
+                    columns_span: None,
+                    columns: Vec::new(),
                     partition: None,
                     if_not_exists: false,
                     replace_where: None,
@@ -493,6 +508,7 @@ impl Parser<'_> {
             target_alias: None,
             target_options,
             columns,
+            columns_span: None,
             partition,
             if_not_exists,
             replace_where: None,
