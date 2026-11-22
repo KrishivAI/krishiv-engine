@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use krishiv_plan::{
-    BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, PlanNode, ReadSource,
-    ResolvedExpr, Scan, SubqueryKind,
+    BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, Origin, PlanNode,
+    ReadSource, ResolvedExpr, Scan, SubqueryKind,
 };
 
 use crate::expr::{Attrs, column, output_of, references_into};
@@ -168,10 +168,18 @@ impl Graph {
             PlanNode::Window { input, .. } => child(input, Some(window_need(p, req))),
             // A Python UDF relation sees every column of its inputs
             // (`group_ops.py` L305 at v4.2.0; design P3-T085 §3.1).
-            PlanNode::MapPartitions { input, .. } | PlanNode::GroupMap { input, .. } => {
-                child(input, None);
-            }
-            PlanNode::CoGroupMap { left, right, .. } => {
+            PlanNode::MapPartitions { input, .. }
+            | PlanNode::GroupMap { input, .. }
+            // The analyzer replaces these nodes before pruning runs; should
+            // one remain, it reads its input whole (a demand of nothing
+            // would prune the columns it reads).
+            | PlanNode::Distinct { input }
+            | PlanNode::WithColumns { input, .. }
+            | PlanNode::Hint { input, .. }
+            | PlanNode::PipeOperator { input }
+            | PlanNode::Pivot { input, .. }
+            | PlanNode::Unpivot { input, .. } => child(input, None),
+            PlanNode::CoGroupMap { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
                 child(left, None);
                 child(right, None);
             }
@@ -280,8 +288,9 @@ impl Rewrite<'_> {
             // first stands in, as when join ordering drops the projection and
             // a join narrows the input again (otherwise the next run, after
             // CSE left the old column unread below, picks another one).
+            // The rebuilt projection keeps the old one's origin.
             PlanNode::Project { input, exprs } if placeholder(exprs, req) => {
-                narrow(input, &Attrs::default())
+                narrow_as(input, &Attrs::default(), rebuilt.origin)
             }
             PlanNode::Project { input, exprs } => {
                 let kept = if has_required_cse(exprs, req) {
@@ -435,6 +444,11 @@ fn replace(like: &LogicalPlan, node: PlanNode) -> Arc<LogicalPlan> {
 /// added after column pruning ran, and narrowing for them alone would come
 /// apart again on the next run.
 fn narrow(input: &Arc<LogicalPlan>, need: &Attrs) -> Arc<LogicalPlan> {
+    narrow_as(input, need, Origin::UNKNOWN)
+}
+
+/// [`narrow`], a projection it adds taking `origin`.
+fn narrow_as(input: &Arc<LogicalPlan>, need: &Attrs, origin: Origin) -> Arc<LogicalPlan> {
     let Some(out) = input.resolved_output() else {
         return Arc::clone(input);
     };
@@ -458,10 +472,13 @@ fn narrow(input: &Arc<LogicalPlan>, need: &Attrs) -> Arc<LogicalPlan> {
     if exprs.len() == out.len() {
         return Arc::clone(input);
     }
-    Arc::new(LogicalPlan::new(PlanNode::Project {
-        input: Arc::clone(input),
-        exprs,
-    }))
+    Arc::new(LogicalPlan {
+        node: PlanNode::Project {
+            input: Arc::clone(input),
+            exprs,
+        },
+        origin,
+    })
 }
 
 /// Whether `p` holds a common-subexpression projection (an alias named
@@ -656,3 +673,6 @@ fn reads_rows_without_columns(scan: &Scan, stats: Option<&dyn Statistics>) -> bo
         _ => stats.is_some_and(|s| s.reads_rows_without_columns(scan)),
     }
 }
+
+#[cfg(test)]
+mod tests;
