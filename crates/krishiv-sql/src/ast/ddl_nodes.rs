@@ -1231,6 +1231,8 @@ pub enum ShowKind {
         namespace: Option<DdlName>,
         /// The pattern, if written.
         pattern: Option<ShowPattern>,
+        /// `AS JSON` (Spark 4.3).
+        as_json: bool,
         /// Source text.
         span: Span,
     },
@@ -1242,6 +1244,8 @@ pub enum ShowKind {
         pattern: ShowPattern,
         /// `PARTITION ...`, if written.
         partition: Option<PartitionSpec>,
+        /// `AS JSON` (Spark 4.3).
+        as_json: bool,
         /// Source text.
         span: Span,
     },
@@ -1319,6 +1323,8 @@ pub enum ShowKind {
         name: DdlName,
         /// `PARTITION ...`, if written.
         partition: Option<PartitionSpec>,
+        /// `AS JSON` (Spark 4.3).
+        as_json: bool,
         /// Source text.
         span: Span,
     },
