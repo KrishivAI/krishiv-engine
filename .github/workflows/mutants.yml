@@ -4,14 +4,17 @@ name: Mutation testing (nightly)
 # and the spill-file serialization, with the score per area tracked in the run
 # summary and in the `mutation-score` artifact (90 days). Nightly only, never
 # per PR; each night one seventh of the mutants per area (the full set once a
-# week, so a job stays inside the six-hour limit; the kernels area runs as three
+# week, so a job stays inside the six-hour limit; the kernels area runs as six
 # slices and the parser as two side by side, the first full run having taken 5.5 hours for its seventh,
 # and single long slices having lost their runner several times (see "Runner health" below);
 # GitHub-hosted runners only (`cargo xtask workflow-lint`). The
 # acceptance numbers are in `tests/mutation-floors.json`.
 on:
   schedule:
-    - cron: "30 3 * * *"
+    # GitHub starts this cron about eight hours late (runs created 11:29-12:10 UTC on 2026-11-16 to 11-21 for
+    # a 03:30 cron), so it is set at 18:07: on time it starts inside the night window of the guard job, and a
+    # delay of up to ten hours still lands before 06:00.
+    - cron: "7 18 * * *"
   workflow_dispatch:
     inputs:
       shard:
@@ -23,7 +26,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: mutants
+  # Keyed by event: a delayed scheduled run that the guard skips never cancels a manual run, and nothing
+  # cancels a run in progress (a new one waits, GitHub keeps one pending).
+  group: mutants-${{ github.event_name }}
   cancel-in-progress: false
 
 env:
@@ -36,10 +41,40 @@ env:
   RUSTC_WRAPPER: "" # every mutant is a different build; nothing to cache
 
 jobs:
-  mutants:
+  # A scheduled run that GitHub delayed into the working day exits at once, so it never holds the runners
+  # the PR checks need. A manual run is not guarded. Window: scheduled runs may start 18:00-06:00 UTC.
+  # The window bounds the start only: a run that starts at 05:59 may still run into the morning (up to
+  # its job limit).
+  guard:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 2
+    # The guard reads the clock only: no token scopes.
+    permissions: {}
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - id: g
+        run: |
+          hour=$((10#$(date -u +%H)))
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$hour" -ge 6 ] && [ "$hour" -lt 18 ]; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "A scheduled run that starts at $hour:xx UTC is outside the night window (18:00-06:00): skipped." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+  mutants:
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
+    runs-on: ubuntu-latest
+    # With three kernels parts a slice took up to 5 h 30 and was cut by the old 330-minute limit on 2026-11-18 and
+    # 11-19 (4 h 43 and 4 h 25 on 11-17). Six parts halve that: at most about 2 h 45 (3 h on the worst night
+    # seen), so 300 minutes leaves room.
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
@@ -47,19 +82,37 @@ jobs:
           # `parts` halves (thirds, ...) a night's slice across that many jobs of the area.
           - area: kernels
             part: 1
-            parts: 3
+            parts: 6
             package: krishiv-kernels
             files: crates/krishiv-kernels/src/**/*.rs
             skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
           - area: kernels
             part: 2
-            parts: 3
+            parts: 6
             package: krishiv-kernels
             files: crates/krishiv-kernels/src/**/*.rs
             skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
           - area: kernels
             part: 3
-            parts: 3
+            parts: 6
+            package: krishiv-kernels
+            files: crates/krishiv-kernels/src/**/*.rs
+            skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
+          - area: kernels
+            part: 4
+            parts: 6
+            package: krishiv-kernels
+            files: crates/krishiv-kernels/src/**/*.rs
+            skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
+          - area: kernels
+            part: 5
+            parts: 6
+            package: krishiv-kernels
+            files: crates/krishiv-kernels/src/**/*.rs
+            skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
+          - area: kernels
+            part: 6
+            parts: 6
             package: krishiv-kernels
             files: crates/krishiv-kernels/src/**/*.rs
             skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
@@ -194,8 +247,8 @@ jobs:
           retention-days: 30
 
   score:
-    needs: mutants
-    if: always() && github.repository == 'KrishivAI/krishiv-engine'
+    needs: [guard, mutants]
+    if: needs.guard.outputs.go == 'true' && always() && github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -219,7 +272,7 @@ jobs:
           # Parts per area (the `parts` of the matrix). An area with a part missing (its job
           # failed or timed out before writing outcomes) is reported untested, never scored
           # from the parts that did arrive.
-          declare -A EXPECT=([kernels]=3 [hash]=1 [parser]=2 [serialization]=1)
+          declare -A EXPECT=([kernels]=6 [hash]=1 [parser]=2 [serialization]=1)
           declare -A HAVE=()
           for f in shards/*.json; do
             area="$(basename "$f" .json)"; area="${area%%.*}" # `kernels.2.json` is part 2

@@ -1262,6 +1262,7 @@ impl Parser<'_> {
         } else if self.kw_at(0, "JSON_TABLE") && self.sym_at(1, Sym::LParen) {
             self.json_table()?
         } else {
+            let name_start = self.tok(0).map_or(0, |t| t.span.start);
             let name = self.ddl_name()?;
             if self.sym_at(0, Sym::LParen) {
                 self.bump();
@@ -1280,7 +1281,16 @@ impl Parser<'_> {
                     args,
                 }
             } else {
-                let temporal = self.temporal_clause()?;
+                let at_suffix = self.at_suffix_clause(name_start)?;
+                let temporal = match (at_suffix, self.temporal_clause()?) {
+                    (Some(mut at), Some(clause)) => {
+                        // Spark's `AstBuilder` reports it after the statement parsed; an earlier
+                        // fault of the suffix is the first error.
+                        at.fault.get_or_insert(TemporalFault::Multiple(clause.span));
+                        Some(at)
+                    }
+                    (at, clause) => at.or(clause),
+                };
                 let options = self.table_options()?;
                 match name {
                     DdlName::Parts(name) => TableFactorKind::Table {
@@ -1445,6 +1455,94 @@ impl Parser<'_> {
         })
     }
 
+    /// The `@v123` / `@yyyyMMddHHmmssSSS` suffix of a table name (Spark 4.3), as the clause it
+    /// stands for: `VERSION AS OF 123` or `TIMESTAMP AS OF 'yyyy-MM-dd HH:mm:ss.SSS'`.
+    /// Spark's grammar is `AT_SIGN INTEGER_VALUE | AT_VERSION (INTEGER_VALUE | stringLit)` with
+    /// `@V` one token: `@v1`, `@v 1` and `@v'x'` are versions, `@ 20240101000000000` a timestamp
+    /// (any digits; `parseAtSyntaxTimestamp` checks them). `name_start` is where the table name
+    /// began: the errors point at name and suffix.
+    #[inline(never)]
+    fn at_suffix_clause(&mut self, name_start: usize) -> PR<Option<TemporalClause>> {
+        let at_tok = match self.tok(0) {
+            Some(t) if t.kind == TokenKind::Unrecognized && t.span.text(self.src) == "@" => t,
+            _ => return Ok(None),
+        };
+        let start = self.start();
+        let adjacent = self
+            .tok(1)
+            .filter(|t| t.span.start == at_tok.span.end && t.kind == TokenKind::Word);
+        let word = adjacent.map(|t| t.span.text(self.src));
+        let int_at = |p: &Self, i: usize| {
+            p.tok(i)
+                .filter(|t| t.kind == TokenKind::Number(NumKind::Int))
+                .map(|t| (t.span, t.span.text(p.src).to_owned()))
+        };
+        let (kind, literal, value_span) = if let Some(n) = word
+            .and_then(|w| w.strip_prefix(['v', 'V']))
+            .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        {
+            let span = adjacent.map_or(at_tok.span, |t| t.span);
+            self.pos += 2;
+            (
+                TemporalKind::Version,
+                Literal::Number {
+                    text: n.to_owned(),
+                    kind: NumKind::Int,
+                },
+                span,
+            )
+        } else if word.is_some_and(|w| w.eq_ignore_ascii_case("v")) {
+            if let Some((span, text)) = int_at(self, 2) {
+                self.pos += 3;
+                (
+                    TemporalKind::Version,
+                    Literal::Number {
+                        text,
+                        kind: NumKind::Int,
+                    },
+                    span,
+                )
+            } else {
+                self.pos += 2;
+                let span = self.tok(0).map_or(at_tok.span, |t| t.span);
+                let Some(text) = self.single_string() else {
+                    return self.fail();
+                };
+                (TemporalKind::Version, Literal::String(text), span)
+            }
+        } else if let Some((span, text)) = int_at(self, 1) {
+            self.pos += 2;
+            (TemporalKind::Timestamp, Literal::String(text), span)
+        } else {
+            self.bump();
+            return self.fail();
+        };
+        let whole = Span::new(name_start, value_span.end);
+        let mut fault = None;
+        if !self.opts.time_travel_at_syntax {
+            fault = Some(TemporalFault::AtSyntaxDisabled(whole));
+        }
+        let literal = match (kind, literal) {
+            (TemporalKind::Timestamp, Literal::String(digits)) => match at_timestamp(&digits) {
+                Some(text) => Literal::String(text),
+                None => {
+                    fault.get_or_insert(TemporalFault::InvalidAtTimestamp(digits.clone(), whole));
+                    Literal::String(digits)
+                }
+            },
+            (_, literal) => literal,
+        };
+        Ok(Some(TemporalClause {
+            kind,
+            value: Expr {
+                kind: ExprKind::Literal(literal),
+                span: value_span,
+            },
+            span: self.span_from(start),
+            fault,
+        }))
+    }
+
     /// `[FOR] (VERSION | SYSTEM_VERSION) AS OF version` or `[FOR]
     /// (TIMESTAMP | SYSTEM_TIME) AS OF expression`, if one starts here.
     #[inline(never)]
@@ -1490,6 +1588,7 @@ impl Parser<'_> {
             kind,
             value,
             span: self.span_from(start),
+            fault: None,
         }))
     }
 
@@ -1758,4 +1857,36 @@ impl Parser<'_> {
         }
         Ok(out)
     }
+}
+
+/// `yyyyMMddHHmmssSSS` as `yyyy-MM-dd HH:mm:ss.SSS`, when it has 17 digits that make a date-time
+/// (what `LocalDateTime.of` accepts: Spark's `parseAtSyntaxTimestamp`).
+fn at_timestamp(word: &str) -> Option<String> {
+    if word.len() != 17 || !word.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n = |a: usize, b: usize| word[a..b].parse::<u32>().ok();
+    let (year, month, day) = (n(0, 4)?, n(4, 6)?, n(6, 8)?);
+    let (hour, minute, second) = (n(8, 10)?, n(10, 12)?, n(12, 14)?);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if day == 0 || day > days || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    Some(format!(
+        "{}-{}-{} {}:{}:{}.{}",
+        &word[0..4],
+        &word[4..6],
+        &word[6..8],
+        &word[8..10],
+        &word[10..12],
+        &word[12..14],
+        &word[14..17]
+    ))
 }

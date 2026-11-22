@@ -6,7 +6,9 @@ name: Fuzz (weekly long run)
 # workflow-lint`); a job is capped at six hours, so a target gets 4.5 h.
 on:
   schedule:
-    - cron: "0 1 * * 0"
+    # GitHub created this run 05:27-07:19 UTC (2026-10-25 to 11-15) for a Sunday 01:00 cron, a delay of 4.5-6.3 h.
+    # Saturday 19:00 lands the run at about 23:30-01:20 UTC (Saturday night to Sunday), inside the guard's night window.
+    - cron: "0 19 * * 6"
   workflow_dispatch:
 
 permissions:
@@ -23,8 +25,35 @@ env:
   NIGHTLY: nightly-2026-08-12
 
 jobs:
-  targets:
+  # A scheduled run that GitHub delayed into the working day exits at once, so it never holds the runners
+  # the PR checks need. A manual run is not guarded. Window: scheduled runs may start 18:00-06:00 UTC.
+  # The window bounds the start only: a run that starts at 05:59 may still run into the morning (up to
+  # its job limit).
+  guard:
     if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    # The guard reads the clock only: no token scopes.
+    permissions: {}
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - id: g
+        run: |
+          hour=$((10#$(date -u +%H)))
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$hour" -ge 6 ] && [ "$hour" -lt 18 ]; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "A scheduled run that starts at $hour:xx UTC is outside the night window (18:00-06:00): skipped." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+  targets:
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     permissions:
       contents: read
     uses: $/.github/workflows/fuzz.yml
@@ -35,7 +64,8 @@ jobs:
   # The kernels differential fuzzer (every specialization and CPU target vs
   # the row-at-a-time reference); its corpus is the one the nightly job keeps.
   kernels:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 345
     env:
@@ -79,7 +109,8 @@ jobs:
   # The pipeline has to find a planted panic and turn it into a regression
   # input that reproduces it; otherwise a green fuzz run proves nothing.
   pipeline-selftest:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:

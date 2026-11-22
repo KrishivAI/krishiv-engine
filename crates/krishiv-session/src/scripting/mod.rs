@@ -41,7 +41,7 @@ use crate::command::{
 };
 use crate::dataframe::DataFrame;
 use crate::session::{Session, internal};
-use crate::variables::{RESOLVE_SEARCH_PATH, StoredVariable, quote_normalized};
+use crate::variables::{StoredVariable, quote_normalized};
 use control::ScriptRun;
 
 /// What a statement tells the statements around it to do next.
@@ -481,7 +481,7 @@ impl Run<'_> {
         }
         let handle = self.handle();
         let env = handle.query_env();
-        let class = krishiv_sql::classify_with(statement, &env.parser);
+        let class = handle.statement_class(statement, &env);
         handle.authorize_statement(statement, class, &env).await?;
         // `EXECUTE IMMEDIATE ... INTO` assigns to locals too, which only this interpreter can do.
         if let Statement::ExecuteImmediate(e) = statement
@@ -527,7 +527,7 @@ impl Run<'_> {
             let Some(target) = self.resolve(name) else {
                 return Err(unresolved_variable(
                     name,
-                    RESOLVE_SEARCH_PATH,
+                    &self.session.search_path(),
                     self.redacted,
                 ));
             };
@@ -805,7 +805,7 @@ impl Run<'_> {
                     let Some(target) = self.resolve(&a.name) else {
                         return Err(unresolved_variable(
                             &a.name,
-                            RESOLVE_SEARCH_PATH,
+                            &self.session.search_path(),
                             self.redacted,
                         ));
                     };
@@ -860,7 +860,7 @@ impl Run<'_> {
                     let Some(target) = self.resolve(name) else {
                         return Err(unresolved_variable(
                             name,
-                            RESOLVE_SEARCH_PATH,
+                            &self.session.search_path(),
                             self.redacted,
                         ));
                     };

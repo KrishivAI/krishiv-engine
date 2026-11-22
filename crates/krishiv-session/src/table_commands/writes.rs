@@ -68,13 +68,21 @@ impl Session {
                 env.analysis.conf.case_sensitive,
             );
         if self.temp_entry_of(name, env) || global {
+            // A temporary view is named as written (a global one without a catalog).
+            let view_name = name.written.clone();
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
                 operation: operation.to_owned(),
-                view_name: name.quoted(),
+                view_name,
             }
             .into());
         }
-        Err(name.not_found())
+        // ALTER TABLE resolves a table only, so its path has no `system.builtin` (Spark's goldens).
+        let path = if matches!(operation, "ALTER TABLE" | "COMMENT ON TABLE") {
+            self.table_search_path()
+        } else {
+            self.search_path()
+        };
+        Err(name.not_found(path))
     }
 
     /// `INSERT INTO|OVERWRITE [TABLE] name [(columns)] [BY NAME] query`, or the multi-table
@@ -102,6 +110,12 @@ impl Session {
             let env = self.query_env();
             for clause in &clauses {
                 let name = self.table_name(&clause.name, &env)?;
+                if clause.replace_where.is_some()
+                    || clause.replace_on.is_some()
+                    || clause.replace_using.is_some()
+                {
+                    self.refuse_replace_into_view(&name, &env)?;
+                }
                 self.table_for_write(&name, "INSERT", &env)?;
             }
             for clause in &clauses {
@@ -114,6 +128,28 @@ impl Session {
         self.empty_frame().await
     }
 
+    /// Spark checks the target before the capability of a `REPLACE` write: a view is not writable at all.
+    fn refuse_replace_into_view(
+        &self,
+        name: &TableName,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let permanent_view = self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some_and(|t| t.view.is_some())
+            && !self.temp_entry_of(name, env);
+        if permanent_view {
+            return Err(krishiv_common::error::ViewWriteNotAllowed {
+                name: name.quoted(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
     /// `c` checked through to the rows it would write (`dry`), or written.
     pub(super) async fn insert_clause(
         &self,
@@ -123,16 +159,21 @@ impl Session {
         dry: bool,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
-        if c.replace_on.is_some() || c.replace_using.is_some() {
-            return Err(unsupported("INSERT ... REPLACE"));
-        }
+        let replace =
+            c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some();
         let name = self.table_name(&c.name, &env)?;
+        if replace {
+            self.refuse_replace_into_view(&name, &env)?;
+        }
         let table = self.table_for_write(&name, "INSERT", &env)?;
-        if c.replace_where.is_some() {
-            // Spark 4.3.0 runs REPLACE WHERE on DSv2 tables only; a Parquet or Hive table (every table
-            // here) fails with this class, with or without a column list
-            // (`tests/fixtures/spark-4.3.0/write-semantics/replace_where.json`).
-            return Err(table_operation(&name, "INSERT INTO ... REPLACE WHERE"));
+        if replace {
+            // A session-catalog table has no replace-by-condition write (Spark: the table lacks the capability).
+            let operation = if c.replace_where.is_some() {
+                "INSERT INTO ... REPLACE WHERE"
+            } else {
+                "INSERT INTO ... REPLACE ON/USING"
+            };
+            return Err(table_operation(&name, operation));
         }
         let statics = match &c.partition {
             None => Vec::new(),
@@ -921,6 +962,8 @@ impl Session {
         }
         let mut options = BTreeMap::new();
         for (k, v) in &spec.options {
+            // The idempotency key travels with the creation write (`create_table_from` strips it
+            // before the table is stored: it belongs to this one write, never to the table).
             // Table metadata is stored as plain text: a secret never is.
             let Some(text) = v.as_plain() else {
                 return Err(unsupported("secret table options"));

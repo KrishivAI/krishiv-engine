@@ -5,6 +5,15 @@
 
 use super::types::{self, CatalogConfig, LoadedTable};
 
+/// Runs one fuzz input: `which`, then a depth byte (`1 + b % 128`, so every limit the client allows is fuzzed;
+/// seeds use 0x3f for the default 64), then the body. `None` when the input is too short.
+pub fn parse_input(data: &[u8]) -> Option<bool> {
+    let [which, depth, body @ ..] = data else {
+        return None;
+    };
+    Some(parse_response(*which, body, 1 + usize::from(*depth) % 128))
+}
+
 /// Runs the parser picked by `which` (modulo the parser count) on `body`, nested at most `max_depth` deep.
 /// Returns whether the body parsed. Parsed values are walked so a lazily wrong shape cannot hide.
 pub fn parse_response(which: u8, body: &[u8], max_depth: usize) -> bool {
@@ -48,7 +57,7 @@ pub fn parse_response(which: u8, body: &[u8], max_depth: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_response;
+    use super::{parse_input, parse_response};
 
     /// The fuzz seeds are well-formed responses: each parses with its own parser, and the 70-deep one is refused
     /// by the depth limit instead of recursing.
@@ -60,12 +69,28 @@ mod tests {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             let data = std::fs::read(&path).unwrap();
-            let ok = parse_response(data[0], &data[1..], 64);
+            let ok = parse_input(&data).unwrap();
             let deep = path.file_name().unwrap().to_string_lossy().contains("deep");
             assert_eq!(ok, !deep, "{}", path.display());
             seen += 1;
         }
         assert_eq!(seen, 8);
+    }
+
+    /// Every allowed depth limit is reachable from the input's depth byte, and a body nested past it is refused.
+    #[test]
+    fn the_depth_byte_picks_the_limit() {
+        let nested = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
+        let input = |depth: u8, n: usize| {
+            let mut v = vec![0, depth];
+            v.extend_from_slice(nested(n).as_bytes());
+            v
+        };
+        // Depth byte 127 allows 128 levels; byte 0 allows 1.
+        assert_eq!(parse_input(&input(127, 120)), Some(true));
+        assert_eq!(parse_input(&input(0, 5)), Some(false));
+        assert_eq!(parse_input(&input(0, 1)), Some(true));
+        assert_eq!(parse_input(&[0]), None);
     }
 
     #[test]
