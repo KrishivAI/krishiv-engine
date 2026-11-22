@@ -132,11 +132,22 @@ impl Root<'_> {
         }
     }
 
-    /// One record into the root type: an object, a top-level array (its
-    /// elements are records), a scalar, or a record that does not parse
+    /// One record into its partition's type: an object, a top-level array
+    /// (its elements are records), a scalar, or a record that does not parse
     /// (Spark's `handleJsonErrorsByParseMode`: the corrupt column alone in
     /// PERMISSIVE, nothing in DROPMALFORMED, an error in FAILFAST).
-    fn absorb(self, inf: &Infer<'_>, root: Ty, rec: &Result<Top, Reason>) -> FormatResult<Ty> {
+    ///
+    /// A partition has no type before its first record: Spark reduces each
+    /// partition's record types without a seed (`reduceOption`) and only
+    /// then folds the partitions into an empty struct, so the scalars before
+    /// a partition's first object merge with each other first (`5` then
+    /// `"str"` is `STRING`), and FAILFAST names that merged type.
+    fn absorb(
+        self,
+        inf: &Infer<'_>,
+        part: Option<Ty>,
+        rec: &Result<Top, Reason>,
+    ) -> FormatResult<Option<Ty>> {
         let t = match rec {
             Ok(Top::Object(o)) => inf.object(&o.fields),
             Ok(Top::Array(items)) => Ty::Array(Box::new(
@@ -147,7 +158,7 @@ impl Root<'_> {
             Ok(Top::Other(v)) => inf.field(v),
             Err(_) => match self.mode {
                 Mode::Permissive => Ty::Struct(vec![(self.corrupt.to_owned(), Ty::Str)]),
-                Mode::DropMalformed => return Ok(root),
+                Mode::DropMalformed => return Ok(part),
                 Mode::FailFast => {
                     return Err(FormatError::Other(
                         MalformedRecordInParsingWithoutSuggestion {
@@ -159,7 +170,19 @@ impl Root<'_> {
                 }
             },
         };
-        self.merge(root, t)
+        match part {
+            None => Ok(Some(t)),
+            Some(p) => self.merge(p, t).map(Some),
+        }
+    }
+
+    /// A partition's type into the root (Spark's fold of the partition
+    /// results into `StructType(Nil)`, in partition order here).
+    fn fold(self, root: Ty, part: Option<Ty>) -> FormatResult<Ty> {
+        match part {
+            None => Ok(root),
+            Some(p) => self.merge(root, p),
+        }
     }
 
     /// Spark's `compatibleRootType`: top-level arrays are unwrapped, null
@@ -569,6 +592,11 @@ pub(crate) fn infer<'a>(
         };
         let mut root = Ty::Struct(Vec::new());
         if opts.multi_line {
+            // One partition: Spark packs whole files into combined splits of
+            // at least `openCostInBytes` (4 MiB), so small files share one.
+            // [inferred] Within a split Spark's file order follows Hadoop's
+            // block grouping; Krishiv takes the listing order.
+            let mut part = None;
             for file in files {
                 let ctx = ctx_of(file);
                 let text = whole_text(&ctx)
@@ -578,10 +606,11 @@ pub(crate) fn infer<'a>(
                 // sees it (Spark's `JsonInferSchema` over one root).
                 match parse_next(&text, 0, syntax) {
                     Ok(None) => {}
-                    Ok(Some((top, _))) => root = rm.absorb(&inf, root, &Ok(top))?,
-                    Err(reason) => root = rm.absorb(&inf, root, &Err(reason))?,
+                    Ok(Some((top, _))) => part = rm.absorb(&inf, part, &Ok(top))?,
+                    Err(reason) => part = rm.absorb(&inf, part, &Err(reason))?,
                 }
             }
+            root = rm.fold(root, part)?;
         } else {
             let listing: Vec<SplitFile> = files
                 .iter()
@@ -594,6 +623,7 @@ pub(crate) fn infer<'a>(
             let parts = plan(&split_config(o)?, &listing);
             for p in &parts {
                 let mut sampler = (ratio <= 0.99).then(|| Sampler::new(ratio, p.index));
+                let mut part = None;
                 for s in &p.splits {
                     let file = &files[s.file];
                     let ctx = ctx_of(file);
@@ -603,11 +633,12 @@ pub(crate) fn infer<'a>(
                         {
                             return Ok(true);
                         }
-                        root = rm.absorb(&inf, std::mem::replace(&mut root, Ty::Null), rec)?;
+                        part = rm.absorb(&inf, part.take(), rec)?;
                         Ok(true)
                     })
                     .await?;
                 }
+                root = rm.fold(std::mem::replace(&mut root, Ty::Null), part)?;
             }
         }
         // Fields are sorted by name, as Spark's inference sorts them.
