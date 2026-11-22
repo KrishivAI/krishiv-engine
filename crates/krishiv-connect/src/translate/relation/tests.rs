@@ -911,6 +911,16 @@ fn with_columns_lifts_a_generator_column() {
     assert!(matches!(below.node, PlanNode::Generate { .. }));
 }
 
+#[test]
+fn with_columns_refuses_a_generator_beside_an_alias_reading_a_replaced_column() {
+    let mut generated = alias_of(&["x"], None);
+    generated.expr = Some(Box::new(func("explode", vec![attr("b")])));
+    let mut reader = alias_of(&["y"], None);
+    reader.expr = Some(Box::new(attr("x")));
+    let r = with_columns(vec![generated, reader]);
+    assert_eq!(code(&r), ErrorClass::KrishivUnsupportedFeature);
+}
+
 // ---- plan ids, unsupported relations ---------------------------------------------------------
 
 #[test]

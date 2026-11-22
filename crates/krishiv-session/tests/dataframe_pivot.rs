@@ -150,3 +150,18 @@ fn sort_within_partitions_keeps_the_rows() -> R {
     assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 4);
     Ok(())
 }
+
+#[test]
+fn a_pivot_value_named_like_a_grouping_column_an_aggregate_reads_is_refused() -> R {
+    let s = session()?;
+    let df = s
+        .table("t")
+        .group_by(["year"])
+        .pivot(col("course"), [lit("Java"), lit("year")])
+        .agg([max(col("year"))]);
+    let Err(e) = block_on(df.collect()) else {
+        return Err("a value named like a read grouping key did not fail".into());
+    };
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    Ok(())
+}
