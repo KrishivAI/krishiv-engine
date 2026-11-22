@@ -5,10 +5,6 @@
 pub(crate) const GAPS: &[&str] = &[
     // `DESCRIBE .. AS JSON` of a view.
     "ddl_describe_as_json",
-    // A command's `TABLE_OR_VIEW_NOT_FOUND` names `default` in its search path, not the current
-    // database (every command, not only metric views).
-    "yaml_dimension_bool",
-    "yaml_dimension_number",
     // Spark's rule order: `WHERE measure(m)` under an aggregate is `MISSING_ATTRIBUTES`, a
     // self-join's qualified name is unresolved.
     "read_measure_in_where",
