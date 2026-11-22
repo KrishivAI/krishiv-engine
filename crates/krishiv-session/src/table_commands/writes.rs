@@ -853,7 +853,10 @@ impl Session {
                 // Admitted before the drop: a controller that refuses the write, or a caller that
                 // gives up while it queues, must not have lost the old table. The write takes
                 // this admission instead of asking again.
-                let mut pre = Some(self.admit_query(&analysis.env, false).await?);
+                let mut pre = Some(
+                    self.admit_query(&analysis.env, false, krishiv_sql::StatementClass::Write)
+                        .await?,
+                );
                 let done = async {
                     // From the drop on, a cancel waits for the write's query
                     // instead of dropping the statement half-way (`action.rs`).

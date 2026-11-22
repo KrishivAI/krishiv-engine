@@ -257,7 +257,7 @@ impl State {
 }
 
 /// `m` as REST's `snapshots=refs` returns it: only the snapshots refs point at.
-fn refs_only(m: &TableMetadata) -> TableMetadata {
+pub(super) fn refs_only(m: &TableMetadata) -> TableMetadata {
     let mut json = serde_json::to_value(m).unwrap();
     let heads: HashSet<i64> = json["refs"]
         .as_object()
