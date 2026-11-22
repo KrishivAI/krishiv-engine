@@ -12,7 +12,7 @@ use crate::operators::{SourceConjunct, SourceFilter};
 
 /// The state of `e` (one conjunct over the columns of `scan`) in Spark's filter translation.
 pub(crate) fn classify(e: &Expr, scan: &[BoundColumn]) -> SourceConjunct {
-    match translate(e, scan) {
+    match translate(e, scan, &mut std::collections::HashMap::new()) {
         Tr::Leaf(f) => SourceConjunct::Serializable(f),
         Tr::Translated => SourceConjunct::Translated,
         Tr::No => SourceConjunct::Untranslated,
@@ -106,7 +106,7 @@ pub(crate) fn and_all(parts: Vec<&Expr>) -> Option<Expr> {
 /// `IS NULL`, `IN`, `AND` or `OR`. First-appearance order.
 pub(crate) fn inferred_not_null(e: &Expr, scan: &[BoundColumn]) -> Vec<Expr> {
     let mut found: Vec<&Expr> = Vec::new();
-    null_rejected(e, scan, &mut found);
+    null_rejected(e, scan, &mut found, &mut std::collections::HashSet::new());
     found
         .into_iter()
         .map(|column| {
@@ -129,7 +129,16 @@ pub(crate) fn inferred_not_null(e: &Expr, scan: &[BoundColumn]) -> Vec<Expr> {
 
 /// Collects the nullable scan columns and struct fields `e` is NULL without (Spark's
 /// `scanNullIntolerantAttribute` / `scanNullIntolerantField`).
-fn null_rejected<'a>(e: &'a Expr, scan: &[BoundColumn], out: &mut Vec<&'a Expr>) {
+fn null_rejected<'a>(
+    e: &'a Expr,
+    scan: &[BoundColumn],
+    out: &mut Vec<&'a Expr>,
+    seen: &mut std::collections::HashSet<*const Expr>,
+) {
+    // A shared child is visited once, so the walk is linear in the expression graph.
+    if !seen.insert(std::ptr::from_ref(e)) {
+        return;
+    }
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {
             if let Some(b) = scan.iter().find(|s| s.id == c.id)
@@ -145,7 +154,7 @@ fn null_rejected<'a>(e: &'a Expr, scan: &[BoundColumn], out: &mut Vec<&'a Expr>)
             }
         }
         ExprNode::Cast { expr, .. } | ExprNode::Collate { expr, .. } => {
-            null_rejected(expr, scan, out);
+            null_rejected(expr, scan, out, seen);
         }
         ExprNode::Resolved(ResolvedExpr::Function(krishiv_plan::ResolvedFunction {
             id: krishiv_plan::FunctionId::Registry { name, .. },
@@ -154,7 +163,7 @@ fn null_rejected<'a>(e: &'a Expr, scan: &[BoundColumn], out: &mut Vec<&'a Expr>)
         })) if matches!(name.as_str(), "lower" | "upper" | "lcase" | "ucase") => {
             // Spark's `ILIKE` is `lower(x) LIKE lower(p)`; the case functions are null-intolerant.
             for a in args {
-                null_rejected(a, scan, out);
+                null_rejected(a, scan, out, seen);
             }
         }
         _ => {
@@ -180,7 +189,7 @@ fn null_rejected<'a>(e: &'a Expr, scan: &[BoundColumn], out: &mut Vec<&'a Expr>)
                 )
             {
                 for a in args {
-                    null_rejected(a, scan, out);
+                    null_rejected(a, scan, out, seen);
                 }
             }
         }
@@ -194,9 +203,23 @@ fn source_value(e: &Expr) -> Option<Option<ScalarValue>> {
         ExprNode::Literal(Literal::TimestampNtz(v)) => {
             Some(Some(ScalarValue::TimestampNtzMicros(*v)))
         }
-        _ => super::pushdown::value_or_null(e),
+        _ => super::pushdown::value_or_null(e).filter(|v| match v {
+            // Python's `date` and `datetime` stop at years 1 and 9999; a literal outside stays in the
+            // residual instead of failing the conversion while the offer is built.
+            Some(ScalarValue::Date32(d)) => PY_DATE_DAYS.contains(d),
+            Some(ScalarValue::TimestampMicros(t) | ScalarValue::TimestampNtzMicros(t)) => {
+                PY_DATETIME_MICROS.contains(t)
+            }
+            _ => true,
+        }),
     }
 }
+
+/// Days since the epoch of `0001-01-01` ..= `9999-12-31`.
+const PY_DATE_DAYS: std::ops::RangeInclusive<i32> = -719_162..=2_932_896;
+/// Microseconds since the epoch of `0001-01-01T00:00:00` ..= `9999-12-31T23:59:59.999999`.
+const PY_DATETIME_MICROS: std::ops::RangeInclusive<i64> =
+    -62_135_596_800_000_000..=253_402_300_799_999_999;
 
 enum Tr {
     /// A serializable leaf or `Not` of a leaf.
@@ -207,7 +230,13 @@ enum Tr {
     No,
 }
 
-fn translate(e: &Expr, scan: &[BoundColumn]) -> Tr {
+/// `memo` caches, per expression address, whether a shared sub-expression has no source form, so a
+/// DAG of shared `And`/`Or` children is classified once per node, not once per path.
+fn translate(
+    e: &Expr,
+    scan: &[BoundColumn],
+    memo: &mut std::collections::HashMap<usize, bool>,
+) -> Tr {
     if let ExprNode::Literal(Literal::Boolean(_)) = &e.node {
         return Tr::Translated;
     }
@@ -225,8 +254,14 @@ fn translate(e: &Expr, scan: &[BoundColumn]) -> Tr {
         return Tr::No;
     };
     match (b, args.as_slice()) {
-        (Builtin::And | Builtin::Or, [l, r]) => both(translate(l, scan), translate(r, scan)),
-        (Builtin::Not, [x]) => match translate(x, scan) {
+        (Builtin::And | Builtin::Or, [l, r]) => {
+            if untranslatable(l, scan, memo) || untranslatable(r, scan, memo) {
+                Tr::No
+            } else {
+                Tr::Translated
+            }
+        }
+        (Builtin::Not, [x]) => match translate(x, scan, memo) {
             Tr::Leaf(SourceFilter::Not(_)) | Tr::Translated => Tr::Translated,
             Tr::Leaf(f) => Tr::Leaf(SourceFilter::Not(Box::new(f))),
             Tr::No => Tr::No,
@@ -269,11 +304,18 @@ fn translate(e: &Expr, scan: &[BoundColumn]) -> Tr {
     }
 }
 
-fn both(l: Tr, r: Tr) -> Tr {
-    match (l, r) {
-        (Tr::No, _) | (_, Tr::No) => Tr::No,
-        _ => Tr::Translated,
+fn untranslatable(
+    e: &Expr,
+    scan: &[BoundColumn],
+    memo: &mut std::collections::HashMap<usize, bool>,
+) -> bool {
+    let key = std::ptr::from_ref(e) as usize;
+    if let Some(known) = memo.get(&key) {
+        return *known;
     }
+    let no = matches!(translate(e, scan, memo), Tr::No);
+    memo.insert(key, no);
+    no
 }
 
 /// `l op r`, the attribute on either side (the operator flips for a literal on the left).
@@ -432,6 +474,48 @@ mod tests {
 
     fn x() -> BoundColumn {
         col(1, "x", DataType::Integer)
+    }
+
+    /// A ladder of `op(child, child)` that shares each child, `depth` levels over `leaf`.
+    fn ladder(op: Builtin, leaf: Expr, depth: usize) -> Expr {
+        let mut e = Arc::new(leaf);
+        for _ in 0..depth {
+            let mut node = call(op, vec![]);
+            if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &mut node.node {
+                f.args = vec![Arc::clone(&e), Arc::clone(&e)];
+            }
+            e = Arc::new(node);
+        }
+        Arc::try_unwrap(e).unwrap_or_else(|shared| (*shared).clone())
+    }
+
+    /// The walks must be linear in the expression graph, not in the number of paths (2^40 here).
+    #[test]
+    fn shared_children_are_visited_once() {
+        let x = x();
+        let scan = [x.clone()];
+        let or = ladder(Builtin::Or, call(Builtin::Gt, vec![c(&x), int(1)]), 40);
+        assert_eq!(classify(&or, &scan), SourceConjunct::Translated);
+        let add = ladder(Builtin::Add, c(&x), 40);
+        assert_eq!(inferred_not_null(&add, &scan).len(), 1);
+    }
+
+    #[test]
+    fn a_date_outside_pythons_range_stays_in_the_residual() {
+        let d = col(2, "d", DataType::Date);
+        let scan = [d.clone()];
+        let lit = |v: i32| Expr::new(ExprNode::Literal(Literal::Date(v)));
+        assert_eq!(
+            classify(&call(Builtin::Eq, vec![c(&d), lit(0)]), &scan),
+            SourceConjunct::Serializable(SourceFilter::EqualTo(
+                ColumnPath::new("d"),
+                ScalarValue::Date32(0)
+            ))
+        );
+        assert_eq!(
+            classify(&call(Builtin::Eq, vec![c(&d), lit(3_000_000)]), &scan),
+            SourceConjunct::Untranslated
+        );
     }
 
     #[test]

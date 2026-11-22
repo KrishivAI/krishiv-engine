@@ -531,23 +531,28 @@ impl DirectoryWrite {
         // An append past the grace may have committed between the sweep's listing and now: the log
         // is read again and a stale file it lists is kept (this narrows the window to the deletes
         // themselves; the grace is what makes the remainder rare).
-        let committed_since: std::collections::HashSet<String> = match &self.log {
-            Some(l) if !l.stale.is_empty() => self
-                .commit_log(io)
-                .snapshot()
-                .await?
-                .files
-                .into_keys()
-                .collect(),
-            _ => std::collections::HashSet::new(),
+        // The entry is published: a failed re-read is maintenance, so the stale files are left for the
+        // next overwrite instead of failing a write that is already visible.
+        let committed_since: Option<std::collections::HashSet<String>> = match &self.log {
+            Some(l) if !l.stale.is_empty() => match self.commit_log(io).snapshot().await {
+                Ok(snapshot) => Some(snapshot.files.into_keys().collect()),
+                Err(e) => {
+                    after_publish(true, "reading the log before the stale sweep", Err(e))?;
+                    None
+                }
+            },
+            _ => Some(std::collections::HashSet::new()),
         };
-        let swept: Vec<&Path> = self
-            .log
-            .as_ref()
-            .map_or(&[][..], |l| l.stale.as_slice())
-            .iter()
-            .filter(|p| !committed_since.contains(&self.relative(p)))
-            .collect();
+        let swept: Vec<&Path> = match &committed_since {
+            Some(committed) => self
+                .log
+                .as_ref()
+                .map_or(&[][..], |l| l.stale.as_slice())
+                .iter()
+                .filter(|p| !committed.contains(&self.relative(p)))
+                .collect(),
+            None => Vec::new(),
+        };
         let deletes: Vec<_> = replaced
             .iter()
             .chain(swept)

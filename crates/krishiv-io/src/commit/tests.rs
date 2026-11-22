@@ -1865,12 +1865,22 @@ fn an_overwrite_keeps_a_stale_file_an_append_committed_meanwhile() {
     env.rt
         .block_on(append.commit(&env.io, format.as_ref(), schema(), &o, append_files))
         .unwrap();
-    let _ = env
+    // The overwrite started before the append's entry, so its own commit is refused and sweeps
+    // nothing; the append's file stays committed and on the store. (The window after publication,
+    // where the re-read before the deletes matters, needs a fault hook between entry and deletes.)
+    let refused = env
         .rt
-        .block_on(over.commit(&env.io, format.as_ref(), schema(), &o, over_files));
+        .block_on(over.commit(&env.io, format.as_ref(), schema(), &o, over_files))
+        .expect_err("the overwrite conflicts with the append's entry");
+    assert_eq!(refused.error_class(), ErrorClass::KrishivConcurrentCommit);
     let visible = env.visible("t");
     let on_store = env.names("t");
-    for f in visible.iter().filter(|f| f.contains("job-2")) {
+    let appended: Vec<_> = visible.iter().filter(|f| f.contains("job-2")).collect();
+    assert!(
+        !appended.is_empty(),
+        "the append's file is in the log: {visible:?}"
+    );
+    for f in appended {
         assert!(
             on_store.iter().any(|n| n.ends_with(f.as_str())),
             "{f} is in the log but gone: {on_store:?}"
