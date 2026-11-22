@@ -8,11 +8,14 @@ use std::fmt::Write as _;
 /// appearance (`sum(amount#1)#4`, as Spark prints `sum(amount#1)#12L`),
 /// never `#4611686018427387904` (PY-008).
 pub fn dense_ids(text: &str) -> String {
-    dense_ids_all(&[text]).remove(0)
+    dense_ids_all(&[text])
+        .into_iter()
+        .next()
+        .unwrap_or_default()
 }
 
 /// [`dense_ids`] over several texts (one plan node's detail each) with one
-/// numbering for all of them, so no separator can mis-split a node's text.
+/// numbering for all of them, so no separator can cut a node's text in the wrong place.
 pub fn dense_ids_all(texts: &[&str]) -> Vec<String> {
     const HIGH: u64 = 1 << 32;
     // `#<digits>` outside single-quoted literals (`Literal::String` prints
@@ -25,7 +28,13 @@ pub fn dense_ids_all(texts: &[&str]) -> Vec<String> {
         while i < b.len() {
             match b[i] {
                 b'\\' if quoted => i += 2,
-                b'\'' => {
+                // A quote right after an identifier character is part of a column
+                // name (`it's#1`), not the start of a literal.
+                b'\''
+                    if quoted
+                        || i == 0
+                        || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_') =>
+                {
                     quoted = !quoted;
                     i += 1;
                 }
@@ -81,6 +90,14 @@ pub fn dense_ids_all(texts: &[&str]) -> Vec<String> {
 #[cfg(test)]
 mod dense_ids_tests {
     use super::{dense_ids, dense_ids_all};
+
+    #[test]
+    fn an_apostrophe_in_a_column_name_opens_no_literal() {
+        assert_eq!(
+            dense_ids("it's#4294967296 a#4294967297 b#3"),
+            "it's#4 a#5 b#3"
+        );
+    }
 
     #[test]
     fn planner_ids_follow_the_plans_own() {
