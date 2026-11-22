@@ -409,8 +409,8 @@ impl Session {
     /// hits as `(_krishiv_row_file, _krishiv_row_index)` (`UPDATE`: after the new row, whose
     /// columns are the table's), into the table's rewriter, which records the deletes and writes
     /// the new rows in one commit. No file is read twice and none is rewritten. The result is the
-    /// table's [`output`](RowLevelTable::output); the hit count is not known before the commit
-    /// (Spark's Iceberg tables return no rows), so it is `0` for a table that wants one.
+    /// table's [`output`](RowLevelTable::output); a table that reports counts gets the hit rows counted by
+    /// a query over the same snapshot (Spark's Iceberg tables return no rows, and pay nothing).
     #[expect(clippy::too_many_arguments, reason = "the statement's parts")]
     async fn run_merge_on_read(
         &self,
@@ -449,6 +449,20 @@ impl Session {
         }
         select.push(column_of(ROW_FILE_COLUMN)?.alias(ROW_FILE_COLUMN));
         select.push(column_of(ROW_POSITION_COLUMN)?.alias(ROW_POSITION_COLUMN));
+        // The hit count only matters to a table whose `output` reports counts (Iceberg's returns
+        // no rows, as Spark's does), so only that table pays for the extra read; it reads the same
+        // pinned snapshot as the write.
+        let affected = if table.output(&RowLevelCounts::affected(0)).is_some() {
+            let counted = self
+                .hidden_frame(&whole, Arc::clone(&whole_entry), with_row_id)
+                .alias(alias)
+                .filter(crate::functions::expr(hit)?)
+                .agg([crate::functions::expr("count(*)")?]);
+            let batches = counted.collect().await?;
+            hit_count(&batches)?
+        } else {
+            0
+        };
         let frame = self
             .hidden_frame(&whole, whole_entry, with_row_id)
             .alias(alias)
@@ -468,7 +482,7 @@ impl Session {
         }
         drop(stream);
         self.refresh_files();
-        match table.output(&RowLevelCounts::affected(0)) {
+        match table.output(&RowLevelCounts::affected(affected)) {
             Some(batch) => self
                 .script_result(batch.schema(), vec![batch])
                 .await
@@ -712,6 +726,21 @@ fn contains_integral_or_decimal(t: &DataType) -> bool {
 }
 
 /// The touched files (each once) and the total hit count of the find query's rows.
+/// The one `count(*)` row of the hit-count query.
+fn hit_count(batches: &[RecordBatch]) -> Result<u64, KrishivError> {
+    let mut hits = 0_u64;
+    for b in batches {
+        let count = b
+            .column(0)
+            .as_primitive_opt::<arrow_array::types::Int64Type>()
+            .ok_or_else(|| internal("a row-level hit count that is not a long".to_owned()))?;
+        for i in 0..b.num_rows() {
+            hits = hits.saturating_add(u64::try_from(count.value(i)).unwrap_or(0));
+        }
+    }
+    Ok(hits)
+}
+
 fn touched_files(batches: &[RecordBatch]) -> Result<(Vec<Vec<u8>>, u64), KrishivError> {
     let mut files = Vec::new();
     let mut hits = 0_u64;

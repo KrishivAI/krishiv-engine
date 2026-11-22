@@ -615,8 +615,7 @@ fn merge_on_read_delete_records_positions_and_rewrites_nothing() {
         Some("t.id IN (2, 5, 6)"),
         vec![],
     );
-    // The hit count is not known before the commit.
-    assert_eq!(affected(&out), 0);
+    assert_eq!(affected(&out), 3);
     assert_eq!(files.ids(), [1, 3, 4, 7, 8, 9]);
     // The files keep their names: no copy-on-write swap.
     assert_eq!(files.names(), ["f0", "f1", "f2"]);
