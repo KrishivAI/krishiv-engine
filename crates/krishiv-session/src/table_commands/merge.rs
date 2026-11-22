@@ -93,10 +93,10 @@ const INSERT_ONLY_CONF: &str = "spark.databricks.delta.merge.optimizeInsertOnlyM
 /// delta-spark's automatic schema evolution (`schema.autoMerge.enabled`, default false).
 const AUTO_MERGE_CONF: &str = "spark.databricks.delta.schema.autoMerge.enabled";
 
-/// The column marking a target row of the join.
+/// The column marking a target row of the join (a suffix is added if a column has the name).
 const TARGET_PRESENT: &str = "__krishiv_merge_target_present";
 
-/// The column marking a source row of the join.
+/// The column marking a source row of the join (a suffix is added if a column has the name).
 const SOURCE_PRESENT: &str = "__krishiv_merge_source_present";
 
 /// Which rows a clause fires on.
@@ -193,6 +193,18 @@ struct Found {
     inserted: u64,
 }
 
+/// `base`, or `base_<n>` for the first `n` that no name of `taken` spells, case-insensitively.
+fn fresh(base: &str, taken: &[&str]) -> String {
+    let clash = |name: &str| taken.iter().any(|t| t.eq_ignore_ascii_case(name));
+    let mut name = base.to_owned();
+    let mut n = 0u32;
+    while clash(&name) {
+        n += 1;
+        name = format!("{base}_{n}");
+    }
+    name
+}
+
 fn qualified(alias: &str, column: &str) -> String {
     format!("{}.{}", ident(alias), ident(column))
 }
@@ -242,7 +254,7 @@ impl Session {
         let rule = table.capabilities().cardinality;
         if rule != CardinalityRule::DeltaWithUnconditionalDeleteExemption {
             return Err(KrishivUnsupportedFeature {
-                feature: "MERGE INTO a table with Spark's MERGE_CARDINALITY_VIOLATION rule"
+                feature: "MERGE INTO a table with Spark's own multiple-match (cardinality) rule"
                     .to_owned(),
             }
             .into());
@@ -284,6 +296,22 @@ impl Session {
             nullable: false,
             char_varchar: None,
         });
+        let source = plain.nested_frame(&m.source).await?;
+        let source_columns: Vec<String> = source
+            .schema()
+            .await?
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        // The presence markers take names that no target or source column spells.
+        let taken: Vec<&str> = columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .chain(source_columns.iter().map(String::as_str))
+            .collect();
+        let target_present = fresh(TARGET_PRESENT, &taken);
+        let source_present = fresh(SOURCE_PRESENT, &taken);
         let target_frame = |files: Option<Vec<Vec<u8>>>| {
             let (name, entry) = self.state.catalog.put_hidden_provider(
                 with_row_id.clone(),
@@ -295,20 +323,12 @@ impl Session {
             );
             let frame = self
                 .hidden_frame(&name, entry, &with_row_id)
-                .with_column(TARGET_PRESENT, lit(true))
+                .with_column(&target_present, lit(true))
                 .alias(&m.target_alias);
             (name, frame)
         };
-        let source = plain.nested_frame(&m.source).await?;
-        let source_columns: Vec<String> = source
-            .schema()
-            .await?
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect();
         let source_frame = |df: &DataFrame| {
-            df.with_column(SOURCE_PRESENT, lit(true))
+            df.with_column(&source_present, lit(true))
                 .alias(&m.source_alias)
         };
 
@@ -352,8 +372,8 @@ impl Session {
         };
         let s = source_frame(&held.frame);
         let on = expr(&m.on)?;
-        let tp = qualified(&m.target_alias, TARGET_PRESENT);
-        let sp = qualified(&m.source_alias, SOURCE_PRESENT);
+        let tp = qualified(&m.target_alias, &target_present);
+        let sp = qualified(&m.source_alias, &source_present);
         let guards: Vec<String> = resolved
             .iter()
             .map(|c| {

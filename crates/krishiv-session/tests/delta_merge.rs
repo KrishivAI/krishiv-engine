@@ -52,6 +52,7 @@ fn cell(column: &dyn Array, row: usize) -> Value {
         ArrowType::Int32 => Value::from(column.as_primitive::<Int32Type>().value(row)),
         ArrowType::Utf8 => Value::from(column.as_string::<i32>().value(row)),
         ArrowType::Utf8View => Value::from(column.as_string_view().value(row)),
+        ArrowType::Boolean => Value::from(column.as_boolean().value(row)),
         other => panic!("no oracle form for {other}"),
     }
 }
@@ -760,5 +761,78 @@ fn a_merge_source_option_error_is_the_reads_error() {
     assert_eq!(merge.error_class(), read.error_class(), "{merge} / {read}");
     assert_eq!(merge.to_string(), read.to_string());
     // The table is unchanged.
+    assert_eq!(table_rows(&dir).as_array().unwrap().len(), 6);
+}
+
+#[test]
+fn a_target_or_source_column_named_like_a_presence_marker_keeps_its_values() {
+    // The join's presence markers must not take the place of a user column of the same name
+    // (case-insensitively): an UPDATE of `v` leaves the target's own Boolean as it was, and the
+    // source's column of the marker's name is an ordinary source column.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let session = Session::new().unwrap();
+    sql(
+        &session,
+        &format!(
+            "CREATE TABLE t USING delta LOCATION '{}' AS SELECT * FROM VALUES \
+             (CAST(1 AS BIGINT), false, 'a'), (CAST(2 AS BIGINT), CAST(NULL AS BOOLEAN), 'b') \
+             AS x(id, __KRISHIV_MERGE_TARGET_PRESENT, v)",
+            dir.display()
+        ),
+    )
+    .unwrap();
+    let (_, out) = sql(
+        &session,
+        "MERGE INTO t USING (SELECT * FROM VALUES (CAST(1 AS BIGINT), false), \
+         (CAST(3 AS BIGINT), false) AS s(id, __krishiv_merge_source_present)) s \
+         ON t.id = s.id \
+         WHEN MATCHED THEN UPDATE SET v = 'z' \
+         WHEN NOT MATCHED THEN INSERT (id, __krishiv_merge_target_present, v) \
+         VALUES (s.id, s.__krishiv_merge_source_present, 'new')",
+    )
+    .unwrap();
+    assert_eq!(out, serde_json::json!([[2, 1, 0, 1]]));
+    assert_eq!(
+        table_rows(&dir),
+        serde_json::json!([[1, false, "z"], [2, null, "b"], [3, false, "new"]])
+    );
+}
+
+#[test]
+fn an_early_clause_without_a_condition_is_spark_s_class() {
+    // Spark's builder: only the last clause of each kind may omit its condition (the golden steps
+    // cover them too; these name each class).
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    copy_dir(&fixtures().join("unpartitioned").join("before"), &dir);
+    let session = Session::new().unwrap();
+    for (clauses, class) in [
+        (
+            "WHEN MATCHED THEN DELETE WHEN MATCHED AND s.id > 0 THEN DELETE",
+            "NON_LAST_MATCHED_CLAUSE_OMIT_CONDITION",
+        ),
+        (
+            "WHEN NOT MATCHED THEN INSERT * WHEN NOT MATCHED AND s.id > 0 THEN INSERT *",
+            "NON_LAST_NOT_MATCHED_BY_TARGET_CLAUSE_OMIT_CONDITION",
+        ),
+        (
+            "WHEN NOT MATCHED BY SOURCE THEN DELETE \
+             WHEN NOT MATCHED BY SOURCE AND t.id > 0 THEN DELETE",
+            "NON_LAST_NOT_MATCHED_BY_SOURCE_CLAUSE_OMIT_CONDITION",
+        ),
+    ] {
+        let e = sql(
+            &session,
+            &format!(
+                "MERGE INTO delta.`{}` t USING delta.`{}` s ON t.id = s.id {clauses}",
+                dir.display(),
+                dir.display()
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(e.error_class().name(), class, "{e}");
+        assert_eq!(e.sql_state(), Some("42613"), "{e}");
+    }
     assert_eq!(table_rows(&dir).as_array().unwrap().len(), 6);
 }

@@ -1053,6 +1053,38 @@ fn delete_update_merge_truncate_errors() {
     let e = err(sql);
     assert_eq!(e.error.error_class(), ErrorClass::MergeWithoutWhen);
     assert_eq!(e.span.range(), 0..sql.len());
+    // An `INSERT` whose value count differs from its column count (Spark 4.2.0 + delta-spark
+    // 4.4.1 run: `MERGE_INSERT_VALUE_COUNT_MISMATCH`, 21S01, over the statement).
+    for (sql, actual, expected) in [
+        (
+            "MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id)",
+            "1",
+            "2",
+        ),
+        (
+            "MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id, s.v)",
+            "2",
+            "1",
+        ),
+    ] {
+        let e = err(sql);
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::MergeInsertValueCountMismatch,
+            "{sql}"
+        );
+        assert_eq!(e.error.sql_state(), Some("21S01"));
+        assert_eq!(
+            e.error.to_string(),
+            format!(
+                "[MERGE_INSERT_VALUE_COUNT_MISMATCH] The number of provided values ({actual}) must \
+                 match the number of expected columns ({expected}) in the INSERT clause of MERGE. \
+                 SQLSTATE: 21S01"
+            ),
+            "{sql}"
+        );
+        assert_eq!(e.span.range(), 0..sql.len(), "{sql}");
+    }
     // Syntax errors at Spark 4.2.0's positions, with its "missing" hints.
     for (sql, near, hint, at) in [
         (
