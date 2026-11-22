@@ -516,10 +516,17 @@ fn the_merge_problems_take_delta_spark_s_classes() {
     let (c, m) = class(merge, &sub).unwrap();
     assert_eq!(c, ErrorClass::DeltaUnsupportedSubquery);
     assert!(m.contains("UPDATE condition of MERGE operation"), "{m}");
-    let (_, m) = class(RowLevelOperation::Update, &sub).unwrap();
-    assert!(m.contains("UPDATE"), "{m}");
-    let (_, m) = class(RowLevelOperation::Delete, &sub).unwrap();
-    assert!(m.contains("DELETE"), "{m}");
+    for (op, name) in [
+        (RowLevelOperation::Update, "UPDATE"),
+        (RowLevelOperation::Delete, "DELETE"),
+    ] {
+        let (c, m) = class(op, &sub).unwrap();
+        assert_eq!(c, ErrorClass::DeltaUnsupportedSubquery, "{name}");
+        assert_eq!(
+            m,
+            format!("Subqueries are not supported in the {name} (condition = id IN (SELECT 1)).")
+        );
+    }
 
     let columns = vec!["s".to_owned(), "a`b".to_owned()];
     let dup = RowLevelProblem::DuplicateAssignment { columns: &columns };
