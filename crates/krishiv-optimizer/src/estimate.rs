@@ -549,6 +549,14 @@ impl<'a> Estimator<'a> {
                     .extend(states.iter().map(|c| (c.id, AttrStats::guess(rows))));
                 out
             }
+            // `range(start, end, step)`: its values are known exactly (QA-2).
+            PlanNode::Range {
+                start,
+                end,
+                step,
+                output,
+                ..
+            } => range_stats(*start, *end, *step, output.id),
             _ => RelStats::unknown(DEFAULT_ROWS, ids()),
         }
     }
@@ -1049,4 +1057,46 @@ fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
         }
     }
     to
+}
+
+/// The statistics of `range(start, end, step)` over the column `id`: as many rows as values,
+/// all distinct, none null, from the first value to the last.
+fn range_stats(start: i64, end: i64, step: i64, id: AttrId) -> RelStats {
+    let (start, end, step) = (i128::from(start), i128::from(end), i128::from(step));
+    let span = end - start;
+    let n = if step == 0 || span == 0 || (span > 0) != (step > 0) {
+        0
+    } else {
+        // ceil(span / step) for a span and step of one sign.
+        (span + step - step.signum()) / step
+    };
+    let rows = n as f64;
+    let mut cols = HashMap::new();
+    if n > 0 {
+        let last = start + (n - 1) * step;
+        let (lo, hi) = if step > 0 {
+            (start, last)
+        } else {
+            (last, start)
+        };
+        cols.insert(
+            id,
+            AttrStats {
+                ndv: rows,
+                null_frac: 0.0,
+                min: Some(lo as f64),
+                max: Some(hi as f64),
+                range_estimated: false,
+                source: StatSource::Provided,
+            },
+        );
+    } else {
+        cols.insert(id, AttrStats::guess(1.0));
+    }
+    RelStats {
+        rows,
+        cols,
+        from_statistics: true,
+        unfiltered_rows: 0.0,
+    }
 }
