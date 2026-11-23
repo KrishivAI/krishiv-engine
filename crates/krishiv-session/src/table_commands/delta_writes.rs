@@ -318,9 +318,12 @@ impl Session {
             }
             SaveMode::Append => WriteMode::Append,
             SaveMode::Overwrite => match option("replaceWhere") {
-                Some(text) => {
-                    WriteMode::OverwriteByFilter(Arc::new(crate::functions::expr(&text)?.expr))
-                }
+                // delta-spark parses `replaceWhere` with the session's parser
+                // (`DeltaOptions.replaceWhere`, `parsePredicates`): under
+                // `spark.sql.ansi.doubleQuotedIdentifiers` a double-quoted name is the column.
+                Some(text) => WriteMode::OverwriteByFilter(Arc::new(
+                    crate::functions::expr_with(&text, &env.parser)?.expr,
+                )),
                 None => {
                     if crate::session::partition_overwrite_is_dynamic(&env.config, options)? {
                         WriteMode::OverwriteDynamic

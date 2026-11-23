@@ -89,6 +89,7 @@ mod distributed;
 mod order;
 mod python_eval;
 mod python_relation;
+mod reads;
 mod table_write;
 pub(crate) use aggregate::{aggregate_node, aggregate_spec};
 pub(crate) use detached::{Detached, LoopRun};
@@ -137,6 +138,8 @@ pub struct WorkerContext {
     exchange: Option<Arc<dyn Exchange>>,
     /// The job's broadcast builds on this worker, shared by its tasks.
     broadcasts: Option<Arc<BroadcastTables>>,
+    /// The rows one execution read from decided scans, shared by its tasks.
+    execution_reads: Option<Arc<crate::operators::ExecutionReads>>,
     /// Whether a partial and a final aggregate around an exchange run as one
     /// breaker (the default; see [`fused_aggregate`]).
     fuse_aggregates: bool,
@@ -228,6 +231,7 @@ impl WorkerContext {
             producer: Producer::default(),
             exchange: None,
             broadcasts: None,
+            execution_reads: None,
             fuse_aggregates: true,
         }
     }
@@ -404,6 +408,7 @@ impl fmt::Debug for WorkerContext {
             .field("producer", &self.producer)
             .field("exchange", &self.exchange.is_some())
             .field("broadcasts", &self.broadcasts.is_some())
+            .field("execution_reads", &self.execution_reads.is_some())
             .field("fuse_aggregates", &self.fuse_aggregates)
             .finish_non_exhaustive()
     }
@@ -1360,7 +1365,7 @@ impl Instantiation<'_> {
     }
 
     fn scan(&mut self, s: &ScanNode) -> Result<Built> {
-        let factory = self.worker.tables.provider(&s.scan)?.scan()?;
+        let factory = self.scan_factory(s)?;
         let factory = self.splits(s.id, factory)?;
         if s.row_id && !factory.supports_take() {
             return Err(internal(format!(

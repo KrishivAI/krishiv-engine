@@ -13,6 +13,8 @@
 //! | neither | `PATH_NOT_FOUND`, the path qualified (`file:/abs/path`) |
 //! | no file left | `UNABLE_TO_INFER_SCHEMA` |
 //!
+//! A subdirectory that is not `name=value` is skipped with its files (Spark 4.2.0), or
+//! `CONFLICTING_DIRECTORY_STRUCTURES` beside partition directories.
 //! `name=value` directories under a path are partition columns (Spark's
 //! partition discovery, `krishiv_io::partition_columns`): typed by
 //! inference, appended after the data columns, read from the path of each
@@ -28,10 +30,7 @@
 //! all of them. Local paths and cloud URLs (`s3://`, `s3a://`, `gs://`,
 //! `abfs://`, `abfss://`, `az://`, resolved by [`ObjectPaths`] through the
 //! [`StoreRegistry`]) are supported. Not yet supported, failing with
-//! `KRISHIV_UNSUPPORTED_FEATURE`: subdirectories that are
-//! not `name=value` partition directories in a read by path (a catalog
-//! table reads its registered partitions only and skips other directories,
-//! as Spark's `CatalogFileIndex`), paths with any other scheme, file sources Spark
+//! `KRISHIV_UNSUPPORTED_FEATURE`: paths with any other scheme, file sources Spark
 //! knows but the engine has no [`FileFormat`] for, and merging the files'
 //! schemas (`mergeSchema`). A name Spark does not know at all fails with
 //! Spark's `DATA_SOURCE_NOT_FOUND`.
@@ -44,8 +43,9 @@ use arrow_schema::{FieldRef, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::config::Config;
 use krishiv_common::error::{
-    CannotMergeIncompatibleDataType, FailedReadFileUnsupportedFileSystem, InvalidEmptyLocation,
-    KrishivError, KrishivUnsupportedFeature, PathNotFound, UnableToInferSchema,
+    CannotMergeIncompatibleDataType, ErrorClass, FailedReadFileUnsupportedFileSystem,
+    InvalidEmptyLocation, KrishivError, KrishivUnsupportedFeature, PathNotFound,
+    UnableToInferSchema,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_io::{
@@ -128,6 +128,9 @@ pub struct LocalPaths {
     store: StoreId,
     cwd: String,
 }
+
+/// How often a read lists again when a commit log appears during its listing.
+const READ_RELISTS: u32 = 3;
 
 impl LocalPaths {
     /// Paths in `store`, relative ones under the absolute directory `cwd`.
@@ -511,7 +514,21 @@ impl FileReads {
             if krishiv_io::partition::glob::has_glob(text) {
                 // Boxed, as the listing below: these futures sit on the recursion of nested scripts, where a
                 // larger one overflows the stack (`script_nesting_is_bounded_at_the_limit`).
-                let at = Box::pin(self.list_glob(text, options, &mode, &mut listed)).await?;
+                // A log that appears while a read lists is not the reader's conflict: list again.
+                let keep = listed.len();
+                let mut tries = 0;
+                let at = loop {
+                    match Box::pin(self.list_glob(text, options, &mode, &mut listed)).await {
+                        Err(e)
+                            if e.error_class() == ErrorClass::KrishivConcurrentCommit
+                                && tries < READ_RELISTS =>
+                        {
+                            tries += 1;
+                            listed.truncate(keep);
+                        }
+                        other => break other?,
+                    }
+                };
                 roots.extend(spark_root(&at));
                 continue;
             }
@@ -519,7 +536,20 @@ impl FileReads {
             // (plans stay pure data): the read's `fs.*` options override
             // the session configuration.
             let at = self.paths.locate_with_options(text, options)?;
-            Box::pin(self.list_path(&at, &mode, known.is_some(), &mut listed)).await?;
+            let keep = listed.len();
+            let mut tries = 0;
+            loop {
+                match Box::pin(self.list_path(&at, &mode, known.is_some(), &mut listed)).await {
+                    Err(e)
+                        if e.error_class() == ErrorClass::KrishivConcurrentCommit
+                            && tries < READ_RELISTS =>
+                    {
+                        tries += 1;
+                        listed.truncate(keep);
+                    }
+                    other => break other?,
+                }
+            }
             roots.extend(spark_root(&at));
         }
         let path_roots = PathRoots::new(roots);
@@ -928,6 +958,7 @@ impl FileReads {
             logged: outer,
             skip_foreign_dirs: mode.skip_foreign_dirs,
             skip_all_dirs: mode.skip_all_dirs,
+            ignore_invalid: mode.ignore_invalid,
         };
         for (names, path) in matched {
             let display = format!("{}/{}", at.display.trim_end_matches('/'), names.join("/"));
@@ -967,6 +998,7 @@ impl FileReads {
             logged: None,
             skip_foreign_dirs: false,
             skip_all_dirs: false,
+            ignore_invalid: self.ignores_invalid_partition_paths(options),
         })
     }
 
@@ -1157,9 +1189,17 @@ impl FileReads {
         };
         let mut seen = 0;
         let mut seen_inherited = 0;
+        let first_out = out.len();
+        let mut foreign_dir = false;
+        let mut nested_partitions = false;
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<_> = meta.location.parts().skip(base).collect();
             if below.iter().any(|p| hidden(p.as_ref())) {
+                continue;
+            }
+            // `_metadata` and `_common_metadata` are listed for schema inference but are not data
+            // (`isDataPath`), and a directory holding only them is no leaf of the layout.
+            if below.last().is_some_and(|p| !is_data_path(p.as_ref())) {
                 continue;
             }
             if let Some(files) = &committed {
@@ -1200,8 +1240,28 @@ impl FileReads {
             {
                 continue;
             }
+            // A read by path (Spark 4.2.0): the files of a directory that is not a `name=value`
+            // partition directory are not read; beside partition directories it is
+            // `CONFLICTING_DIRECTORY_STRUCTURES`.
+            if !mode.recursive && names.iter().any(|d| parse_segment(d).is_none()) {
+                foreign_dir = true;
+                // Partition directories below the foreign one are a second base of the layout.
+                if let Some(at) = names.iter().position(|d| parse_segment(d).is_none()) {
+                    nested_partitions |= names[at + 1..].iter().any(|d| parse_segment(d).is_some());
+                }
+                continue;
+            }
             let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
+        }
+        if foreign_dir
+            && !mode.ignore_invalid
+            && (nested_partitions || out[first_out..].iter().any(|(_, segs)| !segs.is_empty()))
+        {
+            return Err(krishiv_common::error::ConflictingDirectoryStructures {
+                discovered_base_paths: format!("\n\t{}\n", at.display),
+            }
+            .into());
         }
         if committed.is_none() && inherited.is_none() && self.log_appeared(at, mode).await? {
             return Err(krishiv_common::error::KrishivConcurrentCommit {
@@ -1336,6 +1396,9 @@ struct ListMode {
     /// An unpartitioned catalog table's listing: every subdirectory is
     /// skipped, `name=value` ones too (its files are its root's).
     skip_all_dirs: bool,
+    /// `ignoreInvalidPartitionPaths`: a directory that is not `name=value` beside partition
+    /// directories is skipped without `CONFLICTING_DIRECTORY_STRUCTURES` (Spark 4.2.0).
+    ignore_invalid: bool,
 }
 
 /// The partition columns of a permanent table and the partitions its
@@ -1570,11 +1633,21 @@ fn check_sql_location(text: &str) -> Result<()> {
     .into())
 }
 
-/// Whether Spark skips a file or directory named `name`.
+/// Whether Spark skips a file or directory named `name`: `HadoopFSUtils.shouldFilterOutPathName`
+/// (v4.2.0): names starting with `_` (unless they hold `=`) or `.`, and `._COPYING_` files, except
+/// the names starting with `_common_metadata` or `_metadata`.
 fn hidden(name: &str) -> bool {
-    name.starts_with('.')
-        || name.starts_with('_') && !name.contains('=')
-        || name.ends_with("._COPYING_")
+    let exclude = name.starts_with('_') && !name.contains('=')
+        || name.starts_with('.')
+        || name.ends_with("._COPYING_");
+    let include = name.starts_with("_common_metadata") || name.starts_with("_metadata");
+    exclude && !include
+}
+
+/// Spark's `PartitioningAwareFileIndex.isDataPath`: not a name starting with `_` (unless it holds `=`)
+/// or `.`.
+fn is_data_path(name: &str) -> bool {
+    !(name.starts_with('_') && !name.contains('=') || name.starts_with('.'))
 }
 
 /// A format as Spark names it in messages (`Parquet`, `JSON`).
@@ -1797,9 +1870,19 @@ mod tests {
         for name in [".x", "_SUCCESS", "_temporary", "a._COPYING_"] {
             assert!(hidden(name), "{name}");
         }
-        for name in ["a.parquet", "_k=1", "k=_1"] {
+        for name in [
+            "a.parquet",
+            "_k=1",
+            "k=_1",
+            "_metadata",
+            "_common_metadata",
+            "_metadata.parquet",
+            "_common_metadata2",
+        ] {
             assert!(!hidden(name), "{name}");
         }
+        assert!(!is_data_path("_metadata") && !is_data_path("_common_metadata2"));
+        assert!(is_data_path("a.parquet") && is_data_path("_k=1"));
         assert_eq!(display_name("parquet"), "Parquet");
         assert_eq!(display_name("avro"), "Avro");
         assert_eq!(display_name("json"), "JSON");

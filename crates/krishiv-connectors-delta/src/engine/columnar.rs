@@ -397,10 +397,15 @@ impl Reads {
         request.mapping = FieldMapping::ByName {
             case_sensitive: true,
         };
-        let pool: Arc<dyn krishiv_memory::MemoryPool> = match io.memory_pool() {
-            Some(p) => Arc::clone(p),
-            None => krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default()),
-        };
+        // The query's pool; else (a detached checkpoint, planning before a query) the
+        // runtime's root, so the read stays under the process limit; else (embedded tests
+        // with no runtime pool) a pool of the read's own.
+        let pool: Arc<dyn krishiv_memory::MemoryPool> = io
+            .memory_pool()
+            .or_else(|| io.runtime_memory().cloned())
+            .unwrap_or_else(|| {
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default())
+            });
         // The handle's reservation unregisters the consumer when the read ends (or fails).
         let consumer = krishiv_memory::ConsumerHandle::register(pool, "delta parquet read", None);
         let format = format().map_err(to_kernel)?;

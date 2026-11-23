@@ -66,6 +66,7 @@ fn scan_plan(table: Arc<dyn TableProvider>, nullable: bool) -> (PhysicalPlan, Ar
         version: None,
     };
     let node = PhysNode::Scan(ScanNode {
+        decided: None,
         id: ScanId(1),
         scan,
         projection: vec![ColumnPath::new("id")],
@@ -667,4 +668,54 @@ fn two_scans_of_the_same_memory_table_share_the_buffers() {
             "two scans share the stored arrays instead of decoding per scan"
         );
     }
+}
+
+/// A bound scan that is only held, never read.
+struct Held;
+
+impl krishiv_exec::BoundScan for Held {
+    fn table_schema(&self) -> SchemaRef {
+        Arc::new(Schema::empty())
+    }
+    fn output_schema(
+        &self,
+        _pushdowns: &krishiv_exec::ScanPushdowns,
+    ) -> Result<SchemaRef, KrishivError> {
+        Ok(Arc::new(Schema::empty()))
+    }
+    fn explain(&self, _pushdowns: &krishiv_exec::ScanPushdowns) -> Option<String> {
+        None
+    }
+    fn read(
+        &self,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<Arc<dyn krishiv_exec::ScanPushdown>, KrishivError>,
+    > {
+        Box::pin(async {
+            Err(KrishivError::from(
+                krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: "held only".to_owned(),
+                },
+            ))
+        })
+    }
+}
+
+/// A resolver that does not override the bound-scan hooks refuses a Python data source plan, and
+/// has no bound scan to hand back.
+#[test]
+fn default_resolver_refuses_bound_scans() {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", ArrowType::Int32, false)]));
+    let table: Arc<dyn TableProvider> = Arc::new(MemoryTable::new(schema, Vec::new()));
+    let resolver = Stub { table };
+    let err = resolver
+        .bind_scan(Arc::new(Held))
+        .expect_err("the default resolver cannot hold a bound scan");
+    assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    let err = resolver
+        .bound_scan(krishiv_exec::BoundScanId(0))
+        .map(|_| ())
+        .expect_err("no bound scan in this context");
+    assert_eq!(err.error_class(), ErrorClass::InternalError);
 }

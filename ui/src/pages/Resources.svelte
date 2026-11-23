@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createQuery } from "@tanstack/svelte-query";
-  import { api, type CacheRow, type MemoryRow } from "../api";
+  import { api, type CacheRow, type MemoryRow, type UdfPool, type UdfWorkerOwner } from "../api";
   import { bytes, count, percent } from "../format";
   import { consoleInfo } from "../console.svelte";
   import ResponsiveTable, { type Column } from "$lib/components/responsive-table.svelte";
@@ -11,6 +11,32 @@
     queryFn: () => api("/api/internal/resources"),
     refetchInterval: 2000,
   }));
+
+  // The worker pool is a server's: the other consoles have none and do not ask.
+  const workers = createQuery<{ pool: UdfPool | null }>(() => ({
+    queryKey: ["udf-workers"],
+    queryFn: () => api("/api/internal/udf-workers"),
+    refetchInterval: 2000,
+    enabled: consoleInfo.mode === "server",
+  }));
+  const pool = $derived(workers.data?.pool ?? null);
+
+  const workerColumns: Column[] = [
+    { key: "session", label: "Session", title: true },
+    { key: "principal", label: "Principal" },
+    { key: "tenant", label: "Tenant" },
+    { key: "live", label: "Workers", num: true },
+    { key: "busy", label: "Busy", num: true },
+  ];
+  function workerCell(o: UdfWorkerOwner, key: string): string {
+    switch (key) {
+      case "session": return o.session_id;
+      case "principal": return o.principal;
+      case "tenant": return o.tenant ?? "–";
+      case "live": return count(o.live);
+      default: return count(o.busy);
+    }
+  }
 
   const memoryColumns: Column[] = [
     { key: "path", label: "Pool", title: true },
@@ -70,4 +96,25 @@
   <ResponsiveTable columns={cacheColumns} rows={q.data.caches} rowKey={keyOf(q.data.caches, (c) => `${c.worker_id ?? ""}/${c.cache}`)}>
     {#snippet cell(c, col)}{cacheCell(c, col.key)}{/snippet}
   </ResponsiveTable>
+{/if}
+{#if workers.isError}
+  <h2 class="mt-6 mb-3">Python UDF workers</h2>
+  <p class="text-error">Could not load the Python UDF workers: {workers.error.message}</p>
+{:else if pool}
+  <h2 class="mt-6 mb-3">Python UDF workers</h2>
+  <p class="mb-3 text-muted-foreground" data-udf-pool>
+    {count(pool.live)} of {count(pool.max_total)} worker processes, {count(pool.busy)} busy. A session runs at most
+    {count(pool.max_per_session)}, a tenant (or, with authentication on, a principal without one)
+    {count(pool.max_per_tenant)}.
+  </p>
+  {#if pool.owners.length === 0}
+    <p class="text-muted-foreground" data-no-udf-workers>No worker is running: one starts with a session's first Python UDF call.</p>
+  {:else}
+    <ResponsiveTable columns={workerColumns} rows={pool.owners} rowKey={(o) => `${o.tenant ?? ""}/${o.principal}/${o.session_id}`}>
+      {#snippet cell(o, col)}<span class={col.key === "session" ? "mono" : ""}>{workerCell(o, col.key)}</span>{/snippet}
+    </ResponsiveTable>
+    {#if pool.truncated}
+      <p class="mt-2 text-muted-foreground">Only the sessions with the most workers are listed.</p>
+    {/if}
+  {/if}
 {/if}

@@ -799,6 +799,11 @@ impl Encoder {
     }
 
     fn scan(&mut self, node: &ScanNode) -> Result<pb::ScanNode> {
+        if node.decided.is_some() {
+            return Err(CodecError::Unsupported(
+                "a Python data source in a distributed plan".to_owned(),
+            ));
+        }
         let Scan {
             source,
             output,
@@ -1311,6 +1316,8 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
         AggregateFunction::HistogramNumeric { nb } => *nb < 2,
         AggregateFunction::HllSketchAgg { lg_k } => !(4..=21).contains(lg_k),
+        AggregateFunction::ThetaSketchAgg { lg_nom }
+        | AggregateFunction::ThetaUnionAgg { lg_nom } => !(4..=26).contains(lg_nom),
         _ => false,
     };
     if invalid {
@@ -1457,6 +1464,45 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 0,
                 false,
                 u32::from(*lg_k),
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::ThetaSketchAgg { lg_nom } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::ThetaSketchAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                u32::from(*lg_nom),
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::ThetaUnionAgg { lg_nom } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::ThetaUnionAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                u32::from(*lg_nom),
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::ThetaIntersectionAgg => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::ThetaIntersectionAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                0,
                 a,
                 nested,
             ));
