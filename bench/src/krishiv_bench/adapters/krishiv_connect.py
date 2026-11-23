@@ -19,6 +19,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import query_log
 from .base import Dataset, Measure
 from .proc_mem import TreeProc, tree_measure
 from .spark_connect import SparkConnectEngine
@@ -116,8 +117,14 @@ class KrishivConnectEngine(SparkConnectEngine):
         tree, self._tree = self._tree, None
         return tree_measure(tree)
 
+    def _dump_query_log(self) -> None:
+        spark = self.spark
+        if spark is not None and self._proc is not None:
+            query_log.dump(self.name, lambda sql: spark.sql(sql).toArrow())
+
     def teardown(self) -> None:
         self.end_measure()
+        self._dump_query_log()
         proc, self._proc = self._proc, None
         try:
             super().teardown()
