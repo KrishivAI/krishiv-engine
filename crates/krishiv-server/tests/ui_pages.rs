@@ -1420,3 +1420,81 @@ async fn the_query_page_the_system_table_and_the_profile_carry_the_same_hints() 
     assert_eq!(cells(&detail["query"]["hints"]), from_profile, "{detail}");
     assert_eq!(cells(&row["hints"]), from_profile, "{row}");
 }
+
+/// A browser speaks HTTP/2 to a TLS listener, and an HTTP/2 request names the server in `:authority` (which
+/// the server sees as the authority of the request's URI), with no `Host` header. The host check, the same-origin
+/// check and the cookie's name must read that authority: otherwise the console of a TLS server refuses its own
+/// page (the sign-in is a `POST` with an `Origin`).
+#[tokio::test]
+async fn an_http2_request_is_named_by_its_authority() {
+    use axum::body::Body;
+    use axum::http::{Request, Version, header};
+    use tower::ServiceExt;
+    let app = |policy: UiPolicy| {
+        let source = SessionSource::new(EngineRuntime::builder().build().unwrap()).unwrap();
+        router_with_ui_policy(Arc::new(source), Arc::new(TokenGuard::new(TOKEN)), policy)
+    };
+    let request = |method: &str, uri: &str, origin: Option<&str>| {
+        let mut b = Request::builder()
+            .method(method)
+            .uri(uri)
+            .version(Version::HTTP_2)
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .header("x-krishiv-csrf", "1");
+        if let Some(o) = origin {
+            b = b.header(header::ORIGIN, o);
+        }
+        b.body(Body::empty()).unwrap()
+    };
+    let session = "https://localhost:8443/api/internal/session";
+    // A loopback listener (the host check is on) and one on another address (it is off): the sign-in of the
+    // page's own origin is let in on both, and the cookie is named after the authority's port.
+    for loopback in [true, false] {
+        let tls = UiPolicy::for_listener(loopback, []).secure_cookie(true);
+        let res = app(tls.clone())
+            .oneshot(request("POST", session, Some("https://localhost:8443")))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 204, "loopback={loopback}");
+        let cookie = res.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert!(cookie.starts_with("krishiv_ui_token_8443="), "{cookie}");
+        // Another origin, another port of this host, and the wrong scheme are still refused.
+        for other in [
+            "https://evil.example",
+            "https://localhost:9443",
+            "http://localhost:8443",
+        ] {
+            let res = app(tls.clone())
+                .oneshot(request("POST", session, Some(other)))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), 403, "loopback={loopback} {other}");
+        }
+    }
+    // The host check reads the authority too: a read is answered under a name the listener answers to, and
+    // refused under another one (DNS rebinding).
+    let tls = UiPolicy::for_listener(true, []).secure_cookie(true);
+    let health = |host: &str| request("GET", &format!("https://{host}/api/internal/health"), None);
+    let res = app(tls.clone())
+        .oneshot(health("localhost:8443"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let res = app(tls.clone())
+        .oneshot(health("evil.example:8443"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
+    // A `Host` header, when a client sends one, still names the server (HTTP/1.1, or a proxy that adds it).
+    let mut with_host = request(
+        "POST",
+        "/api/internal/session",
+        Some("https://localhost:8443"),
+    );
+    *with_host.version_mut() = Version::HTTP_11;
+    with_host
+        .headers_mut()
+        .insert(header::HOST, "localhost:8443".parse().unwrap());
+    let res = app(tls).oneshot(with_host).await.unwrap();
+    assert_eq!(res.status(), 204);
+}

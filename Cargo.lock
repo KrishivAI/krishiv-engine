@@ -3540,6 +3540,7 @@ dependencies = [
  "axum",
  "futures",
  "getrandom 0.4.3",
+ "hyper-util",
  "krishiv-common",
  "krishiv-exec",
  "krishiv-server",
