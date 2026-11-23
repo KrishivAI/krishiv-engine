@@ -198,7 +198,8 @@ impl Session {
         // drops (its reads are checked by analysis, first thing).
         let class = self.statement_class(&statement, &env);
         if let Some(parsed) = parsed {
-            // Set once: the slot is this statement's alone.
+            // Set once: only `sql_ran` passes a slot, one per call; a statement run inside this one
+            // (`sql_here_spanned`) passes none, so it never writes the outer statement's class.
             let _ = parsed.set(class.name());
         }
         if queries_only && !matches!(statement, Statement::Query(_)) {
