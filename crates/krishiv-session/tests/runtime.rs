@@ -100,7 +100,7 @@ fn runtime_keys_on_a_session_of_a_supplied_runtime_are_refused() {
         s.conf().get("spark.sql.ansi.enabled").as_deref(),
         Some("false")
     );
-    assert_eq!(s.conf().get("krishiv.memory.limit").as_deref(), Some("1GB"));
+    assert_eq!(s.conf().get("krishiv.memory.limit").as_deref(), Some("1g"));
     // A session built alone keeps taking every key (embedded mode).
     let alone = Session::builder()
         .config("krishiv.memory.limit", "64m")

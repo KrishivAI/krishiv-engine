@@ -756,6 +756,457 @@
    "parses": false,
    "pos": 22,
    "sql": "SELECT x IN (SELECT 1 2)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 2,
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 10,
+   "sql": "SELECT (1 + \nFROM range(1)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 2,
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 10,
+   "sql": "SELECT (1 +\nFROM range(1)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 22,
+   "sql": "SELECT (1 + FROM range(1)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 18,
+   "sql": "SELECT (1 + FROM t"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 18,
+   "sql": "SELECT (1 + FROM t(1)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'WHERE'",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 19,
+   "sql": "SELECT (1 + FROM t WHERE a"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'FROM'",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 10,
+   "sql": "SELECT (1 FROM range(1)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'FROM'",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 10,
+   "sql": "SELECT (a FROM t"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 21,
+   "sql": "SELECT 1 + FROM range(1)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 16,
+   "sql": "SELECT (1 + FROM"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'range'",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 18,
+   "sql": "SELECT f(1 + FROM range(1)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 14,
+   "sql": "SELECT f(1 + a"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'b'",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 15,
+   "sql": "SELECT f(1 + a b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'range'",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 15,
+   "sql": "SELECT f(1 + a range(1)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 14,
+   "sql": "SELECT f(a + b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 17,
+   "sql": "SELECT f(1 + FROM"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'b'",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 15,
+   "sql": "SELECT f(1 * a b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'b'",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 15,
+   "sql": "SELECT f(1 = a b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'c'",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 13,
+   "sql": "SELECT f(a.b c"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'b'",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 13,
+   "sql": "SELECT f(- a b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": missing ')'"
+   },
+   "parses": false,
+   "pos": 13,
+   "sql": "SELECT f(TRUE"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 10,
+   "sql": "SELECT f(1"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 12,
+   "sql": "SELECT f('s'"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 18,
+   "sql": "SELECT f(a IS NULL"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 22,
+   "sql": "SELECT f(a IS NOT NULL"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 17,
+   "sql": "SELECT f(a LIKE b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 18,
+   "sql": "SELECT f(a RLIKE b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 26,
+   "sql": "SELECT f(a BETWEEN 1 AND b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 14,
+   "sql": "SELECT f(NOT a"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 16,
+   "sql": "SELECT f(a AND b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 14,
+   "sql": "SELECT f(a = b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 12,
+   "sql": "SELECT f(a.b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 17,
+   "sql": "SELECT f(a IN (1)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 23,
+   "sql": "SELECT f(CAST(a AS INT)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 13,
+   "sql": "SELECT f(a[0]"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "parses": false,
+   "pos": 13,
+   "sql": "SELECT f(g(a)"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": extra input end of input"
+   },
+   "parses": false,
+   "pos": 17,
+   "sql": "SELECT f(a, 1 + b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": extra input end of input"
+   },
+   "parses": false,
+   "pos": 17,
+   "sql": "SELECT f(1 + a, b"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": extra input end of input"
+   },
+   "parses": false,
+   "pos": 15,
+   "sql": "SELECT f(a, b.c"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": extra input end of input"
+   },
+   "parses": false,
+   "pos": 21,
+   "sql": "SELECT f(a, b IS NULL"
+  },
+  {
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "line": 1,
+   "message_parameters": {
+    "error": "'c'",
+    "hint": ": extra input 'c'"
+   },
+   "parses": false,
+   "pos": 18,
+   "sql": "SELECT f(1 + a, b c"
   }
  ],
  "format_version": 1,

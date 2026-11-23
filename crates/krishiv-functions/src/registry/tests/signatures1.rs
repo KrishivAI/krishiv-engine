@@ -39,7 +39,15 @@ fn every_definition_is_in_sparks_catalog() {
             // arity and first release only. An aggregate to the analyzer.
             assert!(s.deterministic.is_none() && s.kind.is_none());
             assert_eq!(d.kind, FunctionKind::Aggregate);
-        } else if matches!(d.name, "hll_sketch_estimate" | "hll_union") {
+        } else if matches!(
+            d.name,
+            "hll_sketch_estimate"
+                | "hll_union"
+                | "theta_difference"
+                | "theta_intersection"
+                | "theta_sketch_estimate"
+                | "theta_union"
+        ) {
             // The probe records the sketch scalars as aggregates (a generator artifact: Spark's
             // `ExpressionDescription` group of both is `sketch_funcs`, and the probe's arguments are
             // sketch aggregates); they are plain expressions in Spark. Regenerate with a Spark run to fix.
@@ -615,10 +623,10 @@ fn calendar_signatures() {
     // What stays unregistered is known to Spark, so it is not "not found".
     assert!(
         matches!(
-            builtins().lookup("theta_sketch_agg", SparkProfile::V4_2),
+            builtins().lookup("tuple_sketch_agg_double", SparkProfile::V4_2),
             Lookup::KnownUnsupported
         ),
-        "theta_sketch_agg"
+        "tuple_sketch_agg_double"
     );
 }
 

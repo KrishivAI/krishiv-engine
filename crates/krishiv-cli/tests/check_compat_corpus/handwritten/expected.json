@@ -42,12 +42,6 @@
   "status": "not yet"
  },
  {
-  "file": "stream_job.py",
-  "line": 11,
-  "name": "theta_sketch_agg",
-  "status": "not yet"
- },
- {
   "file": "direct_imports.py",
   "line": 15,
   "name": "count_min_sketch",
