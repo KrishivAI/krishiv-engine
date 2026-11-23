@@ -3,6 +3,8 @@
 //! the reviewer's probes P1-P14, each asserting the secure outcome, and the further shapes the
 //! review lists for B1 (column reads derived from the resolved plan).
 #![cfg(test)]
+mod literal_path;
+use literal_path::sql_path;
 
 use std::sync::Arc;
 
@@ -432,7 +434,7 @@ fn m5_creators_own_what_they_create_without_a_path_grant() {
         &ana,
         &format!(
             "CREATE TABLE ext (a INT) USING parquet LOCATION '{}'",
-            outside.display()
+            sql_path(&outside)
         ),
     );
     // A no-op create over root's table takes nothing.
@@ -798,7 +800,7 @@ fn r6_replace_and_owner_edges() {
         &ana,
         &format!(
             "CREATE TABLE ext (a INT) USING parquet LOCATION '{}'",
-            other.display()
+            sql_path(&other)
         ),
         true,
         &mut bad,
@@ -1045,7 +1047,7 @@ fn q3_managed_dirs_do_not_reach_siblings() {
         &root,
         &format!(
             "CREATE TABLE vic (a INT) USING parquet LOCATION '{}'",
-            sub.display()
+            sql_path(&sub)
         ),
     );
     show(&root, "INSERT INTO vic VALUES (7)");

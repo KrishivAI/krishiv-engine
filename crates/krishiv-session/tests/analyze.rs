@@ -4,6 +4,8 @@
 //! schemas, `partial` statements, the `Manage`-on-cluster target of `ADMIN`, denials and redaction. The
 //! securables match what a run asks `authorize()` for, both ways (`securables_equal_what_a_run_authorizes`).
 #![cfg(test)]
+mod literal_path;
+use literal_path::sql_path;
 
 mod analyze_support;
 
@@ -803,7 +805,7 @@ fn redaction() {
     let dir = tempfile::tempdir().unwrap();
     let sql = format!(
         "CREATE TABLE x (a INT) USING parquet LOCATION '{}'",
-        dir.path().join("x").display()
+        sql_path(&dir.path().join("x"))
     );
     let s = corpus_ready();
     let a = block_on(s.analyze(&sql)).unwrap();
@@ -1483,7 +1485,7 @@ fn writes_and_drops_list_the_directory_a_run_asks() {
     let ext = external.path().join("ext");
     block_on(s.sql(&format!(
         "CREATE TABLE e (a INT) USING parquet LOCATION '{}'",
-        ext.display()
+        sql_path(&ext)
     )))
     .unwrap();
     assert!(dirs("DROP TABLE e").is_empty());
@@ -1826,7 +1828,7 @@ fn a_denied_target_reveals_nothing() {
             "external",
             vec![format!(
                 "CREATE TABLE x (a INT, b INT, k INT) USING parquet LOCATION '{}'",
-                location.display()
+                sql_path(&location)
             )],
         ),
         ("missing", vec![]),

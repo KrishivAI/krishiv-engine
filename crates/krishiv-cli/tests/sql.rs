@@ -283,7 +283,8 @@ fn ddl_prints_nothing_in_csv_and_for_create_table_as() {
     let loc = dir.path().join("t");
     let sql = format!(
         "CREATE TABLE t USING parquet LOCATION '{}' AS SELECT 1 AS a; SELECT a FROM t",
-        loc.to_str().expect("utf-8")
+        // `/` separators: a Windows path's `\` would be read as a SQL escape.
+        loc.to_str().expect("utf-8").replace('\\', "/")
     );
     let o = krishiv(&["sql", "-o", "table", "-e", &sql], None);
     assert!(o.status.success(), "{}", err(&o));

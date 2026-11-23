@@ -12,6 +12,8 @@
 //! * a filtered reader cannot write; denials do not reveal existence;
 //! * `PathPrefixPolicy` keeps reads and writes under its roots.
 #![cfg(test)]
+mod literal_path;
+use literal_path::sql_path;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -997,11 +999,11 @@ fn a_temporary_table_location_is_checked() {
     for sql in [
         format!(
             "CREATE TEMPORARY TABLE x USING parquet LOCATION '{}' AS SELECT 1 AS a",
-            loc.display()
+            sql_path(&loc)
         ),
         format!(
             "CREATE TEMPORARY TABLE x USING parquet LOCATION '{}'",
-            dir.path().display()
+            sql_path(dir.path())
         ),
     ] {
         assert_eq!(class(block_on(s.sql(&sql))), DENIED, "{sql}");

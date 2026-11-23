@@ -65,7 +65,9 @@ fn session(doc: &Value, script: &str, threads: usize, dir: &std::path::Path) -> 
         run(
             &s,
             &format!(
-                "CREATE TEMPORARY VIEW {name}(id BIGINT) USING parquet OPTIONS (path '{path}')"
+                "CREATE TEMPORARY VIEW {name}(id BIGINT) USING parquet OPTIONS (path '{}')",
+                // `/` separators: a Windows path's `\` would be read as a SQL escape.
+                path.replace('\\', "/")
             ),
         );
     }

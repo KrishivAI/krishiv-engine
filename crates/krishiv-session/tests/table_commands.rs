@@ -3,6 +3,8 @@
 //! permanent catalog through `Session::sql`: what the tables read back, the
 //! files they leave, and Spark's error classes.
 #![cfg(test)]
+mod literal_path;
+use literal_path::sql_path;
 
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
@@ -122,7 +124,7 @@ fn csv_tables_read_files_without_a_header_line() {
         &s,
         &format!(
             "CREATE TABLE e (d INT) USING csv LOCATION '{}'",
-            data.display()
+            sql_path(&data)
         ),
     );
     assert_eq!(
@@ -382,7 +384,7 @@ fn external_tables_keep_their_files_when_dropped() {
         &s,
         &format!(
             "CREATE EXTERNAL TABLE e (a INT) USING parquet LOCATION '{}'",
-            loc.display()
+            sql_path(&loc)
         ),
     );
     run(&s, "INSERT INTO e VALUES (7)");
@@ -393,7 +395,7 @@ fn external_tables_keep_their_files_when_dropped() {
         &s,
         &format!(
             "CREATE EXTERNAL TABLE e (a INT) USING parquet LOCATION '{}'",
-            loc.display()
+            sql_path(&loc)
         ),
     );
     assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM e"), ["7"]);
@@ -788,7 +790,7 @@ fn existing_locations_and_names() {
         &s,
         &format!(
             "CREATE TABLE ex (a INT) USING parquet LOCATION '{}'",
-            loc.display()
+            sql_path(&loc)
         ),
     );
     assert_eq!(

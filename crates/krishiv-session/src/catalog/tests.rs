@@ -472,7 +472,7 @@ fn task_specs_deal_a_reference_with_options_to_a_table_over_files() {
         .unwrap();
     block_on(session.sql(&format!(
         "CREATE TABLE pt (id INT) USING parquet LOCATION '{}'",
-        dir.path().display()
+        sql_path(dir.path())
     )))
     .unwrap();
     // The reference's options name another listing than the bare table's: its splits come
@@ -1242,4 +1242,10 @@ fn task_specs_refuse_a_delta_scan_anywhere_in_the_plan() {
         drop(analysis);
         drop(df);
     }
+}
+
+/// `path` with `/` separators, for a SQL string literal: a Windows path's `\` would be read as an
+/// escape.
+fn sql_path(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\\', "/")
 }
