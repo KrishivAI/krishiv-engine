@@ -152,6 +152,10 @@ pub struct ParserOptions {
     /// nanosecond timestamp types when on; Krishiv has none yet, so under [`Self::spark_4_3`]
     /// a nanosecond type is `KRISHIV_UNSUPPORTED_FEATURE` instead of `FEATURE_NOT_ENABLED`.
     pub timestamp_nanos_types: bool,
+    /// `spark.sql.join.asofJoin.enabled` (Spark 4.3, off by default):
+    /// `ASOF JOIN` after a relation starts an as-of join; off, an as-of join
+    /// is `UNSUPPORTED_FEATURE.ASOF_JOIN` and `ASOF` stays a name.
+    pub asof_join: bool,
     /// `spark.sql.timeTravel.atSyntax.enabled` (on by default): a table name may carry an `@v123` or
     /// `@yyyyMMddHHmmssSSS` time travel suffix.
     pub time_travel_at_syntax: bool,
@@ -205,6 +209,7 @@ impl ParserOptions {
             schema_level_collations: on("spark.sql.collation.schemaLevel.enabled", false),
             spark_4_3: true,
             timestamp_nanos_types: on("spark.sql.timestampNanosTypes.enabled", false),
+            asof_join: on("spark.sql.join.asofJoin.enabled", false),
             time_travel_at_syntax: on("spark.sql.timeTravel.atSyntax.enabled", true),
         }
     }

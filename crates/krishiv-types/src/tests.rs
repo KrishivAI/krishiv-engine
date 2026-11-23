@@ -214,6 +214,11 @@ fn the_type_grammar_follows_the_release() {
     let t9 = DataType::from_json_in(&field("time(9)"), TypeGrammar::V4_2).unwrap_err();
     assert!(t9.to_string().contains("range [0, 6]"));
     assert!(DataType::from_json_in(&field("time(9)"), TypeGrammar::V4_3).is_ok());
+    // A `time(10)` parse error is worded as the selected release words it.
+    let t10 = DataType::from_json_in(&field("time(10)"), TypeGrammar::V4_2).unwrap_err();
+    assert!(t10.to_string().contains("range [0, 6]"), "{t10}");
+    let t10 = DataType::from_json_in(&field("time(10)"), TypeGrammar::V4_3).unwrap_err();
+    assert!(t10.to_string().contains("range [0, 9]"), "{t10}");
 }
 
 #[test]

@@ -42,6 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use krishiv_common::PrincipalKind;
 use krishiv_common::config::{
     CONNECT_EXECUTE_ABANDONED_TOMBSTONES, CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
     CONNECT_SESSION_IDLE_TIMEOUT, CONNECT_SESSION_TOMBSTONES, Config, ConfigValue,
@@ -50,14 +51,14 @@ use krishiv_common::error::{
     InvalidHandleSessionChanged, InvalidHandleSessionClosed, InvalidHandleSessionNotFound,
     KrishivError, KrishivSessionLimit,
 };
-use krishiv_session::auth::{Authenticated, Role, Surface};
+use krishiv_session::auth::{Authenticated, Method, Role, Surface};
 use krishiv_session::{DataFrame, QueryId, Session, Transport};
 
 use crate::artifacts::SessionArtifacts;
 use crate::auth::SessionOwner;
 use crate::errors::SessionErrors;
 use crate::operation::{Operation, Operations};
-use crate::udf::{SessionPython, UdfHost};
+use crate::udf::{FunctionStore, SessionPython, UdfHost};
 
 /// Builds the session an authenticated caller gets for a new session id:
 /// its principal, and the policy of its role. The transport is the service the
@@ -374,6 +375,8 @@ pub struct SessionManager {
     factory: Box<SessionFactory>,
     /// The server's Python UDF workers; `None` refuses Python UDFs.
     udfs: Option<Arc<dyn UdfHost>>,
+    /// The catalog of persisted Python UDFs; `None`: nothing is persisted.
+    function_store: Option<Arc<dyn FunctionStore>>,
     limits: SessionLimits,
     inner: Mutex<Inner>,
     epoch: Instant,
@@ -395,6 +398,7 @@ impl SessionManager {
         Self {
             factory,
             udfs: None,
+            function_store: None,
             limits,
             inner: Mutex::new(Inner::default()),
             epoch: Instant::now(),
@@ -418,6 +422,14 @@ impl SessionManager {
     #[must_use]
     pub fn with_udf_host(mut self, host: Arc<dyn UdfHost>) -> Self {
         self.udfs = Some(host);
+        self
+    }
+
+    /// Keeps the Python UDFs a client persists (`krishiv.v1.PersistPythonFunction`) in `store`, per tenant, and
+    /// loads a tenant's into its sessions (at a session's first request that passes the UDF privilege check).
+    #[must_use]
+    pub fn with_function_store(mut self, store: Arc<dyn FunctionStore>) -> Self {
+        self.function_store = Some(store);
         self
     }
 
@@ -558,7 +570,14 @@ impl SessionManager {
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
         let session = (self.factory)(caller, transport)?;
-        let python = SessionPython::new(self.udfs.as_ref(), &caller.principal.name, &session);
+        let python = SessionPython::new(
+            self.udfs.as_ref(),
+            &principal_id(caller),
+            caller.principal.tenant.as_deref(),
+            caller.method != Method::None,
+            &session,
+        )
+        .with_store(self.function_store.as_ref());
         let entry = self.new_entry(
             caller,
             session,
@@ -1167,3 +1186,14 @@ fn write_foreign_record(caller: &Authenticated, handle: &'static str, surface: S
 
 #[cfg(test)]
 mod tests;
+
+/// The principal as the Python UDF runtime and the function catalog tell it apart: a user and a service of
+/// one name are two principals (the persisted-function owner and the untenanted key).
+pub(crate) fn principal_id(caller: &Authenticated) -> String {
+    let kind = match caller.principal.kind {
+        PrincipalKind::User => "user",
+        PrincipalKind::Service => "service",
+        _ => "other",
+    };
+    format!("{kind}:{}", caller.principal.name)
+}

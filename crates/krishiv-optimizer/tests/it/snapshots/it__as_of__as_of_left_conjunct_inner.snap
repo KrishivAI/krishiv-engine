@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-optimizer/tests/it/as_of.rs
+expression: SELECT * FROM t ASOF JOIN u MATCH_CONDITION (t.a >= u.a) ON t.b = u.d AND t.c > 3
+---
+AsOfJoin Inner, a#0 >= a#3, (b#1 == d#4)
+:- Filter (c#2 > 3L)
+:  +- Scan spark_catalog.default.t [a#0, b#1, c#2]
++- Scan spark_catalog.default.u [a#3, d#4]

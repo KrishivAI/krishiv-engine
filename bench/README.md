@@ -400,6 +400,22 @@ uv run krishiv-bench report --suite h2o-groupby --size 5gb
   timings and the dataset digest. `reproduce` and `ab` use the same checksum comparison before their interleaved timing (`abba` supports the TPC suites
   and ClickBench only).
 
+## As-of joins (`--suite asof`, P3 4.3-C)
+
+Spark 4.3's `ASOF JOIN ... MATCH_CONDITION (...)` against DuckDB's `ASOF JOIN` (its syntax: the comparison is in
+`ON`), over seeded `trades` and `quotes` of one trading day (`src/krishiv_bench/asof_data.py`).
+
+- Data: `uv run krishiv-datasets asof --sf N` writes `$KRISHIV_DATA/asof/sfN/{trades,quotes}.parquet`: `N` million
+  trades and `5 N` million quotes over 1,000 symbols, prices in integer cents (exact sums in every engine), every
+  quote on its own microsecond (an as-of join's pick among ties is unspecified, so the data has none on the right).
+  `MANIFEST.json` holds the content digests (`krishiv-datasets asof-verify DIR`); `session.conf` holds
+  `spark.sql.join.asofJoin.enabled=true`, which the Krishiv adapter applies. A directory is never regenerated.
+- Queries `queries/asof/q01..q04.sql` (DuckDB's text in `queries/asof/duckdb/`): q01 backward with the symbol key,
+  q02 forward and strict, q03 a left join where a tenth of the symbols have no quotes, q04 no equality key over a
+  tenth of each table (one group). Each returns one row of counts and sums, so the two engines' rows compare exactly.
+- Run: `uv run krishiv-bench abba --suite asof --sf 10 --reps 3` (laptop: under the bench lock; DuckDB at most
+  24 GB).
+
 ## Many-join suite (`dsb`, P2-T141)
 
 DSB (Microsoft; derived from TPC-DS, with correlated and skewed data) replaces JOB/IMDB for the join-enumerator decision: the IMDb data terms are

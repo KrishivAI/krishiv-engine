@@ -490,6 +490,8 @@ mod tests {
             Owner {
                 principal: "p".to_owned(),
                 session: "s".to_owned(),
+                tenant: None,
+                capped: true,
             },
         )
     }

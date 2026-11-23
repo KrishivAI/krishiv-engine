@@ -30,24 +30,24 @@ mod types;
 use std::collections::HashMap;
 
 use crate::ast::{
-    Alias, BucketOn, BucketSpec, ColumnConstraint, ColumnConstraintKind, ColumnDef, ColumnName,
-    ConstraintCharacteristic, CreateFlow, CreateNamespace, CreatePipelineDataset, CreateTable,
-    CreateTableLike, CreateView, Cte, DataTypeSpec, DdlName, DeclareVariable, DropBehavior,
-    DropNamespace, DropTable, DropVariable, DropView, DynamicName, ExecuteImmediate, Explain,
-    ExplainMode, Expr, ExprKind, FileFormat, FileFormatKind, ForeignKeyConstraint, ForeignKeyRef,
-    FromClause, FromStatement, GeneratedColumn, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
-    GroupWith, GroupingSet, Hint, Ident, IdentityColumn, IdentityHow, Insert, Join, JoinConstraint,
-    JoinKind, LateralView, Limit, Literal, NamedWindow, NamespaceKind, NearestBy, NearestDirection,
-    NumKind, ObjectName, OptionKey, OrderedIdent, PartitionColumn, PartitionField,
-    PartitionFieldKind, PartitionTransform, Pipe, PipeAggregate, PipeAssignment, PipeOp,
-    PipeOpKind, PipeSelect, PipeWhere, PipelineDatasetKind, Pivot, Query, QueryOrganization,
-    Relation, RelationExt, Reset, RowDelimited, RowFormat, RowFormatKind, RowSerde, SampleMethod,
-    SampleMethodKind, SampleType, Select, SelectItem, Set, SetAssignment, SetExpr, SetExprKind,
-    SetKind, SetOperator, SetQuantifier, SetVariable, SetVariableKind, SkewSpec, SortItem, Span,
-    Statement, StructField, TableAlias, TableConstraint, TableConstraintKind, TableElement,
-    TableFactor, TableFactorKind, TableOption, TableSample, TemporalClause, TemporalFault,
-    TemporalKind, TimeZone, TransformKind, TransformOutput, TransformSelect, Unpivot,
-    UnpivotColumns, Use, UsingArgument, Values, ViewColumn, With,
+    Alias, AsOfCriteria, AsOfFilter, BucketOn, BucketSpec, ColumnConstraint, ColumnConstraintKind,
+    ColumnDef, ColumnName, ConstraintCharacteristic, CreateFlow, CreateNamespace,
+    CreatePipelineDataset, CreateTable, CreateTableLike, CreateView, Cte, DataTypeSpec, DdlName,
+    DeclareVariable, DropBehavior, DropNamespace, DropTable, DropVariable, DropView, DynamicName,
+    ExecuteImmediate, Explain, ExplainMode, Expr, ExprKind, FileFormat, FileFormatKind,
+    ForeignKeyConstraint, ForeignKeyRef, FromClause, FromStatement, GeneratedColumn, GeneratedKind,
+    GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Hint, Ident, IdentityColumn,
+    IdentityHow, Insert, Join, JoinConstraint, JoinKind, LateralView, Limit, Literal, NamedWindow,
+    NamespaceKind, NearestBy, NearestDirection, NumKind, ObjectName, OptionKey, OrderedIdent,
+    PartitionColumn, PartitionField, PartitionFieldKind, PartitionTransform, Pipe, PipeAggregate,
+    PipeAssignment, PipeOp, PipeOpKind, PipeSelect, PipeWhere, PipelineDatasetKind, Pivot, Query,
+    QueryOrganization, Relation, RelationExt, Reset, RowDelimited, RowFormat, RowFormatKind,
+    RowSerde, SampleMethod, SampleMethodKind, SampleType, Select, SelectItem, Set, SetAssignment,
+    SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier, SetVariable, SetVariableKind,
+    SkewSpec, SortItem, Span, Statement, StructField, TableAlias, TableConstraint,
+    TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption, TableSample,
+    TemporalClause, TemporalFault, TemporalKind, TimeZone, TransformKind, TransformOutput,
+    TransformSelect, Unpivot, UnpivotColumns, Use, UsingArgument, Values, ViewColumn, With,
 };
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
@@ -205,6 +205,9 @@ pub(crate) struct Parser<'s> {
     /// identifier list that ends the item (`current_timestamp(n)`): ANTLR reads the keyword
     /// alone and the list as a multi-part alias, so the keyword is no call there.
     current_like_alias: Option<usize>,
+    /// Reading the right side of an `ASOF JOIN`: `MATCH_CONDITION (` starts
+    /// its criteria, never an implicit alias.
+    asof_right: bool,
 }
 
 /// A part of a `CASE` expression.
@@ -819,6 +822,7 @@ impl<'s> Parser<'s> {
             force_bare,
             insert_bodies: false,
             current_like_alias: None,
+            asof_right: false,
         };
         if has_case {
             parser.closer_ahead = parser.closer_ahead_table(&case_words);
@@ -1289,6 +1293,14 @@ impl<'s> Parser<'s> {
         }
         // `APPROX NEAREST ...` after a join's relation is its ranking clause.
         if self.any_kw_at(0, &["APPROX", "EXACT"]) && self.kw_at(1, "NEAREST") {
+            return Ok(None);
+        }
+        // Spark 4.3: `ASOF JOIN` after a relation starts an as-of join (with
+        // the flag off it stays Spark 4.2's alias `ASOF`), and
+        // `MATCH_CONDITION (` after an as-of join's right side its criteria.
+        if (self.opts.asof_join && self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN"))
+            || (self.asof_right && self.kw_at(0, "MATCH_CONDITION") && self.sym_at(1, Sym::LParen))
+        {
             return Ok(None);
         }
         if self.insert_bodies

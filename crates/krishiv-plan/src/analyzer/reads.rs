@@ -248,6 +248,12 @@ impl Walk {
                     right,
                     condition,
                     ..
+                }
+                | PlanNode::AsOfJoin {
+                    left,
+                    right,
+                    condition,
+                    ..
                 } => match condition {
                     JoinCondition::On(_) | JoinCondition::None => {}
                     // Resolved joins carry their keys as a condition; a key list still here

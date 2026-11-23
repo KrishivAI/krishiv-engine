@@ -131,7 +131,9 @@ impl DataType {
     /// # Errors
     /// As [`Self::from_json`].
     pub fn from_json_in(text: &str, grammar: crate::TypeGrammar) -> Result<Self> {
-        Self::from_json(text)?.in_grammar(grammar)
+        Self::from_json(text)
+            .map_err(|e| e.in_release(grammar.release()))?
+            .in_grammar(grammar)
     }
 
     /// The inverse of [`Self::json`] for every type it writes: [`Self::from_json`] that also
