@@ -122,19 +122,62 @@ pub(super) fn assign(
         if let Source::Position(i) = from
             && !can_store(&output[*i].data_type, &column.data_type)
         {
+            // Spark names the nested field that cannot be stored (`s`.`element`.`a`), with its own types.
+            let (path, src, dst) = unsafe_leaf(
+                format!("`{}`", column.name),
+                &output[*i].data_type,
+                &column.data_type,
+            );
             return Err(IncompatibleDataForTableCannotSafelyCast {
                 table_name,
-                col_name: format!("`{}`", column.name),
-                src_type: format!(
-                    "\"{}\"",
-                    output[*i].data_type.catalog_string().to_uppercase()
-                ),
-                target_type: format!("\"{}\"", column.data_type.catalog_string().to_uppercase()),
+                col_name: path,
+                src_type: format!("\"{}\"", src.catalog_string().to_uppercase()),
+                target_type: format!("\"{}\"", dst.catalog_string().to_uppercase()),
             }
             .into());
         }
     }
     Ok(out)
+}
+
+/// The innermost part of `from` that `can_store` refuses into `to`: its path (`` `s`.`element`.`a` ``, `` `m`.`value` ``)
+/// and both types; the whole column when no single leaf is to blame (arity or nullability).
+fn unsafe_leaf<'a>(
+    path: String,
+    from: &'a DataType,
+    to: &'a DataType,
+) -> (String, &'a DataType, &'a DataType) {
+    use DataType as T;
+    let inner = match (from, to) {
+        (T::Array(a), T::Array(b)) if !can_store(a.element_type(), b.element_type()) => Some((
+            format!("{path}.`element`"),
+            a.element_type(),
+            b.element_type(),
+        )),
+        (T::Map(a), T::Map(b)) if !can_store(a.key_type(), b.key_type()) => {
+            Some((format!("{path}.`key`"), a.key_type(), b.key_type()))
+        }
+        (T::Map(a), T::Map(b)) if !can_store(a.value_type(), b.value_type()) => {
+            Some((format!("{path}.`value`"), a.value_type(), b.value_type()))
+        }
+        (T::Struct(a), T::Struct(b)) if a.fields().len() == b.fields().len() => a
+            .fields()
+            .iter()
+            .zip(b.fields())
+            .find(|(x, y)| !can_store(x.data_type(), y.data_type()))
+            .map(|(x, y)| {
+                (
+                    format!("{path}.`{}`", y.name()),
+                    x.data_type(),
+                    y.data_type(),
+                )
+            }),
+        _ => None,
+    };
+    match inner {
+        Some((p, f, t)) => unsafe_leaf(p, f, t),
+        None => (path, from, to),
+    }
 }
 
 /// Spark's ANSI store assignment (`Cast.canANSIStoreAssign`): whether a

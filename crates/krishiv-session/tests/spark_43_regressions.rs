@@ -4,7 +4,7 @@
 //! read from the 4.3.0 oracle (`spark-sql`, ANSI on) before it was written:
 //! SPARK-58481 (IN-subquery with NULLs), SPARK-59434 (non-deterministic
 //! predicates and CTEs), SPARK-58384 (NULL semantics in join conditions).
-//! SPARK-58959 (PIVOT with duplicate values) is not here: 4.3 gives every
+//! SPARK-58816 (INSERT into nested structs by position) is the last test. SPARK-58959 (PIVOT with duplicate values) is not here: 4.3 gives every
 //! duplicate its own column where 4.2 raises `INVALID_ARRAY_INDEX`, which
 //! Krishiv reproduces on the 4.2 profile, so it waits for the 4.3 profile.
 #![forbid(unsafe_code)]
@@ -121,5 +121,58 @@ fn spark_58384_null_semantics_in_join_conditions() -> R {
         )?,
         ["1\tNULL\tNULL\tNULL", "2\t2\t1\t1"]
     );
+    Ok(())
+}
+
+/// SPARK-58816: INSERT resolves the fields of a struct inside an array or map by position, and a field
+/// that cannot be stored is named by its path (`s`.`element`.`a`) with its own types.
+#[test]
+fn spark_58816_insert_resolves_nested_structs_positionally() -> R {
+    let s = Session::new()?;
+    rows(
+        &s,
+        "create table st (id int, st struct<a:int,b:string>) using parquet",
+    )?;
+    rows(
+        &s,
+        "create table ar (id int, s array<struct<a:int,b:int>>) using parquet",
+    )?;
+    rows(
+        &s,
+        "create table mp (id int, m map<string,struct<a:int,b:string>>) using parquet",
+    )?;
+    rows(&s, "insert into st select 1, named_struct('b', 5, 'a', 2)")?;
+    rows(
+        &s,
+        "insert into ar select 1, array(named_struct('b', 5, 'a', 2))",
+    )?;
+    rows(
+        &s,
+        "insert into mp select 1, map('k', named_struct('b', 5, 'a', 2))",
+    )?;
+    assert_eq!(rows(&s, "select * from st")?, ["1\t{a: 5, b: 2}"]);
+    assert_eq!(rows(&s, "select * from ar")?, ["1\t[{a: 5, b: 2}]"]);
+    assert_eq!(rows(&s, "select * from mp")?, ["1\t{k: {a: 5, b: 2}}"]);
+    for (sql, want) in [
+        (
+            "insert into st select 1, named_struct('b', 'x', 'a', 2)",
+            "`st`.`a` \"STRING\" to \"INT\"",
+        ),
+        (
+            "insert into ar select 1, array(named_struct('b', 'x', 'a', 2))",
+            "`s`.`element`.`a` \"STRING\" to \"INT\"",
+        ),
+        (
+            "insert into mp select 1, map('k', named_struct('b', 'x', 'a', 2))",
+            "`m`.`value`.`a` \"STRING\" to \"INT\"",
+        ),
+    ] {
+        let err = rows(&s, sql).expect_err(sql).to_string();
+        assert!(
+            err.contains("INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"),
+            "{sql}: {err}"
+        );
+        assert!(err.contains(want), "{sql}: {err}");
+    }
     Ok(())
 }
