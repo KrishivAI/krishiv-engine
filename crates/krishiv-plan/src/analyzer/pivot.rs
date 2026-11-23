@@ -272,7 +272,7 @@ impl Resolver<'_> {
     /// distinct value keyed to its last index, `indexSize` slots, output
     /// `i` reading slot `i`): a NaN value is its own key and never matches
     /// (Scala's numeric `==`); `0.0` and `-0.0` are one key; duplicate
-    /// values leave fewer slots than outputs, so an output past the slots
+    /// values leave fewer slots than outputs (before 4.3; 4.3 gives every output its own slot), so an output past the slots
     /// raises `INVALID_ARRAY_INDEX` when a row is produced with ANSI on and
     /// is NULL with ANSI off, and a slot no value's last index names is
     /// NULL. Before 4.2 a binary pivot column is keyed by array identity, so
@@ -282,7 +282,8 @@ impl Resolver<'_> {
     /// column's type), a collated pivot column before 4.2 (Spark keys it by
     /// bytes, not by collation), and, with ANSI off and several aggregates,
     /// duplicates whose last index is past the slots (Spark writes that
-    /// value into another aggregate's slots).
+    /// value into another aggregate's slots; 4.3 answers duplicates with
+    /// ANSI on, and this case stays refused there until it has a 4.3 golden).
     #[expect(clippy::too_many_arguments, reason = "the resolved parts of one PIVOT")]
     fn pivot_first(
         &mut self,
@@ -362,14 +363,31 @@ impl Resolver<'_> {
                     .unwrap_or(k)
             })
             .collect();
-        let slots = (0..keys.len()).filter(|&k| last[k] == k).count();
+        // Spark 4.3 fixed the slot map: every output reads the slot of its own value, so equal
+        // values give equal cells and no output is past the slots (spark43-coverage
+        // `fix_pivot_duplicate_values`: `IN ('a','b','a')` gives `3, 3, 3`, 4.2 raises).
+        let fixed = profile >= super::SparkProfile::V4_3;
+        let slots = if fixed {
+            keys.len()
+        } else {
+            (0..keys.len()).filter(|&k| last[k] == k).count()
+        };
         let mut owner: Vec<Option<usize>> = vec![None; keys.len()];
-        for (k, &l) in last.iter().enumerate() {
-            if l < slots {
-                owner[l] = Some(k);
+        if fixed {
+            for (k, o) in owner.iter_mut().enumerate() {
+                *o = Some(k);
+            }
+        } else {
+            for (k, &l) in last.iter().enumerate() {
+                if l < slots {
+                    owner[l] = Some(k);
+                }
             }
         }
-        if !ansi && items.len() > 1 && last.iter().any(|&l| l >= slots) {
+        // 4.3 answers duplicates with ANSI on (golden `fix_pivot_duplicate_values`); ANSI off with
+        // several aggregates has no 4.3.0 golden yet, so it stays refused under 4.3 too.
+        let dup_slots = (0..keys.len()).filter(|&k| last[k] == k).count();
+        if !ansi && items.len() > 1 && last.iter().any(|&l| l >= dup_slots) {
             return Err(unsupported(
                 "duplicate PIVOT values with several aggregates and spark.sql.ansi.enabled=false",
                 origin,

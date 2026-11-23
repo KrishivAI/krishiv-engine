@@ -831,6 +831,8 @@ fn listings_and_deletes_are_retried() {
         .block_on(env.io.delete(&env.store, &Path::from("t/_SUCCESS")))
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::TaskWriteFailed);
+    // The reason is the cause, not lost (PY-075).
+    assert!(e.cause().is_some_and(|c| !c.to_string().is_empty()));
     fault.fail_next_deletes(0);
     // The failed delete left the object in place.
     assert!(env.names("t").contains(&"t/_SUCCESS".to_owned()));
@@ -1698,6 +1700,43 @@ fn a_logged_write_killed_before_its_commit_leaves_the_old_state_visible() {
     assert_eq!(env.visible("t").len(), 2);
 }
 
+/// PY-054: a killed overwrite's complete files and the old `_SUCCESS` do not survive the next
+/// overwrite; a file younger than the grace period (a concurrent write's) does.
+#[test]
+fn a_logged_overwrite_sweeps_unlogged_files_of_a_killed_write_and_the_old_marker() {
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    env.write_logged("t", SaveMode::Overwrite, "job-2", 3, false);
+    let w = env
+        .begin("t", SaveMode::Overwrite, "job-3")
+        .unwrap()
+        .unwrap();
+    let w = env.rt.block_on(w.logged(&env.io)).unwrap();
+    // The marker of job-1 is gone before job-3 writes anything.
+    assert!(!env.names("t").iter().any(|n| n.ends_with("_SUCCESS")));
+    drop(w);
+    // With a one-hour grace the killed write's file stays; with none, the commit sweeps it.
+    let young = env
+        .begin("t", SaveMode::Overwrite, "job-4")
+        .unwrap()
+        .unwrap();
+    let young = env.rt.block_on(young.logged(&env.io)).unwrap();
+    assert!(young.log.as_ref().unwrap().stale.is_empty());
+    let old = env
+        .begin("t", SaveMode::Overwrite, "job-5")
+        .unwrap()
+        .unwrap();
+    let old = env
+        .rt
+        .block_on(old.with_grace(chrono::Duration::zero()).logged(&env.io))
+        .unwrap();
+    let stale = &old.log.as_ref().unwrap().stale;
+    assert!(
+        stale.iter().any(|p| p.as_ref().contains("job-2")),
+        "{stale:?}"
+    );
+}
+
 /// A concurrent overwrite replaces only the files its base snapshot shows: the task files of an append that
 /// has not committed yet are never in it, so they survive (and the append can still commit).
 #[test]
@@ -1722,6 +1761,185 @@ fn a_logged_overwrite_leaves_the_uncommitted_files_of_a_concurrent_append() {
         "{on_store:?}"
     );
     assert_eq!(env.visible("t").len(), 1);
+}
+
+/// An append that wrote its files long ago and has not committed, then an overwrite that sweeps
+/// unlogged files (grace zero here for one hour there): the append must not publish files that are
+/// gone. Its commit is refused (`KRISHIV_CONCURRENT_COMMIT`) or the files are still on the store.
+#[test]
+fn an_append_whose_files_an_overwrite_swept_never_publishes_missing_files() {
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let write_files = |w: &DirectoryWrite, rows: i32| {
+        env.rt.block_on(async {
+            let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+            let id = pool.register("write", None);
+            let mut writer = FileWriter::new(
+                &env.io,
+                Arc::clone(&format),
+                &schema(),
+                o.clone(),
+                w.write_options(0),
+                krishiv_memory::Reservation::new(pool, id),
+            )
+            .unwrap();
+            writer.write(&batch(rows)).await.unwrap();
+            writer.finish().await.unwrap()
+        })
+    };
+    // The append writes its files and waits.
+    let append = env.begin("t", SaveMode::Append, "job-2").unwrap().unwrap();
+    let append = env.rt.block_on(append.logged(&env.io)).unwrap();
+    let append_files = write_files(&append, 3);
+    // The overwrite starts later, sweeps every unlogged file (its grace is zero) and commits.
+    let over = env
+        .begin("t", SaveMode::Overwrite, "job-3")
+        .unwrap()
+        .unwrap();
+    let over = env
+        .rt
+        .block_on(over.with_grace(chrono::Duration::zero()).logged(&env.io))
+        .unwrap();
+    let over_files = write_files(&over, 2);
+    env.rt
+        .block_on(over.commit(&env.io, format.as_ref(), schema(), &o, over_files))
+        .unwrap();
+    assert!(
+        !env.names("t").iter().any(|n| n.contains("job-2")),
+        "the overwrite swept the append's files"
+    );
+    // Now the append commits.
+    let committed =
+        env.rt
+            .block_on(append.commit(&env.io, format.as_ref(), schema(), &o, append_files));
+    let err = committed.expect_err("the append's files were swept, so its commit is refused");
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivConcurrentCommit,
+        "{err}"
+    );
+}
+
+/// An overwrite listed an old uncommitted append's files as stale; the append then commits first.
+/// The overwrite re-reads the log before deleting and keeps every file the log lists.
+#[test]
+fn an_overwrite_keeps_a_stale_file_an_append_committed_meanwhile() {
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let write_files = |w: &DirectoryWrite, rows: i32| {
+        env.rt.block_on(async {
+            let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+            let id = pool.register("write", None);
+            let mut writer = FileWriter::new(
+                &env.io,
+                Arc::clone(&format),
+                &schema(),
+                o.clone(),
+                w.write_options(0),
+                krishiv_memory::Reservation::new(pool, id),
+            )
+            .unwrap();
+            writer.write(&batch(rows)).await.unwrap();
+            writer.finish().await.unwrap()
+        })
+    };
+    let append = env.begin("t", SaveMode::Append, "job-2").unwrap().unwrap();
+    let append = env.rt.block_on(append.logged(&env.io)).unwrap();
+    let append_files = write_files(&append, 3);
+    let over = env
+        .begin("t", SaveMode::Overwrite, "job-3")
+        .unwrap()
+        .unwrap();
+    let over = env
+        .rt
+        .block_on(over.with_grace(chrono::Duration::zero()).logged(&env.io))
+        .unwrap();
+    let over_files = write_files(&over, 2);
+    // The append commits between the overwrite's sweep listing and its commit.
+    env.rt
+        .block_on(append.commit(&env.io, format.as_ref(), schema(), &o, append_files))
+        .unwrap();
+    // The overwrite started before the append's entry, so its own commit is refused and sweeps
+    // nothing; the append's file stays committed and on the store. (The window after publication,
+    // where the re-read before the deletes matters, needs a fault hook between entry and deletes.)
+    let refused = env
+        .rt
+        .block_on(over.commit(&env.io, format.as_ref(), schema(), &o, over_files))
+        .expect_err("the overwrite conflicts with the append's entry");
+    assert_eq!(refused.error_class(), ErrorClass::KrishivConcurrentCommit);
+    let visible = env.visible("t");
+    let on_store = env.names("t");
+    let appended: Vec<_> = visible.iter().filter(|f| f.contains("job-2")).collect();
+    assert!(
+        !appended.is_empty(),
+        "the append's file is in the log: {visible:?}"
+    );
+    for f in appended {
+        assert!(
+            on_store.iter().any(|n| n.ends_with(f.as_str())),
+            "{f} is in the log but gone: {on_store:?}"
+        );
+    }
+}
+
+/// A statement that committed before is not applied twice: the second attempt's files are
+/// orphans and are deleted, the winner's data stays, and the success marker is back.
+#[test]
+fn a_replayed_idempotency_key_deletes_the_attempts_files_and_keeps_the_marker() {
+    let env = Env::memory();
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let attempt = |uuid: &str, rows: i32| {
+        let w = env
+            .begin("t", SaveMode::Overwrite, uuid)
+            .unwrap()
+            .unwrap()
+            .with_idempotency_key(Some("stmt-1".to_owned()));
+        let w = env.rt.block_on(w.logged(&env.io)).unwrap();
+        env.rt.block_on(async {
+            let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+            let id = pool.register("write", None);
+            let mut writer = FileWriter::new(
+                &env.io,
+                Arc::clone(&format),
+                &schema(),
+                o.clone(),
+                w.write_options(0),
+                krishiv_memory::Reservation::new(pool, id),
+            )
+            .unwrap();
+            writer.write(&batch(rows)).await.unwrap();
+            let files = writer.finish().await.unwrap();
+            w.commit(&env.io, format.as_ref(), schema(), &o, files)
+                .await
+                .unwrap()
+        })
+    };
+    let first = attempt("job-1", 4);
+    assert!(!first.is_empty(), "the first attempt commits its files");
+    let visible = env.visible("t");
+    let second = attempt("job-2", 2);
+    assert!(
+        second.is_empty(),
+        "a replayed key commits nothing: {second:?}"
+    );
+    assert_eq!(env.visible("t"), visible, "the winner's data is unchanged");
+    let on_store = env.names("t");
+    assert!(
+        !on_store.iter().any(|n| n.contains("job-2")),
+        "the replayed attempt's files are deleted: {on_store:?}"
+    );
+    assert!(
+        on_store.iter().any(|n| n.ends_with("_SUCCESS")),
+        "the success marker is restored: {on_store:?}"
+    );
 }
 
 /// Adoption uses the reads' hidden-name rule: a copy in progress is not data.

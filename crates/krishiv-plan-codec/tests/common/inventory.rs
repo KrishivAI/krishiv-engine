@@ -151,6 +151,7 @@ pub(crate) fn table_scan() -> ScanNode {
         ),
     ]);
     ScanNode {
+        decided: None,
         id: ScanId(7),
         scan: Scan {
             source: ReadSource::Table {
@@ -182,6 +183,7 @@ pub(crate) fn table_scan() -> ScanNode {
 /// A scan of files, without a version or a filter.
 pub(crate) fn file_scan() -> ScanNode {
     ScanNode {
+        decided: None,
         id: ScanId(8),
         scan: Scan {
             source: ReadSource::files(
@@ -285,6 +287,30 @@ pub(crate) fn hll_sketch_aggregate_exprs() -> Vec<AggregateExpr> {
             },
             ArrowType::Binary,
         ),
+    ]
+}
+
+/// One aggregate of each Theta sketch aggregate (values at lgNomEntries 14, sketches at 20, then an intersection).
+pub(crate) fn theta_sketch_aggregate_exprs() -> Vec<AggregateExpr> {
+    let a = |function, arg_type| AggregateExpr {
+        function,
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type,
+        name: "x".to_owned(),
+        mask: None,
+        element: None,
+    };
+    vec![
+        a(
+            AggregateFunction::ThetaSketchAgg { lg_nom: 14 },
+            ArrowType::Int64,
+        ),
+        a(
+            AggregateFunction::ThetaUnionAgg { lg_nom: 20 },
+            ArrowType::Binary,
+        ),
+        a(AggregateFunction::ThetaIntersectionAgg, ArrowType::Binary),
     ]
 }
 
@@ -1440,6 +1466,18 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     group_by: vec![0],
                     aggregates: hll_sketch_aggregate_exprs(),
                     distinct: vec![false; 2],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_theta_sketches",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: theta_sketch_aggregate_exprs(),
+                    distinct: vec![false; 3],
                     output: AggregateOutput::Final,
                 },
             },

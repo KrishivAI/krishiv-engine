@@ -802,29 +802,14 @@ impl Session {
                     }
                     .into());
                 }
-                let batches = self
-                    .run_analyzed_variable_query(&inner_analysis)
-                    .await
-                    .map_err(|e| map_variable_error(e, text, v.span, query.span))?;
-                let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
-                if rows > 1 {
-                    return Err(RowSubqueryTooManyRows {}.into());
-                }
-                if rows == 0 {
-                    for (key, var) in keys.iter().zip(&stored) {
-                        self.state.variables.put(
-                            key.clone(),
-                            StoredVariable {
-                                data_type: var.data_type.clone(),
-                                value: Literal::Null(Some(var.data_type.clone())).into(),
-                                default_query: var.default_query.clone(),
-                            },
-                        );
-                    }
-                    return self.empty_frame().await;
-                }
-                // One row: assign through casts, so values keep Spark's
-                // store-assignment semantics and error classes.
+                // Spark's shape (`ResolveSetVariable`): the casts to the targets' types are part of the
+                // analyzed plan, over the row query and under `LIMIT 2`. A cast that does not analyze
+                // fails whatever the row count; one that fails on a row that is read fails before the
+                // row count is looked at. The assignment is one listed run.
+                // Known divergence: only the rows under the limit are cast here. Spark 4.2 folds the
+                // casts into a local relation before the limit (`ConvertToLocalRelation`), so an
+                // unsorted `VALUES ('1'), ('2'), ('x')` is `CAST_INVALID_INPUT` there and
+                // `ROW_SUBQUERY_TOO_MANY_ROWS` here.
                 let prefix = format!(
                     "SELECT {} FROM (",
                     stored
@@ -841,18 +826,31 @@ impl Session {
                     .map(|i| format!("_c{i}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let wrapper = format!("{prefix}{inner_sql}) AS q({aliases})");
-                let wrapper_analysis = self
+                let wrapper = format!("{prefix}{inner_sql}) AS q({aliases}) LIMIT 2");
+                let analysis = self
                     .analyze_variable_query(&wrapper)
                     .await
                     .map_err(|e| map_variable_error(e, text, v.span, query.span))?;
                 let values = self
-                    .run_analyzed_variable_query(&wrapper_analysis)
+                    .run_analyzed_variable_query(&analysis)
                     .await
                     .map_err(|e| map_variable_error(e, text, v.span, query.span))?;
                 let total: usize = values.iter().map(RecordBatch::num_rows).sum();
-                if total != 1 {
+                if total > 1 {
                     return Err(RowSubqueryTooManyRows {}.into());
+                }
+                if total == 0 {
+                    for (key, var) in keys.iter().zip(&stored) {
+                        self.state.variables.put(
+                            key.clone(),
+                            StoredVariable {
+                                data_type: var.data_type.clone(),
+                                value: Literal::Null(Some(var.data_type.clone())).into(),
+                                default_query: var.default_query.clone(),
+                            },
+                        );
+                    }
+                    return self.empty_frame().await;
                 }
                 let batch = values.iter().find(|b| b.num_rows() > 0).ok_or_else(|| {
                     crate::session::internal("a row assignment returned no batches".to_owned())
@@ -1767,13 +1765,19 @@ impl Session {
         &self,
         analysis: &Arc<crate::dataframe::Analysis>,
     ) -> Result<Vec<RecordBatch>, KrishivError> {
-        let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
-        let mut stream = self.run(&physical, &analysis.env).await?;
-        let mut out = Vec::new();
-        while let Some(batch) = stream.next().await {
-            out.push(batch?);
-        }
-        Ok(out)
+        // The query is listed under the command it is evaluated for, when there is one.
+        let run = async {
+            let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
+            let mut stream = self.run(&physical, &analysis.env).await?;
+            let mut out = Vec::new();
+            while let Some(batch) = stream.next().await {
+                out.push(batch?);
+            }
+            Ok(out)
+        };
+        crate::session::as_evaluation(run)
+            .await
+            .inspect_err(|_| crate::session::evaluation_failed(&analysis.env.row))
     }
 
     /// The value of `sql` (a synthesized one-row `SELECT`): its single

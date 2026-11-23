@@ -829,7 +829,7 @@ async fn config_refusals_are_counted_like_sql_set() {
     .expect("get");
     assert_ne!(
         got.pairs[0].value.as_deref(),
-        Some("1min"),
+        Some("1m"),
         "a refused set changes nothing"
     );
     release_as(&run, OPERATOR).await;
@@ -846,8 +846,8 @@ async fn config_refusals_are_counted_like_sql_set() {
     .expect("get");
     assert_eq!(
         got.pairs[0].value.as_deref(),
-        Some("1min"),
-        "the admin's set holds (1m, read back normalized)"
+        Some("1m"),
+        "the admin's set holds (1m, read back as set, as Spark's getConfString)"
     );
     assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 5)]);
 }
