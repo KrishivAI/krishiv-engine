@@ -24,7 +24,6 @@ use crate::store::{CatalogPartition, CatalogStore, CatalogTable, NamespaceMeta};
 use crate::table_commands::TableName;
 
 mod show_json;
-use show_json::json_form;
 
 type Cell = Option<String>;
 
@@ -358,8 +357,7 @@ impl Session {
     }
 
     /// The text of `DESCRIBE EXTENDED` and `SHOW CREATE TABLE` is Spark 4.2's
-    /// (`Created By`, `COLLATE UTF8_BINARY`), which 4.3 prints the same way; older profiles are
-    /// refused rather than shown 4.2 output.
+    /// (`Created By`, `COLLATE UTF8_BINARY`), the same on 4.3; older profiles are refused.
     fn require_current_profile(&self, what: &str) -> Result<(), KrishivError> {
         if self.state.profile >= krishiv_plan::analyzer::SparkProfile::V4_2 {
             Ok(())
@@ -418,7 +416,7 @@ impl Session {
         show: &Show,
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
-        if let Some(kind) = json_form(&show.kind) {
+        if let Some(kind) = show_json::json_form(&show.kind) {
             return self.show_as_json(show, kind, original).await;
         }
         let store = &self.state.catalog.store;
