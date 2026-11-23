@@ -126,6 +126,9 @@ def test_the_session_catalog_keys_stay_configuration(stub_uri: str) -> None:
     try:
         assert s.sql("SELECT current_catalog() AS c").collect()[0]["c"] == "lake"
         assert s.conf.get("spark.sql.defaultCatalog") == "lake"
+        # Configuration keeps the key under its one spelling, as `krishiv server` does.
+        listed = [r[0] for r in s.sql("SET").collect() if r[0].lower() == "spark.sql.defaultcatalog"]
+        assert listed == ["spark.sql.defaultCatalog"]
         assert s.sql("SELECT 1 AS one").collect()[0]["one"] == 1
     finally:
         s.stop()
