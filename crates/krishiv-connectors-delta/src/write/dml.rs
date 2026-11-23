@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Copy-on-write `DELETE` and `UPDATE` on a Delta table (design note P3-T021 sections 2.3, 6.1 and
-//! 6.2; PR-37b part 2): [`DeltaRowLevel`], the table's
-//! [`RowLevelTable`].
+//! Copy-on-write `DELETE`, `UPDATE` and `MERGE` on a Delta table (design note P3-T021 sections
+//! 2.3, 6.1 and 6.2; PR-37b part 2, PR-37c): [`DeltaRowLevel`], the table's [`RowLevelTable`]; what
+//! a `MERGE` commits is in [`super::merge`].
 //!
 //! The session plans the statement (krishiv-session `table_commands/row_level.rs`): a find query
 //! over [`scan`](DeltaRowLevel) (the live rows, deletion vectors applied, with
@@ -77,10 +77,14 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, Int64Array, MapArray, RecordBatch, StructArray};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 use delta_kernel::expressions::PredicateRef;
-use krishiv_common::error::{InternalError, KrishivError, UnsupportedFeatureTableOperation};
+use krishiv_common::error::{
+    DeltaCastOverflowInTableWrite, DeltaConflictSetColumn, DeltaDuplicateColumnsOnInsert,
+    DeltaNonDeterministicFunctionNotSupported, DeltaUnsupportedSubquery, InternalError,
+    KrishivError, TaskWriteFailed, UnsupportedFeatureTableOperation,
+};
 use krishiv_exec::planner::{
     CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
-    RowLevelTable, RowLevelWrite,
+    RowLevelProblem, RowLevelTable, RowLevelWrite,
 };
 use krishiv_exec::{ScanPushdown, Sink};
 use krishiv_plan::{Expr, ExprNode};
@@ -132,6 +136,8 @@ struct Outcome {
     /// delta-spark's `numDeletedRows` (`DELETE`) or `numUpdatedRows` (`UPDATE`) metric; `None`
     /// when a whole-file delete's files lack the statistic.
     rows: Option<u64>,
+    /// A `MERGE`'s counts.
+    merge: Option<super::merge::MergeOutcome>,
 }
 
 /// A Delta table at the version a `DELETE` or `UPDATE` read (see the module docs).
@@ -143,20 +149,27 @@ pub struct DeltaRowLevel {
 }
 
 impl DeltaRowLevel {
-    /// The row-level table of `op` over `table`; `None` for an operation not built yet
-    /// (`MERGE` is PR-37c).
+    /// The row-level table of `op` over `table`; `None` for an operation not built.
     #[must_use]
     pub fn new(table: DeltaTable, op: RowLevelOperation) -> Option<Self> {
-        matches!(op, RowLevelOperation::Delete | RowLevelOperation::Update).then(|| Self {
+        matches!(
+            op,
+            RowLevelOperation::Delete | RowLevelOperation::Update | RowLevelOperation::Merge
+        )
+        .then(|| Self {
             table,
             op,
             outcome: Arc::new(Mutex::new(None)),
         })
     }
 
-    /// The refusals that need no condition: the writer allow-list and append-only.
+    /// The refusals that need no condition: the writer allow-list and append-only (a `MERGE`
+    /// may only insert: its refusal waits for the touched files, [`Self::rewriter`]).
     fn check_table(&self) -> Result<(), KrishivError> {
         check_write(self.table.name(), &WriteProtocol::of(self.table.snapshot()))?;
+        if self.op == RowLevelOperation::Merge {
+            return Ok(());
+        }
         append_only_refusal(&self.table)
     }
 
@@ -249,7 +262,33 @@ impl RowLevelTable for DeltaRowLevel {
             .table_properties()
             .enable_change_data_feed
             == Some(true);
-        if cdf && whole_files.is_none() {
+        let merge = if request.op == RowLevelOperation::Merge {
+            let text = |key: &str| {
+                option(key)
+                    .cloned()
+                    .ok_or_else(|| internal(&format!("a Delta MERGE without {key}")))
+            };
+            if !touched.is_empty() {
+                // A MERGE that removes a file: refused where delta-spark refuses removes, and
+                // where it writes change data files (design section 6.2).
+                append_only_refusal(&self.table)?;
+                if cdf {
+                    return Err(cdf_refusal(
+                        &request.table_name,
+                        "MERGE INTO that changes or deletes rows",
+                    )
+                    .into());
+                }
+            }
+            Some(super::merge::MergeInfo::parse(
+                &text(super::merge::MERGE_COUNTS_OPTION)?,
+                &text(super::merge::MERGE_CLAUSES_OPTION)?,
+                &text(ROW_LEVEL_CONDITION_OPTION)?,
+            )?)
+        } else {
+            None
+        };
+        if cdf && whole_files.is_none() && merge.is_none() {
             let what = match request.op {
                 RowLevelOperation::Delete => "DELETE of rows (not of whole partitions)",
                 _ => "UPDATE",
@@ -264,7 +303,8 @@ impl RowLevelTable for DeltaRowLevel {
             condition,
             affected,
             scan_ms,
-            refuse_rows: cdf.then(|| request.table_name.clone()),
+            refuse_rows: (cdf && merge.is_none()).then(|| request.table_name.clone()),
+            merge,
             outcome: Arc::clone(&self.outcome),
         };
         Ok(row_level_sink(
@@ -276,10 +316,93 @@ impl RowLevelTable for DeltaRowLevel {
         ))
     }
 
+    /// delta-spark's classes for what the session's planner found (krishiv-session
+    /// `row_level.rs`, `merge_checks.rs`):
+    /// - a `MERGE` name that does not resolve: `INTERNAL_ERROR` "Cannot find main error class
+    ///   'DELTA_MERGE_UNRESOLVED_EXPRESSION'", the analyzer's error as its cause (delta-spark
+    ///   4.4.1's class file lacks the class it raises, `ResolveDeltaMergeInto.scala:44-52`;
+    ///   `merge/MERGE.json`);
+    /// - a non-deterministic `MERGE` condition: `DELTA_NON_DETERMINISTIC_FUNCTION_NOT_SUPPORTED`
+    ///   (`PreprocessTableMerge.scala:66-71`);
+    /// - a subquery: `DELTA_UNSUPPORTED_SUBQUERY` (`PreprocessTableDelete.scala:35-45`,
+    ///   `PreprocessTableUpdate.scala:44`, `PreprocessTableMerge.scala:76-78`);
+    /// - an error of a task writing rows: Spark's `TASK_WRITE_FAILED` naming the table's root
+    ///   (`FileFormatWriter`), caused by the error, or by `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE`
+    ///   for an arithmetic error under a store-assignment cast that can overflow
+    ///   (`UpdateExpressionsSupport.scala:729-757`); conflicts, Krishiv's refusals and limits,
+    ///   internal errors and cancellations stay as they came.
+    fn error(&self, op: RowLevelOperation, problem: &RowLevelProblem<'_>) -> Option<KrishivError> {
+        let name = |op: RowLevelOperation| match op {
+            RowLevelOperation::Update => "UPDATE",
+            RowLevelOperation::Merge => "MERGE",
+            _ => "DELETE",
+        };
+        match problem {
+            RowLevelProblem::Unresolved(e) if op == RowLevelOperation::Merge => Some(
+                KrishivError::from(InternalError {
+                    message: "Cannot find main error class 'DELTA_MERGE_UNRESOLVED_EXPRESSION'"
+                        .to_owned(),
+                })
+                .with_cause((*e).clone()),
+            ),
+            RowLevelProblem::NonDeterministic { what, condition }
+                if op == RowLevelOperation::Merge =>
+            {
+                Some(
+                    DeltaNonDeterministicFunctionNotSupported {
+                        operation: format!("{what} of MERGE operation"),
+                        expression: format!("(condition = {condition})"),
+                    }
+                    .into(),
+                )
+            }
+            RowLevelProblem::Subquery { what, condition } => Some(
+                DeltaUnsupportedSubquery {
+                    operation: if op == RowLevelOperation::Merge {
+                        format!("{what} of MERGE operation")
+                    } else {
+                        name(op).to_owned()
+                    },
+                    cond: (*condition).to_owned(),
+                }
+                .into(),
+            ),
+            // `PreprocessTableMerge.scala:136-162` and delta-spark's `UPDATE` alignment.
+            RowLevelProblem::DuplicateAssignment { columns } if op == RowLevelOperation::Merge => {
+                Some(
+                    DeltaConflictSetColumn {
+                        column_list: format!(
+                            "[{}]",
+                            columns
+                                .iter()
+                                .map(|c| format!("`{}`", c.replace('`', "``")))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    }
+                    .into(),
+                )
+            }
+            RowLevelProblem::DuplicateInsertColumn => Some(DeltaDuplicateColumnsOnInsert {}.into()),
+            RowLevelProblem::WriteFailed { error, overflow } => {
+                Some(task_write_failed(&self.table, error, *overflow))
+            }
+            _ => None,
+        }
+    }
+
     /// delta-spark's result row: `num_affected_rows`, `-1` for a whole-file delete whose count is
     /// not known.
     fn output(&self, counts: &RowLevelCounts) -> Option<RecordBatch> {
         let outcome = *self.outcome.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.op == RowLevelOperation::Merge {
+            // delta-spark's four counts (`MergeIntoCommand.scala:78-82, 183-192`).
+            let (u, d, i) = match outcome.and_then(|o| o.merge) {
+                Some(m) => (m.updated, m.deleted, m.inserted),
+                None => (counts.updated, counts.deleted, counts.inserted),
+            };
+            return Some(merge_row(u, d, i));
+        }
         let n = match outcome {
             // Nothing was committed: no row matched.
             None => counts.affected,
@@ -301,6 +424,71 @@ fn affected_row(n: i64) -> RecordBatch {
         true,
     )]));
     RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![n]))])
+        .unwrap_or_else(|_| RecordBatch::new_empty(Arc::new(Schema::empty())))
+}
+
+/// `TASK_WRITE_FAILED` around `e` (see [`DeltaRowLevel`]'s `error`).
+fn task_write_failed(
+    table: &DeltaTable,
+    e: &KrishivError,
+    overflow: Option<(&str, &krishiv_types::DataType, &krishiv_types::DataType)>,
+) -> KrishivError {
+    let class = e.error_class().name();
+    if class.starts_with("DELTA_")
+        || class.starts_with("KRISHIV_")
+        || class.starts_with("UNSUPPORTED_FEATURE")
+        || class == "INTERNAL_ERROR"
+        || e.sql_state() == Some("HY008")
+    {
+        return e.clone();
+    }
+    let sql = |t: &krishiv_types::DataType| format!("\"{}\"", t.catalog_string().to_uppercase());
+    let cause = match overflow {
+        Some((column, value, target)) if matches!(e.sql_state(), Some("22003" | "22012")) => {
+            DeltaCastOverflowInTableWrite {
+                source_type: sql(value),
+                target_type: sql(target),
+                column_name: format!("`{}`", column.replace('`', "``")),
+                store_assignment_policy_flag: "spark.sql.storeAssignmentPolicy".to_owned(),
+                update_and_merge_casting_follows_ansi_enabled_flag:
+                    "spark.databricks.delta.updateAndMergeCastingFollowsAnsiEnabledFlag".to_owned(),
+                ansi_enabled_flag: "spark.sql.ansi.enabled".to_owned(),
+            }
+            .into()
+        }
+        _ => e.clone(),
+    };
+    KrishivError::from(TaskWriteFailed {
+        path: crate::table::hadoop_path(table.engine().table_root()),
+    })
+    .with_cause(cause)
+}
+
+fn merge_row(updated: u64, deleted: u64, inserted: u64) -> RecordBatch {
+    let n = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
+    let names = [
+        "num_affected_rows",
+        "num_updated_rows",
+        "num_deleted_rows",
+        "num_inserted_rows",
+    ];
+    let values = [
+        n(updated.saturating_add(deleted).saturating_add(inserted)),
+        n(updated),
+        n(deleted),
+        n(inserted),
+    ];
+    let schema = Arc::new(Schema::new(
+        names
+            .iter()
+            .map(|c| Field::new(*c, ArrowType::Int64, true))
+            .collect::<Vec<_>>(),
+    ));
+    let columns: Vec<arrow_array::ArrayRef> = values
+        .iter()
+        .map(|v| Arc::new(Int64Array::from(vec![*v])) as arrow_array::ArrayRef)
+        .collect();
+    RecordBatch::try_new(schema, columns)
         .unwrap_or_else(|_| RecordBatch::new_empty(Arc::new(Schema::empty())))
 }
 
@@ -333,6 +521,8 @@ pub(crate) struct RowLevelPlan {
     /// A whole-file `DELETE` on a change-data-feed table: no row may be written (the table's
     /// name for the refusal).
     refuse_rows: Option<String>,
+    /// A `MERGE`'s counts and clauses.
+    merge: Option<super::merge::MergeInfo>,
     outcome: Arc<Mutex<Option<Outcome>>>,
 }
 
@@ -350,6 +540,7 @@ impl RowLevelPlan {
     fn operation(&self) -> CommitOperation {
         match self.op {
             RowLevelOperation::Update => CommitOperation::Update,
+            RowLevelOperation::Merge => CommitOperation::Merge,
             _ => CommitOperation::Delete,
         }
     }
@@ -397,6 +588,7 @@ pub(super) async fn stage(
     plan: &RowLevelPlan,
     written: Written,
     write_id: &str,
+    query: &krishiv_exec::QueryContext,
 ) -> Result<Option<StagedCommit>, Failure> {
     let (snapshot, name, partitions) = (
         Arc::clone(table.snapshot()),
@@ -518,6 +710,44 @@ pub(super) async fn stage(
         return Ok(None);
     }
     let rewrite_ms = millis(started.elapsed());
+    if let Some(info) = &plan.merge {
+        let info = &info.with_observed(query).map_err(Failure::NotCommitted)?;
+        *plan.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(Outcome {
+            removed_files: removed.files,
+            rows: None,
+            merge: Some(info.outcome(written.rows)),
+        });
+        let metrics = info.metrics(
+            written.rows,
+            written.files,
+            written.bytes,
+            removed.files,
+            removed.bytes,
+            plan.scan_ms,
+            rewrite_ms,
+        );
+        let mut read_set = ReadSet::default();
+        match &plan.read_predicate {
+            Some(p) => read_set.predicates.push(Arc::clone(p)),
+            None => read_set.whole_table = true,
+        }
+        read_set.files = removed.actions;
+        read_set.files.extend(also_read);
+        return Ok(Some(StagedCommit {
+            table: table.name().to_owned(),
+            write_id: write_id.to_owned(),
+            idempotency_key: None,
+            operation: plan.operation(),
+            operation_parameters: info.parameters(),
+            operation_metrics: metrics
+                .into_iter()
+                .map(|(k, v)| (k, Some(v.to_string())))
+                .collect(),
+            adds: written.adds,
+            removes,
+            read_set,
+        }));
+    }
     let mut metrics: Vec<(String, u64)> = Vec::new();
     let mut put = |k: &str, v: u64| metrics.push((k.to_owned(), v));
     put("numRemovedFiles", removed.files);
@@ -564,6 +794,7 @@ pub(super) async fn stage(
     *plan.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(Outcome {
         removed_files: removed.files,
         rows: outcome_rows,
+        merge: None,
     });
     let mut read_set = ReadSet::default();
     match &plan.read_predicate {

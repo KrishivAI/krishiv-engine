@@ -342,28 +342,30 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
 fn concat_ws_arrays(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivError> {
     enum Part {
         Text(StringArray),
-        List(ArrayRef, StringArray),
+        List(arrow_array::ListArray, StringArray),
     }
     let seps = x.strings(0)?;
     let mut parts = Vec::with_capacity(count);
     for i in 1..count {
         let c = x.column(i)?;
         parts.push(if matches!(c.data_type(), DataType::List(_)) {
-            let values = to_utf8(list_of(&c, "concat_ws")?.values().as_ref())?;
-            Part::List(c, values)
+            let list = list_of(&c, "concat_ws")?.clone();
+            let values = to_utf8(list.values().as_ref())?;
+            Part::List(list, values)
         } else {
             Part::Text(to_utf8(c.as_ref())?)
         });
     }
-    let mut out: Vec<Option<String>> = Vec::with_capacity(x.rows());
+    let mut out = arrow_array::builder::StringBuilder::with_capacity(x.rows(), 0);
+    let mut text = String::new();
     let mut total = 0usize;
     for row in 0..x.rows() {
         if seps.is_null(row) {
-            out.push(None);
+            out.append_null();
             continue;
         }
         let sep = seps.value(row);
-        let mut text = String::new();
+        text.clear();
         let mut first = true;
         let mut push = |piece: &str| {
             if !first {
@@ -379,8 +381,7 @@ fn concat_ws_arrays(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivErr
                         push(a.value(row));
                     }
                 }
-                Part::List(c, values) => {
-                    let list = list_of(c, "concat_ws")?;
+                Part::List(list, values) => {
                     if list.is_valid(row) {
                         let (start, len) = span(list, row);
                         for at in start..start + len {
@@ -396,7 +397,7 @@ fn concat_ws_arrays(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivErr
         if i32::try_from(total).is_err() {
             return Err(too_long("concat_ws", total));
         }
-        out.push(Some(text));
+        out.append_value(&text);
     }
-    Ok(Arc::new(StringArray::from(out)))
+    Ok(Arc::new(out.finish()))
 }

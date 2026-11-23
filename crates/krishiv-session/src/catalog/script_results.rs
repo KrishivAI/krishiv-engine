@@ -58,6 +58,14 @@ impl SessionCatalog {
         self.epoch.fetch_add(1, Ordering::AcqRel);
         (name, entry)
     }
+
+    /// Removes the hidden entries nothing but the catalog holds now, at once (a statement's
+    /// hidden tables, such as a `MERGE` source's spill file, go when the statement ends).
+    pub(crate) fn sweep_hidden(&self) {
+        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
+        Self::collect_garbage(&mut tables);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+    }
 }
 
 /// Drops the hidden entries nothing needs: those no live view pins (`live`) and, of the script

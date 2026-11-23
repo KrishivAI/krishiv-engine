@@ -63,6 +63,36 @@ pub(super) fn keep_not_null(
     }
 }
 
+/// Whether `path` is absolute as Hadoop's `Path.isAbsolute` reads it: a leading `/`, or a URI
+/// scheme followed by one (`file:/t`, `s3://b/t`).
+fn absolute(path: &str) -> bool {
+    path.starts_with('/')
+        || path.split_once(':').is_some_and(|(scheme, rest)| {
+            !scheme.is_empty()
+                && scheme
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+                && rest.starts_with('/')
+        })
+}
+
+/// The field a new table's log holds for the declared column `c`: its type in the client form
+/// (a decimal on `Decimal128`, as the log's `decimal(p,s)` reads back; the engine's narrower
+/// decimal carriers have no Delta type), its comment and its `CHAR`/`VARCHAR` type as Spark's
+/// field metadata (`comment`, `__CHAR_VARCHAR_TYPE_STRING`).
+fn log_field(c: &StoreColumn) -> arrow_schema::Field {
+    let field = c.data_type.to_arrow_field(&c.name, c.nullable);
+    let data_type = krishiv_types::arrow::client_arrow_type(field.data_type());
+    let mut metadata = field.metadata().clone();
+    if let Some(comment) = &c.comment {
+        metadata.insert("comment".to_owned(), comment.clone());
+    }
+    if let Some(declared) = &c.char_varchar {
+        metadata.insert("__CHAR_VARCHAR_TYPE_STRING".to_owned(), declared.clone());
+    }
+    field.with_data_type(data_type).with_metadata(metadata)
+}
+
 /// `SchemaUtils.reportDifferences(existing, specified)` for top-level columns: missing and
 /// additional fields by exact name, then for each common field its nullability and type
 /// differences. delta-spark lists the missing and additional fields in its set's order; here they
@@ -325,10 +355,7 @@ impl Session {
         }
         self.authorize_path(&table.location, &[Privilege::Create], StatementClass::Ddl)
             .await?;
-        let fields: Vec<_> = specified
-            .iter()
-            .map(|c| c.data_type.to_arrow_field(&c.name, c.nullable))
-            .collect();
+        let fields: Vec<_> = specified.iter().map(log_field).collect();
         let schema = std::sync::Arc::new(arrow_schema::Schema::new(fields));
         let source =
             super::delta_source(&self.qualify_path(&table.location.display().to_string())?);
@@ -348,6 +375,153 @@ impl Session {
             ..TableLayout::default()
         };
         self.add_table(table, mode, true).await
+    }
+
+    /// The Delta path a `CREATE TABLE delta.`<path>` .. USING delta` names, as written: `delta`
+    /// and an absolute path (delta-spark's `isPathIdentifier`: Hadoop's `Path.isAbsolute`, so
+    /// `delta.`rel/dir`` is a table `dir`.. in namespace `delta`), no catalog table of that name, `USING delta`. Any other target is
+    /// `None` (a catalog table, or a name the name checks refuse).
+    pub(super) fn delta_path_target(
+        &self,
+        t: &CreateTable,
+        env: &QueryEnv,
+    ) -> Result<Option<String>, KrishivError> {
+        let using_delta = t.using.as_ref().is_some_and(
+            |u| matches!(u.parts.as_slice(), [only] if only.value.eq_ignore_ascii_case(DELTA)),
+        );
+        if !using_delta {
+            return Ok(None);
+        }
+        let name = self.table_name(&t.name, env)?;
+        Ok(match crate::access::ddl_parts(&t.name, env)?.as_slice() {
+            [format, path]
+                if format.eq_ignore_ascii_case(DELTA)
+                    && absolute(path)
+                    && self
+                        .state
+                        .catalog
+                        .store
+                        .table(&name.namespace, &name.name)
+                        .is_none() =>
+            {
+                Some(path.clone())
+            }
+            _ => None,
+        })
+    }
+
+    /// `CREATE TABLE [IF NOT EXISTS] delta.`<path>` (columns) USING delta [PARTITIONED BY ..]
+    /// [COMMENT ..] [TBLPROPERTIES ..]`: version 0 of a new Delta table at `path`, no catalog
+    /// entry, as delta-spark 4.4.1 does (`tests/fixtures/delta-4.4.1/CREATE-PATH.json`). A Delta
+    /// table or any file already at the path is `TABLE_OR_VIEW_ALREADY_EXISTS` naming
+    /// `` `delta`.`<path>` `` (nothing with `IF NOT EXISTS`), checked before the column list.
+    ///
+    /// # Errors
+    /// `TABLE_OR_VIEW_ALREADY_EXISTS`; refused by name (`UNSUPPORTED_FEATURE.TABLE_OPERATION`),
+    /// where delta-spark creates a table: `OR REPLACE`, CTAS, no columns, a table `COMMENT` (the
+    /// kernel writes no `description`), `OPTIONS`, a
+    /// `LOCATION` other than the path, `CLUSTERED BY`; the access check (`CREATE` on the path);
+    /// the kernel's create errors; storage errors.
+    pub(super) async fn create_delta_path_table(
+        &self,
+        t: &CreateTable,
+        path: &str,
+        original: &str,
+    ) -> Result<(), KrishivError> {
+        let shown = format!("`delta`.`{}`", path.replace('`', "``"));
+        if t.temporary {
+            return Err(unsupported("CREATE TEMPORARY TABLE"));
+        }
+        if t.file_format.is_some() || t.row_format.is_some() {
+            return Err(NotSupportedCommandWithoutHiveSupport {
+                cmd: "CREATE Hive TABLE (AS SELECT)".to_owned(),
+            }
+            .into());
+        }
+        let refused = |operation: &str| Err(delta_write_refused(shown.clone(), operation));
+        if t.or_replace {
+            return refused("CREATE OR REPLACE TABLE by path");
+        }
+        if t.as_query.is_some() {
+            return refused("CREATE TABLE ... AS SELECT by path");
+        }
+        if t.bucket.is_some() || t.skew.is_some() || !t.cluster_by.is_empty() {
+            return refused("CREATE TABLE ... CLUSTERED BY");
+        }
+        if !t.options.is_empty() {
+            return refused("CREATE TABLE ... OPTIONS by path");
+        }
+        let qualified = self.qualify_path(path)?;
+        if let Some(location) = &t.location
+            && self.qualify_path(location)? != qualified
+        {
+            return refused("CREATE TABLE by path with another LOCATION");
+        }
+        // A local root is acted on as the access check resolved it (links followed, canonical):
+        // the occupancy check, the directory made and the table written all use that path.
+        let checked = match qualified.strip_prefix("file:") {
+            Some(local) => Some(
+                self.authorize_path(Path::new(local), &[Privilege::Create], StatementClass::Ddl)
+                    .await?,
+            ),
+            None => {
+                self.authorize_qualified_root(
+                    &qualified,
+                    &[Privilege::Create],
+                    StatementClass::Ddl,
+                )
+                .await?;
+                None
+            }
+        };
+        let root = match &checked {
+            Some(dir) => format!("file:{}", dir.path.display()),
+            None => qualified.clone(),
+        };
+        let source = super::delta_source(&root);
+        let env = self.query_env();
+        // delta-spark's `tableExists` for a path: a Delta table there, or anything at all in the
+        // directory (a Parquet directory is "already exists" too; an empty directory is not).
+        let occupied = env.catalog.delta.holds_files(&source).await?;
+        if occupied {
+            if t.if_not_exists {
+                return Ok(());
+            }
+            return Err(krishiv_common::error::TableOrViewAlreadyExists {
+                relation_name: shown,
+            }
+            .into());
+        }
+        let (partition_names, typed_partitions) = partition_fields(&t.partitioned_by)?;
+        let mut declared = self.declared_columns(t, original, &typed_partitions)?;
+        keep_not_null(&mut declared, t, &typed_partitions);
+        if declared.is_empty() {
+            return refused("CREATE TABLE without columns where there is no Delta table");
+        }
+        // delta-spark writes the comment as the log's `description`; the kernel's create
+        // writes none, so it is refused rather than dropped.
+        if t.comment.is_some() {
+            return refused("CREATE TABLE ... COMMENT by path");
+        }
+        // The declared order, partition columns where they were written (delta-spark keeps it).
+        let fields: Vec<_> = declared.iter().map(log_field).collect();
+        let schema = std::sync::Arc::new(arrow_schema::Schema::new(fields));
+        let new = env.catalog.delta.new_table(
+            &source,
+            &schema,
+            partition_names,
+            options_of(&t.tblproperties, original),
+            None,
+        )?;
+        if let Some(dir) = &checked {
+            self.create_checked_dir(
+                &dir.path,
+                &dir.shown,
+                Privilege::Create,
+                StatementClass::Ddl,
+            )?;
+        }
+        new.create_empty(&crate::session::job_uuid()).await
     }
 
     /// `CREATE TEMPORARY VIEW v USING delta OPTIONS (path 'p')`: a read of the Delta table at

@@ -256,6 +256,29 @@ impl Parser<'_> {
             })
     }
 
+    /// Whether the token before this one is an arithmetic, bitwise, string
+    /// or comparison operator (the word `DIV` included), after which an
+    /// operand must follow.
+    fn operator_before(&self) -> bool {
+        use Sym::{
+            Amp, Caret, Concat, Eq, Ge, Gt, Le, Lt, Minus, Neq, NullSafeEq, Percent, Pipe, Plus,
+            Shl, Shr, Shru, Slash, Star, Tilde,
+        };
+        self.pos
+            .checked_sub(1)
+            .and_then(|i| self.toks.get(i))
+            .is_some_and(|t| match t.kind {
+                TokenKind::Sym(s) => [
+                    Amp, Caret, Concat, Eq, Ge, Gt, Le, Lt, Minus, Neq, NullSafeEq, Percent, Pipe,
+                    Plus, Shl, Shr, Shru, Slash, Star, Tilde,
+                ]
+                .contains(&s),
+                // `1 DIV FROM AS x` is `(1 div from) AS x` (Spark 4.2.0 run).
+                TokenKind::Word => crate::keywords::is_kw(t.span.text(self.src), "DIV"),
+                _ => false,
+            })
+    }
+
     fn exists_follows(&self) -> bool {
         self.kw_at(0, "EXISTS") && self.sym_at(1, Sym::LParen) && self.query_follows(2)
     }
@@ -1043,9 +1066,15 @@ impl Parser<'_> {
             };
         // `NOT` here, where no boolean expression may start, and a lone
         // `CASE` are columns, as ANTLR reads them (`1 + NOT a`).
+        // A word that starts no primary of its own right after an operator
+        // is a column whatever follows, as the operator needs an operand
+        // (`1 + FROM range(1)` is `1 + from AS range`, then the `(` fails;
+        // Spark 4.2.0, SQL-38).
         let keyword_column = !identifier
             && !self.opts.enforce_reserved_keywords
-            && (self.kw_at(0, "NOT") || (self.kw_at(0, "CASE") && self.case_is_column()));
+            && (self.kw_at(0, "NOT")
+                || (self.kw_at(0, "CASE") && self.case_is_column())
+                || (self.class(0) & PRIMARY_WORD == 0 && self.operator_before()));
         if !identifier && (reserved_call || keyword_column || self.reserved_column_here()) {
             parts.push(self.keyword_ident());
         } else {
@@ -1514,12 +1543,26 @@ impl Parser<'_> {
         start: usize,
     ) -> PR<Function> {
         let mut null_treatment = self.null_treatment();
-        // After a plain column name Spark also inserts a missing `)`.
+        // ANTLR's recovery at a missing `)` (Spark 4.2.0 run, SQL-38 and its review): when every
+        // argument is a bare one-part name or a literal and the last token is a word, it inserts
+        // the `)` (`f(a`, `f(TRUE`, `f(a, b`: `: missing ')'`). An argument that is anything
+        // more (`f(1 + a`, `f(a IS NULL`, `f(a.b`, `f(g(a)`) ends its prediction: alone it gives
+        // no hint, beside another argument the end of input is extra (`f(a, 1 + b`,
+        // `f(1 + a, b`: `: extra input end of input`), as after a comma list.
+        let simple = |a: &FunctionArg| match &a.expr.kind {
+            ExprKind::Column(parts) => parts.len() == 1,
+            ExprKind::Literal(_) => true,
+            _ => false,
+        };
+        let all_simple = args.iter().all(simple);
         let after_name = quantifier.is_none()
+            && all_simple
             && self.pos > 0
             && self.toks.get(self.pos - 1).map(|t| t.kind) == Some(TokenKind::Word);
         let how = if after_name {
             Close::DropOrInsert
+        } else if quantifier.is_none() && !all_simple && args.len() >= 2 {
+            Close::List(args.len())
         } else {
             Close::Drop
         };

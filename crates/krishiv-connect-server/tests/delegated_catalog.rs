@@ -53,6 +53,27 @@ type Seen = Arc<Mutex<Vec<(String, String, String)>>>;
 /// `x-<subject>`; `db.t` exists only for `x-alice-jwt`, answered with `table` (a `loadTable`
 /// body) when given, else with a table on `s3://b/t` this test never reads.
 fn fake_catalog(table: Option<String>) -> (String, Seen) {
+    fake_catalog_with(move |path, auth| {
+        match path {
+        "/v1/namespaces/db/tables/t" if auth == "Bearer x-alice-jwt" => Some((
+            200,
+            table.clone().unwrap_or_else(|| {
+                r#"{"metadata-location": "s3://b/t/metadata/v1.metadata.json",
+                        "metadata": {"format-version": 2, "table-uuid": "u", "location": "s3://b/t"},
+                        "config": {}}"#
+                    .to_owned()
+            }),
+        )),
+        _ => None,
+    }
+    })
+}
+
+/// [`fake_catalog`]'s IdP and `/v1/config`, with `route(path, authorization)` answering every other request
+/// (`None`: 404 `NoSuchTableException`).
+fn fake_catalog_with(
+    route: impl Fn(&str, &str) -> Option<(u16, String)> + Send + 'static,
+) -> (String, Seen) {
     let listener = StdListener::bind("127.0.0.1:0").expect("bind");
     let base = format!("http://{}", listener.local_addr().expect("addr"));
     let seen: Seen = Arc::default();
@@ -98,20 +119,13 @@ fn fake_catalog(table: Option<String>) -> (String, Seen) {
                     )
                 }
                 "/v1/config" => (200, r#"{"defaults": {}, "overrides": {}}"#.to_owned()),
-                "/v1/namespaces/db/tables/t" if auth == "Bearer x-alice-jwt" => (
-                    200,
-                    table.clone().unwrap_or_else(|| {
-                        r#"{"metadata-location": "s3://b/t/metadata/v1.metadata.json",
-                        "metadata": {"format-version": 2, "table-uuid": "u", "location": "s3://b/t"},
-                        "config": {}}"#
-                            .to_owned()
-                    }),
-                ),
-                _ => (
-                    404,
-                    r#"{"error": {"message": "no", "type": "NoSuchTableException", "code": 404}}"#
-                        .to_owned(),
-                ),
+                other => route(other, &auth).unwrap_or_else(|| {
+                    (
+                        404,
+                        r#"{"error": {"message": "no", "type": "NoSuchTableException", "code": 404}}"#
+                            .to_owned(),
+                    )
+                }),
             };
             let head = format!(
                 "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -163,6 +177,7 @@ impl Authenticator for TestAuth {
 fn manager(
     base: &str,
     mode: DeclMode,
+    config: &[(&str, &str)],
 ) -> (
     Arc<SessionManager>,
     Arc<krishiv_session::auth::DeniedCounts>,
@@ -190,8 +205,11 @@ fn manager(
         CatalogSetup::new(mode).factory(Arc::new(IcebergRestFactory)),
         |s, (k, v)| s.setting(k, v),
     );
-    let runtime = EngineRuntime::builder()
-        .catalogs(setup)
+    let runtime = config
+        .iter()
+        .fold(EngineRuntime::builder().catalogs(setup), |b, (k, v)| {
+            b.config(*k, *v)
+        })
         .build()
         .expect("runtime");
     let base_session = Session::builder()
@@ -208,7 +226,16 @@ fn manager(
 }
 
 async fn start(base: &str, mode: DeclMode) -> (Channel, oneshot::Sender<()>) {
-    let (manager, denials) = manager(base, mode);
+    start_with(base, mode, &[]).await
+}
+
+/// [`start`] over a runtime with `config` too.
+async fn start_with(
+    base: &str,
+    mode: DeclMode,
+    config: &[(&str, &str)],
+) -> (Channel, oneshot::Sender<()>) {
+    let (manager, denials) = manager(base, mode, config);
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let server = ConnectServer::new(manager, ConnectServerConfig::default())
@@ -385,7 +412,7 @@ async fn oidc_session_reaches_delegated_catalog_with_the_exchanged_token() {
 async fn analyze_plan_uses_its_own_requests_token() {
     use krishiv_connect::proto::v4_3::analyze_plan_request::{self as areq, Analyze};
     let (base, seen) = fake_catalog(None);
-    let (manager, _) = manager(&base, DeclMode::Server);
+    let (manager, _) = manager(&base, DeclMode::Server, &[]);
     let credential = |token: &str| {
         InboundCredential::new(
             CredentialKind::Oidc,
@@ -540,4 +567,181 @@ async fn read_stream_of_a_delegated_catalog_table_refused() {
             .any(|(p, _, _)| p.starts_with("/v1/namespaces")),
         "the catalog was asked for a table"
     );
+}
+
+/// A `loadTable` body of `table` vending `key_id` for `s3://bucket/wh` for an hour.
+fn vended_body(table: &krishiv_connectors_iceberg::testing::WrittenTable, key_id: &str) -> String {
+    let expires = (SystemTime::now() + Duration::from_secs(3600))
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("epoch")
+        .as_millis();
+    format!(
+        r#"{{"metadata-location": {}, "metadata": {}, "config": {{}},
+            "storage-credentials": [{{"prefix": "s3://bucket/wh", "config": {{
+                "s3.access-key-id": "{key_id}", "s3.secret-access-key": "secret-of-{key_id}",
+                "s3.session-token-expires-at-ms": "{expires}"}}}}]}}"#,
+        serde_json::Value::String(table.metadata_location.clone()),
+        table.metadata
+    )
+}
+
+/// The table on a loopback S3 stand-in (written with a key every later request is denied) and a delegated catalog
+/// vending each user `AKIA<USER>` for it.
+async fn vending_lake() -> (krishiv_catalogs::testing::S3Server, String, Seen) {
+    let s3 = krishiv_catalogs::testing::serve_s3();
+    let writer = s3.clone();
+    let table = tokio::task::spawn_blocking(move || {
+        krishiv_catalogs::testing::write_s3_table(&writer, "s3://bucket/wh", "AKIAWRITER")
+    })
+    .await
+    .expect("join");
+    s3.deny("AKIAWRITER");
+    let (base, seen) = fake_catalog_with(move |path, auth| {
+        let user = auth.strip_prefix("Bearer x-")?.strip_suffix("-jwt")?;
+        (path == "/v1/namespaces/db/tables/t").then(|| {
+            (
+                200,
+                vended_body(&table, &format!("AKIA{}", user.to_ascii_uppercase())),
+            )
+        })
+    });
+    (s3, base, seen)
+}
+
+/// Design P3-T067 §4.4 `vended_blocks_not_shared_across_delegated_users`: over single-node Connect, Alice and Bob
+/// read one vended table with the key the catalog vended each of them; Bob's read fetches the data files with his own
+/// key, never from blocks Alice's read cached.
+///
+/// Not the mutation guard for the §4.4 scope encoding: a vended read's stores are scoped (`#scope:<nonce>` ids, one
+/// nonce per query), so no two queries share vended blocks whatever `cache_scope` returns. The encoding itself is
+/// pinned by `krishiv-catalogs` `declared::vended::tests::block_cache_scope_encoding_no_collision`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn vended_blocks_not_shared_across_delegated_users() {
+    let (s3, base, _) = vending_lake().await;
+    let config = [
+        ("fs.s3a.endpoint", s3.endpoint.as_str()),
+        ("fs.s3a.region", "us-east-1"),
+    ];
+    let (channel, _stop) = start_with(&base, DeclMode::Server, &config).await;
+    let want = [(1, "a"), (2, "b"), (3, "c")].map(|(i, n)| (i, n.to_owned()));
+    let mut data_reads = Vec::new();
+    for (user, key) in [
+        ("alice", "AKIAALICE"),
+        ("bob", "AKIABOB"),
+        ("alice", "AKIAALICE"),
+    ] {
+        s3.clear_seen();
+        let got = execute(
+            &channel,
+            "SELECT id, name FROM lake.db.t",
+            &format!("{user}-jwt"),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{user} reads: {e:?}"));
+        assert_eq!(rows(&got), want, "{user}");
+        let seen = s3.seen();
+        assert!(
+            seen.iter().all(|r| r.key_id.as_deref() == Some(key)),
+            "{user}: {seen:?}"
+        );
+        data_reads.push(
+            seen.iter()
+                .filter(|r| r.method == "GET" && r.object.ends_with(".parquet"))
+                .count(),
+        );
+    }
+    assert!(data_reads[0] > 0, "{data_reads:?}");
+    assert!(
+        data_reads[1] > 0,
+        "Bob's read was served from Alice's blocks: {data_reads:?}"
+    );
+}
+
+/// Design P3-T067 §6 `catalog_mode_matrix` (the legs krishiv2 runs): one vended table read by an embedded session
+/// and over single-node Connect gives the same rows, each signed only with a vended key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_mode_matrix() {
+    let (s3, base, _) = vending_lake().await;
+    let config = [
+        ("fs.s3a.endpoint", s3.endpoint.as_str()),
+        ("fs.s3a.region", "us-east-1"),
+    ];
+    // Single-node Connect, server-mode declaration, delegated: Alice's vended key.
+    let (channel, _stop) = start_with(&base, DeclMode::Server, &config).await;
+    s3.clear_seen();
+    let connect = rows(
+        &execute(&channel, "SELECT id, name FROM lake.db.t", "alice-jwt")
+            .await
+            .expect("connect reads"),
+    );
+    assert_eq!(s3.key_ids(), [Some("AKIAALICE".to_owned())].into());
+    // Embedded session: the same declaration in embedded mode, the caller's token set on the session.
+    let token_endpoint = format!("{base}/token");
+    let embedded_setup = [
+        ("krishiv.catalog.lake.type", "iceberg-rest"),
+        ("krishiv.catalog.lake.uri", base.as_str()),
+        ("krishiv.catalog.lake.allowInsecure", "true"),
+        ("krishiv.catalog.lake.auth", "delegated"),
+        ("krishiv.catalog.lake.audience", "lake"),
+        ("krishiv.catalog.lake.actorToken", "none"),
+        (
+            "krishiv.catalog.lake.tokenEndpoint",
+            token_endpoint.as_str(),
+        ),
+        ("krishiv.catalog.lake.storage", "vended"),
+    ]
+    .iter()
+    .fold(
+        CatalogSetup::new(DeclMode::Embedded).factory(Arc::new(IcebergRestFactory)),
+        |s, (k, v)| s.setting(*k, *v),
+    );
+    let runtime = config
+        .iter()
+        .fold(
+            EngineRuntime::builder().catalogs(embedded_setup),
+            |b, (k, v)| b.config(*k, *v),
+        )
+        .build()
+        .expect("runtime");
+    let session = Session::builder()
+        .runtime(runtime)
+        .principal(Principal::new("alice", PrincipalKind::User))
+        .build()
+        .expect("session");
+    session.set_inbound_credential(
+        Method::Oidc,
+        Some(InboundCredential::new(
+            CredentialKind::Oidc,
+            SecretString::new("alice-jwt"),
+            ExchangeClaims::with_audiences(vec!["krishiv".to_owned()]),
+            SystemTime::now() + Duration::from_secs(3600),
+        )),
+    );
+    s3.clear_seen();
+    let embedded = async {
+        session
+            .sql("SELECT id, name FROM lake.db.t")
+            .await?
+            .collect()
+            .await
+    }
+    .await
+    .expect("embedded reads");
+    assert_eq!(s3.key_ids(), [Some("AKIAALICE".to_owned())].into());
+    let mut embedded_rows: Vec<(i64, String)> = Vec::new();
+    for b in &embedded {
+        use arrow_array::cast::AsArray;
+        let ids = b.column(0).as_primitive::<arrow_array::types::Int64Type>();
+        let names = b.column(1);
+        for i in 0..b.num_rows() {
+            let name = names
+                .as_string_view_opt()
+                .map(|v| v.value(i).to_owned())
+                .or_else(|| names.as_string_opt::<i32>().map(|v| v.value(i).to_owned()))
+                .expect("a string column");
+            embedded_rows.push((ids.value(i), name));
+        }
+    }
+    embedded_rows.sort();
+    assert_eq!(embedded_rows, connect);
 }

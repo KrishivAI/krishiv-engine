@@ -7,6 +7,8 @@
 //
 //   java -cp flight-sql-jdbc-driver.jar FlightSqlJdbc.java <url> <q1> <q1 with ?> <date for ?>
 //     [<url with user= and password=> <url with another user=>]
+//   java -cp flight-sql-jdbc-driver.jar FlightSqlJdbc.java tpch <url> <queries dir> <tpch dir>
+//     runs q01.sql..q22.sql over the eight TPC-H Parquet files and prints TPCH q<n> <rows> <columns>
 //
 // Prints, one per line:
 //   QUERY <name>, then COL <label>|<java.sql.Types code>|<precision>|<scale> per column and
@@ -86,7 +88,53 @@ public final class FlightSqlJdbc {
         }
     }
 
+    private static final String[] TPCH_TABLES =
+        {"part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation", "region"};
+
+    /** `sql` with each TPC-H table a CTE over its Parquet file, spliced into the query's own WITH. */
+    static String tpchQuery(String sql, java.nio.file.Path dir) {
+        StringBuilder ctes = new StringBuilder();
+        for (String t : TPCH_TABLES) {
+            if (ctes.length() > 0) {
+                ctes.append(", ");
+            }
+            ctes.append(t).append(" AS (SELECT * FROM parquet.`")
+                .append(dir.resolve(t + ".parquet")).append("`)");
+        }
+        String body = sql.strip();
+        while (body.endsWith(";")) {
+            body = body.substring(0, body.length() - 1).strip();
+        }
+        if (body.regionMatches(true, 0, "WITH", 0, 4)) {
+            return "WITH " + ctes + ", " + body.substring(4).stripLeading();
+        }
+        return "WITH " + ctes + " " + body;
+    }
+
+    /** q1..q22 as Statements: each must run and read to its end; prints the row and column counts. */
+    private static void tpch(String url, java.nio.file.Path queries, java.nio.file.Path data)
+            throws Exception {
+        try (Connection conn = DriverManager.getConnection(url)) {
+            for (int n = 1; n <= 22; n++) {
+                String text = java.nio.file.Files.readString(queries.resolve(String.format("q%02d.sql", n)));
+                try (Statement st = conn.createStatement();
+                     ResultSet rs = st.executeQuery(tpchQuery(text, data))) {
+                    int columns = rs.getMetaData().getColumnCount();
+                    long rows = 0;
+                    while (rs.next()) {
+                        rows++;
+                    }
+                    System.out.println("TPCH q" + n + " " + rows + " " + columns);
+                }
+            }
+        }
+    }
+
     public static void main(String[] args) throws Exception {
+        if (args.length == 4 && args[0].equals("tpch")) {
+            tpch(args[1], java.nio.file.Path.of(args[2]), java.nio.file.Path.of(args[3]));
+            return;
+        }
         if (args.length != 4 && args.length != 6) {
             System.err.println(
                 "usage: FlightSqlJdbc <url> <q1> <q1 with ?> <date for ?> [<basic url> <wrong basic url>]");
