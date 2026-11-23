@@ -421,7 +421,7 @@ fn a_refused_statement_is_listed_with_its_class_once_it_parsed() {
         ("SELECT a FROM zr_missing", "READ"),
         ("INSERT INTO zr_missing VALUES (1)", "WRITE"),
         ("DROP TABLE zr_missing", "DDL"),
-        ("SELEC 1", "-"),
+        ("SELECT 1 +", "-"),
     ];
     for (i, (sql, class)) in cases.iter().enumerate() {
         let tag = format!("ui-run-28-{i}");
