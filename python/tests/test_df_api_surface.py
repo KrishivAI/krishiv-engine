@@ -500,3 +500,10 @@ def test_col_regex_qualifier_selects_one_side_of_a_join(spark: SparkSession) -> 
     joined = left.join(right, F.col("l.k") == F.col("r.k"))
     assert joined.select(joined.colRegex("l.`^a.*`")).collect() == [Row(ax=1)]
     assert joined.select(joined.colRegex("r.`^a.*`")).collect() == [Row(ay=3)]
+
+
+def test_with_columns_empty_keeps_duplicate_named_columns(spark: SparkSession) -> None:
+    left = spark.createDataFrame([(1, 2)], "a int, k int").alias("l")
+    right = spark.createDataFrame([(3, 2)], "a int, k int").alias("r")
+    joined = left.join(right, F.col("l.k") == F.col("r.k"))
+    assert joined.withColumns({}).columns == ["a", "k", "a", "k"]
