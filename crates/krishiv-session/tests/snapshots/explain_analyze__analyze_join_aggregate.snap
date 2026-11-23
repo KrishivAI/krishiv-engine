@@ -10,7 +10,7 @@ Sort [name#3 ASC NULLS FIRST]
 :  · sink   #1 Sort p1: in 4 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>
 :  · source #10 Sort p0: out 4 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)
 +- Exchange rangepartitioning(name#3 ASC NULLS FIRST)
-   +- Project [name#3, count(1)#4611686018427387904 AS n#4, sum(amount#1)#4611686018427387905 AS total#5]
+   +- Project [name#3, count(1)#6 AS n#4, sum(amount#1)#7 AS total#5]
       :  · operator #9 Project p1: in 4 rows (1 batch); out 4 rows (1 batch); compute <t> (max <t>, <n> drivers)
       +- HashAggregate keys=[name#3], functions=[count(1), sum(amount#1)]
          :  · source #8 HashAggregate p1: out 4 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)

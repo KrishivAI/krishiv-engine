@@ -499,7 +499,14 @@ impl QueryHistory {
             row.wall_ns = Some(done.wall_ns);
             row.peak_memory_bytes = Some(done.peak_memory_bytes);
             row.error_class = done.error_class.map(str::to_owned);
-            row.operators = Arc::from(done.operators.as_slice());
+            row.operators = done
+                .operators
+                .iter()
+                .map(|o| OperatorRow {
+                    session_id: session.to_owned(),
+                    ..o.clone()
+                })
+                .collect();
             row.hints = done.hints.as_deref().map(Arc::from);
             if let Some(t) = done.totals {
                 row.workload_class = Some(t.workload_class);
