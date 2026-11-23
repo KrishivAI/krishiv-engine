@@ -453,7 +453,32 @@ fn arguments_spark_cannot_bind_are_refused() {
         ("retain_last => 7 / 7", "two doubles or two decimals"),
         (
             "older_than => CAST('2020-01-01' AS TIMESTAMP)",
-            "CAST of a string",
+            "CAST of a string AS TIMESTAMP",
+        ),
+        (
+            "older_than => CAST(current_date() AS TIMESTAMP)",
+            "CAST of a date AS TIMESTAMP",
+        ),
+        (
+            "older_than => CAST(DATE '2020-01-01' AS TIMESTAMP)",
+            "CAST of a date AS TIMESTAMP",
+        ),
+        (
+            "older_than => CAST(current_timestamp() AS DATE)",
+            "CAST of a timestamp AS DATE",
+        ),
+        (
+            "older_than => CAST(TIMESTAMP '2020-01-01 00:00:00' AS TIMESTAMP_NTZ)",
+            "CAST of a timestamp AS TIMESTAMP_NTZ",
+        ),
+        (
+            "older_than => CAST(TIMESTAMP_NTZ '2020-01-01 00:00:00' AS TIMESTAMP)",
+            "CAST of a timestamp_ntz AS TIMESTAMP",
+        ),
+        // Divergence toward refusal: Spark's run binds this one (see `refuse_unbindable`).
+        (
+            "older_than => CAST(date_sub(current_date(), 7) AS TIMESTAMP)",
+            "CAST of a date AS TIMESTAMP",
         ),
     ] {
         let e = call(
@@ -476,6 +501,12 @@ fn arguments_spark_cannot_bind_are_refused() {
         "retain_last => extract(DAY FROM INTERVAL 1 DAY + INTERVAL 2 DAYS)",
         "retain_last => extract(DAY FROM INTERVAL 1 DAY * 2)",
         "retain_last => datediff(current_date(), current_date()) + 1",
+        "older_than => CAST('2020-01-01' AS DATE)",
+        "older_than => CAST('2020-01-01 00:00:00' AS TIMESTAMP_NTZ)",
+        "older_than => '2020-01-01 00:00:00'",
+        "older_than => DATE '2020-01-01'",
+        "retain_last => CAST('1' AS INT)",
+        "retain_last => CAST(1.5 AS INT)",
     ] {
         let e = call(
             &s,
@@ -487,4 +518,14 @@ fn arguments_spark_cannot_bind_are_refused() {
             "{arg}: {e}"
         );
     }
+    // Timestamp to string, on a string parameter (the run used `table`).
+    let e = call(
+        &s,
+        "CALL lake.system.rewrite_data_files(table => 'db.missing', \
+         strategy => CAST(current_timestamp() AS STRING))",
+    );
+    assert!(
+        e.to_string().contains("CAST of a timestamp AS STRING"),
+        "{e}"
+    );
 }

@@ -94,16 +94,6 @@ impl Session {
             case_sensitive,
         )?;
         self.refuse_unbindable(call, query).await?;
-        // The casts run in a clone with ANSI on: a non-ANSI cast turns a bad value into `NULL`,
-        // which a procedure reads as an absent argument (an expire would fall back to its
-        // default retention).
-        let caster = if slots.iter().any(Option::is_some) {
-            let c = self.clone_session()?;
-            c.conf().set("spark.sql.ansi.enabled", "true")?;
-            Some(c)
-        } else {
-            None
-        };
         let mut args = Vec::with_capacity(slots.len());
         for (param, slot) in loaded.parameters().iter().zip(slots) {
             args.push(match slot {
@@ -113,13 +103,9 @@ impl Session {
                     let text = query
                         .get(arg.expr.span.start..arg.expr.span.end)
                         .unwrap_or_default();
-                    let caster = caster.as_ref().unwrap_or(self);
-                    caster.cast_argument(text, param.data_type).await?
+                    self.cast_argument(text, param.data_type).await?
                 }
             });
-        }
-        if let Some(c) = caster {
-            c.close();
         }
         let ctx = ProcedureContext {
             catalog: catalog.clone(),
@@ -146,7 +132,26 @@ impl Session {
         self.script_result(batch.schema(), vec![batch]).await
     }
 
-    /// `SELECT CAST((text) AS type)`: the value, as the session's `CAST` gives it.
+    /// The one row of `sql`, a `SELECT` this statement makes for itself: analyzed and run with
+    /// ANSI on whatever `spark.sql.ansi.enabled` says (a non-ANSI cast turns a bad value into
+    /// `NULL`, which a procedure reads as an absent argument: an expire would fall back to its
+    /// default retention), and through the statement-internal path, so it is no query of its own
+    /// (no `system.queries` row, no history entry).
+    async fn internal_row(&self, sql: &str) -> Result<RecordBatch, KrishivError> {
+        let mut env = self.query_env();
+        let mut config = (*env.config).clone();
+        config.set("spark.sql.ansi.enabled", "true")?;
+        env.config = std::sync::Arc::new(config);
+        env.analysis.conf.ansi = true;
+        let analysis = self.analyze_variable_query_in(sql, env).await?;
+        let batches = self.run_analyzed_variable_query(&analysis).await?;
+        batches
+            .into_iter()
+            .find(|b| b.num_rows() > 0)
+            .ok_or_else(|| crate::session::internal(format!("`{sql}` gave no row")))
+    }
+
+    /// `SELECT CAST((text) AS type)`: the value, as `CAST` gives it in ANSI mode.
     async fn cast_argument(
         &self,
         text: &str,
@@ -158,12 +163,8 @@ impl Session {
             }
             other => format!("CAST(({text}) AS {})", other.sql()),
         };
-        let frame = self.sql_boxed(&format!("SELECT {expr}")).await?;
-        let batches = frame.collect_boxed().await?;
-        let batch = batches.iter().find(|b| b.num_rows() > 0).ok_or_else(|| {
-            crate::session::internal("a procedure argument gave no row".to_owned())
-        })?;
-        value_of(batch, ty)
+        let batch = self.internal_row(&format!("SELECT {expr}")).await?;
+        value_of(&batch, ty)
     }
 }
 
@@ -287,8 +288,9 @@ enum Typed<'a> {
     AddOrSubtract(&'a Expr, &'a Expr),
     /// `/` (an implicit cast to `double` unless both sides are `double` or both `decimal`).
     Divide(&'a Expr, &'a Expr),
-    /// `CAST(x AS TIMESTAMP)` (the time zone `ResolveTimeZone` adds).
-    CastToTimestamp(&'a Expr),
+    /// `CAST(x AS <target>)`, the target as Spark's type name in lower case (the time zone
+    /// `ResolveTimeZone` adds when `Cast.needsTimeZone(from, to)`).
+    Cast(&'a Expr, String),
 }
 
 fn refuse_argument(what: &str) -> KrishivError {
@@ -296,6 +298,50 @@ fn refuse_argument(what: &str) -> KrishivError {
         feature: format!("{what} in a CALL argument"),
     }
     .into()
+}
+
+/// The kind of a type name for [`needs_time_zone`]: a `typeof` result or a cast's target as
+/// written, in lower case.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum TzKind {
+    String,
+    Date,
+    Timestamp,
+    TimestampNtz,
+    Variant,
+    Other,
+}
+
+fn tz_kind(t: &str) -> TzKind {
+    let t = t.trim();
+    if t == "string" || t.starts_with("varchar") || t.starts_with("char") {
+        TzKind::String
+    } else if t == "date" {
+        TzKind::Date
+    } else if t == "timestamp_ntz" {
+        TzKind::TimestampNtz
+    } else if t == "timestamp" || t == "timestamp_ltz" {
+        TzKind::Timestamp
+    } else if t == "variant" {
+        TzKind::Variant
+    } else {
+        TzKind::Other
+    }
+}
+
+/// Spark's `Cast.needsTimeZone` over the top-level types (nested arrays, maps and structs are not
+/// looked into): such a cast stays unresolved until `ResolveTimeZone` gives it a zone, so Spark's
+/// binding fails on it. Every pair was checked in the Spark 4.1.0 + Iceberg 1.12.0 run (string
+/// → timestamp, date → timestamp, timestamp → date, timestamp → string, timestamp ↔
+/// timestamp_ntz fail; string → date, string → timestamp_ntz, string → int bind).
+fn needs_time_zone(from: &str, to: &str) -> bool {
+    use TzKind as K;
+    matches!(
+        (tz_kind(from), tz_kind(to)),
+        (K::Variant, _)
+            | (K::String | K::Date | K::TimestampNtz, K::Timestamp)
+            | (K::Timestamp, K::String | K::Date | K::TimestampNtz)
+    )
 }
 
 /// Whether `typeof` names a date, timestamp or interval type.
@@ -328,12 +374,19 @@ impl Session {
     ///   `ts - make_interval(..)`, `ts + INTERVAL 1 DAY`, `date - date`), except an interval
     ///   with an interval of the same family (`INTERVAL 1 DAY + INTERVAL 2 DAYS` binds);
     /// - `/` unless both operands are `double` or both `decimal` (`7 / 7` fails);
-    /// - `CAST(<string> AS TIMESTAMP)`.
+    /// - a cast `Cast.needsTimeZone` holds for ([`needs_time_zone`]): `CAST('..' AS TIMESTAMP)`,
+    ///   `CAST(current_date() AS TIMESTAMP)`, `CAST(current_timestamp() AS DATE)`, timestamp to
+    ///   string, timestamp to and from `TIMESTAMP_NTZ`.
     ///
     /// These bind in the run and are taken: `1 + 1`, `2 * 3`, `length('abc')`,
-    /// `current_timestamp()`, `date_sub(current_date(), 5)`, `datediff(..)`, `interval * 2`. Other
-    /// rewrites of Spark's resolution batch (coercions of other operators, for example) are not
-    /// probed; such an argument is evaluated here, where Spark may fail.
+    /// `current_timestamp()`, `date_sub(current_date(), 5)`, `datediff(..)`, `interval * 2`,
+    /// `CAST('..' AS DATE)`, `CAST('..' AS TIMESTAMP_NTZ)`, `CAST('1' AS INT)`, a plain string or
+    /// `DATE` literal for a timestamp parameter (Spark casts those itself). Divergence toward
+    /// refusal: `CAST(date_sub(current_date(), 7) AS TIMESTAMP)` binds in the run although
+    /// `CAST(current_date() AS TIMESTAMP)` does not; both sources are `date`, so the type rule
+    /// refuses both (`older_than => date_sub(current_date(), 7)` without the cast is taken). Other
+    /// rewrites of Spark's resolution batch (coercions of other operators, casts inside nested
+    /// types) are not probed; such an argument is evaluated here, where Spark may fail.
     async fn refuse_unbindable(&self, call: &Call, query: &str) -> Result<(), KrishivError> {
         let mut typed: Vec<Typed<'_>> = Vec::new();
         let mut stack: Vec<&Expr> = call.args.iter().map(|a| &a.expr).collect();
@@ -357,14 +410,13 @@ impl Session {
                 ExprKind::Binary(l, BinaryOp::Divide, r) => typed.push(Typed::Divide(l, r)),
                 ExprKind::Cast {
                     expr, data_type, ..
-                } if query
-                    .get(data_type.span.start..data_type.span.end)
-                    .is_some_and(|t| {
-                        let t = t.trim().to_ascii_lowercase();
-                        t == "timestamp" || t.starts_with("timestamp_ltz")
-                    }) =>
-                {
-                    typed.push(Typed::CastToTimestamp(expr));
+                } => {
+                    let target = query
+                        .get(data_type.span.start..data_type.span.end)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_ascii_lowercase();
+                    typed.push(Typed::Cast(expr, target));
                 }
                 _ => {}
             }
@@ -394,10 +446,13 @@ impl Session {
                         ));
                     }
                 }
-                Typed::CastToTimestamp(x) => {
-                    let [a] = self.types_of(query, [x]).await?;
-                    if a == "string" {
-                        return Err(refuse_argument("CAST of a string AS TIMESTAMP"));
+                Typed::Cast(x, target) => {
+                    let [from] = self.types_of(query, [x]).await?;
+                    if needs_time_zone(&from, &target) {
+                        return Err(refuse_argument(&format!(
+                            "CAST of a {from} AS {}",
+                            target.to_ascii_uppercase()
+                        )));
                     }
                 }
             }
@@ -418,21 +473,24 @@ impl Session {
                 format!("typeof(({text}))")
             })
             .collect();
-        let frame = self
-            .sql_boxed(&format!("SELECT {}", items.join(", ")))
+        let batch = self
+            .internal_row(&format!("SELECT {}", items.join(", ")))
             .await?;
-        let batches = frame.collect_boxed().await?;
-        let batch = batches.iter().find(|b| b.num_rows() > 0).ok_or_else(|| {
-            crate::session::internal("a CALL argument's typeof gave no row".to_owned())
-        })?;
         let mut out: [String; N] = std::array::from_fn(|_| String::new());
         for (i, slot) in out.iter_mut().enumerate() {
             let col = batch.column(i);
+            // Fail closed: a `typeof` column of another shape must not read as a type no rule
+            // refuses.
             *slot = col
                 .as_string_opt::<i32>()
                 .map(|a| a.value(0).to_owned())
                 .or_else(|| col.as_string_view_opt().map(|a| a.value(0).to_owned()))
-                .unwrap_or_default();
+                .ok_or_else(|| {
+                    crate::session::internal(format!(
+                        "typeof of a CALL argument gave a {:?} column",
+                        col.data_type()
+                    ))
+                })?;
         }
         Ok(out)
     }
