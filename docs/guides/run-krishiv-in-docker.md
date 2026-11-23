@@ -91,8 +91,8 @@ Mount a volume only for data you want to keep or read:
 | `/certs`, read-only | the TLS certificate and key |
 
 The image declares no volumes. The server runs as uid `10001`, so a bind-mounted directory it writes to must be writable
-by that uid (`chown 10001:10001 data`), and the key and token files must be readable by it. Spill files go to the
-temporary directory inside the container; mount a volume there only if the container's own disk is small.
+by that uid (`chown 10001:10001 data`), and the key and token files must be readable by it. Spill files go to `~/.cache/krishiv/spill`, under the home directory `/var/lib/krishiv`, inside the container; set
+`krishiv.spill.dir` to a mounted local volume if the container's own disk is small.
 
 To limit what clients can reach, set `krishiv.io.local.allowedRoots=/data`. See
 [Securing a single-node server](single-node-server-security.md#path-confinement).
