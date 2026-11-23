@@ -791,7 +791,8 @@ fn security_workflows_are_wired() {
 }
 
 /// Commands and actions that publish or release something.
-const PUBLISH_MARKERS: [&str; 10] = [
+const PUBLISH_MARKERS: [&str; 11] = [
+    "docker/login-action",
     "gh-action-pypi-publish",
     "twine",
     "maturin publish",
@@ -850,10 +851,11 @@ fn release_publishing_is_manual_and_gated() {
         publishers,
         [
             "publish-crates.yml",
+            "publish-docker.yml",
             "publish-pypi.yml",
             "publish-testpypi.yml"
         ],
-        "only the three gated publishing workflows may publish"
+        "only the four gated publishing workflows may publish"
     );
 
     for (file, env) in [
@@ -954,6 +956,35 @@ fn release_publishing_is_manual_and_gated() {
             }
         }
     }
+
+    // The image (owner 2026-11-23): manual dispatch, a `v*` tag only, the `ghcr` environment, after ci.yml.
+    let docker = read(".github/workflows/publish-docker.yml");
+    let triggers: Vec<&str> = docker
+        .lines()
+        .skip_while(|l| *l != "on:")
+        .skip(1)
+        .take_while(|l| l.starts_with(' '))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        triggers,
+        ["workflow_dispatch:"],
+        "publish-docker.yml must run on manual dispatch only"
+    );
+    assert!(
+        docker.contains("startsWith(github.ref, 'refs/tags/v')")
+            && !docker.contains("refs/heads/main"),
+        "publish-docker.yml: only a v* tag may publish"
+    );
+    assert!(
+        docker.contains("    uses: $/.github/workflows/ci.yml\n")
+            && docker.contains("    needs: ci\n")
+    );
+    assert!(
+        docker.matches("environment:\n      name: ghcr\n").count() == 3
+            && !docker.contains("secrets."),
+        "publish-docker.yml: every pushing job declares the ghcr environment; the run token is the only credential"
+    );
 
     // release-plz stays a dry run until the owner changes it.
     let plz = read("release-plz.toml");

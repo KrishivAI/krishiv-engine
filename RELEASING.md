@@ -108,6 +108,16 @@ Not wired yet (each is a reviewed change by the maintainer, because it edits the
 Owner actions before the gate are listed in `ops/needs-owner.md` ("Release 0.2.0 channels and pre-publish setup"):
 crates.io keywords and description (drop `datafusion`), the PyPI classifier, the credentials, and the go/no-go.
 
+## Docker image (manual, owner's go required)
+
+`publish-docker.yml` pushes `ghcr.io/krishivai/krishiv:<version>`, `:<major.minor>` and `:latest` (a pre-release tag
+pushes only `:<version>`) as one linux/amd64 + linux/arm64 manifest built from `docker/Dockerfile`, with a BuildKit SBOM,
+max-mode provenance and a GitHub build-provenance attestation. Dispatch it from the `v*` tag (Actions tab, "Run workflow",
+choose the tag) after the tag exists; it refuses any other ref, runs `ci.yml` on the tag first and waits for the `ghcr`
+environment's approval (create the environment with required reviewers and `v*` tags only before the first run). After the
+first push, make the package public in its settings on GitHub. Verify:
+`gh attestation verify oci://ghcr.io/krishivai/krishiv:<version> --repo KrishivAI/krishiv-engine`.
+
 ## Release integrity
 
 - **Provenance:** every file in the `release-bundle` artifact (wheels, binaries, SBOMs) has a GitHub build-provenance
