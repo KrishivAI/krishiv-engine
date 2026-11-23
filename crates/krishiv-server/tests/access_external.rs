@@ -36,6 +36,8 @@ enum Mode {
     Slow,
     /// Fail every check with a `PermissionDenied` status whose message is `CANARY`.
     Canary,
+    /// No service: nothing listens on the endpoint.
+    Down,
 }
 
 struct Service {
@@ -64,7 +66,7 @@ impl AccessPolicyService for Service {
         match self.mode {
             Mode::Slow => tokio::time::sleep(Duration::from_secs(2)).await,
             Mode::Canary => return Err(tonic::Status::permission_denied(CANARY)),
-            Mode::Rule => {}
+            Mode::Rule | Mode::Down => {}
         }
         let message = request.into_inner();
         self.statements
@@ -133,6 +135,8 @@ impl World {
             "INSERT INTO secret_t VALUES (3)",
             "CREATE VIEW secret_v AS SELECT a FROM t",
             "CREATE VIEW v AS SELECT a FROM t",
+            // A definer view over a table the service refuses (review r4).
+            "CREATE VIEW dv SQL SECURITY DEFINER AS SELECT a FROM secret_t",
         ] {
             w.run(&admin, sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
         }
@@ -180,6 +184,11 @@ impl World {
             statements: Arc::clone(&statements),
         };
         let addr = self.tokio.block_on(async {
+            if mode == Mode::Down {
+                // A port that was free a moment ago, with nothing listening on it now.
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                return listener.local_addr().unwrap();
+            }
             let incoming =
                 tonic::transport::server::TcpIncoming::bind("127.0.0.1:0".parse().unwrap())
                     .unwrap();
@@ -360,13 +369,37 @@ fn a_service_error_refuses_without_its_message() {
 #[test]
 fn a_slow_or_absent_service_refuses_everything() {
     let w = World::new();
-    let (ana, _) = w.ana(Mode::Slow, Role::Admin, false);
-    for sql in [
-        "SELECT * FROM t",
-        "SELECT * FROM v",
-        "INSERT INTO t VALUES (9, 9)",
-    ] {
-        refused(w.run(&ana, sql), sql);
+    for mode in [Mode::Slow, Mode::Down] {
+        let (ana, _) = w.ana(mode, Role::Admin, false);
+        for sql in [
+            "SELECT * FROM t",
+            "SELECT * FROM v",
+            "INSERT INTO t VALUES (9, 9)",
+        ] {
+            refused(w.run(&ana, sql), sql);
+        }
+    }
+}
+
+/// Review r4: a definer view the service allows over a table it refuses is refused, whether the
+/// list holds the role matrix for data or not, and the refusal names neither the table nor the
+/// service. (A column-level refusal needs a column-level member, `grants`, which `krishiv server`
+/// does not wire yet; `krishiv-session` `access::intersection` tests cover the list's column pass.)
+#[test]
+fn a_definer_view_over_a_refused_table_is_refused() {
+    let w = World::new();
+    for roles_decide_data in [false, true] {
+        let (ana, items) = w.ana(Mode::Rule, Role::Operator, roles_decide_data);
+        let sql = "SELECT * FROM dv";
+        let e = w.run(&ana, sql).unwrap_err();
+        assert_eq!(e.error_class().name(), DENIED, "{sql}: {e}");
+        assert!(!e.to_string().contains("secret_t"), "{sql}: {e}");
+        // The service was asked about the view and, for its definer, the table.
+        let asked = items.lock().unwrap().clone();
+        assert!(asked.iter().any(|n| n == "dv"), "{asked:?}");
+        assert!(asked.iter().any(|n| n == "secret_t"), "{asked:?}");
+        // The view itself is not what was refused: an allowed definer view reads.
+        assert_eq!(w.run(&ana, "SELECT * FROM v").unwrap(), 1);
     }
 }
 

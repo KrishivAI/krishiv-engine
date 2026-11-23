@@ -19,7 +19,12 @@ service AccessPolicy {
   rpc Check(CheckRequest) returns (CheckResponse);
 
   // The policy's current version. Krishiv asks at most once a second; a change makes every cached
-  // plan analyzed under an older version miss.
+  // plan analyzed under an older version miss. Versions are compared for equality only, so any
+  // change (downwards too: a restarted service, hash-style versions) invalidates. A version is
+  // trusted for 3 s after the latest answer that reported it (a `Version` or `Check` answer); past
+  // that, or after a failed call, Krishiv reuses no cached analysis until the service answers again,
+  // so a cached plan outlives a policy change by at most 3 s plus one call's timeout. 0 means
+  // unknown, and so does a value with the top bit set (reserved): neither is ever trusted.
   rpc Version(VersionRequest) returns (VersionResponse);
 }
 
@@ -114,7 +119,8 @@ message CheckResponse {
   // One decision per request item, in order. Fewer or more decisions than items, or any value but
   // DECISION_ALLOW, deny.
   repeated Decision decisions = 1;
-  // The policy version these decisions were made under (0: unknown).
+  // The policy version these decisions were made under (0 or the top bit set: unknown; see
+  // `AccessPolicy.Version`).
   uint64 policy_version = 2;
 }
 
@@ -127,5 +133,6 @@ enum Decision {
 message VersionRequest {}
 
 message VersionResponse {
+  // The current version (0 or the top bit set: unknown; see `AccessPolicy.Version`).
   uint64 policy_version = 1;
 }

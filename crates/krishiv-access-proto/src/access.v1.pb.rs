@@ -107,7 +107,8 @@ pub struct CheckResponse {
     /// DECISION_ALLOW, deny.
     #[prost(enumeration = "Decision", repeated, tag = "1")]
     pub decisions: ::prost::alloc::vec::Vec<i32>,
-    /// The policy version these decisions were made under (0: unknown).
+    /// The policy version these decisions were made under (0 or the top bit set: unknown; see
+    /// `AccessPolicy.Version`).
     #[prost(uint64, tag = "2")]
     pub policy_version: u64,
 }
@@ -115,6 +116,7 @@ pub struct CheckResponse {
 pub struct VersionRequest {}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct VersionResponse {
+    /// The current version (0 or the top bit set: unknown; see `AccessPolicy.Version`).
     #[prost(uint64, tag = "1")]
     pub policy_version: u64,
 }

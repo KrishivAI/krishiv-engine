@@ -3,7 +3,7 @@
 //! allowed prefixes, every other decision delegated; and the `krishiv.io.*` allowlist settings it reads.
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use krishiv_common::config::{
     Config, ConfigValue, IO_LOCAL_ALLOWED_ROOTS, IO_OBJECT_STORE_ALLOWED_PREFIXES,
@@ -52,6 +52,19 @@ pub struct PathPrefixPolicy {
     roots: Vec<PathBuf>,
     prefixes: Vec<ObjectPrefix>,
     inner: Arc<dyn AccessPolicy>,
+    /// The path refusals this policy made itself (G6 review: not `inner`'s to count or label).
+    own: Arc<Mutex<OwnRefusals>>,
+}
+
+/// The most of its own refusals a [`PathPrefixPolicy`] keeps for [`AccessPolicy::denied`].
+const OWN_REFUSALS: usize = 64;
+
+#[derive(Debug, Default)]
+struct OwnRefusals {
+    /// Refused here and not yet told (the newest last).
+    waiting: Vec<(Securable, Privilege)>,
+    /// Whether the latest refusal was this policy's own.
+    latest: bool,
 }
 
 /// One allowed object-store prefix: a store and the whole key segments under it.
@@ -94,6 +107,7 @@ impl PathPrefixPolicy {
             roots,
             prefixes: Vec::new(),
             inner,
+            own: Arc::default(),
         })
     }
 
@@ -156,6 +170,7 @@ impl PathPrefixPolicy {
             roots: allowed_roots(config)?,
             prefixes: Vec::new(),
             inner,
+            own: Arc::default(),
         }
         .with_object_prefixes(config_list(config, &IO_OBJECT_STORE_ALLOWED_PREFIXES))
     }
@@ -193,6 +208,13 @@ impl PathPrefixPolicy {
 }
 
 impl PathPrefixPolicy {
+    fn own(&self) -> std::sync::MutexGuard<'_, OwnRefusals> {
+        // A poisoned lock only means a panic elsewhere held it; the list stays usable.
+        self.own
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Whether the object-store URL `text` lies under one of the prefixes.
     fn allows_object(&self, text: &str) -> bool {
         parse_object_prefix(text).is_some_and(|p| {
@@ -319,10 +341,17 @@ impl AccessPolicy for PathPrefixPolicy {
         if let Securable::Path(path) = securable
             && !self.allows(path)
         {
+            let mut own = self.own();
+            own.latest = true;
+            if own.waiting.len() >= OWN_REFUSALS {
+                own.waiting.remove(0);
+            }
+            own.waiting.push((securable.clone(), privilege));
             return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
                 reason: "path outside the allowed roots".to_owned(),
             })));
         }
+        self.own().latest = false;
         self.inner.check(principal, securable, privilege)
     }
 
@@ -331,8 +360,20 @@ impl AccessPolicy for PathPrefixPolicy {
     }
 
     fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
+        // A refusal of this policy's own is not `inner`'s: it never decided it.
+        let mut own = self.own();
+        if let Some(i) = own
+            .waiting
+            .iter()
+            .rposition(|(s, p)| s == securable && *p == privilege)
+        {
+            own.waiting.remove(i);
+            return;
+        }
+        drop(own);
         self.inner.denied(principal, securable, privilege);
     }
+
     fn prefetch<'a>(
         &'a self,
         principal: &'a Principal,
@@ -346,6 +387,80 @@ impl AccessPolicy for PathPrefixPolicy {
     }
 
     fn refusal_label(&self) -> Option<&'static str> {
+        // The confinement is the server's own rule (ADR 0046 §3a): its refusals read as `roles`.
+        if self.own().latest {
+            return None;
+        }
         self.inner.refusal_label()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use krishiv_plan::analyzer::{PrincipalKind, TableIdent};
+
+    use super::*;
+
+    /// A provider that allows, names itself `external` and counts what it is told.
+    #[derive(Default)]
+    struct Labelled {
+        told: AtomicUsize,
+    }
+
+    impl AccessPolicy for Labelled {
+        fn version(&self) -> PolicyVersion {
+            PolicyVersion(1)
+        }
+
+        fn check<'a>(
+            &'a self,
+            _: &'a Principal,
+            _: &'a Securable,
+            _: Privilege,
+        ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+            Box::pin(std::future::ready(Ok(AccessDecision::Deny {
+                reason: "no".to_owned(),
+            })))
+        }
+
+        fn denied(&self, _: &Principal, _: &Securable, _: Privilege) {
+            self.told.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn refusal_label(&self) -> Option<&'static str> {
+            Some("external")
+        }
+    }
+
+    /// G6 review: a path refused by the confinement itself is labelled as the server's rule and
+    /// never told to the provider behind it; a refusal of that provider still is.
+    #[test]
+    fn its_own_refusals_are_not_the_inner_providers() {
+        let root = tempfile::tempdir().unwrap();
+        let inner = Arc::new(Labelled::default());
+        let policy = PathPrefixPolicy::new([root.path()], Arc::clone(&inner) as _).unwrap();
+        let ana = Principal::new("ana", PrincipalKind::User);
+        let outside = Securable::Path(OptionValue::Plain("file:/etc".to_owned()));
+        let d = futures::executor::block_on(policy.check(&ana, &outside, Privilege::Select));
+        assert!(matches!(d, Ok(AccessDecision::Deny { .. })), "{d:?}");
+        assert_eq!(policy.refusal_label(), None);
+        policy.denied(&ana, &outside, Privilege::Select);
+        assert_eq!(inner.told.load(Ordering::Relaxed), 0);
+
+        let table = Securable::Table(TableIdent {
+            catalog: "spark_catalog".to_owned(),
+            namespace: vec!["default".to_owned()],
+            name: "t".to_owned(),
+        });
+        let d = futures::executor::block_on(policy.check(&ana, &table, Privilege::Select));
+        assert!(matches!(d, Ok(AccessDecision::Deny { .. })), "{d:?}");
+        assert_eq!(policy.refusal_label(), Some("external"));
+        policy.denied(&ana, &table, Privilege::Select);
+        assert_eq!(inner.told.load(Ordering::Relaxed), 1);
+        // A path told again without a refusal of its own here goes to the provider.
+        policy.denied(&ana, &outside, Privilege::Select);
+        assert_eq!(inner.told.load(Ordering::Relaxed), 2);
     }
 }
