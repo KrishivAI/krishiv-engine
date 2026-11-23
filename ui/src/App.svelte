@@ -121,7 +121,7 @@
   {#if embed}
     <main class="mx-auto max-w-7xl px-3 py-4 md:px-4">
       {#if page === "queries" && route.id && route.sub === "profile"}
-        <QueryDetail id={route.id} {embed} />
+        <QueryDetail id={route.id} {embed} session={route.session} />
       {:else}
         <h1>This view cannot be embedded</h1>
       {/if}

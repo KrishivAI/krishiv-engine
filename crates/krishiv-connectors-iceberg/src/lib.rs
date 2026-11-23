@@ -23,6 +23,6 @@ pub use rest_commit::{RestCommitTransport, TransportFailure, TransportReply};
 #[cfg(feature = "testing")]
 pub mod testing {
     pub use crate::iceberg_v0::testing::{
-        CommitRefusal, LocalIo, WrittenTable, append, apply_commit, write_table,
+        CommitRefusal, LocalIo, WrittenTable, append, apply_commit, write_table, write_table_with,
     };
 }

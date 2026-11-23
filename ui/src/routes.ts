@@ -27,7 +27,8 @@ export function parseRoute(pathname: string, hash: string, search = ""): Route {
   const [hashPath, hashQuery = ""] = hash.replace(/^#\/?/, "").split("?", 2);
   // The parameters travel with the address that names the page: the hash's own, or the path's.
   const [raw, query] = hashPath !== "" ? [hashPath, hashQuery] : [fromPath, search.replace(/^\?/, "")];
-  const session = new URLSearchParams(query).get("session") || undefined;
+  // An empty qualifier (`?session=`) stays an empty string: the embedded view sends it on, and the server refuses it.
+  const session = new URLSearchParams(query).get("session") ?? undefined;
   const parts = raw.split("/").filter((p) => p !== "");
   const safe = (s: string | undefined) => {
     if (s === undefined) return undefined;

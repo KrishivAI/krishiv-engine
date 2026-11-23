@@ -18,7 +18,9 @@ use krishiv_connectors_iceberg::testing::{
 };
 use krishiv_exec::planner::TableProvider;
 use krishiv_session::catalog_decl::DeclMode;
-use krishiv_session::catalog_registry::{CallerCatalog, CatalogCaller, CatalogFactory, ScanInputs};
+use krishiv_session::catalog_registry::{
+    CallerCatalog, CatalogCaller, CatalogFactory, ScanInputs, ScopedStores,
+};
 use krishiv_store::egress::PrivateAddresses;
 
 use super::IcebergRestFactory;
@@ -125,7 +127,9 @@ fn open(catalog: &Arc<dyn CallerCatalog>, io: &LocalIo) -> Arc<dyn TableProvider
     ))
     .unwrap()
     .unwrap();
-    let inputs = ScanInputs::new(io.io(), io.paths(), Arc::new(Config::new()), 1);
+    let config = Arc::new(Config::new());
+    let stores = ScopedStores::new(Arc::clone(&config), Arc::clone(io.io().scheduler()), "/");
+    let inputs = ScanInputs::new(io.io(), io.paths(), config, 1, stores);
     block_on(loaded.table.unwrap().open(inputs)).unwrap()
 }
 
