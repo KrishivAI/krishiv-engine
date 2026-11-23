@@ -666,15 +666,8 @@ impl Config {
     /// The canonical keys of registered entries with explicitly set values, in order, with each value's text
     /// as it was set (`spark.conf.get` and `SET` show this text, as Spark's `getConfString` does).
     pub fn explicit_registered_as_set(&self) -> Vec<(&'static str, String)> {
-        self.values
-            .iter()
-            .map(|(k, v)| {
-                (
-                    *k,
-                    self.texts.get(k).cloned().unwrap_or_else(|| v.to_string()),
-                )
-            })
-            .collect()
+        // `set` writes a value and its text together, and `unset` / `reset_key` drop or copy both.
+        self.texts.iter().map(|(k, t)| (*k, t.clone())).collect()
     }
 
     /// The value of `entry` as text, as `spark.conf.get` shows it: the text it was set to, else its default's
