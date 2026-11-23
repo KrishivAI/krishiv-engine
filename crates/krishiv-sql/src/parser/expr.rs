@@ -257,7 +257,8 @@ impl Parser<'_> {
     }
 
     /// Whether the token before this one is an arithmetic, bitwise, string
-    /// or comparison operator, after which an operand must follow.
+    /// or comparison operator (the word `DIV` included), after which an
+    /// operand must follow.
     fn operator_before(&self) -> bool {
         use Sym::{
             Amp, Caret, Concat, Eq, Ge, Gt, Le, Lt, Minus, Neq, NullSafeEq, Percent, Pipe, Plus,
@@ -272,6 +273,8 @@ impl Parser<'_> {
                     Plus, Shl, Shr, Shru, Slash, Star, Tilde,
                 ]
                 .contains(&s),
+                // `1 DIV FROM AS x` is `(1 div from) AS x` (Spark 4.2.0 run).
+                TokenKind::Word => crate::keywords::is_kw(t.span.text(self.src), "DIV"),
                 _ => false,
             })
     }
