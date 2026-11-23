@@ -309,6 +309,10 @@ result. Pending, not stubbed: MERGE through SQL. See
 - **Merge-on-read drops (review 36c1 M3):** a `MorTask::finish` dropped midway deletes its delete files and finished
   data files in the background, and a `put` dropped in flight deletes its file once the store is done; a data file
   whose close is dropped after the store completed it is `write.rs`'s documented limit (an unreferenced file).
+- **Expire cleanup memory (PR-36e, review of #983):** `maintenance/expire.rs` `cleanup` holds the paths every
+  removed snapshot reached, every kept snapshot reached and the decoded manifests' paths in memory, uncharged to any
+  pool (each manifest is capped by `krishiv.catalog.maxMetadataBytes`, the sum is not), as Java's
+  `ReachableFileCleanup` holds its sets. Follow-up: charge the sets to the procedure's pool or walk in bounded batches.
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
 - A deletion vector is read at the length its manifest declares (`deletes.rs` `read_dv`) without the
   `krishiv.catalog.maxMetadataBytes` cap the metadata files get; its memory is charged to the query (the decode's transient copy aside; review of the

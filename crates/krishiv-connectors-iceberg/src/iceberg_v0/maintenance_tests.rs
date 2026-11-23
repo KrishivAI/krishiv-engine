@@ -17,6 +17,9 @@ use super::cow_tests::{Dml, append, create};
 use super::maintenance::expire::{Defaults, ExpireArgs, expire, plan};
 use super::provider_tests::{Env, env};
 use super::sink_tests::{Catalog, expected, range, read_back};
+use iceberg::spec::{
+    SnapshotReference, SnapshotRetention, TableMetadataBuilder, Transform, UnboundPartitionSpec,
+};
 
 const FAR: i64 = i64::MAX / 4;
 
@@ -182,10 +185,187 @@ fn retain_last_two_keeps_two_snapshots() {
     assert_eq!(catalog.metadata().snapshots().count(), 2);
 }
 
-/// [`Catalog`] answering every commit with one outcome and applying none.
+/// The snapshot ids from the current one back to the first, newest first.
+fn chain(meta: &TableMetadata) -> Vec<i64> {
+    let mut out = Vec::new();
+    let mut at = meta.current_snapshot_id();
+    while let Some(id) = at {
+        out.push(id);
+        at = meta.snapshot_by_id(id).and_then(|s| s.parent_snapshot_id());
+    }
+    out
+}
+
+fn edit(
+    meta: TableMetadata,
+    f: impl FnOnce(TableMetadataBuilder) -> TableMetadataBuilder,
+) -> TableMetadata {
+    f(TableMetadataBuilder::new_from_metadata(meta, None))
+        .build()
+        .unwrap()
+        .metadata
+}
+
+/// `main` at the oldest snapshot, a tag at the third: the tag's ancestors are not referenced by
+/// it (Java's `unreferencedSnapshotsToRetain`), so the young second snapshot stays.
+#[test]
+fn a_tag_references_only_its_head() {
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let meta = catalog.metadata();
+    let ids = chain(&meta);
+    let (first, second, third) = (ids[4], ids[3], ids[2]);
+    let meta = edit(meta, |b| {
+        b.set_ref(
+            "main",
+            SnapshotReference::new(
+                first,
+                SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            ),
+        )
+        .unwrap()
+        .set_ref(
+            "t1",
+            SnapshotReference::new(
+                third,
+                SnapshotRetention::Tag {
+                    max_ref_age_ms: None,
+                },
+            ),
+        )
+        .unwrap()
+    });
+    let young = ExpireArgs {
+        older_than_ms: meta.snapshot_by_id(second).map(|s| s.timestamp_ms()),
+        ..ExpireArgs::default()
+    };
+    let p = plan(&meta, &Defaults::of(&meta, FAR), &young).unwrap();
+    assert!(!p.snapshots.contains(&second), "{p:?}");
+    assert!(p.snapshots.is_empty(), "{p:?}");
+}
+
+/// Explicit ids add to the age rule's removals (Java's `RemoveSnapshots` applies both).
+#[test]
+fn explicit_ids_add_to_the_age_rule() {
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let meta = catalog.metadata();
+    let ids = chain(&meta);
+    let explicit = ExpireArgs {
+        snapshot_ids: vec![ids[4]],
+        ..args(Some(1))
+    };
+    let p = plan(&meta, &Defaults::of(&meta, FAR), &explicit).unwrap();
+    let mut want = ids[1..].to_vec();
+    want.sort_unstable();
+    assert_eq!(p.snapshots, want);
+}
+
+/// A retention property of `i64::MIN` saturates instead of overflowing.
+#[test]
+fn an_extreme_retention_property_does_not_overflow() {
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let meta = edit(catalog.metadata(), |b| {
+        b.set_properties(std::collections::HashMap::from([(
+            "history.expire.max-snapshot-age-ms".to_owned(),
+            i64::MIN.to_string(),
+        )]))
+        .unwrap()
+    });
+    let p = plan(
+        &meta,
+        &Defaults::of(&meta, FAR),
+        &ExpireArgs {
+            retain_last: Some(1),
+            ..ExpireArgs::default()
+        },
+    )
+    .unwrap();
+    // The cutoff saturates at `i64::MAX`: every unretained snapshot is old enough.
+    assert_eq!(p.snapshots.len(), 4);
+}
+
+/// The five snapshots' table with a spec 1 (identity on `x`) added, made the default when
+/// `default` holds.
+fn with_spec_one(env: &Env, default: bool) -> std::sync::Arc<Catalog> {
+    let catalog = five_snapshots(env);
+    let spec = UnboundPartitionSpec::builder()
+        .add_partition_field(2, "x_identity", Transform::Identity)
+        .unwrap()
+        .build();
+    let (meta, location) = catalog.state();
+    let meta = edit(meta, |b| {
+        let b = b.add_partition_spec(spec).unwrap();
+        if default {
+            b.set_default_partition_spec(-1).unwrap()
+        } else {
+            b
+        }
+    });
+    catalog.restore((meta, location));
+    catalog
+}
+
+fn cleaning(retain_last: Option<i64>, older_than_ms: i64) -> ExpireArgs {
+    ExpireArgs {
+        older_than_ms: Some(older_than_ms),
+        retain_last,
+        clean_expired_metadata: true,
+        ..ExpireArgs::default()
+    }
+}
+
+/// The kept snapshot's manifests were written with spec 0, no longer the default: spec 0 stays.
+#[test]
+fn a_spec_a_kept_manifest_names_is_kept() {
+    let env = env();
+    let catalog = with_spec_one(&env, true);
+    env.rt
+        .block_on(expire(
+            &*catalog,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &cleaning(Some(1), FAR),
+        ))
+        .unwrap();
+    let after = catalog.metadata();
+    assert_eq!(after.snapshots().count(), 1);
+    assert!(after.partition_spec_by_id(0).is_some());
+    assert!(after.partition_spec_by_id(1).is_some());
+}
+
+/// Spec 1 is neither the default nor named by a manifest: it is removed, alone.
+#[test]
+fn an_unreached_spec_is_removed() {
+    let env = env();
+    let catalog = with_spec_one(&env, false);
+    env.rt
+        .block_on(expire(
+            &*catalog,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &cleaning(None, 0),
+        ))
+        .unwrap();
+    let after = catalog.metadata();
+    assert_eq!(after.snapshots().count(), 5);
+    assert!(after.partition_spec_by_id(1).is_none());
+}
+
+/// [`Catalog`] answering every commit with one outcome and applying none; with `fail_reload`,
+/// every load after the first fails.
 struct Refusing {
     inner: std::sync::Arc<Catalog>,
     unknown: bool,
+    fail_reload: bool,
+    loads: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait]
@@ -203,26 +383,61 @@ impl CommitTable for Refusing {
     }
 
     async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
+        let n = self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.fail_reload && n > 0 {
+            return Err(krishiv_common::error::InternalError {
+                message: "the catalog is unreachable".to_owned(),
+            }
+            .into());
+        }
         self.inner.load(all).await
     }
 }
 
-fn expire_against(unknown: bool) -> KrishivError {
-    let env = env();
-    let catalog = five_snapshots(&env);
-    let table = Refusing {
+fn refusing(catalog: std::sync::Arc<Catalog>, unknown: bool, fail_reload: bool) -> Refusing {
+    Refusing {
         inner: catalog,
         unknown,
-    };
+        fail_reload,
+        loads: std::sync::atomic::AtomicUsize::new(0),
+    }
+}
+
+fn run_expire(env: &Env, table: &Refusing, a: &ExpireArgs) -> KrishivError {
     env.rt
-        .block_on(expire(
-            &table,
-            &env.reg.file_io(),
-            &clock(),
-            1 << 30,
-            &args(Some(1)),
-        ))
+        .block_on(expire(table, &env.reg.file_io(), &clock(), 1 << 30, a))
         .unwrap_err()
+}
+
+fn expire_against(unknown: bool) -> KrishivError {
+    let env = env();
+    let table = refusing(five_snapshots(&env), unknown, false);
+    run_expire(&env, &table, &args(Some(1)))
+}
+
+/// An unknown answer whose check cannot reload the table stays unknown, naming both causes.
+#[test]
+fn an_unknown_answer_whose_reload_fails_is_expire_state_unknown() {
+    let env = env();
+    let table = refusing(five_snapshots(&env), true, true);
+    let e = run_expire(&env, &table, &args(Some(1)));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergExpireStateUnknown
+    );
+    assert!(e.to_string().contains("could not be reloaded"), "{e}");
+}
+
+/// A request removing only a spec, answered unknown and not applied, is not taken as landed.
+#[test]
+fn an_unknown_spec_only_removal_is_expire_state_unknown() {
+    let env = env();
+    let table = refusing(with_spec_one(&env, false), true, false);
+    let e = run_expire(&env, &table, &cleaning(None, 0));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergExpireStateUnknown
+    );
 }
 
 #[test]

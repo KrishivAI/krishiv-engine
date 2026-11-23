@@ -44,7 +44,8 @@ pub(crate) struct Plan {
     pub(crate) snapshots: Vec<i64>,
     /// Refs dropped (a ref to a missing snapshot, or one past its max ref age), in name order.
     pub(crate) refs: Vec<String>,
-    /// Partition specs no kept snapshot reaches (`clean_expired_metadata`).
+    /// Partition specs no kept snapshot reaches (`clean_expired_metadata`; filled by
+    /// [`with_obsolete_specs`] from the kept snapshots' manifest lists).
     pub(crate) specs: Vec<i32>,
     /// Schemas no kept snapshot reaches (`clean_expired_metadata`).
     pub(crate) schemas: Vec<i32>,
@@ -95,10 +96,12 @@ pub(crate) fn check(meta: &TableMetadata, args: &ExpireArgs) -> Result<(), Krish
     Ok(())
 }
 
-/// The snapshots, refs, specs and schemas an expire at `now_ms` removes from `meta` (the table
-/// as loaded with every snapshot): Iceberg's `RemoveSnapshots.internalApply`. The retention
-/// defaults are read from `meta` here, so a caller that wants them read once passes the first
-/// load's `defaults`.
+/// The snapshots, refs and schemas an expire at `now_ms` removes from `meta` (the table as
+/// loaded with every snapshot): Iceberg's `RemoveSnapshots.internalApply`. The retention
+/// defaults are those of the first load (`defaults`). The specs need the kept snapshots'
+/// manifest lists, so [`with_obsolete_specs`] adds them.
+///
+/// Time arithmetic saturates: a retention property is a catalog's untrusted `i64`.
 ///
 /// # Errors
 /// `KRISHIV_ICEBERG_PROCEDURE_ARGUMENT` for an explicit snapshot a kept ref still names.
@@ -110,7 +113,7 @@ pub(crate) fn plan(
     let now = defaults.now_ms;
     let older_than = args
         .older_than_ms
-        .unwrap_or(now - defaults.max_snapshot_age_ms);
+        .unwrap_or_else(|| now.saturating_sub(defaults.max_snapshot_age_ms));
     let min_keep = args.retain_last.unwrap_or(defaults.min_snapshots_to_keep);
     let refs = snapshot_refs(meta)?;
     let ts = |id: i64| meta.snapshot_by_id(id).map(|s| s.timestamp_ms());
@@ -128,7 +131,7 @@ pub(crate) fn plan(
             | SnapshotRetention::Tag { max_ref_age_ms } => (*max_ref_age_ms, ()),
         };
         let max_ref_age = own_max_ref_age.unwrap_or(defaults.max_ref_age_ms);
-        if name != "main" && now - t > max_ref_age {
+        if name != "main" && now.saturating_sub(t) > max_ref_age {
             dropped.push(name.clone());
         } else {
             kept_refs.push((name, r));
@@ -146,7 +149,7 @@ pub(crate) fn plan(
         } = &r.retention
         {
             let keep_min = min_snapshots_to_keep.map_or(min_keep, i64::from);
-            let expire_before = max_snapshot_age_ms.map_or(older_than, |a| now - a);
+            let expire_before = max_snapshot_age_ms.map_or(older_than, |a| now.saturating_sub(a));
             let mut kept = 0_i64;
             let mut at = Some(r.snapshot_id);
             while let Some(id) = at {
@@ -163,42 +166,39 @@ pub(crate) fn plan(
             }
         }
     }
-    // Ancestors of kept refs that are in no retained set stay expirable; unreferenced snapshots
-    // stay while young.
-    let in_ancestry = ancestry(meta, kept_refs.iter().map(|(_, r)| r.snapshot_id));
+    // Explicit ids first (Java's `idsToRemove`): one a kept ref names is refused.
     let mut remove: Vec<i64> = Vec::new();
-    if args.snapshot_ids.is_empty() {
-        for s in meta.snapshots() {
-            let id = s.snapshot_id();
-            if retained.contains(&id) {
-                continue;
-            }
-            let unreferenced = !in_ancestry.contains(&id);
-            if unreferenced && s.timestamp_ms() >= older_than {
-                continue;
-            }
-            remove.push(id);
+    for &id in &args.snapshot_ids {
+        if meta.snapshot_by_id(id).is_none() {
+            continue;
         }
-    } else {
-        for &id in &args.snapshot_ids {
-            if meta.snapshot_by_id(id).is_none() {
-                continue;
-            }
-            let named: Vec<&str> = kept_refs
-                .iter()
-                .filter(|(_, r)| r.snapshot_id == id)
-                .map(|(n, _)| n.as_str())
-                .collect();
-            if !named.is_empty() {
-                let mut named = named;
-                named.sort_unstable();
-                return Err(argument(format!(
-                    "Cannot expire {id}. Still referenced by refs: [{}]",
-                    named.join(", ")
-                )));
-            }
-            remove.push(id);
+        let mut named: Vec<&str> = kept_refs
+            .iter()
+            .filter(|(_, r)| r.snapshot_id == id)
+            .map(|(n, _)| n.as_str())
+            .collect();
+        if !named.is_empty() {
+            named.sort_unstable();
+            return Err(argument(format!(
+                "Cannot expire {id}. Still referenced by refs: [{}]",
+                named.join(", ")
+            )));
         }
+        remove.push(id);
+    }
+    // Then the age rule, which explicit ids do not switch off (`unreferencedSnapshotsToRetain`):
+    // a branch references its ancestors, a tag only its head; an unreferenced snapshot stays
+    // while young; a referenced one in no retained set is expired.
+    let referenced = referenced(meta, &kept_refs);
+    for s in meta.snapshots() {
+        let id = s.snapshot_id();
+        if retained.contains(&id) {
+            continue;
+        }
+        if !referenced.contains(&id) && s.timestamp_ms() >= older_than {
+            continue;
+        }
+        remove.push(id);
     }
     remove.sort_unstable();
     remove.dedup();
@@ -211,7 +211,6 @@ pub(crate) fn plan(
     };
     if args.clean_expired_metadata {
         let removed: HashSet<i64> = plan.snapshots.iter().copied().collect();
-        let mut specs: HashSet<i32> = HashSet::from([meta.default_partition_spec_id()]);
         let mut schemas: HashSet<i32> = HashSet::from([meta.current_schema_id()]);
         for s in meta.snapshots() {
             if removed.contains(&s.snapshot_id()) {
@@ -221,30 +220,29 @@ pub(crate) fn plan(
                 schemas.insert(id);
             }
         }
-        // A kept snapshot's manifests name the specs they were written with; the spec ids a
-        // kept snapshot can reach are read from its manifest list by the caller (`reached_specs`).
-        specs.extend(defaults.kept_specs.iter().copied());
-        for spec in meta.partition_specs_iter() {
-            if !specs.contains(&spec.spec_id()) {
-                plan.specs.push(spec.spec_id());
-            }
-        }
         for schema in meta.schemas_iter() {
             if !schemas.contains(&schema.schema_id()) {
                 plan.schemas.push(schema.schema_id());
             }
         }
-        plan.specs.sort_unstable();
         plan.schemas.sort_unstable();
     }
     Ok(plan)
 }
 
-/// Every snapshot reachable from `heads` through parents.
-fn ancestry(meta: &TableMetadata, heads: impl Iterator<Item = i64>) -> HashSet<i64> {
+/// The snapshots the kept refs reference: a branch its head and every ancestor, a tag its head
+/// only (Java's `unreferencedSnapshotsToRetain`).
+fn referenced(
+    meta: &TableMetadata,
+    kept_refs: &[(&String, &iceberg::spec::SnapshotReference)],
+) -> HashSet<i64> {
     let mut seen = HashSet::new();
-    for head in heads {
-        let mut at = Some(head);
+    for (_, r) in kept_refs {
+        if !matches!(r.retention, SnapshotRetention::Branch { .. }) {
+            seen.insert(r.snapshot_id);
+            continue;
+        }
+        let mut at = Some(r.snapshot_id);
         while let Some(id) = at {
             if !seen.insert(id) {
                 break;
@@ -253,6 +251,50 @@ fn ancestry(meta: &TableMetadata, heads: impl Iterator<Item = i64>) -> HashSet<i
         }
     }
     seen
+}
+
+/// With `clean_expired_metadata`, adds to `plan` the partition specs neither the default spec
+/// nor any manifest of a kept snapshot names (Java reads every kept snapshot's manifests' spec
+/// ids before it removes a spec). Run on every attempt's base.
+///
+/// # Errors
+/// A manifest list that cannot be read: the expire fails before any request.
+pub(crate) async fn with_obsolete_specs(
+    io: &iceberg::io::FileIO,
+    meta: &TableMetadata,
+    args: &ExpireArgs,
+    mut plan: Plan,
+    max_bytes: u64,
+) -> Result<Plan, KrishivError> {
+    if !args.clean_expired_metadata {
+        return Ok(plan);
+    }
+    let removed: HashSet<i64> = plan.snapshots.iter().copied().collect();
+    let mut reached: HashSet<i32> = HashSet::from([meta.default_partition_spec_id()]);
+    let version = format_version(meta);
+    for s in meta.snapshots() {
+        if removed.contains(&s.snapshot_id()) {
+            continue;
+        }
+        for m in read_manifest_files(io, s.manifest_list(), version, max_bytes).await? {
+            reached.insert(m.partition_spec_id);
+        }
+    }
+    plan.specs = meta
+        .partition_specs_iter()
+        .map(|spec| spec.spec_id())
+        .filter(|id| !reached.contains(id))
+        .collect();
+    plan.specs.sort_unstable();
+    Ok(plan)
+}
+
+fn format_version(meta: &TableMetadata) -> u8 {
+    match meta.format_version() {
+        iceberg::spec::FormatVersion::V1 => 1,
+        iceberg::spec::FormatVersion::V2 => 2,
+        iceberg::spec::FormatVersion::V3 => 3,
+    }
 }
 
 /// The retention settings an expire reads once, from the table as loaded at its start
@@ -267,8 +309,6 @@ pub(crate) struct Defaults {
     pub(crate) min_snapshots_to_keep: i64,
     /// `history.expire.max-ref-age-ms`.
     pub(crate) max_ref_age_ms: i64,
-    /// The partition specs the kept snapshots' manifests were written with.
-    pub(crate) kept_specs: Vec<i32>,
 }
 
 impl Defaults {
@@ -281,7 +321,6 @@ impl Defaults {
             min_snapshots_to_keep: prop(meta, "history.expire.min-snapshots-to-keep")
                 .unwrap_or(MIN_SNAPSHOTS_TO_KEEP),
             max_ref_age_ms: prop(meta, "history.expire.max-ref-age-ms").unwrap_or(i64::MAX),
-            kept_specs: Vec::new(),
         }
     }
 }
@@ -376,11 +415,7 @@ async fn reachable(
     };
     let list = snapshot.manifest_list().to_owned();
     out.insert(list.clone(), Kind::ManifestList);
-    let version = match meta.format_version() {
-        iceberg::spec::FormatVersion::V1 => 1,
-        iceberg::spec::FormatVersion::V2 => 2,
-        iceberg::spec::FormatVersion::V3 => 3,
-    };
+    let version = format_version(meta);
     for m in read_manifest_files(io, &list, version, max_bytes).await? {
         out.insert(m.manifest_path.clone(), Kind::Manifest);
         let entries = if let Some(hit) = manifests.get(&m.manifest_path) {
@@ -430,29 +465,29 @@ async fn reachable(
     Ok(())
 }
 
-/// Deletes the files only the snapshots `start` has and `after` lacks reached: candidates are
-/// everything reachable from the removed snapshots in `start`, minus everything reachable from
-/// any snapshot of `after`, by path. Each delete is retried three times; one that fails is logged
-/// and not counted, and never fails the expire.
+/// Deletes the files only the `removed` snapshots reached: candidates are everything reachable
+/// from them in `base` (the metadata the applied request was planned on, which after a conflict
+/// is a reload, not the first load), minus everything reachable from any snapshot of `after`, by
+/// path. Each delete is retried three times; one that fails is logged and not counted, and never
+/// fails the expire.
+///
+/// The path sets are held in memory, uncharged, as Java's `ReachableFileCleanup` holds them
+/// (crate CLAUDE.md, known limits).
 ///
 /// # Errors
 /// A manifest list or manifest that cannot be read: nothing is deleted then.
 pub(crate) async fn cleanup(
     io: &iceberg::io::FileIO,
-    start: &TableMetadata,
+    base: &TableMetadata,
+    removed: &[i64],
     after: &TableMetadata,
     max_bytes: u64,
 ) -> Result<Deleted, KrishivError> {
     let kept: HashSet<i64> = after.snapshots().map(|s| s.snapshot_id()).collect();
-    let removed: Vec<i64> = start
-        .snapshots()
-        .map(|s| s.snapshot_id())
-        .filter(|id| !kept.contains(id))
-        .collect();
     let mut cache = HashMap::new();
     let mut candidates: HashMap<String, Kind> = HashMap::new();
-    for id in removed {
-        reachable(io, start, id, max_bytes, &mut cache, &mut candidates).await?;
+    for &id in removed.iter().filter(|id| !kept.contains(id)) {
+        reachable(io, base, id, max_bytes, &mut cache, &mut candidates).await?;
     }
     let mut valid: HashMap<String, Kind> = HashMap::new();
     for id in &kept {
@@ -500,13 +535,32 @@ pub(crate) struct Expired {
     pub(crate) deleted: Deleted,
 }
 
+/// Whether everything `plan` removes is absent from `now`.
+fn landed(now: &TableMetadata, plan: &Plan) -> bool {
+    let Ok(refs) = snapshot_refs(now) else {
+        return false;
+    };
+    plan.snapshots
+        .iter()
+        .all(|id| now.snapshot_by_id(*id).is_none())
+        && plan.refs.iter().all(|r| !refs.contains_key(r))
+        && plan
+            .specs
+            .iter()
+            .all(|id| now.partition_spec_by_id(*id).is_none())
+        && plan
+            .schemas
+            .iter()
+            .all(|id| now.schema_by_id(*id).is_none())
+}
+
 /// Runs `expire_snapshots` over `table`: loads every snapshot, plans, commits the metadata change
 /// with the retries below, then deletes what only the removed snapshots reached.
 ///
 /// A conflict reloads the table and plans again. An unknown outcome (a request that may have
-/// landed) is looked up in the table's snapshots: the planned snapshots gone means it landed;
-/// otherwise the error is `KRISHIV_ICEBERG_EXPIRE_STATE_UNKNOWN` and nothing is deleted or
-/// recomputed (design §6.1).
+/// landed) is looked up in the table: every planned snapshot, ref, spec and schema gone means it
+/// landed; otherwise, or when that load fails, the error is
+/// `KRISHIV_ICEBERG_EXPIRE_STATE_UNKNOWN` and nothing is deleted or recomputed (design §6.1).
 ///
 /// # Errors
 /// The argument and gc checks; `KRISHIV_ICEBERG_EXPIRE_FAILED` when no request applied in the
@@ -529,12 +583,13 @@ pub(crate) async fn expire(
         .unwrap_or(60_000)
         .max(min_wait);
     let name = table.name();
-    let mut meta = start.clone();
+    let mut meta = start;
     let mut last;
     let mut attempts = 0_i64;
     let mut planned: Plan;
     loop {
         planned = plan(&meta, &defaults, args)?;
+        planned = with_obsolete_specs(io, &meta, args, planned, max_metadata_bytes).await?;
         if planned.is_empty() {
             return Ok(Expired {
                 deleted: Deleted::default(),
@@ -544,31 +599,35 @@ pub(crate) async fn expire(
         attempts += 1;
         match table.commit(requirements, updates).await {
             CommitOutcome::Committed(after) => {
-                let deleted = cleanup(io, &start, &after, max_metadata_bytes).await?;
+                let deleted =
+                    cleanup(io, &meta, &planned.snapshots, &after, max_metadata_bytes).await?;
                 return Ok(Expired { deleted });
             }
             CommitOutcome::Conflict { .. } => last = "a conflicting commit".to_owned(),
             CommitOutcome::Unknown(reason) => {
                 // It may have landed: it did when the planned snapshots are gone.
-                let now = table.load(true).await?;
-                let gone = planned
-                    .snapshots
-                    .iter()
-                    .all(|id| now.snapshot_by_id(*id).is_none())
-                    && planned
-                        .refs
-                        .iter()
-                        .all(|r| snapshot_refs(&now).is_ok_and(|m| !m.contains_key(r)));
-                if gone {
-                    let deleted = cleanup(io, &start, &now, max_metadata_bytes).await?;
-                    return Ok(Expired { deleted });
+                let unknown = |reason: String| -> KrishivError {
+                    KrishivIcebergExpireStateUnknown {
+                        snapshot_ids: format!("{:?}", planned.snapshots),
+                        table: name.clone(),
+                        reason,
+                    }
+                    .into()
+                };
+                let now = match table.load(true).await {
+                    Ok(now) => now,
+                    Err(e) => {
+                        return Err(unknown(format!(
+                            "{reason}; the table could not be reloaded to check: {e}"
+                        )));
+                    }
+                };
+                if !landed(&now, &planned) {
+                    return Err(unknown(reason));
                 }
-                return Err(KrishivIcebergExpireStateUnknown {
-                    snapshot_ids: format!("{:?}", planned.snapshots),
-                    table: name,
-                    reason,
-                }
-                .into());
+                let deleted =
+                    cleanup(io, &meta, &planned.snapshots, &now, max_metadata_bytes).await?;
+                return Ok(Expired { deleted });
             }
             CommitOutcome::Failed(e) => return Err(e),
         }
