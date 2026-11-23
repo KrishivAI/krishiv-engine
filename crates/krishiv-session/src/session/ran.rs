@@ -112,6 +112,8 @@ impl Session {
         let query = self.substituted(query);
         let query: &str = &query;
         // `IDENTIFIER(expr)` names are evaluated first: parsing, access checks and the run see them.
+        // This runs before the statement's `StatementContext` scope below, so a check it made would
+        // carry an enclosing statement's context; it makes none today (the arguments are constant).
         let resolved = self.identifier_clauses_into(query, &mut env).await?;
         let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
         if !spans.is_empty() && !named_by_clause && query == written {
