@@ -466,3 +466,81 @@ fn a_row_assignment_whose_cast_fails_answers_as_spark_does() {
     );
     assert_eq!(rc(), Some(3));
 }
+
+/// A statement of a script refused before any query of it began (a missing table, an unknown variable)
+/// is listed as refused under its own text and class, beside the failed script.
+#[test]
+fn a_script_statement_refused_before_it_ran_is_listed_with_its_text_and_class() {
+    let s = Session::new().unwrap();
+    let script = "BEGIN SELECT 1; SELECT a FROM zs_missing; END";
+    assert!(!run_tagged(&s, script, "ui-run-32"));
+    assert_eq!(
+        listed(&s, "ui-run-32"),
+        [
+            format!("{script} | READ | failed"),
+            "SELECT 1 | READ | finished".to_owned(),
+            "SELECT a FROM zs_missing | READ | failed".to_owned(),
+        ]
+    );
+    let script = "BEGIN SET zs_no_such = 1; END";
+    assert!(!run_tagged(&s, script, "ui-run-33"));
+    assert_eq!(
+        listed(&s, "ui-run-33"),
+        [
+            format!("{script} | SESSION | failed"),
+            "SET zs_no_such = 1 | SESSION | failed".to_owned(),
+        ]
+    );
+}
+
+/// `EXECUTE IMMEDIATE` as a statement of a script: the query that evaluates its string and what the named
+/// statement runs are listed under the script statement's text and class. A script inside an
+/// `EXECUTE IMMEDIATE` is refused (as Spark refuses it): its row is the failed one, beside the finished
+/// query that evaluated the string.
+#[test]
+fn execute_immediate_in_a_script_is_listed_under_its_own_text() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE TABLE zh (a INT) USING parquet")).unwrap();
+    let write = "EXECUTE IMMEDIATE 'INSERT INTO zh VALUES (1)'";
+    let read = "EXECUTE IMMEDIATE 'SELECT a FROM zh'";
+    let outer = format!("BEGIN {write}; {read}; END");
+    assert!(run_tagged(&s, &outer, "ui-run-26"));
+    assert_eq!(
+        listed(&s, "ui-run-26"),
+        [
+            format!("{outer} | WRITE | finished"),
+            format!("{write} | WRITE | finished"),
+            format!("{write} | WRITE | finished"),
+            format!("{read} | READ | finished"),
+            format!("{read} | READ | finished"),
+        ]
+    );
+    let inner = "EXECUTE IMMEDIATE 'BEGIN INSERT INTO zh VALUES (2); SELECT a FROM zh; END'";
+    assert!(!run_tagged(&s, inner, "ui-run-27"));
+    assert_eq!(
+        listed(&s, "ui-run-27"),
+        [
+            format!("{inner} | WRITE | failed"),
+            format!("{inner} | WRITE | finished"),
+        ],
+        "the query that evaluated the string finished; the refused statement is the failed row, with its class"
+    );
+}
+
+/// A statement refused before any query of it began is listed with its class once it parsed: a read
+/// of a missing table, a write to one, a statement of the session. One that did not parse has no class.
+#[test]
+fn a_refused_statement_is_listed_with_its_class_once_it_parsed() {
+    let s = Session::new().unwrap();
+    let cases = [
+        ("SELECT a FROM zr_missing", "READ"),
+        ("INSERT INTO zr_missing VALUES (1)", "WRITE"),
+        ("DROP TABLE zr_missing", "DDL"),
+        ("SELECT 1 +", "-"),
+    ];
+    for (i, (sql, class)) in cases.iter().enumerate() {
+        let tag = format!("ui-run-28-{i}");
+        assert!(!run_tagged(&s, sql, &tag), "{sql}");
+        assert_eq!(listed(&s, &tag), [format!("{sql} | {class} | failed")]);
+    }
+}

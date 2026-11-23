@@ -806,6 +806,10 @@ impl Session {
                 // analyzed plan, over the row query and under `LIMIT 2`. A cast that does not analyze
                 // fails whatever the row count; one that fails on a row that is read fails before the
                 // row count is looked at. The assignment is one listed run.
+                // Known divergence: only the rows under the limit are cast here. Spark 4.2 folds the
+                // casts into a local relation before the limit (`ConvertToLocalRelation`), so an
+                // unsorted `VALUES ('1'), ('2'), ('x')` is `CAST_INVALID_INPUT` there and
+                // `ROW_SUBQUERY_TOO_MANY_ROWS` here.
                 let prefix = format!(
                     "SELECT {} FROM (",
                     stored
