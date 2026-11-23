@@ -65,3 +65,54 @@ jobs:
         if: steps.check.outcome == 'failure'
         shell: bash
         run: exit 1
+
+  # The workspace tests, every failure listed (--no-fail-fast); the log is the artifact windows-test-log.
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: test
+      - uses: ./.github/actions/install-tool
+        with:
+          tool: cargo-nextest
+      - name: Disk before
+        shell: bash
+        run: df -h . || true
+      - name: cargo nextest (workspace)
+        id: test
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo nextest run --workspace --locked --no-tests=pass --no-fail-fast 2>&1 | tee test.log
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Windows port: cargo nextest"
+            grep -E '^ *Summary ' test.log || echo "no nextest summary (build failure?)"
+            echo '```'
+            grep -E '^ *(FAIL|TIMEOUT|SIGSEGV|ABORT) ' test.log | sort -u | head -200 || true
+            grep -o 'could not compile `[^`]*`' test.log | sort -u || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          df -h . || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: windows-test-log
+          path: test.log
+          retention-days: 7
+      - name: Fail when tests failed
+        if: steps.test.outcome == 'failure'
+        shell: bash
+        run: exit 1
