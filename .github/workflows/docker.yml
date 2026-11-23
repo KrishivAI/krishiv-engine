@@ -45,6 +45,7 @@ jobs:
           docker buildx build --platform linux/amd64 -f docker/Dockerfile \
             --build-arg "KRISHIV_GIT_SHA=$SHA" --load -t krishiv:ci .
       - name: Smoke test
+        timeout-minutes: 20
         run: |
           docker run --rm krishiv:ci --version
           docker run --rm krishiv:ci sql -e "SELECT 1"
@@ -74,6 +75,7 @@ jobs:
           docker buildx build --platform linux/arm64 -f docker/Dockerfile \
             --build-arg "KRISHIV_GIT_SHA=$SHA" --load -t krishiv:ci .
       - name: Smoke test
+        timeout-minutes: 20
         run: |
           docker run --rm krishiv:ci --version
           docker run --rm krishiv:ci sql -e "SELECT 1"
