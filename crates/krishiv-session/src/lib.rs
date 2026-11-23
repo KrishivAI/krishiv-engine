@@ -65,6 +65,7 @@ mod config_defaults;
 mod dataframe;
 mod delta;
 pub mod egress;
+pub mod events;
 mod execute_immediate;
 mod explain;
 mod explain_graph;
@@ -165,13 +166,14 @@ pub use krishiv_udf_sdk::{
     ReturnField, ScalarUdf, Signature, StateField, UdfArg, UdfError, UdfInputType, UdfLibrary,
     UdfProperties,
 };
-pub use memory_table::BatchSource;
+pub use memory_table::{BatchSource, PlannedRead, SourcePlanner};
 pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use python_udfs::{
     ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary, PythonUdtfDef,
     PythonUdtfEntry,
 };
+pub use python_udfs::{MAX_PYTHON_SOURCE_CALLS, python_source_call, run_python_source_call};
 #[cfg(feature = "unstable-ir")]
 pub use python_udfs::{python_udf_call_name, python_udtf_call_name};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};

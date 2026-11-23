@@ -321,6 +321,7 @@ fn a_history_copy_shares_the_operator_rows() {
     let id = log.begin(None, None);
     let op = OperatorRow {
         query_id: id.clone(),
+        session_id: String::new(),
         operator_id: 0,
         node_id: None,
         name: "Scan".to_owned(),

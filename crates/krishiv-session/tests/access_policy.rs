@@ -876,7 +876,7 @@ fn a_file_in_the_way_of_the_target_is_handled_as_before() {
     assert_eq!(e.error_class().name(), "PATH_ALREADY_EXISTS", "{text}");
     assert!(
         text.contains(&format!(
-            "file/{}",
+            "file:/{}",
             target.display().to_string().trim_start_matches('/')
         )),
         "{text}"

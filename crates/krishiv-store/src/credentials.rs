@@ -54,6 +54,15 @@ use crate::stores::{ObjectScheme, parse_object_url};
 /// How long before its expiry a credential is refreshed (design note section 2).
 pub const DEFAULT_REFRESH_SKEW: Duration = Duration::from_secs(300);
 
+/// The refresh skew of a credential issued at `issued` that expires at `expiry`: `skew`, but at most half its
+/// lifetime, so a credential that lives less than twice the skew (a 60 s session token, an aged STS key) is still
+/// used for half its life instead of refreshed on every request.
+#[must_use]
+pub fn effective_skew(skew: Duration, issued: SystemTime, expiry: SystemTime) -> Duration {
+    let half_life = expiry.duration_since(issued).unwrap_or(Duration::ZERO) / 2;
+    skew.min(half_life)
+}
+
 /// A location a credential is good for: a bucket (or container) and a key prefix in it.
 ///
 /// The prefix matches on path segments, so `warehouse/t1/` does not cover `warehouse/t10/`.
@@ -374,6 +383,8 @@ struct CacheState {
     failure: Option<String>,
     /// The cached credential was refused by the store: fetch again on the next use.
     stale: bool,
+    /// When `current` was fetched: its refresh skew is at most half its lifetime from then ([`effective_skew`]).
+    fetched_at: Option<SystemTime>,
 }
 
 /// The shared state behind a [`RefreshingProvider`]: the source, the scope and the cached
@@ -449,7 +460,7 @@ impl CredentialCache {
         self.fresh_within(state, self.skew)
     }
 
-    /// The cached credential if it is not refused and expires more than `skew` from now.
+    /// The cached credential if it is not refused and expires more than `skew` (at most half its lifetime) from now.
     fn fresh_within(&self, state: &CacheState, skew: Duration) -> Option<Arc<ScopedCredential>> {
         if state.stale {
             return None;
@@ -457,11 +468,15 @@ impl CredentialCache {
         let current = state.current.as_ref()?;
         let usable = match current.expires_at {
             None => true,
-            Some(expiry) => self
-                .clock
-                .now()
-                .checked_add(skew)
-                .is_some_and(|horizon| horizon < expiry),
+            Some(expiry) => {
+                let skew = state
+                    .fetched_at
+                    .map_or(skew, |at| effective_skew(skew, at, expiry));
+                self.clock
+                    .now()
+                    .checked_add(skew)
+                    .is_some_and(|horizon| horizon < expiry)
+            }
         };
         usable.then(|| Arc::clone(current))
     }
@@ -531,6 +546,7 @@ impl CredentialCache {
                 state.failure = None;
                 let credential = Arc::new(credential);
                 state.current = Some(Arc::clone(&credential));
+                state.fetched_at = Some(self.clock.now());
                 Ok((credential, state.generation))
             }
             Err(e) => {
@@ -849,6 +865,45 @@ pub(crate) mod tests {
             source.fetches.load(Ordering::SeqCst),
             2,
             "inside the window"
+        );
+    }
+
+    /// A credential that lives less than twice the skew is used for half its life, not refreshed on every request.
+    #[tokio::test]
+    async fn a_short_lived_credential_is_used_for_half_its_life() {
+        let clock = FakeClock::new();
+        let source = CountingSource::new(&clock, Duration::from_secs(60));
+        let cache = cache_for(&source, &clock, Duration::from_secs(300));
+        for _ in 0..10 {
+            cache.credential().await.unwrap();
+        }
+        assert_eq!(
+            source.fetches.load(Ordering::SeqCst),
+            1,
+            "one fetch for a burst of requests"
+        );
+        clock.advance(Duration::from_secs(29));
+        cache.credential().await.unwrap();
+        assert_eq!(
+            source.fetches.load(Ordering::SeqCst),
+            1,
+            "still in its first half"
+        );
+        clock.advance(Duration::from_secs(2));
+        cache.credential().await.unwrap();
+        assert_eq!(
+            source.fetches.load(Ordering::SeqCst),
+            2,
+            "refreshed past half its life"
+        );
+        assert_eq!(
+            effective_skew(
+                Duration::from_secs(300),
+                SystemTime::UNIX_EPOCH,
+                SystemTime::UNIX_EPOCH + Duration::from_secs(3600)
+            ),
+            Duration::from_secs(300),
+            "a long-lived credential keeps the full skew"
         );
     }
 

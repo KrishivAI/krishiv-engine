@@ -27,6 +27,7 @@ pub use python::{
 };
 mod access;
 mod advisor;
+mod connect_client;
 mod lakehouse;
 mod optimizer;
 mod result_cache;
@@ -47,13 +48,22 @@ pub use advisor::{
     ADVISOR_SKEW_FACTOR, ADVISOR_SKEW_MIN_ROWS, ADVISOR_SKEW_MIN_TIME, ADVISOR_SPILL_MIN_BYTES,
     ADVISOR_SPILL_MIN_PERCENT,
 };
+pub use connect_client::{
+    ARROW_USE_LARGE_VAR_TYPES, LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES,
+    LOCAL_RELATION_CACHE_THRESHOLD, LOCAL_RELATION_CHUNK_SIZE_BYTES,
+    LOCAL_RELATION_CHUNK_SIZE_ROWS, LOCAL_RELATION_SIZE_LIMIT,
+    PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY, PANDAS_INFER_DICT_AS_MAP, PANDAS_STRUCT_HANDLING_MODE,
+    PYSPARK_INFER_NESTED_DICT_AS_STRUCT, PYSPARK_LEGACY_INFER_ARRAY_FROM_FIRST,
+    PYSPARK_LEGACY_INFER_MAP_FROM_FIRST, REPL_EAGER_EVAL_ENABLED, REPL_EAGER_EVAL_MAX_NUM_ROWS,
+    REPL_EAGER_EVAL_TRUNCATE, SQL_TIMESTAMP_TYPE,
+};
 pub use lakehouse::{
     CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
     CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE, CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES,
-    CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS, DELTA_MAX_COMMIT_ATTEMPTS,
-    DELTA_SNAPSHOT_CACHE_MAX_BYTES, ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_MANIFEST_CACHE_BYTES,
-    ICEBERG_WRITE_MAX_OPEN_FILES, ICEBERG_WRITE_STATISTICS_ENABLED, WRITE_COMMIT_RETRY_TIMEOUT,
-    WRITE_IDEMPOTENCY_KEY,
+    CATALOG_REQUEST_TIMEOUT, CATALOG_VENDED_DEFAULT_TTL, CATALOG_VENDED_MAX_ENTRIES,
+    DELTA_LOG_THREADS, DELTA_MAX_COMMIT_ATTEMPTS, DELTA_SNAPSHOT_CACHE_MAX_BYTES,
+    ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_MANIFEST_CACHE_BYTES, ICEBERG_WRITE_MAX_OPEN_FILES,
+    ICEBERG_WRITE_STATISTICS_ENABLED, WRITE_COMMIT_RETRY_TIMEOUT, WRITE_IDEMPOTENCY_KEY,
 };
 pub use optimizer::{
     DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
@@ -86,6 +96,22 @@ const MIB: u64 = 1024 * 1024;
 /// Every registered entry. Order is irrelevant; docs sort by key.
 pub static REGISTRY: &[&ConfigEntry] = &[
     &ANSI_ENABLED,
+    &SQL_TIMESTAMP_TYPE,
+    &PANDAS_STRUCT_HANDLING_MODE,
+    &REPL_EAGER_EVAL_ENABLED,
+    &REPL_EAGER_EVAL_MAX_NUM_ROWS,
+    &REPL_EAGER_EVAL_TRUNCATE,
+    &LOCAL_RELATION_CACHE_THRESHOLD,
+    &LOCAL_RELATION_SIZE_LIMIT,
+    &LOCAL_RELATION_CHUNK_SIZE_ROWS,
+    &LOCAL_RELATION_CHUNK_SIZE_BYTES,
+    &LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES,
+    &PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
+    &PANDAS_INFER_DICT_AS_MAP,
+    &PYSPARK_INFER_NESTED_DICT_AS_STRUCT,
+    &PYSPARK_LEGACY_INFER_ARRAY_FROM_FIRST,
+    &PYSPARK_LEGACY_INFER_MAP_FROM_FIRST,
+    &ARROW_USE_LARGE_VAR_TYPES,
     &SESSION_TIME_ZONE,
     &SQL_PATH_ENABLED,
     &SCHEMA_LEVEL_COLLATIONS_ENABLED,
@@ -129,6 +155,12 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
     &HISTORY_PATH,
+    &COMPUTE_ID,
+    &EVENTS_FILE_PATH,
+    &EVENTS_FILE_MAX_BYTES,
+    &EVENTS_FILE_MAX_FILES,
+    &EVENTS_TEXT_MAX_BYTES,
+    &EVENTS_QUEUE_CAPACITY,
     &ADVISOR_ENABLED,
     &ADVISOR_SPILL_MIN_PERCENT,
     &ADVISOR_SPILL_MIN_BYTES,
@@ -209,6 +241,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CATALOG_REQUEST_TIMEOUT,
     &CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE,
     &CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
+    &CATALOG_VENDED_DEFAULT_TTL,
+    &CATALOG_VENDED_MAX_ENTRIES,
     &IO_COALESCE_BYTES,
     &IO_COALESCE_WASTE_BYTES,
     &IO_COALESCE_WASTE_DIVISOR,
@@ -637,6 +671,78 @@ pub static HISTORY_PATH: ConfigEntry = ConfigEntry {
           them: a statement refused in parsing, analysis or an access check is not. Writing happens after the result stream \
           ends and never fails the query; a failed write is counted in \
           `krishiv_history_write_failures`. When unset, nothing is stored.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// The compute a usage record is billed to (P3 E7).
+pub static COMPUTE_ID: ConfigEntry = ConfigEntry {
+    key: "krishiv.compute.id",
+    value_type: ValueType::String,
+    default: None,
+    doc: "The compute (cluster or warehouse) this engine runtime bills to. Every usage record in the query events carries it as `compute_id`. Unset, it is the host name.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Where the JSON-lines event sink writes (P3 E9).
+pub static EVENTS_FILE_PATH: ConfigEntry = ConfigEntry {
+    key: "krishiv.events.file.path",
+    value_type: ValueType::String,
+    default: None,
+    doc: "A path prefix for the JSON-lines event file: one event per line, schema `krishiv.event.v1`, rotated at `krishiv.events.file.maxBytes`. When unset, no file is written.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Rotation size of the event file (P3 E9).
+pub static EVENTS_FILE_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.events.file.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(256 << 20)),
+    doc: "Bytes after which the event file moves on to a new segment.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Segments of the event file kept (P3 E9).
+pub static EVENTS_FILE_MAX_FILES: ConfigEntry = ConfigEntry {
+    key: "krishiv.events.file.maxFiles",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(8)),
+    doc: "Event file segments kept; older ones are removed at rotation.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Statement text bound in query events (P3 E9).
+pub static EVENTS_TEXT_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.events.textMaxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(4096)),
+    doc: "Most bytes of statement text a `submitted` event carries, cut at a character boundary. The text is always literal-masked first.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Per-sink queue bound of the query event bus (P3 E9).
+pub static EVENTS_QUEUE_CAPACITY: ConfigEntry = ConfigEntry {
+    key: "krishiv.events.queueCapacity",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10_000)),
+    doc: "Events one event sink may hold waiting for its delivery thread. A full queue drops events (counted in the gauge `krishiv_events_dropped`) and never slows a query.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",

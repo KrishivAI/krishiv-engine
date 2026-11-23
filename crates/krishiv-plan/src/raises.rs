@@ -89,7 +89,9 @@ fn every_call_declared(e: &Expr) -> bool {
     ok
 }
 
-fn has_subquery(e: &Expr) -> bool {
+/// Whether `e` holds a subquery expression.
+#[must_use]
+pub fn has_subquery(e: &Expr) -> bool {
     let mut found = false;
     let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
         if let crate::walk::Node::Expr(x) = n

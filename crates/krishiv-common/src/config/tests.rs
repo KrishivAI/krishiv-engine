@@ -1945,3 +1945,29 @@ fn a_key_named_like_a_credential_is_on_the_allow_list() {
         "keys named like a credential that are not on the allow list: {found:?}"
     );
 }
+
+/// A registered value keeps the text it was set to (Spark's `setConfString` stores the string it validated), while
+/// its typed value is parsed; unset and reset drop or restore the text with the value.
+#[test]
+fn a_registered_value_keeps_the_text_it_was_set_to() {
+    let mut c = Config::new();
+    c.set("spark.sql.repl.eagerEval.enabled", " TRUE ").unwrap();
+    assert_eq!(
+        c.get(&REPL_EAGER_EVAL_ENABLED),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert_eq!(c.text(&REPL_EAGER_EVAL_ENABLED).as_deref(), Some(" TRUE "));
+    assert!(
+        c.explicit_registered_as_set()
+            .contains(&("krishiv.sql.repl.eagerEval.enabled", " TRUE ".to_owned()))
+    );
+    assert!(
+        c.explicit_registered()
+            .contains(&("krishiv.sql.repl.eagerEval.enabled", "true".to_owned()))
+    );
+    let baseline = c.clone();
+    c.unset("krishiv.sql.repl.eagerEval.enabled");
+    assert_eq!(c.text(&REPL_EAGER_EVAL_ENABLED).as_deref(), Some("false"));
+    c.reset_key("spark.sql.repl.eagerEval.enabled", &baseline);
+    assert_eq!(c.text(&REPL_EAGER_EVAL_ENABLED).as_deref(), Some(" TRUE "));
+}

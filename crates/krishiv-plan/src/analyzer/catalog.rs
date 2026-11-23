@@ -763,6 +763,14 @@ pub trait FileSchemaResolver: Send + Sync {
             .into())
         })
     }
+    /// Whether a read of `format` keeps the nullability [`Self::infer`] gives. A file source's
+    /// columns are made nullable at every depth (`HadoopFsRelation` over `dataSchema.asNullable`);
+    /// a table format whose log declares the schema (Delta) keeps its `NOT NULL` columns and
+    /// fields, as the catalog table over it does. The default is `false`.
+    fn keeps_nullability(&self, format: &str) -> bool {
+        let _ = format;
+        false
+    }
 }
 
 /// Tables in memory, by namespace and name, stored lower-case like Spark's

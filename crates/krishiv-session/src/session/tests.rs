@@ -43,6 +43,18 @@ fn max_records_per_file_reads_the_write_option() {
         max_records_per_file(&options(&[("MAXRECORDSPERFILE", " 7 ")]), "parquet").unwrap(),
         7
     );
+    for v in ["-1", "0", "-9223372036854775808"] {
+        assert_eq!(
+            max_records_per_file(&options(&[("maxRecordsPerFile", v)]), "parquet").unwrap(),
+            0,
+            "{v} is unlimited"
+        );
+    }
+    max_records_per_file(
+        &options(&[("maxRecordsPerFile", "9223372036854775808")]),
+        "parquet",
+    )
+    .unwrap_err();
     let e = max_records_per_file(&options(&[("maxRecordsPerFile", "ten")]), "parquet").unwrap_err();
     assert_eq!(
         e.error_class().name(),

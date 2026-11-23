@@ -1038,6 +1038,39 @@ fn startup_token(server: &mut Running) -> String {
         .to_owned()
 }
 
+/// The console's Resources page reads the server's own Python UDF worker pool: its limits as configured, and
+/// no worker before a session's first Python UDF call.
+#[cfg(all(feature = "ui", target_os = "linux"))]
+#[test]
+fn the_console_lists_the_servers_udf_worker_pool() {
+    let spill = tempfile::tempdir().expect("tempdir");
+    let mut server = start_with(
+        spill.path(),
+        &[
+            "krishiv.python.worker.maxTotal=7".to_owned(),
+            "krishiv.python.worker.maxPerSession=2".to_owned(),
+            "krishiv.python.worker.maxPerTenant=5".to_owned(),
+        ],
+    );
+    let token = startup_token(&mut server);
+    let answer = http_get_as(&server.admin, "/api/internal/udf-workers", Some(&token));
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    let body = answer.split("\r\n\r\n").nth(1).expect("a body");
+    let json: serde_json::Value =
+        serde_json::from_str(&body[body.find('{').expect("json")..=body.rfind('}').expect("json")])
+            .expect("json");
+    assert_eq!(
+        json["pool"],
+        serde_json::json!({
+            "live": 0, "busy": 0, "max_total": 7, "max_per_session": 2, "max_per_tenant": 5,
+            "owners": [], "truncated": false,
+        }),
+        "{answer}"
+    );
+    let none = http_get(&server.admin, "/api/internal/udf-workers");
+    assert!(none.starts_with("HTTP/1.1 401"), "{none}");
+}
+
 /// A server started on a history folder lists what an earlier run stored there; a folder that cannot be read
 /// costs the old history, not the server.
 #[cfg(feature = "ui")]
