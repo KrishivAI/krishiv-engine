@@ -154,6 +154,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
 | [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
 | [Delta Lake writes](../concepts/known-differences.md#delta-lake-writes) |
+| [Spark 4.3's nanosecond timestamps and nanosecond clocks](../concepts/known-differences.md#spark-43s-nanosecond-timestamps-and-nanosecond-clocks) |
 | [HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)](../concepts/known-differences.md#hll-sketches-the-compact-form-hll_sketch_agg-hll_union_agg-hll_union) |
 | [Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)](../concepts/known-differences.md#metric-views-create-view--with-metrics-language-yaml) |
 | [Pattern matching over collated strings (`LIKE`, `RLIKE`)](../concepts/known-differences.md#pattern-matching-over-collated-strings-like-rlike) |

@@ -220,3 +220,22 @@ fn a_time_casts_to_decimal_as_seconds() {
     );
     assert!(e.to_string().contains("60.000000000"), "{e}");
 }
+
+/// Spark 4.3 refuses a `TIME` literal with more than nine fractional digits
+/// (4.3.0 golden `time-precision-goldens.json`, `SELECT TIME'12:00:00.1234567890'`).
+#[test]
+fn a_time_literal_past_nine_digits_is_refused_under_spark_4_3() {
+    let s = Session::builder()
+        .profile(SparkProfile::V4_3)
+        .build()
+        .unwrap();
+    let e = block_on(s.sql("SELECT TIME'12:00:00.1234567890'"))
+        .and_then(|df| block_on(df.collect()))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::InvalidTimeLiteralPrecision,
+        "{e}"
+    );
+    assert!(e.to_string().contains("'12:00:00.1234567890'"), "{e}");
+}
