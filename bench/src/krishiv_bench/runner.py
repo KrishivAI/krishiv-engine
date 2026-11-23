@@ -21,7 +21,17 @@ from . import clickbench_queries, compare, memguard
 from .adapters import Dataset, Engine, Query, make_engine
 from .dialect import unsupported_reason
 from .errors import error_fields
-from .paths import bench_root, data_root, dataset_dir, fmt_sf, manifest_stem, queries_dir, results_dir, split_dataset
+from .paths import (
+    bench_root,
+    data_root,
+    dataset_dir,
+    fmt_sf,
+    manifest_stem,
+    queries_dir,
+    require_queries_dir,
+    results_dir,
+    split_dataset,
+)
 from .resources import evict_page_cache, resource_fields
 
 SUITE_DATASET = {
@@ -135,9 +145,7 @@ def load_queries(
     if suite == "clickbench":  # licensed CC BY-NC-SA: fetched from a pinned upstream commit, never stored here
         texts = clickbench_queries.load(engine)
         return [Query(q, sql, suite) for q, sql in texts.items() if not only or q in only]
-    d = queries_dir(suite)
-    if not d.is_dir():  # a non-editable install resolves bench_root() into site-packages: fail, never time 0 queries
-        raise SystemExit(f"{suite} queries directory {d} is missing; install the harness editable (uv pip install -e)")
+    d = require_queries_dir(suite)
     out = []
     for f in sorted(d.glob("q*.sql")):
         if only and f.stem not in only:
