@@ -30,6 +30,9 @@ consuming test checks what the oracle wrote, never a hand-written value.
 ``merge/MERGE.json``, with the file-backed sources the steps read. Use a fresh ``$OUT`` for each
 attempt: the run refuses an ``$OUT/merge`` left by an earlier or interrupted one.
 
+``... /out create-path`` writes ``CREATE-PATH.json`` (``create_by_path``): ``CREATE TABLE
+delta.`<path>``` in each form, the log it writes and its refusals.
+
 ``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
 (``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
 
@@ -1903,6 +1906,157 @@ def readback(spark: SparkSession, out: str, src: str) -> None:
         f.write("\n")
 
 
+def log_actions(path: str) -> list[dict]:
+    """Every JSON commit of the table's log as written, in version order: each action, with the
+    values that differ per run dropped (``commitInfo`` ``timestamp``, ``txnId``, ``engineInfo``,
+    ``inCommitTimestamp``; ``metaData`` ``id`` and ``createdTime``; ``add`` ``modificationTime``
+    and ``size``)."""
+    log = os.path.join(path, "_delta_log")
+    out = []
+    for name in sorted(n for n in os.listdir(log) if n.endswith(".json") and n[0].isdigit()):
+        actions = []
+        with open(os.path.join(log, name)) as f:
+            for line in f:
+                action = json.loads(line)
+                for kind, drop in (
+                    ("commitInfo", ("timestamp", "txnId", "engineInfo", "inCommitTimestamp")),
+                    ("metaData", ("id", "createdTime")),
+                    ("add", ("modificationTime", "size")),
+                ):
+                    if kind in action:
+                        for k in drop:
+                            action[kind].pop(k, None)
+                actions.append(action)
+        out.append({"version": int(name.split(".")[0]), "actions": actions})
+    return out
+
+
+def create_by_path(spark: SparkSession, out: str) -> None:
+    """``CREATE-PATH.json``: ``CREATE TABLE delta.`<path>``` (row 74). Each case runs on a path of
+    its own (``<path>`` in the record) and records the oracle's error, or the log's commits as
+    written (``log_actions``) and what ``SELECT *`` reads (columns and rows). The cases: plain,
+    partitioned, ``NOT NULL`` and comments, ``TBLPROPERTIES``, every Spark type family, a second
+    ``CREATE`` over the table (same, other, no columns; ``IF NOT EXISTS``; other partitioning),
+    an empty directory, a Parquet directory, a trailing slash, a ``file:`` URI, a ``LOCATION``
+    beside the path, ``OR REPLACE``, CTAS, no columns, a relative path and a name without ``/``.
+    No catalog entry is made: ``tables_after`` lists ``default`` at the end."""
+    root = os.path.join(out, "create-path")
+    os.makedirs(root)
+    n = [0]
+
+    def fresh() -> str:
+        n[0] += 1
+        return os.path.join(root, f"t{n[0]}")
+
+    cases: list[dict] = []
+
+    def case(name: str, sql_of, path: str, setup=None) -> None:
+        if setup is not None:
+            setup(path)
+        sql = sql_of(path)
+        record: dict = {"case": name, "sql": sql.replace(path, "<path>")}
+        before = len(log_actions(path)) if os.path.isdir(os.path.join(path, "_delta_log")) else 0
+        try:
+            spark.sql(sql).collect()
+            record["error"] = None
+        except Exception as e:  # the oracle's error is the record
+            record["error"] = oracle_error(e, path)
+        record["created_log"] = os.path.isdir(os.path.join(path, "_delta_log"))
+        if record["created_log"]:
+            record["commits"] = log_actions(path)[before:]
+            try:
+                df = spark.sql(f"SELECT * FROM delta.`{path}`")
+                record["columns"] = [[f.name, f.dataType.simpleString(), f.nullable] for f in df.schema.fields]
+                record["rows"] = [[typed(r[i]) for i in range(len(r))] for r in df.collect()]
+            except Exception as e:  # a table the oracle cannot read back
+                record["read_error"] = oracle_error(e, path)
+        cases.append(record)
+
+    def t(p: str) -> str:
+        return f"delta.`{p}`"
+
+    plain = fresh()
+    case("plain", lambda p: f"CREATE TABLE {t(p)} (id BIGINT, v STRING) USING delta", plain)
+    case(
+        "partitioned",
+        lambda p: f"CREATE TABLE {t(p)} (id BIGINT, v STRING, p STRING, n INT) USING delta PARTITIONED BY (p, n)",
+        fresh(),
+    )
+    case(
+        "partition_first",
+        lambda p: f"CREATE TABLE {t(p)} (p STRING, id BIGINT) USING delta PARTITIONED BY (p)",
+        fresh(),
+    )
+    case(
+        "not_null_comments",
+        lambda p: f"CREATE TABLE {t(p)} (id BIGINT NOT NULL COMMENT 'the key', v STRING) USING delta COMMENT 'a table'",
+        fresh(),
+    )
+    case(
+        "tblproperties",
+        lambda p: (
+            f"CREATE TABLE {t(p)} (id BIGINT) USING delta "
+            "TBLPROPERTIES ('delta.appendOnly' = 'true', 'krishiv.k' = 'v')"
+        ),
+        fresh(),
+    )
+    case(
+        "types",
+        lambda p: (
+            f"CREATE TABLE {t(p)} (b TINYINT, s SMALLINT, i INT, l BIGINT, f FLOAT, d DOUBLE, "
+            "dec DECIMAL(10, 2), str STRING, c CHAR(3), vc VARCHAR(5), bool BOOLEAN, bin BINARY, dt DATE, "
+            "ts TIMESTAMP, ntz TIMESTAMP_NTZ, arr ARRAY<INT>, m MAP<STRING, INT>, st STRUCT<x: INT, y: STRING>) "
+            "USING delta"
+        ),
+        fresh(),
+    )
+    case("again_same", lambda p: f"CREATE TABLE {t(p)} (id BIGINT, v STRING) USING delta", plain)
+    case("again_other", lambda p: f"CREATE TABLE {t(p)} (id INT) USING delta", plain)
+    case("again_no_columns", lambda p: f"CREATE TABLE {t(p)} USING delta", plain)
+    case("if_not_exists_same", lambda p: f"CREATE TABLE IF NOT EXISTS {t(p)} (id BIGINT, v STRING) USING delta", plain)
+    case("if_not_exists_other", lambda p: f"CREATE TABLE IF NOT EXISTS {t(p)} (id INT) USING delta", plain)
+    case(
+        "again_partitioned",
+        lambda p: f"CREATE TABLE {t(p)} (id BIGINT, v STRING) USING delta PARTITIONED BY (v)",
+        plain,
+    )
+    case("empty_directory", lambda p: f"CREATE TABLE {t(p)} (id BIGINT) USING delta", fresh(), os.makedirs)
+    case(
+        "parquet_directory",
+        lambda p: f"CREATE TABLE {t(p)} (id BIGINT) USING delta",
+        fresh(),
+        lambda p: spark.sql("SELECT CAST(1 AS BIGINT) AS id").write.parquet(p),
+    )
+    case("trailing_slash", lambda p: f"CREATE TABLE delta.`{p}/` (id BIGINT) USING delta", fresh())
+    case("file_uri", lambda p: f"CREATE TABLE delta.`file:{p}` (id BIGINT) USING delta", fresh())
+    case(
+        "location_too",
+        lambda p: f"CREATE TABLE {t(p)} (id BIGINT) USING delta LOCATION '{p}'",
+        fresh(),
+    )
+    case("or_replace_new", lambda p: f"CREATE OR REPLACE TABLE {t(p)} (id BIGINT) USING delta", fresh())
+    case("or_replace_existing", lambda p: f"CREATE OR REPLACE TABLE {t(p)} (id INT, w STRING) USING delta", plain)
+    case("ctas", lambda p: f"CREATE TABLE {t(p)} USING delta AS SELECT CAST(1 AS BIGINT) AS id, 'a' AS v", fresh())
+    case("no_columns", lambda p: f"CREATE TABLE {t(p)} USING delta", fresh())
+    case("using_parquet", lambda p: f"CREATE TABLE {t(p)} (id BIGINT) USING parquet", fresh())
+    case("no_using", lambda p: f"CREATE TABLE {t(p)} (id BIGINT)", fresh())
+    case("relative_path", lambda p: "CREATE TABLE delta.`krishiv_rel/dir` (id BIGINT) USING delta", "krishiv_rel/dir")
+    case("no_slash", lambda p: "CREATE TABLE delta.`krishiv_no_slash` (id BIGINT) USING delta", "krishiv_no_slash")
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "cases": cases,
+        "tables_after": sorted(r.tableName for r in spark.sql("SHOW TABLES IN default").collect()),
+    }
+    shutil.rmtree(root, ignore_errors=True)
+    shutil.rmtree("krishiv_rel", ignore_errors=True)
+    with open(os.path.join(out, "CREATE-PATH.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
 def main(out: str, which: str = "checkpoint", src: str = "") -> None:
     spark = session()
     if which == "readback":
@@ -1924,6 +2078,10 @@ def main(out: str, which: str = "checkpoint", src: str = "") -> None:
         write_modes(spark, out)
         write_feature_tables(spark, out)
         drop_hadoop_crc(out)
+        spark.stop()
+        return
+    if which == "create-path":
+        create_by_path(spark, out)
         spark.stop()
         return
     if which == "edges":
