@@ -5,9 +5,13 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64};
 
-use krishiv_common::error::ErrorClass;
+use async_trait::async_trait;
+use iceberg::spec::TableMetadata;
+use iceberg::{TableRequirement, TableUpdate};
+use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::planner::RowLevelOperation;
 
+use super::commit::{CommitOutcome, CommitTable};
 use super::commit_tests::TestClock;
 use super::cow_tests::{Dml, append, create};
 use super::maintenance::expire::{Defaults, ExpireArgs, expire, plan};
@@ -176,4 +180,62 @@ fn retain_last_two_keeps_two_snapshots() {
         .unwrap();
     assert!(done.deleted.manifest_lists >= 3);
     assert_eq!(catalog.metadata().snapshots().count(), 2);
+}
+
+/// [`Catalog`] answering every commit with one outcome and applying none.
+struct Refusing {
+    inner: std::sync::Arc<Catalog>,
+    unknown: bool,
+}
+
+#[async_trait]
+impl CommitTable for Refusing {
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+
+    async fn commit(&self, _: Vec<TableRequirement>, _: Vec<TableUpdate>) -> CommitOutcome {
+        if self.unknown {
+            CommitOutcome::Unknown("503 service unavailable".to_owned())
+        } else {
+            CommitOutcome::Conflict { stale: false }
+        }
+    }
+
+    async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
+        self.inner.load(all).await
+    }
+}
+
+fn expire_against(unknown: bool) -> KrishivError {
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let table = Refusing {
+        inner: catalog,
+        unknown,
+    };
+    env.rt
+        .block_on(expire(
+            &table,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &args(Some(1)),
+        ))
+        .unwrap_err()
+}
+
+#[test]
+fn commits_that_always_conflict_end_in_krishiv_iceberg_expire_failed() {
+    let e = expire_against(false);
+    assert_eq!(e.error_class(), ErrorClass::KrishivIcebergExpireFailed);
+}
+
+#[test]
+fn an_unknown_answer_with_the_snapshots_still_there_is_expire_state_unknown() {
+    let e = expire_against(true);
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergExpireStateUnknown
+    );
 }
