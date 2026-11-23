@@ -167,3 +167,122 @@ fn a_null_array_element_is_refused() {
     );
     assert!(e.to_string().contains("NULL elements"), "{e}");
 }
+
+/// A session over `server` with `lake` writable (`option.write`) when `write` holds.
+fn lake_session(server: &Server, write: bool) -> Session {
+    let mut pairs = vec![
+        ("krishiv.catalog.lake.type", "iceberg-rest"),
+        ("krishiv.catalog.lake.uri", server.base.as_str()),
+        ("krishiv.catalog.lake.storage", "allowed-prefixes"),
+    ];
+    if write {
+        pairs.push(("krishiv.catalog.lake.option.write", "true"));
+    }
+    super::read_tests::session_with(DeclMode::Embedded, &pairs, &[])
+}
+
+/// The one result row of `sql`, by column name.
+fn result_row(s: &Session, sql: &str) -> Vec<(String, i64)> {
+    use arrow_array::Array;
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Int64Type;
+    let batches = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    let b = batches.iter().find(|b| b.num_rows() > 0).unwrap();
+    assert_eq!(b.num_rows(), 1);
+    b.schema()
+        .fields()
+        .iter()
+        .zip(b.columns())
+        .map(|(f, c)| {
+            let c = c.as_primitive::<Int64Type>();
+            (f.name().clone(), if c.is_null(0) { -1 } else { c.value(0) })
+        })
+        .collect()
+}
+
+/// `expire_snapshots` end to end: the arguments bound and cast, the table opened through the
+/// declared REST catalog, the expire committed through it, the result row Iceberg's, and the
+/// table still read back whole.
+#[test]
+fn expire_snapshots_runs_through_the_rest_catalog() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = krishiv_connectors_iceberg::testing::write_table(dir.path()).unwrap();
+    let (server, lake) = super::write_tests::catalog(&table, &[]);
+    let s = lake_session(&server, true);
+    let row = result_row(
+        &s,
+        "CALL lake.system.expire_snapshots(table => 'lake.db.t', \
+         older_than => TIMESTAMP '9999-01-01 00:00:00', retain_last => 1, \
+         clean_expired_metadata => true)",
+    );
+    let names: Vec<&str> = row.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "deleted_data_files_count",
+            "deleted_position_delete_files_count",
+            "deleted_equality_delete_files_count",
+            "deleted_manifest_files_count",
+            "deleted_manifest_lists_count",
+            "deleted_statistics_files_count",
+        ]
+    );
+    // The first snapshot's manifest list; its data file is still the second's.
+    assert_eq!(row[4].1, 1, "{row:?}");
+    assert_eq!(row[0].1, 0, "{row:?}");
+    let snapshots = lake.lock().unwrap().metadata["snapshots"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(snapshots, 1);
+    assert_eq!(
+        super::read_tests::rows(&s, "SELECT id, name FROM lake.db.t"),
+        super::read_tests::pairs(&[(1, "a"), (2, "b"), (3, "c")])
+    );
+    // Again, positionally: nothing is left to remove and no commit is sent.
+    let posts = || server.seen().iter().filter(|r| r.method == "POST").count();
+    let before = posts();
+    let row = result_row(
+        &s,
+        "CALL lake.system.expire_snapshots('db.t', TIMESTAMP '9999-01-01 00:00:00', 1)",
+    );
+    assert!(row.iter().all(|(_, v)| *v == 0), "{row:?}");
+    assert_eq!(posts(), before);
+}
+
+/// The procedure's own refusals: a read-only catalog, an empty table name, a bad
+/// `max_concurrent_deletes`, and a procedure not in this build yet.
+#[test]
+fn expire_snapshots_refusals() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = krishiv_connectors_iceberg::testing::write_table(dir.path()).unwrap();
+    let (server, _) = super::write_tests::catalog(&table, &[]);
+    let e = call(
+        &lake_session(&server, false),
+        "CALL lake.system.expire_snapshots(table => 'db.t')",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert!(e.to_string().contains("read-only"), "{e}");
+    let s = lake_session(&server, true);
+    let e = call(&s, "CALL lake.system.expire_snapshots(table => '')");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergProcedureArgument,
+        "{e}"
+    );
+    let e = call(
+        &s,
+        "CALL lake.system.expire_snapshots(table => 'db.t', max_concurrent_deletes => 0)",
+    );
+    assert!(e.to_string().contains("max_concurrent_deletes"), "{e}");
+    let e = call(&s, "CALL lake.system.rewrite_manifests(table => 'db.t')");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+}
