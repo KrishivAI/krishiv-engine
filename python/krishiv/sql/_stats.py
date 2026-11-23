@@ -456,6 +456,12 @@ def random_split(df: DataFrame, weights: list[float], seed: int) -> list[DataFra
     """``randomSplit``: the rows ordered within each partition by every sortable column (so a split does not
     depend on the input order), each split the rows whose one shared draw falls in its slice of the normalised
     weights."""
+    if any(math.isnan(w) or math.isinf(w) for w in weights):
+        raise _require(f"Weights must be finite, but got [{','.join(_java_double(float(w)) for w in weights)}]")
+    # Scaled by the largest weight, so finite weights whose sum would overflow still normalise.
+    scale = max(weights, default=0.0)
+    if scale > 0.0:
+        weights = [w / scale for w in weights]
     total = sum(weights)
     if not total > 0.0:
         shown = ",".join(_java_double(float(w)) for w in weights)

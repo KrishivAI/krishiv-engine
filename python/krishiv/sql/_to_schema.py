@@ -126,7 +126,9 @@ def _reconcile(
         )
     if isinstance(have, StructType) and isinstance(want, StructType):
         fields = _match_fields(expr, have, want, path, case)
-        return F.when(expr.isNotNull(), F.named_struct(*[x for pair in fields for x in pair]))
+        rebuilt = F.named_struct(*[x for pair in fields for x in pair])
+        # A CASE with no ELSE is nullable, so a non-nullable source struct is rebuilt without one.
+        return F.when(expr.isNotNull(), rebuilt) if have_nullable else rebuilt
     if _holds_struct(have) or _holds_struct(want):
         if have == want:
             return expr

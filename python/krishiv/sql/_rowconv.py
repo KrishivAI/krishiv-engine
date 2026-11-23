@@ -343,10 +343,9 @@ def normalize_arrow_table(
             and pa.types.is_timestamp(column.type)
             and column.type.tz is None
         ):
-            # A time in a DST gap moves forward and an ambiguous one is the earlier, as java.time reads it.
-            column = pc.assume_timezone(  # ty: ignore[unresolved-attribute]
-                column, zone, ambiguous="earliest", nonexistent="latest"
-            )
+            # An ambiguous time is the earlier, as java.time reads it; a time in a DST gap is refused, as
+            # Spark's Arrow conversion (``assume_timezone`` with its default error handling) refuses it.
+            column = pc.assume_timezone(column, zone, ambiguous="earliest")  # ty: ignore[unresolved-attribute]
         columns.append(column)
     if not columns:
         return table  # a table with no columns can still have rows: rebuilding it would drop them
@@ -370,10 +369,23 @@ def arrow_array(values: list[Any], arrow_type: Any, pa: Any, null_on_error: bool
     except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError, OverflowError, ValueError, TypeError):
         if not null_on_error:
             raise
-    cells = []
-    for v in values:
-        try:
-            cells.append(pa.array([v], type=arrow_type)[0].as_py() if v is not None else None)
-        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError, OverflowError, ValueError, TypeError):
-            cells.append(None)
+    cells = [_recovered(v, arrow_type, pa) for v in values]
     return pa.array(cells, type=arrow_type)
+
+
+def _recovered(value: Any, arrow_type: Any, pa: Any) -> Any:
+    """``value`` as a Python value of ``arrow_type``, with every part pyarrow cannot take NULL: an
+    array's bad element is NULL and its good ones stay (as the JVM conversion of classic PySpark does);
+    a value that is not a container at all is NULL."""
+    if value is None:
+        return None
+    errors = (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError, OverflowError, ValueError, TypeError)
+    try:
+        return pa.array([value], type=arrow_type)[0].as_py()
+    except errors:
+        pass
+    if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type) or pa.types.is_fixed_size_list(arrow_type):
+        if not isinstance(value, list | tuple):
+            return None
+        return [_recovered(v, arrow_type.value_type, pa) for v in value]
+    return None

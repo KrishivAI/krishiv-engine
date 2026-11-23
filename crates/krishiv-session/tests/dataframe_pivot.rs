@@ -148,6 +148,13 @@ fn sort_within_partitions_keeps_the_rows() -> R {
     let s = session()?;
     let rows = block_on(s.table("t").sort_within_partitions(["earnings"]).collect())?;
     assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 4);
+    let mut earnings = Vec::new();
+    for b in &rows {
+        let column = b.column_by_name("earnings").ok_or("no earnings column")?;
+        let values = column.as_primitive::<arrow_array::types::Int32Type>();
+        earnings.extend(values.iter().flatten());
+    }
+    assert_eq!(earnings, [5, 10, 20, 30]);
     Ok(())
 }
 

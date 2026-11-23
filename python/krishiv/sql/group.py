@@ -244,7 +244,9 @@ class GroupedData:
         -----
         An output column is named by the value (``2012``), or, with several aggregates, by the value and the
         aggregate (``2012_sum(x)``, ``2012_s`` for an alias). A group with no row for a value has NULL there
-        (``count`` too), except for aggregates such as ``collect_list``, which give an empty array.
+        (``count`` too) when every aggregate is a numeric one; a pivot that also holds an aggregate such as
+        ``collect_list`` is computed per value with a conditional aggregate, where ``count`` gives 0 and
+        ``collect_list`` an empty array.
 
         Examples
         --------
@@ -297,7 +299,9 @@ class GroupedData:
         df = self._source
         limit = _pivot_max_values(df.sparkSession)
         column = F.col(pivot_col)
-        rows = df.select(column).distinct().limit(limit + 1).sort(column).collect()
+        # Sorted by the projected column's own name, so a qualified ``s.p`` still resolves after DISTINCT.
+        name = "__krishiv_pivot_value"
+        rows = df.select(column.alias(name)).distinct().limit(limit + 1).sort(F.col(name)).collect()
         if len(rows) > limit:
             raise AnalysisException(
                 f"[_LEGACY_ERROR_TEMP_1324] The pivot column {pivot_col} has more than {limit} distinct values, "

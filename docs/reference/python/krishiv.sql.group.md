@@ -198,7 +198,9 @@ values : list, optional
 
 An output column is named by the value (`2012`), or, with several aggregates, by the value and the
 aggregate (`2012_sum(x)`, `2012_s` for an alias). A group with no row for a value has NULL there
-(`count` too), except for aggregates such as `collect_list`, which give an empty array.
+(`count` too) when every aggregate is a numeric one; a pivot that also holds an aggregate such as
+`collect_list` is computed per value with a conditional aggregate, where `count` gives 0 and
+`collect_list` an empty array.
 
 **Examples**
 

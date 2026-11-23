@@ -122,9 +122,7 @@ def test_ntz_value_with_an_offset_keeps_its_wall_clock(spark: SparkSession) -> N
 def test_pivot_accepts_none_among_explicit_values(spark: SparkSession) -> None:
     frame = spark.createDataFrame([(1, "a", 1), (1, None, 2)], "g int, p string, v int")
     rows = frame.groupBy("g").pivot("p", [None, "a"]).sum("v").collect()
-    assert len(rows) == 1
-    assert 2 in tuple(rows[0])
-    assert 1 in tuple(rows[0])
+    assert [tuple(r) for r in rows] == [(1, 2, 1)]  # g, the sum under NULL, the sum under "a"
 
 
 def test_a_negative_nanosecond_timestamp_floors_to_microseconds(spark: SparkSession) -> None:
@@ -147,3 +145,46 @@ def test_an_arrow_map_column_survives_the_python_value_fallback(spark: SparkSess
     out = spark.createDataFrame(table, "m map<string,bigint>, s map<string,bigint>").collect()
     assert [r["m"] for r in out] == [{"a": 1}, None]
     assert [r["s"] for r in out] == [{"k": 1}, {"k": 2}]
+
+
+def test_a_non_container_for_an_array_is_null_without_verification(spark: SparkSession) -> None:
+    frame = spark.createDataFrame([(42,), ([1, 2],)], "a array<int>", verifySchema=False)
+    assert [r[0] for r in frame.collect()] == [None, [1, 2]]
+
+
+def test_a_bad_array_element_is_null_and_the_rest_stay(spark: SparkSession) -> None:
+    frame = spark.createDataFrame([([1, "bad", 3],)], "a array<int>", verifySchema=False)
+    assert frame.collect()[0][0] == [1, None, 3]
+
+
+def test_random_split_weights_whose_sum_overflows(spark: SparkSession) -> None:
+    frame = spark.range(100)
+    parts = frame.randomSplit([1e308, 1e308], 7)
+    assert sum(p.count() for p in parts) == 100
+
+
+def test_pivot_discovery_over_a_qualified_column(spark: SparkSession) -> None:
+    frame = spark.createDataFrame([(1, "a", 1), (1, "b", 2)], "g int, p string, v int").alias("s")
+    rows = frame.groupBy("g").pivot("s.p").sum("v").collect()
+    assert [tuple(r) for r in rows] == [(1, 1, 2)]
+
+
+def test_to_keeps_a_non_nullable_struct_non_nullable(spark: SparkSession) -> None:
+    from krishiv.sql.types import IntegerType, StructField, StructType
+
+    inner = StructType([StructField("x", IntegerType(), False)])
+    schema = StructType([StructField("s", inner, False)])
+    frame = spark.createDataFrame([((1,),)], schema)
+    assert frame.to(schema).to(schema).collect()[0][0][0] == 1
+
+
+def test_explicit_timestamp_target_localizes_under_ntz_inference(spark: SparkSession) -> None:
+    import datetime as dt
+
+    import pyarrow as pa
+
+    spark.conf.set("spark.sql.timestampType", "TIMESTAMP_NTZ")
+    spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+    table = pa.table({"t": pa.array([dt.datetime(2024, 1, 15, 12, 0)])})
+    frame = spark.createDataFrame(table, "t timestamp")
+    assert frame.collect()[0][0].astimezone(dt.UTC).hour == 20

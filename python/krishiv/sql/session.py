@@ -25,7 +25,7 @@ from krishiv.sql.catalog import CatalogMetadata, Column, Database, Function, Tab
 from krishiv.sql.conf import RuntimeConfig, _warn_if_cluster_setting
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.readwriter import DataFrameReader
-from krishiv.sql.types import DataType, StructField, StructType, TimestampNTZType
+from krishiv.sql.types import DataType, StructField, StructType, TimestampNTZType, TimestampType
 from krishiv.storagelevel import StorageLevel
 
 # The class's `_native` property hides the module in annotations written inside it.
@@ -401,11 +401,14 @@ class SparkSession:
         :func:`krishiv.sql._rowconv.normalize_arrow_table`), then renamed by a list of
         names or cast to an explicit schema."""
         ntz = (self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ") or "").strip().upper() == "TIMESTAMP_NTZ"
-        wall_clock: frozenset[int] = frozenset()
+        # With ``spark.sql.timestampType=TIMESTAMP_NTZ`` a naive column is inferred as wall-clock time, but
+        # an explicit ``TimestampType`` target localizes it in the session zone (and an explicit NTZ one never).
+        wall_clock: frozenset[int] = frozenset(range(table.num_columns)) if ntz else frozenset()
         if schema is not None and not isinstance(schema, list | tuple):
             targets = self._explicit_schema(schema).fields
-            wall_clock = frozenset(i for i, f in enumerate(targets) if isinstance(f.dataType, TimestampNTZType))
-        table = _rowconv.normalize_arrow_table(table, pa, None if ntz else _session_zone(self), wall_clock)
+            wall_clock |= frozenset(i for i, f in enumerate(targets) if isinstance(f.dataType, TimestampNTZType))
+            wall_clock -= frozenset(i for i, f in enumerate(targets) if isinstance(f.dataType, TimestampType))
+        table = _rowconv.normalize_arrow_table(table, pa, _session_zone(self), wall_clock)
         if isinstance(schema, list | tuple):
             _refuse_duplicate_names([str(n) for n in schema])
         elif schema is None:
@@ -456,7 +459,16 @@ class SparkSession:
         columns = []
         for i, field in enumerate(struct.fields):
             arrow_type = _rowconv.pa_type(field.dataType, pa)
-            values = [_rowconv.convert(v[i], field.dataType, zone) for v in valued]
+            values = []
+            for v in valued:
+                try:
+                    values.append(_rowconv.convert(v[i], field.dataType, zone))
+                except (TypeError, ValueError, OverflowError):
+                    # An unexpected container (``42`` for an array) is NULL when verification is off, as the
+                    # JVM conversion of classic PySpark leaves it.
+                    if not null_on_error:
+                        raise
+                    values.append(None)
             columns.append(_rowconv.arrow_array(values, arrow_type, pa, null_on_error))
         table = pa.table(columns, schema=_pa_schema(struct, pa))
         return DataFrame(self._native.create_dataframe(table), self)
