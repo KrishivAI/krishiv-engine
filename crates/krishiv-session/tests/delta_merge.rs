@@ -1039,7 +1039,8 @@ fn a_merge_source_reading_the_target_by_another_root_spelling_sees_every_row() {
 }
 
 /// A `MERGE` inside a SQL script sees the script's locals in its source, its clause conditions
-/// and its values, and a local shadows a session variable of the same name (#962 review).
+/// and its values, and a local shadows a session variable of the same name (#962 review): the
+/// clause condition `s.id + k = 3` holds only for the local `k` (2), not the variable (100).
 #[test]
 fn a_merge_in_a_script_reads_the_script_s_locals() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1061,7 +1062,7 @@ fn a_merge_in_a_script_reads_the_script_s_locals() {
            DECLARE k BIGINT DEFAULT 2; \
            DECLARE w STRING DEFAULT 'local'; \
            MERGE INTO t USING (SELECT k AS id UNION ALL SELECT 1) s ON t.id = s.id \
-           WHEN MATCHED AND s.id < k THEN UPDATE SET v = w \
+           WHEN MATCHED AND s.id + k = 3 THEN UPDATE SET v = w \
            WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id + k, w); \
          END",
     )
