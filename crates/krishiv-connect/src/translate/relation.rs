@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
-    ALIAS_PART_SEP, Builtin, CastMode, ColumnNamesOp, Expr, ExprNode, Grouping, JoinCondition,
-    JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode, ReadSource, SampleBounds,
-    SetOperation, SqlArgs, UnpivotColumnSet,
+    ALIAS_PART_SEP, AsOfDirection, AsOfMatch, Builtin, CastMode, ColumnNamesOp, Expr, ExprNode,
+    Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode, ReadSource,
+    SampleBounds, SetOperation, SqlArgs, UnpivotColumnSet,
 };
 
 use super::errors::{
@@ -58,6 +58,7 @@ impl Translator<'_> {
                 predicate: self.required_expression(f.condition.as_ref())?,
             },
             RelType::Join(j) => self.join(j)?,
+            RelType::AsOfJoin(j) => self.as_of_join(j)?,
             RelType::Sort(s) => {
                 if s.order.is_empty() {
                     return Err(assertion("'order' must be present and contain elements."));
@@ -190,6 +191,12 @@ impl Translator<'_> {
                         Expr::literal(Literal::String(echo.message)).alias("message"),
                     )],
                 },
+                // Registered for the command slot only: `resolve` has refused it here.
+                Extension::PersistPythonFunction(_) => {
+                    return Err(super::errors::unsupported(
+                        "the PersistPythonFunction extension in a relation",
+                    ));
+                }
             },
             other => {
                 return Err(unsupported_variant(
@@ -830,6 +837,74 @@ impl Translator<'_> {
             right: self.relation(right)?,
             kind,
             condition,
+        })
+    }
+
+    /// `AsOfJoin`, as Spark's `transformAsOfJoin` and `Dataset.joinAsOf` (v4.3.0): an inner or
+    /// left join (`JoinType`'s names, case and `_` ignored), `backward`, `forward` or `nearest`
+    /// (any case), the as-of values per side as given (no reordering, unlike the SQL match), the
+    /// tolerance kept for the analyzer. `using_columns` (Spark: `left[c] === right[c]` conditions)
+    /// is not translated yet.
+    fn as_of_join(&mut self, j: &pb::AsOfJoin) -> Result<PlanNode> {
+        let (Some(left), Some(right)) = (&j.left, &j.right) else {
+            return Err(assertion("Both join sides must be present"));
+        };
+        let kind = match j.join_type.to_ascii_lowercase().replace('_', "").as_str() {
+            "inner" => JoinKind::Inner,
+            "left" | "leftouter" => JoinKind::LeftOuter,
+            _ => {
+                return Err(unsupported(format!(
+                    "an as-of join of type '{}'",
+                    j.join_type
+                )));
+            }
+        };
+        let direction = match j.direction.to_ascii_lowercase().as_str() {
+            "backward" => AsOfDirection::Backward,
+            "forward" => AsOfDirection::Forward,
+            "nearest" => AsOfDirection::Nearest,
+            _ => {
+                return Err(unsupported(format!(
+                    "the as-of join direction '{}'",
+                    j.direction
+                )));
+            }
+        };
+        if !j.using_columns.is_empty() {
+            return Err(unsupported_field(
+                "AsOfJoin",
+                "using_columns",
+                "an as-of join on using columns",
+            ));
+        }
+        let (Some(left_as_of), Some(right_as_of)) = (&j.left_as_of, &j.right_as_of) else {
+            return Err(assertion("Both as-of values must be present"));
+        };
+        let condition = match &j.join_expr {
+            Some(c) => JoinCondition::On(self.expression(c)?),
+            None => JoinCondition::None,
+        };
+        let as_of = AsOfMatch {
+            left: self.expression(left_as_of)?,
+            right: self.expression(right_as_of)?,
+            direction,
+            allow_exact: j.allow_exact_matches,
+            tolerance: match &j.tolerance {
+                Some(t) => Some(self.expression(t)?),
+                None => None,
+            },
+            distance: None,
+            // Spark runs a Connect `AsOfJoin` as `RewriteAsOfJoin`'s `min_by` over every
+            // passing right row, which evaluates the distance on each.
+            distance_on_every_pair: true,
+            as_written: false,
+        };
+        Ok(PlanNode::AsOfJoin {
+            left: self.relation(left)?,
+            right: self.relation(right)?,
+            kind,
+            condition,
+            as_of: Arc::new(as_of),
         })
     }
 

@@ -26,6 +26,7 @@ pub(crate) use crate::http_test_server as test_server;
 mod tests;
 mod transport;
 pub mod types;
+pub(crate) mod vended;
 
 /// The response parsers on one arbitrary body, for `fuzz/fuzz_targets/iceberg_rest_response.rs` only.
 #[doc(hidden)]

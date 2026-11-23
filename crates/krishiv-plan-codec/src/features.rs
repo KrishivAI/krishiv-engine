@@ -123,6 +123,7 @@ macro_rules! registry {
 registry! {
     (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
     (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
+    (as_of_join, AsOfJoin, POST_MIGRATION_READER_VERSION, Semantic, "A sort-merge join's as-of match (`SortMergeJoinPlan.as_of`, Spark 4.3's `ASOF JOIN`): each left row with the nearest right row of its keys by the as-of columns; without it the join would return every matching pair."),
     (binary_output_style, BinaryOutputStyle, POST_MIGRATION_READER_VERSION, Semantic, "The `binary_output_style` expression environment setting (`spark.sql.binaryOutputStyle`): `to_csv` and `to_xml` print binary fields as UTF-8 text, signed bytes, base64 or hex instead of `[45 61]`."),
     (bitmap_aggregates, BitmapAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The bitmap aggregates (`bitmap_construct_agg`, `bitmap_or_agg`, `bitmap_and_agg`): a 4,096-byte bitmap per group."),
     (calendar_struct, CalendarStruct, POST_MIGRATION_READER_VERSION, Semantic, "CALENDAR INTERVAL columns on the struct carrier (months, days, microseconds, each child marked `krishiv.calendar`; ADR 0009 update 2026-11-06). A reader without it would read the column as a plain STRUCT."),
@@ -480,6 +481,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::SharedRead { .. } => Some(Feature::SharedSubplan),
             PhysNode::ExchangeSource { .. } => Some(Feature::ExchangeSource),
             PhysNode::UnionLoop { .. } | PhysNode::LoopRef { .. } => Some(Feature::UnionLoop),
+            PhysNode::SortMergeJoin(j) if j.as_of.is_some() => Some(Feature::AsOfJoin),
             PhysNode::SortMergeJoin(_) => Some(Feature::SortMergeJoin),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             PhysNode::PythonEval { .. } => Some(Feature::PythonUdf),

@@ -81,6 +81,8 @@ pub use json::JsonFormat;
 pub use krishiv_store::check_hf_file_path;
 /// The egress address rule (design P3-T067 §5.1), from `krishiv-store`.
 pub use krishiv_store::egress;
+/// Per-location credential sources (design P3-T067 §4.1), from `krishiv-store`.
+pub use krishiv_store::{CredentialScope, CredentialSource, ScopedCredential};
 /// The egress policy's HTTP clients (design P3-T067 §5.2), from `krishiv-store`.
 #[cfg(feature = "cloud")]
 pub use krishiv_store::{PolicyConnector, Redirects, SharedHttpClients};
