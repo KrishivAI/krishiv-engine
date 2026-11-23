@@ -306,7 +306,16 @@ fn session(files: &Arc<Files>) -> (Session, String) {
 
 /// [`session`] with or without a row-level table and an output.
 fn session_with(files: &Arc<Files>, row_level: bool, output: bool) -> (Session, String) {
-    let session = Session::new().unwrap();
+    put_table(Session::new().unwrap(), files, row_level, output)
+}
+
+/// `session` with the table `t` over `files`.
+fn put_table(
+    session: Session,
+    files: &Arc<Files>,
+    row_level: bool,
+    output: bool,
+) -> (Session, String) {
     let columns = vec![
         TableColumn {
             name: "id".to_owned(),
@@ -1019,7 +1028,14 @@ mod merge {
         m: MergeStatement,
     ) -> Result<Option<crate::dataframe::DataFrame>, krishiv_common::error::KrishivError> {
         let s = session.clone();
-        block_on(session.on_executor(async move { s.run_merge(&m).await }))
+        // As the statement runs it: the hidden tables go at its end (`Swept`).
+        block_on(session.on_executor(async move {
+            crate::table_commands::row_level::Swept::new(
+                Arc::clone(&s.state.catalog),
+                s.run_merge(&m),
+            )
+            .await
+        }))
     }
 
     fn merge(session: &Session, m: MergeStatement) -> Vec<RecordBatch> {
@@ -1149,6 +1165,84 @@ mod merge {
         assert!(rows.contains(&(10, "n10!".to_owned())), "{rows:?}");
         assert!(rows.contains(&(9, "s9?".to_owned())), "{rows:?}");
         assert_eq!(session.memory_reserved(), 0);
+    }
+
+    /// A MERGE cancelled right after its source's first spill write (the copy waits there, a
+    /// test hook) ends with the cancel's class, commits nothing, gives the pool back and leaves
+    /// no spill file.
+    #[test]
+    fn a_merge_cancelled_after_its_first_source_spill_write_leaves_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spill = tmp.path().join("spill");
+        let runtime = crate::EngineRuntime::builder()
+            .config("krishiv.spill.dir", spill.to_str().unwrap())
+            .build()
+            .unwrap();
+        let files = Files::new();
+        let (session, _) = put_table(
+            Session::builder().runtime(runtime).build().unwrap(),
+            &files,
+            true,
+            true,
+        );
+        let (reached, at_write) = tokio::sync::oneshot::channel();
+        let (resume, resumed) = tokio::sync::oneshot::channel();
+        *crate::table_commands::merge_source::AFTER_FIRST_WRITE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((reached, resumed));
+        let canceller = {
+            let s = session.clone();
+            std::thread::spawn(move || {
+                // An error: the merge ended without reaching the hook (cleared below).
+                if block_on(at_write).is_ok() {
+                    s.interrupt_all();
+                    resume.send(()).unwrap();
+                }
+            })
+        };
+        let e = try_merge(
+            &session,
+            statement(
+                SOURCE,
+                vec![
+                    clause(
+                        ClauseKind::Matched,
+                        None,
+                        ClauseAction::Update(vec![set("s", "src.s")]),
+                    ),
+                    clause(ClauseKind::NotMatched, None, ClauseAction::InsertStar),
+                ],
+            ),
+        )
+        .unwrap_err();
+        let unreached = crate::table_commands::merge_source::AFTER_FIRST_WRITE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .is_some();
+        canceller.join().unwrap();
+        assert!(!unreached, "the source was never spilled");
+        assert_eq!(e.sql_state(), Some("HY008"), "{e}");
+        assert_eq!(session.memory_reserved(), 0);
+        assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+        assert_eq!(files.names(), ["f0", "f1", "f2"]);
+        let mut left = Vec::new();
+        let mut dirs = vec![spill];
+        while let Some(d) = dirs.pop() {
+            let Ok(entries) = std::fs::read_dir(&d) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_none_or(|e| e != "lock") {
+                    // The `.lock` is the runtime's own, held while it lives.
+                    left.push(path);
+                }
+            }
+        }
+        assert!(left.is_empty(), "{left:?}");
     }
 
     #[test]
