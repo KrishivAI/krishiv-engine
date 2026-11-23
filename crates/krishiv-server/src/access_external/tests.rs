@@ -777,10 +777,9 @@ async fn a_unix_socket_endpoint_reaches_the_service() {
     assert_eq!(requests.lock().unwrap().len(), 2);
 }
 
-/// Review m9: an `https://` endpoint whose TLS handshake fails (here a service that speaks no
-/// TLS, as one whose certificate the platform roots refuse) is a denial, not an error.
+/// Review m9: an `https://` endpoint to a service that speaks no TLS is a denial, not an error.
 #[tokio::test]
-async fn an_https_endpoint_that_fails_its_handshake_denies() {
+async fn an_https_endpoint_to_a_service_without_tls_denies() {
     let (fake, requests) = rule_fake();
     let incoming =
         tonic::transport::server::TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).unwrap();
@@ -805,6 +804,78 @@ async fn an_https_endpoint_that_fails_its_handshake_denies() {
         .unwrap();
     assert!(!allowed(&d));
     assert!(requests.lock().unwrap().is_empty());
+}
+
+/// The private test CA's files (`krishiv-session/tests/fixtures/tls`, see its README).
+fn tls_fixture(name: &str) -> Vec<u8> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../krishiv-session/tests/fixtures/tls")
+        .join(name);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// Review m9 (and of 7f535d472, finding 1): a service over TLS whose certificate the platform
+/// roots do not trust (one of a private CA) is a denial, and no request reaches it. A client that
+/// trusts that CA reaches the same service, so the refusal is the certificate's alone.
+#[tokio::test]
+async fn an_https_service_with_an_untrusted_certificate_denies() {
+    use tonic::transport::{
+        Certificate, ClientTlsConfig, Identity, ServerTlsConfig, server::TcpIncoming,
+    };
+    let (fake, requests) = rule_fake();
+    let incoming = TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = incoming.local_addr().unwrap();
+    let identity = Identity::from_pem(tls_fixture("server.pem"), tls_fixture("server.key"));
+    let _server = tokio::spawn(async move {
+        let _ = tonic::transport::Server::builder()
+            .tls_config(ServerTlsConfig::new().identity(identity))
+            .unwrap()
+            .add_service(AccessPolicyServer::new(fake))
+            .serve_with_incoming(incoming)
+            .await;
+    });
+    // The certificate names 127.0.0.1, so only the trust in its CA differs below.
+    let uri = format!("https://127.0.0.1:{}", addr.port());
+
+    let trusting = tonic::transport::Endpoint::from_shared(uri.clone())
+        .unwrap()
+        .tls_config(
+            ClientTlsConfig::new().ca_certificate(Certificate::from_pem(tls_fixture("ca.pem"))),
+        )
+        .unwrap()
+        .connect_lazy();
+    let control = ExternalAccess::over(
+        AccessPolicyClient::new(trusting),
+        Duration::from_secs(5),
+        None,
+        false,
+    );
+    let d = control
+        .policy()
+        .check(&ana(), &table("t"), Privilege::Select)
+        .await
+        .unwrap();
+    assert!(allowed(&d), "a client trusting the test CA is answered");
+    assert_eq!(requests.lock().unwrap().len(), 1);
+
+    let endpoint = Endpoint::parse(&uri).unwrap();
+    let access = ExternalAccess::over(
+        AccessPolicyClient::new(endpoint.channel().unwrap()),
+        Duration::from_secs(5),
+        None,
+        false,
+    );
+    let d = access
+        .policy()
+        .check(&ana(), &table("t"), Privilege::Select)
+        .await
+        .unwrap();
+    assert!(!allowed(&d));
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        1,
+        "the untrusted handshake reached no handler"
+    );
 }
 
 /// Review m9: the provider's `Debug` form never shows its bearer token.

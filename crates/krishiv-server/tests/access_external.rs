@@ -36,7 +36,7 @@ enum Mode {
     Slow,
     /// Fail every check with a `PermissionDenied` status whose message is `CANARY`.
     Canary,
-    /// No service: nothing listens on the endpoint.
+    /// No service: nothing listens on the endpoint (a Unix socket path).
     Down,
 }
 
@@ -183,11 +183,11 @@ impl World {
             items: Arc::clone(&items),
             statements: Arc::clone(&statements),
         };
-        let addr = self.tokio.block_on(async {
+        let endpoint = self.tokio.block_on(async {
             if mode == Mode::Down {
-                // A port that was free a moment ago, with nothing listening on it now.
-                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-                return listener.local_addr().unwrap();
+                // A Unix socket path nothing listens on: refused at once, and no other process
+                // can be on the other end (a freed TCP port could be taken meanwhile).
+                return format!("unix:{}", self.dir.path().join("no-service.sock").display());
             }
             let incoming =
                 tonic::transport::server::TcpIncoming::bind("127.0.0.1:0".parse().unwrap())
@@ -199,14 +199,11 @@ impl World {
                     .serve_with_incoming(incoming)
                     .await;
             });
-            addr
+            format!("http://{addr}")
         });
         let access = {
             let _guard = self.tokio.enter();
-            let channel = Endpoint::parse(&format!("http://{addr}"))
-                .unwrap()
-                .channel()
-                .unwrap();
+            let channel = Endpoint::parse(&endpoint).unwrap().channel().unwrap();
             ExternalAccess::over(
                 AccessPolicyClient::new(channel),
                 Duration::from_millis(300),
