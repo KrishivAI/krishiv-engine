@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+# A local lakehouse: Krishiv, MinIO (S3) and JupyterLab with the PySpark Connect client.
+#
+#   docker compose up -d --wait      then open http://127.0.0.1:8888/lab?token=krishiv
+#   docker compose down -v           stops everything and deletes the data
+#
+# Every port is published on 127.0.0.1 only. The token and the MinIO keys below are for a laptop:
+# change them (a `.env` file next to this one) before anything else can reach these ports.
+# See README.md for the variables.
+name: krishiv-quickstart
+
+services:
+  minio:
+    image: ${MINIO_IMAGE:-cgr.dev/chainguard/minio:latest}
+    # A bucket is a directory of MinIO's data folder: the `lakehouse` bucket exists before the
+    # server starts.
+    entrypoint: ["sh", "-c", "mkdir -p /data/lakehouse && exec minio server /data --console-address :9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-krishiv}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-krishiv-quickstart}
+      # For the health check's `mc ready local`.
+      MC_HOST_local: http://${MINIO_ROOT_USER:-krishiv}:${MINIO_ROOT_PASSWORD:-krishiv-quickstart}@127.0.0.1:9000
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  krishiv:
+    image: ${KRISHIV_IMAGE:-ghcr.io/krishivai/krishiv:0.3.0}
+    # The image's self-signed certificate names the container's host name, so clients on this
+    # network connect to `krishiv`.
+    hostname: krishiv
+    # The image's entrypoint adds the token and the certificate; these two settings open the one
+    # bucket to queries and let the server reach MinIO's private address.
+    command:
+      - server
+      - --conf
+      - krishiv.io.objectStore.allowedPrefixes=s3://lakehouse
+      - --conf
+      - krishiv.io.egress.privateAddresses=allow
+    environment:
+      KRISHIV_AUTH_TOKEN: ${KRISHIV_AUTH_TOKEN:-krishiv-quickstart-token-change-me-please}
+      # The server's own S3 credentials and endpoint: MinIO.
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-krishiv}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-krishiv-quickstart}
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://minio:9000
+      AWS_ALLOW_HTTP: "true"
+    ports:
+      - "127.0.0.1:${KRISHIV_CONNECT_PORT:-15002}:15002"
+      - "127.0.0.1:${KRISHIV_UI_PORT:-8080}:8080"
+    volumes:
+      # The generated certificate, kept across restarts.
+      - krishiv-state:/var/lib/krishiv
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  jupyter:
+    build: ./jupyter
+    environment:
+      # What a notebook's `SparkSession.builder.getOrCreate()` connects to.
+      SPARK_REMOTE: sc://krishiv:15002/;use_ssl=true;token=${KRISHIV_AUTH_TOKEN:-krishiv-quickstart-token-change-me-please}
+      # The server's certificate, fetched by jupyter/start.sh.
+      GRPC_DEFAULT_SSL_ROOTS_FILE_PATH: /tmp/krishiv-cert.pem
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-krishiv}
+    ports:
+      - "127.0.0.1:${JUPYTER_PORT:-8888}:8888"
+    volumes:
+      - ./notebooks:/home/jovyan/work
+    depends_on:
+      krishiv:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/api', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  minio-data:
+  krishiv-state:

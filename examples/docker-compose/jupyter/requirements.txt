@@ -1,0 +1,5 @@
+jupyterlab>=4.2,<5
+# The 4.2 and 4.3 clients read settings at session start that the 0.3 server does not answer yet.
+pyspark-client>=4.0,<4.2
+# PySpark 4.x does not support pandas 3 yet.
+pandas>=2.2,<3
