@@ -538,6 +538,7 @@ impl RowLevelPlan {
         *self.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(Outcome {
             removed_files: 0,
             rows: Some(0),
+            merge: None,
         });
     }
 

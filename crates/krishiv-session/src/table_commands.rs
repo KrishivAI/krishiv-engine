@@ -1692,7 +1692,6 @@ enum ColumnChange {
     DropDefault,
 }
 
-/// The explicit idempotency key among a write's options, if any.
 fn explicit_key<'a, V: 'a>(
     options: impl IntoIterator<Item = (&'a String, &'a V)>,
     plain: impl Fn(&'a V) -> Option<&'a str>,
@@ -1703,7 +1702,7 @@ fn explicit_key<'a, V: 'a>(
         .and_then(|(_, v)| plain(v))
 }
 
-/// The writer of `df` into `table` with `mode`; `key` is the write's own idempotency key. Into a bucketed table each row goes to its bucket's file.
+/// The writer of `df` into `table` with `mode` and the write's own idempotency `key` (never the stored options'); into a bucketed table each row goes to its bucket's file.
 fn table_writer(
     table: &CatalogTable,
     df: &DataFrame,
@@ -1724,7 +1723,6 @@ fn table_writer(
         }
         writer = writer.option(k, v);
     }
-    // The key of this one write (never the stored options').
     if let Some(key) = key {
         writer = writer.option(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION, key);
     }
