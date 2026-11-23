@@ -549,7 +549,7 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans, false))
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans, None, false))
             .await
             .and_then(Ran::into_frame)
             .map(|(df, _)| df)
@@ -1964,4 +1964,7 @@ mod definer;
 
 mod ran;
 mod search_path;
-pub(crate) use ran::Ran;
+pub(crate) use ran::{
+    Ran, as_evaluation, as_listed_script_statement, as_script_statement, command_statement,
+    evaluation_failed,
+};

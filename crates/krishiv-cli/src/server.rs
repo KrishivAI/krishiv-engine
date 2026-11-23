@@ -45,6 +45,7 @@ use krishiv_connect_server::{
 };
 use krishiv_server::guard::{Guard, TokenGuard};
 use krishiv_server::session_guard::SessionGuard;
+use krishiv_server::udf_workers::UdfWorkersProvider;
 use krishiv_session::auth::{
     AuthConfig, Authenticated, ServerAuth, ServerTls, TlsConfig, check_listener, is_auth_key,
 };
@@ -464,14 +465,18 @@ async fn run_listeners(
     // One Python UDF worker pool per server (P3-T014): every Connect session's UDFs run on it, in
     // workers of their own owner, once the session passed the `Usage` check on `System("udf")`.
     // Starting it runs each listed interpreter once and writes the worker package: off the async workers.
+    #[cfg(not(target_os = "linux"))]
+    let udf_workers: Option<UdfWorkersProvider> = None;
     #[cfg(target_os = "linux")]
-    let manager = {
+    let (manager, udf_workers) = {
         let pool_config = krishiv_udf_pool::PoolConfig::from_config(config);
         let pool = tokio::task::spawn_blocking(move || krishiv_udf_pool::Pool::new(pool_config))
             .await
             .map_err(|e| format!("cannot start the Python UDF worker pool: {e}"))?
             .map_err(|e| format!("cannot start the Python UDF worker pool: {e}"))?;
-        manager.with_udf_host(Arc::new(pool))
+        // The console's Resources page lists the workers through a view that does not keep the pool.
+        let udf_workers = Some(udf_workers_of(pool.monitor()));
+        (manager.with_udf_host(Arc::new(pool)), udf_workers)
     };
     let manager = with_function_catalog(manager, config)?;
     let manager = Arc::new(manager);
@@ -560,6 +565,7 @@ async fn run_listeners(
         admin_bound,
         tls.is_some(),
         Arc::clone(&late_metrics),
+        udf_workers,
     )?;
     let mut connect_config = ConnectServerConfig::from_config(config);
     connect_config.shutdown_timeout = Duration::ZERO;
@@ -687,6 +693,34 @@ async fn run_listeners(
     served
 }
 
+/// What the console's Resources page reads of the Python UDF worker pool: its workers now, and nothing once
+/// the pool is gone (the server is stopping).
+#[cfg(target_os = "linux")]
+fn udf_workers_of(pool: krishiv_udf_pool::PoolMonitor) -> UdfWorkersProvider {
+    use krishiv_server::udf_workers::{UdfWorkerOwner, UdfWorkers};
+    let n = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    Arc::new(move || {
+        pool.snapshot().map(|now| UdfWorkers {
+            live: n(now.live),
+            idle: n(now.idle),
+            max_total: n(now.max_total),
+            max_per_session: n(now.max_per_session),
+            max_per_tenant: n(now.max_per_tenant),
+            owners: now
+                .owners
+                .into_iter()
+                .map(|o| UdfWorkerOwner {
+                    principal: o.owner.principal,
+                    session_id: o.owner.session,
+                    tenant: o.owner.tenant,
+                    live: n(o.live),
+                    idle: n(o.idle),
+                })
+                .collect(),
+        })
+    })
+}
+
 /// Samples another service adds to `/metrics` once it exists (the Flight SQL service is built
 /// after the admin router).
 type LateMetrics =
@@ -706,6 +740,7 @@ fn admin_router(
     bound: SocketAddr,
     tls: bool,
     late: LateMetrics,
+    udf_workers: Option<UdfWorkersProvider>,
 ) -> Result<axum::Router, String> {
     let authenticated = auth.is_some();
     let denials = auth.as_ref().map(|a| a.denials());
@@ -762,6 +797,9 @@ fn admin_router(
         let source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
             .map_err(|e| e.to_string())?;
         let mut source = with_stored_history(source, config);
+        if let Some(read) = udf_workers {
+            source = source.with_udf_workers(read);
+        }
         if let Some(denials) = denials {
             // The editor runs a statement as the authenticated caller, in the session a Spark Connect session of
             // that caller gets: the same role matrix and path confinement.
