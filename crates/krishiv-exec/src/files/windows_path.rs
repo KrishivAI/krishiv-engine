@@ -34,6 +34,13 @@ pub(crate) fn normalize(path: &str) -> String {
     text.to_owned()
 }
 
+/// The drive-led text of a local path in the locator's form (`/C:/x` gives `C:/x`, as do `//C:/x`
+/// and `///C:/x`); `None` when no drive follows the leading slashes.
+pub(crate) fn drive_led(local: &str) -> Option<&str> {
+    let text = local.trim_start_matches('/');
+    is_drive(text).then_some(text)
+}
+
 /// Whether `text` starts with a drive (`X:`) followed by `/`, `\` or nothing.
 pub(crate) fn is_drive(text: &str) -> bool {
     let b = text.as_bytes();
@@ -46,6 +53,15 @@ pub(crate) fn is_drive(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_drive_led_path_loses_its_leading_slashes() {
+        assert_eq!(drive_led("/C:/Users/a"), Some("C:/Users/a"));
+        assert_eq!(drive_led("///d:/a"), Some("d:/a"));
+        assert_eq!(drive_led("/C:"), Some("C:"));
+        assert_eq!(drive_led("/tmp/a"), None);
+        assert_eq!(drive_led("/ab:/x"), None);
+    }
 
     #[test]
     fn drive_paths_become_absolute() {

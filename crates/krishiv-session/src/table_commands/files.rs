@@ -73,7 +73,7 @@ impl Session {
             Some(text) if !managed && !location.is_absolute() => {
                 let qualified = self.qualify_path(text)?;
                 Ok(match qualified.strip_prefix("file:") {
-                    Some(local) => LocationAsked::Local(PathBuf::from(local)),
+                    Some(local) => LocationAsked::Local(krishiv_exec::files::native_path(local)),
                     None => LocationAsked::Store(qualified),
                 })
             }
@@ -376,7 +376,7 @@ fn parent_text(shown: &str) -> &str {
 
 /// The local path of a `file:/...` display.
 fn local_of(display: &str) -> PathBuf {
-    PathBuf::from(display.strip_prefix("file:").unwrap_or(display))
+    krishiv_exec::files::native_path(display)
 }
 
 /// Deletes a managed table's directory; a directory that is already gone

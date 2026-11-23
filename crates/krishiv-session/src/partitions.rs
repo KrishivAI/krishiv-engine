@@ -389,7 +389,7 @@ fn qualified(session: &Session, location: &str) -> Result<PathBuf, KrishivError>
     }
     let display = session.qualify_path(location)?;
     match display.strip_prefix("file:") {
-        Some(path) => Ok(PathBuf::from(path)),
+        Some(path) => Ok(krishiv_exec::files::native_path(path)),
         None => Err(unsupported(
             "partition locations outside the local file system",
         )),

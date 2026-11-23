@@ -10,7 +10,7 @@
 //! `KRISHIV_INSUFFICIENT_PERMISSIONS` and never revealing the policy's
 //! reason or whether the object exists.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, Prefix};
 use std::sync::Arc;
 
 use krishiv_common::error::{ErrorClass, KrishivError, KrishivUnsupportedFeature};
@@ -1269,7 +1269,7 @@ pub(crate) fn physical(
     let Some(local) = at.display.strip_prefix("file:") else {
         return Ok(Checked { at, shown });
     };
-    let Some(parts) = canonical_parts(Path::new(local)) else {
+    let Some(parts) = canonical_parts(&krishiv_exec::files::native_path(local)) else {
         return Err(unresolved(session, class, &shown, privilege));
     };
     Ok(Checked {
@@ -1374,7 +1374,7 @@ pub(crate) fn unresolved(
 /// it that exists, and the part that does not exist yet appended as written (see [`resolve_links`]).
 /// `None` for a relative path, one that cannot be resolved (an I/O error, a link loop, a dangling link,
 /// a `..` in its missing part) and a non-UTF-8 one. Callers fold `..` in the text first.
-fn canonical_parts(local: &Path) -> Option<Vec<String>> {
+pub(crate) fn canonical_parts(local: &Path) -> Option<Vec<String>> {
     if !local.is_absolute() {
         return None;
     }
@@ -1382,6 +1382,12 @@ fn canonical_parts(local: &Path) -> Option<Vec<String>> {
         .components()
         .filter_map(|c| match c {
             Component::Normal(p) => Some(p.to_str().map(str::to_owned)),
+            // A drive is the first segment, as `LocalPaths` writes it (`file:/C:/x`); a UNC share or
+            // device path is not resolved here (fails closed).
+            Component::Prefix(p) => Some(match p.kind() {
+                Prefix::Disk(d) | Prefix::VerbatimDisk(d) => Some(format!("{}:", char::from(d))),
+                _ => None,
+            }),
             _ => None,
         })
         .collect()
@@ -1402,7 +1408,7 @@ pub(crate) fn still_physical(session: &Session, checked: &Checked) -> Result<(),
     let Some(local) = checked.at.display.strip_prefix("file:") else {
         return Ok(());
     };
-    match canonical_parts(Path::new(local)) {
+    match canonical_parts(&krishiv_exec::files::native_path(local)) {
         Some(parts) if format!("file:/{}", parts.join("/")) == checked.at.display => Ok(()),
         _ => Err(deny()),
     }
@@ -1653,7 +1659,8 @@ mod canonical_path_tests {
     fn canonical(path: &Path) -> Option<String> {
         let lexical = lexical_dir(path).ok()?;
         let local = lexical.display.strip_prefix("file:")?.to_owned();
-        canonical_parts(Path::new(&local)).map(|p| format!("file:/{}", p.join("/")))
+        canonical_parts(&krishiv_exec::files::native_path(&local))
+            .map(|p| format!("file:/{}", p.join("/")))
     }
 
     #[cfg(unix)]

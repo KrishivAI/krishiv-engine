@@ -173,7 +173,7 @@ impl Session {
     ) -> Result<(), KrishivError> {
         match qualified.strip_prefix("file:") {
             Some(local) => {
-                self.authorize_path(Path::new(local), privileges, class)
+                self.authorize_path(&krishiv_exec::files::native_path(local), privileges, class)
                     .await?;
             }
             None => {

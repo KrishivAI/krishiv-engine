@@ -170,8 +170,8 @@ fn write_all(env: &Env, mut w: DataFileWriter, batches: &[RecordBatch]) -> Vec<W
     })
 }
 
-fn local(location: &str) -> &str {
-    location.strip_prefix("file://").unwrap()
+fn local(location: &str) -> std::path::PathBuf {
+    super::sink_tests::local_path(location)
 }
 
 /// The rows of the Parquet file at `location`.
@@ -806,7 +806,7 @@ fn attempts_of_one_task_name_their_files_apart() {
     assert!(files[0].location.ends_with("/00003-8-w1-00001.parquet"));
     assert_eq!(
         parquet_files(env.dir.path()),
-        [local(&files[0].location).to_owned()]
+        [local(&files[0].location).display().to_string()]
     );
 }
 

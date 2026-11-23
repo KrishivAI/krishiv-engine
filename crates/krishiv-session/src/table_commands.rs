@@ -893,7 +893,7 @@ impl Session {
         }
         if let Some(path) = paths.first().and_then(OptionValue::as_plain) {
             let local = path.strip_prefix("file:").unwrap_or(path);
-            if !path.contains("://") && !std::path::Path::new(local).exists() {
+            if !path.contains("://") && !krishiv_exec::files::native_path(local).exists() {
                 return Err(krishiv_common::error::PathNotFound {
                     path: format!("file:{local}"),
                 }

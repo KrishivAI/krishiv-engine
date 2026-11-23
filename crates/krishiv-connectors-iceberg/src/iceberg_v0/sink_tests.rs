@@ -69,7 +69,7 @@ impl Catalog {
 
     /// A catalog over the metadata file at `location`.
     pub(super) fn at(location: &str) -> Arc<Self> {
-        let bytes = std::fs::read(location.strip_prefix("file://").unwrap()).unwrap();
+        let bytes = std::fs::read(super::sink_tests::local_path(location)).unwrap();
         Arc::new(Self {
             state: Mutex::new((
                 serde_json::from_slice(&bytes).unwrap(),
@@ -147,12 +147,12 @@ impl CommitTable for Catalog {
 
 /// The local path of a `file://`, `file:` or bare absolute location (Spark's Hadoop catalog records a bare path
 /// as the table location).
-pub(super) fn local_path(location: &str) -> &str {
-    location
-        .strip_prefix("file://")
-        .or_else(|| location.strip_prefix("file:"))
-        .or_else(|| location.starts_with('/').then_some(location))
-        .unwrap_or_else(|| panic!("not a local location: {location}"))
+pub(super) fn local_path(location: &str) -> std::path::PathBuf {
+    assert!(
+        location.starts_with("file:") || location.starts_with('/'),
+        "not a local location: {location}"
+    );
+    krishiv_exec::files::native_path(location)
 }
 
 /// The source side of the test's write node: no rows.

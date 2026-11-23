@@ -571,7 +571,7 @@ impl Session {
                 self.state
                     .runtime
                     .results
-                    .invalidate_path(std::path::Path::new(local));
+                    .invalidate_path(&krishiv_exec::files::native_path(local));
             }
             let mut dirs = std::collections::BTreeSet::new();
             for f in &committed {

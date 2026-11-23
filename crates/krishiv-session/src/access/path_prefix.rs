@@ -180,7 +180,7 @@ impl PathPrefixPolicy {
         let Some(local) = text.strip_prefix("file:") else {
             return self.allows_object(text);
         };
-        let local = Path::new(local);
+        let local = &krishiv_exec::files::native_path(local);
         let normal = local.is_absolute()
             && local
                 .components()
