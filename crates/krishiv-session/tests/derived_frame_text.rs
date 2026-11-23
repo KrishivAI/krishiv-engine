@@ -408,6 +408,37 @@ fn a_row_assignment_is_one_run() {
     );
 }
 
+/// A row assignment whose cast to a target's type fails: what the row query alone says comes first. More
+/// than one row is `ROW_SUBQUERY_TOO_MANY_ROWS`, no row sets the targets to NULL, one row is the cast's error.
+#[test]
+fn a_row_assignment_whose_cast_fails_answers_as_the_row_query_does_first() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("DECLARE VARIABLE rc INT DEFAULT 5")).unwrap();
+    let class = |sql: &str| {
+        block_on(s.sql(sql))
+            .err()
+            .map(|e| e.error_class().name().to_owned())
+    };
+    assert_eq!(
+        class("SET VAR (rc) = (SELECT col1 FROM VALUES ('x'), ('y'))").as_deref(),
+        Some("ROW_SUBQUERY_TOO_MANY_ROWS")
+    );
+    assert_eq!(
+        class("SET VAR (rc) = (SELECT 'x')").as_deref(),
+        Some("CAST_INVALID_INPUT")
+    );
+    // A value no cast takes to INT: the casts do not analyze, and there is no row to assign.
+    assert_eq!(class("SET VAR (rc) = (SELECT array(1) WHERE false)"), None);
+    let batches = block_on(block_on(s.sql("SELECT rc IS NULL")).unwrap().collect()).unwrap();
+    let value = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::BooleanArray>()
+        .unwrap()
+        .value(0);
+    assert!(value, "no row sets the target to NULL");
+}
+
 /// A statement of a script refused before any query of it began (a missing table, an unknown variable)
 /// is listed as refused under its own text and class, beside the failed script.
 #[test]
