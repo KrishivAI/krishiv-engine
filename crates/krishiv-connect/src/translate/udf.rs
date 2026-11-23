@@ -59,6 +59,37 @@ pub struct PythonUdf {
     pub python_ver: String,
 }
 
+impl PythonUdf {
+    /// The UDF a stored row describes (`return_type` is a Spark catalog string), as a `register_function` of it would.
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for an eval type the pool does not run as a scalar UDF; the DDL parser's
+    /// (or, for a `{` or `"` start, the JSON reader's) error for a return type that does not parse.
+    pub fn from_stored(
+        name: String,
+        deterministic: bool,
+        eval_type: i32,
+        return_type: &str,
+        command: Vec<u8>,
+        python_ver: String,
+    ) -> Result<Self> {
+        Ok(Self {
+            name,
+            deterministic,
+            eval_type,
+            plan_eval_type: scalar_eval_type(eval_type)?,
+            return_type: if return_type.starts_with(['{', '"']) {
+                // The catalog stores the lossless Spark JSON: field names, nullability and UDT identity.
+                krishiv_types::DataType::from_canonical_json(return_type)?
+            } else {
+                krishiv_types::parse_data_type(return_type)?
+            },
+            command,
+            python_ver,
+        })
+    }
+}
+
 impl fmt::Debug for PythonUdf {
     // No payload bytes: the command is client code, and its size is what matters in a log.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -113,6 +144,14 @@ pub(crate) fn no_host() -> krishiv_common::error::KrishivError {
 pub enum Command {
     /// `register_function` with a Python UDF: register `udf` under its name in the session.
     RegisterPythonUdf(PythonUdf),
+    /// The `krishiv.v1.PersistPythonFunction` command extension: keep the session's registered Python UDF `name` in
+    /// the server's function catalog for the caller's tenant, or (`drop`) remove the tenant's stored one.
+    PersistPythonFunction {
+        /// The function's name.
+        name: String,
+        /// Remove instead of store.
+        drop: bool,
+    },
     /// `checkpoint_command`: checkpoint the command's relation (translated by the server, which
     /// runs the command) and hold the result under a new id.
     Checkpoint(CheckpointSpec),
@@ -168,10 +207,13 @@ pub fn translate_command(command: &pb::Command) -> Result<Command> {
         Some(CommandType::WriteOperationV2(w)) => {
             super::write::write_v2_spec(w).map(Command::WriteV2)
         }
-        // No command extension is registered yet: `resolve` names the capability it lacks, or the
-        // slot a registered message does sit in.
+        // `resolve` names the capability a message lacks, or the slot a registered message does sit in.
         Some(CommandType::Extension(any)) => match resolve(any, Slot::Command)? {
             Extension::Echo(_) => Err(super::command_not_supported(command)),
+            Extension::PersistPythonFunction(p) => Ok(Command::PersistPythonFunction {
+                name: p.name,
+                drop: p.drop,
+            }),
         },
         _ => Err(super::command_not_supported(command)),
     }
