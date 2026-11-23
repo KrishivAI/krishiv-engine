@@ -173,12 +173,20 @@ fn degree_of(name: &str, d: f32) -> Result<Degree, KrishivError> {
     Ok(degree)
 }
 
-fn norm_of(v: &[f32], degree: Degree, nan_propagates: bool) -> f32 {
+/// The norm in double precision. Spark 4.3 (`nan_propagates`) accumulates the L1 and L2 norms in `double` and
+/// divides by the double norm; 4.2 and earlier accumulate in `float` (the kernels), so their norm widens exactly.
+fn norm_of(v: &[f32], degree: Degree, nan_propagates: bool) -> f64 {
     match degree {
-        Degree::One => krishiv_kernels::vector::l1_norm(v),
-        Degree::Two => krishiv_kernels::vector::l2_norm(v),
-        Degree::Infinity if nan_propagates => krishiv_kernels::vector::inf_norm_nan(v),
-        Degree::Infinity => krishiv_kernels::vector::inf_norm(v),
+        Degree::One if nan_propagates => v.iter().map(|&x| f64::from(x).abs()).sum(),
+        Degree::Two if nan_propagates => v
+            .iter()
+            .map(|&x| f64::from(x) * f64::from(x))
+            .sum::<f64>()
+            .sqrt(),
+        Degree::One => f64::from(krishiv_kernels::vector::l1_norm(v)),
+        Degree::Two => f64::from(krishiv_kernels::vector::l2_norm(v)),
+        Degree::Infinity if nan_propagates => f64::from(krishiv_kernels::vector::inf_norm_nan(v)),
+        Degree::Infinity => f64::from(krishiv_kernels::vector::inf_norm(v)),
     }
 }
 
@@ -201,11 +209,13 @@ fn row_norm(
     if has_null {
         return Ok(None);
     }
-    Ok(Some(norm_of(
-        values.as_primitive::<Float32Type>().values(),
-        degree,
-        nan,
-    )))
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the result column is FLOAT"
+    )]
+    Ok(Some(
+        norm_of(values.as_primitive::<Float32Type>().values(), degree, nan) as f32,
+    ))
 }
 
 /// The row's vector divided by its norm: NULL for a norm below `Float.MIN_NORMAL` (4.2 and earlier) or
@@ -231,17 +241,33 @@ fn row_normalized(
         return Ok(Some(Vec::new()));
     }
     let norm = norm_of(values, degree, nan);
-    // Spark 4.3 rejects only a zero norm (a subnormal one divides); 4.2 and earlier reject below
-    // `Float.MIN_NORMAL` (`VectorFunctionImplUtils`).
+    // Spark 4.3 rejects only a zero norm (a subnormal one divides) and divides in double; 4.2 and earlier
+    // reject below `Float.MIN_NORMAL` (`VectorFunctionImplUtils`) and divide in float.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a 4.2 norm is a widened float"
+    )]
     let normalizable = if nan {
         norm != 0.0
     } else {
-        krishiv_kernels::vector::is_normalizable(norm)
+        krishiv_kernels::vector::is_normalizable(norm as f32)
     };
     if !normalizable {
         return Ok(None);
     }
-    Ok(Some(values.iter().map(|x| x / norm).collect()))
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the result elements are FLOAT"
+    )]
+    Ok(Some(if nan {
+        values
+            .iter()
+            .map(|&x| (f64::from(x) / norm) as f32)
+            .collect()
+    } else {
+        let norm = norm as f32;
+        values.iter().map(|x| x / norm).collect()
+    }))
 }
 
 #[derive(Clone, Copy)]

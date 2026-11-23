@@ -1837,6 +1837,28 @@ fn legacy_store_casts_map_values_one_by_one() {
     );
 }
 
+/// Map keys that collide after the LEGACY store cast follow `spark.sql.mapKeyDedupPolicy` (the map is rebuilt
+/// with `MapFromArrays`): `EXCEPTION` fails with `DUPLICATED_MAP_KEY`, `LAST_WIN` keeps the last value.
+#[test]
+fn legacy_store_applies_the_map_key_dedup_policy_to_keys_that_collide_after_the_cast() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table dd(m map<int,int>) using parquet");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    // `'1'` and `'01'` both cast to 1.
+    let insert = "insert into dd select map('1', 7, '01', 8)";
+    assert_eq!(class(&s, insert), "DUPLICATED_MAP_KEY");
+    assert_eq!(rows(&s, "select cast(count(*) as string) from dd"), ["0"]);
+    s.conf()
+        .set("spark.sql.mapKeyDedupPolicy", "LAST_WIN")
+        .unwrap();
+    run(&s, insert);
+    assert_eq!(rows(&s, "select cast(size(m) as string) from dd"), ["1"]);
+    assert_eq!(rows(&s, "select cast(m[1] as string) from dd"), ["8"]);
+}
+
 /// The LEGACY store cast recurses through array elements and struct fields into a nested map.
 #[test]
 fn legacy_store_casts_a_map_nested_in_an_array_and_a_struct() {

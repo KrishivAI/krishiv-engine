@@ -345,12 +345,30 @@ fn nested_windows_and_window_time() {
         vec![f("any_value", vec![c("window")]), count_star()],
     );
     let r = run(nested_any_value);
-    assert_ne!(
-        class(&r),
-        "MISSING_AGGREGATION",
+    assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    // `any_value(window)` is the inner window struct; `count(*)` a long.
+    assert!(
+        matches!(types(&r)[0], DataType::Struct(_)),
         "{:?}",
-        r.as_ref().err().map(|e| &e.error)
+        types(&r)
     );
+    assert_eq!(types(&r)[1], DataType::Long);
+    // A table qualifier called `window` is not the inner window's column.
+    let qualified = LogicalPlan::table(["t"]).alias("window").aggregate(
+        vec![f(
+            "window",
+            vec![window("window.ts", &["1 minute"]), s("5 minutes")],
+        )],
+        vec![
+            f(
+                "window",
+                vec![window("window.ts", &["1 minute"]), s("5 minutes")],
+            ),
+            count_star(),
+        ],
+    );
+    let r = run(qualified);
+    assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
     // `window_time` over a grouped window is neither a key nor an aggregate.
     let grouped_time = LogicalPlan::table(["t"]).aggregate(
         vec![window("ts", &["5 minutes"])],
@@ -428,7 +446,10 @@ fn a_window_over_a_window_column_of_a_derived_table_reads_its_window_time() {
     let r = qualified("q");
     assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
     assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
-    assert_ne!(class(&qualified("other")), "OK");
+    assert_eq!(
+        class(&qualified("other")),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
     // A struct that no `window(..)` made is not a window column.
     let plain = LogicalPlan::table(["t"])
         .project(vec![
@@ -439,6 +460,41 @@ fn a_window_over_a_window_column_of_a_derived_table_reads_its_window_time() {
             vec![c("window.start")],
         );
     assert_ne!(class(&run(plain)), "OK");
+}
+
+/// A derived table that renames its columns (`AS q(w, n)`) keeps the window identity of the renamed column.
+#[test]
+fn a_renamed_window_column_of_a_derived_table_is_still_a_window_column() {
+    let inner = LogicalPlan::table(["t"]).aggregate(
+        vec![window("ts", &["1 minute"])],
+        vec![
+            window("ts", &["1 minute"]).alias("inner_window"),
+            count_star().alias("cnt"),
+        ],
+    );
+    let renamed = LogicalPlan::new(PlanNode::SubqueryAlias {
+        input: std::sync::Arc::new(inner),
+        alias: "q".to_owned(),
+        columns: vec!["w".to_owned(), "n".to_owned()],
+    });
+    let outer = |col: &str| {
+        run(renamed.clone().aggregate(
+            vec![f("window", vec![c(col), s("5 minutes")])],
+            vec![c("window.start"), f("sum", vec![c("n")])],
+        ))
+    };
+    for col in ["w", "q.w"] {
+        let r = outer(col);
+        assert_eq!(
+            class(&r),
+            "OK",
+            "{col}: {:?}",
+            r.as_ref().err().map(|e| &e.error)
+        );
+        assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
+    }
+    // The column that is not a window is still refused.
+    assert_ne!(class(&outer("n")), "OK");
 }
 
 #[test]

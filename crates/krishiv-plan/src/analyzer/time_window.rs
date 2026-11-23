@@ -254,19 +254,25 @@ fn calls_window_time(e: &Arc<Expr>) -> bool {
 }
 
 /// Whether `e` names the inner window's `window` column outside any aggregate call: an aggregate's
-/// arguments are covered (`count(window)`, `any_value(window)`), as in `calls_window_time`.
-fn bare_window(e: &Arc<Expr>) -> bool {
+/// arguments are covered (`count(window)`, `any_value(window)`), as in `calls_window_time`. The column's own
+/// name is its last part: a table qualifier called `window` (`window.ts`) is not the column. `seen` holds the
+/// expressions already scanned without a match, so a shared one is walked once.
+fn bare_window(e: &Arc<Expr>, seen: &mut std::collections::HashSet<*const Expr>) -> bool {
     if let ExprNode::Function(f) = &e.node
         && f.qualifier.is_empty()
         && super::BuiltinFunctions::is_aggregate(&f.name)
     {
         return false;
     }
-    if matches!(&e.node, ExprNode::Column(c) if c.name.first().is_some_and(|n| n == WINDOW)) {
+    if matches!(&e.node, ExprNode::Column(c) if c.name.last().is_some_and(|n| n == WINDOW)) {
         return true;
     }
+    // The pointer is the key: `e` stays alive for the whole scan, so no address is reused.
+    if !seen.insert(Arc::as_ptr(e)) {
+        return false;
+    }
     let mut any = false;
-    e.for_each_child(&mut |c| any = any || bare_window(c));
+    e.for_each_child(&mut |c| any = any || bare_window(c, seen));
     any
 }
 
@@ -405,7 +411,10 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
     if let PlanNode::Aggregate { aggregates, .. } = &p.node
         && call_of(&call, WINDOW)
             .is_some_and(|w| w.args.first().is_some_and(|a| call_of(a, WINDOW).is_some()))
-        && aggregates.iter().any(bare_window)
+        && {
+            let mut seen = std::collections::HashSet::new();
+            aggregates.iter().any(|a| bare_window(a, &mut seen))
+        }
     {
         return Err(AnalysisError::new(
             MissingAggregation {
@@ -598,6 +607,13 @@ fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
             is_window_column(input, name)
         }
+        // A renamed column list (`AS q(w, n)`): `name` is the list's entry at some position, and the input's
+        // output column at that position is the one to look at.
+        PlanNode::SubqueryAlias { input, columns, .. } => columns
+            .iter()
+            .position(|c| c.eq_ignore_ascii_case(name))
+            .and_then(|i| output_names(input).into_iter().nth(i))
+            .is_some_and(|inner| is_window_column(input, &inner)),
         PlanNode::Project { input, exprs }
         | PlanNode::Aggregate {
             input,
@@ -620,6 +636,27 @@ fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
                 })
         }
         _ => false,
+    }
+}
+
+/// The output column names of a projection or aggregate (an alias, or a bare column's own name; `""` for an
+/// expression with neither), seen through derived-table aliases; empty for any other node.
+fn output_names(p: &Arc<LogicalPlan>) -> Vec<String> {
+    match &p.node {
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => output_names(input),
+        PlanNode::SubqueryAlias { columns, .. } => columns.clone(),
+        PlanNode::Project { exprs, .. }
+        | PlanNode::Aggregate {
+            aggregates: exprs, ..
+        } => exprs
+            .iter()
+            .map(|e| match &e.node {
+                ExprNode::Alias { name, .. } => name.clone(),
+                ExprNode::Column(c) => c.name.last().cloned().unwrap_or_default(),
+                _ => String::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
