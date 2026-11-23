@@ -91,6 +91,20 @@ def test_print_schema_is_sparks_tree(spark: SparkSession, capsys: pytest.Capture
     ]
 
 
+def test_print_schema_keeps_nested_nullability(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
+    """Spark prints ``containsNull = false`` for ``array(1)`` and ``valueContainsNull = false`` for ``map('a', 1)``."""
+    spark.sql("select array(1) a, map('a', 1) m").printSchema()
+    assert capsys.readouterr().out == (
+        "root\n"
+        " |-- a: array (nullable = false)\n"
+        " |    |-- element: integer (containsNull = false)\n"
+        " |-- m: map (nullable = false)\n"
+        " |    |-- key: string\n"
+        " |    |-- value: integer (valueContainsNull = false)\n"
+        "\n"
+    )
+
+
 def test_spark_context_is_an_unsupported_name() -> None:
     """PY-045: ``from krishiv import SparkContext`` names the DataFrame way, not a bare ``ImportError``."""
     from krishiv import SparkContext

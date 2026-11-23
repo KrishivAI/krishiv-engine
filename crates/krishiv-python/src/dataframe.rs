@@ -622,8 +622,9 @@ impl PyDataFrame {
         })
     }
 
-    /// `(name, Spark simple type string, nullable)` per column, by analysis.
-    fn schema(&self, py: Python<'_>) -> PyResult<Vec<(String, String, bool)>> {
+    /// `(name, Spark simple type string, nullable, Spark JSON type)` per column, by analysis. The JSON
+    /// type carries the nullability of array elements and map values, which the simple string drops.
+    fn schema(&self, py: Python<'_>) -> PyResult<Vec<(String, String, bool, String)>> {
         let df = self.inner.clone();
         let schema = block_on(py, async move { df.schema_boxed().await })?;
         schema
@@ -631,7 +632,12 @@ impl PyDataFrame {
             .iter()
             .map(|f| {
                 let data_type = DataType::from_arrow_field(f).map_err(|e| to_py(py, &e))?;
-                Ok((f.name().clone(), data_type.simple_string(), f.is_nullable()))
+                Ok((
+                    f.name().clone(),
+                    data_type.simple_string(),
+                    f.is_nullable(),
+                    data_type.json(),
+                ))
             })
             .collect()
     }
