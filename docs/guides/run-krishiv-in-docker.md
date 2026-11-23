@@ -43,14 +43,14 @@ non-loopback address without authentication and TLS (ADR 0046), so the image's e
 One command and one variable:
 
 ```bash
-docker run -d --name krishiv -p 15002:15002 -p 8080:8080 -e KRISHIV_AUTH_TOKEN=change-me \
+docker run -d --name krishiv -p 15002:15002 -p 8080:8080 -e KRISHIV_AUTH_TOKEN=change-me-to-32-or-more-characters-of-your-own \
   ghcr.io/krishivai/krishiv:0.3.0
 docker cp krishiv:/var/lib/krishiv/tls/cert.pem .   # the self-signed certificate it generated
 ```
 
 | What | How the image chooses it |
 |---|---|
-| Token | `KRISHIV_AUTH_TOKEN`; else the file `KRISHIV_AUTH_TOKEN_FILE` (default `/run/secrets/krishiv_token`, a Docker or Compose secret); else a random token generated on first start and printed in the container log. It is one admin principal, `docker`, and expires on `KRISHIV_AUTH_TOKEN_EXPIRES` (`YYYY-MM-DD`, default one year from start). |
+| Token | `KRISHIV_AUTH_TOKEN` (at least 32 characters: the server refuses a shorter token at start); else the file `KRISHIV_AUTH_TOKEN_FILE` (default `/run/secrets/krishiv_token`, a Docker or Compose secret); else a random token generated on first start and printed in the container log. It is one admin principal, `docker`, and expires on `KRISHIV_AUTH_TOKEN_EXPIRES` (`YYYY-MM-DD`, default one year from start). |
 | Certificate | `KRISHIV_TLS_CERT` and `KRISHIV_TLS_KEY` (default `/etc/krishiv/tls/cert.pem` and `key.pem`); else a self-signed certificate for `localhost`, `127.0.0.1` and the container's host name, generated on first start in `KRISHIV_TLS_DIR` (default `/var/lib/krishiv/tls`). Mount that directory to keep the certificate across containers. |
 
 The key and a token file must not be readable by group or others, or the server refuses them.
@@ -108,11 +108,13 @@ Mount a volume only for data you want to keep or read:
 | `/certs`, read-only | your own TLS certificate and key |
 | `/var/lib/krishiv/tls` | the generated certificate and token, to keep them across containers |
 
-The image declares no volumes. The server runs as uid `10001`, so a bind-mounted directory it writes to must be writable
+`/data` is a volume, and with the one-variable start it is the only local directory queries may read or write: a
+server with authentication allows no local path otherwise. `KRISHIV_ALLOWED_ROOTS` names a comma-separated list of
+existing directories to allow instead of `/data`. The server runs as uid `10001`, so a bind-mounted directory it writes to must be writable
 by that uid (`chown 10001:10001 data`), and the key and token files must be readable by it. Spill files go to `~/.cache/krishiv/spill`, under the home directory `/var/lib/krishiv`, inside the container; set
 `krishiv.spill.dir` to a mounted local volume if the container's own disk is small.
 
-To limit what clients can reach, set `krishiv.io.local.allowedRoots=/data`. See
+When you configure authentication yourself, the same limit is the setting `krishiv.io.local.allowedRoots`. See
 [Securing a single-node server](single-node-server-security.md#path-confinement).
 
 ## Check that it is up
@@ -137,11 +139,13 @@ from pyspark.sql import SparkSession
 spark = SparkSession.builder.remote(
     f"sc://localhost:15002/;use_ssl=true;token={os.environ['KRISHIV_TOKEN']}"
 ).create()
-spark.sql("SELECT 1 AS one").show()
+print(spark.sql("SELECT 1 AS one").collect())
 ```
 
 With a certificate that your system does not trust (a self-signed one), point gRPC at it before you connect:
 `export GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=$PWD/cert.pem`.
+
+`DataFrame.show()` is not served in 0.3.0: use `collect()` or `toPandas()`.
 
 JDBC and ADBC clients connect to the same port with the Flight SQL driver; see [Arrow Flight SQL](flight-sql.md).
 
