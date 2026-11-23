@@ -1336,7 +1336,8 @@ fn coverage_dir_is_a_sibling_of_the_target_dir() {
     );
     assert_eq!(
         xtask::precheck::cov_dir_for(root, None),
-        "/w/target/precheck-cov"
+        // Joined as a path: `/w\target/precheck-cov` on Windows.
+        root.join("target/precheck-cov").display().to_string()
     );
 }
 
