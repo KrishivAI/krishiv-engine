@@ -21,6 +21,8 @@ mod rest;
 #[cfg(feature = "session")]
 mod session_admin;
 #[cfg(feature = "session")]
+mod session_admin_config;
+#[cfg(feature = "session")]
 pub use session_admin::{DrainOps, SessionAdmin};
 
 use std::collections::BTreeMap;
@@ -48,12 +50,18 @@ mod pb {
 pub use pb::admin_service_server::{AdminService, AdminServiceServer};
 pub use pb::{
     CancelQueriesByTagRequest, CancelQueriesByTagResponse, CancelQueryRequest, CancelQueryResponse,
-    Capability, DrainRequest, DrainResponse, DrainStatus, GetCapabilitiesRequest,
-    GetCapabilitiesResponse, GetDrainStatusRequest, GetDrainStatusResponse, GetReadinessRequest,
-    GetReadinessResponse, GetVersionRequest, GetVersionResponse, KillSessionRequest,
-    KillSessionResponse, ListQueriesRequest, ListQueriesResponse, ListSessionsRequest,
-    ListSessionsResponse, Query, ReadinessCheck, ResumeServingRequest, ResumeServingResponse,
-    Session,
+    Capability, ConfigEntry, ConfigProblem, DrainRequest, DrainResponse, DrainStatus,
+    GetCapabilitiesRequest, GetCapabilitiesResponse, GetConfigRequest, GetConfigResponse,
+    GetDrainStatusRequest, GetDrainStatusResponse, GetReadinessRequest, GetReadinessResponse,
+    GetResourceGroupConfigRequest, GetResourceGroupConfigResponse, GetVersionRequest,
+    GetVersionResponse, KillSessionRequest, KillSessionResponse, ListQueriesRequest,
+    ListQueriesResponse, ListResourceGroupsRequest, ListResourceGroupsResponse,
+    ListSessionsRequest, ListSessionsResponse, Query, ReadinessCheck,
+    ReloadResourceGroupConfigRequest, ReloadResourceGroupConfigResponse,
+    ReplaceResourceGroupConfigRequest, ReplaceResourceGroupConfigResponse, ResourceGroup,
+    ResumeServingRequest, ResumeServingResponse, Session, SetConfigDefaultsRequest,
+    SetConfigDefaultsResponse, ValidateResourceGroupConfigRequest,
+    ValidateResourceGroupConfigResponse,
 };
 
 #[cfg(test)]
@@ -62,7 +70,7 @@ mod tests;
 /// The revision of this surface: an integer that grows whenever the descriptor snapshot changes
 /// (design §6.3; `cargo xtask admin-api` requires the increase). `GetVersion` returns it and
 /// `system.capabilities` carries it in the `("surface", "admin.v1", <revision>, ..)` row.
-pub const ADMIN_V1_REVISION: i64 = 3;
+pub const ADMIN_V1_REVISION: i64 = 4;
 
 /// Whether the surface is still `preview` (design D8): until the first release that ships it a
 /// non-additive change is possible.
@@ -338,6 +346,69 @@ pub trait AdminApi: Send + Sync + 'static {
         _request: ResumeServingRequest,
     ) -> BoxFuture<'_, AdminResult<ResumeServingResponse>> {
         unsupported("ResumeServing")
+    }
+
+    /// `ListResourceGroups` (design P3-T066 §4).
+    fn list_resource_groups(
+        &self,
+        _call: &Call,
+        _request: ListResourceGroupsRequest,
+    ) -> BoxFuture<'_, AdminResult<ListResourceGroupsResponse>> {
+        unsupported("ListResourceGroups")
+    }
+
+    /// `GetResourceGroupConfig` (design P3-T066 §4).
+    fn get_resource_group_config(
+        &self,
+        _call: &Call,
+        _request: GetResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<GetResourceGroupConfigResponse>> {
+        unsupported("GetResourceGroupConfig")
+    }
+
+    /// `ValidateResourceGroupConfig` (design P3-T066 §4).
+    fn validate_resource_group_config(
+        &self,
+        _call: &Call,
+        _request: ValidateResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<ValidateResourceGroupConfigResponse>> {
+        unsupported("ValidateResourceGroupConfig")
+    }
+
+    /// `ReplaceResourceGroupConfig` (design P3-T066 §4).
+    fn replace_resource_group_config(
+        &self,
+        _call: &Call,
+        _request: ReplaceResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<ReplaceResourceGroupConfigResponse>> {
+        unsupported("ReplaceResourceGroupConfig")
+    }
+
+    /// `ReloadResourceGroupConfig` (design P3-T066 §4).
+    fn reload_resource_group_config(
+        &self,
+        _call: &Call,
+        _request: ReloadResourceGroupConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<ReloadResourceGroupConfigResponse>> {
+        unsupported("ReloadResourceGroupConfig")
+    }
+
+    /// `GetConfig` (design P3-T066 §4).
+    fn get_config(
+        &self,
+        _call: &Call,
+        _request: GetConfigRequest,
+    ) -> BoxFuture<'_, AdminResult<GetConfigResponse>> {
+        unsupported("GetConfig")
+    }
+
+    /// `SetConfigDefaults` (design P3-T066 §4).
+    fn set_config_defaults(
+        &self,
+        _call: &Call,
+        _request: SetConfigDefaultsRequest,
+    ) -> BoxFuture<'_, AdminResult<SetConfigDefaultsResponse>> {
+        unsupported("SetConfigDefaults")
     }
 }
 

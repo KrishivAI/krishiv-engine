@@ -37,6 +37,8 @@ pub(crate) struct Request {
     pub(crate) bearer: Option<SecretString>,
     /// An `application/x-www-form-urlencoded` body (a token request: it carries the client secret).
     pub(crate) form: Option<SecretString>,
+    /// An `application/json` body (a commit request); `post` must be set.
+    pub(crate) json: Option<Vec<u8>>,
     pub(crate) headers: Vec<(&'static str, String)>,
 }
 
@@ -47,6 +49,7 @@ impl Request {
             url,
             bearer: None,
             form: None,
+            json: None,
             headers: Vec::new(),
         }
     }
@@ -56,13 +59,36 @@ impl Request {
 #[derive(Debug)]
 pub(crate) struct Response {
     pub(crate) status: u16,
+    /// `Retry-After` in delta-seconds (an HTTP date is ignored).
+    pub(crate) retry_after: Option<Duration>,
     pub(crate) body: Vec<u8>,
+}
+
+/// A request that got no whole answer, and whether any of it may have reached the server.
+#[derive(Debug)]
+pub(crate) struct SendFailure {
+    pub(crate) error: RestError,
+    /// `false` only when the request provably never left: refused by the egress policy, a
+    /// request that could not be built, a connection that was never made, a deadline passed
+    /// before sending. Everything else (a timeout, a reset, an answer refused while read) may
+    /// have been delivered.
+    pub(crate) sent: bool,
+}
+
+impl SendFailure {
+    fn unsent(error: RestError) -> Self {
+        Self { error, sent: false }
+    }
+
+    fn sent(error: RestError) -> Self {
+        Self { error, sent: true }
+    }
 }
 
 struct Job {
     request: Request,
     deadline: Instant,
-    reply: mpsc::SyncSender<Result<Response, RestError>>,
+    reply: mpsc::SyncSender<Result<Response, SendFailure>>,
 }
 
 /// The HTTP client of one catalog.
@@ -119,7 +145,7 @@ impl Transport {
                                 send(&client, &connector, job.request, max_bytes),
                             )
                             .await
-                            .unwrap_or(Err(RestError::Timeout));
+                            .unwrap_or(Err(SendFailure::sent(RestError::Timeout)));
                             // The caller may have stopped waiting: nothing to do then.
                             let _ = job.reply.send(result);
                         });
@@ -135,9 +161,19 @@ impl Transport {
 
     /// Sends `request` and waits for the whole response until `deadline`.
     pub(crate) fn call(&self, request: Request, deadline: Instant) -> Result<Response, RestError> {
+        self.call_tracked(request, deadline).map_err(|f| f.error)
+    }
+
+    /// [`Self::call`], saying on a failure whether the request may have reached the server (a
+    /// commit is never sent twice after one that may have).
+    pub(crate) fn call_tracked(
+        &self,
+        request: Request,
+        deadline: Instant,
+    ) -> Result<Response, SendFailure> {
         let now = Instant::now();
         if deadline <= now {
-            return Err(RestError::Timeout);
+            return Err(SendFailure::unsent(RestError::Timeout));
         }
         let (reply, answer) = mpsc::sync_channel(1);
         self.jobs
@@ -146,16 +182,20 @@ impl Transport {
                 deadline,
                 reply,
             })
-            .map_err(|_| RestError::Transport("the client thread has stopped".to_owned()))?;
+            .map_err(|_| {
+                SendFailure::unsent(RestError::Transport(
+                    "the client thread has stopped".to_owned(),
+                ))
+            })?;
         match answer.recv_timeout(
             deadline
                 .saturating_duration_since(now)
                 .saturating_add(REPLY_GRACE),
         ) {
             Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(RestError::Timeout),
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(RestError::Transport(
-                "the client thread has stopped".to_owned(),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(SendFailure::sent(RestError::Timeout)),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(SendFailure::sent(
+                RestError::Transport("the client thread has stopped".to_owned()),
             )),
         }
     }
@@ -172,24 +212,40 @@ fn transport_error(e: reqwest::Error) -> RestError {
     )
 }
 
+/// `Retry-After` as delta-seconds; an HTTP date (or anything else) is ignored.
+fn retry_after(response: &reqwest::Response) -> Option<Duration> {
+    response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+}
+
 async fn send(
     client: &reqwest::Client,
     connector: &PolicyConnector,
     request: Request,
     max_bytes: usize,
-) -> Result<Response, RestError> {
+) -> Result<Response, SendFailure> {
     let Request {
         post,
         url,
         bearer,
         form,
+        json,
         headers,
     } = request;
     // An address literal never reaches the egress resolver: checked here, before anything is sent. The
     // message never names the address.
     connector
         .check_request_host(url.host_str().unwrap_or_default())
-        .map_err(|refusal| RestError::Transport(format!("egress policy: {refusal}")))?;
+        .map_err(|refusal| {
+            SendFailure::unsent(RestError::Transport(format!("egress policy: {refusal}")))
+        })?;
     let mut builder = if post {
         client.post(url)
     } else {
@@ -204,8 +260,11 @@ async fn send(
         let mut text = format!("Bearer {}", token.expose_secret());
         let value = HeaderValue::from_str(&text);
         wipe(&mut text);
-        let mut value = value
-            .map_err(|_| RestError::Protocol("the token is not a valid header value".to_owned()))?;
+        let mut value = value.map_err(|_| {
+            SendFailure::unsent(RestError::Protocol(
+                "the token is not a valid header value".to_owned(),
+            ))
+        })?;
         value.set_sensitive(true);
         builder = builder.header(AUTHORIZATION, value);
     }
@@ -214,34 +273,53 @@ async fn send(
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(form.expose_secret().to_owned());
     }
-    let mut response = builder.send().await.map_err(transport_error)?;
+    if let Some(json) = json {
+        builder = builder.header(CONTENT_TYPE, "application/json").body(json);
+    }
+    let mut response = builder.send().await.map_err(|e| {
+        // Only a request that was never built or never connected provably did not leave.
+        if e.is_builder() || e.is_connect() {
+            SendFailure::unsent(transport_error(e))
+        } else {
+            SendFailure::sent(transport_error(e))
+        }
+    })?;
     let status = response.status().as_u16();
     if (300..400).contains(&status) {
-        return Err(RestError::Redirect(status));
+        return Err(SendFailure::sent(RestError::Redirect(status)));
     }
+    let retry_after = retry_after(&response);
     if let Some(encoding) = response.headers().get(CONTENT_ENCODING) {
         let identity = encoding
             .to_str()
             .is_ok_and(|e| e.trim().eq_ignore_ascii_case("identity"));
         if !identity {
-            return Err(RestError::Protocol(
+            return Err(SendFailure::sent(RestError::Protocol(
                 "a compressed response (Content-Encoding) although identity was asked for"
                     .to_owned(),
-            ));
+            )));
         }
     }
     if response
         .content_length()
         .is_some_and(|n| usize::try_from(n).map_or(true, |n| n > max_bytes))
     {
-        return Err(RestError::Limit(RestLimit::Bytes));
+        return Err(SendFailure::sent(RestError::Limit(RestLimit::Bytes)));
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| SendFailure::sent(transport_error(e)))?
+    {
         if body.len().saturating_add(chunk.len()) > max_bytes {
-            return Err(RestError::Limit(RestLimit::Bytes));
+            return Err(SendFailure::sent(RestError::Limit(RestLimit::Bytes)));
         }
         body.extend_from_slice(&chunk);
     }
-    Ok(Response { status, body })
+    Ok(Response {
+        status,
+        retry_after,
+        body,
+    })
 }

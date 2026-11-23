@@ -4,7 +4,9 @@
 
 use serde_json::{Value, json};
 
-use super::{descriptor_problems, generate, openapi_problems, preview_of, revision_problem, run};
+use super::{
+    descriptor_problems, generate, openapi_problems, preview_of, revision_problem, run, schema_of,
+};
 
 /// One non-additive change: what it is and how to make it.
 type Change = (&'static str, Box<dyn Fn(&mut Value)>);
@@ -405,4 +407,35 @@ fn a_removed_field_against_the_base_fails_unless_allowed_while_preview() {
         .err()
         .unwrap_or_default();
     assert!(err.contains("no longer `preview`"), "{err}");
+}
+
+#[test]
+fn a_duration_is_a_protojson_string_not_a_missing_component() {
+    let s = schema_of("message:google.protobuf.Duration");
+    assert_eq!(
+        s,
+        serde_json::json!({
+            "type": "string",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "example": "5s"
+        })
+    );
+    // The documented forms match the pattern.
+    let re = regex_lite_match;
+    assert!(re("5s") && re("1.5s") && re("-3s"));
+    assert!(!re("s") && !re("5") && !re("1.5"));
+}
+
+/// `^-?[0-9]+(\.[0-9]{1,9})?s$` by hand (no regex dependency in xtask).
+fn regex_lite_match(v: &str) -> bool {
+    let Some(body) = v.strip_suffix('s') else {
+        return false;
+    };
+    let body = body.strip_prefix('-').unwrap_or(body);
+    let (whole, frac) = body
+        .split_once('.')
+        .map_or((body, None), |(w, f)| (w, Some(f)));
+    !whole.is_empty()
+        && whole.bytes().all(|b| b.is_ascii_digit())
+        && frac.is_none_or(|f| (1..=9).contains(&f.len()) && f.bytes().all(|b| b.is_ascii_digit()))
 }

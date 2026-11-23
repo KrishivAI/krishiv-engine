@@ -63,7 +63,17 @@ A UDF that breaks a limit gets an error, and the worker is replaced. The server 
 | `krishiv.python.worker.idleTimeout` | `1min` | How long an idle worker is kept for the next call of its session. |
 | `krishiv.python.worker.maxPerSession` | `8` | Most workers one session runs at once. More calls wait. |
 | `krishiv.python.worker.maxTotal` | `64` | Most workers the server runs over all sessions. |
+| `krishiv.python.worker.maxPerTenant` | `32` | Most workers, and most running calls, of one tenant over all its sessions. More calls wait; one tenant cannot take every worker or call thread. Sessions without a tenant count per principal; with authentication off (one local principal) there is no cap, only `maxTotal` and `maxPerSession`. |
 | `krishiv.python.worker.memoryLimit` | `1GB` | Address-space limit per worker. A UDF that allocates past it gets a `MemoryError`, or its worker ends. |
+| `krishiv.python.worker.tenantMemoryLimit` | unset | Address-space limit per worker of a tenant, when lower than `memoryLimit`. |
 | `krishiv.python.worker.sandbox.allowFork` | `false` | Lets a UDF fork (`multiprocessing`, `os.fork`). The other limits still apply to the forked processes. |
 
 All of these are set at start-up. Restart the server after a change.
+
+## Persisting a function
+
+A client can keep a registered Python UDF with the `krishiv.v1.PersistPythonFunction` command (`drop` removes it).
+The server advertises the `persistpythonfunction` capability whether or not it has a function catalog; without one
+(`python-function-catalog` build feature of `krishiv` and `krishiv.connect.pythonFunctions.catalog`) the command is refused with
+`KRISHIV_UNSUPPORTED_FEATURE`. Stored functions are per tenant (an untenanted principal is its own key); replacing
+or dropping another principal's function needs `Manage` on the cluster.
