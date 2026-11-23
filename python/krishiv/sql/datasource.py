@@ -590,13 +590,15 @@ def _plan_and_read(
             if offered:
                 rejected = reader.pushFilters(list(offered))
                 kept = list(rejected) if rejected is not None else []
-                if any(not any(r is f for f in offered) for r in kept):
+                offered_ids = {id(f) for f in offered}
+                kept_ids = {id(r) for r in kept}
+                if any(id(r) not in offered_ids for r in kept):
                     raise PySparkAssertionError(
                         errorClass="DATA_SOURCE_EXTRANEOUS_FILTERS",
                         messageParameters={"type": type(reader).__name__},
                     )
                 for i, f in enumerate(offered):
-                    pushed[i] = not any(r is f for r in kept)
+                    pushed[i] = id(f) not in kept_ids
         return reader
 
     reader = _guard("initialize", "reader", initialize)

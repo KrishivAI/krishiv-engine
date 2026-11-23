@@ -186,6 +186,28 @@ impl Fixture {
     }
 }
 
+/// The sorted values of the plan's first output column (an integer column).
+fn first_column(plan: &Runnable) -> Vec<i64> {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Int32Type, Int64Type};
+    let mut out = Vec::new();
+    for b in run(plan).unwrap() {
+        let c = b.column(0);
+        if let Some(a) = c.as_primitive_opt::<Int64Type>() {
+            out.extend(a.iter().flatten());
+        } else {
+            out.extend(
+                c.as_primitive::<Int32Type>()
+                    .iter()
+                    .flatten()
+                    .map(i64::from),
+            );
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
 /// Whether the plan text has a `Filter` operator line (not the scan's `PushedFilters`).
 fn has_filter(plan: &Runnable) -> bool {
     plan.to_string().lines().any(|l| {
@@ -220,6 +242,7 @@ fn the_residual_keeps_what_the_source_did_not_claim() {
     assert!(has_filter(&plan), "{plan}");
     // `a > 5` is claimed and not applied; the disjunction is the residual: a = 1 or b = 20.
     assert_eq!(f.rows(&plan), 2);
+    assert_eq!(first_column(&plan), [10, 20]);
     let decides = f.log.decides.lock().unwrap();
     assert!(
         decides[0]

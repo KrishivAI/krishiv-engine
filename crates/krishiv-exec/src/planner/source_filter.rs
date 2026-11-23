@@ -200,9 +200,9 @@ fn null_rejected<'a>(
 /// `TIMESTAMP`: Python gets a naive `datetime` for the one and a UTC-aware one for the other.
 fn source_value(e: &Expr) -> Option<Option<ScalarValue>> {
     match &e.node {
-        ExprNode::Literal(Literal::TimestampNtz(v)) => {
-            Some(Some(ScalarValue::TimestampNtzMicros(*v)))
-        }
+        ExprNode::Literal(Literal::TimestampNtz(v)) => PY_DATETIME_MICROS
+            .contains(v)
+            .then_some(Some(ScalarValue::TimestampNtzMicros(*v))),
         _ => super::pushdown::value_or_null(e).filter(|v| match v {
             // Python's `date` and `datetime` stop at years 1 and 9999; a literal outside stays in the
             // residual instead of failing the conversion while the offer is built.

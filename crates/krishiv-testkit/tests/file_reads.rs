@@ -251,6 +251,11 @@ fn directories_list_like_spark() {
     );
     let got = env.block_on(r.infer("mock", &paths(&["/q"]), &ignore));
     assert!(got.is_ok());
+    let listing = env
+        .block_on(r.listing("mock", &paths(&["/q"]), &ignore))
+        .unwrap();
+    let names: Vec<_> = listing.files.iter().map(|f| f.path.to_string()).collect();
+    assert_eq!(names, ["q/k=1/part-0"]);
     // Credentials in paths (globs are expanded: see `partition_discovery` in krishiv-session).
     let got = env.block_on(r.infer("mock", &paths(&["s3://user:secret@bucket/k"]), &none));
     assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
