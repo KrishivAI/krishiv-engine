@@ -148,11 +148,11 @@ class DataFrame:
 
     @property
     def columns(self) -> list[str]:
-        return [name for name, _, _ in self._df.schema()]
+        return [name for name, _, _, _ in self._df.schema()]
 
     @property
     def dtypes(self) -> list[tuple[str, str]]:
-        return [(name, type_) for name, type_, _ in self._df.schema()]
+        return [(name, type_) for name, type_, _, _ in self._df.schema()]
 
     def printSchema(self) -> None:
         print(_convert.tree_string(self.schema))
