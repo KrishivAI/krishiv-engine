@@ -12,7 +12,6 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.seed", &EXEC_SEED),
     ("krishiv.spill.dir", &SPILL_DIR),
     ("krishiv.ui.enabled", &UI_ENABLED),
-    ("krishiv.server.role", &SERVER_ROLE),
     ("krishiv.udf.sandbox", &UDF_SANDBOX),
     ("krishiv.connect.port", &CONNECT_PORT),
     ("krishiv.history.path", &HISTORY_PATH),

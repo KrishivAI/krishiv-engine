@@ -258,22 +258,6 @@ fn bloom_memory_tier_defaults_on_and_parses() {
 }
 
 #[test]
-fn the_server_role_defaults_to_standalone_and_takes_only_its_three_values() {
-    let role = |c: &Config| {
-        c.get(&SERVER_ROLE)
-            .and_then(ConfigValue::as_str)
-            .map(str::to_owned)
-    };
-    let mut c = Config::new();
-    assert_eq!(role(&c).as_deref(), Some("standalone"));
-    for v in ["standalone", "coordinator", "worker"] {
-        c.set("krishiv.server.role", v).unwrap();
-        assert_eq!(role(&c).as_deref(), Some(v));
-    }
-    assert!(c.set("krishiv.server.role", "executor").is_err());
-}
-
-#[test]
 fn spill_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {

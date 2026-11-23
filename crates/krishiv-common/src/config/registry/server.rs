@@ -411,18 +411,6 @@ pub static SERVER_ALLOWED_HOSTS: ConfigEntry = startup(
     None,
 );
 
-/// The part this process plays in a cluster (reserved for distributed mode, design P2-T171).
-pub static SERVER_ROLE: ConfigEntry = startup(
-    "krishiv.server.role",
-    ValueType::Enum(&["standalone", "coordinator", "worker"]),
-    ConfigValue::String(std::borrow::Cow::Borrowed("standalone")),
-    "The part `krishiv server` plays in a cluster. `standalone` (the default and, in this release, \
-     the only one that runs) plans and executes every query in this process. `coordinator` and \
-     `worker` are reserved for distributed mode, where a coordinator plans queries and workers run \
-     their tasks; the server refuses to start with either.",
-    None,
-);
-
 /// `krishiv.workload.resourceGroups.file`.
 pub static WORKLOAD_RESOURCE_GROUPS_FILE: ConfigEntry = ConfigEntry {
     key: "krishiv.workload.resourceGroups.file",
