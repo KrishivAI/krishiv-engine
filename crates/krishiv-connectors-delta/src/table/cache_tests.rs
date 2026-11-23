@@ -255,7 +255,33 @@ fn hadoop_paths() {
     assert_eq!(hadoop_path(&url("file:///a/b/")), "file:/a/b");
     assert_eq!(hadoop_path(&url("file:///a/b%20c/")), "file:/a/b c");
     assert_eq!(hadoop_path(&url("file:///")), "file:/");
+    // A Windows root in Hadoop's form on every platform; a stray `%` stays.
+    assert_eq!(hadoop_path(&url("file:///C:/x/t/")), "file:/C:/x/t");
+    assert_eq!(hadoop_path(&url("file:///a/%C3%A9%2/")), "file:/a/\u{e9}%2");
     assert_eq!(hadoop_path(&url("s3://bucket/k/t/")), "s3://bucket/k/t");
+}
+
+/// `text` with the table directory `dir` as `<path>`, in each form a message can hold it: the
+/// path of its URL as written and canonical (on Windows `/C:/Users/RUNNER~1/...` and the long
+/// name `/C:/Users/runneradmin/...` a listing returns), and the native text.
+fn masked(text: &str, dir: &std::path::Path) -> String {
+    let url_path = |p: &std::path::Path| {
+        url::Url::from_directory_path(p)
+            .map(|u| u.path().trim_end_matches('/').to_owned())
+            .unwrap_or_default()
+    };
+    let canonical = dir.canonicalize().unwrap();
+    let mut out = text.to_owned();
+    for form in [
+        url_path(&canonical),
+        url_path(dir),
+        dir.to_string_lossy().into_owned(),
+    ] {
+        if !form.is_empty() {
+            out = out.replace(&form, "<path>");
+        }
+    }
+    out
 }
 
 fn session_probe(name: &str) -> Value {
@@ -287,13 +313,12 @@ fn table_name_or_path(e: &KrishivError) -> String {
 #[test]
 fn a_refused_table_is_named_as_delta_spark_names_it() {
     let env = refused();
-    let path = env.dir.to_string_lossy().into_owned();
     // By path: the Hadoop form, also when the path was written with a trailing slash.
     let e = env.open().unwrap_err();
     let want = session_probe("refused_path_sql");
     assert_eq!(e.error_class().name(), want["condition"].as_str().unwrap());
     assert_eq!(
-        table_name_or_path(&e).replace(&path, "<path>"),
+        masked(&table_name_or_path(&e), &env.dir),
         want["parameters"]["tableNameOrPath"].as_str().unwrap()
     );
     assert_eq!(
@@ -368,7 +393,7 @@ fn a_corrupt_commit_is_a_failed_read_of_that_file() {
         .map(|(_, v)| v.clone())
         .unwrap();
     assert_eq!(
-        path.replace(&env.dir.to_string_lossy().into_owned(), "<path>"),
+        masked(&path, &env.dir),
         want["parameters"]["path"].as_str().unwrap()
     );
 }
