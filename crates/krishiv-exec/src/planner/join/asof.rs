@@ -5,10 +5,10 @@
 //! The condition's equalities between the two sides are the keys (none: one constant key, so
 //! every row is in one group, Spark's `AllTuples`); the rest is the residual, which filters the
 //! right rows before the nearest one is taken. Each input computes its as-of value as its last
-//! column, and both are hash-partitioned on the keys (gathered to one partition when there are none)
-//! and sorted on keys then value. Runtime-filter
-//! sites stay on the left side only: a filter that dropped right rows would change which row is
-//! nearest; and none stays where the residual or an evaluated distance may raise.
+//! column, and both are hash-partitioned on the keys (gathered to one partition when there are
+//! none) and sorted on keys then value. Runtime-filter sites stay on the left side only: a filter
+//! that dropped right rows would change which row is nearest; and none stays where the residual or
+//! an evaluated distance may raise.
 
 use std::collections::HashSet;
 use std::sync::Arc;
