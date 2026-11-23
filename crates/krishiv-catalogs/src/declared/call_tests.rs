@@ -410,27 +410,50 @@ fn proposal_ties_keep_spark_candidate_order() {
 }
 
 /// The argument shapes Spark's binding cannot take (an internal error in the Spark 4.1.0 +
-/// Iceberg 1.12.0 run) are refused; the ones it binds go on to the table.
+/// Iceberg 1.12.0 run, 2026-11-23, every case below) are refused; the ones it binds go on to the
+/// table.
 #[test]
 fn arguments_spark_cannot_bind_are_refused() {
     let server = empty();
     let s = session(&server, None);
+    let arith = "date, timestamp or interval";
     for (arg, what) in [
-        (
-            "retain_last => CAST(rand() * 10 AS INT) + 1",
-            "non-deterministic",
-        ),
+        ("retain_last => CAST(rand() * 10 AS INT) + 1", "random-seed"),
         (
             "retain_last => CAST(uuid() IS NOT NULL AS INT)",
-            "non-deterministic",
+            "random-seed",
         ),
         (
             "older_than => TIMESTAMP '2020-01-01 00:00:00' + INTERVAL 1 DAY",
-            "INTERVAL",
+            arith,
         ),
         (
             "older_than => current_timestamp() - (INTERVAL 5 DAYS)",
-            "INTERVAL",
+            arith,
+        ),
+        ("older_than => current_date() - 7", arith),
+        ("older_than => current_date() + 1", arith),
+        ("older_than => 1 + current_date()", arith),
+        (
+            "older_than => current_timestamp() - make_interval(0, 0, 0, 5)",
+            arith,
+        ),
+        (
+            "older_than => current_timestamp() - CAST('1' AS INTERVAL DAY)",
+            arith,
+        ),
+        (
+            "older_than => TIMESTAMP '2020-01-01 00:00:00' + (INTERVAL 1 DAY + INTERVAL 2 DAYS)",
+            arith,
+        ),
+        (
+            "retain_last => CAST(current_date() - current_date() AS INT) + 1",
+            arith,
+        ),
+        ("retain_last => 7 / 7", "two doubles or two decimals"),
+        (
+            "older_than => CAST('2020-01-01' AS TIMESTAMP)",
+            "CAST of a string",
         ),
     ] {
         let e = call(
@@ -449,6 +472,10 @@ fn arguments_spark_cannot_bind_are_refused() {
         "retain_last => length('abc')",
         "older_than => current_timestamp()",
         "older_than => date_sub(current_date(), 5)",
+        "retain_last => 2 * 3",
+        "retain_last => extract(DAY FROM INTERVAL 1 DAY + INTERVAL 2 DAYS)",
+        "retain_last => extract(DAY FROM INTERVAL 1 DAY * 2)",
+        "retain_last => datediff(current_date(), current_date()) + 1",
     ] {
         let e = call(
             &s,

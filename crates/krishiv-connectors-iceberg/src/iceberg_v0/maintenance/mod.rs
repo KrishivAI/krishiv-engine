@@ -306,3 +306,27 @@ impl Maintenance {
         })
     }
 }
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    /// Each candidate order holds exactly its signature's names: a parameter added to a
+    /// signature but not to its order would drop out of every proposal.
+    #[test]
+    fn every_name_order_is_a_permutation_of_its_signature() {
+        for (order, signature) in [
+            (EXPIRE_SNAPSHOTS_ORDER, EXPIRE_SNAPSHOTS),
+            (REWRITE_DATA_FILES_ORDER, REWRITE_DATA_FILES),
+            (REMOVE_ORPHAN_FILES_ORDER, REMOVE_ORPHAN_FILES),
+        ] {
+            let mut a: Vec<&str> = order.to_vec();
+            let mut b: Vec<&str> = signature.iter().map(|p| p.name).collect();
+            a.sort_unstable();
+            b.sort_unstable();
+            assert_eq!(a, b);
+        }
+        // Four names or fewer: Scala's `Set1`..`Set4` keep insertion order, the default.
+        assert!(REWRITE_MANIFESTS.len() <= 4);
+    }
+}

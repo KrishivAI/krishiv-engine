@@ -18,7 +18,7 @@ use krishiv_common::error::{
 use krishiv_plan::procedure::{
     ProcedureContext, ProcedureParameter, ProcedureType, ProcedureValue,
 };
-use krishiv_sql::ast::{BinaryOp, Call, DdlName, Expr, ExprKind, Literal};
+use krishiv_sql::ast::{BinaryOp, Call, DdlName, Expr, ExprKind};
 
 use crate::dataframe::DataFrame;
 use crate::session::Session;
@@ -93,7 +93,7 @@ impl Session {
             call,
             case_sensitive,
         )?;
-        refuse_unbindable(call)?;
+        self.refuse_unbindable(call, query).await?;
         // The casts run in a clone with ANSI on: a non-ANSI cast turns a bad value into `NULL`,
         // which a procedure reads as an absent argument (an expire would fall back to its
         // default retention).
@@ -274,53 +274,168 @@ fn value_of(batch: &RecordBatch, ty: ProcedureType) -> Result<ProcedureValue, Kr
     })
 }
 
-/// The arguments Spark's binding cannot take are refused: a subquery, a non-deterministic call
-/// and `+`/`-` with an `INTERVAL` operand. In a Spark 4.1.0 + Iceberg 1.12.0 run each fails
-/// with an internal `IllegalArgumentException` ("number of args and params must match after
-/// binding"); `1 + 1`, `length('abc')`, `current_timestamp()` and `date_sub(current_date(), 5)`
-/// bind. A subquery would also read another table to decide what the procedure changes.
-fn refuse_unbindable(call: &Call) -> Result<(), KrishivError> {
-    const NON_DETERMINISTIC: [&str; 7] = [
-        "rand", "randn", "random", "uuid", "shuffle", "uniform", "randstr",
-    ];
-    let refuse = |what: &str| -> KrishivError {
-        krishiv_common::error::KrishivUnsupportedFeature {
-            feature: format!("{what} in a CALL argument"),
-        }
-        .into()
-    };
-    let is_interval = |e: &Expr| {
-        let mut e = e;
-        while let ExprKind::Nested(inner) = &e.kind {
-            e = inner;
-        }
-        matches!(e.kind, ExprKind::Literal(Literal::Interval(_)))
-    };
-    let mut stack: Vec<&Expr> = call.args.iter().map(|a| &a.expr).collect();
-    while let Some(e) = stack.pop() {
-        match &e.kind {
-            ExprKind::Subquery(_) | ExprKind::Exists(_) | ExprKind::InSubquery { .. } => {
-                return Err(refuse("a subquery"));
-            }
-            ExprKind::Function(f)
-                if f.name.parts.last().is_some_and(|n| {
-                    NON_DETERMINISTIC
-                        .iter()
-                        .any(|d| n.value.eq_ignore_ascii_case(d))
-                }) =>
-            {
-                return Err(refuse("a non-deterministic expression"));
-            }
-            ExprKind::Binary(l, BinaryOp::Plus | BinaryOp::Minus, r)
-                if is_interval(l) || is_interval(r) =>
-            {
-                return Err(refuse("datetime arithmetic with an INTERVAL"));
-            }
-            _ => {}
-        }
-        e.for_each_child(&mut |c| stack.push(c));
+/// Spark's random-seed family (`ExpressionWithRandomSeed` and its aliases), whose calls
+/// `ResolveRandomSeed` rewrites. Not every non-deterministic function: `spark_partition_id()` and
+/// the like are not rewritten and are not refused.
+const RANDOM_SEED_FUNCTIONS: [&str; 7] = [
+    "rand", "randn", "random", "uuid", "shuffle", "uniform", "randstr",
+];
+
+/// A node of an argument whose operand types decide whether Spark's binding takes it.
+enum Typed<'a> {
+    /// `+` or `-` (`ResolveBinaryArithmetic`, `BinaryArithmeticWithDatetimeResolver`).
+    AddOrSubtract(&'a Expr, &'a Expr),
+    /// `/` (an implicit cast to `double` unless both sides are `double` or both `decimal`).
+    Divide(&'a Expr, &'a Expr),
+    /// `CAST(x AS TIMESTAMP)` (the time zone `ResolveTimeZone` adds).
+    CastToTimestamp(&'a Expr),
+}
+
+fn refuse_argument(what: &str) -> KrishivError {
+    krishiv_common::error::KrishivUnsupportedFeature {
+        feature: format!("{what} in a CALL argument"),
     }
-    Ok(())
+    .into()
+}
+
+/// Whether `typeof` names a date, timestamp or interval type.
+fn is_datetime(t: &str) -> bool {
+    t == "date" || t.starts_with("timestamp") || t.starts_with("interval")
+}
+
+/// The interval family of a `typeof` name: calendar, year-month or day-time; `None` for any other
+/// type.
+fn interval_family(t: &str) -> Option<u8> {
+    let rest = t.strip_prefix("interval")?;
+    Some(if rest.is_empty() {
+        0
+    } else if rest.contains("year") || rest.contains("month") {
+        1
+    } else {
+        2
+    })
+}
+
+impl Session {
+    /// The arguments Spark's binding cannot take are refused (`KRISHIV_UNSUPPORTED_FEATURE`).
+    /// Spark binds a procedure's arguments once they are resolved, and an argument that a rule
+    /// of the resolution batch then rewrites fails `Call.checkArgTypes` with an internal
+    /// `IllegalArgumentException` ("number of args and params must match after binding"). The
+    /// shapes refused here, each checked in a Spark 4.1.0 + Iceberg 1.12.0 run (2026-11-23):
+    /// - a subquery (it would also read another table to decide what the procedure changes);
+    /// - a call of the random-seed family (`ResolveRandomSeed`);
+    /// - `+`/`-` with a date, timestamp or interval operand (`current_date() - 7`, `1 + current_date()`,
+    ///   `ts - make_interval(..)`, `ts + INTERVAL 1 DAY`, `date - date`), except an interval
+    ///   with an interval of the same family (`INTERVAL 1 DAY + INTERVAL 2 DAYS` binds);
+    /// - `/` unless both operands are `double` or both `decimal` (`7 / 7` fails);
+    /// - `CAST(<string> AS TIMESTAMP)`.
+    ///
+    /// These bind in the run and are taken: `1 + 1`, `2 * 3`, `length('abc')`,
+    /// `current_timestamp()`, `date_sub(current_date(), 5)`, `datediff(..)`, `interval * 2`. Other
+    /// rewrites of Spark's resolution batch (coercions of other operators, for example) are not
+    /// probed; such an argument is evaluated here, where Spark may fail.
+    async fn refuse_unbindable(&self, call: &Call, query: &str) -> Result<(), KrishivError> {
+        let mut typed: Vec<Typed<'_>> = Vec::new();
+        let mut stack: Vec<&Expr> = call.args.iter().map(|a| &a.expr).collect();
+        while let Some(e) = stack.pop() {
+            match &e.kind {
+                ExprKind::Subquery(_) | ExprKind::Exists(_) | ExprKind::InSubquery { .. } => {
+                    return Err(refuse_argument("a subquery"));
+                }
+                ExprKind::Function(f)
+                    if f.name.parts.last().is_some_and(|n| {
+                        RANDOM_SEED_FUNCTIONS
+                            .iter()
+                            .any(|d| n.value.eq_ignore_ascii_case(d))
+                    }) =>
+                {
+                    return Err(refuse_argument("a random-seed function (rand, uuid, ..)"));
+                }
+                ExprKind::Binary(l, BinaryOp::Plus | BinaryOp::Minus, r) => {
+                    typed.push(Typed::AddOrSubtract(l, r));
+                }
+                ExprKind::Binary(l, BinaryOp::Divide, r) => typed.push(Typed::Divide(l, r)),
+                ExprKind::Cast {
+                    expr, data_type, ..
+                } if query
+                    .get(data_type.span.start..data_type.span.end)
+                    .is_some_and(|t| {
+                        let t = t.trim().to_ascii_lowercase();
+                        t == "timestamp" || t.starts_with("timestamp_ltz")
+                    }) =>
+                {
+                    typed.push(Typed::CastToTimestamp(expr));
+                }
+                _ => {}
+            }
+            e.for_each_child(&mut |c| stack.push(c));
+        }
+        for t in typed {
+            match t {
+                Typed::AddOrSubtract(l, r) => {
+                    let [a, b] = self.types_of(query, [l, r]).await?;
+                    let same_intervals = matches!(
+                        (interval_family(&a), interval_family(&b)),
+                        (Some(x), Some(y)) if x == y
+                    );
+                    if (is_datetime(&a) || is_datetime(&b)) && !same_intervals {
+                        return Err(refuse_argument(
+                            "+ or - with a date, timestamp or interval operand",
+                        ));
+                    }
+                }
+                Typed::Divide(l, r) => {
+                    let [a, b] = self.types_of(query, [l, r]).await?;
+                    let fractional = (a == "double" && b == "double")
+                        || (a.starts_with("decimal") && b.starts_with("decimal"));
+                    if !fractional {
+                        return Err(refuse_argument(
+                            "/ of operands other than two doubles or two decimals",
+                        ));
+                    }
+                }
+                Typed::CastToTimestamp(x) => {
+                    let [a] = self.types_of(query, [x]).await?;
+                    if a == "string" {
+                        return Err(refuse_argument("CAST of a string AS TIMESTAMP"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `typeof` of each expression, as Spark spells types (`date`, `interval day`).
+    async fn types_of<const N: usize>(
+        &self,
+        query: &str,
+        exprs: [&Expr; N],
+    ) -> Result<[String; N], KrishivError> {
+        let items: Vec<String> = exprs
+            .iter()
+            .map(|e| {
+                let text = query.get(e.span.start..e.span.end).unwrap_or_default();
+                format!("typeof(({text}))")
+            })
+            .collect();
+        let frame = self
+            .sql_boxed(&format!("SELECT {}", items.join(", ")))
+            .await?;
+        let batches = frame.collect_boxed().await?;
+        let batch = batches.iter().find(|b| b.num_rows() > 0).ok_or_else(|| {
+            crate::session::internal("a CALL argument's typeof gave no row".to_owned())
+        })?;
+        let mut out: [String; N] = std::array::from_fn(|_| String::new());
+        for (i, slot) in out.iter_mut().enumerate() {
+            let col = batch.column(i);
+            *slot = col
+                .as_string_opt::<i32>()
+                .map(|a| a.value(0).to_owned())
+                .or_else(|| col.as_string_view_opt().map(|a| a.value(0).to_owned()))
+                .unwrap_or_default();
+        }
+        Ok(out)
+    }
 }
 
 /// The names `UNRECOGNIZED_PARAMETER_NAME` proposes: Spark's `orderSuggestedIdentifiersBySimilarity`
