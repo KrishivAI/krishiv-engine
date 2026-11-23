@@ -1415,6 +1415,7 @@ impl Session {
             quiet: QuietDenials::default(),
             udtfs,
             spill_failure: Arc::default(),
+            planning: Arc::default(),
         }
     }
 
@@ -1793,6 +1794,10 @@ impl Session {
                 .await?
                 .into_parts(),
         };
+        // The plan is made: what the statement spent planning, the queue excluded (MODES-2).
+        self.state
+            .queries
+            .set_planning_ns(&log_id, env.planning.take());
         self.state.activity.query_started();
         let id = QueryId(self.state.runtime.reserve_tagged(
             self.state.number,

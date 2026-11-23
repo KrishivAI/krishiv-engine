@@ -1113,7 +1113,9 @@ impl DataFrame {
         if let Some(e) = &self.invalid {
             return Err(e.clone());
         }
+        // A checkpoint the plan runs first is execution, not planning: the clock starts after it.
         let plan = self.plan_with_checkpoints().await?;
+        let began = std::time::Instant::now();
         let (analyzed, through_views) = self.session.analyze_in(&plan, &env, text).await?;
         // Analysis-only paths (DESCRIBE QUERY, `schema`) never reach `open_files`: refuse a
         // time-travel clause they would otherwise describe as the current table.
@@ -1127,6 +1129,7 @@ impl DataFrame {
             env.set_text(t);
         }
         env.observers = Arc::new(self.observers_through(through_views));
+        env.planning.analysis_done(began);
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),

@@ -219,6 +219,24 @@ fn queries_records_statements_refused_before_they_ran() {
 }
 
 #[test]
+fn queries_carry_the_planning_time_of_a_query_that_ran() {
+    let s = Session::new().unwrap();
+    run_all(
+        &s,
+        "SELECT a.id, count(*) FROM range(100) a JOIN range(100) b ON a.id = b.id GROUP BY a.id",
+    )
+    .unwrap();
+    assert!(run_all(&s, "SELECT nope FROM range(1)").is_err());
+    let rows = strings_in(
+        &s,
+        "SELECT concat_ws('|', state, coalesce(CAST(planning_ns > 0 AS STRING), 'null')) \
+         FROM system.queries WHERE query_text NOT LIKE '%system.queries%' ORDER BY submitted_at",
+    );
+    // The query that ran planned for some time; the one analysis refused never ran, so it has none.
+    assert_eq!(rows, ["finished|true", "failed|null"]);
+}
+
+#[test]
 fn queries_records_an_action_that_fails_in_physical_planning() {
     let s = Session::new().unwrap();
     // Analyzes, so `sql` succeeds; the planner has no window form of `approx_count_distinct` yet.
