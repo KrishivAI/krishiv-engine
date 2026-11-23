@@ -21,6 +21,8 @@ Krishiv 0.3 grows from an embedded engine into a server you can put in front of 
   with an optimistic commit. Reads apply Spark's position, equality and deletion-vector deletes.
 - **Delta Lake reads** with deletion vectors, column mapping, type widening, partition pruning and data skipping, and
   `krishiv.write.idempotencyKey` so a retried write commits once.
+- **ASOF JOIN:** match each left row to the closest right row by a time or ordered key, with an optional tolerance and
+  `INNER` or `LEFT` semantics.
 - **Metric views** (Spark 4.2): `CREATE VIEW ... WITH METRICS LANGUAGE YAML`, read with `measure(<name>)`.
 - **Arrow Flight SQL** on the Spark Connect port: ADBC and Arrow JDBC drivers run statements, prepared statements and
   catalog metadata calls with the same sessions, authentication and cancellation as Spark Connect.
