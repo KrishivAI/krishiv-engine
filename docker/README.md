@@ -1,7 +1,7 @@
 # The Krishiv image
 
-`docker/Dockerfile` builds `krishiv` with the server, Spark Connect, Arrow Flight SQL, the web console and the
-cloud object stores (`--features server,connect,flight-sql,cloud,ui`) on `debian:bookworm-slim`. It runs as
+`docker/Dockerfile` builds `krishiv` with the server, Spark Connect, Arrow Flight SQL, the web console, Delta
+and Iceberg tables and the cloud object stores (`--features server,connect,flight-sql,cloud,ui,delta,iceberg`) on `debian:bookworm-slim`. It runs as
 uid/gid 10001 (never root), exposes two ports and has a `HEALTHCHECK` on `/healthz`.
 
 | Port | Serves |
