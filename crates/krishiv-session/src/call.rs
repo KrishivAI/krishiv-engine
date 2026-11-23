@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `CALL cat.system.p(args)` (design P3-T027 PR-36e §3): resolves the catalog, loads the
 //! procedure, rearranges the arguments by name as Spark's `NamedParametersSupport` does, casts
-//! each to its parameter's type (ANSI whatever `spark.sql.ansi.enabled` says, through a clone of
-//! the session, so a bad value fails instead of becoming `NULL`), runs the procedure and returns
-//! its rows. A `NULL` element of an array argument is refused. Not planned through the optimizer
-//! and never cached.
+//! each to its parameter's type (ANSI whatever `spark.sql.ansi.enabled` says, through the
+//! statement-internal query path with an ANSI query environment, so a bad value fails instead of
+//! becoming `NULL` and no extra query is recorded), runs the procedure and returns its rows.
+//! Arguments Spark's binding cannot take are refused (`refuse_unbindable`), and so are `NULL`
+//! elements of arrays and `NULL` map values. Not planned through the optimizer and never cached.
 
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, RecordBatch};
@@ -314,7 +315,8 @@ enum TzKind {
 
 fn tz_kind(t: &str) -> TzKind {
     let t = t.trim();
-    if t == "string" || t.starts_with("varchar") || t.starts_with("char") {
+    // `string collate UTF8_LCASE` is a string too (Spark's rows match `_: StringType`).
+    if t.starts_with("string") || t.starts_with("varchar") || t.starts_with("char") {
         TzKind::String
     } else if t == "date" {
         TzKind::Date

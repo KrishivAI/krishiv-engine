@@ -463,6 +463,11 @@ fn arguments_spark_cannot_bind_are_refused() {
             "older_than => CAST(DATE '2020-01-01' AS TIMESTAMP)",
             "CAST of a date AS TIMESTAMP",
         ),
+        // A collated string is a string (Spark's `needsTimeZone` rows match `_: StringType`).
+        (
+            "older_than => CAST('2020-01-01' COLLATE UTF8_LCASE AS TIMESTAMP)",
+            "AS TIMESTAMP",
+        ),
         (
             "older_than => CAST(current_timestamp() AS DATE)",
             "CAST of a timestamp AS DATE",
@@ -526,6 +531,16 @@ fn arguments_spark_cannot_bind_are_refused() {
     );
     assert!(
         e.to_string().contains("CAST of a timestamp AS STRING"),
+        "{e}"
+    );
+    let e = call(
+        &s,
+        "CALL lake.system.rewrite_data_files(table => 'db.missing', \
+         strategy => CAST(current_timestamp() AS STRING COLLATE UTF8_LCASE))",
+    );
+    assert!(
+        e.to_string()
+            .contains("CAST of a timestamp AS STRING COLLATE"),
         "{e}"
     );
 }
