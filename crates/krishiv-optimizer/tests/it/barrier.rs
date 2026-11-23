@@ -209,7 +209,7 @@ fn all_leaks(p: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
 /// The whole of `sql`'s plan behind a barrier, as a definer view's body would be: its own
 /// filters, leaks included, start inside. Optimized to its fixed point and once more.
 fn definer(sql: &str) -> Arc<LogicalPlan> {
-    let plan = support::resolve(sql, &support::ctx());
+    let plan = resolve_in(sql, &support::ctx());
     let body = all_leaks(Arc::clone(plan.root()));
     let root = Plan::try_new(LogicalPlan::clone(&body).security_barrier(policy())).unwrap();
     let once = optimize(&root).unwrap();
@@ -508,8 +508,9 @@ fn leaks_above_a_barrier_stay_above_it() {
 }
 
 /// A leak above an as-of join stays above the barrier of its left input (inner and left outer:
-/// the as-of arm of the filter pushdown admits only leakproof conjuncts), while a leakproof
-/// left-only filter still reaches the scan.
+/// the push into the barrier checks `leakproof` and runs a guarded trial), while a leakproof
+/// left-only filter still reaches the scan. The as-of arm's own guard runs only inside a barrier:
+/// [`a_leak_inside_a_barrier_stays_above_an_as_of_join`].
 #[test]
 fn a_leak_above_an_as_of_join_stays_above_its_barrier() {
     for kind in ["", "LEFT "] {
@@ -594,6 +595,68 @@ fn a_leak_inside_a_barrier_stays_above_the_join_it_sits_on() {
         assert!(below.iter().any(|c| c.contains("x")), "{below:?}");
     }
     assert!(subtree_calls(&input, "leak"), "the leak is kept");
+}
+
+/// The as-of join of `input` (exactly one): its left input, right input and `ON` condition.
+fn as_of_parts(input: &Arc<LogicalPlan>) -> (Arc<LogicalPlan>, Arc<LogicalPlan>, JoinCondition) {
+    let mut all = Vec::new();
+    nodes(input, &mut all);
+    let joins: Vec<_> = all
+        .iter()
+        .filter_map(|n| match &n.node {
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                condition,
+                ..
+            } => Some((Arc::clone(left), Arc::clone(right), condition.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(joins.len(), 1, "the as-of join is kept\n{input}");
+    joins.into_iter().next().unwrap()
+}
+
+/// Inside a barrier (a definer body), the guarded filter pushdown's as-of arm keeps a leak above
+/// the as-of join (inner and left outer) and moves its leakproof left-only twin into the left
+/// input.
+#[test]
+fn a_leak_inside_a_barrier_stays_above_an_as_of_join() {
+    for kind in ["", "LEFT "] {
+        let sql = format!(
+            "SELECT t.a FROM t {kind}ASOF JOIN u MATCH_CONDITION (t.a >= u.a) ON t.b = u.d \
+             WHERE abs(t.c) = 1 AND t.a > 0"
+        );
+        let input = definer(&sql);
+        let (left, right, _) = as_of_parts(&input);
+        assert!(
+            !subtree_calls(&left, "leak") && !subtree_calls(&right, "leak"),
+            "{sql}: the leak moved below the as-of join\n{input}"
+        );
+        assert!(subtree_calls(&input, "leak"), "{sql}: the leak is kept");
+        assert!(
+            filter_texts(&left).iter().any(|c| c.contains("> 0")),
+            "{sql}: the leakproof twin did not move into the left input\n{input}"
+        );
+    }
+}
+
+/// Inside a barrier, a right-only leak in an as-of join's `ON` condition stays there:
+/// `PushDownAsOfCondition` has no guarded form and does not run inside a barrier.
+#[test]
+fn a_leak_in_an_as_of_condition_inside_a_barrier_stays_there() {
+    let sql = "SELECT t.a FROM t ASOF JOIN u MATCH_CONDITION (t.a >= u.a) \
+               ON t.b = u.d AND abs(u.a) = 1 AND u.a > 0";
+    let input = definer(sql);
+    let (left, right, condition) = as_of_parts(&input);
+    let JoinCondition::On(on) = condition else {
+        panic!("an ON condition: {condition:?}");
+    };
+    assert!(calls(&on, "leak"), "the leak stays in the condition: {on}");
+    assert!(
+        !subtree_calls(&left, "leak") && !subtree_calls(&right, "leak"),
+        "the leak reached an input\n{input}"
+    );
 }
 
 #[test]

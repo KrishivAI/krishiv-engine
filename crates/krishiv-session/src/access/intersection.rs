@@ -24,7 +24,9 @@ use krishiv_plan::analyzer::{
 
 /// The most table kinds and refusals the list remembers; past it, the memory is cleared (a
 /// column of a forgotten relation is refused, a forgotten refusal is told to every deciding
-/// member).
+/// member). The memory is per caller session, so a session that has named more than 4,096
+/// relations can get a spurious 42501 for a query checked while the clear happens: its column
+/// pass finds its relation forgotten. That fails closed; running the query again passes.
 const REMEMBERED: usize = 4096;
 
 /// A name asked about as a table.

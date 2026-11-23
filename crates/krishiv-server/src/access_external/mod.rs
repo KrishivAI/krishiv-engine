@@ -102,6 +102,7 @@ pub struct ExternalAccess {
     version_asked: Mutex<Option<Instant>>,
     version_in_flight: AtomicBool,
     /// Woken each time a background version call has finished (its answer recorded, or none).
+    /// For tests: only `tests.rs` waits on it (a notification nobody waits for costs nothing).
     version_done: tokio::sync::Notify,
     denials: AtomicU64,
     calls: AtomicU64,
