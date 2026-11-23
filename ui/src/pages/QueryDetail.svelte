@@ -18,13 +18,19 @@
 
   const ended = (d: QueryDetail) => !["running", "queued"].includes(d.query.state ?? "");
 
+  // The session travels with both reads; a signed link was signed with it, so the embedded view sends its own.
+  // An embedded link with an empty qualifier is sent as it came, so the server refuses it as it does when asked directly.
+  const at = (sep: string) =>
+    session || (embed && session === "") ? `${sep}session=${encodeURIComponent(session)}` : "";
+
   const q = createQuery<QueryDetail>(() => ({
-    queryKey: ["query", id, session ?? ""],
+    // An absent qualifier and an empty one are different requests, so different entries.
+    queryKey: ["query", id, session ?? null],
     queryFn: () =>
       api<QueryDetail>(
         embed
-          ? `/api/internal/embed/queries/${encodeURIComponent(id)}?exp=${encodeURIComponent(embed.exp)}&sig=${encodeURIComponent(embed.sig)}`
-          : `/api/internal/queries/${encodeURIComponent(id)}${session ? `?session=${encodeURIComponent(session)}` : ""}`,
+          ? `/api/internal/embed/queries/${encodeURIComponent(id)}?exp=${encodeURIComponent(embed.exp)}&sig=${encodeURIComponent(embed.sig)}${at("&")}`
+          : `/api/internal/queries/${encodeURIComponent(id)}${at("?")}`,
       ),
     refetchInterval: (query) => {
       const d = query.state.data;
@@ -150,7 +156,7 @@
   <p class="mb-3 text-muted-foreground">
     Compute time per operator; the busiest one is highlighted{d.hot_operator ? `: ${d.hot_operator.operator}` : ""}.
   </p>
-  <ResponsiveTable {columns} rows={d.operators} rowKey={(o) => o.operator_id} empty="No operator metrics recorded for this query." rowClass={(o) => (o.operator_id === hotId ? "bg-accent font-bold" : "")}>
+  <ResponsiveTable {columns} rows={d.operators} rowKey={(o) => o.operator_id} empty={d.operators_withheld ? "Another session ran a query under this id, and operator metrics are kept by query id alone, so they are not shown for either run." : "No operator metrics recorded for this query."} rowClass={(o) => (o.operator_id === hotId ? "bg-accent font-bold" : "")}>
     {#snippet cell(o, c)}
       {#if c.key === "operator"}
         <span class="mono text-muted-foreground">{o.operator_id}</span> {o.name}{#if o.drivers && o.drivers > 1}{" "}<span class="font-normal text-muted-foreground">×{o.drivers}</span>{/if}

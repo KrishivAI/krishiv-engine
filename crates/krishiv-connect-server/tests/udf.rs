@@ -52,9 +52,17 @@ use tonic::Code;
 use tonic::transport::Channel;
 
 const SESSION: &str = "5b2d9a3e-1c4f-4e8a-9d6b-7f0e3a2c1b94";
+/// Erin's session: a session id belongs to the principal that made it.
+const SESSION2: &str = "0c8e2f71-6b3a-4d5e-8f19-a4b7c2d9e603";
+
+fn session_of(token: &str) -> String {
+    (if token == ADMIN2 { SESSION2 } else { SESSION }).to_owned()
+}
 const VIEWER: &str = "viewer-token-0123456789abcdefghijklmnopqrstuv";
 const OPERATOR: &str = "operator-token-0123456789abcdefghijklmnopqrstu";
 const ADMIN: &str = "admin-token-0123456789abcdefghijklmnopqrstuvw";
+/// A second admin (`erin`), to tell principals apart without the `Usage` gate on client code.
+const ADMIN2: &str = "admin2-token-0123456789abcdefghijklmnopqrstuv";
 
 /// The child entry: the sandbox trampoline when started with `--` and spec arguments.
 #[test]
@@ -111,10 +119,20 @@ async fn start(python: Option<&Path>) -> Running {
 
 /// [`start`], with the sessions' UDFs on `host` instead of the pool when given.
 async fn start_with(python: Option<&Path>, host: Option<Arc<dyn UdfHost>>) -> Running {
+    start_store(python, host, None).await
+}
+
+/// [`start_with`], keeping persisted UDFs in `store` when given.
+async fn start_store(
+    python: Option<&Path>,
+    host: Option<Arc<dyn UdfHost>>,
+    store: Option<Arc<dyn krishiv_connect_server::FunctionStore>>,
+) -> Running {
     let dir = tempfile::tempdir().expect("tempdir");
     let v = secret(dir.path(), "v", VIEWER);
     let o = secret(dir.path(), "o", OPERATOR);
     let a = secret(dir.path(), "a", ADMIN);
+    let e = secret(dir.path(), "e", ADMIN2);
     let auth = AuthConfig::from_settings([
         ("krishiv.auth.tokens.v.secret", v.as_str()),
         ("krishiv.auth.tokens.v.principal", "carol"),
@@ -125,6 +143,9 @@ async fn start_with(python: Option<&Path>, host: Option<Arc<dyn UdfHost>>) -> Ru
         ("krishiv.auth.tokens.a.secret", a.as_str()),
         ("krishiv.auth.tokens.a.principal", "dana"),
         ("krishiv.auth.tokens.a.role", "admin"),
+        ("krishiv.auth.tokens.e.secret", e.as_str()),
+        ("krishiv.auth.tokens.e.principal", "erin"),
+        ("krishiv.auth.tokens.e.role", "admin"),
     ])
     .expect("auth config");
     let auth = Arc::new(ServerAuth::new(&auth).expect("auth"));
@@ -147,10 +168,12 @@ async fn start_with(python: Option<&Path>, host: Option<Arc<dyn UdfHost>>) -> Ru
         Arc::clone(&denials),
     )
     .expect("factory");
-    let manager = Arc::new(
-        SessionManager::new(factory, SessionLimits::default())
-            .with_udf_host(host.unwrap_or_else(|| Arc::new(pool.clone()))),
-    );
+    let mut manager = SessionManager::new(factory, SessionLimits::default())
+        .with_udf_host(host.unwrap_or_else(|| Arc::new(pool.clone())));
+    if let Some(store) = store {
+        manager = manager.with_function_store(store);
+    }
+    let manager = Arc::new(manager);
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let server = ConnectServer::new(manager, ConnectServerConfig::default())
@@ -193,7 +216,7 @@ async fn execute(
     token: &str,
 ) -> Result<Vec<pb::ExecutePlanResponse>, tonic::Status> {
     let request = pb::ExecutePlanRequest {
-        session_id: SESSION.to_owned(),
+        session_id: session_of(token),
         user_context: Some(pb::UserContext {
             user_id: "someone".to_owned(),
             ..Default::default()
@@ -224,7 +247,7 @@ async fn analyze_schema(
     token: &str,
 ) -> Result<pb::AnalyzePlanResponse, tonic::Status> {
     let request = pb::AnalyzePlanRequest {
-        session_id: SESSION.to_owned(),
+        session_id: session_of(token),
         analyze: Some(pb::analyze_plan_request::Analyze::Schema(Box::new(
             pb::analyze_plan_request::Schema { plan: Some(plan) },
         ))),
@@ -517,7 +540,20 @@ async fn client_code_needs_usage_on_udf_and_starts_no_worker_without_it() {
         )
         .await
         .expect("a scalar UDF is typed without running it");
-        assert!(schema.result.is_some());
+        let Some(pb::analyze_plan_response::Result::Schema(schema)) = schema.result else {
+            panic!("a schema result");
+        };
+        let Some(pb::data_type::Kind::Struct(fields)) = schema.schema.and_then(|t| t.kind) else {
+            panic!("a struct schema");
+        };
+        assert_eq!(fields.fields.len(), 1);
+        assert!(matches!(
+            fields.fields[0]
+                .data_type
+                .as_ref()
+                .and_then(|t| t.kind.as_ref()),
+            Some(pb::data_type::Kind::Long(_))
+        ));
         release(&run.channel, token).await;
     }
     assert_eq!(
@@ -680,7 +716,14 @@ impl SessionUdfRuntime for SpyRuntime {
 }
 
 impl UdfHost for Spy {
-    fn session_runtime(&self, _: &str, _: &str, _: RunnerConf) -> Arc<dyn SessionUdfRuntime> {
+    fn session_runtime(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: bool,
+        _: &str,
+        _: RunnerConf,
+    ) -> Arc<dyn SessionUdfRuntime> {
         Arc::new(SpyRuntime(Arc::clone(&self.0)))
     }
 }
@@ -1165,4 +1208,143 @@ async fn each_call_sends_the_session_conf_current_when_it_runs() {
     set_conf(&run.channel, "spark.sql.session.timeZone", "Asia/Tokyo").await;
     let r = execute(&run.channel, query(), ADMIN).await.expect("runs");
     assert_eq!(longs(&r), [Some(1)]);
+}
+
+/// The `krishiv.v1.PersistPythonFunction` command.
+#[cfg(feature = "function-catalog")]
+fn persist(name: &str, drop: bool) -> pb::Plan {
+    pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(CommandType::Extension(Box::new(prost_types::Any {
+                type_url: "type.googleapis.com/krishiv.v1.PersistPythonFunction".to_owned(),
+                value: krishiv_connect::extension::PersistPythonFunction {
+                    name: name.to_owned(),
+                    drop,
+                }
+                .encode_to_vec(),
+            }))),
+        }))),
+    }
+}
+
+#[cfg(feature = "function-catalog")]
+fn file_store(path: &Path) -> Arc<dyn krishiv_connect_server::FunctionStore> {
+    let catalog = krishiv_catalogs::sqlite::SqliteCatalog::open("python_functions", path, false)
+        .expect("catalog");
+    Arc::new(krishiv_connect_server::SqliteFunctionStore::new(Arc::new(
+        catalog,
+    )))
+}
+
+/// A UDF persisted over the Connect service survives a server restart: a new server on the reopened catalog
+/// file types it in a fresh session whose first request is `AnalyzePlan`; another principal of that file
+/// does not see it (tenants are keyed the same way, `t:<tenant>` instead of `p:<principal>`).
+#[cfg(feature = "function-catalog")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_persisted_udf_survives_a_restart_and_is_typed_by_the_first_analysis() {
+    let dir = tempfile::tempdir().expect("dir");
+    let file = dir.path().join("functions.db");
+    {
+        let run = start_store(
+            None,
+            Some(Arc::new(Spy::default())),
+            Some(file_store(&file)),
+        )
+        .await;
+        execute(
+            &run.channel,
+            register(udf(None, "plus_one", PLUS_ONE, long(), Vec::new())),
+            ADMIN,
+        )
+        .await
+        .expect("registered");
+        execute(&run.channel, persist("PLUS_ONE", false), ADMIN)
+            .await
+            .expect("persisted");
+        // A name the session never registered is refused.
+        let e = execute(&run.channel, persist("nope", false), ADMIN)
+            .await
+            .expect_err("not registered");
+        assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE", "{e:?}");
+    }
+    let query = || sql("SELECT plus_one(id) FROM range(3)");
+    let run = start_store(
+        None,
+        Some(Arc::new(Spy::default())),
+        Some(file_store(&file)),
+    )
+    .await;
+    let schema = analyze_schema(&run.channel, query(), ADMIN)
+        .await
+        .expect("typed in a new session of a restarted server");
+    assert!(schema.result.is_some());
+    // The same file, another authenticated principal who may send code (erin, admin; untenanted, so keyed
+    // by principal): the function is dana's alone and erin's session does not resolve it.
+    execute(&run.channel, sql("SELECT 1"), ADMIN2)
+        .await
+        .expect("erin's session");
+    let e = analyze_schema(&run.channel, query(), ADMIN2)
+        .await
+        .expect_err("not visible to another principal of the same catalog");
+    assert_eq!(error_class(&e), "UNRESOLVED_ROUTINE", "{e:?}");
+    // dana's own new session still does, on the same server.
+    analyze_schema(&run.channel, query(), ADMIN)
+        .await
+        .expect("visible to its owner");
+    // erin persists her own `plus_one` and registers nothing of dana's: dana's row is unchanged.
+    execute(
+        &run.channel,
+        register(udf(None, "plus_one", PLUS_ONE, long(), Vec::new())),
+        ADMIN2,
+    )
+    .await
+    .expect("erin registers");
+    execute(&run.channel, persist("plus_one", false), ADMIN2)
+        .await
+        .expect("erin persists her own");
+    let owners = |key: &str| {
+        let catalog =
+            krishiv_catalogs::sqlite::SqliteCatalog::open("python_functions", &file, false)
+                .expect("catalog");
+        catalog
+            .python_function(Some(key), "plus_one")
+            .expect("read")
+            .map(|f| f.owner)
+    };
+    assert_eq!(owners("p:user:dana").as_deref(), Some("user:dana"));
+    assert_eq!(owners("p:user:erin").as_deref(), Some("user:erin"));
+    // A `spark.sql()` statement as a new session's first request (the `SqlCommand` path) finds dana's function.
+    let sql_first = start_store(
+        None,
+        Some(Arc::new(Spy::default())),
+        Some(file_store(&file)),
+    )
+    .await;
+    let command = pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(CommandType::SqlCommand(Box::new(pb::SqlCommand {
+                sql: "SELECT plus_one(id) FROM range(3)".to_owned(),
+                ..Default::default()
+            }))),
+        }))),
+    };
+    execute(&sql_first.channel, command, ADMIN)
+        .await
+        .expect("a first-request statement resolves the persisted function");
+    drop(sql_first);
+    // `drop` removes it for later sessions.
+    execute(&run.channel, persist("plus_one", true), ADMIN)
+        .await
+        .expect("dropped");
+    drop(run);
+    let again = start_store(
+        None,
+        Some(Arc::new(Spy::default())),
+        Some(file_store(&file)),
+    )
+    .await;
+    let e = analyze_schema(&again.channel, query(), ADMIN)
+        .await
+        .expect_err("dropped");
+    assert_eq!(error_class(&e), "UNRESOLVED_ROUTINE", "{e:?}");
 }
