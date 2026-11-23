@@ -1270,6 +1270,10 @@ impl Loading {
             .cloned()
             .collect();
         let rows = chunks.iter().map(Batch::num_rows).sum();
+        // A grace partition's table is built alone: its inline directory
+        // keeps to the bound as a finalized build's do (`IndexChoice::bounded`).
+        let bounded = hashing.clone().with_index(hashing.index().bounded([rows]));
+        let hashing = &bounded;
         let headroom = self.task.probe.read_headroom();
         let marks = if shared.join_type.builds_preserved() {
             JoinTable::marks_bytes(rows)
