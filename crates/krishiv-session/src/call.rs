@@ -263,14 +263,15 @@ fn value_of(batch: &RecordBatch, ty: ProcedureType) -> Result<ProcedureValue, Kr
         ProcedureType::StringArray => {
             let list = col.as_list_opt::<i32>().ok_or_else(bad)?;
             let items = list.value(0);
-            let strings = items.as_string_opt::<i32>().ok_or_else(bad)?;
-            ProcedureValue::StringArray(
-                strings
-                    .iter()
-                    .map(|v| v.map(str::to_owned))
-                    .collect::<Option<Vec<String>>>()
-                    .ok_or_else(null_element)?,
-            )
+            // The engine's strings are `Utf8` or `Utf8View`, whichever the array was built of.
+            let strings: Option<Vec<String>> = if let Some(s) = items.as_string_opt::<i32>() {
+                s.iter().map(|v| v.map(str::to_owned)).collect()
+            } else if let Some(s) = items.as_string_view_opt() {
+                s.iter().map(|v| v.map(str::to_owned)).collect()
+            } else {
+                return Err(bad());
+            };
+            ProcedureValue::StringArray(strings.ok_or_else(null_element)?)
         }
         _ => return Err(bad()),
     })

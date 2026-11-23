@@ -544,3 +544,69 @@ fn arguments_spark_cannot_bind_are_refused() {
         "{e}"
     );
 }
+
+/// Spark's argument-assignment refusals (`NamedParametersSupport.defaultRearrange`), each by
+/// its class: a positional argument after a named one, a name given twice, a name also given by
+/// position, more arguments than parameters and a required parameter left out.
+#[test]
+fn argument_assignment_refusals() {
+    let server = empty();
+    let s = session(&server, None);
+    for (sql, class) in [
+        (
+            "CALL lake.system.expire_snapshots(table => 'db.t', 1)",
+            ErrorClass::UnexpectedPositionalArgument,
+        ),
+        (
+            "CALL lake.system.expire_snapshots(table => 'db.t', TABLE => 'db.u')",
+            ErrorClass::DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference,
+        ),
+        (
+            "CALL lake.system.expire_snapshots('db.t', table => 'db.u')",
+            ErrorClass::DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
+        ),
+        (
+            "CALL lake.system.expire_snapshots('db.t', NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+            ErrorClass::WrongNumArgsWithoutSuggestion,
+        ),
+        (
+            "CALL lake.system.expire_snapshots(retain_last => 1)",
+            ErrorClass::RequiredParameterNotFound,
+        ),
+    ] {
+        let e = call(&s, sql);
+        assert_eq!(e.error_class(), class, "{sql}: {e}");
+        assert!(e.to_string().contains("expire_snapshots"), "{sql}: {e}");
+    }
+}
+
+/// An `ARRAY<STRING>` argument binds (`rewrite_manifests`'s `sort_by`), and a two-part name
+/// calls the procedure of the current catalog; both go on to the table.
+#[test]
+fn array_arguments_and_the_current_catalog() {
+    let server = empty();
+    let s = session(&server, None);
+    let e = call(
+        &s,
+        "CALL lake.system.rewrite_manifests(table => 'db.missing', sort_by => array('a', 'b'))",
+    );
+    // Bound (a `Utf8View` list once was an internal error); `rewrite_manifests` itself is not in
+    // this build yet.
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    let e = call(
+        &s,
+        "CALL lake.system.rewrite_manifests(table => 'db.missing', sort_by => array('a', NULL))",
+    );
+    assert!(e.to_string().contains("NULL elements"), "{e}");
+    block_on(async { s.sql("USE lake").await?.collect().await }).unwrap();
+    let e = call(&s, "CALL system.expire_snapshots(table => 'db.missing')");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergProcedureTableNotFound,
+        "{e}"
+    );
+}
