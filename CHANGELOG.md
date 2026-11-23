@@ -19,11 +19,13 @@ Krishiv 0.3 grows from an embedded engine into a server you can put in front of 
 - **TPC-H SF10 runs at parity with DuckDB:** 0.98x of DuckDB's time (geomean), 22/22 queries, measured on 2026-11-21 on one
   AMD Ryzen 5 3600 (6 cores, 12 threads, 64 GB), both engines on the same data with the same row counts. Reproduce it with
   `uv run krishiv-bench reproduce --suite tpch --sf 10 --reps 3` (see `bench/README.md`). This is the only DuckDB comparison made for 0.3.0.
-- **Iceberg tables you can write.** Appends, `INSERT OVERWRITE`, and copy-on-write and merge-on-read `DELETE`/`UPDATE`
-  (deletion vectors on v3, position deletes on v2) commit with Iceberg's own conflict rules, also through a REST catalog
-  with an optimistic commit. Reads apply Spark's position, equality and deletion-vector deletes.
-- **Delta Lake reads** with deletion vectors, column mapping, type widening, partition pruning and data skipping, and
-  `krishiv.write.idempotencyKey` so a retried write commits once.
+- **Delta Lake tables you can read and write.** Reads handle deletion vectors, column mapping, type widening, partition
+  pruning and data skipping. `INSERT`, `INSERT OVERWRITE`, CTAS, `df.write.format("delta")`, `DELETE`, `UPDATE` and `MERGE`
+  commit with Delta's conflict rules (changed files are rewritten; deletion vectors are not written), and
+  `krishiv.write.idempotencyKey` makes a retried write commit once.
+- **Iceberg tables you can read.** Position, equality and deletion-vector deletes are applied, and tables of a declared
+  Iceberg REST catalog can be queried. Writing Iceberg tables from SQL or the DataFrame API is not available in 0.3:
+  the connector's append, overwrite and row-level code is in place, but no SQL or DataFrame write reaches it yet.
 - **ASOF JOIN:** match each left row to the closest right row by a time or ordered key, with an optional tolerance and
   `INNER` or `LEFT` semantics.
 - **Metric views** (Spark 4.2): `CREATE VIEW ... WITH METRICS LANGUAGE YAML`, read with `measure(<name>)`.
