@@ -176,7 +176,7 @@ def test_reader_shape_errors(spark: SparkSession) -> None:
             return [(1,)]
 
     with pytest.raises(PySparkRuntimeError):
-        ds._plan_and_read(spark, _source(ListRead()), schema, "t")
+        ds._plan_and_read(spark, _source(ListRead()), schema, "t")[1]()
 
 
 def test_pushdown_conf_is_read_and_tolerates_a_broken_session() -> None:
@@ -200,7 +200,7 @@ def test_load_read_callback_and_dropped_session(spark: SparkSession, monkeypatch
     real = spark._native
 
     class Native:
-        def register_python_source(self, name: str, empty: Any, read: Any) -> Any:
+        def register_python_source(self, name: str, empty: Any, read: Any, plan: Any) -> Any:
             seen["read"] = read
             return real.sql("SELECT 1 AS a")
 

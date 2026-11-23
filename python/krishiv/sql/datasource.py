@@ -653,9 +653,8 @@ def _filter_of(spec: tuple[Any, ...]) -> Filter:
     if kind == "Not":
         return Not(_filter_of(value))
     cls: Any = _FILTERS[kind]
-    if kind in ("IsNull", "IsNotNull"):
-        return cls(attribute)
-    return cls(attribute, value)
+    made: Filter = cls(attribute) if kind in ("IsNull", "IsNotNull") else cls(attribute, value)
+    return made
 
 
 def _pushdown_enabled(session: SparkSession) -> bool:
