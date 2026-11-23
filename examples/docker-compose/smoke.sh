@@ -16,6 +16,8 @@ cd "$(dirname "$0")"
 # `mc` in the image. Bump it here and in README.md together.
 export MINIO_IMAGE=${MINIO_IMAGE:-cgr.dev/chainguard/minio@sha256:304e0bbeb70a9aa0c40ff26d5a9c0a24296019c6d326ba8b75214fb73441d6e9}
 # JupyterLab runs as this user, as README.md tells a Linux user whose uid is not 1000.
+# Not as root: JupyterLab refuses to start as uid 0.
+[ "$(id -u)" -ne 0 ] || [ -n "${JUPYTER_UID:-}" ] || { echo "::error::run smoke.sh as a normal user, or set JUPYTER_UID and JUPYTER_GID"; exit 1; }
 export JUPYTER_UID=${JUPYTER_UID:-$(id -u)} JUPYTER_GID=${JUPYTER_GID:-$(id -g)}
 compose=(docker compose -p krishiv-quickstart-smoke)
 

@@ -15,6 +15,9 @@ cd examples/docker-compose
 docker compose up -d --wait
 ```
 
+On Linux, if `id -u` is not 1000, start it as yourself so that JupyterLab can save into `notebooks/`:
+`JUPYTER_UID=$(id -u) JUPYTER_GID=$(id -g) docker compose up -d --wait`.
+
 Open <http://127.0.0.1:8888/lab?token=krishiv> and run `lakehouse.ipynb`. It writes a Delta table to
 `s3://lakehouse/trips` on MinIO, reads it back by path and by name, and changes it with `INSERT`, `UPDATE` and
 `DELETE`.
