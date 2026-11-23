@@ -65,6 +65,9 @@ if [ ! -r "$cert" ] || [ ! -r "$key" ]; then
   fi
 fi
 
+# A static service token must say when it stops working: default one year, like the certificate.
+expires="${KRISHIV_AUTH_TOKEN_EXPIRES:-$(date -u -d '+365 days' +%F)}"
+
 exec krishiv server --host 0.0.0.0 \
   --conf "krishiv.server.tls.certFile=$cert" \
   --conf "krishiv.server.tls.keyFile=$key" \
@@ -72,4 +75,5 @@ exec krishiv server --host 0.0.0.0 \
   --conf "krishiv.auth.tokens.docker.principal=docker" \
   --conf "krishiv.auth.tokens.docker.kind=service" \
   --conf "krishiv.auth.tokens.docker.role=admin" \
+  --conf "krishiv.auth.principals.docker.expires=$expires" \
   "$@"

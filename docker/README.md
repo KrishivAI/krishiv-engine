@@ -34,7 +34,7 @@ Clients connect with `sc://localhost:15002/;use_ssl=true;token=change-me` (PySpa
 
 | Setting | Default |
 |---|---|
-| token | `KRISHIV_AUTH_TOKEN`, else the file `KRISHIV_AUTH_TOKEN_FILE` (default `/run/secrets/krishiv_token`, a Docker or compose secret), else a random token generated on first start and printed in the container log. It is one admin principal, `docker`. |
+| token | `KRISHIV_AUTH_TOKEN`, else the file `KRISHIV_AUTH_TOKEN_FILE` (default `/run/secrets/krishiv_token`, a Docker or compose secret), else a random token generated on first start and printed in the container log. It is one admin principal, `docker`, whose token expires on `KRISHIV_AUTH_TOKEN_EXPIRES` (YYYY-MM-DD, default one year from start). |
 | certificate | `KRISHIV_TLS_CERT` and `KRISHIV_TLS_KEY` (default `/etc/krishiv/tls/cert.pem` and `key.pem`), else a self-signed certificate (`localhost`, `127.0.0.1`, the container's host name) generated on first start in `KRISHIV_TLS_DIR` (default `/var/lib/krishiv/tls`; its path is printed). Mount that directory to keep the certificate. |
 
 The key and a token file must not be readable by group or others. To configure authentication yourself (several
