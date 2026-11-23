@@ -50,18 +50,18 @@ admin-api = ["dep:prost", "dep:prost-types", "dep:prost-reflect", "dep:tonic", "
 # The `external` access-policy provider (ADR 0049 §3): a `krishiv.access.v1` gRPC client (HTTPS through
 # rustls with the platform's roots, loopback HTTP, or a Unix socket).
 access-external = [
-  "session",
-  "dep:krishiv-access-proto",
-  "dep:krishiv-plan",
-  "dep:prost",
-  "dep:tonic",
-  "dep:tonic-prost",
-  "dep:tower",
-  "dep:hyper-util",
-  "tonic/channel",
-  "tonic/codegen",
-  "tonic/tls-aws-lc",
-  "tonic/tls-native-roots",
+    "session",
+    "dep:krishiv-access-proto",
+    "dep:krishiv-plan",
+    "dep:prost",
+    "dep:tonic",
+    "dep:tonic-prost",
+    "dep:tower",
+    "dep:hyper-util",
+    "tonic/channel",
+    "tonic/codegen",
+    "tonic/tls-aws-lc",
+    "tonic/tls-native-roots",
 ]
 # The admin listener over TLS (`tls::serve_capped_tls`, P3-T002 design §3.5).
 tls = ["dep:tokio-rustls", "krishiv-session?/tls"]

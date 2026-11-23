@@ -22,6 +22,7 @@ krishiv-connect
 krishiv-connect-server
 krishiv-flight-sql
 krishiv-ui-assets
+krishiv-access-proto
 krishiv-server
 krishiv
 krishiv-alloc

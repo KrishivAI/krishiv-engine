@@ -1918,10 +1918,16 @@ fn scan_instance_projection_defaults_on_and_parses_booleans() {
 #[test]
 fn a_key_named_like_a_credential_is_on_the_allow_list() {
     const WORDS: [&str; 5] = ["password", "secret", "token", "credential", "key"];
-    const ALLOWED: &[(&str, &str)] = &[(
-        "krishiv.write.idempotencyKey",
-        "a caller-chosen job id that makes a retried write a no-op, not a credential",
-    )];
+    const ALLOWED: &[(&str, &str)] = &[
+        (
+            "krishiv.access.external.token",
+            "a secret reference (`env:NAME` or `file:/path`); the server refuses a literal at startup",
+        ),
+        (
+            "krishiv.write.idempotencyKey",
+            "a caller-chosen job id that makes a retried write a no-op, not a credential",
+        ),
+    ];
     let mut found = Vec::new();
     for e in REGISTRY {
         let last = e
