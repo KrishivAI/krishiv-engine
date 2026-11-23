@@ -33,6 +33,8 @@ enum T {
     Double,
     Date,
     Timestamp,
+    /// `TIME(6)`.
+    Time,
     Boolean,
     Str,
 }
@@ -121,6 +123,7 @@ impl Infer<'_> {
             T::Decimal(_) => self.decimal(f),
             T::Double => self.double(f),
             T::Date => self.date_time(f),
+            T::Time => self.time(f),
             T::Timestamp => self.timestamp(f),
             T::Boolean => Self::boolean(f),
             T::Str => T::Str,
@@ -159,6 +162,17 @@ impl Infer<'_> {
             || f == self.o.pos_inf
         {
             T::Double
+        } else if self.o.prefer_date {
+            self.time(f)
+        } else {
+            self.date_time(f)
+        }
+    }
+
+    /// Spark 4.3.0's `tryParseTime`: a `TIME` while the gate is on, else a date.
+    fn time(&self, f: &str) -> T {
+        if self.o.time_type && matches!(self.dt.parse_time(f), Ok(Some(_))) {
+            T::Time
         } else {
             self.date_time(f)
         }
@@ -231,6 +245,7 @@ fn arrow_type(t: T) -> DataType {
         T::Double => DataType::Float64,
         T::Date => DataType::Date32,
         T::Timestamp => DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        T::Time => DataType::Time64(TimeUnit::Nanosecond),
         T::Boolean => DataType::Boolean,
         T::Null | T::Str => DataType::Utf8View,
     }
@@ -246,6 +261,7 @@ pub(crate) fn ddl_type(t: &DataType) -> FormatResult<String> {
         DataType::Float64 => "DOUBLE".to_owned(),
         DataType::Date32 => "DATE".to_owned(),
         DataType::Timestamp(_, _) => "TIMESTAMP".to_owned(),
+        DataType::Time64(_) => "TIME(6)".to_owned(),
         DataType::Boolean => "BOOLEAN".to_owned(),
         DataType::Utf8View => "STRING".to_owned(),
         // `arrow_type` above only yields the types matched here.

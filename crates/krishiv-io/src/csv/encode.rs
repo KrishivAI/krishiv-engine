@@ -36,6 +36,7 @@ pub(crate) struct CsvEncoder {
 
 impl CsvEncoder {
     pub(crate) fn new(schema: &Schema, o: &FormatOptions) -> FormatResult<Self> {
+        crate::text::refuse_time_without_gate(schema, o)?;
         let opts = CsvOptions::new(o, true)?;
         let dt = Datetimes::new(o, Purpose::Format)?;
         let style = o.str("binaryOutputStyle").unwrap_or("HEX_DISCRETE");
@@ -224,7 +225,8 @@ impl CsvEncoder {
                 &self
                     .dt
                     .format_time(a.as_primitive::<Time64NanosecondType>().value(i))
-                    .map_err(write_err)?,
+                    // Spark: `TASK_WRITE_FAILED` at the first non-NULL `TIME`.
+                    .map_err(|e| FormatError::WriteFailed(e.to_string()))?,
             ),
             (Kind::YearMonth(..) | Kind::DayTime(..), _) => {
                 buf.push_str(&interval_text(kind, a, i).unwrap_or_default());

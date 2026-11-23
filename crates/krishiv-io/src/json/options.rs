@@ -74,6 +74,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("dateFormat", "The pattern of DATE values (default: Spark's lenient grammar).");
         string("timestampFormat", "The pattern of TIMESTAMP values.");
         string("timestampNTZFormat", "The pattern of TIMESTAMP_NTZ values.");
+        conf(crate::text::TIME_TYPE_CONF, OptionKind::Bool, OptionDefault::Bool(false), crate::text::TIME_TYPE_CONF, "The session's `spark.sql.timeType.enabled`: inference may give `TIME`.");
         string("timeFormat", "The pattern of TIME values (default: Spark's TIME grammar to read, the value's own digits to write).");
         conf("ignoreCorruptFiles", OptionKind::Bool, OptionDefault::Bool(false), "spark.sql.files.ignoreCorruptFiles", "Inference: a compressed file that breaks counts the lines decoded before the break, as the scan does (`spark.sql.files.ignoreCorruptFiles`).");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");

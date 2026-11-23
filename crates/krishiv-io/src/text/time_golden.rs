@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Int32Type, Time64NanosecondType};
+use arrow_array::types::{Int32Type, Int64Type, Time64NanosecondType};
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, SchemaRef};
 use krishiv_common::error::{ErrorClass, KrishivError};
@@ -131,6 +131,7 @@ fn cell(a: &dyn Array, i: usize) -> Option<String> {
     }
     Some(match a.data_type() {
         DataType::Int32 => a.as_primitive::<Int32Type>().value(i).to_string(),
+        DataType::Int64 => a.as_primitive::<Int64Type>().value(i).to_string(),
         DataType::Time64(_) => format_time(a.as_primitive::<Time64NanosecondType>().value(i)),
         DataType::Utf8View => a.as_string_view().value(i).to_owned(),
         DataType::Utf8 => a.as_string::<i32>().value(i).to_owned(),
@@ -294,5 +295,81 @@ pub(crate) fn check_reads(fmt: &str, read: Reader<'_>) {
         assert_eq!(got, expected(c, true), "{fmt} timeFormat {pattern}");
         checked += 1;
     }
-    assert_eq!(checked, 14);
+    // A pattern Spark's formatter cannot build fails each value, not the read.
+    let c = case(&doc, &format!("timeFormat {fmt} invalid pattern"));
+    let ddl = "id INT, t TIME, _corrupt_record STRING";
+    let got = rows(
+        &read(
+            &formatted,
+            &serde_json::json!({"timeFormat": "qqq HH"}),
+            schema(ddl),
+        )
+        .expect("invalid pattern"),
+    );
+    assert_eq!(got, expected(c, false), "{fmt} timeFormat invalid pattern");
+    let c = case(&doc, &format!("timeFormat {fmt} FAILFAST"));
+    let e = read(
+        &formatted,
+        &serde_json::json!({"timeFormat": "HH:mm:ss", "mode": "FAILFAST"}),
+        schema("id INT, t TIME"),
+    )
+    .expect_err("timeFormat FAILFAST");
+    assert_eq!(c["error_chain"][0], "FAILED_READ_FILE.NO_HINT");
+    assert_eq!(
+        classes(&e)[..2],
+        [
+            ErrorClass::FailedReadFileNoHint,
+            ErrorClass::MalformedRecordInParsingWithoutSuggestion
+        ],
+        "{fmt} timeFormat FAILFAST"
+    );
+    checked += 2;
+    assert_eq!(checked, 16);
+}
+
+/// The inference files of the generator (`infer/a.csv`, `infer_dots/a.csv`,
+/// `infer_mixed/a.csv`, `infer_json/a.json`).
+pub(crate) const INFER_CSV: &str = "id,t\n0,12:34:56\n1,01:02:03.5\n2,\n";
+/// See [`INFER_CSV`].
+pub(crate) const INFER_DOTS_CSV: &str = "id,t\n0,12.34.56\n1,01.02.03\n";
+/// See [`INFER_CSV`].
+pub(crate) const INFER_MIXED_CSV: &str = "id,t\n0,12:34:56\n1,7\n";
+/// See [`INFER_CSV`].
+pub(crate) const INFER_JSON: &str =
+    "{\"id\":0,\"t\":\"12:34:56\"}\n{\"id\":1,\"t\":\"01:02:03.5\"}\n{\"id\":2,\"t\":null}\n";
+
+/// Spark's simple name of column `t`'s inferred Arrow type.
+pub(crate) fn inferred_t(schema: &SchemaRef) -> String {
+    let f = schema.field_with_name("t").expect("column t");
+    match f.data_type() {
+        DataType::Time64(_) => "time(6)".to_owned(),
+        DataType::Timestamp(..) => "timestamp".to_owned(),
+        DataType::Utf8View | DataType::Utf8 => "string".to_owned(),
+        other => other.to_string(),
+    }
+}
+
+/// The type Spark inferred for column `t` in `case`.
+pub(crate) fn spark_t(case: &Value) -> String {
+    case["schema"]
+        .as_array()
+        .expect("schema")
+        .iter()
+        .find(|f| f["name"] == "t")
+        .and_then(|f| f["type"].as_str())
+        .expect("t")
+        .to_owned()
+}
+
+/// A case's options with the `TIME` gate of its `conf`.
+pub(crate) fn with_gate(case: &Value, mut opts: Value) -> Value {
+    let gate = case["conf"][crate::text::TIME_TYPE_CONF].clone();
+    opts[crate::text::TIME_TYPE_CONF] = gate;
+    opts
+}
+
+/// `opts` with the `TIME` gate on (a session with `spark.sql.timeType.enabled`).
+pub(crate) fn gate_on(mut opts: Value) -> Value {
+    opts[crate::text::TIME_TYPE_CONF] = Value::from("true");
+    opts
 }

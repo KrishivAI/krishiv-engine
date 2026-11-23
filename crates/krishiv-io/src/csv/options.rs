@@ -113,6 +113,8 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("dateFormat", "The pattern of DATE values (default: Spark's lenient grammar).");
         string("timestampFormat", "The pattern of TIMESTAMP values.");
         string("timestampNTZFormat", "The pattern of TIMESTAMP_NTZ values.");
+        flag("preferDate", Some(true), "Inference: try a DATE (and a TIME) before a TIMESTAMP.");
+        conf(crate::text::TIME_TYPE_CONF, OptionKind::Bool, OptionDefault::Bool(false), crate::text::TIME_TYPE_CONF, "The session's `spark.sql.timeType.enabled`: inference may give `TIME`.");
         string("timeFormat", "The pattern of TIME values (default: Spark's TIME grammar to read, the value's own digits to write).");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");
         conf("binaryOutputStyle", OptionKind::String, OptionDefault::Str("HEX_DISCRETE"), "spark.sql.binaryOutputStyle", "Write: how a BINARY value prints (UTF-8, BASIC, BASE64, HEX or HEX_DISCRETE).");
@@ -188,6 +190,10 @@ pub(crate) struct CsvOptions {
     pub charset: Charset,
     pub line_sep: LineSep,
     pub enforce_schema: bool,
+    /// `preferDate` (default true): inference tries a `TIME` after a number.
+    pub prefer_date: bool,
+    /// The session's `spark.sql.timeType.enabled`: inference may give `TIME`.
+    pub time_type: bool,
     pub quote_all: bool,
     pub escape_quotes: bool,
     pub column_pruning: bool,
@@ -340,6 +346,8 @@ impl CsvOptions {
             charset,
             line_sep,
             enforce_schema: o.bool("enforceSchema").unwrap_or(true),
+            prefer_date: o.bool("preferDate").unwrap_or(true),
+            time_type: o.bool(crate::text::TIME_TYPE_CONF).unwrap_or(false),
             quote_all: o.bool("quoteAll").unwrap_or(false),
             escape_quotes: o.bool("escapeQuotes").unwrap_or(true),
             // Spark 4.2's `CSVOptions`: `getBool(COLUMN_PRUNING, !multiLine

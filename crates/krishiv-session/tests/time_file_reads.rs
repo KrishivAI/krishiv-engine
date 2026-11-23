@@ -141,3 +141,98 @@ fn a_written_time_column_reads_back() {
         vec![row("1", Some("12:34:56.12")), row("2", None)]
     );
 }
+
+fn typeof_t(s: &Session, df: &krishiv_session::DataFrame) -> String {
+    block_on(df.create_or_replace_temp_view("i")).unwrap();
+    let out = block_on(s.sql("SELECT typeof(t) FROM i LIMIT 1")).unwrap();
+    texts(&block_on(out.collect()).unwrap())[0][0]
+        .clone()
+        .unwrap()
+}
+
+/// Schema inference gives `TIME(6)` only with the gate on (Spark 4.3.0: CSV
+/// under `preferDate`, JSON under `inferTimestamp`); with it off the same
+/// texts are timestamps, as Spark infers them.
+#[test]
+fn inference_gives_time_only_with_the_gate_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("a.csv");
+    std::fs::write(&csv, "id,t\n0,12:34:56\n1,01:02:03.5\n").unwrap();
+    let json = dir.path().join("a.json");
+    std::fs::write(
+        &json,
+        "{\"id\":0,\"t\":\"12:34:56\"}\n{\"id\":1,\"t\":\"01:02:03.5\"}\n",
+    )
+    .unwrap();
+    for (gate, csv_type, json_type) in [
+        (true, "time(6)", "time(6)"),
+        (false, "timestamp", "timestamp"),
+    ] {
+        let s = session(gate);
+        let df = s
+            .read()
+            .format("csv")
+            .option("header", "true")
+            .option("inferSchema", "true")
+            .load([csv.to_str().unwrap()]);
+        assert_eq!(typeof_t(&s, &df), csv_type, "csv, gate {gate}");
+        let df = s
+            .read()
+            .format("json")
+            .option("inferTimestamp", "true")
+            .load([json.to_str().unwrap()]);
+        assert_eq!(typeof_t(&s, &df), json_type, "json, gate {gate}");
+    }
+}
+
+/// With the gate off a JSON read and a CSV write of a `TIME` are refused too.
+#[test]
+fn the_gate_off_refuses_json_reads_and_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("a.json");
+    std::fs::write(&json, "{\"id\":1,\"t\":\"12:34:56\"}\n").unwrap();
+    let s = session(false);
+    let df = s
+        .read()
+        .format("json")
+        .schema_ddl("id INT, t TIME(3)")
+        .unwrap()
+        .load([json.to_str().unwrap()]);
+    let e = block_on(df.collect()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnsupportedTimeType, "{e}");
+    let df = block_on(s.sql("SELECT TIME'01:02:03' AS t")).unwrap();
+    let out = dir.path().join("out");
+    let e = block_on(df.write().csv(out.to_str().unwrap())).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnsupportedTimeType, "{e}");
+}
+
+/// A `TIME(3)` column keeps the digits it read past its precision.
+#[test]
+fn a_read_value_keeps_digits_past_its_precision() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("a.csv");
+    std::fs::write(&csv, "id,t\n1,12:34:56.123456\n").unwrap();
+    let s = session(true);
+    let df = s
+        .read()
+        .format("csv")
+        .option("header", "true")
+        .schema_ddl("id INT, t TIME(3)")
+        .unwrap()
+        .load([csv.to_str().unwrap()]);
+    block_on(df.create_or_replace_temp_view("p")).unwrap();
+    let out = block_on(s.sql(
+        "SELECT CAST(t = TIME'12:34:56.123' AS STRING), CAST(t = TIME'12:34:56.123456' AS STRING), \
+         CAST(hour(t) AS STRING), typeof(t) FROM p",
+    ))
+    .unwrap();
+    assert_eq!(
+        texts(&block_on(out.collect()).unwrap()),
+        vec![vec![
+            Some("false".to_owned()),
+            Some("true".to_owned()),
+            Some("12".to_owned()),
+            Some("time(3)".to_owned()),
+        ]]
+    );
+}

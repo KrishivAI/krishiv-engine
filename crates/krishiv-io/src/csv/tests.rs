@@ -354,7 +354,7 @@ fn in_memory_file_on(
     (sched, file)
 }
 
-fn infer(bytes: &[u8], o: &FormatOptions) -> Result<SchemaRef, KrishivError> {
+pub(super) fn infer(bytes: &[u8], o: &FormatOptions) -> Result<SchemaRef, KrishivError> {
     infer_named(bytes, "f.csv", o)
 }
 

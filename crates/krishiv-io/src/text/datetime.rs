@@ -34,7 +34,10 @@ pub(crate) struct Datetimes {
     ntz: Option<DateTimePattern>,
     /// `timeFormat`: unset reads Spark's `TIME` grammar and writes the value's
     /// own digits (Spark 4.3.0, `tests/fixtures/spark-4.3.0/time-file-reads.json`).
-    time: Option<DateTimePattern>,
+    /// Spark builds the formatter lazily, so a pattern that does not compile
+    /// fails each value it meets (a malformed record on read, the write on
+    /// writing), never the reader itself; the error is kept for that.
+    time: Option<Result<DateTimePattern, KrishivError>>,
     /// Today in the session zone, for a bare time of day.
     today: i32,
     fallback_date: bool,
@@ -48,6 +51,39 @@ fn clean(s: &str) -> std::borrow::Cow<'_, str> {
     } else {
         std::borrow::Cow::Borrowed(s)
     }
+}
+
+/// `compiled` as a `TIME` pattern. Writing: java.time's `LocalTime` has only
+/// the time-of-day fields, so a pattern with any other letter (a year, a day,
+/// a zone) fails to format; reading resolves a date-time to its time of day.
+/// Known difference: a pattern with a field Spark's timestamp checks refuse
+/// (`Q`, `E`, `F`, ...) fails here as a whole, where java.time could still
+/// parse a time from some texts (the fixture's `qqq HH` parses nothing).
+fn time_pattern(
+    text: &str,
+    compiled: DateTimePattern,
+    purpose: Purpose,
+) -> Result<DateTimePattern, KrishivError> {
+    if matches!(purpose, Purpose::Format)
+        && let Some(c) = unquoted_letters(text).find(|c| !"HhKkmsSnNAa".contains(*c))
+    {
+        return Err(crate::error::unsupported(format!(
+            "a TIME written with the timeFormat letter '{c}'"
+        )));
+    }
+    Ok(compiled)
+}
+
+/// The pattern letters of `text` outside quotes.
+fn unquoted_letters(text: &str) -> impl Iterator<Item = char> + '_ {
+    let mut quoted = false;
+    text.chars().filter(move |c| {
+        if *c == '\'' {
+            quoted = !quoted;
+            return false;
+        }
+        !quoted && c.is_ascii_alphabetic()
+    })
 }
 
 impl Datetimes {
@@ -73,8 +109,7 @@ impl Datetimes {
         let ntz = pattern("timestampNTZFormat", NTZ_PATTERN)?;
         let time = o
             .str("timeFormat")
-            .map(|p| DateTimePattern::new(p, purpose))
-            .transpose()?;
+            .map(|p| DateTimePattern::new(p, purpose).and_then(|c| time_pattern(p, c, purpose)));
         let explicit = o.bool("enableDateTimeParsingFallback");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -164,7 +199,9 @@ impl Datetimes {
     /// A text the pattern refuses with an error of its own.
     pub(crate) fn parse_time(&self, s: &str) -> Result<Option<i64>, KrishivError> {
         match &self.time {
-            Some(p) => Ok(p
+            // Spark's formatter fails to build on this value: not a time.
+            Some(Err(_)) => Ok(None),
+            Some(Ok(p)) => Ok(p
                 .parse_local(s, false)?
                 .map(|m| m.rem_euclid(MICROS_PER_DAY).wrapping_mul(NANOS_PER_MICRO))),
             None => Ok(parse_time(s)),
@@ -175,10 +212,13 @@ impl Datetimes {
     /// the fraction's own digits.
     ///
     /// # Errors
-    /// A value the pattern cannot show.
+    /// A `timeFormat` that does not compile or names a field a time of day
+    /// has not (a date, a zone): Spark fails the write at the first non-NULL
+    /// `TIME` (`TASK_WRITE_FAILED`).
     pub(crate) fn format_time(&self, nanos: i64) -> Result<String, KrishivError> {
         match &self.time {
-            Some(p) => p.format_local(nanos.div_euclid(NANOS_PER_MICRO)),
+            Some(Err(e)) => Err(e.clone()),
+            Some(Ok(p)) => p.format_local(nanos.div_euclid(NANOS_PER_MICRO)),
             None => Ok(format_time(nanos)),
         }
     }

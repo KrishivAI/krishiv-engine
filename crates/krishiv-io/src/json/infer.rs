@@ -32,6 +32,8 @@ enum Ty {
     Decimal(u8, i8),
     Double,
     Timestamp,
+    /// `TIME(6)`.
+    Time,
     Str,
     /// A struct, its fields sorted by name as Spark's `inferField` sorts
     /// them (`String.compareTo`, UTF-16 order).
@@ -251,6 +253,8 @@ struct Infer<'a> {
     prefers_decimal: bool,
     primitives_as_string: bool,
     infer_timestamp: bool,
+    /// `spark.sql.timeType.enabled`: a `TIME` may be inferred.
+    time_type: bool,
     dt: &'a Datetimes,
 }
 
@@ -267,6 +271,12 @@ impl Infer<'_> {
                     && let Some(t) = self.decimal_of_string(s)
                 {
                     t
+                } else if self.infer_timestamp
+                    && self.time_type
+                    && matches!(self.dt.parse_time(s), Ok(Some(_)))
+                {
+                    // Spark 4.3.0 tries a `TIME` first, under `inferTimestamp` only.
+                    Ty::Time
                 } else if self.infer_timestamp && matches!(self.dt.parse_timestamp(s), Ok(Some(_)))
                 {
                     Ty::Timestamp
@@ -388,6 +398,7 @@ fn sql_type(t: &Ty) -> String {
         Ty::Decimal(p, s) => format!("DECIMAL({p},{s})"),
         Ty::Double => "DOUBLE".to_owned(),
         Ty::Timestamp => "TIMESTAMP".to_owned(),
+        Ty::Time => "TIME(6)".to_owned(),
         Ty::Str => "STRING".to_owned(),
         Ty::Struct(fields) => format!(
             "STRUCT<{}>",
@@ -409,6 +420,7 @@ fn arrow_type(t: &Ty) -> DataType {
         Ty::Decimal(p, s) => DataType::Decimal128(*p, *s),
         Ty::Double => DataType::Float64,
         Ty::Timestamp => DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        Ty::Time => DataType::Time64(TimeUnit::Nanosecond),
         Ty::Struct(fields) => DataType::Struct(
             fields
                 .iter()
@@ -582,6 +594,7 @@ pub(crate) fn infer<'a>(
             prefers_decimal: opts.prefers_decimal,
             primitives_as_string: opts.primitives_as_string,
             infer_timestamp: opts.infer_timestamp,
+            time_type: o.bool(crate::text::TIME_TYPE_CONF).unwrap_or(false),
             dt: &dt,
         };
         let ratio = sampling_ratio(o)?;

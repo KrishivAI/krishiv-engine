@@ -8,8 +8,10 @@ STRING in a UTC session, rows sorted), or the error (condition, the chain of con
 Covered: `spark.sql.timeType.enabled` off (the 4.3.0 default: reads, writes and from_csv/from_json refuse,
 to_csv/to_json evaluate), and on: a table of TIME texts read through CSV and JSON next to
 `try_cast(text AS TIME(p))`, the parse modes, `timeFormat` on read and write, `nullValue`/`emptyValue`,
-schema inference (TIME is never inferred), writes of TIME(p) columns read back as text, from_csv/from_json and
-to_csv/to_json. The root is written as `<root>`. Usage (from repo root):
+schema inference (TIME is inferred with the gate on: CSV under `preferDate`, JSON under `inferTimestamp`; a
+column of mixed shapes merges to STRING), writes of TIME(p) columns read back as text (patterns that cannot
+format a TIME), from_csv/from_json and to_csv/to_json (those four are expressions: their cases are checked by
+krishiv-functions, not by the file readers). The root is written as `<root>`. Usage (from repo root):
 
     docker run --rm -v "$PWD/tests/scripts:/work:ro" apache/spark:4.3.0 \
         /opt/spark/bin/spark-submit --master 'local[1]' --driver-memory 1g /work/gen_time_file_reads.py \
@@ -98,6 +100,11 @@ def layout(root):
         "id,t\n0,12:34:56\n1,12.34.56\n2,1:05 PM\n3,12:34:56.123\n4,12:34:56.123456789\n5,2024-01-01 12:34:56\n"
         "6,12:34\n7,1:2:3\n",
     )
+    # Single-shape TIME columns, for inference.
+    write_text(f"{root}/infer/a.csv", "id,t\n0,12:34:56\n1,01:02:03.5\n2,\n")
+    write_text(f"{root}/infer_dots/a.csv", "id,t\n0,12.34.56\n1,01.02.03\n")
+    write_text(f"{root}/infer_mixed/a.csv", "id,t\n0,12:34:56\n1,7\n")
+    write_text(f"{root}/infer_json/a.json", '{"id":0,"t":"12:34:56"}\n{"id":1,"t":"01:02:03.5"}\n{"id":2,"t":null}\n')
     write_text(
         f"{root}/fmt_json/a.json",
         '{"id":0,"t":"12:34:56"}\n{"id":1,"t":"12.34.56"}\n{"id":2,"t":"1:05 PM"}\n{"id":3,"t":"12:34:56.123"}\n'
@@ -285,7 +292,7 @@ def cases(spark, root):
     add("csv nullValue", "csv nullValue 'bad'", read("csv", "nulls", "id INT, t TIME", nullValue="bad"))
     add("csv emptyValue", "csv emptyValue '12:00'", read("csv", "nulls", "id INT, t TIME", emptyValue="12:00"))
 
-    # 5. Inference never gives TIME.
+    # 5. Inference: mixed shapes merge to STRING; single-shape columns.
     add(
         "csv inferSchema",
         "csv inferSchema over TIME texts",
@@ -303,6 +310,32 @@ def cases(spark, root):
     )
     add("json inference", "json inference over TIME texts", lambda: spark.read.json(p("fmt_json")))
 
+    def infer_csv(path, **opts):
+        return lambda: spark.read.options(header="true", inferSchema="true", **opts).csv(p(path))
+
+    add("infer csv single shape", "csv inferSchema, every value a TIME text", infer_csv("infer"))
+    add("infer csv gate off", "the same with the gate off", infer_csv("infer"), off)
+    add("infer csv preferDate false", "csv inferSchema, preferDate=false", infer_csv("infer", preferDate="false"))
+    add("infer csv timeFormat", "csv inferSchema, timeFormat HH.mm.ss", infer_csv("infer_dots", timeFormat="HH.mm.ss"))
+    add(
+        "infer csv timeFormat default texts",
+        "csv inferSchema, timeFormat HH.mm.ss over colon texts",
+        infer_csv("infer", timeFormat="HH.mm.ss"),
+    )
+    add("infer csv mixed", "csv inferSchema, a TIME text then an integer", infer_csv("infer_mixed"))
+    add("infer json default", "json inference, TIME texts", lambda: spark.read.json(p("infer_json")))
+    add(
+        "infer json inferTimestamp",
+        "json inference, inferTimestamp=true",
+        lambda: spark.read.option("inferTimestamp", "true").json(p("infer_json")),
+    )
+    add(
+        "infer json inferTimestamp gate off",
+        "json inference, inferTimestamp=true, the gate off",
+        lambda: spark.read.option("inferTimestamp", "true").json(p("infer_json")),
+        off,
+    )
+
     # 6. Writes, read back as text.
     sql = (
         "SELECT 1 AS id, CAST(TIME'12:34:56.123456789' AS TIME(9)) AS t9, CAST(TIME'12:34:56.120' AS TIME(3)) AS t3, "
@@ -319,6 +352,21 @@ def cases(spark, root):
             f"write {fmt} timeFormat fraction",
             f"{fmt} write with timeFormat HH:mm:ss.SSS",
             write_back(fmt, sql, timeFormat="HH:mm:ss.SSS"),
+        )
+        add(
+            f"write {fmt} timeFormat invalid",
+            f"{fmt} write with timeFormat 'qqq HH'",
+            write_back(fmt, sql, timeFormat="qqq HH"),
+        )
+        add(
+            f"write {fmt} timeFormat date fields",
+            f"{fmt} write with timeFormat yyyy-MM-dd HH:mm",
+            write_back(fmt, sql, timeFormat="yyyy-MM-dd HH:mm"),
+        )
+        add(
+            f"write {fmt} timeFormat invalid nulls only",
+            f"{fmt} write of a NULL TIME with timeFormat 'qqq HH'",
+            write_back(fmt, "SELECT 1 AS id, CAST(NULL AS TIME) AS t", timeFormat="qqq HH"),
         )
     add(
         "write csv read back TIME(3)",

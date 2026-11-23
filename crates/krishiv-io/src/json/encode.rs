@@ -59,6 +59,7 @@ fn push_quoted(out: &mut String, s: &str) {
 
 impl JsonEncoder {
     pub(crate) fn new(schema: &Schema, o: &FormatOptions) -> FormatResult<Self> {
+        crate::text::refuse_time_without_gate(schema, o)?;
         let opts = JsonOptions::new(o, true)?;
         let dt = Datetimes::new(o, Purpose::Format)?;
         let kinds = schema
@@ -173,7 +174,8 @@ impl JsonEncoder {
             (Kind::Time, _) => {
                 let s = dt
                     .format_time(a.as_primitive::<Time64NanosecondType>().value(i))
-                    .map_err(write_err)?;
+                    // Spark: `TASK_WRITE_FAILED` at the first non-NULL `TIME`.
+                    .map_err(|e| FormatError::WriteFailed(e.to_string()))?;
                 push_quoted(buf, &s);
             }
             (Kind::YearMonth(..) | Kind::DayTime(..), _) => {

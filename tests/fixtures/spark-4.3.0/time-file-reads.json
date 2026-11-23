@@ -4228,6 +4228,295 @@
    ]
   },
   {
+   "name": "infer csv single shape",
+   "description": "csv inferSchema, every value a TIME text",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "schema": [
+    {
+     "name": "id",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "t",
+     "type": "time(6)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "0",
+     "12:34:56"
+    ],
+    [
+     "1",
+     "01:02:03.5"
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "infer csv gate off",
+   "description": "the same with the gate off",
+   "conf": {
+    "spark.sql.timeType.enabled": "false"
+   },
+   "schema": [
+    {
+     "name": "id",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "t",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "0",
+     "2026-11-23 12:34:56"
+    ],
+    [
+     "1",
+     "2026-11-23 01:02:03.5"
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "infer csv preferDate false",
+   "description": "csv inferSchema, preferDate=false",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "schema": [
+    {
+     "name": "id",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "t",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "0",
+     "2026-11-23 12:34:56"
+    ],
+    [
+     "1",
+     "2026-11-23 01:02:03.5"
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "infer csv timeFormat",
+   "description": "csv inferSchema, timeFormat HH.mm.ss",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "schema": [
+    {
+     "name": "id",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "t",
+     "type": "time(6)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "0",
+     "12:34:56"
+    ],
+    [
+     "1",
+     "01:02:03"
+    ]
+   ]
+  },
+  {
+   "name": "infer csv timeFormat default texts",
+   "description": "csv inferSchema, timeFormat HH.mm.ss over colon texts",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "schema": [
+    {
+     "name": "id",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "t",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "0",
+     "2026-11-23 12:34:56"
+    ],
+    [
+     "1",
+     "2026-11-23 01:02:03.5"
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "infer csv mixed",
+   "description": "csv inferSchema, a TIME text then an integer",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "schema": [
+    {
+     "name": "id",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "t",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "0",
+     "12:34:56"
+    ],
+    [
+     "1",
+     "7"
+    ]
+   ]
+  },
+  {
+   "name": "infer json default",
+   "description": "json inference, TIME texts",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "schema": [
+    {
+     "name": "id",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "t",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "0",
+     "12:34:56"
+    ],
+    [
+     "1",
+     "01:02:03.5"
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "infer json inferTimestamp",
+   "description": "json inference, inferTimestamp=true",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "schema": [
+    {
+     "name": "id",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "t",
+     "type": "time(6)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "0",
+     "12:34:56"
+    ],
+    [
+     "1",
+     "01:02:03.5"
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "infer json inferTimestamp gate off",
+   "description": "json inference, inferTimestamp=true, the gate off",
+   "conf": {
+    "spark.sql.timeType.enabled": "false"
+   },
+   "schema": [
+    {
+     "name": "id",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "t",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "0",
+     "2026-11-23 12:34:56"
+    ],
+    [
+     "1",
+     "2026-11-23 01:02:03.5"
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
    "name": "write csv",
    "description": "csv write of TIME(p) columns",
    "conf": {
@@ -4285,6 +4574,47 @@
    ]
   },
   {
+   "name": "write csv timeFormat invalid",
+   "description": "csv write with timeFormat 'qqq HH'",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "error_class": "TASK_WRITE_FAILED",
+   "error_chain": [
+    "TASK_WRITE_FAILED"
+   ]
+  },
+  {
+   "name": "write csv timeFormat date fields",
+   "description": "csv write with timeFormat yyyy-MM-dd HH:mm",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "error_class": "TASK_WRITE_FAILED",
+   "error_chain": [
+    "TASK_WRITE_FAILED"
+   ]
+  },
+  {
+   "name": "write csv timeFormat invalid nulls only",
+   "description": "csv write of a NULL TIME with timeFormat 'qqq HH'",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "schema": [
+    {
+     "name": "value",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1,"
+    ]
+   ]
+  },
+  {
    "name": "write json",
    "description": "json write of TIME(p) columns",
    "conf": {
@@ -4338,6 +4668,47 @@
    "rows": [
     [
      "{\"id\":1,\"t9\":\"12:34:56.123\",\"t3\":\"12:34:56.120\",\"t6\":\"01:02:03.000\",\"t0\":\"00:00:00.000\"}"
+    ]
+   ]
+  },
+  {
+   "name": "write json timeFormat invalid",
+   "description": "json write with timeFormat 'qqq HH'",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "error_class": "TASK_WRITE_FAILED",
+   "error_chain": [
+    "TASK_WRITE_FAILED"
+   ]
+  },
+  {
+   "name": "write json timeFormat date fields",
+   "description": "json write with timeFormat yyyy-MM-dd HH:mm",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "error_class": "TASK_WRITE_FAILED",
+   "error_chain": [
+    "TASK_WRITE_FAILED"
+   ]
+  },
+  {
+   "name": "write json timeFormat invalid nulls only",
+   "description": "json write of a NULL TIME with timeFormat 'qqq HH'",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "schema": [
+    {
+     "name": "value",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "{\"id\":1}"
     ]
    ]
   },
