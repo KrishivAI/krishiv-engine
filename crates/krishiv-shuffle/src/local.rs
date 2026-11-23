@@ -473,7 +473,8 @@ fn read_exact_at(file: &std::fs::File, buf: &mut [u8], offset: u64) -> std::io::
 }
 
 /// Fills `buf` from `file` at `offset` (Windows port): `seek_read` takes the offset with each
-/// call, so concurrent readers of one handle each read their own range.
+/// call, so concurrent readers of one handle each read their own range. It does move the
+/// handle's cursor, so no sequential reader may share a handle with these reads.
 #[cfg(windows)]
 fn read_exact_at(file: &std::fs::File, mut buf: &mut [u8], mut offset: u64) -> std::io::Result<()> {
     use std::os::windows::fs::FileExt as _;

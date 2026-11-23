@@ -459,6 +459,36 @@ async fn artifact_names() {
     assert_eq!(run.entry().artifacts().used_bytes(), 0);
 }
 
+/// On Windows a segment with a `:` is a drive-relative path (`C:x` replaces the directory it is
+/// joined to) or an alternate data stream (`a:s`): refused before anything is written, so nothing
+/// lands in the server's current directory.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_drive_and_stream_segments_are_refused() {
+    let run = start().await;
+    let cwd = std::env::current_dir().expect("cwd");
+    for name in [
+        "files/C:x",
+        "files/C:/x",
+        "files/C:../x",
+        "files/a:s",
+        "pyfiles/C:evil.py",
+    ] {
+        let status = add(&run, vec![batch(vec![single(name, b"x")])])
+            .await
+            .unwrap_err();
+        assert_eq!(error_class(&status), "INVALID_ARTIFACT_PATH", "{name:?}");
+    }
+    assert!(run.root().is_none());
+    assert_eq!(run.entry().artifacts().used_bytes(), 0);
+    for leaf in ["x", "evil.py", "s"] {
+        assert!(
+            !cwd.join(leaf).exists(),
+            "{leaf} written to the current directory"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn artifact_already_exists() {
     let run = start().await;

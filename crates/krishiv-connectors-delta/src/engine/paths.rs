@@ -55,7 +55,8 @@ impl TableRoot {
     pub fn confine(&self, url: &Url) -> Result<Path, KrishivError> {
         // On Windows one directory has several spellings (an 8.3 short name such as
         // `RUNNER~1`, any letter case), so a local root's text is no guide: the canonical check
-        // below decides there.
+        // below decides there. A root that does not exist yet keeps its text as written, so a
+        // case-different spelling of a not-yet-created root is refused (fails closed).
         let canonical_only = cfg!(windows) && self.local.is_some();
         let inside = url.scheme() == self.root.scheme()
             && url.username() == self.root.username()

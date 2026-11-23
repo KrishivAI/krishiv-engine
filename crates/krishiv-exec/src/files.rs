@@ -144,7 +144,9 @@ impl LocalPaths {
 }
 
 /// A local path's text in the form the locator reads: on Windows, `\` separators and drive
-/// letters normalized (`files/windows_path.rs`); elsewhere unchanged.
+/// letters normalized (`files/windows_path.rs`); elsewhere unchanged. Every `\` becomes `/`,
+/// which is right only for local paths (a `\` is never part of a Windows file name): object-store
+/// URLs must not be routed through here.
 fn local_text(path: &str) -> String {
     if cfg!(windows) {
         windows_path::normalize(path)

@@ -95,6 +95,18 @@ fn artifact_names_refused() {
 }
 
 #[test]
+fn a_colon_in_a_segment_is_refused_on_windows_only() {
+    // On Windows `C:x` is drive-relative and `a:s` an alternate data stream.
+    for name in ["files/C:x", "files/C:/x", "files/a:s", "pyfiles/C:evil.py"] {
+        if cfg!(windows) {
+            assert_eq!(class(name), ErrorClass::InvalidArtifactPath, "{name}");
+        } else {
+            assert!(parse_artifact_name(name).is_ok(), "{name}");
+        }
+    }
+}
+
+#[test]
 fn jvm_and_forwarded_artifacts_are_unsupported() {
     for name in ["jars/udf.jar", "classes/A.class", "forward_to_fs/tmp/x"] {
         assert_eq!(

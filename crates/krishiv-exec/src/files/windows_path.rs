@@ -11,13 +11,21 @@
 //! every platform so its tests run everywhere; only Windows builds call it, since `\` is an
 //! ordinary file-name character on Unix.
 
-/// `path` with `\` as `/`, the verbatim prefix `\\?\` dropped and a leading drive (`X:`) made
-/// the first segment of an absolute path. Other text (cloud URLs, UNC shares, relative paths)
-/// keeps its form apart from the separators.
+/// `path` with `\` as `/`, the verbatim prefix `\\?\` dropped before a drive and a leading drive
+/// (`X:`) made the first segment of an absolute path. A verbatim UNC path `\\?\UNC\srv\share`
+/// becomes the share `//srv/share`; any other verbatim or device text keeps its `//?/` form, so it
+/// never turns into a relative path. Other text (cloud URLs, UNC shares, relative paths) keeps its
+/// form apart from the separators.
 #[must_use]
 pub(crate) fn normalize(path: &str) -> String {
     let slashed = path.replace('\\', "/");
-    let text = slashed.strip_prefix("//?/").unwrap_or(&slashed);
+    if let Some(share) = slashed.strip_prefix("//?/UNC/") {
+        return format!("//{share}");
+    }
+    let text = match slashed.strip_prefix("//?/") {
+        Some(rest) if is_drive(rest) => rest,
+        _ => &slashed,
+    };
     if is_drive(text) {
         return format!("/{text}");
     }
@@ -88,6 +96,12 @@ mod tests {
         assert_eq!(normalize("file://host/a"), "file://host/a");
         assert_eq!(normalize(r"rel\dir"), "rel/dir");
         assert_eq!(normalize("/abs/x"), "/abs/x");
+        // A verbatim UNC path is the share, never the relative `UNC/srv/share/x`.
+        assert_eq!(normalize(r"\\?\UNC\srv\share\x"), "//srv/share/x");
+        assert_eq!(normalize(r"\\srv\share\x"), "//srv/share/x");
+        // Other verbatim and device forms keep their prefix.
+        assert_eq!(normalize(r"\\?\Volume{0a}\x"), "//?/Volume{0a}/x");
+        assert_eq!(normalize(r"\\.\COM1"), "//./COM1");
         // A scheme longer than one letter is not a drive.
         assert_eq!(normalize("hf://d/x"), "hf://d/x");
         assert!(!is_drive("C:x"));

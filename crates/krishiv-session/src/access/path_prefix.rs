@@ -2,7 +2,7 @@
 //! [`PathPrefixPolicy`]: local paths only under allowed roots (links resolved), object-store paths only under
 //! allowed prefixes, every other decision delegated; and the `krishiv.io.*` allowlist settings it reads.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::Arc;
 
 use krishiv_common::config::{
@@ -181,11 +181,7 @@ impl PathPrefixPolicy {
             return self.allows_object(text);
         };
         let local = &krishiv_exec::files::native_path(local);
-        let normal = local.is_absolute()
-            && local
-                .components()
-                .all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
-        if !normal || text.contains('%') {
+        if !plain_absolute(local) || text.contains('%') {
             return false;
         }
         resolve_links(local).is_some_and(|p| self.roots.iter().any(|r| p.starts_with(r)))
@@ -201,6 +197,22 @@ impl PathPrefixPolicy {
                 .any(|a| a.store == p.store && p.segments.starts_with(&a.segments))
         })
     }
+}
+
+/// Whether `local` is absolute and holds only plain names after its root: no `.`, no `..`. On
+/// Windows it may start with a drive (`C:\`, or verbatim `\\?\C:\`), and nothing else: a UNC share
+/// or device path is refused (fails closed).
+fn plain_absolute(local: &Path) -> bool {
+    let mut parts = local.components().peekable();
+    if let Some(Component::Prefix(p)) = parts.peek() {
+        if !matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) {
+            return false;
+        }
+        parts.next();
+    }
+    local.is_absolute()
+        && parts.next() == Some(Component::RootDir)
+        && parts.all(|c| matches!(c, Component::Normal(_)))
 }
 
 /// The comma-separated entries of the string setting `entry` (blank entries dropped).
@@ -332,5 +344,64 @@ impl AccessPolicy for PathPrefixPolicy {
 
     fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
         self.inner.denied(principal, securable, privilege);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use krishiv_common::secret::OptionValue;
+    use krishiv_plan::analyzer::AllowAll;
+
+    use super::{PathPrefixPolicy, plain_absolute};
+
+    #[test]
+    fn plain_absolute_paths() {
+        assert!(plain_absolute(Path::new("/data/x")));
+        assert!(!plain_absolute(Path::new("/data/../x")));
+        assert!(!plain_absolute(Path::new("data/x")));
+        if cfg!(windows) {
+            assert!(plain_absolute(Path::new(r"C:\data\x")));
+            assert!(plain_absolute(Path::new("C:/data/x")));
+            assert!(plain_absolute(Path::new(r"\\?\C:\data\x")));
+            // Drive-relative, a share and a device path are refused.
+            assert!(!plain_absolute(Path::new("C:data")));
+            assert!(!plain_absolute(Path::new(r"\\srv\share\x")));
+            assert!(!plain_absolute(Path::new(r"\\.\COM1")));
+            assert!(!plain_absolute(Path::new(r"C:\data\..\x")));
+        }
+    }
+
+    /// An allowed root admits the files under it in every spelling a local path takes on this
+    /// platform, and refuses a sibling and a `..` escape.
+    #[test]
+    fn an_allowed_root_admits_its_files_and_nothing_beside_it() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join("allowed");
+        let sibling = tmp.path().join("other");
+        std::fs::create_dir(&root).expect("root");
+        std::fs::create_dir(&sibling).expect("sibling");
+        std::fs::write(root.join("a.csv"), "x").expect("file");
+        let policy = PathPrefixPolicy {
+            roots: vec![std::fs::canonicalize(&root).expect("canonical")],
+            prefixes: Vec::new(),
+            inner: Arc::new(AllowAll),
+        };
+        let allows = |text: String| policy.allows(&OptionValue::Plain(text));
+        let slashed = |p: &Path| p.display().to_string().replace('\\', "/");
+        let file = root.join("a.csv");
+        let mut admitted = vec![format!("file:{}", slashed(&file))];
+        if cfg!(windows) {
+            // `LocalPaths` writes a drive path as `file:/C:/x`; `C:\x` text is accepted too.
+            admitted.push(format!("file:/{}", slashed(&file)));
+            admitted.push(format!("file:{}", file.display()));
+        }
+        for text in admitted {
+            assert!(allows(text.clone()), "{text}");
+        }
+        assert!(!allows(format!("file:{}", slashed(&sibling.join("b.csv")))));
+        assert!(!allows(format!("file:{}/../other/b.csv", slashed(&root))));
     }
 }

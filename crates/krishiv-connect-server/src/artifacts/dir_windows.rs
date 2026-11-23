@@ -11,6 +11,12 @@
 //! names (by default the user's temporary directory, private to the user under Windows' default
 //! ACLs), removed with its contents when dropped.
 //!
+//! Every name is joined through [`child`], which takes exactly one plain segment with no `:`:
+//! on Windows `dir.join("C:x")` is the drive-relative `C:x` (it replaces `dir`), and `x:s` names
+//! an NTFS alternate data stream, so either would leave the session's directory. The root is
+//! `std::fs::canonicalize(parent)`, a verbatim `\\?\C:\...` path (what the UDF workers get), under
+//! which `CON`, trailing dots and trailing spaces are literal names.
+//!
 //! Known limit against the Unix version: a reparse point created between the check of a segment
 //! and its use is not caught (the Unix walk holds directory descriptors, Windows uses paths), and
 //! the root's privacy rests on the parent directory's ACL, not on mode bits checked here.
@@ -124,9 +130,27 @@ fn is_reparse_point(m: &std::fs::Metadata) -> bool {
     m.file_attributes() & REPARSE_POINT != 0
 }
 
+/// `dir` joined with `name`, which must be one plain path segment: no prefix (`C:`), root,
+/// separator, `.` or `..`, and no `:` (a drive or an alternate data stream). Anything else is
+/// `InvalidInput`, which [`blocked`] treats as a name we may not take.
+fn child(dir: &Path, name: &str) -> io::Result<PathBuf> {
+    let mut parts = Path::new(name).components();
+    let plain = !name.contains(':')
+        && matches!(parts.next(), Some(std::path::Component::Normal(n)) if n == name)
+        && parts.next().is_none();
+    if plain {
+        Ok(dir.join(name))
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "an artifact path segment is not one plain name",
+        ))
+    }
+}
+
 /// Creates the directory `name` in `dir` unless it exists, then checks it is a plain directory.
 fn mkdir_checked(dir: &Path, name: &str) -> io::Result<PathBuf> {
-    let path = dir.join(name);
+    let path = child(dir, name)?;
     #[expect(
         clippy::disallowed_methods,
         reason = "runs on the blocking pool (`artifacts::blocking`)"
@@ -168,7 +192,7 @@ impl SessionDir {
         OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(self.staging.join(name))
+            .open(child(&self.staging, name)?)
     }
 
     /// Removes the staged file `name`, if it is still there.
@@ -177,7 +201,10 @@ impl SessionDir {
             clippy::disallowed_methods,
             reason = "runs on the blocking pool (`artifacts::blocking`)"
         )]
-        match std::fs::remove_file(self.staging.join(name)) {
+        let Ok(path) = child(&self.staging, name) else {
+            return;
+        };
+        match std::fs::remove_file(path) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => {
@@ -204,8 +231,15 @@ impl SessionDir {
                 Err(e) => return Err(e),
             };
         }
-        let source = self.staging.join(staged);
-        let target = dir.join(leaf);
+        let source = child(&self.staging, staged)?;
+        let target = match child(&dir, leaf) {
+            Ok(p) => p,
+            Err(e) if blocked(&e) => {
+                self.remove_staged(staged);
+                return Ok(Install::Blocked);
+            }
+            Err(e) => return Err(e),
+        };
         #[expect(
             clippy::disallowed_methods,
             reason = "runs on the blocking pool (`artifacts::blocking`)"
@@ -233,12 +267,12 @@ impl SessionDir {
         };
         let mut dir = self.path.clone();
         for segment in parents {
-            dir = dir.join(segment);
+            dir = child(&dir, segment).map_err(|_| io::Error::from(io::ErrorKind::NotFound))?;
             if !is_plain_dir(&dir)? {
                 return Err(io::Error::from(io::ErrorKind::NotFound));
             }
         }
-        let path = dir.join(leaf);
+        let path = child(&dir, leaf).map_err(|_| io::Error::from(io::ErrorKind::NotFound))?;
         if !is_regular_file(&path)? {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -269,7 +303,7 @@ fn is_regular_file(path: &Path) -> io::Result<bool> {
 fn blocked(e: &io::Error) -> bool {
     matches!(
         e.kind(),
-        io::ErrorKind::NotADirectory | io::ErrorKind::AlreadyExists
+        io::ErrorKind::NotADirectory | io::ErrorKind::AlreadyExists | io::ErrorKind::InvalidInput
     )
 }
 
