@@ -600,6 +600,13 @@ impl Spiller {
                         // Cut by bytes too: large sketch states must keep the `binary` offsets under 2 GiB.
                         let mut rest = ids;
                         while !rest.is_empty() {
+                            // Each byte-cut frame is materialized and written, so a peer's failure
+                            // stops the run before the next one, not after the whole chunk.
+                            if stop.load(AtomicOrdering::Acquire) {
+                                return Err(internal(
+                                    "stopped: another spill writer failed".to_owned(),
+                                ));
+                            }
                             let n = t.state_cut(rest).clamp(1, rest.len());
                             let (now, later) = rest.split_at(n);
                             if let Err(e) = w.write(&Batch::new(t.state_batch(now)?)) {
