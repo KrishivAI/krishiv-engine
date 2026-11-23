@@ -3,7 +3,7 @@
 # so the scanner fails again if the dependency is still here by then.
 
 # paste is unmaintained (archived) and has no successor release. It comes only
-# from parquet 58.4.1, which iceberg 0.11 pulls; paste is a proc macro, so
+# from parquet 58.4.2, which iceberg 0.11 pulls; paste is a proc macro, so
 # nothing of it is linked. Drop this with the deny.toml ignore, when
 # iceberg-rust releases on the workspace Arrow major.
 [[IgnoredVulns]]
