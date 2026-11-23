@@ -83,6 +83,14 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
         None
     }
 
+    /// Whether every scan of this provider reads the same rows (a table-format snapshot at one
+    /// version, an immutable in-memory table): a statement that reads it twice, as `MERGE`
+    /// reads its source, need not copy it first. The default is no (a file listing is taken
+    /// again per scan).
+    fn pinned(&self) -> bool {
+        false
+    }
+
     /// Sets of column names, each unique among the table's rows whose
     /// columns of the set are all non-NULL (a fact, never an estimate:
     /// [`Statistics::unique_keys`]). None by default; a [`FileTable`]
@@ -276,6 +284,10 @@ impl TableProvider for SpilledTable {
             rows: self.file.num_rows(),
             ..TableStats::default()
         })
+    }
+
+    fn pinned(&self) -> bool {
+        true
     }
 }
 
