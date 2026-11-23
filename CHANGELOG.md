@@ -351,6 +351,10 @@ Krishiv 0.3 grows from an embedded engine into a server you can put in front of 
 - A bare `DROP VIEW v` of a stored view now checks the Drop privilege on that view and transfers its grants, as `DROP TABLE` does. Before, a user who held only `CREATE` on the schema could drop another user's view. A draining server now refuses the statement as DDL. (#952)
 - Tables of a declared Iceberg REST catalog are read with the storage credentials the catalog vends for each table, cached per catalog and caller until they expire; a refused credential is fetched again once. `krishiv.catalog.vended.maxEntries` and `krishiv.catalog.vendedDefaultTtl` bound the cache. (#930)
 
+### Known limits
+
+- The `krishiv` crate features `kafka`, `iceberg`, `cdc`, `connect`, `flight-sql`, `mcp`, `python`, `celeborn` and `mimalloc` are reserved names with no effect yet; they are wired in 0.3.x.
+
 ## 0.2.1
 
 A patch release: packaging, documentation and the fixes found by acceptance testing of 0.2.0. The fixes are listed from their changelog fragments when the release is assembled (`cargo xtask changelog assemble 0.2.1`).

@@ -10,6 +10,9 @@
 //!
 //! # Cargo features
 //!
+//! **Reserved features (no effect yet):** `kafka`, `iceberg`, `cdc`, `connect`, `flight-sql`, `mcp`,
+//! `python`, `celeborn` and `mimalloc`. They are wired in 0.3.x.
+//!
 //! `kafka`, `iceberg`, `cdc`, `connect`, `flight-sql`, `mcp`, `python`, `wasm-udf`,
 //! `celeborn` and `mimalloc` are reserved names: they enable no code in this crate
 //! yet (features are additive, ADR 0027, so they can gain code later without breaking

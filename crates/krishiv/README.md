@@ -31,6 +31,11 @@ assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
 Actions are `async` and run on the session's own executor, so any runtime (or none, with
 `futures::executor::block_on`) can await them.
 
+## Cargo features
+
+Reserved features (no effect yet): `kafka`, `iceberg`, `cdc`, `connect`, `flight-sql`, `mcp`, `python`, `celeborn`
+and `mimalloc`. The names exist so that naming them is safe; they enable no code and are wired in 0.3.x.
+
 ## Speed
 
 Benchmark results against Spark 4.2.0 on TPC-H-derived queries (not official TPC results) are published with their
