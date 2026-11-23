@@ -407,11 +407,33 @@ fn a_check_names_the_statement_it_is_asked_for() {
         checks.iter().all(|(c, id)| c == "DDL" && id == op),
         "{checks:?}"
     );
-    // Without an operation id the class is still sent; the id only once the query's row exists.
+    // Without an operation id the class is still sent; the id only once the query's row exists,
+    // so the first analysis (before the row) sends none.
     w.run(&ana, "SELECT a FROM t").unwrap();
     let checks = std::mem::take(&mut *seen.lock().unwrap());
     assert!(
         !checks.is_empty() && checks.iter().all(|(c, _)| c == "READ"),
+        "{checks:?}"
+    );
+    assert_eq!(checks[0].1, "", "{checks:?}");
+    // A DataFrame action is no SQL statement: its checks send neither, even right after one
+    // (review of 2a46d63f4, finding 1: nothing of the statement carries over).
+    let op = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+    let (read, _) = run("SELECT a, b FROM t", op);
+    read.unwrap();
+    let rows = w
+        .tokio
+        .block_on(async { ana.table("t").collect().await })
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        2
+    );
+    let checks = std::mem::take(&mut *seen.lock().unwrap());
+    assert!(
+        !checks.is_empty() && checks.iter().all(|(c, id)| c.is_empty() && id.is_empty()),
         "{checks:?}"
     );
 }

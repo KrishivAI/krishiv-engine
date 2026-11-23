@@ -9,7 +9,9 @@ pub struct CheckRequest {
     pub items: ::prost::alloc::vec::Vec<Item>,
     /// The class of the SQL statement the check is made for, as `system.queries.statement_class`
     /// names it (`READ`, `WRITE`, `DDL`, `SESSION`, `ADMIN`), or empty when the check is not made
-    /// for a SQL statement (a DataFrame or Spark Connect plan).
+    /// for a SQL statement (a DataFrame or Spark Connect plan). A DataFrame derived from a SQL
+    /// statement's result (`sql(..).limit(1)`) is checked as that statement, as `system.queries`
+    /// lists its action.
     #[prost(string, tag = "3")]
     pub statement_class: ::prost::alloc::string::String,
     /// The statement's query id as `system.queries.query_id` shows it: the caller's operation id
