@@ -1991,5 +1991,6 @@ mod definer;
 mod ran;
 mod search_path;
 pub(crate) use ran::{
-    Ran, as_evaluation, as_script_statement, command_statement, evaluation_failed,
+    Ran, as_evaluation, as_listed_script_statement, as_script_statement, command_statement,
+    evaluation_failed,
 };

@@ -104,7 +104,8 @@
   <h2 class="mt-6 mb-3">Python UDF workers</h2>
   <p class="mb-3 text-muted-foreground" data-udf-pool>
     {count(pool.live)} of {count(pool.max_total)} worker processes, {count(pool.busy)} busy. A session runs at most
-    {count(pool.max_per_session)}, a tenant (or a principal without one) {count(pool.max_per_tenant)}.
+    {count(pool.max_per_session)}, a tenant (or, with authentication on, a principal without one)
+    {count(pool.max_per_tenant)}.
   </p>
   {#if pool.owners.length === 0}
     <p class="text-muted-foreground" data-no-udf-workers>No worker is running: one starts with a session's first Python UDF call.</p>

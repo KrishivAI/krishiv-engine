@@ -94,15 +94,45 @@ pub(crate) fn as_script_statement<F: Future>(
     class: &'static str,
     work: F,
 ) -> impl Future<Output = F::Output> {
-    let statement = Arc::new(Command {
+    COMMAND.scope(script_statement(text, class), work)
+}
+
+/// [`as_script_statement`] for a whole statement of a script (`work` checks access, analyzes and runs it).
+/// One that fails before any query of it began is listed as refused under `text` and `class`, on
+/// `session`, as the same statement typed alone is; the script's own row tells the script's failure.
+pub(crate) async fn as_listed_script_statement<T, F>(
+    session: &Session,
+    text: &str,
+    class: &'static str,
+    work: F,
+) -> Result<T, KrishivError>
+where
+    F: Future<Output = Result<T, KrishivError>>,
+{
+    let statement = script_statement(text, class);
+    let result = COMMAND.scope(Arc::clone(&statement), work).await;
+    if let Err(error) = &result
+        && statement
+            .row
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none()
+    {
+        session.record_refused(Some(text), Some(class), error);
+    }
+    result
+}
+
+/// A statement of a script, as the command its queries are listed under.
+fn script_statement(text: &str, class: &'static str) -> Arc<Command> {
+    Arc::new(Command {
         text: Arc::from(text),
         class,
         listed: std::sync::atomic::AtomicBool::new(false),
         // The statement's own slot: the script's failure is told by the script's row.
         row: Arc::default(),
         of_script: true,
-    });
-    COMMAND.scope(statement, work)
+    })
 }
 
 /// What [`Session::sql_here_marked`] did with a statement.

@@ -253,6 +253,12 @@ fn a_snapshot_lists_the_sessions_worker_and_a_monitor_outlives_the_pool_without_
     assert_eq!((after.owners[0].live, after.owners[0].idle), (1, 1));
     drop(udfs);
     drop(pool);
+    // The reaper thread holds the pool for the length of one pass, so the pool may outlive the last
+    // handle by that much; the monitor never keeps it.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while monitor.snapshot().is_some() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(
         monitor.snapshot(),
         None,
@@ -650,8 +656,8 @@ fn idle_workers_stop_and_released_sessions_free_theirs() {
     assert_eq!(pool.live_workers(), 1);
     udfs.release();
     // The workers stop on a release thread, and their slots are freed once they are gone.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while pool.live_workers() > 0 && std::time::Instant::now() < deadline {
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    while pool.live_workers() > 0 && Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert_eq!(
@@ -873,10 +879,10 @@ fn call_threads() -> usize {
 /// it sets its own, so for a moment `/proc` counts the reader as a call thread (merge-queue flake 2026-11-16, run
 /// 43858094536). Waits up to 2 s for at most `limit`; N calls on N threads would still fail.
 fn added_call_threads(before: usize, limit: usize) -> usize {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = Instant::now() + std::time::Duration::from_secs(2);
     loop {
         let added = call_threads().saturating_sub(before);
-        if added <= limit || std::time::Instant::now() >= deadline {
+        if added <= limit || Instant::now() >= deadline {
             return added;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));

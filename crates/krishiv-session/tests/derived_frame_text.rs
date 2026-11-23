@@ -378,6 +378,62 @@ fn a_variable_assignment_is_one_run_with_the_statements_text() {
     );
 }
 
+/// The row form of `SET VAR` runs its query once: one listed run, finished. A row query with more than
+/// one row is that run, finished, and the refused assignment beside it.
+#[test]
+fn a_row_assignment_is_one_run() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("DECLARE VARIABLE ra INT DEFAULT 0")).unwrap();
+    block_on(s.sql("DECLARE VARIABLE rb STRING")).unwrap();
+    let set = "SET VAR (ra, rb) = (SELECT 7, 'x')";
+    assert!(run_tagged(&s, set, "ui-run-29"));
+    assert_eq!(
+        listed(&s, "ui-run-29"),
+        [format!("{set} | SESSION | finished")]
+    );
+    let none = "SET VAR (ra, rb) = (SELECT 1, 'y' WHERE false)";
+    assert!(run_tagged(&s, none, "ui-run-30"));
+    assert_eq!(
+        listed(&s, "ui-run-30"),
+        [format!("{none} | SESSION | finished")]
+    );
+    let many = "SET VAR (ra, rb) = (SELECT id, 'z' FROM range(0, 3))";
+    assert!(!run_tagged(&s, many, "ui-run-31"));
+    assert_eq!(
+        listed(&s, "ui-run-31"),
+        [
+            format!("{many} | SESSION | failed"),
+            format!("{many} | SESSION | finished"),
+        ]
+    );
+}
+
+/// A statement of a script refused before any query of it began (a missing table, an unknown variable)
+/// is listed as refused under its own text and class, beside the failed script.
+#[test]
+fn a_script_statement_refused_before_it_ran_is_listed_with_its_text_and_class() {
+    let s = Session::new().unwrap();
+    let script = "BEGIN SELECT 1; SELECT a FROM zs_missing; END";
+    assert!(!run_tagged(&s, script, "ui-run-32"));
+    assert_eq!(
+        listed(&s, "ui-run-32"),
+        [
+            format!("{script} | READ | failed"),
+            "SELECT 1 | READ | finished".to_owned(),
+            "SELECT a FROM zs_missing | READ | failed".to_owned(),
+        ]
+    );
+    let script = "BEGIN SET zs_no_such = 1; END";
+    assert!(!run_tagged(&s, script, "ui-run-33"));
+    assert_eq!(
+        listed(&s, "ui-run-33"),
+        [
+            format!("{script} | SESSION | failed"),
+            "SET zs_no_such = 1 | SESSION | failed".to_owned(),
+        ]
+    );
+}
+
 /// `EXECUTE IMMEDIATE` as a statement of a script: the query that evaluates its string and what the named
 /// statement runs are listed under the script statement's text and class. A script inside an
 /// `EXECUTE IMMEDIATE` is refused (as Spark refuses it): its row is the failed one, beside the finished

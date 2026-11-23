@@ -306,10 +306,13 @@ impl Run<'_> {
         match item {
             S::Declare(d) => {
                 let own = self.redacted.fragment(d.span.start..d.span.end);
+                let lister = self.handle();
                 let run = self.declare(d);
-                Box::pin(crate::session::as_script_statement(own, SESSION, run))
-                    .await
-                    .map(|()| Flow::Normal)
+                Box::pin(crate::session::as_listed_script_statement(
+                    &lister, own, SESSION, run,
+                ))
+                .await
+                .map(|()| Flow::Normal)
             }
             // Conditions match by name and handlers were registered when the compound started.
             S::Condition(_) | S::Handler(_) => Ok(Flow::Normal),
@@ -317,10 +320,13 @@ impl Run<'_> {
             S::For(f) => Box::pin(self.for_loop(f)).await,
             S::Assign(set) => {
                 let own = self.redacted.fragment(set.span.start..set.span.end);
+                let lister = self.handle();
                 let run = self.assign(set);
-                Box::pin(crate::session::as_script_statement(own, SESSION, run))
-                    .await
-                    .map(|()| Flow::Normal)
+                Box::pin(crate::session::as_listed_script_statement(
+                    &lister, own, SESSION, run,
+                ))
+                .await
+                .map(|()| Flow::Normal)
             }
             S::Sql(statement) => Box::pin(self.leaf(statement)).await.map(|()| Flow::Normal),
             S::Compound(c) => Box::pin(self.compound(c)).await,
@@ -502,12 +508,22 @@ impl Run<'_> {
         let handle = self.handle();
         let env = handle.query_env();
         let class = handle.statement_class(statement, &env);
-        handle.authorize_statement(statement, class, &env).await?;
-        // The queries the statement runs are listed under its own text, not the script's.
+        // The queries the statement runs are listed under its own text, not the script's; refused
+        // before any began (no access, an analysis error), it is listed as refused.
         let span = statement.span();
         let own = self.redacted.fragment(span.start..span.end);
-        let run = self.run_leaf(statement, handle, env);
-        Box::pin(crate::session::as_script_statement(own, class.name(), run)).await
+        let lister = handle.clone();
+        let run = async {
+            handle.authorize_statement(statement, class, &env).await?;
+            self.run_leaf(statement, handle, env).await
+        };
+        Box::pin(crate::session::as_listed_script_statement(
+            &lister,
+            own,
+            class.name(),
+            run,
+        ))
+        .await
     }
 
     /// The run of [`Self::leaf`]'s statement, classified and authorized, on `handle`.
