@@ -999,6 +999,45 @@ fn a_merge_insert_column_takes_the_target_s_qualifier() {
     }
 }
 
+/// A `MERGE` whose source reads the target again under another spelling of its root (the path
+/// with a trailing slash, `file:`) reads every row of the target's snapshot, files the `ON`
+/// condition skips included, and writes the right rows (#962 review). The read set of its
+/// conflict check is `row_level/tests.rs` `a_delta_update_reads_the_whole_table_only_when_..`.
+#[test]
+fn a_merge_source_reading_the_target_by_another_root_spelling_sees_every_row() {
+    for spelling in ["{dir}", "{dir}/", "file:{dir}"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("t");
+        let session = Session::new().unwrap();
+        sql(
+            &session,
+            &format!(
+                "CREATE TABLE t (id BIGINT, v STRING) USING delta LOCATION '{}'",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        // One file per row: the `ON` condition's `t.id < 3` skips id 5's file.
+        for row in ["(1, 'a')", "(2, 'b')", "(5, 'e')"] {
+            sql(&session, &format!("INSERT INTO t VALUES {row}")).unwrap();
+        }
+        let root = spelling.replace("{dir}", &dir.display().to_string());
+        let statement = format!(
+            "MERGE INTO t USING (SELECT id + 1 AS id, v FROM delta.`{root}`) s ON t.id = s.id \
+             AND t.id < 3 WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *"
+        );
+        let (_, out) = sql(&session, &statement).unwrap();
+        // Source rows (2, a), (3, b), (6, e): 2 matches, 3 and 6 are inserted.
+        assert_eq!(out, serde_json::json!([[3, 1, 0, 2]]), "{statement}");
+        let (_, rows) = sql(&session, "SELECT id, v FROM t ORDER BY id").unwrap();
+        assert_eq!(
+            rows,
+            serde_json::json!([[1, "a"], [2, "a"], [3, "b"], [5, "e"], [6, "e"]]),
+            "{statement}"
+        );
+    }
+}
+
 /// A `MERGE` inside a SQL script sees the script's locals in its source, its clause conditions
 /// and its values, and a local shadows a session variable of the same name (#962 review).
 #[test]

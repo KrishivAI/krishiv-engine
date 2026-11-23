@@ -785,7 +785,7 @@ fn the_delta_connector_reads_the_same_option_keys() {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Row-level (DML) writes do not take `krishiv.write.idempotencyKey` yet (E34): a set key is refused
 /// instead of deduplicating on some table formats only.

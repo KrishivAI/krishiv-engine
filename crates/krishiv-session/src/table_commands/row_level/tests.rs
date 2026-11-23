@@ -28,7 +28,7 @@ use crate::session::Session;
 
 /// Each rewrite's target and whether its request kept a `read_filter` (the partitions read), in
 /// order: the end-to-end side of the re-read rule (review 681c2e038 nit 1).
-pub(super) static READ_FILTERS: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+pub(crate) static READ_FILTERS: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
 
 /// The table's files: name and rows (`id BIGINT, s STRING`).
 #[derive(Debug)]
@@ -995,6 +995,29 @@ fn a_delta_update_reads_the_whole_table_only_when_a_subquery_reads_the_target() 
         ),
         vec![true]
     );
+    // The same rule for a MERGE (#962 review nit 2): a source that reads the target again under
+    // another spelling of its root, or through the catalog table over it, reads every row.
+    let merge = |source: &str| {
+        format!(
+            "MERGE INTO delta.`{t}` t USING ({source}) s ON t.p = s.p AND t.p = 1 \
+             WHEN MATCHED THEN UPDATE SET v = s.v"
+        )
+    };
+    assert_eq!(
+        filters(&merge(&format!("SELECT v, p FROM delta.`{o}`"))),
+        vec![true]
+    );
+    for again in [
+        format!("delta.`file:{t}/`"),
+        format!("delta.`{t}/`"),
+        "rt".to_owned(),
+    ] {
+        assert_eq!(
+            filters(&merge(&format!("SELECT v, p FROM {again}"))),
+            vec![false],
+            "{again}"
+        );
+    }
 }
 
 mod merge {

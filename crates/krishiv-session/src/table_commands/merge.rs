@@ -587,6 +587,11 @@ impl Session {
         } else {
             Some(Arc::new(on_of(&m.on, &probe.env.parser)?))
         };
+        #[cfg(test)]
+        super::row_level::tests::READ_FILTERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((m.target.clone(), read_filter.is_some()));
         let mut request = RowLevelWrite::new(
             RowLevelOperation::Merge,
             m.target.clone(),
