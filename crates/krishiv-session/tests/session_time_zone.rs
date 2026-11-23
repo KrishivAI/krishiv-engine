@@ -87,3 +87,21 @@ fn known_zones_and_offsets_are_accepted() {
         assert_eq!(s.conf().get(KEY).as_deref(), Some(ok));
     }
 }
+
+#[test]
+fn a_padded_zone_is_refused_by_the_builder_too() {
+    // The builder's settings are startup configuration checked by the
+    // registry (its class for any refused setting), not `conf().set`; a
+    // padded zone stored there would read back padded (`conf.get` returns a
+    // value as set), so it is refused, as Spark's `ZoneId.of` refuses it.
+    for bad in [" UTC ", "UTC ", " +01:00"] {
+        let e = Session::builder().config(KEY, bad).build().unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivInvalidConfigValue,
+            "{bad:?}: {e}"
+        );
+    }
+    let s = Session::builder().config(KEY, "UTC").build().unwrap();
+    assert_eq!(s.conf().get(KEY).as_deref(), Some("UTC"));
+}
