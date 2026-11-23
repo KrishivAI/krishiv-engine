@@ -99,6 +99,8 @@ pub struct DirectoryWrite {
     overwrite: bool,
     /// The commit log state, when the write goes through the log.
     log: Option<LogState>,
+    /// Minimum age of an unlogged file an overwrite sweeps.
+    grace: chrono::Duration,
     /// The caller's idempotency key (E34), recorded in the log entry.
     idempotency_key: Option<Box<str>>,
 }
@@ -110,7 +112,14 @@ struct LogState {
     base: Option<u64>,
     /// Files visible in the log at that version, relative to the root.
     visible: Vec<String>,
+    /// Data files of an overwrite's directory that no log entry lists and that are older than
+    /// [`UNLOGGED_GRACE`]: what a killed earlier write left (PY-054). Deleted after the commit.
+    stale: Vec<Path>,
 }
+
+/// How old an unlogged data file must be before an overwrite sweeps it: a younger one may be the
+/// task output of a concurrent write that has not committed yet.
+const UNLOGGED_GRACE: chrono::Duration = chrono::Duration::hours(1);
 
 impl DirectoryWrite {
     /// Starts a write of `dir` in `store` with `mode`; `job_uuid` names its
@@ -144,7 +153,7 @@ impl DirectoryWrite {
         let replaced = match mode {
             SaveMode::ErrorIfExists if exists => {
                 return Err(PathAlreadyExists {
-                    output_path: format!("{store}/{dir}"),
+                    output_path: shown_path(&store, &dir),
                 }
                 .into());
             }
@@ -153,7 +162,7 @@ impl DirectoryWrite {
             // append to it, and overwriting replaces it.
             SaveMode::Append if file.is_some() => {
                 return Err(PathAlreadyExists {
-                    output_path: format!("{store}/{dir}"),
+                    output_path: shown_path(&store, &dir),
                 }
                 .into());
             }
@@ -178,6 +187,7 @@ impl DirectoryWrite {
             partitioned: false,
             overwrite: matches!(mode, SaveMode::Overwrite),
             log: None,
+            grace: UNLOGGED_GRACE,
             idempotency_key: None,
         }))
     }
@@ -228,11 +238,82 @@ impl DirectoryWrite {
         let log_dir = self.dir.clone().join(LOG_DIR);
         self.replaced
             .retain(|p| !p.prefix_matches(&log_dir) && *p != log_dir);
+        let visible: Vec<String> = snap.files.into_keys().collect();
+        let mut stale = Vec::new();
+        if self.overwrite {
+            // The old marker goes first: a run killed before its commit must not leave the
+            // `_SUCCESS` of the data it began to replace (readers take it for complete).
+            let marker = self.dir.clone().join(SUCCESS_MARKER);
+            // Best effort: a marker that stays is rewritten by this write's commit.
+            if matches!(io.head(&self.store, &marker).await, Ok(Some(_))) {
+                let _ = io.delete(&self.store, &marker).await;
+            }
+            let seen: std::collections::HashSet<&str> =
+                visible.iter().map(String::as_str).collect();
+            let cutoff = chrono::Utc::now() - self.grace;
+            for meta in io.list(&self.store, &self.dir).await? {
+                let rel = self.relative(&meta.location);
+                if rel.is_empty()
+                    || rel.split('/').any(is_hidden)
+                    || seen.contains(rel.as_str())
+                    || meta.last_modified > cutoff
+                {
+                    continue;
+                }
+                stale.push(meta.location);
+            }
+        }
         self.log = Some(LogState {
             base: snap.version,
-            visible: snap.files.into_keys().collect(),
+            visible,
+            stale,
         });
         Ok(self)
+    }
+
+    /// The age an unlogged file must have for an overwrite to sweep it.
+    #[cfg(test)]
+    pub(crate) fn with_grace(mut self, grace: chrono::Duration) -> Self {
+        self.grace = grace;
+        self
+    }
+
+    /// An append that another writer's commit overtook publishes only files that are still there: an
+    /// overwrite sweeps unlogged files older than its grace, and an append that stayed uncommitted
+    /// that long would otherwise list files that are gone. A file that vanishes after this check
+    /// needs the sweep to run inside the window between the check and the publish; the sweep's one-hour grace
+    /// is the real guard, this check only turns the rare late append into a refusal.
+    async fn refuse_if_files_swept(
+        &self,
+        io: &IoContext,
+        state: &LogState,
+        add: &[AddedFile],
+    ) -> Result<()> {
+        let now = self.commit_log(io).snapshot().await?;
+        if now.version == state.base {
+            return Ok(());
+        }
+        // Concurrent HEADs, bounded: a large append that lost a race must not cost one request after another.
+        // Only a missing file (`Ok(None)`) is a swept one; a failed request is its own error.
+        for chunk in add.chunks(32) {
+            let mut heads = Vec::with_capacity(chunk.len());
+            for f in chunk {
+                let path = Path::from(format!("{}/{}", self.dir, f.path));
+                heads.push(Box::pin(async move { io.head(&self.store, &path).await }));
+            }
+            for head in futures::future::join_all(heads).await {
+                if head?.is_none() {
+                    return Err(krishiv_common::error::KrishivConcurrentCommit {
+                        root: format!("{}/{}", self.store, self.dir),
+                        version: now
+                            .version
+                            .map_or_else(|| "0".to_owned(), |v| v.to_string()),
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Records the caller's idempotency key (`krishiv.write.idempotencyKey`) in the commit: a
@@ -357,7 +438,8 @@ impl DirectoryWrite {
             self.replaced.clone()
         };
         // A logged overwrite replaces only what its base snapshot shows: another writer's task files
-        // (written, not yet committed) are never in it, so a concurrent append's files survive it.
+        // (written, not yet committed) are never in it, so a concurrent append's files survive it. The unlogged-file sweep can still take an append's files older than
+        // its grace; that append's commit is then refused (`refuse_if_files_swept`).
         let replaced: Vec<Path> = match &self.log {
             Some(state) => {
                 let visible: std::collections::HashSet<&str> =
@@ -415,6 +497,9 @@ impl DirectoryWrite {
                 remove,
                 idempotency_key: self.idempotency_key.as_deref().map(str::to_owned),
             };
+            if !self.overwrite {
+                self.refuse_if_files_swept(io, state, &entry.add).await?;
+            }
             if let Keyed::Replayed(version) =
                 Box::pin(self.commit_log(io).commit_keyed(state.base, &entry)).await?
             {
@@ -425,14 +510,52 @@ impl DirectoryWrite {
                 );
                 self.delete_orphans(io, &std::collections::HashSet::new())
                     .await?;
+                if self.overwrite {
+                    // This attempt removed the marker the winner wrote (overlapping same-key writes):
+                    // the data is complete, so put it back.
+                    let marker = io
+                        .put_object(
+                            &self.store,
+                            &self.dir.clone().join(SUCCESS_MARKER),
+                            Bytes::new(),
+                        )
+                        .await;
+                    after_publish(true, "restoring the success marker", marker)?;
+                }
                 return Ok(Vec::new());
             }
         }
         // The (lazy) delete futures are built first: a stream mapping
         // through a borrowing closure makes this future unprovably `Send`
         // for callers that spawn it.
+        // An append past the grace may have committed between the sweep's listing and now: the log
+        // is read again and a stale file it lists is kept (this narrows the window to the deletes
+        // themselves; the grace is what makes the remainder rare).
+        // The entry is published: a failed re-read is maintenance, so the stale files are left for the
+        // next overwrite instead of failing a write that is already visible.
+        let committed_since: Option<std::collections::HashSet<String>> = match &self.log {
+            Some(l) if !l.stale.is_empty() => match self.commit_log(io).snapshot().await {
+                Ok(snapshot) => Some(snapshot.files.into_keys().collect()),
+                Err(e) => {
+                    after_publish(true, "reading the log before the stale sweep", Err(e))?;
+                    None
+                }
+            },
+            _ => Some(std::collections::HashSet::new()),
+        };
+        let swept: Vec<&Path> = match &committed_since {
+            Some(committed) => self
+                .log
+                .as_ref()
+                .map_or(&[][..], |l| l.stale.as_slice())
+                .iter()
+                .filter(|p| !committed.contains(&self.relative(p)))
+                .collect(),
+            None => Vec::new(),
+        };
         let deletes: Vec<_> = replaced
             .iter()
+            .chain(swept)
             .filter(|p| !new.contains(p))
             .map(|p| io.delete(&self.store, p))
             .collect();
@@ -562,12 +685,24 @@ impl DirectoryWrite {
     }
 }
 
+/// A path as Spark's messages show it: a local file is `file:/<path>` (a Hadoop `Path` with its
+/// scheme), an object store `<scheme>://<bucket>/<key>`.
+fn shown_path(store: &StoreId, dir: &Path) -> String {
+    let store = store.to_string();
+    if store == "file" {
+        format!("file:/{dir}")
+    } else {
+        format!("{store}/{dir}")
+    }
+}
+
 /// Spark's hidden-name rule for one path component.
 fn is_hidden(name: &str) -> bool {
     // The same rule as the reads' (`krishiv-exec` `hidden`), or adopted files would vanish from them.
-    name.starts_with('.')
+    let exclude = name.starts_with('.')
         || (name.starts_with('_') && !name.contains('='))
-        || name.ends_with("._COPYING_")
+        || name.ends_with("._COPYING_");
+    exclude && !(name.starts_with("_common_metadata") || name.starts_with("_metadata"))
 }
 
 /// The `name=value` directories of the relative file path `rel`.

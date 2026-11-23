@@ -138,6 +138,11 @@ impl Session {
     }
 }
 
+/// The class a script's `DECLARE` and `SET` are listed under in `system.queries`, as typed alone.
+const SESSION: &str = krishiv_sql::StatementClass::Session.name();
+/// The class the query of a condition or of a `FOR` is listed under.
+const READ: &str = krishiv_sql::StatementClass::Read.name();
+
 fn unsupported(feature: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: feature.to_owned(),
@@ -299,12 +304,30 @@ impl Run<'_> {
 
     async fn item(&mut self, item: &ScriptStatement) -> Result<Flow, KrishivError> {
         match item {
-            S::Declare(d) => Box::pin(self.declare(d)).await.map(|()| Flow::Normal),
+            S::Declare(d) => {
+                let own = self.redacted.fragment(d.span.start..d.span.end);
+                let lister = self.handle();
+                let run = self.declare(d);
+                Box::pin(crate::session::as_listed_script_statement(
+                    &lister, own, SESSION, run,
+                ))
+                .await
+                .map(|()| Flow::Normal)
+            }
             // Conditions match by name and handlers were registered when the compound started.
             S::Condition(_) | S::Handler(_) => Ok(Flow::Normal),
             S::Cursor(_) => Err(unsupported("SQL cursors")),
             S::For(f) => Box::pin(self.for_loop(f)).await,
-            S::Assign(set) => Box::pin(self.assign(set)).await.map(|()| Flow::Normal),
+            S::Assign(set) => {
+                let own = self.redacted.fragment(set.span.start..set.span.end);
+                let lister = self.handle();
+                let run = self.assign(set);
+                Box::pin(crate::session::as_listed_script_statement(
+                    &lister, own, SESSION, run,
+                ))
+                .await
+                .map(|()| Flow::Normal)
+            }
             S::Sql(statement) => Box::pin(self.leaf(statement)).await.map(|()| Flow::Normal),
             S::Compound(c) => Box::pin(self.compound(c)).await,
             S::Leave(j) => Ok(Flow::Leave(self.fold(&j.label.value))),
@@ -408,7 +431,10 @@ impl Run<'_> {
             }
         }
         // Spark reads the query lazily; the rows are held, in the script's pool, for the whole loop.
-        let batches = handle.run_analyzed_variable_query(&analysis).await?;
+        // The loop's query is listed under its own text, as a read.
+        let own = self.redacted.fragment(f.query.span.start..f.query.span.end);
+        let run = handle.run_analyzed_variable_query(&analysis);
+        let batches = Box::pin(crate::session::as_script_statement(own, READ, run)).await?;
         let held = self.control.hold(&batches)?;
         let flow = self.for_rows(&batches, &names, &label, &variable, f).await;
         self.control.release(held);
@@ -482,7 +508,31 @@ impl Run<'_> {
         let handle = self.handle();
         let env = handle.query_env();
         let class = handle.statement_class(statement, &env);
-        handle.authorize_statement(statement, class, &env).await?;
+        // The queries the statement runs are listed under its own text, not the script's; refused
+        // before any began (no access, an analysis error), it is listed as refused.
+        let span = statement.span();
+        let own = self.redacted.fragment(span.start..span.end);
+        let lister = handle.clone();
+        let run = async {
+            handle.authorize_statement(statement, class, &env).await?;
+            self.run_leaf(statement, handle, env).await
+        };
+        Box::pin(crate::session::as_listed_script_statement(
+            &lister,
+            own,
+            class.name(),
+            run,
+        ))
+        .await
+    }
+
+    /// The run of [`Self::leaf`]'s statement, classified and authorized, on `handle`.
+    async fn run_leaf(
+        &mut self,
+        statement: &Statement,
+        handle: Session,
+        env: crate::session::QueryEnv,
+    ) -> Result<(), KrishivError> {
         // `EXECUTE IMMEDIATE ... INTO` assigns to locals too, which only this interpreter can do.
         if let Statement::ExecuteImmediate(e) = statement
             && !e.into.is_empty()
@@ -593,7 +643,10 @@ impl Run<'_> {
             [column] if column.data_type == DataType::Boolean => {}
             _ => return Err(not_boolean()),
         }
-        let batches = handle.run_analyzed_variable_query(&analysis).await?;
+        // The condition's query is listed under the condition's text, as a read.
+        let own = self.redacted.fragment(shown.span.start..shown.span.end);
+        let run = handle.run_analyzed_variable_query(&analysis);
+        let batches = Box::pin(crate::session::as_script_statement(own, READ, run)).await?;
         let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
         if rows == 0 {
             return Err(internal("a script condition returned no row".to_owned()));

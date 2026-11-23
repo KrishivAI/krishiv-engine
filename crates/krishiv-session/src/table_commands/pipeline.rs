@@ -7,7 +7,10 @@ use krishiv_common::error::{
     LegacyErrorTemp1261, UnsupportedFeatureCreateFlowQueryExecution,
     UnsupportedFeatureCreatePipelineDatasetQueryExecution,
 };
-use krishiv_sql::ast::{CreateFlow, CreatePipelineDataset, LoadData};
+use krishiv_sql::ast::{
+    CreateFlow, CreatePipelineDataset, DirectoryFormat, ExprKind, InsertDirectory, Literal,
+    LoadData,
+};
 
 use super::*;
 
@@ -46,5 +49,60 @@ impl Session {
             table_ident_with_d_b: name.quoted(),
         }
         .into())
+    }
+
+    /// `INSERT OVERWRITE [LOCAL] DIRECTORY` with a data source (`USING provider [OPTIONS (..)]`): the
+    /// query's rows written to the path as `df.write.format(provider).mode("overwrite")` writes them,
+    /// with the writer's own access checks and the statement's path check already made by `sql`. The
+    /// Hive form (`ROW FORMAT`, `STORED AS`) is refused by name.
+    pub(crate) async fn exec_insert_directory(
+        &self,
+        d: &InsertDirectory,
+        ids: &[krishiv_sql::ast::Span],
+    ) -> Result<DataFrame, KrishivError> {
+        let DirectoryFormat::Provider { provider, options } = &d.format else {
+            return Err(unsupported(
+                "INSERT OVERWRITE DIRECTORY with ROW FORMAT or STORED AS",
+            ));
+        };
+        let path = match d.option_path() {
+            Some(p) if !p.is_empty() => p.to_owned(),
+            _ => d.path.clone().unwrap_or_default(),
+        };
+        let format = provider
+            .parts
+            .last()
+            .map(|p| p.value.clone())
+            .unwrap_or_default();
+        let plan = krishiv_sql::lower_identified(
+            &d.query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+            ids,
+        )
+        .map_err(|e| e.error)?;
+        let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        let mut writer = source.write().format(&format).mode("overwrite");
+        for option in options {
+            let key = option
+                .key
+                .parts
+                .iter()
+                .map(|p| p.value.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            if key.eq_ignore_ascii_case("path") {
+                continue;
+            }
+            let value = match option.value.as_ref().map(|e| &e.kind) {
+                Some(ExprKind::Literal(Literal::String(s))) => s.clone(),
+                Some(ExprKind::Literal(Literal::Boolean(b))) => b.to_string(),
+                Some(ExprKind::Literal(Literal::Number { text, .. })) => text.clone(),
+                _ => return Err(unsupported("INSERT OVERWRITE DIRECTORY option values")),
+            };
+            writer = writer.option(&key, &value);
+        }
+        writer.save(&path).await?;
+        self.empty_frame().await
     }
 }

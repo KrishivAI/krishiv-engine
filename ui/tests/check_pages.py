@@ -72,7 +72,19 @@ PAGES = [
         "#/advisor",
         ["Advisor", "Partition by", "event_date", "100 of 120", "83.1%"],
     ),
-    ("resources", "#/resources", ["Memory", "Caches", "root/query-1"]),
+    (
+        "resources",
+        "#/resources",
+        [
+            "Memory",
+            "Caches",
+            "root/query-1",
+            "Python UDF workers",
+            "5 of 64 worker processes, 3 busy",
+            "5d0c7a52-etl",
+            "acme",
+        ],
+    ),
     ("catalog", "#/catalog", ["Catalog", "spark_catalog", "Schemas", "Tables"]),
     ("sql", "#/sql", ["SQL", "Run", "Cancel"]),
     ("environment", "#/environment", ["Environment", "krishiv.auth.token", "***"]),
@@ -621,7 +633,11 @@ MODE_PAGES = {
         ),
         ("#/queries", ["SELECT l_returnflag", "Cancel"], ["Principal"]),
         ("#/history", ["DIVIDE_BY_ZERO", "State"], ["Principal"]),
-        ("#/resources", ["Memory pools and caches of this process"], []),
+        (
+            "#/resources",
+            ["Memory pools and caches of this process"],
+            ["Python UDF workers"],
+        ),
         ("#/sql", ["Statements run in your session", "Run"], []),
         ("#/environment", ["The settings of this session", "***"], []),
         # The sessions of every client, the resource groups and the advice folded from every principal's
@@ -657,6 +673,7 @@ PROFILES_NEVER = (
     "/sessions",
     "/groups",
     "/advice",
+    "/udf-workers",
 )
 
 
@@ -732,7 +749,9 @@ def mode_checks() -> list[str]:
                 problems += [
                     f"embedded: the page asked for {path}"
                     for path in sorted(set(server.asked))
-                    if path.endswith(("/sessions", "/groups", "/advice"))
+                    if path.endswith(
+                        ("/sessions", "/groups", "/advice", "/udf-workers")
+                    )
                 ]
             if mode == "profiles":
                 problems += [

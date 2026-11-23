@@ -229,6 +229,44 @@ fn scalar_kinds_run_in_a_sandboxed_worker() {
 }
 
 #[test]
+fn a_snapshot_lists_the_sessions_worker_and_a_monitor_outlives_the_pool_without_keeping_it() {
+    let Some(py) = python() else { return };
+    let pool = Pool::new(config(&py)).expect("pool");
+    let monitor = pool.monitor();
+    let empty = pool.snapshot();
+    assert_eq!((empty.live, empty.idle, empty.owners.len()), (0, 0, 0));
+    let udfs = SessionUdfs::new(pool.clone(), owner("s1"));
+    call(
+        &udfs,
+        command(&py, "def f(x):\n    return x", "LongType()"),
+        ARROW_BATCHED,
+        ArrowType::Int64,
+        longs(&[Some(5)]),
+    )
+    .expect("call");
+    // The call is over: its worker waits for the next one.
+    let after = monitor.snapshot().expect("the pool is alive");
+    assert_eq!((after.live, after.idle), (1, 1));
+    assert_eq!(after.max_total, pool.snapshot().max_total);
+    assert_eq!(after.owners.len(), 1);
+    assert_eq!(after.owners[0].owner, owner("s1"));
+    assert_eq!((after.owners[0].live, after.owners[0].idle), (1, 1));
+    drop(udfs);
+    drop(pool);
+    // The reaper thread holds the pool for the length of one pass, so the pool may outlive the last
+    // handle by that much; the monitor never keeps it.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while monitor.snapshot().is_some() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        monitor.snapshot(),
+        None,
+        "the monitor does not keep the pool"
+    );
+}
+
+#[test]
 fn a_python_error_is_python_exception_and_the_worker_stays() {
     let Some(py) = python() else { return };
     let pool = Pool::new(config(&py)).expect("pool");
@@ -618,8 +656,8 @@ fn idle_workers_stop_and_released_sessions_free_theirs() {
     assert_eq!(pool.live_workers(), 1);
     udfs.release();
     // The workers stop on a release thread, and their slots are freed once they are gone.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while pool.live_workers() > 0 && std::time::Instant::now() < deadline {
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    while pool.live_workers() > 0 && Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert_eq!(
@@ -841,10 +879,10 @@ fn call_threads() -> usize {
 /// it sets its own, so for a moment `/proc` counts the reader as a call thread (merge-queue flake 2026-11-16, run
 /// 43858094536). Waits up to 2 s for at most `limit`; N calls on N threads would still fail.
 fn added_call_threads(before: usize, limit: usize) -> usize {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = Instant::now() + std::time::Duration::from_secs(2);
     loop {
         let added = call_threads().saturating_sub(before);
-        if added <= limit || std::time::Instant::now() >= deadline {
+        if added <= limit || Instant::now() >= deadline {
             return added;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));

@@ -543,20 +543,90 @@ fn wait_for_analysis(
         krishiv_exec::Result<krishiv_plan::udtf::UdtfAnalysis>,
     >,
 ) -> Result<krishiv_plan::udtf::UdtfAnalysis, KrishivError> {
+    wait_for_user_code(
+        analysis,
+        "analyzing a Python UDTF without a declared result on a current-thread runtime; \
+         run the statement on a multi-thread runtime or declare the UDTF's return type",
+    )
+}
+
+/// The most threads of Python source calls (`plan`) alive in a process: the GIL runs one at a time, so
+/// more would only hold memory. A call beyond the bound waits for a permit, cancellably.
+pub const MAX_PYTHON_SOURCE_CALLS: usize = 32;
+
+/// Runs `call` (user Python that plans a data source's read) on a thread of its own, named
+/// `krishiv-pysrc`, and waits for its result like `wait_for_analysis`: ending with the statement's cancel,
+/// leaving the executor thread to its other tasks, and holding no engine pool thread (not the executor's
+/// blocking pool, not the I/O runtime's). A cancelled call returns its error at once; its thread runs
+/// to its end, then drops its result and frees its permit.
+///
+/// # Errors
+/// `call`'s error; `OPERATION_CANCELED` when the action is cancelled first; `KRISHIV_UNSUPPORTED_FEATURE`
+/// on a current-thread runtime.
+pub fn run_python_source_call<T: Send + 'static>(
+    call: impl FnOnce() -> Result<T, KrishivError> + Send + 'static,
+) -> Result<T, KrishivError> {
+    wait_for_user_code(
+        Box::pin(python_source_call(call)),
+        "planning a Python data source on a current-thread runtime; run the statement on a \
+         multi-thread runtime",
+    )
+}
+
+/// The async form of [`run_python_source_call`]: the call runs on a `krishiv-pysrc` thread under the
+/// same 32-permit bound; the caller awaits it (and races its own cancel). Dropping the future leaves
+/// the thread to finish and free its permit.
+///
+/// # Errors
+/// `call`'s error; `KRISHIV_INTERNAL_ERROR` when the thread does not start.
+pub async fn python_source_call<T: Send + 'static>(
+    call: impl FnOnce() -> Result<T, KrishivError> + Send + 'static,
+) -> Result<T, KrishivError> {
+    use std::sync::OnceLock;
+    use tokio::sync::{Semaphore, oneshot};
+    static PERMITS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    let permits =
+        Arc::clone(PERMITS.get_or_init(|| Arc::new(Semaphore::new(MAX_PYTHON_SOURCE_CALLS))));
+    let permit = permits
+        .acquire_owned()
+        .await
+        .map_err(|_| internal_error("the Python source call limit closed"))?;
+    let (tx, rx) = oneshot::channel();
+    std::thread::Builder::new()
+        .name("krishiv-pysrc".to_owned())
+        .spawn(move || {
+            let result = call();
+            // The permit goes back when the user code returned, not when the caller gave up.
+            drop(permit);
+            let _ = tx.send(result);
+        })
+        .map_err(|e| internal_error(&format!("a Python source call thread did not start: {e}")))?;
+    rx.await
+        .map_err(|_| internal_error("a Python source call ended without an answer"))?
+}
+
+fn internal_error(message: &str) -> KrishivError {
+    krishiv_common::error::InternalError {
+        message: message.to_owned(),
+    }
+    .into()
+}
+
+fn wait_for_user_code<T>(
+    work: futures::future::BoxFuture<'static, Result<T, KrishivError>>,
+    current_thread_refusal: &str,
+) -> Result<T, KrishivError> {
     if tokio::runtime::Handle::try_current()
         .is_ok_and(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread)
     {
         return Err(krishiv_common::error::KrishivUnsupportedFeature {
-            feature:
-                "analyzing a Python UDTF without a declared result on a current-thread runtime; \
-                      run the statement on a multi-thread runtime or declare the UDTF's return type"
-                    .to_owned(),
+            feature: current_thread_refusal.to_owned(),
         }
         .into());
     }
     let cancelled = Box::pin(crate::action::cancelled());
     let both = async move {
-        match futures::future::select(analysis, cancelled).await {
+        match futures::future::select(work, cancelled).await {
             futures::future::Either::Left((done, _)) => done,
             futures::future::Either::Right((reason, _)) => {
                 Err(crate::action::cancelled_error(reason))
@@ -795,6 +865,134 @@ mod tests {
             let _ = lib.register(d);
             let entry = lib.entry(name).map(|e| e.kind);
             assert_eq!(entry, Some(FunctionKind::Aggregate), "{eval_type:?}");
+        }
+    }
+    /// A source call runs on a thread of its own named `krishiv-pysrc` and hands its result back.
+    #[test]
+    fn a_source_call_runs_on_its_own_named_thread() {
+        let name = run_python_source_call(|| Ok(std::thread::current().name().map(str::to_owned)))
+            .expect("call");
+        assert_eq!(name.as_deref(), Some("krishiv-pysrc"));
+    }
+
+    /// The call's error is the caller's; a call that panics is an internal error, not a hang.
+    #[test]
+    fn a_failed_or_panicking_source_call_reports_an_error() {
+        let failed: Result<(), KrishivError> =
+            run_python_source_call(|| Err(super::internal_error("boom")));
+        assert!(failed.unwrap_err().to_string().contains("boom"));
+        let panicked: Result<(), KrishivError> = run_python_source_call(|| panic!("user code"));
+        assert!(panicked.is_err());
+    }
+
+    /// A cancel ends a call that is still running user code: the caller gets `OPERATION_CANCELED`
+    /// at once, the thread runs on to its end and frees its permit then.
+    #[test]
+    fn a_cancel_ends_a_blocked_source_call_at_once() {
+        use crate::action::Actions;
+        use crate::cancel::CancelReason;
+        use std::sync::mpsc;
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let actions = Arc::new(Actions::default());
+        let guard = actions.begin(1, Some("op"));
+        let hold = Arc::new(std::sync::Mutex::new(()));
+        let held = hold.lock().expect("lock");
+        let (started_tx, started_rx) = mpsc::channel();
+        let call_hold = Arc::clone(&hold);
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let call_finished = Arc::clone(&finished);
+        let canceller = {
+            let actions = Arc::clone(&actions);
+            std::thread::spawn(move || {
+                started_rx.recv().expect("the call started");
+                actions.cancel_where(CancelReason::User, &|_, _| true);
+            })
+        };
+        let began = std::time::Instant::now();
+        let out: Result<(), KrishivError> = rt.block_on(guard.run(async move {
+            // The statement's executor task: the call blocks in `block_in_place`, as at plan time.
+            tokio::spawn(async move {
+                run_python_source_call(move || {
+                    let _ = started_tx.send(());
+                    drop(call_hold.lock());
+                    call_finished.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                })
+            })
+            .await
+            .expect("join")
+        }));
+        canceller.join().expect("canceller");
+        assert!(out.is_err(), "the cancel ends the call");
+        // The error is the cancel's own: the user code is still blocked, it has not returned one.
+        assert!(
+            !finished.load(std::sync::atomic::Ordering::SeqCst),
+            "the caller returned while the user code was still running"
+        );
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(5),
+            "the caller did not wait for the user code"
+        );
+        drop(held);
+        // The thread runs on to its end after the cancel.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !finished.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the call never finished"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// Calls beyond the bound wait for a permit: with every permit held by blocked calls, one more
+    /// call does not run until a permit returns.
+    #[test]
+    fn calls_beyond_the_bound_wait() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::mpsc;
+        let release = Arc::new(std::sync::Mutex::new(()));
+        let guard = release.lock().expect("lock");
+        let mut running = Vec::new();
+        for _ in 0..MAX_PYTHON_SOURCE_CALLS {
+            let release = Arc::clone(&release);
+            let (started_tx, started_rx) = mpsc::channel();
+            running.push((
+                std::thread::spawn(move || {
+                    run_python_source_call(move || {
+                        let _ = started_tx.send(());
+                        drop(release.lock());
+                        Ok(())
+                    })
+                }),
+                started_rx,
+            ));
+        }
+        for (_, started) in &running {
+            started.recv().expect("started");
+        }
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let extra = std::thread::spawn(move || {
+            run_python_source_call(move || {
+                flag.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "the 33rd call ran past the bound"
+        );
+        drop(guard);
+        extra.join().expect("join").expect("extra call");
+        assert!(ran.load(Ordering::SeqCst));
+        for (handle, _) in running {
+            handle.join().expect("join").expect("call");
         }
     }
 }

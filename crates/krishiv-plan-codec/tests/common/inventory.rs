@@ -151,6 +151,7 @@ pub(crate) fn table_scan() -> ScanNode {
         ),
     ]);
     ScanNode {
+        decided: None,
         id: ScanId(7),
         scan: Scan {
             source: ReadSource::Table {
@@ -182,6 +183,7 @@ pub(crate) fn table_scan() -> ScanNode {
 /// A scan of files, without a version or a filter.
 pub(crate) fn file_scan() -> ScanNode {
     ScanNode {
+        decided: None,
         id: ScanId(8),
         scan: Scan {
             source: ReadSource::files(
