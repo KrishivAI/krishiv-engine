@@ -69,6 +69,8 @@ impl Session {
         let (session, text) = (self.clone(), query.to_owned());
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let marker = Arc::clone(&row);
+        let parsed: Arc<std::sync::OnceLock<&'static str>> = Arc::default();
+        let class = Arc::clone(&parsed);
         let (result, cancelled) = self
             .on_executor_reasoned(async move {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
@@ -76,7 +78,7 @@ impl Session {
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
                 let span = trace.prepare_span(&crate::telemetry::Who::of(&session));
                 session
-                    .sql_here_marked(&text, marker, queries_only)
+                    .sql_here_marked(&text, marker, &class, queries_only)
                     .instrument(span)
                     .await
                     .map(|ran| match ran {
@@ -88,7 +90,8 @@ impl Session {
             })
             .await;
         // A statement refused before it ran (parse, analysis, access) is a
-        // row of `system.queries` too, with the text as the session may show it.
+        // row of `system.queries` too, with the text as the session may show it
+        // and, once it parsed, its class.
         // ...unless a query already ran inside `sql` (an `EXPLAIN ANALYZE`
         // that failed while it ran): that one has its row.
         if let Err(error) = &result
@@ -97,7 +100,7 @@ impl Session {
             let id = self.state.queries.record_refused(
                 crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
                 Some(krishiv_sql::redact_sql(query).as_str()),
-                None,
+                parsed.get().copied(),
                 error,
                 self.operation_id(),
             );
@@ -779,10 +782,8 @@ impl Session {
     ) -> Result<Admitted, KrishivError> {
         // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
         // A query a command runs for itself (an `INSERT`'s write) has no statement: it is the command's.
-        let command = match env.text {
-            None => super::ran::command_statement(),
-            Some(_) => None,
-        };
+        // A statement of a script is listed under its own text, not the script's (which `env` carries).
+        let command = super::ran::command_statement(env.text.is_some());
         let (text, class) = match &command {
             Some(c) => (Some(&*c.text), Some(c.class)),
             None => (env.text.as_deref(), env.statement_class),
@@ -798,8 +799,8 @@ impl Session {
         self.stamp_row(&log_id);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         // The command's listed run: a failure of it is this row, and the statement gets no refused row.
-        if let Some(c) = &command {
-            *c.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        if let Some(row) = command.as_ref().and_then(|c| c.row.as_ref()) {
+            *row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         }
         let permit = self.admit(&log_id, env, exempt, fallback).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))

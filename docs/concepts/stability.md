@@ -36,5 +36,6 @@ Krishiv follows [semantic versioning](https://semver.org). While the major versi
 ## Checks
 
 - `public-api` (nightly): the snapshot diff above.
-- `semver-checks` (nightly): `cargo-semver-checks` against the last released version. It is **non-blocking** in CI
-  today (`continue-on-error`), and becomes blocking when the job's baseline is set.
+- `semver-checks` (nightly): `cargo-semver-checks` against the last release tag (`v0.2.0` for
+  the 0.3 line). It is **blocking**. A minor release below 1.0 may break, so the job checks it as a major release and
+  writes the list of breaks to its summary for the changelog's "Breaking" section; a patch release may not break.

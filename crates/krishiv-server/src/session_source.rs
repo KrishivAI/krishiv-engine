@@ -47,6 +47,8 @@ pub struct SessionSource {
     /// Whether [`Self::anonymous`] is the one session the console shows ([`Self::over_session`]): a cancel from
     /// the editor is then that session's own.
     own_session: bool,
+    /// The server's Python UDF worker pool, when it has one ([`Self::with_udf_workers`]).
+    udf_workers: Option<crate::udf_workers::UdfWorkersProvider>,
 }
 
 /// How long after a query ended its plan is still expected from the history writer.
@@ -110,6 +112,7 @@ impl SessionSource {
             sessions: Mutex::new(std::collections::HashMap::new()),
             stored: None,
             own_session: false,
+            udf_workers: None,
         })
     }
 
@@ -131,6 +134,14 @@ impl SessionSource {
     #[must_use]
     pub fn with_caller_sessions(mut self, factory: Arc<CallerSessions>) -> Self {
         self.caller_sessions = Some(factory);
+        self
+    }
+
+    /// The same, with the server's Python UDF worker pool: the Resources page lists its workers. `provider`
+    /// runs on a request's task and must not block.
+    #[must_use]
+    pub fn with_udf_workers(mut self, provider: crate::udf_workers::UdfWorkersProvider) -> Self {
+        self.udf_workers = Some(provider);
         self
     }
 
@@ -597,6 +608,11 @@ const QUERIES_WITH_CLIENT: &str = "SELECT q.*, s.client_type FROM system.queries
      LEFT JOIN system.sessions s ON q.session_id = s.session_id";
 
 impl UiSource for SessionSource {
+    fn udf_workers(&self) -> UiFuture<'_, Option<crate::udf_workers::UdfWorkers>> {
+        let pool = self.udf_workers.as_ref().and_then(|read| read());
+        Box::pin(async move { Ok(pool) })
+    }
+
     fn rows(&self, table: SystemTable) -> UiFuture<'_, Vec<Row>> {
         Box::pin(async move {
             // A query row carries `client_type`: what the client of the query's session said it is

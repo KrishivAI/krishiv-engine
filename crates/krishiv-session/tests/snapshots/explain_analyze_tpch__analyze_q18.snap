@@ -13,7 +13,7 @@ TopN 100, [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
    +- LocalTopN 100, [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
       :  · sink   #2 TopN p2: in 5 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>
       :  · source #27 TopN p1: out 5 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)
-      +- Project [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11, sum(l_quantity#21)#4611686018427387953 AS sum(l_quantity)#50]
+      +- Project [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11, sum(l_quantity#21)#52 AS sum(l_quantity)#50]
          :  · operator #26 Project p2: in 5 rows (1 batch); out 5 rows (1 batch); compute <t> (max <t>, <n> drivers)
          +- HashAggregate keys=[c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11], functions=[sum(l_quantity#21)]
             :  · source #25 HashAggregate p2: out 5 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)
@@ -54,7 +54,7 @@ TopN 100, [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
                                     :  · operator #11 Project p5: in 5 rows (1 batch); out 5 rows (1 batch); compute <t> (max <t>, <n> drivers)
                                     +- Filter (sum(l_quantity)#49 > 300.00)
                                        :  · operator #10 Filter p5: in 5 rows (1 batch); out 5 rows (1 batch); compute <t> (max <t>, <n> drivers)
-                                       +- Project [l_orderkey#33, sum(l_quantity#37)#4611686018427387950 AS sum(l_quantity)#49]
+                                       +- Project [l_orderkey#33, sum(l_quantity#37)#53 AS sum(l_quantity)#49]
                                           :  · operator #9 Project p5: in 5 rows (1 batch); out 5 rows (1 batch); compute <t> (max <t>, <n> drivers)
                                           +- HashAggregate keys=[l_orderkey#33], functions=[sum(l_quantity#37)]
                                              :  · source #8 HashAggregate p5: out 5 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)

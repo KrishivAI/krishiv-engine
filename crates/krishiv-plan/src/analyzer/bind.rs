@@ -1341,16 +1341,24 @@ async fn bind_files(
     // column is nullable, nested elements, values and fields too
     // (`HadoopFsRelation` over `dataSchema.asNullable`), as the scan's rows
     // are typed.
+    // A table format that declares its schema keeps it (`keeps_nullability`).
+    let keeps = files.keeps_nullability(format);
     let columns = match schema {
         Some(schema) => files.with_schema(format, &qualified, options, schema).await,
         None => files.infer(format, &qualified, options).await,
     }
     .map_err(fail)?
     .into_iter()
-    .map(|c| TableColumn {
-        nullable: true,
-        data_type: c.data_type.as_nullable(),
-        ..c
+    .map(|c| {
+        if keeps {
+            c
+        } else {
+            TableColumn {
+                nullable: true,
+                data_type: c.data_type.as_nullable(),
+                ..c
+            }
+        }
     })
     .collect();
     b.files.push(BoundFiles {

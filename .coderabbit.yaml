@@ -22,6 +22,20 @@ reviews:
     - "!**/Cargo.lock"
     - "!tests/fixtures/**"
     - "!**/generated/**"
+    # Generated or bulk data files (and the changelog fragments, owner 2026-11-23): a review of them spends the
+    # hourly quota on no finding. Hand-kept files stay reviewed: the golden scripts and manifests
+    # (known-failures*.json, exclusions.json), the .slt tests, docs/reference/sql/{index,statements}.md.
+    - "!**/*.snap"
+    - "!tests/spark-golden/v4.2.0/**"
+    - "!tests/spark-golden/known-failures-cases/**"
+    - "!tests/spark-golden/profiles/**"
+    - "!**/uv.lock"
+    - "!**/requirements*.txt"
+    - "!docs/reference/sql/functions/**"
+    - "!docs/reference/config/**"
+    - "!docs/reference/python/**"
+    - "!docs/reference/rust/**"
+    - "!changelog.d/**"
   path_instructions:
     - path: "crates/**/*.rs"
       instructions: >-
@@ -94,8 +108,13 @@ reviews:
     enabled: true
     drafts: false
     base_branches: ["main"]
-    # Review when a PR opens; later reviews run only on `@coderabbitai review`.
+    # Quota (Essentials plan: 5 PR reviews an hour for the one developer account all our PRs share, 1 an hour after
+    # 60 reviews in 7 days; every reviewed push counts). Only a PR with the `coderabbit` label is reviewed
+    # automatically; add the label once, then comment `@coderabbitai review` once per round. Later pushes are not
+    # reviewed on their own, and automatic reviews pause after the first reviewed commit.
+    labels: ["coderabbit"]
     auto_incremental_review: false
+    auto_pause_after_reviewed_commits: 1
   finishing_touches:
     docstrings:
       enabled: false
