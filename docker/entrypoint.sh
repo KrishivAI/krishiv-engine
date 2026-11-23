@@ -76,4 +76,5 @@ exec krishiv server --host 0.0.0.0 \
   --conf "krishiv.auth.tokens.docker.kind=service" \
   --conf "krishiv.auth.tokens.docker.role=admin" \
   --conf "krishiv.auth.principals.docker.expires=$expires" \
+  --conf "krishiv.io.local.allowedRoots=${KRISHIV_ALLOWED_ROOTS:-/data}" \
   "$@"
