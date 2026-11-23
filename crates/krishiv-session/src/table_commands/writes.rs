@@ -514,11 +514,17 @@ impl Session {
     /// Whether this keyed `saveAsTable` is the retry of a write the managed file table's commit log
     /// already holds: it then writes nothing, as a path `save` with the same key does (an overwrite
     /// must not drop what a later write added, an `errorifexists` retry must not fail on the table the
-    /// first try created).
+    /// first try created). The dedup window of a managed table ends at its next overwrite under another
+    /// key: that drop deletes the directory and its log (a path `save` overwrite keeps the log).
+    ///
+    /// What the skipped arm asks of the policy is asked first (an overwrite: `DROP TABLE`, the table
+    /// write, the options and the table's directory; a create: the same without the drop), before the
+    /// log is read or the key checked, so a denial does not depend on the table's log.
     async fn keyed_retry_is_done(
         &self,
         name: &TableName,
         spec: &V2WriteSpec,
+        mode: krishiv_io::SaveMode,
         env: &QueryEnv,
     ) -> Result<bool, KrishivError> {
         let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name) else {
@@ -527,6 +533,23 @@ impl Session {
         if !table.managed {
             return Ok(false);
         }
+        // A write without a key never takes the shortcut: the arm it falls to asks for itself. An
+        // invalid key counts as keyed, so its error comes after the checks.
+        let keyed = crate::session::writes::write_idempotency_key(&env.config, &spec.options)
+            .map_or(true, |key| key.is_some());
+        if !keyed {
+            return Ok(false);
+        }
+        if mode == krishiv_io::SaveMode::Overwrite {
+            self.authorize_equivalent(name, "DROP TABLE {}", env)
+                .await?;
+        }
+        self.authorize_table_write(name, true, env).await?;
+        let location = managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
+        self.authorize_write_options(&spec.options, &BTreeMap::new())
+            .await?;
+        let at = self.locate_write_path(&location.display().to_string(), &spec.options, env)?;
+        self.authorize_write_path(&at).await?;
         let checked =
             self.locate_write_path(&table.location.display().to_string(), &spec.options, env)?;
         crate::session::writes::key_already_committed(
@@ -569,9 +592,8 @@ impl Session {
         if exists
             && matches!(mode, SaveMode::Overwrite | SaveMode::ErrorIfExists)
             && !self.temp_entry_of(&name, &env)
-            && self.keyed_retry_is_done(&name, &spec, &env).await?
+            && self.keyed_retry_is_done(&name, &spec, mode, &env).await?
         {
-            self.authorize_table_write(&name, true, &env).await?;
             return Ok(());
         }
         match (mode, exists) {

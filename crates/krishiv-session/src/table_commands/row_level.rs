@@ -149,7 +149,8 @@ impl Session {
         // path split (E34).
         let caps = table.capabilities();
         if caps.idempotent_commit {
-            // An empty key is refused here, before the find scan.
+            // Validates only (an empty key is refused before the find scan); the key is read again
+            // from the config when the rewrite is set up.
             apply_idempotency_key(&probe.env.config, &mut std::collections::BTreeMap::new())?;
         } else {
             refuse_idempotency_key(&probe.env.config)?;
