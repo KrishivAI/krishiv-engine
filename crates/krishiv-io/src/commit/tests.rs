@@ -1888,6 +1888,60 @@ fn an_overwrite_keeps_a_stale_file_an_append_committed_meanwhile() {
     }
 }
 
+/// A statement that committed before is not applied twice: the second attempt's files are
+/// orphans and are deleted, the winner's data stays, and the success marker is back.
+#[test]
+fn a_replayed_idempotency_key_deletes_the_attempts_files_and_keeps_the_marker() {
+    let env = Env::memory();
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let attempt = |uuid: &str, rows: i32| {
+        let w = env
+            .begin("t", SaveMode::Overwrite, uuid)
+            .unwrap()
+            .unwrap()
+            .with_idempotency_key(Some("stmt-1".to_owned()));
+        let w = env.rt.block_on(w.logged(&env.io)).unwrap();
+        env.rt.block_on(async {
+            let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+            let id = pool.register("write", None);
+            let mut writer = FileWriter::new(
+                &env.io,
+                Arc::clone(&format),
+                &schema(),
+                o.clone(),
+                w.write_options(0),
+                krishiv_memory::Reservation::new(pool, id),
+            )
+            .unwrap();
+            writer.write(&batch(rows)).await.unwrap();
+            let files = writer.finish().await.unwrap();
+            w.commit(&env.io, format.as_ref(), schema(), &o, files)
+                .await
+                .unwrap()
+        })
+    };
+    let first = attempt("job-1", 4);
+    assert!(!first.is_empty(), "the first attempt commits its files");
+    let visible = env.visible("t");
+    let second = attempt("job-2", 2);
+    assert!(
+        second.is_empty(),
+        "a replayed key commits nothing: {second:?}"
+    );
+    assert_eq!(env.visible("t"), visible, "the winner's data is unchanged");
+    let on_store = env.names("t");
+    assert!(
+        !on_store.iter().any(|n| n.contains("job-2")),
+        "the replayed attempt's files are deleted: {on_store:?}"
+    );
+    assert!(
+        on_store.iter().any(|n| n.ends_with("_SUCCESS")),
+        "the success marker is restored: {on_store:?}"
+    );
+}
+
 /// Adoption uses the reads' hidden-name rule: a copy in progress is not data.
 #[test]
 fn adoption_skips_copy_in_progress_files() {
