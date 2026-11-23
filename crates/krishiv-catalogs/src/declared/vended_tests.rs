@@ -122,6 +122,7 @@ fn vended_cache_orders_answers_by_receipt_not_by_the_clock() {
     let first = answer("s3://b/first");
     let mut second = VendedAnswer::new(Vec::new(), BTreeMap::new(), "s3://b/second".to_owned());
     second.fetched = first.fetched - Duration::from_secs(60);
+    let (first_fetched, second_received) = (first.fetched, second.received);
     let second = Arc::new(second);
     cache.put_if_newer(k(), first, TTL, 10);
     cache.put_if_newer(k(), second, TTL, 10);
@@ -130,6 +131,14 @@ fn vended_cache_orders_answers_by_receipt_not_by_the_clock() {
     third.fetched -= Duration::from_secs(120);
     let published = cache.publish(k(), Arc::new(third), TTL, 10, cache.drops());
     assert_eq!(published.location(), "s3://b/third");
+    // The cache now holds the refresh, not only `publish`'s answer.
+    assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/third");
+    // An answer received before the refresh no longer replaces it, whatever its fetch time.
+    let mut late = VendedAnswer::new(Vec::new(), BTreeMap::new(), "s3://b/late".to_owned());
+    late.fetched = first_fetched + Duration::from_secs(60);
+    late.received = second_received;
+    cache.put_if_newer(k(), Arc::new(late), TTL, 10);
+    assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/third");
 }
 
 /// The live set holds only catalogs not yet dropped: registering and dropping many leaves nothing behind.

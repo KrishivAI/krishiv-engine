@@ -89,7 +89,7 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   instance is remembered as dead, so nothing is kept for it later and two runtimes declaring one
   name never share an answer; a `loadTable` answer replaces the held one only when fetched later, under one lock; the
   table `token` of a `loadTable` answer is kept with it and is the bearer of that table's `loadCredentials` and reload
-  only, a 401 falling back to the caller's token), `VendedSource` (the cached credential while it outlives the refresh
+  only, a 401 or 419 falling back to the caller's token), `VendedSource` (the cached credential while it outlives the refresh
   skew, else `loadCredentials` with the same caller or a table reload (endpoint not advertised, or a 404); a second
   fetch while the cache still holds the answer it served means the store refused it, so it refreshes), one store scope per vended prefix through `ScanInputs::stores`,
   `VendedPaths` (a location outside every scope, or no credential, is `KRISHIV_CATALOG_LOCATION_REFUSED` before any

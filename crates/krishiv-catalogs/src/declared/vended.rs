@@ -9,7 +9,7 @@
 //!   on `REFRESH TABLE`, when its catalog is dropped, or on eviction. Not when the last session of its identity
 //!   ends: the expiry bounds it (design §4.3 as amended in unit 3).
 //! - **Table token.** A `token` in the `loadTable` answer's `config` is kept with the answer and sent as the bearer
-//!   of that table's `loadCredentials` and reload only (the declared catalog host; a 401 falls back to the caller's
+//!   of that table's `loadCredentials` and reload only (the declared catalog host; a 401 or 419 falls back to the caller's
 //!   token), never to the token endpoint or to storage (§4.1).
 //! - **Refresh.** [`VendedSource`] is the `CredentialSource` of one scope of one query: the cached credential of the
 //!   longest prefix covering the scope while it is valid for longer than the refresh skew, else a new answer from
@@ -422,7 +422,7 @@ impl Refetch {
 
     /// A new answer: `loadCredentials`, or the table reloaded when the catalog does not advertise it or answers it
     /// 404 (the reload tells whether the table is really gone). Both are sent with the table's own `token` when the
-    /// last answer carried one; a `loadCredentials` answer keeps that token unless the catalog refused it (401), in
+    /// last answer carried one; a `loadCredentials` answer keeps that token unless the catalog refused it (401 or 419), in
     /// which case neither the reload nor the new answer carries it.
     /// `clock` stamps the new answer's fetch time.
     fn fetch_blocking(
