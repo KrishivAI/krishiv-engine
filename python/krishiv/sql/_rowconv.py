@@ -343,9 +343,11 @@ def normalize_arrow_table(
             and pa.types.is_timestamp(column.type)
             and column.type.tz is None
         ):
-            # An ambiguous time is the earlier, as java.time reads it; a time in a DST gap is refused, as
-            # Spark's Arrow conversion (``assume_timezone`` with its default error handling) refuses it.
-            column = pc.assume_timezone(column, zone, ambiguous="earliest")  # ty: ignore[unresolved-attribute]
+            # An ambiguous time is the earlier, as java.time reads it. A time in a DST gap does not fail the
+            # conversion: it becomes the end of the gap (02:30 becomes 03:00; java.time would say 03:30).
+            column = pc.assume_timezone(  # ty: ignore[unresolved-attribute]
+                column, zone, ambiguous="earliest", nonexistent="latest"
+            )
         columns.append(column)
     if not columns:
         return table  # a table with no columns can still have rows: rebuilding it would drop them
