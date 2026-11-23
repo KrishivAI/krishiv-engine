@@ -408,6 +408,19 @@ class SparkSession:
             targets = self._explicit_schema(schema).fields
             wall_clock |= frozenset(i for i, f in enumerate(targets) if isinstance(f.dataType, TimestampNTZType))
             wall_clock -= frozenset(i for i, f in enumerate(targets) if isinstance(f.dataType, TimestampType))
+        if schema is not None and not isinstance(schema, list | tuple):
+            # An explicit target is applied to an unsigned source column first (Spark casts to the target's Arrow
+            # type without inferring the source); with no target an unsigned column is refused.
+            struct = self._explicit_schema(schema)
+            if len(struct.fields) == table.num_columns:
+                target = _pa_schema(struct, pa)
+                table = pa.table(
+                    [
+                        c.cast(target.field(i).type) if pa.types.is_unsigned_integer(c.type) else c
+                        for i, c in enumerate(table.columns)
+                    ],
+                    names=table.column_names,
+                )
         table = _rowconv.normalize_arrow_table(table, pa, _session_zone(self), wall_clock)
         if isinstance(schema, list | tuple):
             _refuse_duplicate_names([str(n) for n in schema])

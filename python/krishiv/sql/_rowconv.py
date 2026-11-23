@@ -366,6 +366,10 @@ def normalize_arrow_table(
 def arrow_array(values: list[Any], arrow_type: Any, pa: Any, null_on_error: bool) -> Any:
     """``pa.array(values, type=arrow_type)``; with ``null_on_error`` (``verifySchema=False``) a value
     pyarrow cannot take is NULL, as the JVM conversion of classic PySpark leaves it."""
+    if null_on_error and pa.types.is_floating(arrow_type):
+        # Spark's unchecked conversion takes only a floating-point object for a double target (an int is NULL);
+        # pyarrow would accept the int.
+        values = [None if isinstance(v, int) else v for v in values]
     try:
         return pa.array(values, type=arrow_type)
     except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError, OverflowError, ValueError, TypeError):

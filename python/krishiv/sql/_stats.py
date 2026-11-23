@@ -176,8 +176,6 @@ def summary_frame(df: DataFrame, statistics: tuple[str, ...]) -> DataFrame:
     policy = df.sparkSession.conf.get("spark.sql.mapKeyDedupPolicy", "EXCEPTION") or "EXCEPTION"
     last_win = policy.upper() == "LAST_WIN"
     _check_statistics(statistics, last_win=last_win)
-    if last_win:
-        statistics = tuple(dict.fromkeys(statistics))
     dtypes = [(n, t) for n, t in df.dtypes if _is_numeric(t) or _is_string(t)]
     schema = StructType(
         [StructField("summary", StringType(), True)] + [StructField(n, StringType(), True) for n, _ in dtypes]
@@ -435,6 +433,21 @@ def sample(df: DataFrame, with_replacement: bool, fraction: float, seed: int) ->
     return sample_range(df, 0.0, fraction, seed)
 
 
+def _key_kind(key: Any) -> str:
+    """``string``, ``boolean`` or ``number``: the kind of a stratum key (Python's ``bool`` is an ``int``, so it is
+    tested first)."""
+    if isinstance(key, bool):
+        return "boolean"
+    return "string" if isinstance(key, str) else "number"
+
+
+def _column_kind(dtype: str) -> str:
+    """The kind of a stratum column's type name, as :func:`_key_kind` names a key's."""
+    if _is_string(dtype):
+        return "string"
+    return "boolean" if dtype == "boolean" else "number"
+
+
 def stratified_sample(df: DataFrame, strata: Column, fractions: list[tuple[Any, float]], seed: int) -> DataFrame:
     """``sampleBy``: a row is kept when its ``rand(seed)`` draw is below its stratum's fraction (0 for a stratum
     that is not listed); every row consumes one draw whatever its stratum, as Spark's."""
@@ -442,7 +455,8 @@ def stratified_sample(df: DataFrame, strata: Column, fractions: list[tuple[Any, 
     # Spark looks the stratum up in a typed map: a string column matches only string keys, any other only
     # numbers (SQL's `=` would coerce `'1'` and `1`).
     kind = df.select(strata.alias("__krishiv_stratum")).dtypes[0][1]
-    fractions = [(k, f) for k, f in fractions if isinstance(k, str) == _is_string(kind)]
+    key_kind = _column_kind(kind)
+    fractions = [(k, f) for k, f in fractions if _key_kind(k) == key_kind]
     for stratum, wanted in fractions:
         hit = strata == F.lit(stratum)
         fraction = F.when(hit, F.lit(wanted)) if fraction is None else fraction.when(hit, F.lit(wanted))

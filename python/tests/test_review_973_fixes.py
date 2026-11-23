@@ -90,16 +90,26 @@ def test_summary_with_a_repeated_statistic_under_last_win(spark: SparkSession) -
         frame.summary("count", "count")
     spark.conf.set("spark.sql.mapKeyDedupPolicy", "LAST_WIN")
     try:
-        assert [r[0] for r in frame.summary("count", "count").collect()] == ["count"]
+        assert [r[0] for r in frame.summary("count", "count").collect()] == ["count", "count"]
     finally:
         spark.conf.unset("spark.sql.mapKeyDedupPolicy")
 
 
 def test_random_split_keeps_array_and_struct_columns_in_the_sort_key(spark: SparkSession) -> None:
-    frame = spark.createDataFrame(
-        [([1], (1,)), ([2], (2,))], "a array<int>, s struct<x:int>"
-    )  # the list column is not a sort key
-    assert sum(part.count() for part in frame.randomSplit([1.0, 1.0], 7)) == 2
+    rows = [(k, [k], (k,)) for k in (1, 2, 3, 4)]
+    schema = "k int, a array<int>, s struct<x:int>"
+    first = [
+        [tuple(r) for r in p.collect()]
+        for p in spark.createDataFrame(rows, schema).coalesce(1).randomSplit([1.0, 1.0], 7)
+    ]
+    again = [
+        [tuple(r) for r in p.collect()]
+        for p in spark.createDataFrame(rows[::-1], schema).coalesce(1).randomSplit([1.0, 1.0], 7)
+    ]
+    # The array and struct columns ride along while the sort is by `k`: the split does not depend on the input
+    # order, so the same seed gives the same rows in each part.
+    assert [sorted(p) for p in again] == [sorted(p) for p in first]
+    assert sum(len(p) for p in first) == 4
 
 
 def test_stats_refuse_a_string_column_named_by_a_quoted_or_qualified_reference(spark: SparkSession) -> None:
@@ -183,8 +193,35 @@ def test_explicit_timestamp_target_localizes_under_ntz_inference(spark: SparkSes
 
     import pyarrow as pa
 
+    old_type = spark.conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ") or "TIMESTAMP_LTZ"
+    old_zone = spark.conf.get("spark.sql.session.timeZone")
     spark.conf.set("spark.sql.timestampType", "TIMESTAMP_NTZ")
     spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
-    table = pa.table({"t": pa.array([dt.datetime(2024, 1, 15, 12, 0)])})
-    frame = spark.createDataFrame(table, "t timestamp")
-    assert frame.collect()[0][0].astimezone(dt.UTC).hour == 20
+    try:
+        table = pa.table({"t": pa.array([dt.datetime(2024, 1, 15, 12, 0)])})
+        frame = spark.createDataFrame(table, "t timestamp")
+        assert frame.collect()[0][0].astimezone(dt.UTC).hour == 20
+    finally:
+        spark.conf.set("spark.sql.timestampType", old_type)
+        if old_zone is None:
+            spark.conf.unset("spark.sql.session.timeZone")
+        else:
+            spark.conf.set("spark.sql.session.timeZone", old_zone)
+
+
+def test_unchecked_double_target_takes_only_floats(spark: SparkSession) -> None:
+    frame = spark.createDataFrame([(1,), (1.5,)], "x double", verifySchema=False)
+    assert [r[0] for r in frame.collect()] == [None, 1.5]
+
+
+def test_unsigned_arrow_column_is_cast_to_an_explicit_target(spark: SparkSession) -> None:
+    import pyarrow as pa
+
+    frame = spark.createDataFrame(pa.table({"x": pa.array([1, 2], type=pa.uint32())}), "x bigint")
+    assert [r[0] for r in frame.collect()] == [1, 2]
+
+
+def test_sample_by_matches_a_boolean_stratum_only_with_boolean_keys(spark: SparkSession) -> None:
+    frame = spark.createDataFrame([(True,), (False,)], "b boolean")
+    assert frame.sampleBy("b", {1: 1.0}, 1).count() == 0
+    assert frame.sampleBy("b", {True: 1.0}, 1).count() == 1
