@@ -778,16 +778,29 @@ impl Session {
         fallback: krishiv_sql::StatementClass,
     ) -> Result<Admitted, KrishivError> {
         // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
+        // A query a command runs for itself (an `INSERT`'s write) has no statement: it is the command's.
+        let command = match env.text {
+            None => super::ran::command_statement(),
+            Some(_) => None,
+        };
+        let (text, class) = match &command {
+            Some(c) => (Some(&*c.text), Some(c.class)),
+            None => (env.text.as_deref(), env.statement_class),
+        };
         let log_id = self.state.queries.begin_as(
             crate::system::TextPolicy::from_config(&env.config),
-            env.text.as_deref(),
-            env.statement_class,
+            text,
+            class,
             self.operation_id(),
         )?;
         crate::action::note_row(&log_id);
         // The request tags join the row's tags at once, so a queued query shows them too.
         self.stamp_row(&log_id);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        // The command's listed run: a failure of it is this row, and the statement gets no refused row.
+        if let Some(c) = &command {
+            *c.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        }
         let permit = self.admit(&log_id, env, exempt, fallback).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
