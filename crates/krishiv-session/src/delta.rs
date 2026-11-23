@@ -159,6 +159,16 @@ impl FileSchemaResolver for SessionFiles {
         }
         self.files.with_schema(format, paths, options, schema)
     }
+
+    fn keeps_nullability(&self, format: &str) -> bool {
+        // A Delta read by path keeps the log's `NOT NULL` columns and fields, as the catalog
+        // table over it does (the scan gives its rows those types).
+        #[cfg(feature = "delta")]
+        if handles(format) {
+            return true;
+        }
+        self.files.keeps_nullability(format)
+    }
 }
 
 #[cfg(all(test, feature = "delta"))]

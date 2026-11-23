@@ -45,12 +45,20 @@ def _numeric(names: list[str], dtypes: list[tuple[str, str]], strict: bool) -> l
     return out
 
 
+def _truncated(items: list[str], more: str) -> str:
+    """Spark's ``truncatedString`` with two entries shown: ``a, b ... 1 more field(s)``."""
+    if len(items) <= 2:
+        return ", ".join(items)
+    return f"{', '.join(items[:2])} ... {len(items) - 2} more {more}"
+
+
 class GroupedData:
     def __init__(self, native: _native.GroupedData, df: DataFrame, keys: list[Any] | None = None) -> None:
         self._grouped = native
         self._source = df
         # The grouping columns, which a cogroup needs again (the native handle keeps them to itself).
         self._keys = [] if keys is None else keys
+        self._key_cols: tuple[Any, ...] = ()  # the grouping expressions, for ``repr``
 
     def applyInPandas(self, func: Any, schema: Any) -> DataFrame:
         """Maps each group of the current :class:`DataFrame` using a pandas UDF and returns the result as a
@@ -100,6 +108,14 @@ class GroupedData:
     def cogroup(self, other: GroupedData) -> PandasCogroupedOps:
         """Cogroups this group with another by common keys, for ``applyInPandas``/``applyInArrow``."""
         return PandasCogroupedOps(self, other)
+
+    def __repr__(self) -> str:
+        """``GroupedData[grouping expressions: [name], value: [name: string, age: bigint], type: GroupBy]``."""
+        names = [k._text if isinstance(k, Column) and k._text is not None else str(k) for k in self._key_cols]
+        fields = [f"{name}: {type_}" for name, type_ in self._source.dtypes]
+        keys = _truncated(names, "field(s)")
+        values = _truncated(fields, "field" if len(fields) == 3 else "fields")
+        return f"GroupedData[grouping expressions: [{keys}], value: [{values}], type: GroupBy]"
 
     def agg(self, *exprs: Column | dict[str, str]) -> DataFrame:
         """Computes aggregates and returns the result as a :class:`DataFrame`.

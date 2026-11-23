@@ -647,6 +647,119 @@ fn jdbc_flight_sql_tpch_q1() {
     );
 }
 
+/// TPC-H q1..q22 through the Arrow Flight SQL JDBC driver: each runs and returns as many rows and
+/// columns as the Rust Flight SQL client reads for the same text (design P3-T101 §11; the ADBC
+/// counterpart is `adbc_flight_sql_tpch_all`, which compares values with Spark Connect).
+#[cfg(unix)]
+#[test]
+#[ignore = "needs Java 21 or Docker, the network on a cold cache and tpchgen-cli: --run-ignored only"]
+fn jdbc_flight_sql_tpch_all() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tpch = data_dir(dir.path()).join("tpch");
+    let gen_status = Command::new("tpchgen-cli")
+        .args(["parquet", "-s", "0.01", "--output-dir"])
+        .arg(&tpch)
+        .status()
+        .expect("tpchgen-cli runs (cargo install tpchgen-cli)");
+    assert!(gen_status.success());
+    let (conf, _) = auth_conf(dir.path(), false);
+    let conf: Vec<&str> = conf.iter().map(String::as_str).collect();
+    let (server, flight) = start(dir.path(), &conf);
+    assert!(flight);
+    let addr = server
+        .connect
+        .split(';')
+        .next()
+        .expect("address")
+        .trim_end_matches('/')
+        .to_owned();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let queries = root.join("bench/queries/tpch");
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let expected: Vec<(usize, usize)> = (1..=22)
+        .map(|n| {
+            let text =
+                std::fs::read_to_string(queries.join(format!("q{n:02}.sql"))).expect("query");
+            rt.block_on(counts_by_rust_client(&addr, &tpch_text(&text, &tpch)))
+        })
+        .collect();
+    let url = format!("jdbc:arrow-flight-sql://{addr}?useEncryption=false&token={ADMIN_TOKEN}");
+    let out = Command::new("sh")
+        .arg(root.join("tests/scripts/flight_sql_jdbc.sh"))
+        .arg("tpch")
+        .arg(&url)
+        .arg(&queries)
+        .arg(&tpch)
+        .output()
+        .expect("the JDBC script runs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stdout}\n{stderr}");
+    assert_eq!(
+        parse_tpch_counts(&stdout),
+        expected,
+        "JDBC vs the Rust client\n{stdout}"
+    );
+}
+
+/// A TPC-H query with each table a CTE over its Parquet file, spliced into the query's own `WITH`.
+fn tpch_text(sql: &str, dir: &std::path::Path) -> String {
+    let ctes = [
+        "part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation", "region",
+    ]
+    .iter()
+    .map(|t| {
+        format!(
+            "{t} AS (SELECT * FROM parquet.`{}`)",
+            dir.join(format!("{t}.parquet")).display()
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(", ");
+    let body = sql.trim().trim_end_matches(';').trim();
+    match body.get(..4).filter(|w| w.eq_ignore_ascii_case("with")) {
+        Some(_) => format!("WITH {ctes}, {}", body[4..].trim_start()),
+        None => format!("WITH {ctes} {body}"),
+    }
+}
+
+/// The row and column counts the Rust Flight SQL client reads for `sql`.
+async fn counts_by_rust_client(addr: &str, sql: &str) -> (usize, usize) {
+    let mut c = client(addr).await;
+    c.set_header("authorization", format!("Bearer {ADMIN_TOKEN}"));
+    let info = c.execute(sql.to_owned(), None).await.expect("info");
+    let ticket = info.endpoint[0].ticket.clone().expect("ticket");
+    let batches: Vec<arrow_array::RecordBatch> = c
+        .do_get(ticket)
+        .await
+        .expect("do_get")
+        .try_collect()
+        .await
+        .expect("rows");
+    let columns = batches.first().map_or(0, |b| b.num_columns());
+    (batches.iter().map(|b| b.num_rows()).sum(), columns)
+}
+
+/// `(rows, columns)` of each `TPCH q<n> <rows> <columns>` line, in order.
+fn parse_tpch_counts(out: &str) -> Vec<(usize, usize)> {
+    out.lines()
+        .filter_map(|l| l.strip_prefix("TPCH q"))
+        .filter_map(|l| {
+            let mut p = l.split(' ');
+            p.next()?;
+            Some((p.next()?.parse().ok()?, p.next()?.parse().ok()?))
+        })
+        .collect()
+}
+
+#[test]
+fn jdbc_tpch_counts_parse() {
+    assert_eq!(
+        parse_tpch_counts("TPCH q1 4 10\nnoise\nTPCH q2 100 8\n"),
+        [(4, 10), (100, 8)]
+    );
+}
+
 #[test]
 fn jdbc_output_parses() {
     let run = parse_jdbc(

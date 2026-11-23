@@ -612,6 +612,7 @@ mod tests {
     #[test]
     fn a_source_is_its_paths_not_its_format() {
         let scan = PhysNode::Scan(ScanNode {
+            decided: None,
             id: ScanId(0),
             scan: Scan {
                 source: files("a.parquet"),

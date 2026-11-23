@@ -25,6 +25,12 @@ pub(crate) fn round_trip(
     if !on {
         return Ok(None);
     }
+    if plan.has_decided_scan() {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "a Python data source in a distributed plan".to_owned(),
+        }
+        .into());
+    }
     let fail = |what: String| -> KrishivError {
         InternalError {
             message: format!("plan round trip: {what}"),

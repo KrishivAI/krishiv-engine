@@ -2452,6 +2452,15 @@ pub enum AggregateFunction {
     /// `hll_union_agg(sketch, allowDifferentLgConfigK)`: the folded flag is `hll_precision` (0 or 1).
     /// feature: hll_sketch_aggregates
     HllUnionAgg = 54,
+    /// `theta_sketch_agg(x, lgNomEntries)`: the folded lgNomEntries is `hll_precision` (4 to 26).
+    /// feature: theta_sketch_aggregates
+    ThetaSketchAgg = 55,
+    /// `theta_union_agg(sketch, lgNomEntries)`: the folded lgNomEntries is `hll_precision` (4 to 26).
+    /// feature: theta_sketch_aggregates
+    ThetaUnionAgg = 56,
+    /// `theta_intersection_agg(sketch)`.
+    /// feature: theta_sketch_aggregates
+    ThetaIntersectionAgg = 57,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2515,6 +2524,9 @@ impl AggregateFunction {
             Self::BitmapAndAgg => "AGGREGATE_FUNCTION_BITMAP_AND_AGG",
             Self::HllSketchAgg => "AGGREGATE_FUNCTION_HLL_SKETCH_AGG",
             Self::HllUnionAgg => "AGGREGATE_FUNCTION_HLL_UNION_AGG",
+            Self::ThetaSketchAgg => "AGGREGATE_FUNCTION_THETA_SKETCH_AGG",
+            Self::ThetaUnionAgg => "AGGREGATE_FUNCTION_THETA_UNION_AGG",
+            Self::ThetaIntersectionAgg => "AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2575,6 +2587,11 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_BITMAP_AND_AGG" => Some(Self::BitmapAndAgg),
             "AGGREGATE_FUNCTION_HLL_SKETCH_AGG" => Some(Self::HllSketchAgg),
             "AGGREGATE_FUNCTION_HLL_UNION_AGG" => Some(Self::HllUnionAgg),
+            "AGGREGATE_FUNCTION_THETA_SKETCH_AGG" => Some(Self::ThetaSketchAgg),
+            "AGGREGATE_FUNCTION_THETA_UNION_AGG" => Some(Self::ThetaUnionAgg),
+            "AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG" => {
+                Some(Self::ThetaIntersectionAgg)
+            }
             _ => None,
         }
     }

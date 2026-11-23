@@ -1,6 +1,6 @@
 ## __init__.py
 __all__
-__all__ = ['Console', 'LocalConnect', 'ProfileView', 'SparkConf', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
+__all__ = ['Console', 'LocalConnect', 'ProfileView', 'SparkConf', 'SparkContext', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
 def build_info() -> dict[str, str]
 def metrics() -> list[dict[str, Any]]
 def session() -> SparkSession
@@ -137,7 +137,7 @@ Session.def metrics(self) -> list[dict[str, object]]
 Session.def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None=..., schema_json: str | None=..., schema_ddl: str | None=...) -> DataFrame
 Session.def refresh_files(self) -> None
 Session.def refresh_table(self, name: str) -> None
-Session.def register_python_source(self, label: str, schema: object, read: object) -> DataFrame
+Session.def register_python_source(self, label: str, schema: object, read: object, plan: object | None=None) -> DataFrame
 Session.def register_python_udf(self, name: str, eval_type: int, return_type: str, deterministic: bool, thread_safe: bool, wrapper: object) -> int
 Session.def sql(self, query: str) -> DataFrame
 Session.def table(self, name: str) -> DataFrame
@@ -1247,7 +1247,7 @@ Column.def __ge__(self, other: Any) -> Column
 Column.def __getattr__(self, item: Any) -> Column
 Column.def __getitem__(self, k: Any) -> Column
 Column.def __gt__(self, other: Any) -> Column
-Column.def __init__(self, native: _native.Column) -> None
+Column.def __init__(self, native: _native.Column, text: str | None=None) -> None
 Column.def __invert__(self) -> Column
 Column.def __iter__(self) -> Any
 Column.def __le__(self, other: Any) -> Column
@@ -1401,6 +1401,7 @@ DataFrame.groupby
 DataFrame.sort
 DataFrame.where
 EAGER_DEFAULT_MAX_ROWS
+EAGER_ENABLED_KEY
 EAGER_MAX_ROWS_KEY
 class DataFrame()
 ## sql/datasource.py
@@ -1567,6 +1568,7 @@ def years(col: ColumnOrName) -> Column
 def zip_with(left: ColumnOrName, right: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
 ## sql/group.py
 GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame, keys: list[Any] | None=None) -> None
+GroupedData.def __repr__(self) -> str
 GroupedData.def agg(self, *exprs: Column | dict[str, str]) -> DataFrame
 GroupedData.def applyInArrow(self, func: Any, schema: Any) -> DataFrame
 GroupedData.def applyInPandas(self, func: Any, schema: Any) -> DataFrame
@@ -1637,6 +1639,7 @@ DataFrameReader.def option(self, key: str, value: object) -> DataFrameReader
 DataFrameReader.def options(self, **options: object) -> DataFrameReader
 DataFrameReader.def parquet(self, *paths: str) -> DataFrame
 DataFrameReader.def schema(self, schema: StructType | str) -> DataFrameReader
+DataFrameReader.def text(self, paths: str | list[str], wholetext: bool=False, lineSep: str | None=None, **options: object) -> DataFrame
 DataFrameWriter.def __init__(self, df: DataFrame) -> None
 DataFrameWriter.def bucketBy(self, numBuckets: int, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
 DataFrameWriter.def csv(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
@@ -1676,7 +1679,7 @@ Row.def __getitem__(self, item: Any) -> Any
 Row.def __new__(cls, *args: Any, **kwargs: Any) -> Row
 Row.def __reduce__(self) -> tuple[Any, ...]
 Row.def __repr__(self) -> str
-Row.def asDict(self) -> dict[str, Any]
+Row.def asDict(self, recursive: bool=False) -> dict[str, Any]
 class Row(tuple[Any, ...])
 ## sql/session.py
 Catalog.def __init__(self, session: SparkSession) -> None

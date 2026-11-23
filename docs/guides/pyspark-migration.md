@@ -34,7 +34,7 @@ assert [tuple(r) for r in out.collect()] == [("east", 15.5), ("west", 20.0)]
 
 Search your project for the function names in the tables below. The `krishiv check-compat` scanner that automates this is not part of 0.2.0 (see [check-compat](check-compat.md)).
 
-## Spark functions Krishiv does not run yet (74)
+## Spark functions Krishiv does not run yet (67)
 
 A name that is not in the data is reported as unknown and is not supported. A workaround is given only where one exists;
 an empty cell means there is none yet.
@@ -74,13 +74,6 @@ an empty cell means there is none yet.
 | [`schema_of_avro`](../reference/sql/functions/schema_of_avro.md) | not yet |  |
 | [`schema_of_variant_agg`](../reference/sql/functions/schema_of_variant_agg.md) | not yet |  |
 | [`sentences`](../reference/sql/functions/sentences.md) | not yet | for the words of one sentence: regexp_extract_all(str, '[A-Za-z0-9_]+', 0); Spark's sentence and word break rules are not reproduced |
-| [`theta_difference`](../reference/sql/functions/theta_difference.md) | not yet |  |
-| [`theta_intersection`](../reference/sql/functions/theta_intersection.md) | not yet |  |
-| [`theta_intersection_agg`](../reference/sql/functions/theta_intersection_agg.md) | not yet |  |
-| [`theta_sketch_agg`](../reference/sql/functions/theta_sketch_agg.md) | not yet | approx_count_distinct(expr) returns a distinct-count estimate; Theta sketches are not available |
-| [`theta_sketch_estimate`](../reference/sql/functions/theta_sketch_estimate.md) | not yet | approx_count_distinct(expr) over the raw column returns a distinct-count estimate; Theta sketches are not available |
-| [`theta_union`](../reference/sql/functions/theta_union.md) | not yet |  |
-| [`theta_union_agg`](../reference/sql/functions/theta_union_agg.md) | not yet |  |
 | [`try_reflect`](../reference/sql/functions/try_reflect.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`tuple_difference_double`](../reference/sql/functions/tuple_difference_double.md) | not yet |  |
 | [`tuple_difference_integer`](../reference/sql/functions/tuple_difference_integer.md) | not yet |  |
@@ -123,6 +116,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | Difference |
 | --- |
 | [Error ordering between two raising expressions](../concepts/known-differences.md#error-ordering-between-two-raising-expressions) |
+| [Spark 3.5 error-message parameters follow 4.x](../concepts/known-differences.md#spark-35-error-message-parameters-follow-4x) |
 | [Result cache, reproducible results (Krishiv extensions, off by default)](../concepts/known-differences.md#result-cache-reproducible-results-krishiv-extensions-off-by-default) |
 | [`EXPLAIN FORMAT JSON`, `EXPLAIN ANALYZE`, `EXPLAIN VERBOSE` (Krishiv extensions)](../concepts/known-differences.md#explain-format-json-explain-analyze-explain-verbose-krishiv-extensions) |
 | [Writers leave a `_krishiv_log` directory](../concepts/known-differences.md#writers-leave-a-_krishiv_log-directory) |
@@ -152,6 +146,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [A declared schema on a Delta read](../concepts/known-differences.md#a-declared-schema-on-a-delta-read) |
 | [Tags and global views](../concepts/known-differences.md#tags-and-global-views) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
+| [Declared catalogs (`krishiv.catalog.<name>.*`, `spark.sql.catalog.<name>`)](../concepts/known-differences.md#declared-catalogs-krishivcatalogname-sparksqlcatalogname) |
 | [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
 | [Delta Lake writes](../concepts/known-differences.md#delta-lake-writes) |
 | [HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)](../concepts/known-differences.md#hll-sketches-the-compact-form-hll_sketch_agg-hll_union_agg-hll_union) |
