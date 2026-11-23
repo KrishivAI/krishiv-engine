@@ -51,7 +51,7 @@ code=$(curl --silent --max-time 10 -o /dev/null -w '%{http_code}' "$base/")
 [ "$code" = 200 ] || { echo "::error::GET / on the UI port answered $code"; exit 1; }
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
-SMOKE_REMOTE=${connect%%\?*} SMOKE_DIR="$work" uv run --quiet --frozen --project "$repo/bench" python -I - <<'PY'
+SMOKE_REMOTE=${connect%%\?*} SMOKE_DIR="$work" timeout 300 uv run --quiet --frozen --project "$repo/bench" python -I - <<'PY'
 import os
 from pyspark.sql import SparkSession
 
@@ -67,5 +67,6 @@ p = os.path.join(os.environ["SMOKE_DIR"], "parquet-table")
 spark.range(3).write.parquet(p)
 assert spark.read.parquet(p).count() == 3
 print("release-smoke: pyspark query, Delta write and read, Parquet round trip")
+spark.stop()
 PY
 echo "release-smoke: $bin serves the console, Flight SQL and Spark Connect at $connect"
