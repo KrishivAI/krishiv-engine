@@ -499,3 +499,28 @@ async fn one_read_of_a_table_is_one_statement() {
     source.rows(SystemTable::Sessions).await.unwrap();
     assert_eq!(console_statements(&rt).await, before + 2);
 }
+
+#[tokio::test]
+async fn a_source_lists_udf_workers_only_when_it_was_given_a_pool_and_reads_it_each_time() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use krishiv_server::udf_workers::{UdfWorkers, UdfWorkersProvider};
+
+    let none = SessionSource::new(runtime()).unwrap();
+    assert_eq!(none.udf_workers().await.unwrap(), None);
+
+    let live = Arc::new(AtomicU64::new(1));
+    let read = Arc::clone(&live);
+    let provider: UdfWorkersProvider = Arc::new(move || UdfWorkers {
+        live: read.load(Ordering::SeqCst),
+        max_total: 64,
+        ..UdfWorkers::default()
+    });
+    let source = SessionSource::new(runtime())
+        .unwrap()
+        .with_udf_workers(provider);
+    assert_eq!(source.udf_workers().await.unwrap().unwrap().live, 1);
+    live.store(3, Ordering::SeqCst);
+    let pool = source.udf_workers().await.unwrap().unwrap();
+    assert_eq!((pool.live, pool.max_total), (3, 64));
+}

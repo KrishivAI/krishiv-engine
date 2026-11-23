@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use krishiv_server::internal::{Row, SystemTable, UiError, UiFuture, UiSource, router_with_ui};
+use krishiv_server::udf_workers::{UdfWorkerOwner, UdfWorkers};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -180,6 +181,33 @@ impl UiSource for Fake {
         )
     }
 
+    fn udf_workers(&self) -> UiFuture<'_, Option<UdfWorkers>> {
+        let fail = self.fail;
+        Box::pin(async move {
+            if fail {
+                return Err(UiError::new("the worker pool is unavailable"));
+            }
+            let owner = |tenant: Option<&str>, session: &str, live, idle| UdfWorkerOwner {
+                principal: "ana".to_owned(),
+                session_id: session.to_owned(),
+                tenant: tenant.map(str::to_owned),
+                live,
+                idle,
+            };
+            Ok(Some(UdfWorkers {
+                live: 4,
+                idle: 1,
+                max_total: 64,
+                max_per_session: 4,
+                max_per_tenant: 32,
+                owners: vec![
+                    owner(None, "s-idle", 1, 1),
+                    owner(Some("acme"), "s-busy", 3, 0),
+                ],
+            }))
+        })
+    }
+
     fn close_session<'a>(&'a self, session_id: &'a str) -> UiFuture<'a, Option<usize>> {
         Box::pin(async move {
             self.closed.lock().unwrap().push(session_id.to_owned());
@@ -285,6 +313,7 @@ async fn every_internal_endpoint_needs_the_token() {
         "/api/internal/sessions",
         "/api/internal/groups",
         "/api/internal/advice",
+        "/api/internal/udf-workers",
     ] {
         let (status, _, body) = request(addr, "GET", path, false).await;
         assert_eq!(status, 401, "{path}");
@@ -850,6 +879,7 @@ async fn a_failing_source_fails_the_session_and_group_routes_as_json() {
         "/api/internal/sessions",
         "/api/internal/groups",
         "/api/internal/advice",
+        "/api/internal/udf-workers",
     ] {
         let (status, _, body) = request(addr, "GET", path, true).await;
         assert_eq!(status, 500, "{path}");
@@ -1135,4 +1165,39 @@ async fn a_source_that_does_not_tell_sessions_apart_cancels_nothing_in_a_named_s
     // The default is not the unqualified cancel: that would end another session's query of the same id.
     assert!(Plain.cancel("q").await.unwrap());
     assert!(!Plain.cancel_in_session("q", "s").await.unwrap());
+}
+
+#[tokio::test]
+async fn the_udf_workers_are_listed_most_workers_first_with_the_pools_limits() {
+    let (addr, _) = start(false).await;
+    let body = get(addr, "/api/internal/udf-workers").await;
+    let pool = &body["pool"];
+    assert_eq!(pool["live"], 4);
+    assert_eq!(pool["busy"], 3);
+    assert_eq!(pool["max_total"], 64);
+    assert_eq!(pool["max_per_session"], 4);
+    assert_eq!(pool["max_per_tenant"], 32);
+    assert_eq!(pool["truncated"], false);
+    let owners = pool["owners"].as_array().unwrap();
+    assert_eq!(owners.len(), 2);
+    assert_eq!(
+        owners[0],
+        json!({"principal": "ana", "session_id": "s-busy", "tenant": "acme", "live": 3, "busy": 3})
+    );
+    assert_eq!(owners[1]["session_id"], "s-idle");
+    assert_eq!(owners[1]["tenant"], Value::Null);
+    assert_eq!(owners[1]["busy"], 0);
+    // Reading only: the route takes no change.
+    let (status, ..) = request(addr, "POST", "/api/internal/udf-workers", true).await;
+    assert_eq!(status, 405);
+}
+
+#[tokio::test]
+async fn a_source_without_a_worker_pool_answers_no_pool() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = router_with_ui(Arc::new(Plain), TOKEN);
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let body = get(addr, "/api/internal/udf-workers").await;
+    assert_eq!(body, json!({"pool": null}));
 }
