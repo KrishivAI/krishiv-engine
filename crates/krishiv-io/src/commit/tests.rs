@@ -1776,3 +1776,68 @@ fn a_step_after_the_commit_point_fails_the_write_only_without_a_log() {
     super::after_publish(false, "step", failure()).unwrap_err();
     super::after_publish(false, "step", Ok(())).unwrap();
 }
+
+/// A writer whose upload buffer the pool cannot hold (another consumer
+/// keeps most of a small limit; one multipart part is at least 5 MiB)
+/// ends the file it is writing and goes on in a new one instead of
+/// failing or aborting the query (SQL-33 at a 6 MB limit, perf-1
+/// 2026-11-23): every row is written once and the memory is returned.
+#[test]
+fn a_writer_short_of_memory_rolls_to_a_new_file() {
+    use arrow_array::Int64Array;
+    let env = Env::memory();
+    let w = env
+        .begin("tight", SaveMode::ErrorIfExists, "u")
+        .unwrap()
+        .unwrap();
+    let pool: Arc<dyn krishiv_memory::MemoryPool> =
+        krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig {
+            limit: Some(4 << 20),
+            ..krishiv_memory::MemoryConfig::default()
+        });
+    // Memory no spill takes back, as a sort's final merge budget is.
+    let hog = pool.register("hog", None);
+    let mut hold = krishiv_memory::Reservation::new(Arc::clone(&pool), hog);
+    hold.try_grow(2 << 20).unwrap();
+    let id = pool.register("write", None);
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+    // Incompressible values (xorshift), 8,192 rows a batch: about 8 MB in all.
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x.cast_signed()
+    };
+    let batches: Vec<RecordBatch> = (0..128)
+        .map(|_| {
+            let v: Vec<i64> = (0..8192).map(|_| next()).collect();
+            RecordBatch::try_new(
+                Arc::clone(&schema) as SchemaRef,
+                vec![Arc::new(Int64Array::from(v))],
+            )
+            .unwrap()
+        })
+        .collect();
+    let files = env.rt.block_on(async {
+        let mut writer = FileWriter::new(
+            &env.io,
+            Arc::new(ParquetFormat),
+            &(Arc::clone(&schema) as SchemaRef),
+            FormatOptions::defaults(ParquetFormat.options()),
+            w.write_options(0),
+            krishiv_memory::Reservation::new(Arc::clone(&pool), id),
+        )
+        .unwrap();
+        for b in &batches {
+            writer.write(b).await.unwrap();
+        }
+        writer.finish().await.unwrap()
+    });
+    assert!(files.len() > 1, "the writer rolled over: {files:?}");
+    let rows: u64 = files.iter().map(|f| f.rows).sum();
+    assert_eq!(rows, 128 * 8192);
+    assert_eq!(pool.reserved(), 2 << 20, "only the hog's memory is left");
+    drop(hold);
+    drop(w);
+}
