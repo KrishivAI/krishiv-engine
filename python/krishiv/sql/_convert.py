@@ -306,7 +306,7 @@ def _tree_type_name(dt: Any) -> str:
 
     if isinstance(dt, DecimalType | DayTimeIntervalType | YearMonthIntervalType):
         return dt.simpleString()
-    return dt.typeName()
+    return str(dt.typeName())
 
 
 def tree_string(schema: Any) -> str:
