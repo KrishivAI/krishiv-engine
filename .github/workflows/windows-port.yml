@@ -70,6 +70,13 @@ jobs:
   test:
     runs-on: windows-latest
     timeout-minutes: 180
+    # Run 4 filled the runner's 147 GB D: drive (each of ~480 test executables links statically with its own PDB)
+    # and link.exe hit the PDB size limit (LNK1140). As in ci.yml's Linux test job, the test build carries no debug
+    # info, and the run is split: krishiv-session (303 test binaries) runs after the other crates' test executables
+    # are removed.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "false"
+      CARGO_PROFILE_TEST_DEBUG: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -92,7 +99,14 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          cargo nextest run --workspace --locked --no-tests=pass --no-fail-fast 2>&1 | tee test.log
+          status=0
+          cargo nextest run --workspace --exclude krishiv-session --locked --no-tests=pass --no-fail-fast 2>&1 \
+            | tee test.log || status=1
+          df -h . || true
+          find target/debug/deps -maxdepth 1 -type f \( -name '*.exe' -o -name '*.pdb' \) -delete
+          df -h . || true
+          cargo nextest run -p krishiv-session --locked --no-tests=pass --no-fail-fast 2>&1 | tee -a test.log || status=1
+          exit "$status"
       - name: Summary
         if: always()
         shell: bash
