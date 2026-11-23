@@ -169,6 +169,7 @@ def test_with_columns_replaces_in_place_and_adds(df) -> None:
     assert out.columns == ["a", "b", "c", "x", "y"]
     assert out.sort("a").collect()[0] == Row(a=1, b="a", c=11, x=1, y=1)
     assert df.withColumns({"A": F.lit(5)}).columns == ["A", "b", "c"]
+    assert df.withColumns({}).columns == df.columns
     with pytest.raises(errors.PySparkTypeError, match="NOT_EXPECTED_TYPE"):
         df.withColumns({"x": 1})
 

@@ -2216,6 +2216,8 @@ class DataFrame:
                 values[name] = value
             else:
                 raise not_expected_type("col", "Column or str", value)
+        if not values:
+            return self
         case_sensitive = _case_sensitive(self._session)
         names = list(values)
         for i, n in enumerate(names):
