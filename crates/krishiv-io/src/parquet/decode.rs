@@ -93,10 +93,6 @@ struct Unit {
 /// uncompressed size.
 const PAGE_ESTIMATE: u64 = 1 << 20;
 
-/// [`Unit::decode`] of row group `rg` over the projected `leaves`: a
-/// decompressed page per column and one output batch (`BATCH_ROWS` rows at
-/// the row group's average uncompressed row width). The sizes come from the
-/// footer (untrusted): saturating, and only ever an estimate to reserve.
 /// Puts one leaf's offset index into `builder`. Row group and leaf come from the file's own footer, so only a
 /// corrupt footer puts one out of bounds, which is a corrupt-format error, never a silently missing page index.
 fn put_offset_index(
@@ -110,6 +106,10 @@ fn put_offset_index(
         .map_err(|e| FormatError::Corrupt(e.to_string()))
 }
 
+/// [`Unit::decode`] of row group `rg` over the projected `leaves`: a
+/// decompressed page per column and one output batch (`BATCH_ROWS` rows at
+/// the row group's average uncompressed row width). The sizes come from the
+/// footer (untrusted): saturating, and only ever an estimate to reserve.
 fn decode_bytes(rg: &parquet::file::metadata::RowGroupMetaData, leaves: &[usize]) -> usize {
     let mut pages = 0u64;
     let mut uncompressed = 0u64;
@@ -1301,7 +1301,9 @@ mod offset_index_tests {
         };
         let mut builder = PageIndexBuilder::new(1, 1);
         assert!(put_offset_index(&mut builder, index.clone(), 0, 0).is_ok());
-        let e = put_offset_index(&mut builder, index, 1, 0).unwrap_err();
+        let e = put_offset_index(&mut builder, index.clone(), 1, 0).unwrap_err();
+        assert!(matches!(e, FormatError::Corrupt(_)), "{e:?}");
+        let e = put_offset_index(&mut builder, index, 0, 1).unwrap_err();
         assert!(matches!(e, FormatError::Corrupt(_)), "{e:?}");
     }
 }
