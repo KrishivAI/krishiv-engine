@@ -118,6 +118,16 @@ environment's approval (create the environment with required reviewers and `v*` 
 first push, make the package public in its settings on GitHub. Verify:
 `gh attestation verify oci://ghcr.io/krishivai/krishiv:<version> --repo KrishivAI/krishiv-engine`.
 
+## CLI binaries on the GitHub Release (manual, owner's go required)
+
+0.2.0's release had no assets. After the tag exists and the owner has created the GitHub Release for it, dispatch
+`publish-release-assets.yml` from the `v*` tag (it refuses any other ref, runs `ci.yml` on the tag, then builds the binaries
+through `binaries.yml`, waits for the `release` environment's approval: create it with required reviewers and `v*` tags
+only). It attaches `krishiv-linux-x86_64`, `krishiv-compat-linux-x86_64`, `krishiv-linux-aarch64`, `krishiv-macos-arm64`
+(plus `krishiv-macos-x86_64` and `krishiv-windows-x86_64.exe` when their jobs passed), one `.sha256` per binary,
+`SHA256SUMS`, the CycloneDX SBOMs, and checks the build-provenance attestation of every file before uploading
+(`gh attestation verify <file> --repo KrishivAI/krishiv-engine`). musl CLI binaries are not built yet.
+
 ## Release integrity
 
 - **Provenance:** every file in the `release-bundle` artifact (wheels, binaries, SBOMs) has a GitHub build-provenance
