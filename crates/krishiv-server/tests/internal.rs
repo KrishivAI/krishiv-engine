@@ -165,6 +165,8 @@ impl UiSource for Fake {
                     {"table_name": "spark_catalog.default.ev", "rank": 2, "column_name": "c", "table_queries": 120,
                      "column_queries": 20, "partitions": 3, "pruned_fraction": 0.6667}
                 ])),
+                // `SystemTable` is non-exhaustive: a table added later has no rows here.
+                _ => Vec::new(),
             })
         })
     }

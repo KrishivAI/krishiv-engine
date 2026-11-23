@@ -62,8 +62,10 @@ impl InboundTrace {
 /// A boxed future the source returns (object safe, no `async_trait`).
 pub type UiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, UiError>> + Send + 'a>>;
 
-/// The system tables the UI reads.
+/// The system tables the UI reads. More are added as pages are: a [`UiSource`] outside this crate gives no rows
+/// for a table it does not know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SystemTable {
     /// `system.queries`.
     Queries,
