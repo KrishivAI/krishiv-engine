@@ -41,6 +41,8 @@ enum Mode {
 struct Service {
     mode: Mode,
     items: Arc<Mutex<Vec<String>>>,
+    /// The `(statement_class, query_id)` of every check.
+    statements: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 fn name_of(item: &proto::Item) -> String {
@@ -65,6 +67,10 @@ impl AccessPolicyService for Service {
             Mode::Rule => {}
         }
         let message = request.into_inner();
+        self.statements
+            .lock()
+            .unwrap()
+            .push((message.statement_class.clone(), message.query_id.clone()));
         let decisions = message
             .items
             .iter()
@@ -150,10 +156,28 @@ impl World {
         role: Role,
         roles_decide_data: bool,
     ) -> (Session, Arc<Mutex<Vec<String>>>) {
+        let (session, items, _) = self.ana_seen(mode, role, roles_decide_data);
+        (session, items)
+    }
+
+    /// [`Self::ana`], and the statements the service was told of.
+    #[expect(clippy::type_complexity, reason = "a test helper's tuple")]
+    fn ana_seen(
+        &self,
+        mode: Mode,
+        role: Role,
+        roles_decide_data: bool,
+    ) -> (
+        Session,
+        Arc<Mutex<Vec<String>>>,
+        Arc<Mutex<Vec<(String, String)>>>,
+    ) {
         let items = Arc::new(Mutex::new(Vec::new()));
+        let statements = Arc::new(Mutex::new(Vec::new()));
         let service = Service {
             mode,
             items: Arc::clone(&items),
+            statements: Arc::clone(&statements),
         };
         let addr = self.tokio.block_on(async {
             let incoming =
@@ -207,7 +231,11 @@ impl World {
             Some(role),
             Method::Token,
         );
-        (factory(&caller, Transport::Connect).unwrap(), items)
+        (
+            factory(&caller, Transport::Connect).unwrap(),
+            items,
+            statements,
+        )
     }
 
     fn run(&self, s: &Session, sql: &str) -> Result<usize, KrishivError> {
@@ -340,4 +368,50 @@ fn a_slow_or_absent_service_refuses_everything() {
     ] {
         refused(w.run(&ana, sql), sql);
     }
+}
+
+/// ADR 0049 §3, queue row 75: each check carries the statement's class and, with the caller's
+/// operation id, its query id; checks of the frame's action and of the queries a command runs
+/// carry them too.
+#[test]
+fn a_check_names_the_statement_it_is_asked_for() {
+    let w = World::new();
+    let (ana, _, seen) = w.ana_seen(Mode::Rule, Role::Operator, false);
+    let run = |sql: &str, op: &str| {
+        let options = krishiv_session::QueryOptions::new().operation_id(op);
+        let r = w
+            .tokio
+            .block_on(async { ana.sql_with(sql, options).await?.collect().await });
+        let checks = std::mem::take(&mut *seen.lock().unwrap());
+        assert!(!checks.is_empty(), "{sql}: the service was asked");
+        (r, checks)
+    };
+    let op = "6f1d2c1e-8b8a-4c55-9a8e-2f6a3c1b7d90";
+    let (read, checks) = run("SELECT a, b FROM t", op);
+    assert_eq!(read.unwrap().len(), 1);
+    assert!(
+        checks.iter().all(|(c, id)| c == "READ" && id == op),
+        "{checks:?}"
+    );
+    let op = "0b7e4f3a-2d51-4e6b-8f0c-9a1d3e5b7c22";
+    let (write, checks) = run("INSERT INTO t VALUES (5, 6)", op);
+    write.unwrap();
+    assert!(
+        checks.iter().all(|(c, id)| c == "WRITE" && id == op),
+        "{checks:?}"
+    );
+    let op = "4c2a9e1b-7f3d-4a8c-b6e5-1d0f2a3b4c5d";
+    let (drop, checks) = run("DROP TABLE secret_t", op);
+    refused(drop.map(|b| b.len()), "drop");
+    assert!(
+        checks.iter().all(|(c, id)| c == "DDL" && id == op),
+        "{checks:?}"
+    );
+    // Without an operation id the class is still sent; the id only once the query's row exists.
+    w.run(&ana, "SELECT a FROM t").unwrap();
+    let checks = std::mem::take(&mut *seen.lock().unwrap());
+    assert!(
+        !checks.is_empty() && checks.iter().all(|(c, _)| c == "READ"),
+        "{checks:?}"
+    );
 }

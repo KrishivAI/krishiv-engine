@@ -26,10 +26,13 @@ service AccessPolicy {
 message CheckRequest {
   Principal principal = 1;
   repeated Item items = 2;
-  // The statement's class as the server's role matrix names it (`query`, `ddl`, `dml`, `admin`,
-  // `session`, `metadata`), or empty when the check is not made for a statement.
+  // The class of the SQL statement the check is made for, as `system.queries.statement_class`
+  // names it (`READ`, `WRITE`, `DDL`, `SESSION`, `ADMIN`), or empty when the check is not made
+  // for a SQL statement (a DataFrame or Spark Connect plan).
   string statement_class = 3;
-  // The query id of the statement, or empty.
+  // The statement's query id as `system.queries.query_id` shows it: the caller's operation id
+  // (Spark Connect sends one), else the id of the row the statement's query began; empty when
+  // neither is known yet (a statement's first analysis comes before its row).
   string query_id = 4;
 }
 

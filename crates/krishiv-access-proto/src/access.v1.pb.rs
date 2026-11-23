@@ -7,11 +7,14 @@ pub struct CheckRequest {
     pub principal: ::core::option::Option<Principal>,
     #[prost(message, repeated, tag = "2")]
     pub items: ::prost::alloc::vec::Vec<Item>,
-    /// The statement's class as the server's role matrix names it (`query`, `ddl`, `dml`, `admin`,
-    /// `session`, `metadata`), or empty when the check is not made for a statement.
+    /// The class of the SQL statement the check is made for, as `system.queries.statement_class`
+    /// names it (`READ`, `WRITE`, `DDL`, `SESSION`, `ADMIN`), or empty when the check is not made
+    /// for a SQL statement (a DataFrame or Spark Connect plan).
     #[prost(string, tag = "3")]
     pub statement_class: ::prost::alloc::string::String,
-    /// The query id of the statement, or empty.
+    /// The statement's query id as `system.queries.query_id` shows it: the caller's operation id
+    /// (Spark Connect sends one), else the id of the row the statement's query began; empty when
+    /// neither is known yet (a statement's first analysis comes before its row).
     #[prost(string, tag = "4")]
     pub query_id: ::prost::alloc::string::String,
 }
