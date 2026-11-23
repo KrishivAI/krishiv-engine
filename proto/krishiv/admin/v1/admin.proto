@@ -52,6 +52,32 @@ service AdminService {
   // Back to serving from `DRAINING` or `DRAINED`; refused with `exiting` once the process is going
   // to exit. Needs `Manage` on the cluster.
   rpc ResumeServing(ResumeServingRequest) returns (ResumeServingResponse);
+
+  // The resource groups the caller may see (`system.resource_groups`): every group with
+  // `Monitor`, else the caller's own groups and their ancestors with the subtree counters unset.
+  rpc ListResourceGroups(ListResourceGroupsRequest) returns (ListResourceGroupsResponse);
+
+  // The loaded resource group document, its etag and the etag of the file on disk. Needs
+  // `Monitor`.
+  rpc GetResourceGroupConfig(GetResourceGroupConfigRequest) returns (GetResourceGroupConfigResponse);
+
+  // Runs the group loader on a candidate document and changes nothing. Needs `Monitor`.
+  rpc ValidateResourceGroupConfig(ValidateResourceGroupConfigRequest) returns (ValidateResourceGroupConfigResponse);
+
+  // Writes the document over the group file and swaps the tree; refused for a stale etag, a file
+  // edited since it was loaded, or a file that cannot be replaced. Needs `Manage` on the cluster.
+  rpc ReplaceResourceGroupConfig(ReplaceResourceGroupConfigRequest) returns (ReplaceResourceGroupConfigResponse);
+
+  // Re-reads the group file; an invalid file is refused and the old tree stays. Needs `Manage` on
+  // the cluster.
+  rpc ReloadResourceGroupConfig(ReloadResourceGroupConfigRequest) returns (ReloadResourceGroupConfigResponse);
+
+  // The configuration the server runs with: value, scope, who may set it, where it comes from.
+  // Needs `Monitor`; values that say how to become an administrator are withheld.
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+
+  // Changes the session defaults of new sessions, all or none. Needs `Manage` on the cluster.
+  rpc SetConfigDefaults(SetConfigDefaultsRequest) returns (SetConfigDefaultsResponse);
 }
 
 message GetVersionRequest {}
@@ -239,4 +265,133 @@ message ResumeServingRequest {
 
 message ResumeServingResponse {
   DrainStatus status = 1;
+}
+
+message ResourceGroup {
+  // Dotted path, `root.etl.nightly`.
+  string group_id = 1;
+  // Empty for a root.
+  string parent_id = 2;
+  // `active`, or `removed` (left by a reload, still holding queries).
+  string state = 3;
+  string scheduling_policy = 4;
+  int32 scheduling_weight = 5;
+  int32 priority = 6;
+  string workload_class = 7;
+  int32 hard_concurrency_limit = 8;
+  int32 max_queued = 9;
+  // The limits below are unset when the group has none.
+  optional int64 soft_memory_limit_bytes = 10;
+  optional int64 per_query_memory_limit_bytes = 11;
+  optional int64 scan_quota_bytes = 12;
+  optional int64 scan_quota_period_s = 13;
+  // The subtree counters are unset on an ancestor row of a caller without `Monitor`.
+  optional int32 running = 14;
+  optional int32 queued = 15;
+  optional int64 memory_reserved_bytes = 16;
+  optional int64 scan_bytes_in_window = 17;
+  google.protobuf.Timestamp scan_window_resets_at = 18;
+  string config_etag = 19;
+  google.protobuf.Timestamp loaded_at = 20;
+}
+
+message ListResourceGroupsRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListResourceGroupsResponse {
+  repeated ResourceGroup groups = 1;
+  string next_page_token = 2;
+}
+
+message GetResourceGroupConfigRequest {}
+
+message GetResourceGroupConfigResponse {
+  // The canonical JSON; empty when no group file is configured.
+  string document = 1;
+  // SHA-256 (hex) of the canonical JSON.
+  string etag = 2;
+  google.protobuf.Timestamp loaded_at = 3;
+  // The etag of the file as it is on disk now; empty when it cannot be read.
+  string file_etag = 4;
+}
+
+message ValidateResourceGroupConfigRequest {
+  string document = 1;
+}
+
+message ConfigProblem {
+  // The error class of the refusal.
+  string error_class = 1;
+  string message = 2;
+  // Where in the document, as `rootGroups[1].subGroups[0].name`; empty when it is the document.
+  string path = 3;
+}
+
+message ValidateResourceGroupConfigResponse {
+  bool valid = 1;
+  repeated ConfigProblem problems = 2;
+}
+
+message ReplaceResourceGroupConfigRequest {
+  string document = 1;
+  // The etag the caller read; a stale one is refused with `KRISHIV_ADMIN_PRECONDITION_FAILED`.
+  string etag = 2;
+  string request_id = 3;
+}
+
+message ReplaceResourceGroupConfigResponse {
+  // The etag and load time of the document now in force.
+  string etag = 1;
+  google.protobuf.Timestamp loaded_at = 2;
+}
+
+message ReloadResourceGroupConfigRequest {
+  string request_id = 1;
+}
+
+message ReloadResourceGroupConfigResponse {
+  string etag = 1;
+  google.protobuf.Timestamp loaded_at = 2;
+}
+
+message ConfigEntry {
+  string key = 1;
+  // Unset when the key has no value or the value is withheld.
+  optional string value = 2;
+  // `session` or `cluster`; empty for a startup key the registry does not know.
+  string scope = 3;
+  // `startup`, `admin` or `user`; empty for a key the registry does not know.
+  string settable_by = 4;
+  // `default`, `startup` or `admin`.
+  string source = 5;
+  // The value is hidden because the caller may not see it.
+  bool withheld = 6;
+}
+
+message GetConfigRequest {
+  // Keeps the keys that start with this prefix.
+  string prefix = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message GetConfigResponse {
+  repeated ConfigEntry entries = 1;
+  string next_page_token = 2;
+}
+
+message SetConfigDefaultsRequest {
+  // Key to value; applied to sessions created afterwards.
+  map<string, string> set = 1;
+  // Keys that return to their startup value.
+  repeated string unset = 2;
+  string request_id = 3;
+}
+
+message SetConfigDefaultsResponse {
+  // The keys set and unset.
+  int32 set_count = 1;
+  int32 unset_count = 2;
 }

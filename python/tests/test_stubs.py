@@ -120,6 +120,7 @@ def test_native_stub_matches_runtime() -> None:
         "call_function",
         "count_star",
         "count_distinct",
+        "_pressure_epoch",
         "_udf_pool_shutdown",
         "_udf_runner_conf",
     }

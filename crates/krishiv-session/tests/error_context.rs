@@ -385,3 +385,68 @@ fn runtime_error_under_count_keeps_the_span() {
     assert_eq!(e.error_class(), ErrorClass::DivideByZero);
     assert_eq!(span(&e), (45, 49, "a / b"));
 }
+
+/// A frame derived from a `sql` frame inherits that statement for `system.queries`, but its own
+/// expressions are not part of the statement's text: their analysis errors never cut a fragment of
+/// it (the review of fbd78acf9).
+mod derived_from_sql {
+    use super::*;
+    use krishiv_session::functions::{col, lit};
+
+    fn source(s: &Session) -> krishiv_session::DataFrame {
+        block_on(s.sql("SELECT a, b FROM VALUES (1, 0) AS t(a, b)")).unwrap()
+    }
+
+    #[test]
+    fn a_filter_expression_error_carries_no_sql_fragment() {
+        let s = Session::new().unwrap();
+        let e = block_on(source(&s).filter_expr("nope > 1").unwrap().collect()).expect_err("nope");
+        assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
+    }
+
+    #[test]
+    fn a_select_expression_error_carries_no_sql_fragment() {
+        let s = Session::new().unwrap();
+        let e = block_on(source(&s).select_expr(["a", "nope + 1"]).unwrap().collect())
+            .expect_err("nope");
+        assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
+    }
+
+    #[test]
+    fn a_column_filter_error_has_the_dataframe_context() {
+        let s = Session::new().unwrap();
+        let e = block_on(source(&s).filter(col("nope").gt(lit(1))).collect()).expect_err("nope");
+        assert!(
+            e.query_contexts().iter().all(|c| c.fragment.is_empty()),
+            "{:?}",
+            e.query_contexts()
+        );
+        assert!(!e.query_contexts().is_empty());
+    }
+
+    #[test]
+    fn counting_a_derived_frame_carries_no_sql_fragment() {
+        let s = Session::new().unwrap();
+        let e = block_on(source(&s).filter_expr("nope > 1").unwrap().count()).expect_err("nope");
+        assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
+        let e =
+            block_on(source(&s).select_expr(["a", "nope + 1"]).unwrap().count()).expect_err("nope");
+        assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
+        let e = block_on(source(&s).filter(col("nope").gt(lit(1))).count()).expect_err("nope");
+        assert!(
+            e.query_contexts().iter().all(|c| c.fragment.is_empty()),
+            "{:?}",
+            e.query_contexts()
+        );
+        assert!(!e.query_contexts().is_empty());
+    }
+
+    #[test]
+    fn counting_a_derived_frame_after_collecting_it_carries_no_sql_fragment() {
+        let s = Session::new().unwrap();
+        let df = source(&s).filter_expr("nope > 1").unwrap();
+        block_on(df.collect()).expect_err("nope");
+        let e = block_on(df.count()).expect_err("nope");
+        assert!(e.query_contexts().is_empty(), "{:?}", e.query_contexts());
+    }
+}

@@ -42,6 +42,13 @@ pub fn set_release_hook(hook: fn()) -> bool {
     HOOK.set(hook).is_ok()
 }
 
+/// Whether a release hook is installed ([`set_release_hook`]): pressure
+/// epochs start only then.
+#[must_use]
+pub fn release_hook_installed() -> bool {
+    HOOK.get().is_some()
+}
+
 /// The current pressure epoch.
 pub fn pressure_epoch() -> u64 {
     EPOCH.load(Ordering::Acquire)

@@ -117,8 +117,8 @@ fn echo_debug_shows_the_length_only() {
 
 #[test]
 fn capabilities_are_sorted_and_joined() {
-    assert_eq!(capabilities(), vec!["echo"]);
-    assert_eq!(capabilities_value(), "echo");
+    assert_eq!(capabilities(), vec!["echo", "persistpythonfunction"]);
+    assert_eq!(capabilities_value(), "echo,persistpythonfunction");
 }
 
 /// The `.proto` snapshot lists exactly the messages the registry carries, and the pinned fields
@@ -128,7 +128,11 @@ fn the_proto_snapshot_matches_the_messages_and_only_grows() {
     let proto = include_str!("../../../../proto/krishiv/v1/krishiv.proto");
     assert!(proto.contains("package krishiv.v1;"));
     // (message, field, number, type): append only.
-    let pinned: &[(&str, &str, u32, &str)] = &[("Echo", "message", 1, "string")];
+    let pinned: &[(&str, &str, u32, &str)] = &[
+        ("Echo", "message", 1, "string"),
+        ("PersistPythonFunction", "name", 1, "string"),
+        ("PersistPythonFunction", "drop", 2, "bool"),
+    ];
     for (message, field, number, ty) in pinned {
         let start = proto
             .find(&format!("message {message} {{"))
@@ -148,4 +152,68 @@ fn the_proto_snapshot_matches_the_messages_and_only_grows() {
     let mut registered: Vec<&str> = REGISTRY.iter().map(|r| r.message).collect();
     registered.sort_unstable();
     assert_eq!(declared, registered);
+}
+
+fn persist(name: &str, drop: bool) -> Any {
+    any(
+        "PersistPythonFunction",
+        PersistPythonFunction {
+            name: name.to_owned(),
+            drop,
+        }
+        .encode_to_vec(),
+    )
+}
+
+#[test]
+fn persist_python_function_resolves_in_a_command_only() {
+    assert_eq!(
+        resolve(&persist("f", true), Slot::Command).unwrap(),
+        Extension::PersistPythonFunction(PersistPythonFunction {
+            name: "f".to_owned(),
+            drop: true
+        })
+    );
+    for slot in [Slot::Relation, Slot::Expression] {
+        let e = resolve(&persist("f", false), slot).unwrap_err();
+        assert!(e.to_string().contains("persistpythonfunction"), "{e}");
+    }
+}
+
+#[test]
+fn persist_python_function_refuses_a_group_and_an_overrun() {
+    use krishiv_common::error::ErrorClass;
+    // As Echo's bytes (above): the wire check, then prost's own refusal; never "unsupported extension".
+    let group = resolve(
+        &any("PersistPythonFunction", vec![0x0B, 0x0C]),
+        Slot::Command,
+    )
+    .unwrap_err();
+    assert_eq!(
+        group.error_class(),
+        ErrorClass::ConnectInvalidPlanCannotParse
+    );
+    let overrun = resolve(
+        &any("PersistPythonFunction", vec![0x0A, 0x7F]),
+        Slot::Command,
+    )
+    .unwrap_err();
+    assert_eq!(
+        overrun.error_class(),
+        ErrorClass::ConnectInvalidPlanCannotParse
+    );
+    assert!(
+        overrun.to_string().contains("runs past the end"),
+        "{overrun}"
+    );
+    let utf8 = resolve(
+        &any("PersistPythonFunction", vec![0x0A, 0x01, 0xFF]),
+        Slot::Command,
+    )
+    .unwrap_err();
+    assert_eq!(
+        utf8.error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+    assert!(utf8.to_string().contains("does not decode"), "{utf8}");
 }

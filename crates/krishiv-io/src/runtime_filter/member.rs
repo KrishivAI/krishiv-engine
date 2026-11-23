@@ -6,6 +6,7 @@
 //! |---|---|---|
 //! | dense integers (`count = max - min + 1`) | the range alone: exact | two compares |
 //! | ≤ [`SMALL_SET_MAX`] | [`Small`]: compared against every member, no hash | a few compares |
+//! | ≤ [`EXACT_SET_MAX`] integers over at most [`DENSE_MAX_BITS`] values, the bits at most [`DENSE_SIZE_FACTOR`] times a hash set's bytes (or under [`DENSE_FREE_BYTES`]) | [`Exact::Dense`]: a bit per value of the range | one load |
 //! | ≤ [`EXACT_SET_MAX`] (`krishiv.runtimeFilter.exactSet.maxValues`) | [`Exact`]: a hash set probed with `h` | one hash, one probe |
 //! | more | a split-block Bloom filter probed with `h` | one hash, one block |
 //!
@@ -35,6 +36,25 @@ pub const SMALL_SET_MAX: usize = 8;
 /// (`krishiv.runtimeFilter.exactSet.maxValues`); a larger build gets a
 /// Bloom filter.
 pub const EXACT_SET_MAX: usize = 4096;
+
+/// Most values (bits) of the range an exact integer set may span to be held
+/// as a bit per value ([`Exact::Dense`]): 128 KiB, inside a core's L2.
+/// Dimension surrogate keys (TPC-DS `hd_demo_sk` 1-7,200, `d_date_sk`
+/// 73,049 values, `i_item_sk` at SF10 102,000) fit; study 44 F1.
+pub(crate) const DENSE_MAX_BITS: u64 = 1 << 20;
+
+/// A bit set is chosen only while its bytes are at most this many times
+/// the hash set's (about [`HASH_SET_BYTES_PER_KEY`] a key), so a few
+/// sparse keys never cost 128 KiB per copy: q34's 1,028 of 7,200 take
+/// 904 B (a hash set ~9 KiB), 314 dates of 73,049 9.1 KiB (~2.8 KiB).
+pub(crate) const DENSE_SIZE_FACTOR: usize = 16;
+
+/// Bits up to this size are always taken (one or two pages).
+pub(crate) const DENSE_FREE_BYTES: usize = 4096;
+
+/// A hash set's bytes per key, as [`Exact`]'s `heap_bytes` counts an
+/// integer set (9 a slot, about one slot a key).
+pub(crate) const HASH_SET_BYTES_PER_KEY: usize = 9;
 
 /// How a key type's values are held by the exact forms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,7 +126,8 @@ pub(crate) enum Small {
     Bytes(Box<[Box<[u8]>]>),
 }
 
-/// An exact hash set, placed by the row hash `h`.
+/// An exact set: a hash set placed by the row hash `h`, or (integers
+/// over a short range) a bit per value.
 #[derive(Clone)]
 pub(crate) enum Exact {
     /// Integers and float bits.
@@ -115,11 +136,93 @@ pub(crate) enum Exact {
     Wide(HashTable<i128>),
     /// Strings and binaries.
     Bytes(HashTable<Box<[u8]>>),
+    /// Integers (not float bits) over a short range: a bit per value.
+    Dense(Dense),
+}
+
+/// An exact set of integers as a bit per value of `lo..lo + 64 * bits.len()`
+/// (no hash: one load per probe row). Encoded as its members, so the wire
+/// form is that of [`Exact::Int`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Dense {
+    lo: i64,
+    bits: Box<[u64]>,
+    len: usize,
+}
+
+impl Dense {
+    /// The bit set of `values` (distinct), unless they span more than
+    /// [`DENSE_MAX_BITS`] values, the bits outgrow the size rule
+    /// ([`DENSE_SIZE_FACTOR`], [`DENSE_FREE_BYTES`]) or there are none.
+    pub(crate) fn of(values: &[i64]) -> Option<Self> {
+        let lo = *values.iter().min()?;
+        let hi = *values.iter().max()?;
+        let span = u64::try_from(i128::from(hi) - i128::from(lo) + 1).ok()?;
+        if span > DENSE_MAX_BITS {
+            return None;
+        }
+        let words = usize::try_from(span.div_ceil(64)).ok()?;
+        let hashed = values.len().saturating_mul(HASH_SET_BYTES_PER_KEY);
+        if words * 8 > DENSE_FREE_BYTES.max(hashed.saturating_mul(DENSE_SIZE_FACTOR)) {
+            return None;
+        }
+        let mut bits = vec![0u64; words].into_boxed_slice();
+        for &v in values {
+            let d = v.wrapping_sub(lo).cast_unsigned();
+            let w = bits.get_mut(usize::try_from(d >> 6).ok()?)?;
+            *w |= 1 << (d & 63);
+        }
+        Some(Self {
+            lo,
+            bits,
+            len: values.len(),
+        })
+    }
+
+    /// Whether `v` is a member: a value below `lo` wraps to a huge offset,
+    /// whose word does not exist.
+    #[inline]
+    fn contains(&self, v: i64) -> bool {
+        let d = v.wrapping_sub(self.lo).cast_unsigned();
+        usize::try_from(d >> 6)
+            .ok()
+            .and_then(|i| self.bits.get(i))
+            .is_some_and(|w| (w >> (d & 63)) & 1 == 1)
+    }
+
+    /// How many members.
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
+    /// The members, ascending.
+    pub(crate) fn values(&self) -> impl Iterator<Item = i64> + '_ {
+        self.bits.iter().enumerate().flat_map(move |(i, &w)| {
+            let base = self.lo.wrapping_add((i as i64).wrapping_mul(64));
+            (0..64)
+                .filter(move |j| (w >> j) & 1 == 1)
+                .map(move |j| base.wrapping_add(j))
+        })
+    }
 }
 
 impl Exact {
+    /// The integer set `t` of a key of `class` as a bit set when its
+    /// values fit [`DENSE_MAX_BITS`] (integer keys only: float bit
+    /// patterns are not dense), else as it is.
+    pub(crate) fn densify(self, class: Class) -> Self {
+        match (self, class) {
+            (Self::Int(t), Class::Int { .. }) => {
+                let values: Vec<i64> = t.iter().copied().collect();
+                Dense::of(&values).map_or(Self::Int(t), Self::Dense)
+            }
+            (e, _) => e,
+        }
+    }
+
     fn len(&self) -> usize {
         match self {
+            Self::Dense(d) => d.len,
             Self::Int(t) => t.len(),
             Self::Wide(t) => t.len(),
             Self::Bytes(t) => t.len(),
@@ -128,6 +231,7 @@ impl Exact {
 
     fn heap_bytes(&self) -> usize {
         match self {
+            Self::Dense(d) => d.bits.len() * 8,
             Self::Int(t) => t.capacity() * 9,
             Self::Wide(t) => t.capacity() * 17,
             Self::Bytes(t) => t.capacity() * 17 + t.iter().map(|b| b.len()).sum::<usize>(),
@@ -153,6 +257,7 @@ impl PartialEq for Exact {
             (Self::Bytes(a), Self::Bytes(b)) => {
                 a.len() == b.len() && a.iter().all(|v| b.iter().any(|w| w == v))
             }
+            (Self::Dense(a), Self::Dense(b)) => a == b,
             _ => false,
         }
     }
@@ -166,7 +271,7 @@ pub(crate) enum Member {
     Range,
     /// A small exact set.
     Small(Small),
-    /// An exact hash set.
+    /// An exact set: hashed, or a bit set for short integer ranges.
     Exact(Exact),
     /// A Bloom filter.
     Bloom(RuntimeBloom),
@@ -231,7 +336,7 @@ impl Member {
                     let KeyValue::Fixed(x) = v else { return None };
                     t.insert_unique(h, fixed64(x), |&y| class.hash64(y));
                 }
-                Exact::Int(t)
+                Exact::Int(t).densify(class)
             }
             Class::Decimal => {
                 let mut t = HashTable::with_capacity(n);
@@ -264,6 +369,7 @@ impl Member {
             Self::Small(Small::Wide(v)) => v.iter().map(|&x| wide(x)).collect(),
             Self::Small(Small::Bytes(v)) => v.iter().map(|b| bytes(b)).collect(),
             Self::Exact(Exact::Int(t)) => t.iter().map(|&x| int(x)).collect(),
+            Self::Exact(Exact::Dense(d)) => d.values().map(int).collect(),
             Self::Exact(Exact::Wide(t)) => t.iter().map(|&x| wide(x)).collect(),
             Self::Exact(Exact::Bytes(t)) => t.iter().map(|b| bytes(b)).collect(),
         })
@@ -298,11 +404,15 @@ impl Member {
     /// The `runtime_filter` microbenchmark's per-row times at x86-64-v3
     /// (the shipped build), rounded up: range 0.4, small set 3.0, hash set
     /// 5.0, Bloom 4.3 ns (the baseline x86-64 build: 1.2, 5.4, 6.8, 10.5).
+    /// A bit set (`probe_dense1028_256k_i64`, baseline build, 2026-11-22):
+    /// 1.15 ns a row, against 2.9 for the small set and 4.4 for the hash
+    /// set in the same run.
     pub(crate) fn row_cost_ns(&self) -> f64 {
         match self {
             Self::Range => 0.5,
             Self::Small(_) => 3.0,
             Self::Bloom(_) => 4.5,
+            Self::Exact(Exact::Dense(_)) => 1.2,
             Self::Exact(_) => 5.0,
         }
     }
@@ -427,6 +537,11 @@ fn member_pass(member: &Member, keys: &NormalizedKeys, pass: BooleanBuffer) -> B
         }
         (Member::Small(Small::Wide(set)), Norm::Decimal(values)) => {
             let hit = pack(values, |v| set.iter().fold(false, |a, &x| a | (x == v)));
+            &pass & &hit
+        }
+        (Member::Exact(Exact::Dense(d)), Norm::Int { values, .. }) => {
+            // Branch-free over every row: no hash, one load.
+            let hit = pack(values, |v| d.contains(v));
             &pass & &hit
         }
         (Member::Exact(Exact::Int(t)), Norm::Int { values, .. }) => {

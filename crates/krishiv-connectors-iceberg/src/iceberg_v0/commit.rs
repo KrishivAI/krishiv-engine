@@ -151,13 +151,6 @@ const COMMIT_STATUS_CHECKS_MAX_WAIT_MS: &str = "commit.status-check.max-wait-ms"
 /// The loop, not the implementation, decides that a `Failed` answer to a
 /// resend is still unknown (§7.2's per-request rule).
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "built only by a `CommitTable`: PR-17's catalog clients"
-    )
-)]
 pub(crate) enum CommitOutcome {
     /// Applied; the table's new metadata.
     Committed(Box<TableMetadata>),
@@ -919,7 +912,7 @@ impl Loop<'_> {
 }
 
 /// The `<files>` text of a failed write whose files were deleted.
-const REMOVED: &str = "the written files were removed where possible, and the write \
+pub(crate) const REMOVED: &str = "the written files were removed where possible, and the write \
      can run again";
 
 /// The `<files>` text of a failed write that once had an unknown answer.

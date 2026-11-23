@@ -611,6 +611,24 @@ impl Parser<'_> {
                     span,
                 });
             }
+            // Spark's builder, over the statement: an `INSERT (columns) VALUES (...)` with a
+            // different number of values (Spark 4.2.0 + delta-spark 4.4.1 run, 2026-11-22).
+            for c in &clauses {
+                if let MergeAction::Insert(MergeInsert::Values {
+                    columns, values, ..
+                }) = &c.action
+                    && columns.len() != values.len()
+                {
+                    return Self::fatal(ParseError {
+                        error: MergeInsertValueCountMismatch {
+                            actual_count: values.len().to_string(),
+                            expected_count: columns.len().to_string(),
+                        }
+                        .into(),
+                        span,
+                    });
+                }
+            }
             Ok(Statement::Merge(Box::new(Merge {
                 target,
                 options,

@@ -21,6 +21,13 @@ error reported can differ in class as well as in the blamed expression (for
 example `DIVIDE_BY_ZERO` against `ARITHMETIC_OVERFLOW`); a query that raises
 in one engine still raises in the other.
 
+## Spark 3.5 error-message parameters follow 4.x
+
+The parameters inside an error message follow Spark 4.x, also for a Spark
+3.5 client. For example, `SCHEMA_NOT_FOUND` names the schema with its catalog
+(`` `spark_catalog`.`dummy` ``) where Spark 3.5 names it without
+(`` `dummy` ``).
+
 ## Result cache, reproducible results (Krishiv extensions, off by default)
 
 `krishiv.resultCache.enabled` and `krishiv.deterministicOrder` add behaviour Spark does not have; with
@@ -512,6 +519,21 @@ shared by every session of the application.
   remembered after it ends, so the same id may be reused (Spark refuses a reused id with `OPERATION_ABANDONED`;
   clients send fresh ids). Every other `ml_command` fails with SQLSTATE 56K00.
 
+## Declared catalogs (`krishiv.catalog.<name>.*`, `spark.sql.catalog.<name>`)
+
+- **`SHOW CATALOGS` and `spark.catalog.listCatalogs()` list every declared catalog the principal sees, used or
+  not.** Spark lists `spark_catalog` and only the catalogs the session has already loaded. Spark loads a catalog when
+  a multi-part name first names it, even in a lookup that then fails, or with `SHOW NAMESPACES IN <catalog>`.
+  Setting `spark.sql.defaultCatalog` to it does not load it by itself. So a fresh Spark session answers
+  `spark_catalog` only, and Krishiv answers `spark_catalog` plus its declared catalogs. A catalog declared for other
+  tenants is never listed. `SHOW CATALOGS` also lists `system`; `spark.catalog.listCatalogs()` does not.
+- **In `krishiv server`, a session cannot declare or change a catalog.** `SET`, `RESET` and `spark.conf.set` of
+  `spark.sql.catalog.<name>`, `spark.sql.catalog.<name>.*` or `krishiv.catalog.<name>.*` fail with
+  `CANNOT_MODIFY_STATIC_CONFIG` for every role. So does a session builder that sets one. Declare catalogs in the
+  server's configuration instead. Spark lets a session set `spark.sql.catalog.<name>` at runtime and loads the
+  catalog when it is first used. In server mode that would mean fetching from an endpoint the client chose. Embedded
+  sessions are unchanged. Registered settings such as `krishiv.catalog.default` are not declaration keys.
+
 ## `Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)
 
 `DataFrame::observe` / PySpark `Observation` match Spark 4.2.0 on every case of
@@ -671,7 +693,49 @@ They differ in:
   cancellations stay unwrapped.
 - **Refused.** On a table with the change data feed on, `UPDATE` and a `DELETE` that rewrites rows
   are refused (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written: Krishiv writes no
-  change data files yet. A `DELETE` of whole partitions commits. `MERGE` is refused by name.
+  change data files yet. A `DELETE` of whole partitions commits.
+
+`MERGE INTO` a Delta table (copy-on-write; the session's `table_commands/merge.rs`, the connector's
+`src/write/merge.rs`) leaves the rows, the command's four counts, the files removed and the counted
+`operationMetrics` that delta-spark leaves (`tests/fixtures/delta-4.4.1/merge/MERGE.json`; Spark
+reads the tables back, `merge/krishiv-written/`). It differs in:
+
+- **Predicate text.** `operationParameters.predicate` and the `predicate` of each entry of
+  `matchedPredicates`, `notMatchedPredicates` and `notMatchedBySourcePredicates` are the
+  conditions as written, in parentheses; delta-spark prints Catalyst's form with expression ids.
+  The same holds for the condition in `DELTA_NON_DETERMINISTIC_FUNCTION_NOT_SUPPORTED` and
+  `DELTA_UNSUPPORTED_SUBQUERY` messages.
+- **Unresolved names.** A name that does not resolve in a `MERGE` is `INTERNAL_ERROR` ("Cannot find
+  main error class 'DELTA_MERGE_UNRESOLVED_EXPRESSION'"), the analyzer's `UNRESOLVED_COLUMN.*` as
+  its cause. This matches a delta-spark 4.4.1 defect: its error class file lacks the class it
+  raises. Revisit when a delta-spark release ships the class. A SQL script's handler does not take
+  it (Krishiv's handlers never take `INTERNAL_ERROR`).
+- **Source.** delta-spark copies the source unless the `MERGE` only inserts (with
+  `spark.databricks.delta.merge.optimizeInsertOnlyMerge.enabled`, on by default) or the source
+  reads only Delta tables and is deterministic (`MergeIntoMaterializeSource`). Krishiv reads an
+  insert-only `MERGE`'s source once, under the same setting (with it off, the source is chosen as
+  for any other `MERGE`), and a source that is one bare scan of a Delta table at its snapshot; any
+  other source (a query, files, a Delta read under a filter or a projection) is copied into a
+  spill file of its own first, a batch at a time, and read back from it. An
+  insert-only `MERGE` and a Delta-table source are read once more to count `numSourceRows`.
+- **Read predicates.** The conflict check reads by the `ON` condition's partition-only conjuncts
+  (the whole table with a `NOT MATCHED BY SOURCE` clause); delta-spark also skips data files by
+  the conjuncts' statistics, so Krishiv's read set is wider (a concurrent append to a partition the
+  `ON` condition does not exclude conflicts).
+- **Change data feed.** On a table with it on, a `MERGE` that removes a file is refused
+  (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written; delta-spark commits it with
+  change data files. A `MERGE` that only inserts commits, as delta-spark's does (with no change
+  data files).
+- **Schema evolution.** Under `spark.databricks.delta.schema.autoMerge.enabled = true` a `MERGE`
+  that would add a column (a `*` clause whose source has a column the target lacks, an
+  assignment to a source column the target lacks) is refused (`KRISHIV_UNSUPPORTED_FEATURE`); other
+  `MERGE`s run, with `*` taking the target columns the source has. `MERGE WITH SCHEMA EVOLUTION`
+  does not parse.
+- **Refused.** A `MERGE` under `spark.sql.caseSensitive = true`, `SET c = DEFAULT`, a nested
+  assignment key (`SET s.f = ..`) and a table whose row-level rule is Spark's own
+  `MERGE_CARDINALITY_VIOLATION` (no oracle yet) are refused by name.
+- **Deletion vectors.** Never written (as for `DELETE` and `UPDATE`); delta-spark's default
+  `merge.deletionVectors.persistent = true` marks rows in vectors on a table with them on.
 
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 
@@ -682,6 +746,37 @@ both forms, so a sketch written by one engine can be estimated or unioned by the
 `length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
 `hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
 (`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.
+
+## Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)
+
+Metric views follow Spark 4.2.1 and 4.3.0 (goldens in `tests/fixtures/spark-{4.2.1,4.3.0}/metric-views/`), with
+these differences:
+
+- **Malformed YAML.** `INVALID_METRIC_VIEW_YAML` keeps Spark's `Failed to parse YAML:` prefix; the rest of the
+  message is Krishiv's YAML parser's, not SnakeYAML's scanner text.
+- **YAML Krishiv refuses where Spark reads on.** An alias to an anchor the document never defined is a YAML
+  syntax error (Spark's binding reads the alias name as the value). A `name` or `expr` that is null is refused when
+  the view is created, with a Krishiv message (Spark keeps it and fails later).
+- **Spark internal errors, reproduced by class.** Where Spark fails with an internal error, Krishiv raises the same
+  class and SQLSTATE (`INTERNAL_ERROR`, `XX000`, or the `MISSING_ATTRIBUTES.*` class) with Spark's message prefix;
+  plan dumps, expression ids and Java exception text after it differ. This covers: a 4.2 `CREATE VIEW` missing
+  `WITH METRICS` or `LANGUAGE` (Spark 4.2 cannot find `MISSING_CLAUSES_FOR_OPERATION`); a read with no aggregate;
+  `measure(<dimension>)` (`key not found: ExprId(..)`); a read through a view, a temporary view or a CTE over a
+  metric view; `source: ~`; a constant dimension (`expr: 1`); a measure column read anywhere but as the argument of
+  `measure(..)`.
+- **Errors that are not Spark exceptions.** The 1,024-character expression limit, `measure(<dimension>)` and
+  `SHOW CREATE TABLE .. AS SERDE` are plain JVM exceptions in Spark, with no error class: Spark Connect clients
+  see `UnknownException` or `IllegalArgumentException`. Krishiv raises `INTERNAL_ERROR` with Spark's text, and its
+  Connect server withholds the text of internal errors, as for any other.
+- **4.3 missing clause.** Krishiv has no Spark 4.3 profile yet, so a missing `WITH METRICS` or `LANGUAGE` is 4.2's
+  internal error on every release from 4.2 (Spark 4.3 raises `MISSING_CLAUSES_FOR_OPERATION`).
+- **`CANNOT_UP_CAST_DATATYPE` after a source column changed type.** The class, SQLSTATE and types are Spark's;
+  the `expression` parameter is Krishiv's form of the dimension, where Spark qualifies its columns
+  (`spark_catalog.default.t.k`).
+- **Not matched yet:** `DESCRIBE EXTENDED .. AS JSON` of a metric view (refused, as for every view: Krishiv does not
+  record the SQL configuration a view captures); a self-join of a metric view (Spark's
+  `UNRESOLVED_COLUMN`, Krishiv's internal error); `WHERE measure(m)` under an aggregate (Spark's
+  `MISSING_ATTRIBUTES.*`, Krishiv's `INVALID_WHERE_CONDITION`); the physical plan `EXPLAIN` prints.
 
 ## Pattern matching over collated strings (`LIKE`, `RLIKE`)
 

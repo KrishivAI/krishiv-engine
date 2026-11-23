@@ -34,6 +34,10 @@ pub enum LocationRule {
     PathEscape,
     /// No host or bucket after `scheme://` (`s3:///key`).
     MissingHost,
+    /// `storage = vended`: the catalog vended no credential for the table (design P3-T067 §4.1, no fallback).
+    NoVendedCredential,
+    /// `storage = vended`: a file of the table lies outside every prefix the catalog vended credentials for.
+    OutsideVendedPrefixes,
 }
 
 impl LocationRule {
@@ -49,6 +53,8 @@ impl LocationRule {
             Self::CredentialsInLocation => "credentials in the location",
             Self::PathEscape => "path escape",
             Self::MissingHost => "no bucket or host",
+            Self::NoVendedCredential => "no vended credential",
+            Self::OutsideVendedPrefixes => "outside the vended credential prefixes",
         }
     }
 }
@@ -218,7 +224,7 @@ fn is_scheme(scheme: &str) -> Result<(), LocationRule> {
     }
 }
 
-fn refused(catalog: &str, relation_name: &str, rule: LocationRule) -> KrishivError {
+pub(crate) fn refused(catalog: &str, relation_name: &str, rule: LocationRule) -> KrishivError {
     tracing::warn!(
         target: "krishiv::catalog",
         catalog,

@@ -45,8 +45,9 @@ pub(crate) struct Act {
     pub(crate) wait_for: Option<Arc<AtomicBool>>,
 }
 
-/// The longest an [`Act::wait_for`] waits.
-pub(crate) const WAIT_BOUND: Duration = Duration::from_secs(30);
+/// The longest an [`Act::wait_for`] waits: far past what a loaded debug build needs (the ended-driver
+/// test waited up to 19 s at load 23, #892 review), and free when the flag is set in time.
+pub(crate) const WAIT_BOUND: Duration = Duration::from_secs(120);
 
 impl Act {
     pub(crate) const NONE: Self = Self {

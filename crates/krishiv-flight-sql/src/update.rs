@@ -19,7 +19,7 @@ use prost::Message;
 use tonic::metadata::MetadataMap;
 use tonic::{Response, Status};
 
-use crate::call::CallSession;
+use crate::call::{CallSession, traced};
 use crate::cookies::{SessionCookie, session_cookie};
 use crate::server::FlightSqlServer;
 use crate::statement::{
@@ -81,7 +81,7 @@ impl FlightSqlServer {
         let cookieless = matches!(session_cookie(metadata), SessionCookie::Absent);
         let mut call = self.call_session(metadata, caller)?;
         let sql: Arc<str> = Arc::from(command.query.as_str());
-        let (count, changed) = self.run_update(&call, &sql).await?;
+        let (count, changed) = self.run_update(&call, &sql, metadata).await?;
         let mut response = Response::new(update_result(count));
         // A cookie-less update that left no session state ran in a transient session: no
         // cookie, and the guard releases it as the call ends (§16 M2).
@@ -98,6 +98,7 @@ impl FlightSqlServer {
         &self,
         call: &CallSession,
         sql: &Arc<str>,
+        metadata: &MetadataMap,
     ) -> Result<(i64, bool), Status> {
         let entry = Arc::clone(&call.entry);
         let op = OpGuard::register(
@@ -110,7 +111,7 @@ impl FlightSqlServer {
         let query_start = now_micros();
         let gate = entry.shared().await;
         let session = entry.session();
-        let options = || QueryOptions::new().query_start(query_start);
+        let options = || traced(QueryOptions::new().query_start(query_start), metadata);
         let class = match session
             .sql_query_with(sql, options())
             .await

@@ -817,6 +817,47 @@ impl Encoder {
                 self.plan(left, bias);
                 self.plan(right, bias);
             }
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => {
+                self.tag("AsOfJoin");
+                self.debug(kind);
+                match condition {
+                    JoinCondition::None => self.tag("no-cond"),
+                    JoinCondition::On(e) => {
+                        self.tag("on");
+                        self.expr(e, bias);
+                    }
+                    JoinCondition::Using(cols) => {
+                        self.tag("using");
+                        self.num(cols.len() as u64);
+                        for c in cols {
+                            self.text(c);
+                        }
+                    }
+                    JoinCondition::Natural => self.tag("natural"),
+                }
+                self.expr(&as_of.left, bias);
+                self.expr(&as_of.right, bias);
+                self.debug(&as_of.direction);
+                self.flag(as_of.allow_exact);
+                self.flag(as_of.as_written);
+                self.flag(as_of.distance_on_every_pair);
+                match &as_of.tolerance {
+                    None => self.tag("no-tolerance"),
+                    Some(t) => self.expr(t, bias),
+                }
+                match &as_of.distance {
+                    None => self.tag("no-distance"),
+                    Some(d) => self.expr(d, bias),
+                }
+                self.plan(left, bias);
+                self.plan(right, bias);
+            }
             PlanNode::Sort {
                 input,
                 order,
@@ -970,6 +1011,37 @@ impl Encoder {
                 self.tag("CollectMetrics");
                 self.text(name);
                 self.exprs(metrics, bias);
+                self.plan(input, bias);
+            }
+            PlanNode::MetricViewRead {
+                input,
+                name,
+                dimensions,
+                measures,
+                output,
+                ansi,
+            } => {
+                self.tag("MetricViewRead");
+                self.num(match ansi {
+                    None => 0,
+                    Some(false) => 1,
+                    Some(true) => 2,
+                });
+                self.num(name.len() as u64);
+                name.iter().for_each(|n| self.text(n));
+                for cols in [dimensions, measures] {
+                    self.num(cols.len() as u64);
+                    for c in cols {
+                        self.text(&c.name);
+                        self.expr(&c.expr, bias);
+                        self.debug(&c.data_type);
+                        self.flag(c.nullable);
+                    }
+                }
+                self.num(output.len() as u64);
+                for c in output {
+                    self.bound(c, bias);
+                }
                 self.plan(input, bias);
             }
             PlanNode::JoinHint { input, strategy } => {

@@ -248,6 +248,12 @@ impl Walk {
                     right,
                     condition,
                     ..
+                }
+                | PlanNode::AsOfJoin {
+                    left,
+                    right,
+                    condition,
+                    ..
                 } => match condition {
                     JoinCondition::On(_) | JoinCondition::None => {}
                     // Resolved joins carry their keys as a condition; a key list still here
@@ -303,8 +309,10 @@ impl Walk {
                     }
                 }
                 // Unresolved forms: nothing proves what they read. A Python UDF over a relation
-                // (map, grouped and cogrouped map, table function) sees every column of it.
+                // (map, grouped and cogrouped map, table function) sees every column of it, and so
+                // does a metric-view read no aggregate rewrote (its expressions are unresolved).
                 PlanNode::Read(_)
+                | PlanNode::MetricViewRead { .. }
                 | PlanNode::MapPartitions { .. }
                 | PlanNode::GroupMap { .. }
                 | PlanNode::CoGroupMap { .. }

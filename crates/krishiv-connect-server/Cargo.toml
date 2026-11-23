@@ -20,6 +20,7 @@ arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
+krishiv-catalogs = { path = "../krishiv-catalogs", version = "=0.2.1", features = ["sqlite"], optional = true }
 krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 krishiv-connect = { path = "../krishiv-connect", version = "=0.2.1" }
 krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
@@ -43,7 +44,7 @@ zstd.workspace = true
 
 [dev-dependencies]
 # The declared Iceberg REST catalog of `tests/delegated_catalog.rs` (P3-T067 §3.3).
-krishiv-catalogs = { path = "../krishiv-catalogs", features = ["session"] }
+krishiv-catalogs = { path = "../krishiv-catalogs", features = ["session", "testing"] }
 # The local Iceberg table `tests/delegated_catalog.rs` reads rows of (`testing::write_table`).
 krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", features = ["testing"] }
 # Signs act-as assertions in `tests/impersonation.rs` (feature `oidc`).
@@ -57,5 +58,7 @@ tonic = { workspace = true, features = ["channel", "server", "router", "codegen"
 tonic-prost.workspace = true
 
 [features]
+# Persisted Python UDFs in the embedded SQLite catalog (P3-T072c): `SqliteFunctionStore`. A C build (bundled SQLite).
+function-catalog = ["dep:krishiv-catalogs"]
 # Signed act-as assertions (`x-krishiv-act-as-token`, P3-T061 I3): `krishiv-session`'s verifier.
 oidc = ["krishiv-session/oidc"]

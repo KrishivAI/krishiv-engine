@@ -319,6 +319,38 @@ fn alter_view_and_namespace_statements() {
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
 }
 
+/// `ALTER VIEW v AS? query` (Spark's `alterViewQuery`): without `AS` a query still follows, so
+/// `WITH METRICS` starts a CTE and fails at `LANGUAGE` (metric-view golden
+/// `parse_alter_view_with_metrics`).
+#[test]
+fn alter_view_query_without_as() {
+    for sql in [
+        "ALTER VIEW v SELECT 1",
+        "ALTER VIEW v WITH c AS (SELECT 1) SELECT * FROM c",
+        // A CTE named `SCHEMA`, and `TABLE t` (Spark 4.2.1, 2026-11-21).
+        "ALTER VIEW v WITH SCHEMA AS (SELECT 2 AS x) SELECT x FROM SCHEMA",
+        "ALTER VIEW v TABLE t",
+    ] {
+        let ast::Statement::AlterView(a) = checked(sql) else {
+            panic!("{sql}: not an ALTER VIEW");
+        };
+        assert!(
+            matches!(a.action, ast::AlterViewAction::SetQuery { .. }),
+            "{sql}"
+        );
+    }
+    let ast::Statement::AlterView(a) = checked("ALTER VIEW v WITH SCHEMA EVOLUTION") else {
+        panic!("not an ALTER VIEW");
+    };
+    assert!(matches!(
+        a.action,
+        ast::AlterViewAction::SetSchemaBinding(_)
+    ));
+    let e = err("ALTER VIEW mv WITH METRICS LANGUAGE YAML AS $$version: 0.1$$");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert!(e.error.to_string().contains("'LANGUAGE'"), "{}", e.error);
+}
+
 /// The full `CREATE VIEW` grammar: permanent views, and the temporary
 /// views the legacy node cannot express.
 #[test]
@@ -1053,6 +1085,38 @@ fn delete_update_merge_truncate_errors() {
     let e = err(sql);
     assert_eq!(e.error.error_class(), ErrorClass::MergeWithoutWhen);
     assert_eq!(e.span.range(), 0..sql.len());
+    // An `INSERT` whose value count differs from its column count (Spark 4.2.0 + delta-spark
+    // 4.4.1 run: `MERGE_INSERT_VALUE_COUNT_MISMATCH`, 21S01, over the statement).
+    for (sql, actual, expected) in [
+        (
+            "MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id)",
+            "1",
+            "2",
+        ),
+        (
+            "MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id, s.v)",
+            "2",
+            "1",
+        ),
+    ] {
+        let e = err(sql);
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::MergeInsertValueCountMismatch,
+            "{sql}"
+        );
+        assert_eq!(e.error.sql_state(), Some("21S01"));
+        assert_eq!(
+            e.error.to_string(),
+            format!(
+                "[MERGE_INSERT_VALUE_COUNT_MISMATCH] The number of provided values ({actual}) must \
+                 match the number of expected columns ({expected}) in the INSERT clause of MERGE. \
+                 SQLSTATE: 21S01"
+            ),
+            "{sql}"
+        );
+        assert_eq!(e.span.range(), 0..sql.len(), "{sql}");
+    }
     // Syntax errors at Spark 4.2.0's positions, with its "missing" hints.
     for (sql, near, hint, at) in [
         (

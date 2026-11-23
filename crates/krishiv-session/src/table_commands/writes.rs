@@ -37,15 +37,19 @@ impl Session {
             && !self.temp_entry_of(name, env)
         {
             if table.view.is_none() {
-                // INSERT writes through the Delta writer (`delta_writes.rs`), DELETE and UPDATE
-                // through its row-level table (`row_level.rs`); the other writes are refused by
-                // name (a read command never reaches here as a write).
+                // INSERT writes through the Delta writer (`delta_writes.rs`), DELETE, UPDATE and
+                // MERGE through its row-level table (`row_level.rs`, `merge.rs`); the other writes
+                // are refused by name (a read command never reaches here as a write).
                 #[cfg(feature = "delta")]
                 if access == Access::Write
                     && is_delta_table(&table)
                     && !matches!(
                         operation,
-                        "INSERT" | "INSERT OVERWRITE" | "DELETE" | "UPDATE TABLE"
+                        "INSERT"
+                            | "INSERT OVERWRITE"
+                            | "DELETE"
+                            | "UPDATE TABLE"
+                            | "MERGE INTO TABLE"
                     )
                 {
                     return Err(delta_write_refused(name.quoted(), operation));
@@ -53,6 +57,23 @@ impl Session {
                 #[cfg(not(feature = "delta"))]
                 let _ = access;
                 return Ok(table);
+            }
+            if table
+                .view
+                .as_ref()
+                .is_some_and(crate::store::ViewDef::is_metric)
+            {
+                // A metric view is no relation Spark can write or measure (4.2.1 goldens):
+                // `INSERT` meets its plan as an RDD-based one, `ANALYZE` the view refusal.
+                match operation {
+                    "INSERT" | "INSERT OVERWRITE" => {
+                        return Err(krishiv_common::error::UnsupportedInsertRddBased {}.into());
+                    }
+                    "ANALYZE TABLE" => {
+                        return Err(krishiv_common::error::UnsupportedFeatureAnalyzeView {}.into());
+                    }
+                    _ => {}
+                }
             }
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
                 operation: operation.to_owned(),
@@ -907,7 +928,10 @@ impl Session {
                 // Admitted before the drop: a controller that refuses the write, or a caller that
                 // gives up while it queues, must not have lost the old table. The write takes
                 // this admission instead of asking again.
-                let mut pre = Some(self.admit_query(&analysis.env, false).await?);
+                let mut pre = Some(
+                    self.admit_query(&analysis.env, false, krishiv_sql::StatementClass::Write)
+                        .await?,
+                );
                 let done = async {
                     // From the drop on, a cancel waits for the write's query
                     // instead of dropping the statement half-way (`action.rs`).
