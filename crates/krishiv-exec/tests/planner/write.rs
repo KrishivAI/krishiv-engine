@@ -326,6 +326,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
             version: None,
         };
         let node = PhysNode::Scan(krishiv_exec::physical::ScanNode {
+            decided: None,
             id: krishiv_exec::physical::ScanId(1),
             scan,
             projection: vec![krishiv_io::ColumnPath::new("id")],
@@ -513,6 +514,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
             version: None,
         };
         let node = PhysNode::Scan(krishiv_exec::physical::ScanNode {
+            decided: None,
             id: krishiv_exec::physical::ScanId(1),
             scan,
             projection: vec![krishiv_io::ColumnPath::new("id")],
@@ -717,6 +719,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
             version: None,
         };
         let node = PhysNode::Scan(krishiv_exec::physical::ScanNode {
+            decided: None,
             id: krishiv_exec::physical::ScanId(1),
             scan,
             projection: vec![krishiv_io::ColumnPath::new("id")],

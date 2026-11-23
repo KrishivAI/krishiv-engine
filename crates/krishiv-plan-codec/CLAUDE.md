@@ -42,3 +42,5 @@ enforcement of design P2-T171 invariant I1 (plans are pure data) and the wire fo
 
 ## Vector carrier (P3-T075)
 Feature `fixed_size_list_carrier` (Semantic, legacy level `POST_MIGRATION_READER_VERSION`): a plan with a vector carrier column lists it, so a reader without the vector guard refuses the plan. `arrow_type_is_nested` excludes it from `nested_types`. Goldens: `tests/golden/fixed_size_list_carrier/`.
+
+Feature `theta_sketch_aggregates` (proto `AggregateFunction` values 55 to 57): a plan with a Theta aggregate needs it, an older reader refuses; golden `tests/golden/theta_sketch_aggregates/`.

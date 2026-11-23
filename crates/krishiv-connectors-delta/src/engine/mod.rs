@@ -262,9 +262,15 @@ impl DeltaEngine {
     #[must_use]
     pub(crate) fn detached(&self, cancel: Arc<CancellationToken>) -> Self {
         let s = &self.shared;
+        // Never the statement's consumer: the work outlives it. The runtime's root when the
+        // scheduler has one, so the checkpoint stays under the process limit.
+        let io = match s.io.runtime_memory() {
+            Some(root) => s.io.clone().with_memory(Arc::clone(root)),
+            None => s.io.clone().without_memory(),
+        };
         Self {
             shared: Arc::new(Shared {
-                io: s.io.clone().without_memory(),
+                io,
                 store: s.store.clone(),
                 root: s.root.clone(),
                 handle: s.handle.clone(),

@@ -25,14 +25,14 @@
 //! last chunk's reader is done with them.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock, Weak};
 
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_memory::{
-    ConsumerHandle, Reservation, SpillError, SpillFile, SpillReader, SpillScope, SpillSignal,
-    SpillWriter, Spillable as _,
+    ConsumerHandle, Reservation, SpillFile, SpillReader, SpillScope, SpillSignal, SpillWriter,
+    Spillable as _,
 };
 use krishiv_types::batch::{Batch, Weights};
 
@@ -57,6 +57,7 @@ mod disk;
 mod held;
 mod parallel;
 mod parts;
+mod runs;
 #[cfg(test)]
 pub(super) use parts::{HANDBACKS, PANICS};
 
@@ -545,79 +546,6 @@ impl Spiller {
             &|ids| table.state_batch(ids),
             partition,
         )
-    }
-
-    /// Writes the rows that each source's filter keeps as one run of
-    /// partition files at `level`: per partition file, the sources in
-    /// order (their merge order; blocking I/O). The sources mix driver
-    /// partitions, so the run keeps its insertion order.
-    ///
-    /// `files` holds the run's partition files so far: partitions already
-    /// written are skipped, so a run that stopped (its writer refused) is
-    /// resumed by another writer without writing or counting a file twice.
-    /// Each file's writer comes from `writer`; the inner error is a
-    /// writer's (a refused scratch among them: the partition being written
-    /// is dropped, the finished ones stay in `files`). `stop` set by another
-    /// writer's failure ends the run at its next chunk (an error, which
-    /// loses to that failure).
-    fn write_run_sources(
-        &self,
-        sources: &[(&RowTable, &dyn Fn(u32) -> bool)],
-        level: u32,
-        writer: &dyn Fn() -> std::result::Result<SpillWriter, SpillError>,
-        files: &mut [Option<SpillFile>],
-        stop: &AtomicBool,
-    ) -> Result<std::result::Result<(), SpillError>> {
-        let started = std::time::Instant::now();
-        let per: Vec<Vec<Vec<u32>>> = sources
-            .iter()
-            .map(|(t, keep)| {
-                let mut parts = t.ids_by_partition(level, 0);
-                for ids in &mut parts {
-                    ids.retain(|&r| keep(r));
-                }
-                parts
-            })
-            .collect();
-        let outcome = (|| {
-            for (p, file) in files.iter_mut().enumerate() {
-                if file.is_some() || per.iter().all(|parts| parts[p].is_empty()) {
-                    continue;
-                }
-                let mut w = match writer() {
-                    Ok(w) => w,
-                    Err(e) => return Ok(Err(e)),
-                };
-                for ((t, _), parts) in sources.iter().zip(&per) {
-                    let chunk = spill_chunk(t.memory_size(), t.len());
-                    for ids in row_chunks(&parts[p], chunk, t) {
-                        self.query.check_cancelled()?;
-                        if stop.load(AtomicOrdering::Acquire) {
-                            return Err(internal(
-                                "stopped: another spill writer failed".to_owned(),
-                            ));
-                        }
-                        if let Err(e) = w.write(&Batch::new(t.state_batch(ids)?)) {
-                            return Ok(Err(e));
-                        }
-                    }
-                }
-                *file = Some(self.finish(w)?);
-            }
-            Ok(Ok(()))
-        })();
-        self.time_run(started);
-        outcome
-    }
-
-    /// Adds one writer's time on a run, since `started`, to
-    /// `spill_write_ns` and `spill_write_max_ns`.
-    pub(super) fn time_run(&self, started: std::time::Instant) {
-        let ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        bump(&self.counters.spill_write_ns, ns);
-        self.counters
-            .spill_write_max_ns
-            .fetch_max(ns, AtomicOrdering::Relaxed);
     }
 
     /// Writes `chunks` of an in-memory result to one output file
@@ -1294,8 +1222,8 @@ impl HashAggregate {
             inner.merged = 0;
             return Ok(Step::Yield);
         }
-        let end = (inner.merged + CHUNK).min(src.len());
-        let ids = src.ids(inner.merged..end);
+        let ids = src.state_ids(inner.merged..(inner.merged + CHUNK).min(src.len()));
+        let end = inner.merged + ids.len();
         let p = dst.prepare(&Batch::new(src.state_batch(&ids)?), true)?;
         let granted: usize = inner.granted.iter().map(Reservation::size).sum();
         let want = dst.projected(&p)? + dst.transient(&p);
