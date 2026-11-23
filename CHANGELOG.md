@@ -16,6 +16,9 @@ Krishiv 0.3 grows from an embedded engine into a server you can put in front of 
 
 ### Highlights
 
+- **TPC-H SF10 runs at parity with DuckDB:** 0.98x of DuckDB's time (geomean), 22/22 queries, measured on 2026-11-21 on one
+  AMD Ryzen 5 3600 (6 cores, 12 threads, 64 GB), both engines on the same data with the same row counts. Reproduce it with
+  `uv run krishiv-bench reproduce --suite tpch --sf 10 --reps 3` (see `bench/README.md`). This is the only DuckDB comparison made for 0.3.0.
 - **Iceberg tables you can write.** Appends, `INSERT OVERWRITE`, and copy-on-write and merge-on-read `DELETE`/`UPDATE`
   (deletion vectors on v3, position deletes on v2) commit with Iceberg's own conflict rules, also through a REST catalog
   with an optimistic commit. Reads apply Spark's position, equality and deletion-vector deletes.
