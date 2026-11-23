@@ -51,6 +51,22 @@ fn binary_array(rows: Vec<Vec<u8>>) -> Result<BinaryArray> {
     Ok(BinaryArray::from_iter_values(rows))
 }
 
+/// The byte length of row `i` of a sketch column (0 for a null row); a column of another carrier is shared
+/// evenly over its rows.
+pub(crate) fn sketch_row_bytes(a: &dyn arrow_array::Array, i: usize) -> usize {
+    use arrow_array::cast::AsArray;
+    use arrow_schema::DataType;
+    if a.is_null(i) {
+        return 0;
+    }
+    match a.data_type() {
+        DataType::Binary => a.as_binary::<i32>().value(i).len(),
+        DataType::LargeBinary => a.as_binary::<i64>().value(i).len(),
+        DataType::BinaryView => a.as_binary_view().value(i).len(),
+        _ => sketch_bytes(a).div_ceil(a.len().max(1)),
+    }
+}
+
 /// The bytes of the sketches in a binary column: the values' own lengths, for `Binary`, `LargeBinary` and
 /// `BinaryView` alike, not the views, the offsets or a slice's parent buffer.
 pub(crate) fn sketch_bytes(a: &dyn arrow_array::Array) -> usize {

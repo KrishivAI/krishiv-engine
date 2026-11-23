@@ -118,7 +118,9 @@ use krishiv_types::batch::{Batch, Weights};
 use super::accumulator::{Accumulator, paired};
 use super::merge_index::{MergeIndex, Slot};
 use super::table::{AggCore, batch, own_bytes};
-use super::theta_sketch::sketch_bytes;
+use std::collections::HashMap;
+
+use super::theta_sketch::{sketch_bytes, sketch_row_bytes};
 use super::{AggregateOutput, unsupported};
 use crate::error::{Result, internal};
 use crate::hash::{HashSeed, PARTITIONS, ProbeCount, ProbeTotals, grown, spill_partition};
@@ -1003,13 +1005,48 @@ impl RowTable {
     /// The accumulators' bytes after `new[p]` more groups in each partition
     /// `p` and a fold of `cols` (`fold` says which columns each aggregate
     /// reads; a string `min`/`max` may keep all their bytes, once).
-    fn projected_accs(&self, new: &[usize], cols: &[ArrayRef], fold: Fold) -> usize {
+    fn projected_accs(
+        &self,
+        new: &[usize],
+        cols: &[ArrayRef],
+        fold: Fold,
+        row_part: Option<&[u8]>,
+    ) -> usize {
         let states = matches!(fold, Fold::States { .. });
+        // The sketch bytes of each partition's own rows, per argument column (when the rows' partitions are known).
+        let mut by_part: HashMap<usize, Vec<usize>> = HashMap::new();
+        if let Some(rp) = row_part {
+            for (a, r) in self
+                .parts
+                .first()
+                .iter()
+                .flat_map(|p| p.accs.iter().zip(&self.core.ranges))
+            {
+                if !a.theta_reads_sketches(states) {
+                    continue;
+                }
+                let at = match fold {
+                    Fold::States { offset } => r.start.checked_sub(offset),
+                    Fold::Raw => a.args().first().copied(),
+                };
+                if let Some(i) = at
+                    && let Some(c) = cols.get(i)
+                    && !by_part.contains_key(&i)
+                {
+                    let mut v = vec![0_usize; PARTS];
+                    for (row, &q) in rp.iter().enumerate() {
+                        v[usize::from(q)] += sketch_row_bytes(c.as_ref(), row);
+                    }
+                    by_part.insert(i, v);
+                }
+            }
+        }
         let parts: usize = self
             .parts
             .iter()
             .zip(new.iter().copied().chain(std::iter::repeat(0)))
-            .map(|(part, n)| {
+            .enumerate()
+            .map(|(pi, (part, n))| {
                 part.accs
                     .iter()
                     .zip(&self.core.ranges)
@@ -1021,8 +1058,13 @@ impl RowTable {
                                 Fold::States { offset } => r.start.checked_sub(offset),
                                 Fold::Raw => a.args().first().copied(),
                             };
-                            at.and_then(|i| cols.get(i))
-                                .map_or(0, |c| sketch_bytes(c.as_ref()))
+                            at.and_then(|i| {
+                                by_part
+                                    .get(&i)
+                                    .and_then(|v| v.get(pi).copied())
+                                    .or_else(|| cols.get(i).map(|c| sketch_bytes(c.as_ref())))
+                            })
+                            .unwrap_or(0)
                         } else {
                             0
                         };
@@ -1082,6 +1124,27 @@ impl RowTable {
         varied + fixed.saturating_mul(most).div_ceil(rows.max(1))
     }
 
+    /// The radix partition of each input row, when a batch of sketches spreads over several partitions (so each
+    /// is charged its own rows' sketch bytes); `None` for one partition, the direct path, or no sketch aggregate.
+    fn row_parts(&self, p: &RowPrepared) -> Option<Vec<u8>> {
+        let spread = p.counts.iter().filter(|&&c| c > 0).count() > 1;
+        if p.local.is_some() || self.bits == 0 || !spread || p.keys.hashes().len() != p.rows() {
+            return None;
+        }
+        let reads = self.parts.first().is_some_and(|v| {
+            v.accs
+                .iter()
+                .any(|a| a.theta_reads_sketches(matches!(Self::fold_of(p), Fold::States { .. })))
+        });
+        reads.then(|| {
+            p.keys
+                .hashes()
+                .iter()
+                .map(|&h| u8::try_from(part_of(h, self.bits)).unwrap_or(0))
+                .collect()
+        })
+    }
+
     /// [`memory_size`](Self::memory_size) after [`apply`](Self::apply)ing
     /// `p` (an upper bound).
     pub(crate) fn projected(&self, p: &RowPrepared) -> usize {
@@ -1097,7 +1160,12 @@ impl RowTable {
             .map(|(v, (c, &b))| grown(&v.rows, c * self.stride) + grown(&v.heap, b))
             .sum();
         rows + self.index_bytes(self.next_mode(), n)
-            + self.projected_accs(&p.counts, &p.cols, Self::fold_of(p))
+            + self.projected_accs(
+                &p.counts,
+                &p.cols,
+                Self::fold_of(p),
+                self.row_parts(p).as_deref(),
+            )
             + self.projected_sketch_bytes(n, p.keys.hashes().len() == n)
             + self.direct.as_ref().map_or(0, direct::Direct::bytes)
     }

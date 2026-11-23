@@ -114,7 +114,7 @@ impl RowTable {
         }
         let k = self.core.spec.group_by.len();
         rows + self.index_bytes(self.mode, n)
-            + self.projected_accs(&new, &c.states, Fold::States { offset: k })
+            + self.projected_accs(&new, &c.states, Fold::States { offset: k }, None)
             + Self::scratch(n)
             + self.sketch_bytes()
     }

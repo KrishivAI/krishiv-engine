@@ -102,3 +102,37 @@ fn a_partition_with_no_row_is_not_charged_the_column() {
     // ... and the sketch bytes are charged at all (a projection that stopped charging them would pass the cap alone).
     assert!(one >= 32 * bytes, "{one} for {bytes}");
 }
+
+/// One big sketch and fifteen small ones in sixteen groups spread over several radix partitions: each partition is
+/// charged the sketches of its own rows (the fold's partition assignment), so the big sketch is charged once, not
+/// once per partition the batch touches.
+#[test]
+fn a_sketch_is_charged_to_the_partition_that_reads_it() {
+    let function = AggregateFunction::ThetaIntersectionAgg;
+    let core = core(function, DataType::BinaryView);
+    let seed = HashSeed::new(Some(3));
+    let t = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS).unwrap();
+    let big = big_sketch();
+    let mut small = theta::new_sketch(12, "theta_sketch_agg").unwrap();
+    theta::update_long(&mut small, 1);
+    let small = theta::to_bytes(&theta::compact(&mut small));
+    let rows = 16_usize;
+    let sk: ArrayRef = Arc::new(BinaryViewArray::from_iter_values(
+        (0..rows).map(|i| if i == 0 { big.clone() } else { small.clone() }),
+    ));
+    let g: Vec<i64> = (0..16).collect();
+    let cols: Vec<ArrayRef> = vec![Arc::new(Int64Array::from(g)), sk];
+    let b = Batch::new(RecordBatch::try_new(Arc::clone(&core.spec.input), cols).unwrap());
+    let p = t.prepare(&b, false).unwrap();
+    let touched = p.counts.iter().filter(|&&c| c > 0).count();
+    assert!(touched > 2, "the groups must spread: {touched} partitions");
+    let growth = t.projected(&p) - t.memory_size();
+    let bytes = big.len() + 15 * small.len();
+    // As one partition holding the whole column (`a_partition_with_no_row_is_not_charged_the_column`): about 64
+    // bytes per sketch byte, once. Charging the column to every touched partition would be `touched` times that.
+    assert!(growth >= 32 * big.len(), "{growth} for {bytes}");
+    assert!(
+        growth < 70 * bytes + (8 << 20),
+        "{growth} for {bytes} over {touched} partitions"
+    );
+}
