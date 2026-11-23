@@ -60,7 +60,8 @@ not a bare scan of a Delta table is copied to a spill file first, so a large sou
 
 ## How it runs
 
-The write is copy-on-write: a data file that holds a changed row is rewritten without that row (or with the new
+A `DELETE` without a condition, or with one on partition columns only, removes whole files and rewrites nothing. Otherwise
+the write is copy-on-write: a data file that holds a changed row is rewritten without that row (or with the new
 value), and the commit removes the old file and adds the new one. Files that hold no matching row are left alone, so
 filter on a partition column to keep a change small. Deletion vectors are not written; a table that has them is read
 correctly, but a change rewrites the whole file.
@@ -73,6 +74,7 @@ all the attempts of one commit.
 | You write | What happens |
 |---|---|
 | `UPDATE`, `DELETE` or `MERGE` while `krishiv.write.idempotencyKey` is set | `KRISHIV_UNSUPPORTED_FEATURE`; unset the key for the statement. See [make a retried write safe](lakehouse-tables.md#make-a-retried-write-safe) |
-| A change to a table with the change data feed on | refused |
+| `UPDATE`, or a `DELETE` that rewrites rows, on a table with the change data feed on | refused |
+| A whole-file `DELETE` (no condition, or partition columns only) on such a table | commits |
 
 See [Iceberg and Delta tables, and catalogs](lakehouse-tables.md) for the rest of what a Delta table supports.

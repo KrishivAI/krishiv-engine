@@ -51,8 +51,8 @@ FROM docs AS d, LATERAL split_words(d.text) AS w;
 ```
 
 Each result row leads with the columns of the input row it came from. An inner `JOIN LATERAL ... ON condition` works too.
-`LEFT JOIN LATERAL` without a condition returns the rows of the inner join; with `ON`, `USING` or `NATURAL` it is refused
-with `KRISHIV_UNSUPPORTED_FEATURE` for now. An `@arrow_udtf` cannot be the target of a `LATERAL` call.
+`LEFT JOIN LATERAL` without a condition returns the rows of the inner join; with `ON` it is refused
+with `KRISHIV_UNSUPPORTED_FEATURE` for now, and `USING` and `NATURAL` are refused earlier, by the SQL validator. An `@arrow_udtf` cannot be the target of a `LATERAL` call.
 
 ## Hand a whole table to the function
 
@@ -89,15 +89,18 @@ class Echo:
 
 `analyze` can also ask for a partitioning (`withSinglePartition`, `partitionBy`, `orderBy`) and for a `select` of the
 input columns. Two limits to know: a constant that the analyzer does not fold, such as `array(1, 2)`, reaches `analyze`
-as no constant (`value` is `None`), and the pickled result of `analyze` may not exceed 64 MiB.
+as no constant (`value` is `None`), and the JSON response of `analyze`, which holds the pickled result as hex (about twice its size), may not exceed 64 MiB.
+A pickle above roughly 32 MiB fails with `TABLE_VALUED_FUNCTION_FAILED_TO_ANALYZE_IN_PYTHON`.
 
 ## Where it runs
 
 - **In a server.** Register through a Spark Connect client (`pyspark-client`, or [`krishiv.start_local()`](embedded-connect.md)).
   The function runs in the pool, so the server needs Python workers and the sandbox the
   [UDF sandbox guide](python-udf-sandbox.md) describes. [Per-tenant limits](python-udf-tenants.md) apply.
-- **Result types.** A row whose value has another type than the column declares gives NULL in the `@udtf` forms (as in
-  Spark, where the JVM converts it), and an `@arrow_udtf` result unlike its declared schema fails with `PYTHON_EXCEPTION`.
+- **Result types.** In the `@udtf` forms a row value is converted to the declared column type as Spark's JVM converts it:
+  an integer in a string column becomes its text, and a value that cannot be converted gives NULL. An `@arrow_udtf` result
+  is cast to its declared schema when the cast is safe (`int32` for an `int64` column works); an incompatible or unsafe
+  conversion fails with `PYTHON_EXCEPTION`.
 - **Re-registering** a name replaces the function and runs a fresh analysis for the next query. A built-in table function
   such as `range` or `explode` keeps its name; a UDTF of the same name does not shadow it.
 

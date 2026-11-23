@@ -56,7 +56,9 @@ Options set with `.option(k, v)` and the path given to `load` reach `self.option
 case-insensitive (`options["path"]` and `options["Path"]` are the same key). A schema given with `.schema(...)` wins
 over the source's.
 
-`read` may yield tuples, `Row` objects, lists or `pyarrow.RecordBatch` objects; they are cast to the declared schema.
+`read` may yield tuples, `Row` objects, lists or `pyarrow.RecordBatch` objects. Tuples, `Row` objects and lists are
+converted to the declared types. A `RecordBatch` is not cast: its Arrow schema must match the declared one exactly, or the
+read fails with `DATA_SOURCE_RETURN_SCHEMA_MISMATCH`.
 
 ## Write
 
@@ -96,8 +98,8 @@ instead, with `None` for the failed task's message. `mode("overwrite")` passes `
 
 - Batch only. `streamReader` and `streamWriter` raise `NOT_IMPLEMENTED`; the streaming classes arrive after 0.3.
 - Partitions run one after the other in the calling process, not in parallel.
-- The rows of a read are held in memory while the scan runs. The cap is the environment variable
-  `KRISHIV_PYTHON_DATA_SOURCE_LIMIT`.
+- The rows of a read are held in memory while the scan runs. The cap is a fixed 1 GiB; a read that holds
+  more fails.
 - Filter pushdown is off, as in Spark 4.3 (`spark.sql.python.filterPushdown.enabled`). A reader that overrides
   `pushFilters` fails with `DATA_SOURCE_PUSHDOWN_DISABLED`; with the key on, `pushFilters` is still not called and
   Krishiv applies every filter itself.

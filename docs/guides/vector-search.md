@@ -82,10 +82,13 @@ All the vectors of a group must have the same number of elements.
 - **Same bits as Spark.** The sums run in blocks of 8 elements, as Spark 4.2.0 runs them, because a plain left-to-right
   sum differs in the last digits from 8 dimensions up. A query gives the same floats on Krishiv and on Spark 4.2.
 - **NULL.** A NULL *element* inside a vector does not hide a dimension mismatch: two vectors of different sizes still fail.
-- **A zero vector.** `vector_cosine_similarity` and `vector_normalize` give NULL when the norm is smaller than the
-  smallest normal `FLOAT` (about 1.2e-38), instead of dividing by nearly zero.
+- **A zero vector.** `vector_cosine_similarity` and `vector_normalize` give NULL when the square root of the product of the
+  two squared norms is smaller than the smallest normal `FLOAT` (about 1.2e-38), instead of dividing by nearly zero. That
+  product is computed in single precision, so vectors with very small elements (such as `1e-12`) can give NULL although
+  each norm alone is above the limit.
 - **NaN.** `vector_norm(v, float('inf'))` skips a NaN element, as Spark does.
-- **Single precision.** The result is a `FLOAT`. Cast to `DOUBLE` before you compare it with a threshold computed in
+- **Single precision.** A scalar result, and each element of a vector result (`vector_normalize`, `vector_sum`, `vector_avg`), is a
+  `FLOAT`. Cast to `DOUBLE` before you compare it with a threshold computed in
   double precision.
 
 ## Spark versions

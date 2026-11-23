@@ -4,8 +4,8 @@ description: "ASOF JOIN: join each row to the nearest earlier (or later) row of 
 
 # As-of joins
 
-An as-of join matches each row of the left table to the one right-hand row that is nearest to it in time (or in any
-ordered column) instead of an exact one. Use it to attach the latest quote to a trade, the price in force at an
+An as-of join matches each row of the left table to the one right-hand row that is nearest to it in time (or in another
+ordered column; a forward join accepts fewer column types, see Limits) instead of an exact one. Use it to attach the latest quote to a trade, the price in force at an
 order, or the last reading before an event. `ASOF JOIN` is Spark 4.3 syntax.
 
 ## Turn it on
@@ -55,11 +55,15 @@ drops it.
 | `t.ts < q.ts` | the least `q.ts` strictly after `t.ts` |
 
 The operands may be written either way round: `q.ts <= t.ts` is `t.ts >= q.ts`. When several right rows share the
-chosen value, Spark leaves the pick open and so does Krishiv. A row whose key or match value is NULL matches nothing.
+chosen value, Spark leaves the pick open and so does Krishiv. A row whose match value is NULL matches nothing, and a NULL key matches nothing under `=`; under the null-safe `<=>`
+in `ON`, NULL keys match each other.
 Extra conditions in `ON` are applied before the nearest row is chosen, so a right row that fails them is skipped.
 
 ## Limits
 
+- A forward join (`<=` or `<`) refuses a floating-point match column (`DOUBLE`, `FLOAT`), an integral or non-exact
+  decimal one when ANSI mode is off, and a `TIMESTAMP` in a session time zone whose UTC offset can decrease. A backward
+  join does not apply these checks.
 - Only inner and `LEFT` (`LEFT OUTER`) as-of joins exist. `RIGHT`, `FULL`, `CROSS`, `NATURAL`, `SEMI` and `ANTI`
   before `ASOF` are a `PARSE_SYNTAX_ERROR`, as in Spark.
 - `MATCH_CONDITION` is required: an as-of join without one is a `PARSE_SYNTAX_ERROR`.
