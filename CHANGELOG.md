@@ -190,6 +190,22 @@ Krishiv 0.3 grows from an embedded engine into a server you can put in front of 
   one operation id are told apart; a cancel that names no session is refused (409) when several sessions run
   that id.
 - The docs gain guides for Delta tables and Iceberg REST catalogs, access control with grants and Arrow Flight SQL, and a table of the DataFrame save modes. (#967)
+- Spark 4.3's `ASOF JOIN ... MATCH_CONDITION (...)` in SQL (behind `spark.sql.join.asofJoin.enabled`, off by default as in Spark) and the Spark Connect `AsOfJoin` relation (backward and forward; `nearest` and `tolerance` not yet), run as an as-of sort-merge join. (#927)
+- Python UDF workers are kept apart per tenant: a worker never serves two tenants, and one tenant's workers and running calls are bounded together (`krishiv.python.worker.maxPerTenant`), with an optional lower address-space limit for its workers (`krishiv.python.worker.tenantMemoryLimit`). (#939)
+  
+  A Python UDF a client registered can be kept for its tenant: the `krishiv.v1.PersistPythonFunction` command (capability `persistpythonfunction`, `drop` removes) stores it in the SQLite catalog named by `krishiv.connect.pythonFunctions.catalog` (build feature `python-function-catalog`), and later sessions of the tenant, also after a restart, find it at their first request, if the principal may run client code. The catalog file is format version 2 (a version 1 file is upgraded when opened).
+  
+  Only the principal that persisted a function (or an admin, `Manage` on the cluster) can replace or drop it, and an untenanted principal's functions are its own. Opening a catalog file with this build makes it format version 2, which an older build refuses: keep a copy before upgrading if you may roll back.
+- Flight SQL queries and updates, and statements started through the server's HTTP SQL route, join the W3C trace in the request's `traceparent` and `baggage` headers, shown in `system.queries.trace_id`. (#940)
+  
+  A session says who its client is with `SessionBuilder::source`, and a resource group's `source` and `queryType` selectors now see the session's client type and the statement's class (P3-T003).
+  
+  `krishiv.admin.v1` lists, reads, validates, replaces and reloads the resource-group configuration, and reads and sets run-time config defaults, over gRPC and REST (P3-T066 PR-52c). A duration in the OpenAPI document is now a ProtoJSON string such as `"5s"`.
+- `MERGE INTO` a Delta table: matched updates and deletes, inserts, `NOT MATCHED BY SOURCE` clauses and delta-spark's multiple-match check, written copy-on-write and readable by delta-spark 4.4.1. (#962)
+- The console's History page filters by statement: any part of the SQL as the list shows it, in either case (#979)
+  (`GET /api/internal/history?text=`). A signed embed link names its query's session, and the SQL editor's
+  colours follow the page's light or dark scheme.
+- The docs gain guides for ASOF joins, query events, Delta MERGE and DML, metric views, the TIME type, Python data sources, per-tenant Python UDFs, vector search and Python table functions. (#982)
 
 ### Performance
 
@@ -222,6 +238,8 @@ Krishiv 0.3 grows from an embedded engine into a server you can put in front of 
 - Grouping sets (ROLLUP, CUBE, GROUPING SETS) aggregate their input once before expanding it: TPC-DS q22 runs about 10x faster; an aggregate over keys that recur after a first stretch of unique keys no longer stays append-only. (#933)
 - TPC-DS queries that repeat a subquery with different filters (q47, q57) compute the shared part once (about 0.55x wall at SF10), widening decimal casts no longer convert row by row (q28 0.31x), and a scan skips a value-list filter already covered by an exact join filter (q68 0.86x CPU cycles at SF10). (#935)
 - A `CASE` whose branches cannot raise evaluates each branch on the whole batch (TPC-DS q59 0.72x CPU cycles at SF10), and a table read only by two or more filters is read once and its kept rows shared (q28 0.41x; `krishiv.optimizer.shareFilteredScans`, on by default). (#958)
+- Queries that filter a dimension joined above an outer join now reduce the outer join's preserved side first: TPC-DS q40 uses about 4 times fewer CPU cycles (0.23x) and q80 0.76x at scale factor 10, results unchanged. Joins against a tiny table on one integer key probe it by direct index: q62 0.86x and q99 0.81x CPU cycles at scale factor 10. (#951)
+  A runtime join filter whose keys are a few integers over a short range tests each row with one bit lookup instead of a hash set: TPC-DS q34 0.89x, q73 0.90x, q02 0.85x and q95 0.89x CPU instructions at scale factor 10, no query slower.
 
 ### Spark compatibility
 
@@ -313,6 +331,16 @@ Krishiv 0.3 grows from an embedded engine into a server you can put in front of 
 - `variant_get` and `try_variant_get` name their output column without the type argument, as Spark 4.0 to 4.3 do. (#955)
 - A query whose filter compares a repeated expression with a column (for example `c + 1 = c` beside `c + 1 IN (2, 3)`) above an outer join now gets the same plan when optimized again. (#964)
 - Fixed: `url` 2.5.9 for RUSTSEC-2026-0592 so `cargo deny` passes again; the chrono ignore (RUSTSEC-2026-0543) carries a review date. (#971)
+- Reading JSON whose records are not all objects now infers as Spark does: in FAILFAST mode the error names the type of the values merged before the first object (lines `5`, `"str"`, `{"a":1}` say STRING, as Spark 4.2.0 does, not BIGINT), and in PERMISSIVE mode an object field named `_corrupt_record` that follows a scalar keeps its own type. (#951)
+- An observation folds each range or partition-tagged scan split on its own, so a `sum` that overflows in the merge no longer sometimes fails the action when one worker happens to pick up two partitions. (#954)
+- Fixed: the CLI at its default memory limit and the Python module install the resident-set guard, so large windows and sorts (SQL-34, SQL-33) spill instead of running past the container; the guard releases its pressure only after the resident set falls below the range of its recent epochs. (#976)
+- A DataFrame derived from `session.sql(...)` (a `limit` or `filter` of it) is recorded in `system.queries` with (#979)
+  that statement's text, so statements run from the console's SQL editor are listed with their SQL.
+  A statement that writes (`INSERT`) is listed in `system.queries` as the run that wrote, with its SQL and class
+  `WRITE`; before, that run had no text and the read of its empty result carried the statement's. A write that
+  fails while it runs is listed once, as that failed run. A query's page
+  and a signed link to it show no operator metrics or plan while another session has a query under the same id
+  (they are kept by query id alone).
 
 ### Security
 
@@ -321,6 +349,7 @@ Krishiv 0.3 grows from an embedded engine into a server you can put in front of 
 - A silent Spark Connect `Config.set` that fails no longer repeats a secret value in its warning: when the key or the value matches the redaction rules (a token, a password, credentials in a URL), the warning shows `Some(*********(redacted))`, also where the error message would repeat the value. Spark prints the value as given. (#891)
 - A refused or invalid setting (SQL `SET`, Spark Connect `Config.set`, PySpark `conf.set`) no longer repeats a secret value, such as a token or a URL holding credentials, in its error; the key is still named. (#906)
 - A bare `DROP VIEW v` of a stored view now checks the Drop privilege on that view and transfers its grants, as `DROP TABLE` does. Before, a user who held only `CREATE` on the schema could drop another user's view. A draining server now refuses the statement as DDL. (#952)
+- Tables of a declared Iceberg REST catalog are read with the storage credentials the catalog vends for each table, cached per catalog and caller until they expire; a refused credential is fetched again once. `krishiv.catalog.vended.maxEntries` and `krishiv.catalog.vendedDefaultTtl` bound the cache. (#930)
 
 ## 0.2.1
 
