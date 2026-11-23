@@ -92,6 +92,86 @@
         }
       }
     },
+    "ConfigEntry": {
+      "fields": {
+        "key": {
+          "jsonName": "key",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "scope": {
+          "jsonName": "scope",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "settable_by": {
+          "jsonName": "settableBy",
+          "label": "singular",
+          "number": 4,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "source": {
+          "jsonName": "source",
+          "label": "singular",
+          "number": 5,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "value": {
+          "jsonName": "value",
+          "label": "singular",
+          "number": 2,
+          "oneof": "_value",
+          "optional": true,
+          "type": "string"
+        },
+        "withheld": {
+          "jsonName": "withheld",
+          "label": "singular",
+          "number": 6,
+          "oneof": null,
+          "optional": false,
+          "type": "bool"
+        }
+      }
+    },
+    "ConfigProblem": {
+      "fields": {
+        "error_class": {
+          "jsonName": "errorClass",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "message": {
+          "jsonName": "message",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "path": {
+          "jsonName": "path",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
     "DrainRequest": {
       "fields": {
         "exit_when_drained": {
@@ -191,6 +271,54 @@
         }
       }
     },
+    "GetConfigRequest": {
+      "fields": {
+        "page_size": {
+          "jsonName": "pageSize",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "int32"
+        },
+        "page_token": {
+          "jsonName": "pageToken",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "prefix": {
+          "jsonName": "prefix",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "GetConfigResponse": {
+      "fields": {
+        "entries": {
+          "jsonName": "entries",
+          "label": "repeated",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "message:ConfigEntry"
+        },
+        "next_page_token": {
+          "jsonName": "nextPageToken",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
     "GetDrainStatusRequest": {
       "fields": {}
     },
@@ -226,6 +354,45 @@
           "oneof": null,
           "optional": false,
           "type": "bool"
+        }
+      }
+    },
+    "GetResourceGroupConfigRequest": {
+      "fields": {}
+    },
+    "GetResourceGroupConfigResponse": {
+      "fields": {
+        "document": {
+          "jsonName": "document",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "etag": {
+          "jsonName": "etag",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "file_etag": {
+          "jsonName": "fileEtag",
+          "label": "singular",
+          "number": 4,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "loaded_at": {
+          "jsonName": "loadedAt",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
         }
       }
     },
@@ -361,6 +528,46 @@
           "oneof": null,
           "optional": false,
           "type": "message:Query"
+        }
+      }
+    },
+    "ListResourceGroupsRequest": {
+      "fields": {
+        "page_size": {
+          "jsonName": "pageSize",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "int32"
+        },
+        "page_token": {
+          "jsonName": "pageToken",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "ListResourceGroupsResponse": {
+      "fields": {
+        "groups": {
+          "jsonName": "groups",
+          "label": "repeated",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "message:ResourceGroup"
+        },
+        "next_page_token": {
+          "jsonName": "nextPageToken",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
         }
       }
     },
@@ -561,6 +768,250 @@
         }
       }
     },
+    "ReloadResourceGroupConfigRequest": {
+      "fields": {
+        "request_id": {
+          "jsonName": "requestId",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "ReloadResourceGroupConfigResponse": {
+      "fields": {
+        "etag": {
+          "jsonName": "etag",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "loaded_at": {
+          "jsonName": "loadedAt",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
+        }
+      }
+    },
+    "ReplaceResourceGroupConfigRequest": {
+      "fields": {
+        "document": {
+          "jsonName": "document",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "etag": {
+          "jsonName": "etag",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "request_id": {
+          "jsonName": "requestId",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "ReplaceResourceGroupConfigResponse": {
+      "fields": {
+        "etag": {
+          "jsonName": "etag",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "loaded_at": {
+          "jsonName": "loadedAt",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
+        }
+      }
+    },
+    "ResourceGroup": {
+      "fields": {
+        "config_etag": {
+          "jsonName": "configEtag",
+          "label": "singular",
+          "number": 19,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "group_id": {
+          "jsonName": "groupId",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "hard_concurrency_limit": {
+          "jsonName": "hardConcurrencyLimit",
+          "label": "singular",
+          "number": 8,
+          "oneof": null,
+          "optional": false,
+          "type": "int32"
+        },
+        "loaded_at": {
+          "jsonName": "loadedAt",
+          "label": "singular",
+          "number": 20,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
+        },
+        "max_queued": {
+          "jsonName": "maxQueued",
+          "label": "singular",
+          "number": 9,
+          "oneof": null,
+          "optional": false,
+          "type": "int32"
+        },
+        "memory_reserved_bytes": {
+          "jsonName": "memoryReservedBytes",
+          "label": "singular",
+          "number": 16,
+          "oneof": "_memory_reserved_bytes",
+          "optional": true,
+          "type": "int64"
+        },
+        "parent_id": {
+          "jsonName": "parentId",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "per_query_memory_limit_bytes": {
+          "jsonName": "perQueryMemoryLimitBytes",
+          "label": "singular",
+          "number": 11,
+          "oneof": "_per_query_memory_limit_bytes",
+          "optional": true,
+          "type": "int64"
+        },
+        "priority": {
+          "jsonName": "priority",
+          "label": "singular",
+          "number": 6,
+          "oneof": null,
+          "optional": false,
+          "type": "int32"
+        },
+        "queued": {
+          "jsonName": "queued",
+          "label": "singular",
+          "number": 15,
+          "oneof": "_queued",
+          "optional": true,
+          "type": "int32"
+        },
+        "running": {
+          "jsonName": "running",
+          "label": "singular",
+          "number": 14,
+          "oneof": "_running",
+          "optional": true,
+          "type": "int32"
+        },
+        "scan_bytes_in_window": {
+          "jsonName": "scanBytesInWindow",
+          "label": "singular",
+          "number": 17,
+          "oneof": "_scan_bytes_in_window",
+          "optional": true,
+          "type": "int64"
+        },
+        "scan_quota_bytes": {
+          "jsonName": "scanQuotaBytes",
+          "label": "singular",
+          "number": 12,
+          "oneof": "_scan_quota_bytes",
+          "optional": true,
+          "type": "int64"
+        },
+        "scan_quota_period_s": {
+          "jsonName": "scanQuotaPeriodS",
+          "label": "singular",
+          "number": 13,
+          "oneof": "_scan_quota_period_s",
+          "optional": true,
+          "type": "int64"
+        },
+        "scan_window_resets_at": {
+          "jsonName": "scanWindowResetsAt",
+          "label": "singular",
+          "number": 18,
+          "oneof": null,
+          "optional": false,
+          "type": "message:google.protobuf.Timestamp"
+        },
+        "scheduling_policy": {
+          "jsonName": "schedulingPolicy",
+          "label": "singular",
+          "number": 4,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "scheduling_weight": {
+          "jsonName": "schedulingWeight",
+          "label": "singular",
+          "number": 5,
+          "oneof": null,
+          "optional": false,
+          "type": "int32"
+        },
+        "soft_memory_limit_bytes": {
+          "jsonName": "softMemoryLimitBytes",
+          "label": "singular",
+          "number": 10,
+          "oneof": "_soft_memory_limit_bytes",
+          "optional": true,
+          "type": "int64"
+        },
+        "state": {
+          "jsonName": "state",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "workload_class": {
+          "jsonName": "workloadClass",
+          "label": "singular",
+          "number": 7,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
     "ResumeServingRequest": {
       "fields": {
         "request_id": {
@@ -713,6 +1164,107 @@
         }
       },
       "mapEntry": true
+    },
+    "SetConfigDefaultsRequest": {
+      "fields": {
+        "request_id": {
+          "jsonName": "requestId",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "set": {
+          "jsonName": "set",
+          "label": "repeated",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "message:SetConfigDefaultsRequest.SetEntry"
+        },
+        "unset": {
+          "jsonName": "unset",
+          "label": "repeated",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "SetConfigDefaultsRequest.SetEntry": {
+      "fields": {
+        "key": {
+          "jsonName": "key",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "value": {
+          "jsonName": "value",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      },
+      "mapEntry": true
+    },
+    "SetConfigDefaultsResponse": {
+      "fields": {
+        "set_count": {
+          "jsonName": "setCount",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "int32"
+        },
+        "unset_count": {
+          "jsonName": "unsetCount",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "int32"
+        }
+      }
+    },
+    "ValidateResourceGroupConfigRequest": {
+      "fields": {
+        "document": {
+          "jsonName": "document",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "ValidateResourceGroupConfigResponse": {
+      "fields": {
+        "problems": {
+          "jsonName": "problems",
+          "label": "repeated",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "message:ConfigProblem"
+        },
+        "valid": {
+          "jsonName": "valid",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "bool"
+        }
+      }
     }
   },
   "methods": {
@@ -760,6 +1312,17 @@
       "response": "GetCapabilitiesResponse",
       "serverStreaming": false
     },
+    "GetConfig": {
+      "clientStreaming": false,
+      "http": {
+        "method": "GET",
+        "path": "/config"
+      },
+      "privilege": "authenticated",
+      "request": "GetConfigRequest",
+      "response": "GetConfigResponse",
+      "serverStreaming": false
+    },
     "GetDrainStatus": {
       "clientStreaming": false,
       "http": {
@@ -780,6 +1343,17 @@
       "privilege": "authenticated",
       "request": "GetReadinessRequest",
       "response": "GetReadinessResponse",
+      "serverStreaming": false
+    },
+    "GetResourceGroupConfig": {
+      "clientStreaming": false,
+      "http": {
+        "method": "GET",
+        "path": "/resourceGroups/config"
+      },
+      "privilege": "authenticated",
+      "request": "GetResourceGroupConfigRequest",
+      "response": "GetResourceGroupConfigResponse",
       "serverStreaming": false
     },
     "GetVersion": {
@@ -815,6 +1389,17 @@
       "response": "ListQueriesResponse",
       "serverStreaming": false
     },
+    "ListResourceGroups": {
+      "clientStreaming": false,
+      "http": {
+        "method": "GET",
+        "path": "/resourceGroups"
+      },
+      "privilege": "authenticated",
+      "request": "ListResourceGroupsRequest",
+      "response": "ListResourceGroupsResponse",
+      "serverStreaming": false
+    },
     "ListSessions": {
       "clientStreaming": false,
       "http": {
@@ -824,6 +1409,28 @@
       "privilege": "authenticated",
       "request": "ListSessionsRequest",
       "response": "ListSessionsResponse",
+      "serverStreaming": false
+    },
+    "ReloadResourceGroupConfig": {
+      "clientStreaming": false,
+      "http": {
+        "method": "POST",
+        "path": "/resourceGroups/config:reload"
+      },
+      "privilege": "authenticated",
+      "request": "ReloadResourceGroupConfigRequest",
+      "response": "ReloadResourceGroupConfigResponse",
+      "serverStreaming": false
+    },
+    "ReplaceResourceGroupConfig": {
+      "clientStreaming": false,
+      "http": {
+        "method": "PUT",
+        "path": "/resourceGroups/config"
+      },
+      "privilege": "authenticated",
+      "request": "ReplaceResourceGroupConfigRequest",
+      "response": "ReplaceResourceGroupConfigResponse",
       "serverStreaming": false
     },
     "ResumeServing": {
@@ -836,8 +1443,30 @@
       "request": "ResumeServingRequest",
       "response": "ResumeServingResponse",
       "serverStreaming": false
+    },
+    "SetConfigDefaults": {
+      "clientStreaming": false,
+      "http": {
+        "method": "PATCH",
+        "path": "/config/defaults"
+      },
+      "privilege": "authenticated",
+      "request": "SetConfigDefaultsRequest",
+      "response": "SetConfigDefaultsResponse",
+      "serverStreaming": false
+    },
+    "ValidateResourceGroupConfig": {
+      "clientStreaming": false,
+      "http": {
+        "method": "POST",
+        "path": "/resourceGroups/config:validate"
+      },
+      "privilege": "authenticated",
+      "request": "ValidateResourceGroupConfigRequest",
+      "response": "ValidateResourceGroupConfigResponse",
+      "serverStreaming": false
     }
   },
   "package": "krishiv.admin.v1",
-  "revision": 3
+  "revision": 4
 }

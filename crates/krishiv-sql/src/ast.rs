@@ -141,6 +141,9 @@ pub enum Statement {
     /// view, or a temporary view with a qualified or computed name, a
     /// datasource provider, or the `GLOBAL` qualifier).
     CreatePermanentView(Box<CreatePermanentView>),
+    /// `CREATE [OR REPLACE] VIEW ... WITH METRICS LANGUAGE YAML AS $$...$$`
+    /// (Spark 4.2 `createMetricView`).
+    CreateMetricView(Box<CreateMetricView>),
     /// `DROP VIEW [IF EXISTS] name` with a qualified or computed name.
     DropPermanentView(DropPermanentView),
     /// `ALTER TABLE name ...`.
@@ -215,6 +218,7 @@ impl Statement {
             Self::ExecuteImmediate(e) => e.span,
             Self::Script(c) => c.span,
             Self::CreatePermanentView(v) => v.span,
+            Self::CreateMetricView(v) => v.span,
             Self::DropPermanentView(v) => v.span,
             Self::AlterTable(a) => a.span,
             Self::AlterView(a) => a.span,

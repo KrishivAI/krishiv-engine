@@ -200,6 +200,24 @@ fn a_200_with_a_refused_location_is_a_sent_failure() {
     assert!(f.sent, "{f:?}");
 }
 
+/// A 200 whose body does not validate (a non-string `config` value here) is a failure after sending,
+/// not a plain reply: the connector probes the commit instead of taking the body as its state.
+#[test]
+fn a_200_that_does_not_validate_is_a_sent_failure() {
+    let server = serve(|r| match path(r) {
+        "/v1/config" => Reply::Json(200, CONFIG.into()),
+        _ => Reply::Json(
+            200,
+            r#"{"metadata-location": "file:///etc/m.json", "metadata": {"format-version": 2,
+                "table-uuid": "u", "location": "file:///etc"}, "config": {"x": 123}}"#
+                .into(),
+        ),
+    });
+    let c = client(&server, RestAuth::None, false);
+    let f = commit(&c).unwrap_err();
+    assert!(f.sent, "{f:?}");
+}
+
 /// `snapshots=all|refs` reaches the query; no parameter by default.
 #[test]
 fn load_sends_the_snapshots_parameter() {

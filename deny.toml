@@ -21,8 +21,9 @@ ignore = [
     # affected and there is no successor release. Every Arrow crate depends on it
     # (arrow-array, arrow-arith, ... at both workspace and iceberg majors), and the
     # workspace uses it directly too, so it cannot be dropped until Arrow moves off
-    # it. Unmaintained, not a vulnerability. Revisit when Arrow switches.
-    { id = "RUSTSEC-2026-0543", reason = "unmaintained; required by every Arrow crate; no safe upgrade" },
+    # it (arrow-array 60.1 among them). Unmaintained, not a vulnerability. Review by 2027-01-31,
+    # or when Arrow switches.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained; required by every Arrow crate (arrow-array 60.1); no safe upgrade; review by 2027-01-31" },
     # humantime was declared unmaintained in the same announcement as chrono
     # (chronotope/chrono#1768); it has no dependencies of its own. It is in default
     # builds through krishiv-store's `cloud` feature (HTTP client duration

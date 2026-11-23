@@ -42,6 +42,7 @@
 pub(crate) mod interval;
 mod keys;
 pub(crate) mod literal;
+mod metric_view;
 mod pipe;
 mod pipeline;
 mod relation;
@@ -161,6 +162,9 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             Statement::Repair(r) => return Checker { sql, opts }.ddl_name(&r.table),
             Statement::CreatePermanentView(v) => {
                 return Checker { sql, opts }.create_permanent_view(v);
+            }
+            Statement::CreateMetricView(v) => {
+                return Checker { sql, opts }.create_metric_view(v);
             }
             Statement::AlterTable(a) => return Checker { sql, opts }.alter_table(a),
             Statement::AlterView(a) => return Checker { sql, opts }.alter_view(a),
@@ -1388,6 +1392,9 @@ impl Checker<'_> {
     }
 
     fn join(&self, j: &Join) -> R {
+        if let JoinConstraint::AsOf(c) = &j.constraint {
+            return self.asof_join(j, c);
+        }
         if let JoinConstraint::NearestBy(n) = &j.constraint {
             self.nearest_by(j, n)?;
         }

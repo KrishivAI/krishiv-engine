@@ -27,6 +27,7 @@ Paths are relative to this crate.
 - `src/lower/identified.rs` `lower_identified`: the session's substituted `IDENTIFIER(..)` names (by span) mark their columns `ColumnRef::by_identifier`, so a select item of one is named as Spark names the clause
 - `src/summary.rs` `sanitize_query_text` (every literal `?`, comments dropped) and `query_summary` (`SELECT orders customers`): the telemetry forms of query text, from lexer tokens
 - `src/parser/access.rs` (P3-T062 G1, a Krishiv extension: open Spark has no such grammar) `GRANT`, `REVOKE [GRANT OPTION FOR]`, `SHOW GRANTS [ON ..] [TO ..]`, `CREATE ROLE`, `DROP ROLE`, `GRANT ROLE .. TO`, `REVOKE ROLE .. FROM` into `Statement::AccessControl` holding `krishiv_plan::analyzer::access_control::AccessCommand`; taken only at a statement start no Spark statement has (`SHOW GRANTS` only before the end, `ON` or `TO`), never under `EXPLAIN`; classified `ADMIN`, `SHOW GRANTS` `READ`; `tests/access_control.rs`
+- `src/parser/metric_view.rs` (P3 4.2-MV) `CREATE VIEW ... WITH METRICS LANGUAGE YAML AS $$...$$` into `Statement::CreateMetricView` (clauses as written, the body text); `create_full_view_command` tries `createView` first and keeps whichever reading gets further (ANTLR's prediction); `validate/metric_view.rs` the duplicate / `OR REPLACE` + `IF NOT EXISTS` / language checks. A missing `WITH METRICS` or `LANGUAGE` is left to the session (the error is keyed by Spark release); YAML expressions are parsed by the session; goldens `tests/fixtures/spark-{4.2.1,4.3.0}/metric-views/` (`src/tests/metric_view.rs`)
 - `src/classify.rs` statement classifier (`classify` → `StatementClass`, `explain_kind`, `statement_queries`, `statement_targets`: the privileges a statement needs on what it writes, creates or drops); goldens `tests/fixtures/statement-classes.tsv` (`tests/classify.rs`), corpus goldens in `krishiv-testkit` `tests/statement_classes.rs`
 
 ## Extension points
@@ -52,7 +53,8 @@ Paths are relative to this crate.
   (`SetExprKind::Pipe`: input plus a flat `PipeOp` list; pipes bind below set operators; `lower/pipe.rs`) lower,
   each behind a `PipeOperator` boundary. `TABLESAMPLE` lowers `n ROWS` to a limit and `PERCENT` / `BUCKET x OUT OF y` (with
   `REPEATABLE`) to `PlanNode::Sample` (goldens `tests/fixtures/spark-4.2.0/tablesample.json`, `src/tests/sample.rs`);
-  `SYSTEM` is `KRISHIV_UNSUPPORTED_FEATURE`, as are `COLLATE`, `NEAREST BY`, `TABLE(...)` arguments,
+  `SYSTEM` is `KRISHIV_UNSUPPORTED_FEATURE`, as are `COLLATE`, `NEAREST BY`, Spark 4.3's `ASOF JOIN` (parsed with its
+  `AstBuilder` checks in `validate/relation.rs`: the `spark.sql.join.asofJoin.enabled` gate, `ParserOptions::asof_join`, and the match operator), `TABLE(...)` arguments,
   `IDENTIFIER(...)` (names, function names, identifier literals unless `legacy_identifier_clause`), variant paths
   and `TRANSFORM`.
 - `FROM ... SELECT ...` stores its `FROM` once (`FromStatement`); never copy subtrees per use.

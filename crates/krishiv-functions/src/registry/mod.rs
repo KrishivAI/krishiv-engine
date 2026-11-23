@@ -186,6 +186,8 @@ pub enum Aggregate {
     /// deterministic)` and `mode() WITHIN GROUP (ORDER BY col)` forms.
     /// The input type.
     Mode,
+    /// `measure(m)` (Spark 4.2 metric views): never evaluated. The input type.
+    Measure,
     /// `listagg(expr[, delimiter])` (and `string_agg`, which the analyzer
     /// resolves as `listagg` for Spark's display name): the non-NULL
     /// values joined by the delimiter. The input type (`STRING` or
@@ -339,6 +341,8 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__find_in_set_lcase" => "__find_in_set_lcase",
         "__trim_collated" => "__trim_collated",
         "__icu_case" => "__icu_case",
+        "__like_fold" => "__like_fold",
+        "__like_fold_pattern" => "__like_fold_pattern",
         "__replace_lcase" => "__replace_lcase",
         "__translate_lcase" => "__translate_lcase",
         "__split_part_lcase" => "__split_part_lcase",
@@ -369,6 +373,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
             | "__startswith_lcase"
             | "__endswith_lcase"
             | "__find_in_set_lcase"
+            | "__like_fold"
     ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {

@@ -641,6 +641,25 @@ pub(crate) fn decode_echo(bytes: &[u8]) -> Result<crate::extension::Echo, Krishi
     })
 }
 
+/// Decodes the flat `krishiv.v1.PersistPythonFunction` extension message, as [`decode_echo`] does `Echo`.
+///
+/// # Errors
+/// As [`decode_echo`].
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a flat message, checked by `flat_message` (no group, no overrun) first"
+)]
+pub(crate) fn decode_persist_python_function(
+    bytes: &[u8],
+) -> Result<crate::extension::PersistPythonFunction, KrishivError> {
+    flat_message(bytes)?;
+    crate::extension::PersistPythonFunction::decode(bytes).map_err(|_| {
+        KrishivError::from(krishiv_common::error::ConnectInvalidPlanAssertionFailure {
+            message: "the krishiv.v1.PersistPythonFunction extension does not decode".to_owned(),
+        })
+    })
+}
+
 /// The position `n` bytes after `pos`, which must lie within `buf`.
 fn skip(buf: &[u8], pos: usize, n: usize) -> Result<usize, Reject> {
     pos.checked_add(n)

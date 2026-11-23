@@ -6,11 +6,18 @@ use std::fmt;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
-use krishiv_common::secret::OptionValue;
 
 use crate::dag::{self, Memo};
 use crate::walk::{self, Node};
 use crate::{AttrId, BoundColumn, Expr, Origin, PythonUdfRef, SortOrder};
+
+mod asof;
+mod generator;
+pub use asof::{AsOfDirection, AsOfMatch};
+pub use generator::{GeneratorKind, generator_arg};
+mod source;
+pub(crate) use source::GENERATED_METADATA_KEY;
+pub use source::{ReadSource, Scan, TableVersion, without_generated_marker};
 
 /// The IR version a [`Plan`] is written in. It changes when a node changes
 /// meaning; adding a node or field does not change it before 1.0.
@@ -242,6 +249,22 @@ pub enum PlanNode {
         kind: JoinKind,
         /// Join condition.
         condition: JoinCondition,
+    },
+    /// An as-of join (Spark 4.3's `AsOfJoin`): each left row with the one right row
+    /// nearest to it by `as_of` among those `condition` keeps. `kind` is
+    /// [`JoinKind::Inner`] or [`JoinKind::LeftOuter`]; the output is the left columns,
+    /// then the right ones. The optimizer never reorders it.
+    AsOfJoin {
+        /// Left input.
+        left: Arc<LogicalPlan>,
+        /// Right input.
+        right: Arc<LogicalPlan>,
+        /// Join type.
+        kind: JoinKind,
+        /// The `ON` condition or `USING` columns (resolved: `On` or `None`).
+        condition: JoinCondition,
+        /// The match.
+        as_of: Arc<AsOfMatch>,
     },
     /// `ORDER BY` (global) or `SORT BY` / `sortWithinPartitions`.
     Sort {
@@ -692,6 +715,42 @@ pub enum PlanNode {
         /// plan never runs `analyze` again.
         analyzed: Option<Arc<[u8]>>,
     },
+    /// A read of a metric view (Spark's `MetricViewPlaceholder`, design note
+    /// `P3-metric-views.md` §4): its one child is the source with the view's
+    /// filter applied; its output is the stored schema, the dimensions then the
+    /// measures. An aggregate over it rewrites it (`analyzer/metric_view.rs`);
+    /// a resolved plan may still hold it, and planning refuses it.
+    MetricViewRead {
+        /// The source, with the view's filter.
+        input: Arc<LogicalPlan>,
+        /// The view's name (catalog, namespace, name).
+        name: Vec<String>,
+        /// The dimensions, in order.
+        dimensions: Vec<MetricColumn>,
+        /// The measures, in order.
+        measures: Vec<MetricColumn>,
+        /// The output attributes; empty until resolved.
+        output: Vec<BoundColumn>,
+        /// `spark.sql.ansi.enabled` when the view was created: the arithmetic operators its
+        /// dimensions and measures write evaluate in it whatever the reader's mode is (Spark's parser
+        /// builds them with the mode it parses the view's expressions under). `None` follows the
+        /// reader's. Casts carry their mode in [`CastMode`](crate::CastMode) already.
+        ansi: Option<bool>,
+    },
+}
+
+/// A dimension or measure of a [`PlanNode::MetricViewRead`]: its name, its
+/// parsed (unresolved) expression and the stored type of its column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetricColumn {
+    /// The column name.
+    pub name: String,
+    /// The expression as parsed from the view's YAML; never resolved in place.
+    pub expr: Arc<Expr>,
+    /// The stored column type.
+    pub data_type: krishiv_types::DataType,
+    /// The stored nullability.
+    pub nullable: bool,
 }
 
 /// The `TABLE(t)` argument of a [`PlanNode::PythonTableFunction`] (Spark's
@@ -716,73 +775,6 @@ pub struct TableArg {
     pub position: usize,
     /// Its name, when it is a named argument (`row => TABLE(t)`).
     pub name: Option<String>,
-}
-
-/// The attribute a resolved generator reads: its argument is always a
-/// column of its input, which the generator does not carry to its output
-/// (so an exploded array is not copied once per element).
-#[must_use]
-pub fn generator_arg(arg: &Expr) -> Option<AttrId> {
-    match &arg.node {
-        crate::ExprNode::Resolved(crate::ResolvedExpr::Column(c)) => Some(c.id),
-        _ => None,
-    }
-}
-
-/// What a [`PlanNode::Generate`] produces for each element of its argument
-/// (Spark's `Explode`, `PosExplode` and `Inline` generators).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum GeneratorKind {
-    /// `explode`: a row per array element (`col`), or per map entry (`key`,
-    /// `value`).
-    Explode,
-    /// `posexplode`: as `explode` with the 0-based position first (`pos`).
-    PosExplode,
-    /// `inline`: a row per struct of an array of structs, one column per
-    /// field.
-    Inline,
-    /// `variant_explode`: a row per field of a variant object or element of
-    /// a variant array (`pos`, `key`, `value`); any other value, a variant
-    /// null and SQL `NULL` give no rows.
-    VariantExplode,
-    /// A Python UDTF under `LATERAL` (Spark's `Generate(PythonUDTF)`): the
-    /// node's `arg` is the call, a [`crate::FunctionId::PythonUdf`] of a
-    /// table kind with the UDTF's arguments, not a column; the generated
-    /// columns are its declared result.
-    PythonUdtf,
-}
-
-impl GeneratorKind {
-    /// The function name Spark shows for the generator (`explode`,
-    /// `posexplode`, `inline`; `_outer` is added by the caller).
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Explode => "explode",
-            Self::PosExplode => "posexplode",
-            Self::Inline => "inline",
-            Self::VariantExplode => "variant_explode",
-            Self::PythonUdtf => "python_udtf",
-        }
-    }
-
-    /// The generator a function name calls (ASCII lower case), and whether
-    /// it is the `_outer` form; `stack` is not one (it lowers to `inline`).
-    #[must_use]
-    pub fn of_name(name: &str) -> Option<(Self, bool)> {
-        let (base, outer) = match name.strip_suffix("_outer") {
-            Some(base) => (base, true),
-            None => (name, false),
-        };
-        let kind = match base {
-            "explode" => Self::Explode,
-            "posexplode" => Self::PosExplode,
-            "inline" => Self::Inline,
-            "variant_explode" => Self::VariantExplode,
-            _ => return None,
-        };
-        Some((kind, outer))
-    }
 }
 
 /// One value of a [`PlanNode::Pivot`]: one expression per pivot column,
@@ -879,152 +871,6 @@ pub struct CteRef {
     /// This reference's attributes, one per source attribute.
     pub output: Vec<BoundColumn>,
 }
-
-/// What an unresolved read reads.
-///
-/// Option values are typed ([`OptionValue`], ADR 0038): front ends build
-/// them with [`OptionValue::from_user`], so secrets never print, not even
-/// through `Debug`, and never enter the canonical encoding in plaintext.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ReadSource {
-    /// A table, view or CTE by name (`spark.read.table`, `FROM t`).
-    Table {
-        /// Name parts, e.g. `["cat", "db", "t"]`.
-        name: Vec<String>,
-        /// Data source options.
-        options: BTreeMap<String, OptionValue>,
-    },
-    /// Files of a format (`spark.read.parquet(path)`).
-    #[non_exhaustive]
-    Files {
-        /// Format name, e.g. `parquet`, as written (compared
-        /// case-insensitively; a resolved [`Scan`] holds it in lower case).
-        format: String,
-        /// Paths or globs, typed like options (built with
-        /// [`OptionValue::from_user`] under the key `path`, as Spark keeps
-        /// them as the `path` option): a signed URL's credentials are secret
-        /// parts.
-        paths: Vec<OptionValue>,
-        /// Data source options.
-        options: BTreeMap<String, OptionValue>,
-        /// The schema the user declared (`spark.read.schema(..)`); `None`
-        /// infers it from the files. Build with [`ReadSource::files`] and
-        /// [`ReadSource::with_schema`].
-        schema: Option<krishiv_types::StructType>,
-    },
-    /// Arrow data held in the session's relation store (Spark's
-    /// `LocalRelation`). Built only from a lease; the analyzer resolves it
-    /// to a [`Scan`] with the Arrow schema's columns.
-    Local(crate::LocalRelation),
-}
-
-impl ReadSource {
-    /// A read of files of `format` at `paths` whose schema is inferred.
-    #[must_use]
-    pub fn files(
-        format: impl Into<String>,
-        paths: Vec<OptionValue>,
-        options: BTreeMap<String, OptionValue>,
-    ) -> Self {
-        Self::Files {
-            format: format.into(),
-            paths,
-            options,
-            schema: None,
-        }
-    }
-
-    /// This read with the user-declared `schema`; a table read is returned
-    /// unchanged (Spark's `NamedTable` has no schema).
-    #[must_use]
-    pub fn with_schema(self, schema: krishiv_types::StructType) -> Self {
-        match self {
-            Self::Files {
-                format,
-                paths,
-                options,
-                ..
-            } => Self::Files {
-                format,
-                paths,
-                options,
-                schema: Some(schema),
-            },
-            other @ (Self::Table { .. } | Self::Local(_)) => other,
-        }
-    }
-}
-
-/// A resolved read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Scan {
-    /// What was read.
-    pub source: ReadSource,
-    /// Output attributes.
-    pub output: Vec<BoundColumn>,
-    /// The table version pinned for the whole query (ADR 0037); `None` for
-    /// sources without versions.
-    pub version: Option<TableVersion>,
-}
-
-/// Field-metadata key the analyzer puts on every field of the generated
-/// `_metadata` struct, so a table column of that name and shape is never
-/// taken for it.
-pub(crate) const GENERATED_METADATA_KEY: &str = "krishiv.generated_file_metadata";
-
-/// `t` without the analyzer's provenance marker on the fields of a generated
-/// `_metadata` struct: what a stored column keeps when a query's output is
-/// materialized (`CREATE TABLE .. AS SELECT _metadata`), so the stored
-/// values are never mistaken for the generated column.
-#[must_use]
-pub fn without_generated_marker(t: &krishiv_types::DataType) -> krishiv_types::DataType {
-    use krishiv_types::{DataType, StructField, StructType};
-    let DataType::Struct(s) = t else {
-        return t.clone();
-    };
-    DataType::Struct(StructType::new(s.fields().iter().map(|f| {
-        let mut map = f.metadata().as_map().clone();
-        map.remove(GENERATED_METADATA_KEY);
-        StructField::new(f.name(), f.data_type().clone(), f.nullable())
-            .with_metadata(krishiv_types::Metadata::from_map(map))
-    })))
-}
-
-impl Scan {
-    /// The hidden `_metadata` column of a file source this scan outputs
-    /// (always last), if it does: a struct of the source's own fields.
-    #[must_use]
-    pub fn metadata_column(&self) -> Option<&BoundColumn> {
-        let c = self.output.last()?;
-        let krishiv_types::DataType::Struct(s) = &c.data_type else {
-            return None;
-        };
-        // Every field is one of the source's own (a pruned scan keeps only
-        // the fields read), so a user column of this name that holds anything
-        // else is a table column.
-        const FIELDS: [&str; 7] = [
-            "file_path",
-            "file_name",
-            "file_size",
-            "file_block_start",
-            "file_block_length",
-            "file_modification_time",
-            "row_index",
-        ];
-        (c.name == "_metadata"
-            && !s.fields().is_empty()
-            && s.fields().iter().all(|f| {
-                FIELDS.iter().any(|n| *n == f.name())
-                    && f.metadata().as_map().contains_key(GENERATED_METADATA_KEY)
-            }))
-        .then_some(c)
-    }
-}
-
-/// A table version: an Iceberg snapshot id or a Delta table version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TableVersion(pub i64);
 
 /// Parameters of a [`PlanNode::Sql`] statement.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1198,6 +1044,24 @@ impl LogicalPlan {
         })
     }
 
+    /// `self kind ASOF JOIN right` matching by `as_of` among the rows `condition` keeps.
+    #[must_use]
+    pub fn as_of_join(
+        self,
+        right: Self,
+        kind: JoinKind,
+        condition: JoinCondition,
+        as_of: AsOfMatch,
+    ) -> Self {
+        Self::new(PlanNode::AsOfJoin {
+            left: Arc::new(self),
+            right: Arc::new(right),
+            kind,
+            condition,
+            as_of: Arc::new(as_of),
+        })
+    }
+
     /// `self ORDER BY order` (a global sort).
     #[must_use]
     pub fn sort(self, order: Vec<SortOrder>) -> Self {
@@ -1280,6 +1144,7 @@ impl LogicalPlan {
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
+            | PlanNode::MetricViewRead { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1292,6 +1157,7 @@ impl LogicalPlan {
             | PlanNode::MapPartitions { input, .. }
             | PlanNode::GroupMap { input, .. } => f(input),
             PlanNode::Join { left, right, .. }
+            | PlanNode::AsOfJoin { left, right, .. }
             | PlanNode::SetOp { left, right, .. }
             | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
@@ -1348,6 +1214,7 @@ impl LogicalPlan {
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
+            | PlanNode::MetricViewRead { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1360,6 +1227,7 @@ impl LogicalPlan {
             | PlanNode::MapPartitions { input, .. }
             | PlanNode::GroupMap { input, .. } => f(input),
             PlanNode::Join { left, right, .. }
+            | PlanNode::AsOfJoin { left, right, .. }
             | PlanNode::SetOp { left, right, .. }
             | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
@@ -1403,7 +1271,9 @@ impl LogicalPlan {
             | PlanNode::SetOp { .. }
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
-            | PlanNode::Distinct { .. } => {}
+            | PlanNode::Distinct { .. }
+            // Its dimensions and measures are never resolved in place.
+            | PlanNode::MetricViewRead { .. } => {}
             PlanNode::Hint { params, .. }
             | PlanNode::Repartition { exprs: params, .. }
             | PlanNode::CollectMetrics {
@@ -1453,6 +1323,14 @@ impl LogicalPlan {
                 JoinCondition::On(e) => f(e),
                 JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
             },
+            PlanNode::AsOfJoin {
+                condition, as_of, ..
+            } => {
+                as_of.exprs().for_each(&mut *f);
+                if let JoinCondition::On(e) = condition {
+                    f(e);
+                }
+            }
             PlanNode::Sort { order, .. } => order.iter().for_each(|o| f(&o.expr)),
             PlanNode::Expand { projections, .. } => projections.iter().flatten().for_each(f),
             PlanNode::Generate { arg, .. } => f(arg),
@@ -1518,7 +1396,9 @@ impl LogicalPlan {
             | PlanNode::SetOp { .. }
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
-            | PlanNode::Distinct { .. } => {}
+            | PlanNode::Distinct { .. }
+            // Its dimensions and measures are never resolved in place.
+            | PlanNode::MetricViewRead { .. } => {}
             PlanNode::Hint { params, .. }
             | PlanNode::Repartition { exprs: params, .. }
             | PlanNode::CollectMetrics {
@@ -1571,6 +1451,14 @@ impl LogicalPlan {
                 JoinCondition::On(e) => f(e),
                 JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
             },
+            PlanNode::AsOfJoin {
+                condition, as_of, ..
+            } => {
+                Arc::make_mut(as_of).exprs_mut().for_each(&mut *f);
+                if let JoinCondition::On(e) = condition {
+                    f(e);
+                }
+            }
             PlanNode::Sort { order, .. } => order.iter_mut().for_each(|o| f(&mut o.expr)),
             PlanNode::Generate { arg, .. } => f(arg),
             PlanNode::Expand { projections, .. } => {
@@ -1698,6 +1586,7 @@ impl LogicalPlan {
                 PlanNode::Range { output, .. } => return Some(vec![output.clone()]),
                 PlanNode::UnionLoop { output, .. }
                 | PlanNode::UnionLoopRef { output, .. }
+                | PlanNode::MetricViewRead { output, .. }
                 | PlanNode::MapPartitions { output, .. }
                 | PlanNode::GroupMap { output, .. }
                 | PlanNode::CoGroupMap { output, .. }
@@ -1772,6 +1661,9 @@ impl LogicalPlan {
                     return Some(out);
                 }
                 PlanNode::Join {
+                    left, right, kind, ..
+                }
+                | PlanNode::AsOfJoin {
                     left, right, kind, ..
                 } => {
                     let nullable = |v: Vec<BoundColumn>, yes: bool| {
