@@ -165,7 +165,12 @@ impl Infer<'_> {
         } else if self.o.prefer_date {
             self.time(f)
         } else {
-            self.date_time(f)
+            // Spark 4.3.0 `tryParseDouble`: without `preferDate` inference
+            // goes straight to the timestamp, never trying a DATE (Spark's
+            // lenient timestamp parser takes a date-only text). Spark also
+            // forces `preferDate` off under the LEGACY parser policy
+            // (`CSVOptions.scala:193-198`); that policy is not visible here.
+            self.timestamp(f)
         }
     }
 

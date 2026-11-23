@@ -64,6 +64,9 @@ fn time_pattern(
     compiled: DateTimePattern,
     purpose: Purpose,
 ) -> Result<DateTimePattern, KrishivError> {
+    // The second gate: `DateTimePattern::new` already refused what Spark's
+    // timestamp checks refuse (so `n`, `N`, `A` never reach here, and the
+    // pad modifier `p`, which `LocalTime` would format, is refused there).
     if matches!(purpose, Purpose::Format)
         && let Some(c) = unquoted_letters(text).find(|c| !"HhKkmsSnNAa".contains(*c))
     {

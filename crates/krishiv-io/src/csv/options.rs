@@ -190,7 +190,8 @@ pub(crate) struct CsvOptions {
     pub charset: Charset,
     pub line_sep: LineSep,
     pub enforce_schema: bool,
-    /// `preferDate` (default true): inference tries a `TIME` after a number.
+    /// `preferDate` (default true): inference tries a `TIME`, then a `DATE`,
+    /// after a number; when false it goes straight to a `TIMESTAMP`.
     pub prefer_date: bool,
     /// The session's `spark.sql.timeType.enabled`: inference may give `TIME`.
     pub time_type: bool,

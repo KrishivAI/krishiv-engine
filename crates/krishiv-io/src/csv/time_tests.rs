@@ -12,8 +12,8 @@ use krishiv_common::error::ErrorClass;
 use super::tests::{encode, infer, options, read};
 use crate::request::ScanRequest;
 use crate::text::time_golden::{
-    INFER_CSV, INFER_DOTS_CSV, INFER_MIXED_CSV, case, check_reads, expected, fixture, inferred_t,
-    rows, schema, spark_t, with_gate,
+    INFER_CSV, INFER_DATES_CSV, INFER_DOTS_CSV, INFER_MIXED_CSV, case, check_reads, expected,
+    fixture, inferred_t, rows, schema, spark_t, with_gate,
 };
 
 #[test]
@@ -184,6 +184,12 @@ fn time_inference_matches_spark() {
             serde_json::json!({"timeFormat": "HH.mm.ss"}),
         ),
         ("infer csv mixed", INFER_MIXED_CSV, serde_json::json!({})),
+        ("infer csv dates", INFER_DATES_CSV, serde_json::json!({})),
+        (
+            "infer csv dates preferDate false",
+            INFER_DATES_CSV,
+            serde_json::json!({"preferDate": "false"}),
+        ),
     ] {
         let c = case(&doc, name);
         let mut opts = with_gate(c, extra);

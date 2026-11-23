@@ -334,6 +334,8 @@ pub(crate) const INFER_CSV: &str = "id,t\n0,12:34:56\n1,01:02:03.5\n2,\n";
 pub(crate) const INFER_DOTS_CSV: &str = "id,t\n0,12.34.56\n1,01.02.03\n";
 /// See [`INFER_CSV`].
 pub(crate) const INFER_MIXED_CSV: &str = "id,t\n0,12:34:56\n1,7\n";
+/// See [`INFER_CSV`] (`infer_dates/a.csv`).
+pub(crate) const INFER_DATES_CSV: &str = "id,t\n0,2024-01-15\n1,2024-02-01\n";
 /// See [`INFER_CSV`].
 pub(crate) const INFER_JSON: &str =
     "{\"id\":0,\"t\":\"12:34:56\"}\n{\"id\":1,\"t\":\"01:02:03.5\"}\n{\"id\":2,\"t\":null}\n";
@@ -344,6 +346,7 @@ pub(crate) fn inferred_t(schema: &SchemaRef) -> String {
     match f.data_type() {
         DataType::Time64(_) => "time(6)".to_owned(),
         DataType::Timestamp(..) => "timestamp".to_owned(),
+        DataType::Date32 => "date".to_owned(),
         DataType::Utf8View | DataType::Utf8 => "string".to_owned(),
         other => other.to_string(),
     }

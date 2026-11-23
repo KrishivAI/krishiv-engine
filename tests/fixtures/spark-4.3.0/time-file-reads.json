@@ -4327,6 +4327,64 @@
    ]
   },
   {
+   "name": "infer csv dates",
+   "description": "csv inferSchema, date-only texts",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "schema": [
+    {
+     "name": "id",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "t",
+     "type": "date",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "0",
+     "2024-01-15"
+    ],
+    [
+     "1",
+     "2024-02-01"
+    ]
+   ]
+  },
+  {
+   "name": "infer csv dates preferDate false",
+   "description": "csv inferSchema, date-only texts, preferDate=false",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "schema": [
+    {
+     "name": "id",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "t",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "0",
+     "2024-01-15 00:00:00"
+    ],
+    [
+     "1",
+     "2024-02-01 00:00:00"
+    ]
+   ]
+  },
+  {
    "name": "infer csv timeFormat",
    "description": "csv inferSchema, timeFormat HH.mm.ss",
    "conf": {

@@ -104,6 +104,8 @@ def layout(root):
     write_text(f"{root}/infer/a.csv", "id,t\n0,12:34:56\n1,01:02:03.5\n2,\n")
     write_text(f"{root}/infer_dots/a.csv", "id,t\n0,12.34.56\n1,01.02.03\n")
     write_text(f"{root}/infer_mixed/a.csv", "id,t\n0,12:34:56\n1,7\n")
+    # Date-only texts: `preferDate=false` skips the DATE step (CSVInferSchema.tryParseDouble).
+    write_text(f"{root}/infer_dates/a.csv", "id,t\n0,2024-01-15\n1,2024-02-01\n")
     write_text(f"{root}/infer_json/a.json", '{"id":0,"t":"12:34:56"}\n{"id":1,"t":"01:02:03.5"}\n{"id":2,"t":null}\n')
     write_text(
         f"{root}/fmt_json/a.json",
@@ -316,6 +318,12 @@ def cases(spark, root):
     add("infer csv single shape", "csv inferSchema, every value a TIME text", infer_csv("infer"))
     add("infer csv gate off", "the same with the gate off", infer_csv("infer"), off)
     add("infer csv preferDate false", "csv inferSchema, preferDate=false", infer_csv("infer", preferDate="false"))
+    add("infer csv dates", "csv inferSchema, date-only texts", infer_csv("infer_dates"))
+    add(
+        "infer csv dates preferDate false",
+        "csv inferSchema, date-only texts, preferDate=false",
+        infer_csv("infer_dates", preferDate="false"),
+    )
     add("infer csv timeFormat", "csv inferSchema, timeFormat HH.mm.ss", infer_csv("infer_dots", timeFormat="HH.mm.ss"))
     add(
         "infer csv timeFormat default texts",
