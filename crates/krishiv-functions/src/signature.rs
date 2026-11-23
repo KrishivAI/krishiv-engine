@@ -57,6 +57,18 @@ impl SparkProfile {
     /// Every profile, oldest first.
     pub const ALL: [Self; 5] = [Self::V3_5, Self::V4_0, Self::V4_1, Self::V4_2, Self::V4_3];
 
+    /// The kernels' release line for this profile (the kernels model 4.0 as their oldest line;
+    /// 3.5 behaves as it).
+    #[must_use]
+    pub const fn kernel_version(self) -> krishiv_kernels::SparkVersion {
+        match self {
+            Self::V3_5 | Self::V4_0 => krishiv_kernels::SparkVersion::V4_0,
+            Self::V4_1 => krishiv_kernels::SparkVersion::V4_1,
+            Self::V4_2 => krishiv_kernels::SparkVersion::V4_2,
+            Self::V4_3 => krishiv_kernels::SparkVersion::V4_3,
+        }
+    }
+
     /// The release line, as `"4.2"`.
     #[must_use]
     pub const fn line(self) -> &'static str {

@@ -122,6 +122,10 @@ pub struct PlanningContext {
     /// executes, such as `QUERY_ONLY_CORRUPT_RECORD_COLUMN` (raised by the file format's reader), are
     /// skipped.
     pub inspect: bool,
+    /// The Spark release whose behaviour the kernels and function bindings reproduce (the
+    /// session's profile). Plan data: a version other than the default travels in
+    /// [`ExprEnv::spark_version`](crate::physical::ExprEnv::spark_version).
+    pub spark_version: krishiv_kernels::SparkVersion,
 }
 
 impl PlanningContext {
@@ -135,7 +139,15 @@ impl PlanningContext {
             query_start_micros: None,
             sample_salt: None,
             inspect: false,
+            spark_version: krishiv_kernels::SparkVersion::default(),
         }
+    }
+
+    /// The same context reproducing Spark `version`.
+    #[must_use]
+    pub fn with_spark_version(mut self, version: krishiv_kernels::SparkVersion) -> Self {
+        self.spark_version = version;
+        self
     }
 
     /// The same context for a plan that is only inspected when `inspect`.

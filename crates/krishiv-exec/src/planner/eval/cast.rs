@@ -186,13 +186,17 @@ pub(super) struct CastParts {
     /// day cast to `TIMESTAMP` takes its date from.
     pub(super) query_start: i64,
     /// Where the `time(p)` targets are: a time cast to `time(p)` drops the
-    /// digits below `p` (a string cast keeps them, as Spark does:
+    /// digits below `p` (a string cast keeps six, as Spark 4.2 does:
     /// `time_to_micros(cast('09:08:01.987654' as time(1)))` is
     /// 32881987654). Arrow's
     /// `Time64` does not carry `p`, so a nested target's precisions travel
     /// here.
     pub(super) precision: Precision,
 }
+
+/// Nanoseconds per microsecond: the `TIME(6)` unit a Spark 4.2 string cast
+/// keeps.
+const MICROS_UNIT: i64 = 1_000;
 
 /// The `time(p)` precisions of a cast target, in the shape of the type.
 #[derive(Debug, Clone, Default)]
@@ -377,12 +381,19 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
         time_zone: &zone,
     };
     let out = cast(input.as_ref(), &p.kernel_to, &opts)?;
-    // A `time(p)` target keeps `p` digits whatever the source (a string or a
-    // `time(q)`); the kernel reads every digit the source holds.
-    let out = match out.data_type() {
-        ArrowType::Time64(_) if p.precision.unit() > 1 => {
+    // A `time(q)` cast to `time(p)` keeps `p` digits. A string cast to
+    // `time(p < 9)` reaches here only under Spark 4.2 (under 4.3 the analyzer
+    // reads the string as a `time(9)` first, so the first arm applies), and
+    // 4.2 keeps six digits whatever `p`: `cast('12:00:00.123456789' as
+    // time(1))` is `12:00:00.123456`. The kernel reads nine.
+    let out = match (input.data_type(), out.data_type()) {
+        (from, ArrowType::Time64(_)) if p.precision.unit() > 1 => {
             use arrow_array::types::Time64NanosecondType;
-            let unit = p.precision.unit();
+            let unit = if matches!(from, ArrowType::Time64(_)) {
+                p.precision.unit()
+            } else {
+                MICROS_UNIT
+            };
             Arc::new(
                 out.as_primitive::<Time64NanosecondType>()
                     .unary::<_, Time64NanosecondType>(|v| v - v % unit),

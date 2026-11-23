@@ -647,6 +647,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "legacy_charset_switches"
             | "legacy_time_parser"
             | "binary_output_style"
+            | "spark_version"
             | "session_zone_name"
             | "aggregate_filter"
             | "range"

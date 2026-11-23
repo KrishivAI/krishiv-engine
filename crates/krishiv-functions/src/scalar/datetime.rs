@@ -1379,12 +1379,20 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         (
             "extract" | "date_part" | "datepart",
             [f, DataType::Time64(TimeUnit::Nanosecond)]
-            | [f, DataType::Time64(TimeUnit::Nanosecond), DataType::Int32],
+            | [f, DataType::Time64(TimeUnit::Nanosecond), DataType::Int32]
+            | [
+                f,
+                DataType::Time64(TimeUnit::Nanosecond),
+                DataType::Int32,
+                DataType::Boolean,
+            ],
         ) if is_string(f) => {
             // A third argument is the declared precision of a `time(p)`
             // other than 6, a literal the analyzer appends: below 6 it cuts the
             // seconds' fraction; 7..=9 (Spark 4.3) reads `p` digits into a
-            // `decimal(p + 2, p)`.
+            // `decimal(p + 2, p)`. A fourth, `true` (Spark 4.3), reads `p`
+            // digits into a `decimal(p + 2, p)` below 6 too.
+            let scaled = matches!(args.get(3), Some(BindArg::Literal(_)));
             let precision = match args.get(2) {
                 None => None,
                 Some(BindArg::Literal(a)) => {
@@ -1417,7 +1425,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(None) => Binding::new(DataType::Float64, |x: &Inputs<'_>| {
                     Ok(arrow_array::new_null_array(&DataType::Float64, x.rows()))
                 }),
-                Ok(Some(DatePart::Second)) if precision.is_some_and(|p| p > 6) => {
+                Ok(Some(DatePart::Second)) if precision.is_some_and(|p| p > 6 || scaled) => {
                     let p = precision.unwrap_or(9);
                     let scale = i8::try_from(p).unwrap_or(9);
                     let digits = u8::try_from(p).unwrap_or(9) + 2;

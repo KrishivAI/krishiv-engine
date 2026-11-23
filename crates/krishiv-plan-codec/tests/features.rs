@@ -41,6 +41,26 @@ fn an_unknown_binary_output_style_is_corrupt() {
 }
 
 #[test]
+fn an_unknown_spark_version_is_corrupt() {
+    for line in ["4.3", "3.5", "4.2.0", ""] {
+        let mut m = message("spark_version");
+        m.env.as_mut().unwrap().spark_version = Some(line.to_owned());
+        corrupt(&m, "an unknown Spark version");
+    }
+    let bytes = message("spark_version").encode_to_vec();
+    let plan = decode(&bytes).unwrap();
+    assert_eq!(plan.env().spark_version.as_deref(), Some("4.2"));
+    // A reader without the feature would run the plan as Spark 4.3: it refuses it.
+    let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["spark_version".to_owned()]
+        }
+    );
+}
+
+#[test]
 fn the_header_lists_exactly_the_features_in_use() {
     let m = message("window_ranking");
     assert_eq!(m.features, ["window"]);
@@ -106,6 +126,7 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("binary_output_style").features,
         ["binary_output_style"]
     );
+    assert_eq!(message("spark_version").features, ["spark_version"]);
     assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
     // The exchange's schema alone names the collation.
     assert_eq!(

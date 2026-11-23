@@ -151,7 +151,8 @@ impl Session {
             .with_sample_salt(env.sample_salt)
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs))
-            .with_inspection(inspected);
+            .with_inspection(inspected)
+            .with_spark_version(self.state.profile.kernel_version());
         let physical = self.state.planner.plan(&optimized, &cx)?;
         // The admission request's estimate, only for a controller that reads it.
         if !withheld && self.state.admission.uses_estimate() {

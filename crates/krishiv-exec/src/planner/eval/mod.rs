@@ -320,7 +320,12 @@ impl EvalEnv {
             legacy_statistical_aggregate: env.legacy_statistical_aggregate,
             zone: env.zone,
             zone_name: env.zone_name.clone(),
-            kernels: KernelCtx::new(),
+            kernels: KernelCtx::new().with_spark_version(
+                env.spark_version
+                    .as_deref()
+                    .and_then(krishiv_kernels::SparkVersion::from_line)
+                    .unwrap_or_default(),
+            ),
             query_start_micros: env.query_start_micros,
             user: Arc::clone(&env.user),
             udfs: None,
@@ -356,6 +361,10 @@ impl EvalEnv {
             binary_output_style: (self.binary_style
                 != krishiv_kernels::binary_style::BinaryStyle::default())
             .then(|| Arc::from(self.binary_style.name())),
+            // Likewise only a version other than the default is plan data.
+            spark_version: (self.kernels.spark_version()
+                != krishiv_kernels::SparkVersion::default())
+            .then(|| Arc::from(self.kernels.spark_version().line())),
         }
     }
 }

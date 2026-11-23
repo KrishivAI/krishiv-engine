@@ -131,6 +131,13 @@ pub struct ExprEnv {
     /// feature: binary_output_style
     #[prost(string, optional, tag = "11")]
     pub binary_output_style: ::core::option::Option<::prost::alloc::string::String>,
+    /// The Spark release line ("4.0", "4.1", "4.2") whose behaviour the kernels and function
+    /// bindings reproduce, when it is not the default 4.3 (the session's profile); a worker
+    /// without the feature would run the plan as Spark 4.3 (a `TIME(p)` read keeping nine
+    /// digits where 4.2 keeps six, 4.3's error texts).
+    /// feature: spark_version
+    #[prost(string, optional, tag = "12")]
+    pub spark_version: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {

@@ -6,15 +6,21 @@ release: Spark 4.2.0 and Spark 4.3.0 give one fixture each, and the test runs ev
 Krishiv profile. A case is a SQL statement with optional session configs. For a statement that runs the
 fixture records the output column names and every value cast to STRING on the server (`CAST(c AS STRING)`
 of each output column), so TIME values keep their nanoseconds (Python rows would hold microseconds); a case
-marked `clock` reads a clock and records the names only. For a statement that fails it records the error
+marked `clock` reads a clock: it records the names, and as `typed` the first row's values of its `typeof(..)`
+columns (by position), which do not depend on the clock. For a statement that fails it records the error
 condition and the message's first line without the `SQLSTATE` suffix and query context.
 
 Usage (from the repository root, Java 17+ on PATH):
 
-    SPARK_HOME=/path/to/spark-4.3.0-bin-hadoop3 PYTHONPATH=$SPARK_HOME/python:$SPARK_HOME/python/lib/py4j-*.zip \
+    export SPARK_HOME=/path/to/spark-4.3.0-bin-hadoop3
+    PY4J=$(ls "$SPARK_HOME"/python/lib/py4j-*.zip)
+    PYTHONPATH="$SPARK_HOME/python:$PY4J" \
       python3 tests/scripts/gen_time_precision_goldens.py --out tests/fixtures/spark-4.3.0/time-precision-goldens.json
     <python with pyspark==4.2.0> tests/scripts/gen_time_precision_goldens.py \
       --out tests/fixtures/spark-4.2.0/time-precision-goldens.json
+
+`--remote sc://host:port` runs the cases on a Spark Connect server of the same release instead (a client
+of that release, e.g. `pyspark-client==4.3.0`); the values are cast to STRING on the server either way.
 """
 
 from __future__ import annotations
@@ -133,6 +139,27 @@ CASES: list[tuple[str, dict[str, str], str, bool]] = [
         "typeof(time_trunc('SECOND', TIME'12:00:00.123456789')) AS t",
         False,
     ),
+    # A cast to TIME(p) keeps p digits: from a string column and literal, and from a TIME.
+    (
+        "string_col_to_time1",
+        ON,
+        "SELECT CAST(CAST(s AS TIME(1)) AS STRING) AS a, time_to_micros(CAST(s AS TIME(1))) AS b "
+        "FROM VALUES ('09:08:01.987654') t(s)",
+        False,
+    ),
+    ("string_lit_to_time3", ON, "SELECT CAST(CAST('09:08:01.987654' AS TIME(3)) AS STRING) AS c", False),
+    ("time6_to_time0", ON, "SELECT CAST(CAST(TIME'09:08:01.987654' AS TIME(0)) AS STRING) AS c", False),
+    # EXTRACT(SECOND) of TIME(p), p <= 6.
+    (
+        "extract_second_low_precision",
+        ON,
+        "SELECT CAST(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(0))) AS STRING) AS a, "
+        "typeof(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(0)))) AS ta, "
+        "CAST(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(3))) AS STRING) AS b, "
+        "typeof(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(3)))) AS tb, "
+        "typeof(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(6)))) AS tc",
+        False,
+    ),
     ("time_to_micros", ON, "SELECT time_to_micros(TIME'12:00:01.123456789') AS c", False),
     (
         "to_time",
@@ -186,6 +213,7 @@ CASES: list[tuple[str, dict[str, str], str, bool]] = [
     ),
     ("current_timestamp_bigint", {}, "SELECT typeof(current_timestamp(CAST(6 AS BIGINT)))", True),
     ("current_timestamp9", {}, "SELECT current_timestamp(9)", False),
+    ("current_timestamp_null", {}, "SELECT current_timestamp(CAST(NULL AS INT))", False),
     ("localtimestamp7", {}, "SELECT localtimestamp(7)", False),
     ("current_timestamp3", {}, "SELECT current_timestamp(3)", False),
     ("now10", {}, "SELECT now(10)", False),
@@ -220,12 +248,12 @@ def run(spark: Any, conf: dict[str, str], sql: str, clock: bool) -> dict[str, An
     try:
         df = spark.sql(sql)
         names = list(df.columns)
-        if clock:
-            df.collect()
-            return {"names": names}
         # Positional names first: two output names may be equal (Spark 4.2 cuts a literal's digits).
         positional = df.toDF(*[f"c{i}" for i in range(len(names))])
         rows = positional.select(*[F.col(f"c{i}").cast("string") for i in range(len(names))]).collect()
+        if clock:
+            typed = [[i, rows[0][i]] for i, n in enumerate(names) if n.startswith("typeof(")]
+            return {"names": names, "typed": typed}
         return {"names": names, "values": [[r[i] for i in range(len(names))] for r in rows]}
     except Exception as e:  # a Spark error is the expected result of a case
         return error_record(e)
@@ -237,15 +265,20 @@ def run(spark: Any, conf: dict[str, str], sql: str, clock: bool) -> dict[str, An
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--remote", help="a Spark Connect server (sc://host:port) instead of local mode")
     args = parser.parse_args()
     from pyspark.sql import SparkSession
 
-    spark = (
-        SparkSession.builder.master("local[1]")
-        .config("spark.ui.enabled", "false")
-        .config("spark.sql.session.timeZone", "UTC")
-        .getOrCreate()
-    )
+    if args.remote:
+        spark = SparkSession.builder.remote(args.remote).getOrCreate()
+        spark.conf.set("spark.sql.session.timeZone", "UTC")
+    else:
+        spark = (
+            SparkSession.builder.master("local[1]")
+            .config("spark.ui.enabled", "false")
+            .config("spark.sql.session.timeZone", "UTC")
+            .getOrCreate()
+        )
     cases = []
     for case_id, conf, sql, clock in CASES:
         cases.append({"id": case_id, "conf": conf, "sql": sql, "clock": clock, **run(spark, conf, sql, clock)})

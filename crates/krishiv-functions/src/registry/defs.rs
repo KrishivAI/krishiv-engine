@@ -583,15 +583,20 @@ fn extract_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(match extract_field(c)? {
         // `date_part(NULL, x)` is a NULL `double`.
         None => ArgType::new(DataType::Double, true),
-        // Spark 4.3: the seconds of a `time(p)`, `p > 6`, are a `decimal(p + 2, p)`.
+        // Spark 4.3: the seconds of a `time(p)` are a `decimal(p + 2, p)` (SPARK-57850);
+        // Spark 4.2: a `decimal(8, 6)` (its `time(p)` has `p <= 6`).
         Some(DatePart::Second) => match c.data_type(1) {
-            Some(DataType::Time { precision }) if *precision > 6 => ArgType::new(
-                DataType::Decimal(DecimalType::try_new(
-                    u32::from(*precision) + 2,
-                    u32::from(*precision),
-                )?),
-                nullable,
-            ),
+            Some(DataType::Time { precision })
+                if *precision > 6 || c.profile() >= SparkProfile::V4_3 =>
+            {
+                ArgType::new(
+                    DataType::Decimal(DecimalType::try_new(
+                        u32::from(*precision) + 2,
+                        u32::from(*precision),
+                    )?),
+                    nullable,
+                )
+            }
             _ => ArgType::new(DataType::Decimal(DecimalType::try_new(8, 6)?), nullable),
         },
         Some(_) => ArgType::new(DataType::Integer, nullable),

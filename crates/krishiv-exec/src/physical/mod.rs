@@ -349,6 +349,10 @@ pub struct ExprEnv {
     /// prints): `to_csv` and `to_xml` print binary fields in that style. A plan that sets it
     /// needs the `binary_output_style` codec feature.
     pub binary_output_style: Option<Arc<str>>,
+    /// The Spark release line (`"4.2"`) whose behaviour the kernels and function bindings
+    /// reproduce, when it is not the default (4.3). A plan that sets it needs the
+    /// `spark_version` codec feature.
+    pub spark_version: Option<Arc<str>>,
 }
 
 impl ExprEnv {
@@ -1162,7 +1166,8 @@ plan_data!(struct ExprEnv {
     legacy_java_charsets,
     legacy_coding_error_action,
     legacy_time_parser,
-    binary_output_style
+    binary_output_style,
+    spark_version
 });
 /// What a [`PhysNode::TableWrite`] asks of its table.
 #[derive(Debug, Clone, PartialEq)]

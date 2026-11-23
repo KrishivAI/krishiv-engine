@@ -245,6 +245,16 @@
     "current_time(9)",
     "typeof(current_time(9))",
     "typeof(current_time(7))"
+   ],
+   "typed": [
+    [
+     1,
+     "time(9)"
+    ],
+    [
+     2,
+     "time(7)"
+    ]
    ]
   },
   {
@@ -267,6 +277,12 @@
    "names": [
     "current_time(6)",
     "typeof(current_time(6))"
+   ],
+   "typed": [
+    [
+     1,
+     "time(6)"
+    ]
    ]
   },
   {
@@ -280,6 +296,12 @@
     "current_time(6)",
     "current_time(3)",
     "typeof(current_time(9))"
+   ],
+   "typed": [
+    [
+     2,
+     "time(9)"
+    ]
    ]
   },
   {
@@ -289,7 +311,8 @@
    "clock": true,
    "names": [
     "current_time(9)"
-   ]
+   ],
+   "typed": []
   },
   {
    "id": "localtime_negative",
@@ -540,6 +563,80 @@
      "12:00:00.123456",
      "12:00:00",
      "time(9)"
+    ]
+   ]
+  },
+  {
+   "id": "string_col_to_time1",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST(s AS TIME(1)) AS STRING) AS a, time_to_micros(CAST(s AS TIME(1))) AS b FROM VALUES ('09:08:01.987654') t(s)",
+   "clock": false,
+   "names": [
+    "a",
+    "b"
+   ],
+   "values": [
+    [
+     "09:08:01.9",
+     "32881900000"
+    ]
+   ]
+  },
+  {
+   "id": "string_lit_to_time3",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST('09:08:01.987654' AS TIME(3)) AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "values": [
+    [
+     "09:08:01.987"
+    ]
+   ]
+  },
+  {
+   "id": "time6_to_time0",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST(TIME'09:08:01.987654' AS TIME(0)) AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "values": [
+    [
+     "09:08:01"
+    ]
+   ]
+  },
+  {
+   "id": "extract_second_low_precision",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(0))) AS STRING) AS a, typeof(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(0)))) AS ta, CAST(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(3))) AS STRING) AS b, typeof(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(3)))) AS tb, typeof(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(6)))) AS tc",
+   "clock": false,
+   "names": [
+    "a",
+    "ta",
+    "b",
+    "tb",
+    "tc"
+   ],
+   "values": [
+    [
+     "1",
+     "decimal(2,0)",
+     "1.987",
+     "decimal(5,3)",
+     "decimal(8,6)"
     ]
    ]
   },
@@ -852,6 +949,16 @@
     "localtimestamp()",
     "typeof(current_timestamp())",
     "typeof(localtimestamp())"
+   ],
+   "typed": [
+    [
+     3,
+     "timestamp"
+    ],
+    [
+     4,
+     "timestamp_ntz"
+    ]
    ]
   },
   {
@@ -861,6 +968,12 @@
    "clock": true,
    "names": [
     "typeof(current_timestamp())"
+   ],
+   "typed": [
+    [
+     0,
+     "timestamp"
+    ]
    ]
   },
   {
@@ -870,6 +983,14 @@
    "clock": false,
    "error": "FEATURE_NOT_ENABLED",
    "message": "[FEATURE_NOT_ENABLED] The feature Nanosecond-precision timestamp types is not enabled. Consider setting the config spark.sql.timestampNanosTypes.enabled to true to enable this capability."
+  },
+  {
+   "id": "current_timestamp_null",
+   "conf": {},
+   "sql": "SELECT current_timestamp(CAST(NULL AS INT))",
+   "clock": false,
+   "error": "DATATYPE_MISMATCH.UNEXPECTED_NULL",
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_NULL] Cannot resolve \"CAST(NULL AS INT)\" due to data type mismatch: The `precision` must not be null."
   },
   {
    "id": "localtimestamp7",

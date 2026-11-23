@@ -74,6 +74,7 @@ mod patterns;
 mod pretty;
 mod semantic;
 mod star;
+mod time;
 
 use calls::*;
 pub(super) use columns::*;

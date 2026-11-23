@@ -7,10 +7,14 @@
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use futures::executor::block_on;
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 
 fn text(sql: &str) -> Option<String> {
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
     let df = block_on(s.sql(&format!("SELECT CAST(({sql}) AS STRING)"))).unwrap();
     let b = block_on(df.collect()).unwrap();
@@ -61,5 +65,25 @@ fn from_json_cuts_times_to_the_declared_precision() {
     assert_eq!(
         text("from_json('{\"t\":\"09:08:01.987654\"}', 't TIME')").as_deref(),
         Some("{09:08:01.987654}")
+    );
+}
+
+/// Spark 4.3.0 (lane review probe `probe-430.out`): the reader keeps every digit it reads,
+/// whatever the declared `TIME(p)`; the session's profile reaches the executor's bindings.
+#[test]
+fn from_json_keeps_nine_digits_under_spark_4_3() {
+    let s = Session::builder()
+        .profile(SparkProfile::V4_3)
+        .build()
+        .unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    let df = block_on(
+        s.sql("SELECT CAST(from_json('{\"a\":\"12:00:00.123456789\"}', 'a time(3)').a AS STRING)"),
+    )
+    .unwrap();
+    let b = block_on(df.collect()).unwrap();
+    assert_eq!(
+        b[0].columns()[0].as_string_view().value(0),
+        "12:00:00.123456789"
     );
 }
