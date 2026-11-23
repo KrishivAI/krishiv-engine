@@ -3,6 +3,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use krishiv_common::error::KrishivError;
 use krishiv_session::Session;
 use pyo3::prelude::*;
 
@@ -94,17 +95,51 @@ impl PySession {
     }
 }
 
+/// The session of a builder's options. Catalog declarations (`krishiv.catalog.<name>.*`,
+/// `spark.sql.catalog.<name>[.*]`, `krishiv.catalog.default`) are not configuration: they go to
+/// an embedded catalog registry of the session's runtime (design P3-T067 §2), as `krishiv
+/// server` passes its own, with the `iceberg-rest` factory when the module is built with it;
+/// `spark.sql.defaultCatalog` names the default there and stays configuration. Without a
+/// declaration the session is built as before, on a private runtime.
+fn build_session(config: Vec<(String, String)>) -> Result<Session, KrishivError> {
+    use krishiv_session::catalog_decl::{DeclMode, is_declaration_key};
+    use krishiv_session::catalog_registry::CatalogSetup;
+
+    let builder = Session::builder().source("krishiv-python");
+    if !config.iter().any(|(k, _)| is_declaration_key(k)) {
+        return config
+            .into_iter()
+            .fold(builder, |b, (k, v)| b.config(k, v))
+            .build();
+    }
+    let mut setup = CatalogSetup::new(DeclMode::Embedded);
+    #[cfg(feature = "catalog-iceberg-rest")]
+    {
+        setup = setup.factory(std::sync::Arc::new(
+            krishiv_catalogs::declared::IcebergRestFactory,
+        ));
+    }
+    let mut runtime = krishiv_session::EngineRuntime::builder();
+    for (key, value) in config {
+        if is_declaration_key(&key) {
+            setup = setup.setting(key, value);
+            continue;
+        }
+        if key.eq_ignore_ascii_case("spark.sql.defaultCatalog") {
+            setup = setup.setting(key.clone(), value.clone());
+        }
+        runtime = runtime.config(key, value);
+    }
+    builder.runtime(runtime.catalogs(setup).build()?).build()
+}
+
 #[pymethods]
 impl PySession {
     /// A session with the configuration `config` (`(key, value)` pairs).
     #[new]
     #[pyo3(signature = (config=None))]
     fn new(py: Python<'_>, config: Option<Vec<(String, String)>>) -> PyResult<Self> {
-        let mut builder = Session::builder().source("krishiv-python");
-        for (key, value) in config.unwrap_or_default() {
-            builder = builder.config(key, value);
-        }
-        let inner = builder.build().map_err(|e| to_py(py, &e))?;
+        let inner = build_session(config.unwrap_or_default()).map_err(|e| to_py(py, &e))?;
         let live = std::sync::Arc::new(inner.clone());
         crate::errors::register_session(&live);
         let session = Self {
