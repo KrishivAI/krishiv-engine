@@ -172,12 +172,23 @@ fn overloaded() -> bool {
     load > 2.0 * cores
 }
 
-/// Reports a stall in `what` as excused (and says why) when the machine is [`overloaded`].
+/// Reports a stall in `what` as excused (and says why) when the machine is [`overloaded`] or the
+/// platform has no thread wait time to subtract (not Unix).
 #[expect(
     clippy::print_stderr,
     reason = "a skipped bound is said aloud in the test output"
 )]
 fn excused_by_load(what: &str) -> bool {
+    // Off Unix the driver has no per-thread run-queue wait to subtract (no
+    // `/proc/thread-self/schedstat`), so a poll's slice is its wall time and a
+    // preempted poll on a shared runner reads as a stall; nor is there a load
+    // average to tell. The bound is a Unix measurement.
+    if cfg!(not(unix)) {
+        eprintln!(
+            "{what}: a stalled poll is not counted: this platform reports no thread wait time"
+        );
+        return true;
+    }
     let excused = overloaded();
     if excused {
         eprintln!(
