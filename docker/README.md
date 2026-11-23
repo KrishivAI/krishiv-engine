@@ -25,16 +25,16 @@ docker buildx build --platform linux/amd64,linux/arm64 -f docker/Dockerfile -t k
 One command, one variable:
 
 ```text
-docker run -d --name krishiv -p 15002:15002 -p 8080:8080 -e KRISHIV_AUTH_TOKEN=change-me krishiv
+docker run -d --name krishiv -p 15002:15002 -p 8080:8080 -e KRISHIV_AUTH_TOKEN=change-me-to-32-or-more-characters-of-your-own krishiv
 docker cp krishiv:/var/lib/krishiv/tls/cert.pem .      # the self-signed certificate it generated
 ```
 
-Clients connect with `sc://localhost:15002/;use_ssl=true;token=change-me` (PySpark: set
+Clients connect with `sc://localhost:15002/;use_ssl=true;token=change-me-to-32-or-more-characters-of-your-own` (PySpark: set
 `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=cert.pem` to trust the certificate). The console is `https://localhost:8080/`.
 
 | Setting | Default |
 |---|---|
-| token | `KRISHIV_AUTH_TOKEN`, else the file `KRISHIV_AUTH_TOKEN_FILE` (default `/run/secrets/krishiv_token`, a Docker or compose secret), else a random token generated on first start and printed in the container log. It is one admin principal, `docker`, whose token expires on `KRISHIV_AUTH_TOKEN_EXPIRES` (YYYY-MM-DD, default one year from start). Local files may be read and written only under `/data` (a volume; `KRISHIV_ALLOWED_ROOTS` sets a comma-separated list of other existing directories), because a server with authentication allows no local path otherwise. |
+| token | `KRISHIV_AUTH_TOKEN` (at least 32 characters: the server refuses a shorter token at start), else the file `KRISHIV_AUTH_TOKEN_FILE` (default `/run/secrets/krishiv_token`, a Docker or compose secret), else a random token generated on first start and printed in the container log. It is one admin principal, `docker`, whose token expires on `KRISHIV_AUTH_TOKEN_EXPIRES` (YYYY-MM-DD, default one year from start). Local files may be read and written only under `/data` (a volume; `KRISHIV_ALLOWED_ROOTS` sets a comma-separated list of other existing directories), because a server with authentication allows no local path otherwise. |
 | certificate | `KRISHIV_TLS_CERT` and `KRISHIV_TLS_KEY` (default `/etc/krishiv/tls/cert.pem` and `key.pem`), else a self-signed certificate (`localhost`, `127.0.0.1`, the container's host name) generated on first start in `KRISHIV_TLS_DIR` (default `/var/lib/krishiv/tls`; its path is printed). Mount that directory to keep the certificate. |
 
 The key and a token file must not be readable by group or others. To configure authentication yourself (several

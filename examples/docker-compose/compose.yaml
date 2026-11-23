@@ -64,6 +64,9 @@ services:
 
   jupyter:
     build: ./jupyter
+    # JupyterLab saves into ./notebooks, so it runs as the owner of that folder: set JUPYTER_UID and
+    # JUPYTER_GID when your uid is not 1000 (README.md).
+    user: "${JUPYTER_UID:-1000}:${JUPYTER_GID:-1000}"
     environment:
       # What a notebook's `SparkSession.builder.getOrCreate()` connects to.
       SPARK_REMOTE: sc://krishiv:15002/;use_ssl=true;token=${KRISHIV_AUTH_TOKEN:-krishiv-quickstart-token-change-me-please}

@@ -22,7 +22,7 @@ esac
 
 for a in "$@"; do
   case "$a" in
-    krishiv.auth.*|krishiv.server.tls.*|--host|--host=*)
+    krishiv.auth.*|krishiv.server.tls.*|--conf=krishiv.auth.*|--conf=krishiv.server.tls.*|--host|--host=*)
       exec krishiv server "$@" ;; # the caller configures authentication and TLS itself
   esac
 done

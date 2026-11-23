@@ -12,6 +12,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 [ $# -ge 1 ] && export KRISHIV_IMAGE=$1
+# MinIO by digest: the compose default is a moving tag, and the service needs `sh`, `mkdir` and
+# `mc` in the image. Bump it here and in README.md together.
+export MINIO_IMAGE=${MINIO_IMAGE:-cgr.dev/chainguard/minio@sha256:304e0bbeb70a9aa0c40ff26d5a9c0a24296019c6d326ba8b75214fb73441d6e9}
+# JupyterLab runs as this user, as README.md tells a Linux user whose uid is not 1000.
+export JUPYTER_UID=${JUPYTER_UID:-$(id -u)} JUPYTER_GID=${JUPYTER_GID:-$(id -g)}
 compose=(docker compose -p krishiv-quickstart-smoke)
 
 cleanup() {
@@ -32,7 +37,12 @@ trap cleanup EXIT
 "${compose[@]}" exec -T jupyter jupyter nbconvert --to notebook --execute \
   --ExecutePreprocessor.timeout=300 --output-dir /tmp --output lakehouse-run.ipynb lakehouse.ipynb
 
-# The table the notebook wrote is a Delta table in the bucket: its log has commits.
-commits=$("${compose[@]}" exec -T minio mc ls local/lakehouse/trips/_delta_log/ | grep -c '\.json$')
-[ "$commits" -ge 2 ] || { echo "::error::expected Delta commits in s3://lakehouse/trips, found $commits"; exit 1; }
+# JupyterLab can save into the notebooks folder (the checkout, owned by the user running this).
+"${compose[@]}" exec -T jupyter sh -c 'touch .smoke-write && rm .smoke-write' \
+  || { echo "::error::JupyterLab cannot write to the notebooks folder"; exit 1; }
+
+# The table the notebook wrote is a Delta table in the bucket: its log has the four commits
+# (the write, INSERT, UPDATE, DELETE).
+commits=$("${compose[@]}" exec -T minio mc ls local/lakehouse/trips/_delta_log/ | grep -c '\.json$' || true)
+[ "$commits" -ge 4 ] || { echo "::error::expected Delta commits in s3://lakehouse/trips, found $commits"; exit 1; }
 echo "compose quickstart: notebook ran, $commits Delta commits in s3://lakehouse/trips"

@@ -61,7 +61,7 @@ pip install "pyspark-client>=4.0,<4.2"
 GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=cert.pem python -c '
 from pyspark.sql import SparkSession
 spark = SparkSession.builder.remote("sc://localhost:15002/;use_ssl=true;token=krishiv-quickstart-token-change-me-please").getOrCreate()
-spark.sql("SELECT count(*) FROM delta.`s3://lakehouse/trips`").show()'
+print(spark.sql("SELECT count(*) AS trips FROM delta.`s3://lakehouse/trips`").collect())'
 ```
 
 ## Settings
@@ -74,7 +74,8 @@ Set these in the shell or in a `.env` file next to `compose.yaml`.
 | `KRISHIV_AUTH_TOKEN` | `krishiv-quickstart-token-change-me-please` | the server's bearer token (one admin principal); at least 32 characters |
 | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | `krishiv`, `krishiv-quickstart` | MinIO's root keys; the server reads the bucket with them |
 | `JUPYTER_TOKEN` | `krishiv` | JupyterLab's token |
-| `MINIO_IMAGE` | `cgr.dev/chainguard/minio:latest` | the MinIO image |
+| `JUPYTER_UID`, `JUPYTER_GID` | `1000`, `1000` | the user JupyterLab runs as; it saves notebooks into `./notebooks`, so on Linux set them to your own when `id -u` is not 1000: `JUPYTER_UID=$(id -u) JUPYTER_GID=$(id -g) docker compose up -d --wait` |
+| `MINIO_IMAGE` | `cgr.dev/chainguard/minio:latest` | the MinIO image. The quickstart is tested with `cgr.dev/chainguard/minio@sha256:304e0bbeb70a9aa0c40ff26d5a9c0a24296019c6d326ba8b75214fb73441d6e9` (the digest `smoke.sh` pins); set that if a newer `latest` does not start |
 | `KRISHIV_CONNECT_PORT`, `KRISHIV_UI_PORT`, `MINIO_PORT`, `MINIO_CONSOLE_PORT`, `JUPYTER_PORT` | `15002`, `8080`, `9000`, `9001`, `8888` | the ports on your machine (all on `127.0.0.1`) |
 
 ## What is configured, and why
