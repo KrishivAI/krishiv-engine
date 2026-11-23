@@ -383,6 +383,13 @@ impl CommitTable for Refusing {
     }
 
     async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
+        self.load_located(all).await.map(|(m, _)| m)
+    }
+
+    async fn load_located(
+        &self,
+        all: bool,
+    ) -> Result<(TableMetadata, Option<String>), KrishivError> {
         let n = self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.fail_reload && n > 0 {
             return Err(krishiv_common::error::InternalError {
@@ -390,7 +397,7 @@ impl CommitTable for Refusing {
             }
             .into());
         }
-        self.inner.load(all).await
+        self.inner.load_located(all).await
     }
 }
 
@@ -453,4 +460,285 @@ fn an_unknown_answer_with_the_snapshots_still_there_is_expire_state_unknown() {
         e.error_class(),
         ErrorClass::KrishivIcebergExpireStateUnknown
     );
+}
+
+/// Writes `meta` as a new metadata file of `catalog` and makes it the current one.
+fn make_current(catalog: &Catalog, meta: TableMetadata, name: &str) {
+    let path = format!("{}/metadata/{name}.metadata.json", meta.location());
+    std::fs::write(
+        super::sink_tests::local_path(&path),
+        serde_json::to_vec(&meta).unwrap(),
+    )
+    .unwrap();
+    catalog.restore((meta, path));
+}
+
+/// A catalog that answers with the refs' snapshots only (a server ignoring `snapshots=all`),
+/// while the metadata file it names holds more.
+struct RefsOnly {
+    inner: std::sync::Arc<Catalog>,
+}
+
+#[async_trait]
+impl CommitTable for RefsOnly {
+    fn name(&self) -> String {
+        "lake.db.t".to_owned()
+    }
+
+    async fn commit(&self, r: Vec<TableRequirement>, u: Vec<TableUpdate>) -> CommitOutcome {
+        self.inner.commit(r, u).await
+    }
+
+    async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
+        self.load_located(all).await.map(|(m, _)| m)
+    }
+
+    async fn load_located(
+        &self,
+        all: bool,
+    ) -> Result<(TableMetadata, Option<String>), KrishivError> {
+        let (m, location) = self.inner.load_located(all).await?;
+        let reached = chain(&m);
+        let unreferenced: Vec<i64> = m
+            .snapshots()
+            .map(|s| s.snapshot_id())
+            .filter(|id| !reached.contains(id))
+            .collect();
+        let m = edit(m, |b| b.remove_snapshots(&unreferenced));
+        Ok((m, location))
+    }
+}
+
+/// Design §4: `main` rolled back to the third snapshot leaves the two newer ones unreferenced,
+/// as a staged WAP snapshot is; a catalog that leaves them out of its answer is refused before
+/// any request or delete, since their files would look unreachable.
+#[test]
+fn a_snapshot_list_that_differs_from_its_metadata_file_is_refused() {
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let meta = catalog.metadata();
+    let ids = chain(&meta);
+    let rolled = edit(meta, |b| {
+        b.set_ref(
+            "main",
+            SnapshotReference::new(
+                ids[2],
+                SnapshotRetention::Branch {
+                    min_snapshots_to_keep: None,
+                    max_snapshot_age_ms: None,
+                    max_ref_age_ms: None,
+                },
+            ),
+        )
+        .unwrap()
+    });
+    make_current(&catalog, rolled, "v900-rolled");
+    let files_before = super::cow_tests::live(&env, &catalog.metadata());
+    let table = RefsOnly {
+        inner: std::sync::Arc::clone(&catalog),
+    };
+    let e = env
+        .rt
+        .block_on(expire(
+            &table,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &args(Some(1)),
+        ))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogTableUnsupported,
+        "{e}"
+    );
+    assert!(
+        e.to_string().contains("differs from its metadata file"),
+        "{e}"
+    );
+    assert_eq!(catalog.metadata().snapshots().count(), 5);
+    assert_eq!(
+        super::cow_tests::live(&env, &catalog.metadata()),
+        files_before
+    );
+    // The same table through a catalog that answers in full expires as usual.
+    let done = env
+        .rt
+        .block_on(expire(
+            &*catalog,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &args(Some(1)),
+        ))
+        .unwrap();
+    assert!(done.deleted.manifest_lists >= 1, "{:?}", done.deleted);
+}
+
+/// A catalog that applies each request and then answers that the outcome is unknown.
+struct LandsUnknown {
+    inner: std::sync::Arc<Catalog>,
+}
+
+#[async_trait]
+impl CommitTable for LandsUnknown {
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+
+    async fn commit(&self, r: Vec<TableRequirement>, u: Vec<TableUpdate>) -> CommitOutcome {
+        match self.inner.commit(r, u).await {
+            CommitOutcome::Committed(_) => CommitOutcome::Unknown("502 bad gateway".to_owned()),
+            other => other,
+        }
+    }
+
+    async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
+        self.inner.load(all).await
+    }
+
+    async fn load_located(
+        &self,
+        all: bool,
+    ) -> Result<(TableMetadata, Option<String>), KrishivError> {
+        self.inner.load_located(all).await
+    }
+}
+
+/// An unknown answer to a request that landed: the probe finds it, and the cleanup runs
+/// against the probe's reload as after a plain commit.
+#[test]
+fn an_unknown_answer_that_landed_cleans_up_against_the_reload() {
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let table = LandsUnknown {
+        inner: std::sync::Arc::clone(&catalog),
+    };
+    let done = env
+        .rt
+        .block_on(expire(
+            &table,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &args(Some(1)),
+        ))
+        .unwrap();
+    assert_eq!(catalog.metadata().snapshots().count(), 1);
+    assert_eq!(done.deleted.manifest_lists, 4);
+    assert_eq!(done.deleted.data_files, 1);
+    assert_eq!(read_back(&env, &catalog), expected(5..40));
+}
+
+/// A catalog whose first request meets a foreign commit (a tag on `tagged`) and conflicts;
+/// later requests go through.
+struct ForeignTagFirst {
+    inner: std::sync::Arc<Catalog>,
+    tagged: i64,
+    done: AtomicBool,
+}
+
+#[async_trait]
+impl CommitTable for ForeignTagFirst {
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+
+    async fn commit(&self, r: Vec<TableRequirement>, u: Vec<TableUpdate>) -> CommitOutcome {
+        if !self.done.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let tag = TableUpdate::SetSnapshotRef {
+                ref_name: "keep".to_owned(),
+                reference: SnapshotReference::new(
+                    self.tagged,
+                    SnapshotRetention::Tag {
+                        max_ref_age_ms: None,
+                    },
+                ),
+            };
+            assert!(matches!(
+                self.inner.commit(Vec::new(), vec![tag]).await,
+                CommitOutcome::Committed(_)
+            ));
+            return CommitOutcome::Conflict { stale: false };
+        }
+        self.inner.commit(r, u).await
+    }
+
+    async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
+        self.inner.load(all).await
+    }
+
+    async fn load_located(
+        &self,
+        all: bool,
+    ) -> Result<(TableMetadata, Option<String>), KrishivError> {
+        self.inner.load_located(all).await
+    }
+}
+
+/// A conflict after a foreign commit that changes the plan: the next attempt plans on the
+/// reload, so the snapshot the foreign tag now keeps stays.
+#[test]
+fn a_conflict_replans_on_the_reload() {
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let tagged = chain(&catalog.metadata())[3];
+    let table = ForeignTagFirst {
+        inner: std::sync::Arc::clone(&catalog),
+        tagged,
+        done: AtomicBool::new(false),
+    };
+    let done = env
+        .rt
+        .block_on(expire(
+            &table,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &args(Some(1)),
+        ))
+        .unwrap();
+    let after = catalog.metadata();
+    assert_eq!(after.snapshots().count(), 2);
+    assert!(after.snapshot_by_id(tagged).is_some());
+    assert_eq!(done.deleted.manifest_lists, 3);
+}
+
+/// Design §4.1: a Puffin file holding the DVs of two data files is deleted only when no live
+/// entry of a kept snapshot names its path. After a delete rewrote one of the two files, the
+/// kept snapshot still names the Puffin file for the other: expiring every older snapshot
+/// keeps it, and the table reads the same rows.
+#[test]
+fn a_shared_puffin_file_stays_while_a_kept_snapshot_names_it() {
+    use super::cow_tests::{add_deletes, dvs_in_one_puffin, live};
+    let env = env();
+    let t = create(&env, 3, false, &[]);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 10));
+    append(&env, &catalog, range(10, 20));
+    add_deletes(&env, &catalog, |files| {
+        dvs_in_one_puffin(&env, "shared.puffin", files, &[0, 1])
+    });
+    Dml::open(&env, &catalog, RowLevelOperation::Delete)
+        .delete("id = 5")
+        .unwrap();
+    let rows = read_back(&env, &catalog);
+    assert_eq!(live(&env, &catalog.metadata()).1, ["shared.puffin"]);
+    let done = env
+        .rt
+        .block_on(expire(
+            &*catalog,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &args(Some(1)),
+        ))
+        .unwrap();
+    assert_eq!(catalog.metadata().snapshots().count(), 1);
+    assert_eq!(done.deleted.position_delete_files, 0, "{:?}", done.deleted);
+    // The rewritten data file went with the old snapshots.
+    assert_eq!(done.deleted.data_files, 1, "{:?}", done.deleted);
+    let shared = env.at("shared.puffin");
+    assert!(std::path::Path::new(super::sink_tests::local_path(&shared)).exists());
+    assert_eq!(read_back(&env, &catalog), rows);
 }

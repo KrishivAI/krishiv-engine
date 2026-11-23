@@ -8,8 +8,9 @@ use std::collections::{HashMap, HashSet};
 use iceberg::spec::{SnapshotRetention, TableMetadata};
 use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{
-    KrishivError, KrishivIcebergExpireFailed, KrishivIcebergExpireStateUnknown,
-    KrishivIcebergProcedureArgument, KrishivIcebergProcedureGcDisabled,
+    KrishivCatalogTableUnsupported, KrishivError, KrishivIcebergExpireFailed,
+    KrishivIcebergExpireStateUnknown, KrishivIcebergProcedureArgument,
+    KrishivIcebergProcedureGcDisabled,
 };
 
 use super::super::commit::{CommitClock, CommitOutcome, CommitTable};
@@ -35,6 +36,8 @@ pub(crate) struct ExpireArgs {
     pub(crate) snapshot_ids: Vec<i64>,
     /// `clean_expired_metadata`.
     pub(crate) clean_expired_metadata: bool,
+    /// `max_concurrent_deletes`: how many file deletes run at once (one when absent).
+    pub(crate) max_concurrent_deletes: Option<usize>,
 }
 
 /// What an expire removes from the table's metadata.
@@ -122,6 +125,11 @@ pub(crate) fn plan(
     let mut kept_refs: Vec<(&String, &iceberg::spec::SnapshotReference)> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
     for (name, r) in &refs {
+        // `main` is kept whatever it points at (`computeRetainedRefs` skips it first).
+        if name == "main" {
+            kept_refs.push((name, r));
+            continue;
+        }
         let Some(t) = ts(r.snapshot_id) else {
             dropped.push(name.clone());
             continue;
@@ -131,7 +139,7 @@ pub(crate) fn plan(
             | SnapshotRetention::Tag { max_ref_age_ms } => (*max_ref_age_ms, ()),
         };
         let max_ref_age = own_max_ref_age.unwrap_or(defaults.max_ref_age_ms);
-        if name != "main" && now.saturating_sub(t) > max_ref_age {
+        if now.saturating_sub(t) > max_ref_age {
             dropped.push(name.clone());
         } else {
             kept_refs.push((name, r));
@@ -465,11 +473,12 @@ async fn reachable(
     Ok(())
 }
 
-/// Deletes the files only the `removed` snapshots reached: candidates are everything reachable
-/// from them in `base` (the metadata the applied request was planned on, which after a conflict
-/// is a reload, not the first load), minus everything reachable from any snapshot of `after`, by
-/// path. Each delete is retried three times; one that fails is logged and not counted, and never
-/// fails the expire.
+/// Deletes the files only the snapshots `start` has and `after` lacks reached (the Spark
+/// action's `findExpiredSnapshotIds(originalMetadata, updatedMetadata)`): candidates are
+/// everything reachable from those snapshots in `start`, the table as loaded when the procedure
+/// began, minus everything reachable from any snapshot of `after`, the checked reload after the
+/// commit, by path. Up to `concurrency` deletes run at once, each retried three times; one that
+/// fails is logged and not counted, and never fails the expire.
 ///
 /// The path sets are held in memory, uncharged, as Java's `ReachableFileCleanup` holds them
 /// (crate CLAUDE.md, known limits).
@@ -478,16 +487,22 @@ async fn reachable(
 /// A manifest list or manifest that cannot be read: nothing is deleted then.
 pub(crate) async fn cleanup(
     io: &iceberg::io::FileIO,
-    base: &TableMetadata,
-    removed: &[i64],
+    start: &TableMetadata,
     after: &TableMetadata,
     max_bytes: u64,
+    concurrency: usize,
 ) -> Result<Deleted, KrishivError> {
+    use futures::StreamExt as _;
     let kept: HashSet<i64> = after.snapshots().map(|s| s.snapshot_id()).collect();
+    let removed: Vec<i64> = start
+        .snapshots()
+        .map(|s| s.snapshot_id())
+        .filter(|id| !kept.contains(id))
+        .collect();
     let mut cache = HashMap::new();
     let mut candidates: HashMap<String, Kind> = HashMap::new();
-    for &id in removed.iter().filter(|id| !kept.contains(id)) {
-        reachable(io, base, id, max_bytes, &mut cache, &mut candidates).await?;
+    for id in removed {
+        reachable(io, start, id, max_bytes, &mut cache, &mut candidates).await?;
     }
     let mut valid: HashMap<String, Kind> = HashMap::new();
     for id in &kept {
@@ -499,8 +514,13 @@ pub(crate) async fn cleanup(
         .filter(|(p, _)| !valid.contains_key(p))
         .collect();
     doomed.sort();
-    for (path, kind) in doomed {
-        if delete_with_retries(io, &path).await {
+    let done: Vec<(Kind, bool)> = futures::stream::iter(doomed)
+        .map(|(path, kind)| async move { (kind, delete_with_retries(io, &path).await) })
+        .buffer_unordered(concurrency.max(1))
+        .collect()
+        .await;
+    for (kind, deleted) in done {
+        if deleted {
             match kind {
                 Kind::Data => counts.data_files += 1,
                 Kind::PositionDeletes => counts.position_delete_files += 1,
@@ -535,14 +555,21 @@ pub(crate) struct Expired {
     pub(crate) deleted: Deleted,
 }
 
-/// Whether everything `plan` removes is absent from `now`.
-fn landed(now: &TableMetadata, plan: &Plan) -> bool {
+/// Whether `plan`, made on `base`, landed in `now`: everything it removes is absent and every
+/// snapshot of `base` it keeps is still there (design §6.1).
+fn landed(base: &TableMetadata, now: &TableMetadata, plan: &Plan) -> bool {
     let Ok(refs) = snapshot_refs(now) else {
         return false;
     };
-    plan.snapshots
-        .iter()
-        .all(|id| now.snapshot_by_id(*id).is_none())
+    let removed: HashSet<i64> = plan.snapshots.iter().copied().collect();
+    base.snapshots()
+        .map(|s| s.snapshot_id())
+        .filter(|id| !removed.contains(id))
+        .all(|id| now.snapshot_by_id(id).is_some())
+        && plan
+            .snapshots
+            .iter()
+            .all(|id| now.snapshot_by_id(*id).is_none())
         && plan.refs.iter().all(|r| !refs.contains_key(r))
         && plan
             .specs
@@ -556,6 +583,10 @@ fn landed(now: &TableMetadata, plan: &Plan) -> bool {
 
 /// Runs `expire_snapshots` over `table`: loads every snapshot, plans, commits the metadata change
 /// with the retries below, then deletes what only the removed snapshots reached.
+///
+/// Every load (the start, each attempt's refresh, the unknown outcome's probe and the reload
+/// after the commit) is checked against the metadata file it names ([`checked_load`]), so the
+/// retention and the file sets are computed over every snapshot the table has.
 ///
 /// A conflict reloads the table and plans again. An unknown outcome (a request that may have
 /// landed) is looked up in the table: every planned snapshot, ref, spec and schema gone means it
@@ -572,8 +603,9 @@ pub(crate) async fn expire(
     max_metadata_bytes: u64,
     args: &ExpireArgs,
 ) -> Result<Expired, KrishivError> {
-    let start = table.load(true).await?;
+    let start = checked_load(table, io, max_metadata_bytes).await?;
     check(&start, args)?;
+    let concurrency = args.max_concurrent_deletes.unwrap_or(1);
     let defaults = Defaults::of(&start, clock.now_ms());
     let retries = prop(&start, "commit.retry.num-retries").unwrap_or(4).max(0);
     let min_wait = prop(&start, "commit.retry.min-wait-ms")
@@ -583,7 +615,7 @@ pub(crate) async fn expire(
         .unwrap_or(60_000)
         .max(min_wait);
     let name = table.name();
-    let mut meta = start;
+    let mut meta = start.clone();
     let mut last;
     let mut attempts = 0_i64;
     let mut planned: Plan;
@@ -598,9 +630,10 @@ pub(crate) async fn expire(
         let (requirements, updates) = request(&meta, &planned)?;
         attempts += 1;
         match table.commit(requirements, updates).await {
-            CommitOutcome::Committed(after) => {
-                let deleted =
-                    cleanup(io, &meta, &planned.snapshots, &after, max_metadata_bytes).await?;
+            CommitOutcome::Committed(_) => {
+                // The valid side is a checked reload, never the commit's answer as sent.
+                let after = checked_load(table, io, max_metadata_bytes).await?;
+                let deleted = cleanup(io, &start, &after, max_metadata_bytes, concurrency).await?;
                 return Ok(Expired { deleted });
             }
             CommitOutcome::Conflict { .. } => last = "a conflicting commit".to_owned(),
@@ -614,7 +647,7 @@ pub(crate) async fn expire(
                     }
                     .into()
                 };
-                let now = match table.load(true).await {
+                let now = match checked_load(table, io, max_metadata_bytes).await {
                     Ok(now) => now,
                     Err(e) => {
                         return Err(unknown(format!(
@@ -622,11 +655,10 @@ pub(crate) async fn expire(
                         )));
                     }
                 };
-                if !landed(&now, &planned) {
+                if !landed(&meta, &now, &planned) {
                     return Err(unknown(reason));
                 }
-                let deleted =
-                    cleanup(io, &meta, &planned.snapshots, &now, max_metadata_bytes).await?;
+                let deleted = cleanup(io, &start, &now, max_metadata_bytes, concurrency).await?;
                 return Ok(Expired { deleted });
             }
             CommitOutcome::Failed(e) => return Err(e),
@@ -643,7 +675,7 @@ pub(crate) async fn expire(
                 u64::try_from(wait).unwrap_or(0),
             ))
             .await;
-        meta = table.load(true).await?;
+        meta = checked_load(table, io, max_metadata_bytes).await?;
     }
     Err(KrishivIcebergExpireFailed {
         snapshot_ids: format!("{:?}", planned.snapshots),
@@ -652,4 +684,46 @@ pub(crate) async fn expire(
         reason: last,
     }
     .into())
+}
+
+/// The table with every snapshot, checked against the metadata file its answer names (design
+/// §4, review 2 F2): a catalog that left a snapshot out (a server ignoring `snapshots=all`, a
+/// staged WAP snapshot) would have its files deleted. The file's snapshot ids must equal the
+/// answer's, both ways.
+///
+/// # Errors
+/// `KRISHIV_CATALOG_TABLE_UNSUPPORTED` for an answer without `metadata-location`, a metadata
+/// file that cannot be read or parsed, or a snapshot list that differs from it; the load's own
+/// failure.
+pub(crate) async fn checked_load(
+    table: &dyn CommitTable,
+    io: &iceberg::io::FileIO,
+    max_bytes: u64,
+) -> Result<TableMetadata, KrishivError> {
+    let (meta, location) = table.load_located(true).await?;
+    let name = table.name();
+    let refused = |location: &str, detail: &str| -> KrishivError {
+        tracing::warn!(table = %name, location, detail, "an expire refused the table's snapshot list");
+        let (catalog, relation) = name.split_once('.').unwrap_or(("", name.as_str()));
+        KrishivCatalogTableUnsupported {
+            catalog: catalog.to_owned(),
+            relation_name: relation.to_owned(),
+            feature: format!("a snapshot list that differs from its metadata file `{location}`"),
+        }
+        .into()
+    };
+    let Some(location) = location else {
+        return Err(refused("(none)", "the answer names no metadata-location"));
+    };
+    let bytes = read_capped(io, "metadata file", &location, None, max_bytes)
+        .await
+        .map_err(|e| refused(&location, &e.to_string()))?;
+    let file: TableMetadata = serde_json::from_slice(&bytes)
+        .map_err(|e| refused(&location, &format!("does not parse: {e}")))?;
+    let ids =
+        |m: &TableMetadata| -> HashSet<i64> { m.snapshots().map(|s| s.snapshot_id()).collect() };
+    if ids(&file) != ids(&meta) {
+        return Err(refused(&location, "the snapshot ids differ"));
+    }
+    Ok(meta)
 }

@@ -215,6 +215,7 @@ impl Maintenance {
                 _ => Vec::new(),
             },
             clean_expired_metadata: matches!(arg(6), ProcedureValue::Boolean(true)),
+            max_concurrent_deletes: long(arg(3)).and_then(|n| usize::try_from(n).ok()),
         };
         let t = self.tables.open(table).await?;
         let (committer, io, clock) = t.maintenance_parts(io_clock)?;
