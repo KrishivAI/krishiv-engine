@@ -196,18 +196,19 @@ impl Env {
             input: Arc::new(Leaf(input)),
             sink,
         }));
-        // An ended driver's row groups are shipped by a background flush (`release_combined`) that returns its
-        // memory a moment after the query finished: wait for it, but not forever.
+        self.assert_memory_returned("the write");
+        out.map(drop)
+    }
+
+    /// Asserts the query pool is back to 0 after `what` ran. An ended driver's row groups are
+    /// shipped by a background flush (`release_combined`) that returns its memory a moment after
+    /// the query finished: wait for it, but not forever.
+    fn assert_memory_returned(&self, what: &str) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while self.query_pool.reserved() != 0 && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(
-            self.query_pool.reserved(),
-            0,
-            "the write gave its memory back"
-        );
-        out.map(drop)
+        assert_eq!(self.query_pool.reserved(), 0, "{what} gave its memory back");
     }
 
     #[expect(clippy::unwrap_in_result, reason = "test helper")]

@@ -237,10 +237,15 @@ fn run_where(keep: impl Fn(&str, &str) -> bool) -> Vec<(Value, Run)> {
     out
 }
 
-fn cdf_refused(run: &Run) -> bool {
+/// Whether step `step` of `scenario` is one Krishiv refuses on a change-data-feed table.
+fn is_cdf_refused(scenario: &str, step: &str) -> bool {
     CDF_REFUSED
         .iter()
-        .any(|(s, n)| *s == run.scenario && *n == run.step)
+        .any(|(s, n)| *s == scenario && *n == step)
+}
+
+fn cdf_refused(run: &Run) -> bool {
+    is_cdf_refused(&run.scenario, &run.step)
 }
 
 fn refused_by_name(run: &Run) -> Option<&'static str> {
@@ -470,11 +475,7 @@ fn delta_merge_cardinality() {
 #[test]
 fn delta_cdf_merge_refused() {
     let mut refusals = 0;
-    for (step, run) in run_where(|scenario, step| {
-        CDF_REFUSED
-            .iter()
-            .any(|(s, n)| *s == scenario && *n == step)
-    }) {
+    for (step, run) in run_where(is_cdf_refused) {
         let name = format!("{}/{}", run.scenario, run.step);
         // delta-spark commits these with change data files; Krishiv refuses them before any
         // file is written.
