@@ -126,6 +126,29 @@ CASES = [
     "SELECT f(1 = a b",
     "SELECT f(a.b c",
     "SELECT f(- a b",
+    # review of #985: only a bare name or a literal keeps the hint, whatever the argument ends in
+    "SELECT f(TRUE",
+    "SELECT f(1",
+    "SELECT f('s'",
+    "SELECT f(a IS NULL",
+    "SELECT f(a IS NOT NULL",
+    "SELECT f(a LIKE b",
+    "SELECT f(a RLIKE b",
+    "SELECT f(a BETWEEN 1 AND b",
+    "SELECT f(NOT a",
+    "SELECT f(a AND b",
+    "SELECT f(a = b",
+    "SELECT f(a.b",
+    "SELECT f(a IN (1)",
+    "SELECT f(CAST(a AS INT)",
+    "SELECT f(a[0]",
+    "SELECT f(g(a)",
+    # and after a second argument
+    "SELECT f(a, 1 + b",
+    "SELECT f(1 + a, b",
+    "SELECT f(a, b.c",
+    "SELECT f(a, b IS NULL",
+    "SELECT f(1 + a, b c",
 ]
 
 

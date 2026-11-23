@@ -1543,20 +1543,26 @@ impl Parser<'_> {
         start: usize,
     ) -> PR<Function> {
         let mut null_treatment = self.null_treatment();
-        // After a plain column name Spark also inserts a missing `)`; not
-        // after an operator, a qualified name or a field ending in a word
-        // (`f(1 + a b`, `f(a.b c`: no hint; Spark 4.2.0, SQL-38).
+        // ANTLR's recovery at a missing `)` (Spark 4.2.0 run, SQL-38 and its review): when every
+        // argument is a bare one-part name or a literal and the last token is a word, it inserts
+        // the `)` (`f(a`, `f(TRUE`, `f(a, b`: `: missing ')'`). An argument that is anything
+        // more (`f(1 + a`, `f(a IS NULL`, `f(a.b`, `f(g(a)`) ends its prediction: alone it gives
+        // no hint, beside another argument the end of input is extra (`f(a, 1 + b`,
+        // `f(1 + a, b`: `: extra input end of input`), as after a comma list.
+        let simple = |a: &FunctionArg| match &a.expr.kind {
+            ExprKind::Column(parts) => parts.len() == 1,
+            ExprKind::Literal(_) => true,
+            _ => false,
+        };
+        let all_simple = args.iter().all(simple);
         let after_name = quantifier.is_none()
+            && all_simple
             && self.pos > 0
-            && self.toks.get(self.pos - 1).map(|t| t.kind) == Some(TokenKind::Word)
-            && !args.last().is_some_and(|a| {
-                matches!(
-                    &a.expr.kind,
-                    ExprKind::Binary(..) | ExprKind::Unary(..) | ExprKind::Field(..)
-                ) || matches!(&a.expr.kind, ExprKind::Column(parts) if parts.len() > 1)
-            });
+            && self.toks.get(self.pos - 1).map(|t| t.kind) == Some(TokenKind::Word);
         let how = if after_name {
             Close::DropOrInsert
+        } else if quantifier.is_none() && !all_simple && args.len() >= 2 {
+            Close::List(args.len())
         } else {
             Close::Drop
         };
