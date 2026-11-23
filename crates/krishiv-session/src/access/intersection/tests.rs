@@ -400,6 +400,8 @@ fn prefetch_reaches_each_member_with_its_own_questions() {
     external.decides = |s| !matches!(s, Securable::System(_));
     let external = Arc::new(external);
     let p = list(vec![Arc::clone(&grants), Arc::clone(&external)]);
+    // Bind asks about the relation before the column pass prefetches its columns.
+    p.note_kind(&table("t"));
     let items = vec![
         (column("t", "a"), Privilege::Select),
         (column("t", "b"), Privilege::Select),

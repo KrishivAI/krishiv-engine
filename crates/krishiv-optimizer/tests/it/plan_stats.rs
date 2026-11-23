@@ -1186,4 +1186,22 @@ fn a_range_is_estimated_exactly_from_its_bounds_and_step() {
 fn an_expression_key_join_with_a_known_column_count_divides_by_it() {
     let j = join("SELECT * FROM range(0, 100000) a JOIN range(0, 1000) b ON a.id % 1000 = b.id");
     close(j.rows(), 100_000.0, "rows");
+    // The QA-2 repro, optimized as `EXPLAIN COST` reads it: `a.id > 5` runs below the join and
+    // keeps 99,994 of `a`'s 100,000 values (an unoptimized plan compares with an unfolded
+    // `CAST(5 AS BIGINT)`), each with one `b` row.
+    let plan = resolve(
+        "SELECT * FROM range(0, 100000) a JOIN range(0, 1000) b ON a.id % 1000 = b.id \
+         WHERE a.id > 5",
+    );
+    let stats = fixture();
+    let optimized = optimize_with(&plan, &stats).unwrap();
+    let join = find(optimized.root(), |p| {
+        matches!(p.node, PlanNode::Join { .. })
+    });
+    let estimate = PlanStats::compute(optimized.root(), &stats);
+    close(
+        estimate.get(&join).unwrap().rows,
+        100_000.0 * 99_994.0 / 99_999.0,
+        "filtered rows",
+    );
 }
