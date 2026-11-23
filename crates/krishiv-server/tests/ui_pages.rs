@@ -1497,9 +1497,30 @@ async fn an_http2_request_is_named_by_its_authority() {
     assert_eq!(res.status(), 204);
     let cookie = res.headers()[header::SET_COOKIE].to_str().unwrap();
     assert!(cookie.starts_with("krishiv_ui_token="), "{cookie}");
+    // An origin that names a port is another origin than the port-less name.
+    let res = app(tls.clone())
+        .oneshot(request(
+            "POST",
+            "https://localhost/api/internal/session",
+            Some("https://localhost:8443"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
     // Neither a `Host` header nor an authority: the request names no server, so the host check refuses it.
     let res = app(tls.clone())
         .oneshot(request("GET", "/api/internal/health", None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
+    // Where the host check is off, a change of such a request is still refused: its origin is compared with
+    // an empty name.
+    let res = app(UiPolicy::for_listener(false, []).secure_cookie(true))
+        .oneshot(request(
+            "POST",
+            "/api/internal/session",
+            Some("https://localhost:8443"),
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), 403);
@@ -1513,6 +1534,16 @@ async fn an_http2_request_is_named_by_its_authority() {
     with_host
         .headers_mut()
         .insert(header::HOST, "localhost:8443".parse().unwrap());
-    let res = app(tls).oneshot(with_host).await.unwrap();
+    let res = app(tls.clone()).oneshot(with_host).await.unwrap();
+    assert_eq!(res.status(), 204);
+    // With both, the `Host` header is the name: the authority of the URI is not read.
+    let mut both = request(
+        "POST",
+        "https://evil.example:8443/api/internal/session",
+        Some("https://localhost:8443"),
+    );
+    both.headers_mut()
+        .insert(header::HOST, "localhost:8443".parse().unwrap());
+    let res = app(tls).oneshot(both).await.unwrap();
     assert_eq!(res.status(), 204);
 }
