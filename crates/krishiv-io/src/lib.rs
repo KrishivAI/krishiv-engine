@@ -66,6 +66,7 @@ pub use format::{
 };
 #[cfg(unix)]
 pub use io::beneath::{AnchorError, BeneathStore};
+pub use io::local_dirs::LocalDirsAsMissing;
 #[cfg(unix)]
 pub use io::local_listing::SettledLocalFileSystem;
 pub use io::{

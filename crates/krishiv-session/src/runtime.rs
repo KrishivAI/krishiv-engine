@@ -385,7 +385,9 @@ impl EngineRuntime {
         #[cfg(not(unix))]
         io.register_store(
             StoreId::new(crate::session::LOCAL_STORE),
-            Arc::new(object_store::local::LocalFileSystem::new()) as Arc<dyn ObjectStore>,
+            Arc::new(krishiv_io::LocalDirsAsMissing::new(
+                object_store::local::LocalFileSystem::new(),
+            )) as Arc<dyn ObjectStore>,
         );
         let metrics = Arc::new(MetricsRegistry::new());
         let capacity = config

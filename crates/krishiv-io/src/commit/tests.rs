@@ -14,6 +14,7 @@ use object_store::memory::InMemory;
 use object_store::path::Path;
 
 use super::{DirectoryWrite, SUCCESS_MARKER, SaveMode};
+use crate::LocalDirsAsMissing;
 use crate::parquet::ParquetFormat;
 use crate::{
     FileFormat, FileWriter, FormatOptions, IoConfig, IoContext, IoScheduler, StoreId,
@@ -582,7 +583,9 @@ impl Drop for TempDir {
 fn local_directories_and_files_follow_spark() {
     let tmp = TempDir::new("local");
     let env = Env::new(
-        Arc::new(LocalFileSystem::new_with_prefix(&tmp.0).unwrap()),
+        Arc::new(LocalDirsAsMissing::new(
+            LocalFileSystem::new_with_prefix(&tmp.0).unwrap(),
+        )),
         "file://",
     );
     // An empty directory exists for error and ignore.
@@ -780,12 +783,17 @@ fn listing_and_head_requests_are_retried_then_fail_as_store_failures() {
     assert_eq!(e.error_class(), ErrorClass::KrishivObjectStoreRequestFailed);
 }
 
+// Unix only: Windows answers a path under a file as "not found" (ERROR_PATH_NOT_FOUND), so no
+// request fails there.
+#[cfg(unix)]
 #[test]
 fn a_failing_store_request_is_not_retried() {
     let tmp = TempDir::new("fail");
     std::fs::write(tmp.0.join("afile"), b"hi").unwrap();
     let env = Env::new(
-        Arc::new(LocalFileSystem::new_with_prefix(&tmp.0).unwrap()),
+        Arc::new(LocalDirsAsMissing::new(
+            LocalFileSystem::new_with_prefix(&tmp.0).unwrap(),
+        )),
         "file://",
     );
     // A path under a file: the file system refuses it outright.
@@ -845,7 +853,9 @@ fn a_store_refusing_a_listing_or_delete_is_not_retried() {
     let tmp = TempDir::new("refuse");
     std::fs::write(tmp.0.join("afile"), b"hi").unwrap();
     let env = Env::new(
-        Arc::new(LocalFileSystem::new_with_prefix(&tmp.0).unwrap()),
+        Arc::new(LocalDirsAsMissing::new(
+            LocalFileSystem::new_with_prefix(&tmp.0).unwrap(),
+        )),
         "file://",
     );
     let e = env
@@ -867,7 +877,9 @@ fn partitioned_writes_follow_sparks_layout() {
     let memory = Env::memory();
     let tmp = TempDir::new("partitioned");
     let local = Env::new(
-        Arc::new(LocalFileSystem::new_with_prefix(&tmp.0).unwrap()),
+        Arc::new(LocalDirsAsMissing::new(
+            LocalFileSystem::new_with_prefix(&tmp.0).unwrap(),
+        )),
         "file://",
     );
     for env in [&memory, &local] {
