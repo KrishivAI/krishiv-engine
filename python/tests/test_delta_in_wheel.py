@@ -30,6 +30,8 @@ def test_delta_dml_and_merge_run_in_the_wheel(spark: SparkSession, tmp_path: Pat
     spark.createDataFrame([(1, "a"), (2, "b"), (3, "c")], ["id", "v"]).write.format("delta").save(path)
     spark.sql(f"UPDATE delta.`{path}` SET v = 'x' WHERE id = 1")
     spark.sql(f"DELETE FROM delta.`{path}` WHERE id = 2")
+    after_delete = spark.read.format("delta").load(path).orderBy("id").collect()
+    assert [(r["id"], r["v"]) for r in after_delete] == [(1, "x"), (3, "c")]
     spark.createDataFrame([(3, "m"), (4, "n")], ["id", "v"]).createOrReplaceTempView("src")
     spark.sql(
         f"MERGE INTO delta.`{path}` t USING src s ON t.id = s.id "
