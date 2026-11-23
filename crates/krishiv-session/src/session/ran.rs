@@ -138,15 +138,17 @@ pub(super) fn not_a_query(class: krishiv_sql::StatementClass) -> KrishivError {
 
 impl Session {
     /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
-    /// the id of the `system.queries` row a query of it began.
+    /// the id of the `system.queries` row a query of it began. `parsed` gets the statement's class
+    /// once it parsed: a statement refused after that is listed with its class.
     pub(crate) async fn sql_here_marked(
         &self,
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
+        parsed: &std::sync::OnceLock<&'static str>,
         queries_only: bool,
     ) -> Result<Ran, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, row, Vec::new(), queries_only)).await
+        Box::pin(self.sql_here_inner(query, row, Vec::new(), Some(parsed), queries_only)).await
     }
 
     /// With `queries_only`, a statement that is not a query is not authorized or run: its class
@@ -156,6 +158,7 @@ impl Session {
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
         spans: Vec<krishiv_sql::ast::Span>,
+        parsed: Option<&std::sync::OnceLock<&'static str>>,
         queries_only: bool,
     ) -> Result<Ran, KrishivError> {
         let mut env = self.query_env();
@@ -194,6 +197,10 @@ impl Session {
         // Before any side effect: what the statement writes, creates or
         // drops (its reads are checked by analysis, first thing).
         let class = self.statement_class(&statement, &env);
+        if let Some(parsed) = parsed {
+            // Set once: the slot is this statement's alone.
+            let _ = parsed.set(class.name());
+        }
         if queries_only && !matches!(statement, Statement::Query(_)) {
             return Ok(Ran::NotAQuery(class));
         }

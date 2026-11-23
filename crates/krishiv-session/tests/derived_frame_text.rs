@@ -405,9 +405,27 @@ fn execute_immediate_in_a_script_is_listed_under_its_own_text() {
     assert_eq!(
         listed(&s, "ui-run-27"),
         [
-            format!("{inner} | - | failed"),
+            format!("{inner} | WRITE | failed"),
             format!("{inner} | WRITE | finished"),
         ],
-        "the query that evaluated the string finished; the refused statement is the failed row (no class)"
+        "the query that evaluated the string finished; the refused statement is the failed row, with its class"
     );
+}
+
+/// A statement refused before any query of it began is listed with its class once it parsed: a read
+/// of a missing table, a write to one, a statement of the session. One that did not parse has no class.
+#[test]
+fn a_refused_statement_is_listed_with_its_class_once_it_parsed() {
+    let s = Session::new().unwrap();
+    let cases = [
+        ("SELECT a FROM zr_missing", "READ"),
+        ("INSERT INTO zr_missing VALUES (1)", "WRITE"),
+        ("DROP TABLE zr_missing", "DDL"),
+        ("SELEC 1", "-"),
+    ];
+    for (i, (sql, class)) in cases.iter().enumerate() {
+        let tag = format!("ui-run-28-{i}");
+        assert!(!run_tagged(&s, sql, &tag), "{sql}");
+        assert_eq!(listed(&s, &tag), [format!("{sql} | {class} | failed")]);
+    }
 }

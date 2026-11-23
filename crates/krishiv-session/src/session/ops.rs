@@ -56,6 +56,8 @@ impl Session {
         let (session, text) = (self.clone(), query.to_owned());
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let marker = Arc::clone(&row);
+        let parsed: Arc<std::sync::OnceLock<&'static str>> = Arc::default();
+        let class = Arc::clone(&parsed);
         let (result, cancelled) = self
             .on_executor_reasoned(async move {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
@@ -63,7 +65,7 @@ impl Session {
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
                 let span = trace.prepare_span(&crate::telemetry::Who::of(&session));
                 session
-                    .sql_here_marked(&text, marker, queries_only)
+                    .sql_here_marked(&text, marker, &class, queries_only)
                     .instrument(span)
                     .await
                     .map(|ran| match ran {
@@ -75,7 +77,8 @@ impl Session {
             })
             .await;
         // A statement refused before it ran (parse, analysis, access) is a
-        // row of `system.queries` too, with the text as the session may show it.
+        // row of `system.queries` too, with the text as the session may show it
+        // and, once it parsed, its class.
         // ...unless a query already ran inside `sql` (an `EXPLAIN ANALYZE`
         // that failed while it ran): that one has its row.
         if let Err(error) = &result
@@ -84,7 +87,7 @@ impl Session {
             let id = self.state.queries.record_refused(
                 crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
                 Some(krishiv_sql::redact_sql(query).as_str()),
-                None,
+                parsed.get().copied(),
                 error,
                 self.operation_id(),
             );
