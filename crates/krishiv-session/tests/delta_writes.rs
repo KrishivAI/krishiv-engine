@@ -671,6 +671,39 @@ fn empty_writes_commit_as_delta_spark() {
     );
 }
 
+/// A `replaceWhere` is read under the session's parser options, as delta-spark parses it with
+/// the session's parser: under `spark.sql.ansi.doubleQuotedIdentifiers`, `"p" = 'y'` names the
+/// partition column (by default it would compare the string `p`).
+#[test]
+fn a_replace_where_reads_a_double_quoted_name_as_the_column_under_ansi_identifiers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("q");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE q (a INT, p STRING) USING delta PARTITIONED BY (p) LOCATION '{path}'"
+        ),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO q VALUES (1, 'x'), (2, 'y')").unwrap();
+    run(&s, "SET spark.sql.ansi.doubleQuotedIdentifiers = true").unwrap();
+    let new = block_on(s.sql("SELECT 3 AS a, 'y' AS p")).unwrap();
+    block_on(
+        new.write()
+            .format("delta")
+            .mode("overwrite")
+            .option("replaceWhere", "\"p\" = 'y'")
+            .save(&path),
+    )
+    .unwrap();
+    assert_eq!(
+        query(&s, "SELECT a, p FROM q ORDER BY a"),
+        serde_json::json!([[1, "x"], [3, "y"]])
+    );
+}
+
 /// A NULL into a `NOT NULL` column of a Delta table, through SQL and the DataFrame writer, at
 /// the top level and in a nested struct field, fails as delta-spark does (`WRITE-EDGES.json`
 /// `not_null`) and commits nothing.

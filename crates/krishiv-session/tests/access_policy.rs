@@ -876,7 +876,7 @@ fn a_file_in_the_way_of_the_target_is_handled_as_before() {
     assert_eq!(e.error_class().name(), "PATH_ALREADY_EXISTS", "{text}");
     assert!(
         text.contains(&format!(
-            "file/{}",
+            "file:/{}",
             target.display().to_string().trim_start_matches('/')
         )),
         "{text}"
@@ -1774,8 +1774,10 @@ fn a_keyed_delta_overwrite_is_allowed_like_the_unkeyed_one() {
             .option("krishiv.write.idempotencyKey", "k")
             .save_as_table("d"),
     ));
-    assert_eq!(keyed, unkeyed);
-    assert_ne!(keyed, DENIED);
+    assert_eq!(unkeyed, "OK");
+    assert_eq!(keyed, "OK");
+    // Each overwrite replaced the table with the source's rows.
+    assert_eq!(block_on(s.table("d").count()).unwrap(), 3);
 }
 
 /// `ignore` on an existing table is still authorized: a denial must not tell an existing table

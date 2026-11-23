@@ -28,7 +28,7 @@ use crate::session::Session;
 
 /// Each rewrite's target and whether its request kept a `read_filter` (the partitions read), in
 /// order: the end-to-end side of the re-read rule (review 681c2e038 nit 1).
-pub(super) static READ_FILTERS: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+pub(crate) static READ_FILTERS: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
 
 /// The table's files: name and rows (`id BIGINT, s STRING`).
 #[derive(Debug)]
@@ -318,7 +318,16 @@ fn session(files: &Arc<Files>) -> (Session, String) {
 
 /// [`session`] with or without a row-level table and an output.
 fn session_with(files: &Arc<Files>, row_level: bool, output: bool) -> (Session, String) {
-    let session = Session::new().unwrap();
+    put_table(Session::new().unwrap(), files, row_level, output)
+}
+
+/// `session` with the table `t` over `files`.
+fn put_table(
+    session: Session,
+    files: &Arc<Files>,
+    row_level: bool,
+    output: bool,
+) -> (Session, String) {
     let columns = vec![
         TableColumn {
             name: "id".to_owned(),
@@ -699,6 +708,65 @@ fn merge_on_read_update_deletes_old_rows_and_adds_new_ones() {
     assert_eq!(files.commits.load(Ordering::Relaxed), 1);
 }
 
+/// Under `spark.sql.ansi.doubleQuotedIdentifiers` a double-quoted name in the condition and in a
+/// value is the column, in the rewrite as in the analysis: the texts are read again under the
+/// statement's parser options, for a copy-on-write and a merge-on-read table alike (#962's
+/// CodeRabbit finding on MERGE, here for DELETE and UPDATE).
+#[test]
+fn a_double_quoted_name_reads_the_column_under_ansi_identifiers() {
+    let strings = |batches: &[RecordBatch]| -> Vec<String> {
+        let mut out: Vec<(i64, String)> = batches
+            .iter()
+            .flat_map(|b| {
+                let ids = b.column(0).as_primitive::<Int64Type>().clone();
+                let s = b.column(1).as_string_view().clone();
+                (0..b.num_rows())
+                    .map(|i| (ids.value(i), s.value(i).to_owned()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        out.sort();
+        out.into_iter().map(|(_, s)| s).collect()
+    };
+    for mor in [false, true] {
+        let files = Files::new();
+        files.mor.store(mor, Ordering::Relaxed);
+        let (session, name) = session(&files);
+        session
+            .conf()
+            .set("spark.sql.ansi.doubleQuotedIdentifiers", "true")
+            .unwrap();
+        run(
+            &session,
+            &name,
+            RowLevelOperation::Update,
+            Some("\"id\" IN (2, 8)"),
+            vec![set("s", "concat(\"s\", '!')")],
+        );
+        let batches: Vec<RecordBatch> = files.lock().iter().map(|(_, b)| b.clone()).collect();
+        if mor {
+            // The new rows only: the old ones are deleted by position.
+            assert_eq!(strings(&batches[3..]), ["s2!", "s8!"]);
+        } else {
+            let want: Vec<String> = (1..=9)
+                .map(|i| match i {
+                    2 | 8 => format!("s{i}!"),
+                    _ => format!("s{i}"),
+                })
+                .collect();
+            assert_eq!(strings(&batches), want);
+            run(
+                &session,
+                &name,
+                RowLevelOperation::Delete,
+                Some("\"id\" = 5"),
+                vec![],
+            );
+            assert_eq!(files.ids(), [1, 2, 3, 4, 6, 7, 8, 9]);
+        }
+    }
+}
+
 /// `has_subquery` finds a subquery at any depth of a condition, and only then.
 #[test]
 fn a_condition_holds_a_subquery_only_when_one_is_written() {
@@ -982,6 +1050,29 @@ fn a_delta_update_reads_the_whole_table_only_when_a_subquery_reads_the_target() 
         ),
         vec![true]
     );
+    // The same rule for a MERGE (#962 review nit 2): a source that reads the target again under
+    // another spelling of its root, or through the catalog table over it, reads every row.
+    let merge = |source: &str| {
+        format!(
+            "MERGE INTO delta.`{t}` t USING ({source}) s ON t.p = s.p AND t.p = 1 \
+             WHEN MATCHED THEN UPDATE SET v = s.v"
+        )
+    };
+    assert_eq!(
+        filters(&merge(&format!("SELECT v, p FROM delta.`{o}`"))),
+        vec![true]
+    );
+    for again in [
+        format!("delta.`file:{t}/`"),
+        format!("delta.`{t}/`"),
+        "rt".to_owned(),
+    ] {
+        assert_eq!(
+            filters(&merge(&format!("SELECT v, p FROM {again}"))),
+            vec![false],
+            "{again}"
+        );
+    }
 }
 
 mod merge {
@@ -1015,7 +1106,14 @@ mod merge {
         m: MergeStatement,
     ) -> Result<Option<crate::dataframe::DataFrame>, krishiv_common::error::KrishivError> {
         let s = session.clone();
-        block_on(session.on_executor(async move { s.run_merge(&m).await }))
+        // As the statement runs it: the hidden tables go at its end (`Swept`).
+        block_on(session.on_executor(async move {
+            crate::table_commands::row_level::Swept::new(
+                Arc::clone(&s.state.catalog),
+                s.run_merge(&m),
+            )
+            .await
+        }))
     }
 
     fn merge(session: &Session, m: MergeStatement) -> Vec<RecordBatch> {
@@ -1037,6 +1135,42 @@ mod merge {
             .collect();
         out.sort();
         out
+    }
+
+    #[test]
+    fn a_sql_merge_builds_qualified_insert_and_set_columns_before_its_refusal() {
+        // `exec_merge` builds every clause from the SQL text (an `INSERT` column qualified by the
+        // target's alias, or without one by its name, `namespace.name` or
+        // `spark_catalog.namespace.name`; a `SET` column loses only a first part equal to the alias
+        // or the table name) before it asks the table for a row-level table. A Parquet table has
+        // none, so the statement reaches the old refusal with every clause built: this runs those
+        // paths, it does not check the columns they build.
+        let dir = tempfile::tempdir().unwrap();
+        let session = Session::new().unwrap();
+        block_on(session.sql(&format!(
+            "CREATE TABLE p (id BIGINT, s STRING) USING parquet LOCATION '{}'",
+            dir.path().display()
+        )))
+        .unwrap();
+        for (target, q) in [
+            ("p AS x", "x"),
+            ("p", "p"),
+            ("p", "default.p"),
+            ("p", "spark_catalog.default.p"),
+            ("p", "P"),
+        ] {
+            let sql = format!(
+                "MERGE INTO {target} USING ({SOURCE}) src ON {q}.id = src.id \
+                 WHEN MATCHED THEN UPDATE SET {q}.s = src.s \
+                 WHEN NOT MATCHED THEN INSERT ({q}.id, s) VALUES (src.id, DEFAULT)"
+            );
+            let e = block_on(async { session.sql(&sql).await?.collect().await }).unwrap_err();
+            assert_eq!(
+                format!("{:?}", e.error_class()),
+                "UnsupportedFeatureTableOperation",
+                "{target} / {q}: {e}"
+            );
+        }
     }
 
     #[test]
@@ -1145,6 +1279,112 @@ mod merge {
         assert!(rows.contains(&(10, "n10!".to_owned())), "{rows:?}");
         assert!(rows.contains(&(9, "s9?".to_owned())), "{rows:?}");
         assert_eq!(session.memory_reserved(), 0);
+    }
+
+    #[test]
+    fn a_lambda_variable_shadows_a_column_only_inside_its_lambda() {
+        // `id` is both a column of the two sides and the lambda's variable. The bare `id` outside
+        // the lambda is the target's (qualified by its side); the variable inside stays as it is
+        // (review of #962: a name a lambda bound was left unqualified in the whole clause, so the
+        // outer `id` was ambiguous in the join).
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let out = merge(
+            &session,
+            statement(
+                "SELECT CAST(id AS BIGINT) AS id, s FROM VALUES (2, 'u2') AS v(id, s)",
+                vec![clause(
+                    ClauseKind::NotMatchedBySource,
+                    Some("id = 9 AND NOT exists(array(1, 2), id -> id > 5)"),
+                    ClauseAction::Update(vec![set(
+                        "s",
+                        "concat(s, CAST(size(filter(array(7, 8, 9), id -> id >= 8)) AS STRING))",
+                    )]),
+                )],
+            ),
+        );
+        assert_eq!(affected(&out), 1);
+        let rows = strings(&files);
+        assert!(rows.contains(&(9, "s92".to_owned())), "{rows:?}");
+        assert_eq!(session.memory_reserved(), 0);
+    }
+
+    /// A MERGE cancelled right after its source's first spill write (the copy waits there, a
+    /// test hook) ends with the cancel's class, commits nothing, gives the pool back and leaves
+    /// no spill file.
+    #[test]
+    fn a_merge_cancelled_after_its_first_source_spill_write_leaves_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spill = tmp.path().join("spill");
+        let runtime = crate::EngineRuntime::builder()
+            .config("krishiv.spill.dir", spill.to_str().unwrap())
+            .build()
+            .unwrap();
+        let files = Files::new();
+        let (session, _) = put_table(
+            Session::builder().runtime(runtime).build().unwrap(),
+            &files,
+            true,
+            true,
+        );
+        let (reached, at_write) = tokio::sync::oneshot::channel();
+        let (resume, resumed) = tokio::sync::oneshot::channel();
+        *crate::table_commands::merge_source::AFTER_FIRST_WRITE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((reached, resumed));
+        let canceller = {
+            let s = session.clone();
+            std::thread::spawn(move || {
+                // An error: the merge ended without reaching the hook (cleared below).
+                if block_on(at_write).is_ok() {
+                    s.interrupt_all();
+                    resume.send(()).unwrap();
+                }
+            })
+        };
+        let e = try_merge(
+            &session,
+            statement(
+                SOURCE,
+                vec![
+                    clause(
+                        ClauseKind::Matched,
+                        None,
+                        ClauseAction::Update(vec![set("s", "src.s")]),
+                    ),
+                    clause(ClauseKind::NotMatched, None, ClauseAction::InsertStar),
+                ],
+            ),
+        )
+        .unwrap_err();
+        let unreached = crate::table_commands::merge_source::AFTER_FIRST_WRITE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .is_some();
+        canceller.join().unwrap();
+        assert!(!unreached, "the source was never spilled");
+        assert_eq!(e.sql_state(), Some("HY008"), "{e}");
+        assert_eq!(session.memory_reserved(), 0);
+        assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+        assert_eq!(files.names(), ["f0", "f1", "f2"]);
+        let mut left = Vec::new();
+        let mut dirs = vec![spill];
+        while let Some(d) = dirs.pop() {
+            let Ok(entries) = std::fs::read_dir(&d) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_none_or(|e| e != "lock") {
+                    // The `.lock` is the runtime's own, held while it lives.
+                    left.push(path);
+                }
+            }
+        }
+        assert!(left.is_empty(), "{left:?}");
     }
 
     #[test]

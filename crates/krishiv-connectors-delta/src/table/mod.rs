@@ -116,6 +116,30 @@ pub async fn has_delta_log(engine: &DeltaEngine) -> Result<bool, KrishivError> {
         .await?
 }
 
+/// Whether `engine`'s root holds any object at all (delta-spark's `tableExists` for a path: a
+/// Parquet directory with no log is "already exists" too, an empty or missing root is not).
+///
+/// # Errors
+/// Storage errors listing the root; `OPERATION_CANCELED`.
+pub async fn root_holds_files(engine: &DeltaEngine) -> Result<bool, KrishivError> {
+    let at = engine.table_root().clone();
+    let root = at.as_str().to_owned();
+    engine
+        .delta_blocking(move |e| -> Result<bool, KrishivError> {
+            use delta_kernel::StorageHandler as _;
+            let mut listed = e
+                .storage()
+                .list_from(&at)
+                .map_err(|err| from_kernel(&err, &root))?;
+            match listed.next() {
+                Some(Err(err)) => Err(from_kernel(&err, &root)),
+                Some(Ok(_)) => Ok(true),
+                None => Ok(false),
+            }
+        })
+        .await?
+}
+
 /// One live data file of the snapshot: one scan unit.
 #[derive(Debug, Clone)]
 pub struct ScanUnit {

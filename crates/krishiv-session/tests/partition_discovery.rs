@@ -185,8 +185,9 @@ fn a_directory_that_is_not_name_value_is_refused() {
         format!("{root}/plain/f.parquet"),
     )
     .unwrap();
+    // Spark 4.2.0: a plain subdirectory beside partition directories is a conflict.
     let e = block_on(s.read().parquet([root.as_str()]).schema()).unwrap_err();
-    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(e.error_class().name(), "CONFLICTING_DIRECTORY_STRUCTURES");
 }
 
 #[test]

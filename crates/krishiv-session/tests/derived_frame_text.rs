@@ -239,3 +239,308 @@ fn a_write_that_fails_while_it_runs_is_listed_once_with_its_text() {
         [Some("INSERT INTO no_such_table VALUES (1)".to_owned())]
     );
 }
+
+/// A script from the editor: the script's own row (the one a cancel addresses) has the script's text and
+/// class, and each statement the script runs is a row with that statement's own text and class. The read of
+/// the script's result is a run of its own, listed under the script's text and class.
+#[test]
+fn a_script_is_listed_with_its_text_and_each_statement_with_its_own() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE TABLE zs (a INT) USING parquet")).unwrap();
+    let script = "BEGIN INSERT INTO zs VALUES (1); SELECT a FROM zs; SELECT a + 1 FROM zs; END";
+    let df = block_on(s.sql_with(
+        script,
+        krishiv_session::QueryOptions::new().tags(["ui-run-11"]),
+    ))
+    .unwrap();
+    let mut rows = tagged(&s, "ui-run-11");
+    rows.sort();
+    let listed = vec![
+        Some(format!("{script} | WRITE")),
+        Some("INSERT INTO zs VALUES (1) | WRITE".to_owned()),
+        Some("SELECT a + 1 FROM zs | READ".to_owned()),
+        Some("SELECT a FROM zs | READ".to_owned()),
+    ];
+    assert_eq!(rows, listed);
+    block_on(df.limit(10).collect()).unwrap();
+    let mut rows = tagged(&s, "ui-run-11");
+    rows.sort();
+    // The read of the script's result (its last query's rows) is listed under the script's text and class.
+    let mut with_read = vec![Some(format!("{script} | WRITE"))];
+    with_read.extend(listed);
+    with_read.sort();
+    assert_eq!(rows, with_read);
+}
+
+/// The rows of the runs tagged `tag`, as `text | class | state` (`-` for an absent text or class), sorted.
+fn listed(s: &Session, tag: &str) -> Vec<String> {
+    let sql = format!(
+        "SELECT CAST(query_text AS STRING), CAST(statement_class AS STRING), CAST(state AS STRING) FROM system.queries WHERE tags['{tag}'] IS NOT NULL"
+    );
+    let batches = block_on(block_on(s.sql(&sql)).unwrap().collect()).unwrap();
+    let mut rows = Vec::new();
+    for b in &batches {
+        let column = |i: usize| b.column(i).as_any().downcast_ref::<StringArray>().unwrap();
+        let value = |c: usize, i: usize| {
+            if column(c).is_null(i) {
+                "-"
+            } else {
+                column(c).value(i)
+            }
+        };
+        for i in 0..b.num_rows() {
+            rows.push(format!(
+                "{} | {} | {}",
+                value(0, i),
+                value(1, i),
+                value(2, i)
+            ));
+        }
+    }
+    rows.sort();
+    rows
+}
+
+/// Runs `sql` under the request tag `tag`; whether it succeeded.
+fn run_tagged(s: &Session, sql: &str, tag: &str) -> bool {
+    block_on(s.sql_with(sql, krishiv_session::QueryOptions::new().tags([tag])))
+        .inspect_err(|e| eprintln!("{sql}: {e}"))
+        .is_ok()
+}
+
+/// The queries a script runs outside a SQL statement of it (a `DECLARE` default, a `SET`, a condition, the
+/// query of a `FOR`) are listed under the text of that part of the script: the declaration and the assignment
+/// as session statements, the condition and the loop's query as reads. None is listed under a `SELECT` the
+/// interpreter put together, or under the whole script.
+#[test]
+fn the_queries_of_a_scripts_variables_conditions_and_loops_are_listed_under_their_own_text() {
+    let s = Session::new().unwrap();
+    let script = "BEGIN DECLARE n INT DEFAULT 1 + 1; SET n = n + 1; \
+                  IF n > 2 THEN SELECT n; END IF; \
+                  FOR r AS SELECT id FROM range(0, 2) DO SET n = n + r.id; END FOR; END";
+    assert!(run_tagged(&s, script, "ui-run-21"));
+    assert_eq!(
+        listed(&s, "ui-run-21"),
+        [
+            format!("{script} | SESSION | finished"),
+            "DECLARE n INT DEFAULT 1 + 1 | SESSION | finished".to_owned(),
+            "SELECT id FROM range(0, 2) | READ | finished".to_owned(),
+            "SELECT n | READ | finished".to_owned(),
+            "SET n = n + 1 | SESSION | finished".to_owned(),
+            "SET n = n + r.id | SESSION | finished".to_owned(),
+            "SET n = n + r.id | SESSION | finished".to_owned(),
+            "n > 2 | READ | finished".to_owned(),
+        ]
+    );
+}
+
+/// A script that fails in one of its statements: the script's row and the statement's row are the failed
+/// ones, the statements before it finished, and there is no refused row beside them.
+#[test]
+fn a_failed_script_is_listed_once_and_its_failed_statement_once() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE TABLE zg (a INT) USING parquet")).unwrap();
+    let script = "BEGIN SELECT a FROM zg; INSERT INTO zg SELECT CAST('x' AS INT); END";
+    assert!(!run_tagged(&s, script, "ui-run-22"));
+    assert_eq!(
+        listed(&s, "ui-run-22"),
+        [
+            format!("{script} | WRITE | failed"),
+            "INSERT INTO zg SELECT CAST('x' AS INT) | WRITE | failed".to_owned(),
+            "SELECT a FROM zg | READ | finished".to_owned(),
+        ]
+    );
+}
+
+/// `SET VAR` typed alone: the query that evaluates the value is the statement's run, listed with the
+/// statement's text and class; a value that fails while it is evaluated is that one row, failed.
+#[test]
+fn a_variable_assignment_is_one_run_with_the_statements_text() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("DECLARE VARIABLE pv INT DEFAULT 0")).unwrap();
+    let set = "SET VAR pv = (SELECT max(id) FROM range(0, 5))";
+    assert!(run_tagged(&s, set, "ui-run-23"));
+    assert_eq!(
+        listed(&s, "ui-run-23"),
+        [format!("{set} | SESSION | finished")]
+    );
+    let many = "SET VAR pv = (SELECT id FROM range(0, 5))";
+    assert!(!run_tagged(&s, many, "ui-run-24"));
+    assert_eq!(
+        listed(&s, "ui-run-24"),
+        [format!("{many} | SESSION | failed")]
+    );
+    let declare = "DECLARE VARIABLE pw INT DEFAULT 3 + 4";
+    assert!(run_tagged(&s, declare, "ui-run-25"));
+    assert_eq!(
+        listed(&s, "ui-run-25"),
+        [format!("{declare} | SESSION | finished")]
+    );
+}
+
+/// The row form of `SET VAR` runs its query once: one listed run, finished. A row query with more than
+/// one row is that run, finished, and the refused assignment beside it.
+#[test]
+fn a_row_assignment_is_one_run() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("DECLARE VARIABLE ra INT DEFAULT 0")).unwrap();
+    block_on(s.sql("DECLARE VARIABLE rb STRING")).unwrap();
+    let set = "SET VAR (ra, rb) = (SELECT 7, 'x')";
+    assert!(run_tagged(&s, set, "ui-run-29"));
+    assert_eq!(
+        listed(&s, "ui-run-29"),
+        [format!("{set} | SESSION | finished")]
+    );
+    let none = "SET VAR (ra, rb) = (SELECT 1, 'y' WHERE false)";
+    assert!(run_tagged(&s, none, "ui-run-30"));
+    assert_eq!(
+        listed(&s, "ui-run-30"),
+        [format!("{none} | SESSION | finished")]
+    );
+    let many = "SET VAR (ra, rb) = (SELECT id, 'z' FROM range(0, 3))";
+    assert!(!run_tagged(&s, many, "ui-run-31"));
+    assert_eq!(
+        listed(&s, "ui-run-31"),
+        [
+            format!("{many} | SESSION | failed"),
+            format!("{many} | SESSION | finished"),
+        ]
+    );
+}
+
+/// A row assignment whose cast to a target's type fails, as Spark 4.2 answers (the casts are part of the
+/// analyzed plan, over the row query and under `LIMIT 2`; the row count is looked at after the run).
+#[test]
+fn a_row_assignment_whose_cast_fails_answers_as_spark_does() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("DECLARE VARIABLE rc INT DEFAULT 5")).unwrap();
+    let class = |sql: &str| {
+        block_on(s.sql(sql))
+            .err()
+            .map(|e| e.error_class().name().to_owned())
+    };
+    let rc = || {
+        let batches = block_on(block_on(s.sql("SELECT rc")).unwrap().collect()).unwrap();
+        let column = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int32Array>()
+            .unwrap()
+            .clone();
+        (!column.is_null(0)).then(|| column.value(0))
+    };
+    // A value no cast takes to INT fails at analysis, whatever the row count; the target keeps its value.
+    assert_eq!(
+        class("SET VAR (rc) = (SELECT array(1) WHERE false)").as_deref(),
+        Some("DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION")
+    );
+    assert_eq!(rc(), Some(5));
+    // A cast that fails on a row that is read comes before the row count.
+    for sql in [
+        "SET VAR (rc) = (SELECT col1 FROM VALUES ('x'), ('y'))",
+        "SET VAR (rc) = (SELECT col1 FROM VALUES ('x'))",
+    ] {
+        assert_eq!(class(sql).as_deref(), Some("CAST_INVALID_INPUT"), "{sql}");
+    }
+    assert_eq!(rc(), Some(5));
+    // The third row of a sorted row query is never cast: two rows are already too many.
+    for sql in [
+        "SET VAR (rc) = (SELECT col1 FROM VALUES ('2'), ('1'), ('x') ORDER BY col1)",
+        "SET VAR (rc) = (SELECT col1 FROM VALUES (1), (2))",
+    ] {
+        assert_eq!(
+            class(sql).as_deref(),
+            Some("ROW_SUBQUERY_TOO_MANY_ROWS"),
+            "{sql}"
+        );
+    }
+    // No row sets the target to NULL, though the row's value would not cast.
+    assert_eq!(
+        class("SET VAR (rc) = (SELECT col1 FROM VALUES ('x') WHERE false)"),
+        None
+    );
+    assert_eq!(rc(), None);
+    assert_eq!(
+        class("SET VAR (rc) = (SELECT col1 FROM VALUES ('3'))"),
+        None
+    );
+    assert_eq!(rc(), Some(3));
+}
+
+/// A statement of a script refused before any query of it began (a missing table, an unknown variable)
+/// is listed as refused under its own text and class, beside the failed script.
+#[test]
+fn a_script_statement_refused_before_it_ran_is_listed_with_its_text_and_class() {
+    let s = Session::new().unwrap();
+    let script = "BEGIN SELECT 1; SELECT a FROM zs_missing; END";
+    assert!(!run_tagged(&s, script, "ui-run-32"));
+    assert_eq!(
+        listed(&s, "ui-run-32"),
+        [
+            format!("{script} | READ | failed"),
+            "SELECT 1 | READ | finished".to_owned(),
+            "SELECT a FROM zs_missing | READ | failed".to_owned(),
+        ]
+    );
+    let script = "BEGIN SET zs_no_such = 1; END";
+    assert!(!run_tagged(&s, script, "ui-run-33"));
+    assert_eq!(
+        listed(&s, "ui-run-33"),
+        [
+            format!("{script} | SESSION | failed"),
+            "SET zs_no_such = 1 | SESSION | failed".to_owned(),
+        ]
+    );
+}
+
+/// `EXECUTE IMMEDIATE` as a statement of a script: the query that evaluates its string and what the named
+/// statement runs are listed under the script statement's text and class. A script inside an
+/// `EXECUTE IMMEDIATE` is refused (as Spark refuses it): its row is the failed one, beside the finished
+/// query that evaluated the string.
+#[test]
+fn execute_immediate_in_a_script_is_listed_under_its_own_text() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE TABLE zh (a INT) USING parquet")).unwrap();
+    let write = "EXECUTE IMMEDIATE 'INSERT INTO zh VALUES (1)'";
+    let read = "EXECUTE IMMEDIATE 'SELECT a FROM zh'";
+    let outer = format!("BEGIN {write}; {read}; END");
+    assert!(run_tagged(&s, &outer, "ui-run-26"));
+    assert_eq!(
+        listed(&s, "ui-run-26"),
+        [
+            format!("{outer} | WRITE | finished"),
+            format!("{write} | WRITE | finished"),
+            format!("{write} | WRITE | finished"),
+            format!("{read} | READ | finished"),
+            format!("{read} | READ | finished"),
+        ]
+    );
+    let inner = "EXECUTE IMMEDIATE 'BEGIN INSERT INTO zh VALUES (2); SELECT a FROM zh; END'";
+    assert!(!run_tagged(&s, inner, "ui-run-27"));
+    assert_eq!(
+        listed(&s, "ui-run-27"),
+        [
+            format!("{inner} | WRITE | failed"),
+            format!("{inner} | WRITE | finished"),
+        ],
+        "the query that evaluated the string finished; the refused statement is the failed row, with its class"
+    );
+}
+
+/// A statement refused before any query of it began is listed with its class once it parsed: a read
+/// of a missing table, a write to one, a statement of the session. One that did not parse has no class.
+#[test]
+fn a_refused_statement_is_listed_with_its_class_once_it_parsed() {
+    let s = Session::new().unwrap();
+    let cases = [
+        ("SELECT a FROM zr_missing", "READ"),
+        ("INSERT INTO zr_missing VALUES (1)", "WRITE"),
+        ("DROP TABLE zr_missing", "DDL"),
+        ("SELECT 1 +", "-"),
+    ];
+    for (i, (sql, class)) in cases.iter().enumerate() {
+        let tag = format!("ui-run-28-{i}");
+        assert!(!run_tagged(&s, sql, &tag), "{sql}");
+        assert_eq!(listed(&s, &tag), [format!("{sql} | {class} | failed")]);
+    }
+}

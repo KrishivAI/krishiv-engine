@@ -46,13 +46,25 @@ impl Session {
     pub(super) fn begin_script(&self) -> Result<ScriptRun, KrishivError> {
         self.check_open()?;
         let env = self.query_env();
+        // The script is the command this task runs: its row is listed with its text and class.
+        let script = crate::session::command_statement(env.text.is_some());
+        let (text, class) = match &script {
+            Some(s) => (Some(&*s.text), Some(s.class)),
+            None => (env.text.as_deref(), env.statement_class),
+        };
         let row = self.state.queries.begin_as(
             crate::system::TextPolicy::from_config(&env.config),
-            env.text.as_deref(),
-            env.statement_class,
+            text,
+            class,
             self.operation_id(),
         )?;
         self.stamp_row(&row);
+        // The script's row is the statement's listed run: a failed script gets no refused row beside it.
+        if let Some(slot) = script.as_ref().and_then(|s| s.row.as_ref()) {
+            *slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(row.clone());
+        }
         let index = self.state.runtime.reserve_tagged(
             self.state.number,
             self.state.queries.session_id(),

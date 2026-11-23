@@ -267,7 +267,8 @@ impl Session {
         }))
         .with_io(env.io.clone())
         .with_formats(Arc::clone(&self.state.runtime.formats))
-        .with_config(Arc::clone(&env.config));
+        .with_config(Arc::clone(&env.config))
+        .with_execution_reads(Arc::default());
         self.with_python_runtime(worker)
     }
 }

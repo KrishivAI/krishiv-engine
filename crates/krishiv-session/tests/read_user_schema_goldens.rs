@@ -23,13 +23,13 @@ use serde_json::{Value, json};
 const KNOWN_GAPS: &[(&str, &str)] = &[
     (
         "partition directory under a plain directory",
-        "partition discovery: the engine refuses a plain directory under the root (KRISHIV_UNSUPPORTED_FEATURE); \
-         Spark stops at it as the leaf directory's base path, so two base paths are \
-         CONFLICTING_DIRECTORY_STRUCTURES",
+        "the error class matches Spark's CONFLICTING_DIRECTORY_STRUCTURES, but discoveredBasePaths names only the \
+         root; Spark lists the plain directory's own base path (x) and the root",
     ),
     (
         "partition directory under a plain directory, ignoreInvalidPartitionPaths option",
-        "the same refusal as above; with the option Spark skips the base-path check and reads both files",
+        "with the option Spark skips the base-path check and reads both leaves and their partition values; the \
+         engine skips the plain directory's files",
     ),
 ];
 

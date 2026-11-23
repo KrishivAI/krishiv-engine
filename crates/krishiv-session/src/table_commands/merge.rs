@@ -77,9 +77,14 @@ use crate::session::{Session, internal};
 
 /// The rewrite's option holding the statement's counts, a JSON object: `source_rows`,
 /// `matched_updated`, `matched_deleted`, `not_matched_by_source_updated`,
-/// `not_matched_by_source_deleted`, `inserted` (`null`: every written row is an insert) and
-/// `materialize_ms`.
+/// `not_matched_by_source_deleted`, `inserted` (`null`: every written row is an insert),
+/// `materialize_ms` and `source_rows_observation` (with `source_rows` `null`: the name of the
+/// rewrite's observation that counts the source, [`SOURCE_ROWS_OBSERVATION`]).
 pub(crate) const COUNTS_OPTION: &str = "__krishiv_row_level_merge_counts";
+
+/// The observation of an insert-only `MERGE`'s rewrite counting its source rows (`count(*)`
+/// over the source, before the anti join): the source is read once.
+const SOURCE_ROWS_OBSERVATION: &str = "__krishiv_merge_source_rows";
 
 /// The rewrite's option holding the clauses, a JSON array in statement order of objects
 /// `{"kind": "matched" | "notMatched" | "notMatchedBySource", "action": "update" | "delete" |
@@ -378,9 +383,13 @@ impl Session {
         let materialize_started = std::time::Instant::now();
         let held = self.merge_source(&source, insert_only).await?;
         let source_rows = match held.rows {
-            Some(n) => n,
-            // Only the metric needs it: an insert-only MERGE reads its rows once below.
-            None => held.frame.count().await?,
+            Some(n) => Some(n),
+            // An insert-only MERGE reads its source once, in the rewrite, which counts it (the
+            // observation `SOURCE_ROWS_OBSERVATION`, read by the table at commit), as delta-spark
+            // counts `numSourceRows` in the same pass (`incrSourceRowCountExpr`).
+            None if insert_only => None,
+            // Only the metric needs it.
+            None => Some(held.frame.count().await?),
         };
         let materialize_ms = if held.kind == super::merge_source::SourceKind::Spilled {
             materialize_started.elapsed().as_millis()
@@ -479,7 +488,13 @@ impl Session {
                     .alias("multiple"),
                 crate::functions::sum(col("ins")).alias("ins"),
             ]);
-            found_of(&per_file.collect().await?, resolved.len())?
+            // Folded a batch at a time: the summary (a row per file and action) is not held.
+            let mut fold = FoundFold::new(resolved.len());
+            let mut stream = per_file.execute_stream().await?;
+            while let Some(batch) = stream.next().await {
+                fold.add(&batch?)?;
+            }
+            fold.finish()
         };
         let scan_ms = find_started.elapsed().as_millis();
 
@@ -505,7 +520,8 @@ impl Session {
             // Every row of the anti join is a source row no target row matches: the clauses'
             // own conditions decide.
             let (name, whole) = target_frame(None);
-            let rows = s.join(&whole, on, JoinType::LeftAnti);
+            let counted = s.observe_named(SOURCE_ROWS_OBSERVATION, [expr("count(*)")?]);
+            let rows = counted.join(&whole, on, JoinType::LeftAnti);
             let guards: Vec<Column> = resolved.iter().map(hit).collect();
             let keep = first_of(
                 guards.iter().map(|g| (g.clone(), lit(true))).collect(),
@@ -571,6 +587,11 @@ impl Session {
         } else {
             Some(Arc::new(on_of(&m.on, &probe.env.parser)?))
         };
+        #[cfg(test)]
+        super::row_level::tests::READ_FILTERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((m.target.clone(), read_filter.is_some()));
         let mut request = RowLevelWrite::new(
             RowLevelOperation::Merge,
             m.target.clone(),
@@ -595,6 +616,7 @@ impl Session {
         let by_source_deleted = count_of(&|c| c.kind == ClauseKind::NotMatchedBySource && c.delete);
         let counts = serde_json::json!({
             "source_rows": source_rows,
+            "source_rows_observation": source_rows.is_none().then_some(SOURCE_ROWS_OBSERVATION),
             "matched_updated": matched_updated,
             "matched_deleted": matched_deleted,
             "not_matched_by_source_updated": by_source_updated,
@@ -734,24 +756,35 @@ fn on_of(
     Ok(crate::functions::expr_with(on, parser)?.expr)
 }
 
-/// The find query's rows (`f`, `act`, `rows`, `touch`, `multiple`, `ins`) folded.
-fn found_of(batches: &[RecordBatch], clauses: usize) -> Result<Found, KrishivError> {
-    let mut found = Found {
-        per_clause: vec![0; clauses],
-        ..Found::default()
-    };
-    let mut touched: BTreeSet<Vec<u8>> = BTreeSet::new();
-    let long = |b: &RecordBatch, i: usize| -> Result<Vec<Option<i64>>, KrishivError> {
-        let c = b
-            .column(i)
-            .as_primitive_opt::<Int64Type>()
-            .ok_or_else(|| internal("a MERGE count that is not a long".to_owned()))?;
-        Ok((0..c.len())
-            .map(|r| c.is_valid(r).then(|| c.value(r)))
-            .collect())
-    };
-    let n = |v: Option<i64>| u64::try_from(v.unwrap_or(0)).unwrap_or(0);
-    for b in batches {
+/// The find query's rows (`f`, `act`, `rows`, `touch`, `multiple`, `ins`) folded into a
+/// [`Found`], a batch at a time.
+struct FoundFold {
+    found: Found,
+    touched: BTreeSet<Vec<u8>>,
+}
+
+impl FoundFold {
+    fn new(clauses: usize) -> Self {
+        Self {
+            found: Found {
+                per_clause: vec![0; clauses],
+                ..Found::default()
+            },
+            touched: BTreeSet::new(),
+        }
+    }
+
+    fn add(&mut self, b: &RecordBatch) -> Result<(), KrishivError> {
+        let long = |b: &RecordBatch, i: usize| -> Result<Vec<Option<i64>>, KrishivError> {
+            let c = b
+                .column(i)
+                .as_primitive_opt::<Int64Type>()
+                .ok_or_else(|| internal("a MERGE count that is not a long".to_owned()))?;
+            Ok((0..c.len())
+                .map(|r| c.is_valid(r).then(|| c.value(r)))
+                .collect())
+        };
+        let n = |v: Option<i64>| u64::try_from(v.unwrap_or(0)).unwrap_or(0);
         let file = b.column(0);
         let files: Vec<Option<Vec<u8>>> = match file.data_type() {
             ArrowType::Binary => file
@@ -773,13 +806,14 @@ fn found_of(batches: &[RecordBatch], clauses: usize) -> Result<Found, KrishivErr
             long(b, 4)?,
             long(b, 5)?,
         );
+        let found = &mut self.found;
         for (r, f) in files.into_iter().enumerate() {
             let get = |v: &[Option<i64>]| v.get(r).copied().flatten();
             match f {
                 None => found.inserted += n(get(&ins)),
                 Some(f) => {
                     if get(&touch).unwrap_or(0) > 0 {
-                        touched.insert(f);
+                        self.touched.insert(f);
                     }
                     found.multiple += n(get(&multiple));
                     if let Some(a) = get(&act).and_then(|a| usize::try_from(a).ok())
@@ -790,9 +824,14 @@ fn found_of(batches: &[RecordBatch], clauses: usize) -> Result<Found, KrishivErr
                 }
             }
         }
+        Ok(())
     }
-    found.touched = touched.into_iter().collect();
-    Ok(found)
+
+    fn finish(self) -> Found {
+        let mut found = self.found;
+        found.touched = self.touched.into_iter().collect();
+        found
+    }
 }
 
 #[cfg(all(test, feature = "delta"))]
@@ -907,6 +946,31 @@ impl Session {
             }
             (parts.join("."), parts.len() > 1)
         };
+        // An `INSERT` column resolves against the target as delta-spark resolves it (a delta-spark
+        // 4.4.1 run): under an alias only the alias qualifies it, else the table's name,
+        // `namespace.name` or `spark_catalog.namespace.name` (any case).
+        let explicit_alias = m.target_alias.is_some();
+        let insert_key = |parts: &[krishiv_sql::ast::Ident]| -> (String, bool) {
+            let parts: Vec<&str> = parts.iter().map(|p| p.value.as_str()).collect();
+            let qualifiers: Vec<Vec<&str>> = if explicit_alias {
+                vec![vec![target_alias.as_str()]]
+            } else {
+                vec![
+                    vec!["spark_catalog", name.namespace.as_str(), name.name.as_str()],
+                    vec![name.namespace.as_str(), name.name.as_str()],
+                    vec![name.name.as_str()],
+                ]
+            };
+            let skip = qualifiers
+                .iter()
+                .find(|q| {
+                    parts.len() > q.len()
+                        && q.iter().zip(&parts).all(|(a, b)| a.eq_ignore_ascii_case(b))
+                })
+                .map_or(0, Vec::len);
+            let rest = &parts[skip..];
+            (rest.join("."), rest.len() > 1)
+        };
         let mut clauses = Vec::with_capacity(m.clauses.len());
         for c in &m.clauses {
             let kind = match c.matched {
@@ -938,15 +1002,13 @@ impl Session {
                     columns
                         .iter()
                         .zip(values)
-                        .map(|(c, v)| Assignment {
-                            nested: c.parts.len() > 1,
-                            column: c
-                                .parts
-                                .iter()
-                                .map(|p| p.value.as_str())
-                                .collect::<Vec<_>>()
-                                .join("."),
-                            value: (!crate::command::is_bare_default(v)).then(|| slice(v.span)),
+                        .map(|(c, v)| {
+                            let (column, nested) = insert_key(&c.parts);
+                            Assignment {
+                                nested,
+                                column,
+                                value: (!crate::command::is_bare_default(v)).then(|| slice(v.span)),
+                            }
                         })
                         .collect(),
                 ),

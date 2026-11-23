@@ -603,6 +603,7 @@ pub(super) async fn stage(
     plan: &RowLevelPlan,
     written: Written,
     write_id: &str,
+    query: &krishiv_exec::QueryContext,
 ) -> Result<Option<StagedCommit>, Failure> {
     let (snapshot, name, partitions) = (
         Arc::clone(table.snapshot()),
@@ -725,6 +726,7 @@ pub(super) async fn stage(
     }
     let rewrite_ms = millis(started.elapsed());
     if let Some(info) = &plan.merge {
+        let info = &info.with_observed(query).map_err(Failure::NotCommitted)?;
         *plan.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(Outcome {
             removed_files: removed.files,
             rows: None,

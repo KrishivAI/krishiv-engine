@@ -579,6 +579,9 @@ impl Session {
         self.authorize_write_path(&at).await?;
         let checked =
             self.locate_write_path(&table.location.display().to_string(), &spec.options, env)?;
+        // The table's own location can differ from the warehouse's (it moved), and its commit log is
+        // read below: the policy is asked of that path too.
+        self.authorize_write_path(&checked).await?;
         crate::session::writes::key_already_committed(
             &env.config,
             &spec.options,

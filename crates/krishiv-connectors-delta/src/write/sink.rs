@@ -1088,9 +1088,16 @@ impl DeltaWriteSink {
     ) -> Result<(), Failure> {
         if let Mode::RowLevel(plan) = &self.mode {
             let orphans = written.paths.clone();
-            let staged =
-                super::dml::stage(&g.engine, g.started, table, plan, written, &self.write_id)
-                    .await?;
+            let staged = super::dml::stage(
+                &g.engine,
+                g.started,
+                table,
+                plan,
+                written,
+                &self.write_id,
+                &g.query,
+            )
+            .await?;
             return match staged {
                 Some(mut staged) => {
                     staged.idempotency_key.clone_from(&self.idempotency_key);

@@ -43,6 +43,7 @@ mod predicate;
 mod protobuf;
 mod r#struct;
 mod text;
+mod theta;
 mod time;
 mod time_window;
 mod url;
@@ -226,6 +227,12 @@ pub enum Aggregate {
     HllSketchAgg,
     /// `hll_union_agg(sketch[, allowDifferentLgConfigK])`: the union of HLL sketches; never NULL.
     HllUnionAgg,
+    /// `theta_sketch_agg(x[, lgNomEntries])` (Spark 4.1): a compact Theta sketch of the non-NULL values; never NULL.
+    ThetaSketchAgg,
+    /// `theta_union_agg(sketch[, lgNomEntries])` (Spark 4.1): the union of Theta sketches; never NULL.
+    ThetaUnionAgg,
+    /// `theta_intersection_agg(sketch)` (Spark 4.1): the intersection of Theta sketches; never NULL.
+    ThetaIntersectionAgg,
 }
 
 /// A built-in function.

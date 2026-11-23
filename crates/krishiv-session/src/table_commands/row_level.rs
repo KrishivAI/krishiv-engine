@@ -137,7 +137,7 @@ impl Session {
         else {
             return Ok(None);
         };
-        let Ok((_, physical)) = plain.physical(&probe.analyzed, &probe.env).await else {
+        let Ok((_, physical)) = plain.physical_probe(&probe.analyzed, &probe.env).await else {
             return Ok(None);
         };
         let Some(scan) = first_scan(physical.root()) else {
@@ -152,13 +152,18 @@ impl Session {
         // A table whose commit records the key takes it; any other refuses it here, before any scan or
         // path split (E34).
         let caps = table.capabilities();
+        // The validated key travels with the statement: the rewrite's own config snapshot is never read
+        // for it, so a `conf().set` between the two cannot commit under another key.
+        let mut key_options = std::collections::BTreeMap::new();
         if caps.idempotent_commit {
-            // Validates only (an empty key is refused before the find scan); the key is read again
-            // from the config when the rewrite is set up.
-            apply_idempotency_key(&probe.env.config, &mut std::collections::BTreeMap::new())?;
+            // An empty key is refused here, before the find scan.
+            apply_idempotency_key(&probe.env.config, &mut key_options)?;
         } else {
             refuse_idempotency_key(&probe.env.config)?;
         }
+        // The texts are read again under the statement's parser options (as MERGE does), so a
+        // double-quoted name under `spark.sql.ansi.doubleQuotedIdentifiers` stays a column.
+        let parser = &probe.env.parser;
         // A Delta table's root as delta-spark's errors name it (`file:/..`), for a table by path
         // and for a catalog table over a Delta location alike (its scan keeps the table's name).
         #[cfg(feature = "delta")]
@@ -236,7 +241,7 @@ impl Session {
         // A table may refuse a subquery in the condition (delta-spark does, after resolution:
         // `PreprocessTableDelete.scala:35-45`, `PreprocessTableUpdate.scala:44`).
         if let Some(c) = condition
-            && has_subquery(&crate::functions::expr(c)?.expr)
+            && has_subquery(&crate::functions::expr_with(c, parser)?.expr)
             && let Some(e) = table.error(
                 op,
                 &RowLevelProblem::Subquery {
@@ -273,6 +278,8 @@ impl Session {
                     &columns,
                     &with_row_id,
                     assignments,
+                    parser,
+                    &key_options,
                 )
                 .await;
         }
@@ -289,9 +296,9 @@ impl Session {
         let found = self
             .hidden_frame(&whole, whole_entry, &with_row_id)
             .alias(alias)
-            .filter(crate::functions::expr(&hit)?)
+            .filter(crate::functions::expr_with(&hit, parser)?)
             .group_by([crate::functions::col(ROW_FILE_COLUMN)])
-            .agg([crate::functions::expr("count(*)")?]);
+            .agg([crate::functions::expr_with("count(*)", parser)?]);
         let find_started = std::time::Instant::now();
         let batches = found.collect().await?;
         let scan_ms = find_started.elapsed().as_millis();
@@ -319,8 +326,8 @@ impl Session {
                 Some(a) => crate::functions::call_function(
                     "if",
                     [
-                        crate::functions::expr(&hit)?,
-                        crate::functions::expr(a.value.as_deref().unwrap_or("NULL"))?
+                        crate::functions::expr_with(&hit, parser)?,
+                        crate::functions::expr_with(a.value.as_deref().unwrap_or("NULL"), parser)?
                             .cast_ansi(c.data_type.clone()),
                         column_of(&c.name)?,
                     ],
@@ -333,7 +340,7 @@ impl Session {
             .hidden_frame(&part, part_entry, &with_row_id)
             .alias(alias);
         if op == RowLevelOperation::Delete {
-            rewrite = rewrite.filter(crate::functions::expr(&format!("NOT {hit}"))?);
+            rewrite = rewrite.filter(crate::functions::expr_with(&format!("NOT {hit}"), parser)?);
         }
         let rewrite = rewrite.select(select);
         let analysis = rewrite.action_analysis().await?;
@@ -355,7 +362,7 @@ impl Session {
         #[cfg(not(feature = "delta"))]
         let rereads_target =
             crate::catalog::reads_source(analysis.analyzed.plan.root(), &scan.source);
-        let read_filter = read_filter(condition, rereads_target)?;
+        let read_filter = read_filter(condition, rereads_target, parser)?;
         #[cfg(test)]
         tests::READ_FILTERS
             .lock()
@@ -383,9 +390,9 @@ impl Session {
                 .options
                 .insert(CONDITION_OPTION.to_owned(), c.to_owned());
         }
-        if table.capabilities().idempotent_commit {
-            apply_idempotency_key(&analysis.env.config, &mut request.options)?;
-        }
+        request
+            .options
+            .extend(key_options.iter().map(|(k, v)| (k.clone(), v.clone())));
         let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
         let written = async {
             let mut stream = self.run(&plan, &analysis.env).await?;
@@ -429,6 +436,8 @@ impl Session {
         columns: &[TableColumn],
         with_row_id: &[TableColumn],
         assignments: &[Assignment],
+        parser: &krishiv_sql::ParserOptions,
+        key_options: &std::collections::BTreeMap<String, String>,
     ) -> Result<Option<DataFrame>, KrishivError> {
         let (whole, whole_entry) = self.state.catalog.put_hidden_provider(
             with_row_id.to_vec(),
@@ -447,8 +456,10 @@ impl Session {
                     .iter()
                     .find(|a| a.column.eq_ignore_ascii_case(&c.name))
                 {
-                    Some(a) => crate::functions::expr(a.value.as_deref().unwrap_or("NULL"))?
-                        .cast_ansi(c.data_type.clone()),
+                    Some(a) => {
+                        crate::functions::expr_with(a.value.as_deref().unwrap_or("NULL"), parser)?
+                            .cast_ansi(c.data_type.clone())
+                    }
                     None => column_of(&c.name)?,
                 };
                 select.push(value.alias(&c.name));
@@ -459,7 +470,7 @@ impl Session {
         let frame = self
             .hidden_frame(&whole, whole_entry, with_row_id)
             .alias(alias)
-            .filter(crate::functions::expr(hit)?)
+            .filter(crate::functions::expr_with(hit, parser)?)
             .select(select);
         let analysis = frame.action_analysis().await?;
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
@@ -468,9 +479,9 @@ impl Session {
         let mut request =
             RowLevelWrite::new(op, quoted, Arc::clone(physical.schema()), Vec::new(), None);
         request.write_id = Some(crate::session::job_uuid());
-        if table.capabilities().idempotent_commit {
-            apply_idempotency_key(&analysis.env.config, &mut request.options)?;
-        }
+        request
+            .options
+            .extend(key_options.iter().map(|(k, v)| (k.clone(), v.clone())));
         let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
         let mut stream = self.run(&plan, &analysis.env).await?;
         while let Some(batch) = stream.next().await {
@@ -652,12 +663,13 @@ impl<F> Drop for Swept<F> {
 fn read_filter(
     condition: Option<&str>,
     rereads_target: bool,
+    parser: &krishiv_sql::ParserOptions,
 ) -> Result<Option<Arc<krishiv_plan::Expr>>, KrishivError> {
     if rereads_target {
         return Ok(None);
     }
     condition
-        .map(|c| Ok(Arc::new(crate::functions::expr(c)?.expr)))
+        .map(|c| Ok(Arc::new(crate::functions::expr_with(c, parser)?.expr)))
         .transpose()
 }
 
@@ -791,7 +803,7 @@ fn the_delta_connector_reads_the_same_option_keys() {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// A table whose commit records no key (`idempotent_commit` false) does not take
 /// `krishiv.write.idempotencyKey` (E34): a set key is refused instead of deduplicating on some table
