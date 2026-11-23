@@ -3,7 +3,7 @@
 //! allowed prefixes, every other decision delegated; and the `krishiv.io.*` allowlist settings it reads.
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use krishiv_common::config::{
     Config, ConfigValue, IO_LOCAL_ALLOWED_ROOTS, IO_OBJECT_STORE_ALLOWED_PREFIXES,
@@ -11,6 +11,8 @@ use krishiv_common::config::{
 use krishiv_common::error::{KrishivError, KrishivInvalidConfigValue, PathNotFound};
 use krishiv_common::secret::OptionValue;
 use krishiv_io::{StoreId, parse_object_url};
+
+use super::own_refusals::OwnRefusals;
 use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
 };
@@ -53,18 +55,7 @@ pub struct PathPrefixPolicy {
     prefixes: Vec<ObjectPrefix>,
     inner: Arc<dyn AccessPolicy>,
     /// The path refusals this policy made itself (G6 review: not `inner`'s to count or label).
-    own: Arc<Mutex<OwnRefusals>>,
-}
-
-/// The most of its own refusals a [`PathPrefixPolicy`] keeps for [`AccessPolicy::denied`].
-const OWN_REFUSALS: usize = 64;
-
-#[derive(Debug, Default)]
-struct OwnRefusals {
-    /// Refused here and not yet told (the newest last).
-    waiting: Vec<(Securable, Privilege)>,
-    /// Whether the latest refusal was this policy's own.
-    latest: bool,
+    own: OwnRefusals,
 }
 
 /// One allowed object-store prefix: a store and the whole key segments under it.
@@ -107,7 +98,7 @@ impl PathPrefixPolicy {
             roots,
             prefixes: Vec::new(),
             inner,
-            own: Arc::default(),
+            own: OwnRefusals::default(),
         })
     }
 
@@ -170,7 +161,7 @@ impl PathPrefixPolicy {
             roots: allowed_roots(config)?,
             prefixes: Vec::new(),
             inner,
-            own: Arc::default(),
+            own: OwnRefusals::default(),
         }
         .with_object_prefixes(config_list(config, &IO_OBJECT_STORE_ALLOWED_PREFIXES))
     }
@@ -208,13 +199,6 @@ impl PathPrefixPolicy {
 }
 
 impl PathPrefixPolicy {
-    fn own(&self) -> std::sync::MutexGuard<'_, OwnRefusals> {
-        // A poisoned lock only means a panic elsewhere held it; the list stays usable.
-        self.own
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
     /// Whether the object-store URL `text` lies under one of the prefixes.
     fn allows_object(&self, text: &str) -> bool {
         parse_object_prefix(text).is_some_and(|p| {
@@ -341,17 +325,12 @@ impl AccessPolicy for PathPrefixPolicy {
         if let Securable::Path(path) = securable
             && !self.allows(path)
         {
-            let mut own = self.own();
-            own.latest = true;
-            if own.waiting.len() >= OWN_REFUSALS {
-                own.waiting.remove(0);
-            }
-            own.waiting.push((securable.clone(), privilege));
+            self.own.refused(securable, privilege);
             return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
                 reason: "path outside the allowed roots".to_owned(),
             })));
         }
-        self.own().latest = false;
+        self.own.passed_on();
         self.inner.check(principal, securable, privilege)
     }
 
@@ -361,16 +340,9 @@ impl AccessPolicy for PathPrefixPolicy {
 
     fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
         // A refusal of this policy's own is not `inner`'s: it never decided it.
-        let mut own = self.own();
-        if let Some(i) = own
-            .waiting
-            .iter()
-            .rposition(|(s, p)| s == securable && *p == privilege)
-        {
-            own.waiting.remove(i);
+        if self.own.take(securable, privilege) {
             return;
         }
-        drop(own);
         self.inner.denied(principal, securable, privilege);
     }
 
@@ -388,7 +360,7 @@ impl AccessPolicy for PathPrefixPolicy {
 
     fn refusal_label(&self) -> Option<&'static str> {
         // The confinement is the server's own rule (ADR 0046 §3a): its refusals read as `roles`.
-        if self.own().latest {
+        if self.own.latest() {
             return None;
         }
         self.inner.refusal_label()

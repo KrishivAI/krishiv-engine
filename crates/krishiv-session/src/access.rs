@@ -30,6 +30,7 @@ use krishiv_sql::{
 };
 
 mod intersection;
+mod own_refusals;
 mod path_prefix;
 mod statement_context;
 
@@ -1452,6 +1453,8 @@ pub const READ_ONLY_PRIVILEGES: [Privilege; 2] = [Privilege::Select, Privilege::
 #[derive(Clone)]
 pub struct ReadOnlyPolicy {
     inner: Arc<dyn AccessPolicy>,
+    /// Its own read-only refusals: never told to `inner`, labelled `roles` (G6 review of 7f535d472).
+    own: own_refusals::OwnRefusals,
 }
 
 impl std::fmt::Debug for ReadOnlyPolicy {
@@ -1464,7 +1467,10 @@ impl ReadOnlyPolicy {
     /// Read-only over `inner`, which decides every `Select` and `Browse`.
     #[must_use]
     pub fn new(inner: Arc<dyn AccessPolicy>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            own: own_refusals::OwnRefusals::default(),
+        }
     }
 }
 
@@ -1481,10 +1487,12 @@ impl AccessPolicy for ReadOnlyPolicy {
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
         // `Browse` (metadata) reads nothing a `Select` would not; the inner policy decides both.
         if !READ_ONLY_PRIVILEGES.contains(&privilege) {
+            self.own.refused(securable, privilege);
             return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
                 reason: "the session is read-only".to_owned(),
             })));
         }
+        self.own.passed_on();
         self.inner.check(principal, securable, privilege)
     }
 
@@ -1493,6 +1501,10 @@ impl AccessPolicy for ReadOnlyPolicy {
     }
 
     fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
+        // A read-only refusal is this policy's own, not `inner`'s.
+        if self.own.take(securable, privilege) {
+            return;
+        }
         self.inner.denied(principal, securable, privilege);
     }
 
@@ -1509,6 +1521,9 @@ impl AccessPolicy for ReadOnlyPolicy {
     }
 
     fn refusal_label(&self) -> Option<&'static str> {
+        if self.own.latest() {
+            return None;
+        }
         self.inner.refusal_label()
     }
 }
