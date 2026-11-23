@@ -1043,12 +1043,16 @@ fn a_merge_set_column_takes_the_target_s_qualifier() {
         sql(
             &session,
             &format!(
-                "CREATE TABLE t (id BIGINT, v STRING) USING delta LOCATION '{}'",
+                "CREATE TABLE t (id BIGINT, v STRING, st STRUCT<x: INT>) USING delta LOCATION '{}'",
                 dir.display()
             ),
         )
         .unwrap();
-        sql(&session, "INSERT INTO t VALUES (1, 'a')").unwrap();
+        sql(
+            &session,
+            "INSERT INTO t VALUES (1, 'a', named_struct('x', 1))",
+        )
+        .unwrap();
         let ran = sql(&session, statement);
         let (_, rows) = sql(&session, "SELECT id, v FROM t ORDER BY id").unwrap();
         if ok {
@@ -1065,6 +1069,28 @@ fn a_merge_set_column_takes_the_target_s_qualifier() {
             assert_eq!(rows, serde_json::json!([[1, "a"]]), "{statement}");
         }
     }
+    // A nested key keeps its qualifier stripping too: `default.t.st.x` reaches the nested-field
+    // refusal (Spark updates the field; Krishiv does not write nested fields yet), not the
+    // unresolved name it was before.
+    let tmp = tempfile::tempdir().unwrap();
+    let session = Session::new().unwrap();
+    sql(
+        &session,
+        &format!(
+            "CREATE TABLE t (id BIGINT, v STRING, st STRUCT<x: INT>) USING delta LOCATION '{}'",
+            tmp.path().join("nested").display()
+        ),
+    )
+    .unwrap();
+    let e = sql(
+        &session,
+        &format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN MATCHED THEN UPDATE SET default.t.st.x = 9"
+        ),
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
+    assert!(e.to_string().contains("nested field st.x"), "{e}");
 }
 
 /// A `MERGE` whose source reads the target again under another spelling of its root (the path
