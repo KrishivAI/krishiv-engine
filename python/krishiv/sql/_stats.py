@@ -313,13 +313,16 @@ class _Nan:
     """A NaN key: NaN never equals itself in Spark's counter map, so each one is its own key."""
 
 
-def _hashable(value: Any) -> Any:
+_NESTED_NAN = ("float", "nan")  # NaN inside an array: equal arrays hold equal NaNs (GenericArrayData.equals)
+
+
+def _hashable(value: Any, nested: bool = False) -> Any:
     if isinstance(value, float) and math.isnan(value):
-        return _Nan()
+        return _NESTED_NAN if nested else _Nan()
     if isinstance(value, list | tuple):
-        return (type(value).__name__, *[_hashable(v) for v in value])
+        return (type(value).__name__, *[_hashable(v, True) for v in value])
     if isinstance(value, dict):
-        return ("dict", *[(repr(k), _hashable(v)) for k, v in value.items()])
+        return ("dict", *[(repr(k), _hashable(v, True)) for k, v in value.items()])
     return value
 
 

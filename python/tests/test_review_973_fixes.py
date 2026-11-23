@@ -225,3 +225,22 @@ def test_sample_by_matches_a_boolean_stratum_only_with_boolean_keys(spark: Spark
     frame = spark.createDataFrame([(True,), (False,)], "b boolean")
     assert frame.sampleBy("b", {1: 1.0}, 1).count() == 0
     assert frame.sampleBy("b", {True: 1.0}, 1).count() == 1
+
+
+def test_unchecked_string_for_array_is_null_not_its_characters(spark: SparkSession) -> None:
+    rows = spark.createDataFrame([("ab",), ([1, 2],)], "a array<string>", verifySchema=False).collect()
+    assert [r.a for r in rows] == [None, ["1", "2"]]
+
+
+def test_unchecked_integer_narrows_to_the_target_width(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(128,), (-129,), (5,)], "a tinyint", verifySchema=False)
+    assert [r.a for r in df.collect()] == [-128, 127, 5]
+    df = spark.createDataFrame([(2**31,)], "a int", verifySchema=False)
+    assert df.collect()[0].a == -(2**31)
+
+
+def test_freq_items_counts_equal_arrays_with_nan_as_one_item(spark: SparkSession) -> None:
+    nan = float("nan")
+    df = spark.createDataFrame([([nan],), ([nan],)], "a array<double>")
+    items = df.freqItems(["a"], 1.0).collect()[0][0]
+    assert len(items) == 1

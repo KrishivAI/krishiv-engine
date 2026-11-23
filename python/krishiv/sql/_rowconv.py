@@ -234,6 +234,8 @@ def convert(value: Any, data_type: DataType, zone: Any) -> Any:
     if value is None:
         return None
     if isinstance(data_type, ArrayType):
+        if not isinstance(value, list | tuple | array.array):
+            return value  # not a container: pyarrow refuses it (a type error, or NULL when unchecked)
         return [convert(v, data_type.elementType, zone) for v in value]
     if isinstance(data_type, MapType):
         return [(convert(k, data_type.keyType, zone), convert(v, data_type.valueType, zone)) for k, v in value.items()]
@@ -370,6 +372,8 @@ def arrow_array(values: list[Any], arrow_type: Any, pa: Any, null_on_error: bool
         # Spark's unchecked conversion takes only a floating-point object for a double target (an int is NULL);
         # pyarrow would accept the int.
         values = [None if isinstance(v, int) else v for v in values]
+    if null_on_error:
+        values = [_containers_only(v, arrow_type, pa) for v in values]
     try:
         return pa.array(values, type=arrow_type)
     except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError, OverflowError, ValueError, TypeError):
@@ -377,6 +381,16 @@ def arrow_array(values: list[Any], arrow_type: Any, pa: Any, null_on_error: bool
             raise
     cells = [_recovered(v, arrow_type, pa) for v in values]
     return pa.array(cells, type=arrow_type)
+
+
+def _containers_only(value: Any, arrow_type: Any, pa: Any) -> Any:
+    """``value`` with every non-container found where a list is expected NULL (pyarrow would read a str as
+    a sequence of characters; Spark's unchecked conversion yields NULL)."""
+    if value is None or not (pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type)):
+        return value
+    if not isinstance(value, list | tuple | array.array):
+        return None
+    return [_containers_only(v, arrow_type.value_type, pa) for v in value]
 
 
 def _recovered(value: Any, arrow_type: Any, pa: Any) -> Any:
@@ -390,6 +404,13 @@ def _recovered(value: Any, arrow_type: Any, pa: Any) -> Any:
         return pa.array([value], type=arrow_type)[0].as_py()
     except errors:
         pass
+    if pa.types.is_integer(arrow_type) and isinstance(value, int) and not isinstance(value, bool):
+        # Spark's unchecked conversion narrows an integer to the target width (128 as tinyint is -128).
+        bits = arrow_type.bit_width
+        wrapped = value & ((1 << bits) - 1)
+        if pa.types.is_signed_integer(arrow_type) and wrapped >= 1 << (bits - 1):
+            wrapped -= 1 << bits
+        return wrapped
     if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type) or pa.types.is_fixed_size_list(arrow_type):
         if not isinstance(value, list | tuple):
             return None
