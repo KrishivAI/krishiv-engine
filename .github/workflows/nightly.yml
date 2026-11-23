@@ -679,7 +679,8 @@ jobs:
   # the job. `min_rate` is the blocking floor (percent); empty = report-only. 4.0.5 and 4.1.4 take
   # 75 once the owner freezes the manifest, a first run is committed AND the denominator excludes the
   # run's JVM-only conditional skips (this job passes no --oracle-junit; `ratchet` refuses --min-rate
-  # until `conditional_skips` is set); 3.5.7 stays report-only.
+  # until `conditional_skips` is set, and it refuses whenever `counts.skip > 0` even with oracle exclusions:
+  # the run must have no remaining skips before the floor is enabled); 3.5.7 stays report-only.
   pyspark-suite:
     if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
     needs: guard
@@ -717,7 +718,7 @@ jobs:
           SHA: ${{ matrix.sha }}
         run: |
           git clone --no-checkout --filter=blob:none --depth 1 --branch "v${VERSION}" https://github.com/apache/spark.git "$RUNNER_TEMP/spark"
-          git -C "$RUNNER_TEMP/spark" sparse-checkout set python/pyspark/sql/tests python/pyspark/testing
+          git -C "$RUNNER_TEMP/spark" sparse-checkout set python/pyspark/sql/tests python/pyspark/testing python/test_support
           # The tests are downloaded code: refuse a moved or re-created tag.
           case "$(git -C "$RUNNER_TEMP/spark" rev-parse "v${VERSION}^{commit}")" in "$SHA"*) ;; *) echo "tag v${VERSION} is not at $SHA"; exit 1 ;; esac
           git -C "$RUNNER_TEMP/spark" checkout

@@ -65,6 +65,12 @@ def stage_tests(checkout: Path) -> Path:
         if not (src / sub).is_dir():
             raise RuntimeError(f"{src / sub} is missing from the Spark checkout")
         shutil.copytree(src / sub, installed / sub, dirs_exist_ok=True)
+    # Data files the tests read through SPARK_HOME (`python/test_support/sql/people.json`, ...); in a wheel
+    # install SPARK_HOME is the package directory itself.
+    support = checkout / "python" / "test_support"
+    if not support.is_dir():
+        raise RuntimeError(f"{support} is missing from the Spark checkout")
+    shutil.copytree(support, installed / "python" / "test_support", dirs_exist_ok=True)
     return installed / "sql" / "tests" / "connect"
 
 
