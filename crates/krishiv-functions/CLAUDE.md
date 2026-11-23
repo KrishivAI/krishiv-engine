@@ -139,3 +139,4 @@ text as Spark's do; the key argument prints as `***` in plans, errors and derive
 ## Split modules (T193)
 Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
 - `registry/defs/aggregates.rs` (aggregate result types and specs); `registry/tests/signatures{1,2,3}.rs` (signature tests; helpers stay in `registry/tests.rs`).
+- Theta sketches (P3 PR-49 part 2): `sketch/theta.rs` (a sketch trimmed after each batch to the entries Spark's `rebuild` keeps; update encodings as `hll.rs`), `registry/theta.rs`, `scalar/theta.rs` (`theta_sketch_estimate`, `theta_union`, `theta_intersection`, `theta_difference`) and the aggregates `theta_sketch_agg`, `theta_union_agg`, `theta_intersection_agg` (`lgNomEntries` 12 when omitted); a collated string input is refused.

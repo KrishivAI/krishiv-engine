@@ -179,6 +179,7 @@ registry! {
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (tail, Tail, POST_MIGRATION_READER_VERSION, Semantic, "The `Tail` node (the last rows of the input in plan order, Spark's `Dataset.tail`)."),
+    (theta_sketch_aggregates, ThetaSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches Theta aggregates (`theta_sketch_agg` and `theta_union_agg` with their folded lgNomEntries, `theta_intersection_agg`): a sketch per group."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (udt_type, UdtType, POST_MIGRATION_READER_VERSION, Semantic, "User-defined types (Spark `UserDefinedType`): stored as their SQL type, with the class names in the plan."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
@@ -711,6 +712,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             AggregateFunction::HllSketchAgg { .. } | AggregateFunction::HllUnionAgg { .. } => {
                 Some(Feature::HllSketchAggregates)
             }
+            AggregateFunction::ThetaSketchAgg { .. }
+            | AggregateFunction::ThetaUnionAgg { .. }
+            | AggregateFunction::ThetaIntersectionAgg => Some(Feature::ThetaSketchAggregates),
             AggregateFunction::Udf(_) => Some(Feature::RustUdaf),
         },
         // Built-ins and registry functions travel by name; only a
