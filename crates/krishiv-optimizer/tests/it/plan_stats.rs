@@ -16,8 +16,13 @@ use krishiv_optimizer::{
     AttrStats, ColumnStats, PlanStats, StatSource, Statistics, TableStats, estimated_rows,
     optimize_with, optimize_with_options,
 };
-use krishiv_plan::analyzer::{AnalysisContext, MemoryCatalog, TableColumn};
-use krishiv_plan::{AttrId, ExprNode, Literal, LogicalPlan, Plan, PlanNode, ReadSource, Scan};
+use krishiv_plan::analyzer::testing::block_on;
+use krishiv_plan::analyzer::{
+    AnalysisContext, Analyzer as _, DefaultAnalyzer, MemoryCatalog, TableColumn,
+};
+use krishiv_plan::{
+    AttrId, ExprNode, Literal, LogicalPlan, Plan, PlanNode, ReadSource, Scan, SourceId,
+};
 use krishiv_types::{DataType, DecimalType};
 
 use crate::support;
@@ -1156,4 +1161,49 @@ fn a_predicate_the_estimator_cannot_model_is_a_guess() {
     ] {
         assert!(!guessed(sql), "{sql}");
     }
+}
+
+/// A left as-of join's right columns gain the left rows that find no right row as nulls: those
+/// whose key the right side lacks (`t.a`'s 100 values against `u.k`'s 40: 60%) or whose as-of
+/// value is NULL (`t.a`: 10%); an inner one keeps the right input's fractions.
+#[test]
+fn a_left_as_of_join_gains_its_unmatched_fraction_as_nulls() {
+    let estimated = |sql: &str| {
+        let options = krishiv_sql::ParserOptions {
+            asof_join: true,
+            ..krishiv_sql::ParserOptions::default()
+        };
+        let plan = krishiv_sql::parse_and_lower(sql, &options, SourceId(0))
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        let plan = block_on(DefaultAnalyzer.analyze(&plan, &ctx()))
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"))
+            .plan;
+        let stats = PlanStats::compute(plan.root(), &fixture());
+        let node = find(plan.root(), |p| matches!(p.node, PlanNode::AsOfJoin { .. }));
+        Estimated { stats, node }
+    };
+    let by_key = |kind: &str| {
+        estimated(&format!(
+            "SELECT * FROM t {kind} ASOF JOIN u MATCH_CONDITION (t.b >= u.v) ON t.a = u.k"
+        ))
+    };
+    let left = by_key("LEFT");
+    close(left.col("v").null_frac, 0.6, "v: keys u lacks");
+    close(
+        left.col("k").null_frac,
+        0.6 + 0.4 * 0.1,
+        "k: its own nulls too",
+    );
+    close(left.col("a").null_frac, 0.1, "the left side keeps its own");
+    close(left.rows(), 1000.0, "every left row");
+    let inner = by_key("");
+    close(inner.col("v").null_frac, 0.0, "inner: v");
+    close(inner.col("k").null_frac, 0.1, "inner: k");
+    let by_value =
+        estimated("SELECT * FROM t LEFT ASOF JOIN u MATCH_CONDITION (t.a >= u.v) ON t.b = u.k");
+    close(
+        by_value.col("v").null_frac,
+        0.1,
+        "NULL as-of values match nothing",
+    );
 }

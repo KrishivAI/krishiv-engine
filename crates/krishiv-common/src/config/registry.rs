@@ -3,7 +3,8 @@
 
 use super::registry_join::{
     EXEC_COALESCE_INPUT, EXEC_JOIN_DIRECT_INDEX, EXEC_JOIN_FUSE_PROBE_SELECT,
-    EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT,
+    EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT, EXEC_JOIN_SMJ_BUFFER_BYTES,
+    EXEC_JOIN_STRATEGY, SQL_ASOF_JOIN_ENABLED, SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
 };
 use std::borrow::Cow;
 use std::time::Duration;
@@ -21,7 +22,8 @@ pub use python::{
     ARROW_MAX_RECORDS_PER_BATCH, ARROW_PYSPARK_VALIDATE_SCHEMA, PYTHON_UDF_ARROW_ENABLED,
     PYTHON_UDF_THREADS, PYTHON_UDTF_ARROW_ENABLED, PYTHON_WORKER_ALLOW_FORK,
     PYTHON_WORKER_EXECUTABLES, PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION,
-    PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT, UDF_SANDBOX,
+    PYTHON_WORKER_MAX_PER_TENANT, PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT,
+    PYTHON_WORKER_TENANT_MEMORY_LIMIT, UDF_SANDBOX,
 };
 mod access;
 mod advisor;
@@ -110,6 +112,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_FUSE_PROBE_SELECT,
     &EXEC_COALESCE_INPUT,
     &EXEC_JOIN_IDLE_SPILL_AFTER,
+    &SQL_ASOF_JOIN_ENABLED,
+    &SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
@@ -168,6 +172,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &PRESERVED_SIDE_SEMI_JOIN,
     &SPILL_DIR,
     &WORKLOAD_RESOURCE_GROUPS_FILE,
+    &CONNECT_PYTHON_FUNCTIONS_CATALOG,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
     &SPILL_ZSTD_LEVEL,
@@ -268,7 +273,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &PYTHON_WORKER_IDLE_TIMEOUT,
     &PYTHON_WORKER_MAX_PER_SESSION,
     &PYTHON_WORKER_MAX_TOTAL,
+    &PYTHON_WORKER_MAX_PER_TENANT,
     &PYTHON_WORKER_MEMORY_LIMIT,
+    &PYTHON_WORKER_TENANT_MEMORY_LIMIT,
     &PYTHON_WORKER_ALLOW_FORK,
     &JOIN_ENUMERATOR,
     &JOIN_DP_LIMIT,
@@ -442,35 +449,6 @@ pub static EXEC_JOIN_RADIX_BITS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// Forces the sort-merge join on equi-joins without a strategy hint (P2-T056).
-pub static EXEC_JOIN_STRATEGY: ConfigEntry = ConfigEntry {
-    key: "krishiv.exec.join.strategy",
-    value_type: ValueType::Enum(&["auto", "sortMerge"]),
-    default: Some(ConfigValue::String(Cow::Borrowed("auto"))),
-    doc: "Internal: `auto` runs equi-joins as hash joins unless a `MERGE` hint asks otherwise; \
-          `sortMerge` runs every equi-join without a strategy hint as a sort-merge join, except \
-          `NOT IN` and keys that cannot be ordered. Results are the same either way.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// The bytes one key's rows may hold in a sort-merge join (P2-T056).
-pub static EXEC_JOIN_SMJ_BUFFER_BYTES: ConfigEntry = ConfigEntry {
-    key: "krishiv.exec.join.smj.bufferBytes",
-    value_type: ValueType::Size,
-    default: Some(ConfigValue::Size(0)),
-    doc: "Bytes of one join key's right-side rows a sort-merge join keeps in memory before it \
-          moves them to a spill file; 0 takes a share of the memory pool. Spark bounds these \
-          rows by count (`spark.sql.sortMergeJoinExec.buffer.in.memory.threshold` and \
-          `spark.sql.sortMergeJoinExec.buffer.spill.threshold`), which have no effect here.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
 /// The most one query's shared broadcast tables may hold on a worker
 /// (P2-T177 unit 3, row 30c (b)).
 pub static EXEC_JOIN_SHARED_BROADCAST_BYTES: ConfigEntry = ConfigEntry {
@@ -596,9 +574,12 @@ pub static MEMORY_RESIDENT_GUARD: ConfigEntry = ConfigEntry {
           (allocator overhead, memory used without a reservation) within an allowance of 1/8 of \
           the limit plus 64 MiB, by lowering the memory ordinary reservations may take so \
           operators spill. It needs a resident-set probe from the program that owns the \
-          allocator: the `krishiv` CLI and the bench runner install one when started with a \
-          limit below 4 GiB; elsewhere the setting has no effect. Spill I/O and arbitration \
-          rounds whose spills are exhausted are exempt from it.",
+          allocator: on Linux, the `krishiv` CLI and the Python module (builds with mimalloc, \
+          as shipped) install one at every limit, the bench runner when started with a limit \
+          below 4 GiB; on macOS and Windows, and elsewhere, the setting has no effect. In the \
+          Python module the resident set includes the Python program's own memory (its \
+          DataFrames, NumPy and Arrow data), so that memory lowers what queries may reserve. \
+          Spill I/O and arbitration rounds whose spills are exhausted are exempt from it.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",

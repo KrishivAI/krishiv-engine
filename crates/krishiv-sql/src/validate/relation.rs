@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The checks Spark's `AstBuilder` makes on `NEAREST BY` joins and on the
-//! `TABLE(...)` arguments of table-valued functions.
+//! The checks Spark's `AstBuilder` makes on `NEAREST BY` and `ASOF` joins and
+//! on the `TABLE(...)` arguments of table-valued functions.
 
 use krishiv_common::error::{
+    AsofJoinMatchConditionInvalidOperator,
     InvalidSqlSyntaxInvalidTableFunctionIdentifierArgumentMissingParentheses, LegacyErrorTemp0064,
     NearestByJoinNumResultsOutOfRange, NearestByJoinUnsupportedJoinType,
-    UnsupportedFeatureLateralJoinNearestBy,
+    UnsupportedFeatureAsofJoin, UnsupportedFeatureLateralJoinNearestBy,
 };
 
 use super::{Checker, R, at, quote};
 use crate::ast::{
-    DdlName, Join, JoinKind, NearestBy, Span, TableArgument, TableArgumentPartitioning,
-    TableArgumentSource,
+    AsOfCriteria, AsOfFilter, BinaryOp, DdlName, Expr, ExprKind, Join, JoinKind, NearestBy, Span,
+    TableArgument, TableArgumentPartitioning, TableArgumentSource,
 };
 
 /// `NearestByJoin.MaxNumResults`.
@@ -55,6 +56,31 @@ impl Checker<'_> {
             }
         }
         self.expr(&n.ranking)
+    }
+
+    /// An `ASOF JOIN`, in the order of Spark 4.3's `withAsOfJoin`: the flag,
+    /// the match condition and its operator (`>=`, `>`, `<=` or `<`), the
+    /// `ON` condition, then the right side.
+    pub(super) fn asof_join(&self, j: &Join, c: &AsOfCriteria) -> R {
+        if !self.opts.asof_join {
+            return Err(at(
+                UnsupportedFeatureAsofJoin {
+                    config: "\"spark.sql.join.asofJoin.enabled\"".to_owned(),
+                },
+                j.span,
+            ));
+        }
+        self.expr(&c.match_condition)?;
+        if let Some(operator) = asof_invalid_operator(self.sql, &c.match_condition) {
+            return Err(at(
+                AsofJoinMatchConditionInvalidOperator { operator },
+                j.span,
+            ));
+        }
+        if let Some(AsOfFilter::On(e)) = &c.filter {
+            self.expr(e)?;
+        }
+        self.factor(&j.right)
     }
 
     /// A `TABLE(...)` argument: the name needs parentheses, then its source
@@ -110,4 +136,86 @@ impl Checker<'_> {
         p.extra_order
             .map_or(Ok(()), |span| Err(invalid("ORDER BY", span)))
     }
+}
+
+/// The operator Spark 4.3 names when an `ASOF JOIN`'s match condition is not
+/// a `>=`, `>`, `<=` or `<` comparison (`asOfMatchConditionInvalidOperatorText`),
+/// or `None` when it is one: `AND` or `OR` at the top, else the first
+/// comparison operator in the tree as written, else `IS [NOT] DISTINCT FROM`
+/// at the top, else the condition's text.
+pub(crate) fn asof_invalid_operator(sql: &str, e: &Expr) -> Option<String> {
+    // Spark's builder drops the parentheses around an expression.
+    let mut top = e;
+    while let ExprKind::Nested(inner) = &top.kind {
+        top = inner;
+    }
+    match &top.kind {
+        ExprKind::Binary(_, BinaryOp::GtEq | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::Lt, _) => {
+            return None;
+        }
+        ExprKind::Binary(_, BinaryOp::And, _) => return Some("AND".to_owned()),
+        ExprKind::Binary(_, BinaryOp::Or, _) => return Some("OR".to_owned()),
+        _ => {}
+    }
+    if let Some(op) = first_comparison(sql, e) {
+        return Some(op);
+    }
+    if let ExprKind::IsDistinctFrom { negated, .. } = &top.kind {
+        let text = if *negated {
+            "IS NOT DISTINCT FROM"
+        } else {
+            "IS DISTINCT FROM"
+        };
+        return Some(text.to_owned());
+    }
+    Some(without_strings(e.span.text(sql).trim()))
+}
+
+/// `text` with each string literal's text as `?`: Spark echoes the condition as written, but an
+/// error never echoes a string literal (this crate's invariant), so that part differs from
+/// Spark's parameter. Everything else stays as written.
+fn without_strings(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for t in crate::lexer::tokenize(text) {
+        if t.kind.is_string_like() {
+            out.push_str(text.get(at..t.span.start).unwrap_or(""));
+            out.push('?');
+            at = t.span.end;
+        }
+    }
+    out.push_str(text.get(at..).unwrap_or(""));
+    out
+}
+
+/// The first comparison operator in `e`, parents before children and left
+/// to right (the order of Spark's parse-tree walk), as written.
+fn first_comparison(sql: &str, e: &Expr) -> Option<String> {
+    if let ExprKind::Binary(left, op, right) = &e.kind {
+        let text = match op {
+            BinaryOp::Eq => Some("="),
+            BinaryOp::NullSafeEq => Some("<=>"),
+            BinaryOp::Lt => Some("<"),
+            BinaryOp::LtEq => Some("<="),
+            BinaryOp::Gt => Some(">"),
+            BinaryOp::GtEq => Some(">="),
+            // `<>` and `!=` are one operator in the tree: read the text
+            // between the operands.
+            BinaryOp::NotEq => {
+                let between = sql.get(left.span.end..right.span.start).unwrap_or("");
+                Some(if between.contains("!=") { "!=" } else { "<>" })
+            }
+            _ => None,
+        };
+        if let Some(text) = text {
+            return Some(text.to_owned());
+        }
+    }
+    let mut found = None;
+    e.for_each_child(&mut |child| {
+        if found.is_none() {
+            found = first_comparison(sql, child);
+        }
+    });
+    found
 }
