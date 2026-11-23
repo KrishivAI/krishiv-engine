@@ -12,7 +12,10 @@
 //!   [`MAX_ITEMS_PER_CHECK`]); each later `check` of a pair takes that answer once, within
 //!   [`PREFETCH_LIFETIME`] and until the next prefetch, and asks the service on its own
 //!   otherwise. Nothing else is cached, so a change in the service applies from the next stage
-//!   of analysis.
+//!   of analysis. A `check` whose answer reports another policy version than the stage's earlier
+//!   answers drops the stage's prefetched answers, and until the next prefetch the session's
+//!   `version()` is untrusted: no analysis that took allows from two versions is fingerprinted
+//!   with either.
 //! - The policy version is the service's (highest seen); while there is no trusted one (none
 //!   reported, a 0, or the last call failed) each `version()` is a fresh value, so no analysis or
 //!   cached relation keyed by it is reused.
@@ -166,6 +169,7 @@ impl ExternalAccess {
             access: Arc::clone(self),
             memo: Mutex::new(HashMap::new()),
             stage: AtomicU64::new(0),
+            answered: Mutex::new(Answered::default()),
         }
     }
 
@@ -200,18 +204,15 @@ impl ExternalAccess {
     }
 
     /// Decides `items` for `principal`, in calls of at most [`MAX_ITEMS_PER_CHECK`]; `true` is
-    /// an allow. Any failure denies every item of its call.
-    async fn decide(&self, principal: &Principal, items: &[(Securable, Privilege)]) -> Vec<bool> {
-        self.decide_versioned(principal, items).await.0
-    }
-
-    /// [`Self::decide`], and whether every call that answered reported one policy version: when
-    /// the version moved between the calls, some answers are from a policy the others replaced.
+    /// an allow. Any failure denies every item of its call. Also returns the version the last
+    /// call that answered reported, and whether every call that answered reported one policy
+    /// version: when the version moved between the calls, some answers are from a policy the
+    /// others replaced.
     async fn decide_versioned(
         &self,
         principal: &Principal,
         items: &[(Securable, Privilege)],
-    ) -> (Vec<bool>, bool) {
+    ) -> (Vec<bool>, Option<u64>, bool) {
         let mut out = Vec::with_capacity(items.len());
         let mut version: Option<u64> = None;
         let mut one_version = true;
@@ -264,7 +265,7 @@ impl ExternalAccess {
             }
             out.extend(self.read_answer(seq, answer, chunk.len()));
         }
-        (out, one_version)
+        (out, version, one_version)
     }
 
     /// The decisions of one response for `n` items: all denials unless it holds exactly `n`
@@ -346,9 +347,14 @@ impl ExternalAccess {
             let fresh = noted.at.is_some_and(|t| t.elapsed() < VERSION_STALE);
             (fresh && !noted.failed && noted.version != 0).then_some(noted.version)
         };
-        if let Some(v) = trusted {
-            return PolicyVersion(v);
+        match trusted {
+            Some(v) => PolicyVersion(v),
+            None => self.untrusted_version(),
         }
+    }
+
+    /// A version never given before, with the top bit set so it cannot equal a service version.
+    fn untrusted_version(&self) -> PolicyVersion {
         let n = self.untrusted.fetch_add(1, Ordering::Relaxed);
         PolicyVersion((1 << 63) | n)
     }
@@ -419,6 +425,17 @@ pub struct ExternalPolicy {
     /// The latest prefetch's number, read and written under the `memo` lock: a prefetch stores
     /// its answers only if no later one started while it waited for the service.
     stage: AtomicU64,
+    /// The policy versions this stage's answers came from. Lock order: `memo`, then this.
+    answered: Mutex<Answered>,
+}
+
+/// The policy versions of one stage's answers, reset by each prefetch.
+#[derive(Debug, Default)]
+struct Answered {
+    /// The version the stage's first kept answer reported.
+    version: Option<u64>,
+    /// Whether a later answer reported another version.
+    mixed: bool,
 }
 
 impl std::fmt::Debug for ExternalPolicy {
@@ -442,6 +459,42 @@ impl ExternalPolicy {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn answered(&self) -> std::sync::MutexGuard<'_, Answered> {
+        self.answered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Records the version a `check` answer reported. When it differs from the stage's earlier
+    /// answers, the policy changed while the stage was analysed: the prefetched answers left (of
+    /// the replaced version) are dropped, so each later `check` asks the service, and the stage
+    /// is marked mixed until the next prefetch.
+    fn observe(&self, v: u64) {
+        let changed = {
+            let mut answered = self.answered();
+            match answered.version {
+                None => {
+                    answered.version = Some(v);
+                    false
+                }
+                Some(seen) if seen != v => {
+                    answered.version = Some(v);
+                    answered.mixed = true;
+                    true
+                }
+                Some(_) => false,
+            }
+        };
+        if changed {
+            self.memo().clear();
+            tracing::warn!(
+                target: "krishiv::access",
+                provider = "external",
+                "the policy version changed during an analysis; its prefetched answers are dropped"
+            );
+        }
+    }
+
     /// The prefetched decision for a pair, taken (it answers once), if still fresh.
     fn take(&self, key: &MemoKey) -> Option<bool> {
         let (allow, at) = self.memo().remove(key)?;
@@ -462,6 +515,11 @@ fn decision(allow: bool) -> AccessDecision {
 impl AccessPolicy for ExternalPolicy {
     fn version(&self) -> PolicyVersion {
         self.access.refresh_version();
+        // An analysis that took allows from two policy versions is fingerprinted with neither
+        // (review: one version per analysis), so it is never reused.
+        if self.answered().mixed {
+            return self.access.untrusted_version();
+        }
         self.access.current_version()
     }
 
@@ -483,14 +541,11 @@ impl AccessPolicy for ExternalPolicy {
                 return Ok(decision(allow));
             }
             let item = [(securable.clone(), privilege)];
-            let allow = self
-                .access
-                .decide(principal, &item)
-                .await
-                .first()
-                .copied()
-                .unwrap_or(false);
-            Ok(decision(allow))
+            let (answers, version, _) = self.access.decide_versioned(principal, &item).await;
+            if let Some(v) = version {
+                self.observe(v);
+            }
+            Ok(decision(answers.first().copied().unwrap_or(false)))
         })
     }
 
@@ -510,6 +565,7 @@ impl AccessPolicy for ExternalPolicy {
             let stage = {
                 let mut memo = self.memo();
                 memo.clear();
+                *self.answered() = Answered::default();
                 self.stage.fetch_add(1, Ordering::Relaxed) + 1
             };
             if !convert::known_principal(principal) {
@@ -523,7 +579,8 @@ impl AccessPolicy for ExternalPolicy {
             if asked.is_empty() {
                 return;
             }
-            let (answers, one_version) = self.access.decide_versioned(principal, &asked).await;
+            let (answers, version, one_version) =
+                self.access.decide_versioned(principal, &asked).await;
             let id = principal_key(principal);
             let now = Instant::now();
             let mut memo = self.memo();
@@ -542,6 +599,7 @@ impl AccessPolicy for ExternalPolicy {
                 );
                 return;
             }
+            self.answered().version = version;
             for ((securable, privilege), allow) in asked.into_iter().zip(answers).take(MEMO_LIMIT) {
                 memo.insert(memo_key(&id, &securable, privilege), (allow, now));
             }

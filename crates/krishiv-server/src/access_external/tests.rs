@@ -27,6 +27,9 @@ enum Mode {
     Fail,
     /// Answer by the rule, each call under a policy version one higher than the last.
     Moving,
+    /// The first call answers by the rule under the version; every later call denies everything
+    /// under the next version (a revocation between the stage's prefetch and its checks).
+    Revoke,
 }
 
 struct Fake {
@@ -72,6 +75,11 @@ impl AccessPolicyService for Fake {
             .collect();
         match self.mode {
             Mode::Rule | Mode::Moving => {}
+            Mode::Revoke => {
+                if self.calls.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+                    decisions.fill(pb::Decision::Deny.into());
+                }
+            }
             Mode::Short => {
                 decisions.pop();
             }
@@ -84,6 +92,7 @@ impl AccessPolicyService for Fake {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let policy_version = match self.mode {
             Mode::Moving => self.version + call,
+            Mode::Revoke if call > 0 => self.version + 1,
             _ => self.version,
         };
         Ok(tonic::Response::new(pb::CheckResponse {
@@ -371,6 +380,56 @@ async fn a_prefetch_across_a_version_change_keeps_nothing() {
         .unwrap();
     assert!(allowed(&d), "{d:?}");
     assert_eq!(s.requests().len(), 3, "the check asked the service itself");
+}
+
+/// A check that learns of a newer policy version than the stage's prefetch drops the prefetched
+/// answers left (a revoked allow is not served from them), and the analysis that took allows
+/// from both versions gets an untrusted version: no cached analysis carries mixed allows.
+#[tokio::test]
+async fn a_version_change_after_the_prefetch_drops_its_answers() {
+    let s = serve(Mode::Revoke, None).await;
+    let policy = s.access.policy();
+    let items: Vec<_> = ["t0", "t1"]
+        .iter()
+        .map(|t| (table(t), Privilege::Select))
+        .collect();
+    policy.prefetch(&ana(), &items).await;
+    assert_eq!(s.requests().len(), 1);
+    let check = |t: &'static str| {
+        let policy = &policy;
+        async move { policy.check(&ana(), &table(t), Privilege::Select).await }
+    };
+    // Answered by the prefetch (version 41).
+    assert!(allowed(&check("t0").await.unwrap()));
+    assert_eq!(s.requests().len(), 1);
+    assert_eq!(policy.version().0, 41);
+    // A pair the prefetch did not ask: the service answers under version 42.
+    assert!(!allowed(&check("t2").await.unwrap()));
+    assert_eq!(s.requests().len(), 2);
+    // t1's prefetched allow (version 41) is gone: the service is asked and revokes it.
+    let d = check("t1").await.unwrap();
+    assert!(!allowed(&d), "{d:?}");
+    assert_eq!(s.requests().len(), 3, "the check asked the service itself");
+    let v = policy.version();
+    assert_ne!(v.0 & (1 << 63), 0, "mixed stage: {v:?}");
+    assert_ne!(policy.version(), v, "a fresh value each time");
+    // The next stage starts clean: one version again.
+    policy.prefetch(&ana(), &items[..1]).await;
+    assert_eq!(policy.version().0, 42);
+}
+
+/// Checks that all report one version keep the version trusted.
+#[tokio::test]
+async fn checks_under_one_version_keep_it_trusted() {
+    let s = serve(Mode::Rule, None).await;
+    let policy = s.access.policy();
+    for t in ["t0", "t1", "secret"] {
+        policy
+            .check(&ana(), &table(t), Privilege::Select)
+            .await
+            .unwrap();
+    }
+    assert_eq!(policy.version().0, 41);
 }
 
 #[tokio::test]
@@ -722,4 +781,95 @@ fn only_a_url_loses_its_user_info() {
         "/data/x://u@pub/f"
     );
     assert_eq!(convert::credential_free("1a://u@h/f"), "1a://u@h/f");
+}
+
+#[test]
+fn a_zero_timeout_is_refused() {
+    let mut c = Config::new();
+    c.set("krishiv.access.external.endpoint", "http://127.0.0.1:9")
+        .unwrap();
+    c.set("krishiv.access.external.timeout", "0s").unwrap();
+    let e = ExternalConfig::from_config(&c).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_INVALID_CONFIG_VALUE");
+}
+
+/// The token is read from its reference when the header is made, trimmed, and marked sensitive;
+/// a token that is not header text is refused without echoing it.
+#[test]
+fn the_bearer_header_comes_from_the_token_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = |token: Option<&str>| {
+        let mut c = Config::new();
+        c.set("krishiv.access.external.endpoint", "http://127.0.0.1:9")
+            .unwrap();
+        if let Some(t) = token {
+            c.set("krishiv.access.external.token", t).unwrap();
+        }
+        ExternalConfig::from_config(&c).unwrap()
+    };
+    assert!(config(None).bearer().unwrap().is_none());
+
+    let good = dir.path().join("token");
+    std::fs::write(&good, "Canary-7f3a9c\n").unwrap();
+    std::fs::set_permissions(&good, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    let header = config(Some(&format!("file:{}", good.display())))
+        .bearer()
+        .unwrap()
+        .unwrap();
+    assert!(header.is_sensitive());
+    assert_eq!(header.to_str().unwrap(), "Bearer Canary-7f3a9c");
+
+    let bad = dir.path().join("bad");
+    std::fs::write(&bad, "Canary\n7f3a9c").unwrap();
+    std::fs::set_permissions(&bad, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    let e = config(Some(&format!("file:{}", bad.display())))
+        .bearer()
+        .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_INVALID_CONFIG_VALUE");
+    assert!(!e.to_string().contains("Canary"), "{e}");
+}
+
+/// An `https://` endpoint makes a TLS channel without connecting.
+#[tokio::test]
+async fn an_https_endpoint_makes_a_lazy_channel() {
+    Endpoint::parse("https://policy.example.com:8443")
+        .unwrap()
+        .channel()
+        .unwrap();
+}
+
+/// A `unix:` endpoint dials the socket: a service that closes the connection is a denial, and so
+/// is a socket nobody listens on.
+#[tokio::test]
+async fn a_unix_endpoint_dials_the_socket() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("policy.sock");
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let accepted = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let seen = Arc::clone(&accepted);
+    let _server = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            drop(stream);
+        }
+    });
+    for socket in [path.clone(), dir.path().join("absent.sock")] {
+        let channel = Endpoint::parse(&format!("unix:{}", socket.display()))
+            .unwrap()
+            .channel()
+            .unwrap();
+        let access = ExternalAccess::over(
+            AccessPolicyClient::new(channel),
+            Duration::from_millis(500),
+            None,
+            false,
+        );
+        let d = access
+            .policy()
+            .check(&ana(), &table("t"), Privilege::Select)
+            .await
+            .unwrap();
+        assert!(!allowed(&d), "{}: {d:?}", socket.display());
+    }
+    assert!(accepted.load(std::sync::atomic::Ordering::Relaxed) >= 1);
 }
