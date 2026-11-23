@@ -777,6 +777,9 @@ pub struct ScanNode {
     /// Whether the output ends in the row id (file, then position) that a
     /// [`PhysNode::LateFetch`] above reads.
     pub row_id: bool,
+    /// The scan's decision, when it decides once (a Python data source): the plan holds the id of the
+    /// bound scan in the query's resolver, never the scan.
+    pub decided: Option<Box<crate::operators::DecidedScan>>,
 }
 
 /// A range source: `range(start, end, step, numSlices)` (Spark's `Range`).
@@ -1121,6 +1124,9 @@ impl WritePlan {
 }
 
 plan_data!(tuple ScanId(id));
+use crate::operators::{BoundScanId, DecidedScan};
+plan_data!(tuple BoundScanId(id));
+plan_data!(struct DecidedScan { id, pushed });
 plan_data!(tuple SubqueryId(id));
 plan_data!(tuple ExchangeId(id));
 plan_data!(tuple SharedId(id));
@@ -1278,7 +1284,7 @@ plan_data!(struct WritePlan {
     bucket
 });
 plan_data!(struct BucketWrite { column, sort_by });
-plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage, row_id });
+plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage, row_id, decided });
 plan_data!(
     enum FetchSlot {
         Input(index),
@@ -1552,6 +1558,16 @@ impl PhysicalPlan {
     /// The root node.
     pub fn root(&self) -> &PhysNode {
         &self.root
+    }
+
+    /// Whether a scan in any tree of the plan decided once (a Python data source): such a plan
+    /// holds a bound scan of its query's resolver and cannot leave the process.
+    pub fn has_decided_scan(&self) -> bool {
+        fn any(n: &PhysNode) -> bool {
+            matches!(n, PhysNode::Scan(s) if s.decided.is_some())
+                || n.children().into_iter().any(any)
+        }
+        self.roots().any(any)
     }
 
     /// The plans [`PhysNode::SharedRead`]s read, inner first.

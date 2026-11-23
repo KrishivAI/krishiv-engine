@@ -87,7 +87,17 @@ fn convert(py: Python<'_>, error: &KrishivError, rendered: Option<String>) -> Py
                 contexts,
                 rendered,
             ))?;
-        Ok(PyErr::from_value(exception))
+        let err = PyErr::from_value(exception);
+        // The causes become the `__cause__` chain, so the traceback shows Spark's `Caused by:` lines.
+        let texts: Vec<String> = error.causes().map(ToString::to_string).collect();
+        let mut cause: Option<PyErr> = None;
+        for text in texts.into_iter().rev() {
+            let next = pyo3::exceptions::PyRuntimeError::new_err(text);
+            next.set_cause(py, cause.take());
+            cause = Some(next);
+        }
+        err.set_cause(py, cause);
+        Ok(err)
     };
     build().unwrap_or_else(|cause| {
         // Keep why the conversion failed (a bug in `krishiv.errors`) as the cause.
