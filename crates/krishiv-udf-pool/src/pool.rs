@@ -242,6 +242,89 @@ pub(crate) struct Inner {
     root: tempfile::TempDir,
 }
 
+/// The workers of one [`Owner`] in a [`PoolSnapshot`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OwnerWorkers {
+    /// Whose workers these are.
+    pub owner: Owner,
+    /// Its live workers (idle, busy or starting).
+    pub live: usize,
+    /// Those of them that wait for a call.
+    pub idle: usize,
+}
+
+/// The pool at one moment ([`Pool::snapshot`]): what an operator's page lists.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct PoolSnapshot {
+    /// Live workers (idle, busy or starting).
+    pub live: usize,
+    /// Those of them that wait for a call.
+    pub idle: usize,
+    /// [`PoolConfig::max_total`].
+    pub max_total: usize,
+    /// [`PoolConfig::max_per_session`].
+    pub max_per_session: usize,
+    /// [`PoolConfig::max_per_tenant`].
+    pub max_per_tenant: usize,
+    /// Every owner with a live worker, in no order.
+    pub owners: Vec<OwnerWorkers>,
+}
+
+impl PoolSnapshot {
+    /// The snapshot of the counts `per_owner` (live workers) and `idle` (idle workers, an owner once per key
+    /// of its workers) under `config`'s limits.
+    fn of<'a>(
+        config: &PoolConfig,
+        live: usize,
+        per_owner: &HashMap<Owner, usize>,
+        idle: impl Iterator<Item = (&'a Owner, usize)>,
+    ) -> Self {
+        let mut waiting: HashMap<&Owner, usize> = HashMap::new();
+        for (owner, n) in idle {
+            *waiting.entry(owner).or_default() += n;
+        }
+        let owners: Vec<OwnerWorkers> = per_owner
+            .iter()
+            .map(|(owner, live)| OwnerWorkers {
+                owner: owner.clone(),
+                live: *live,
+                idle: waiting.get(owner).copied().unwrap_or(0),
+            })
+            .collect();
+        Self {
+            live,
+            idle: owners.iter().map(|o| o.idle).sum(),
+            max_total: config.max_total,
+            max_per_session: config.max_per_session,
+            max_per_tenant: config.max_per_tenant,
+            owners,
+        }
+    }
+}
+
+/// A view of a [`Pool`] that does not keep it running ([`Pool::monitor`]): for a status page, which must not
+/// delay the workers' stop when the server drops the pool.
+#[derive(Clone)]
+pub struct PoolMonitor {
+    inner: std::sync::Weak<Inner>,
+}
+
+impl std::fmt::Debug for PoolMonitor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PoolMonitor").finish_non_exhaustive()
+    }
+}
+
+impl PoolMonitor {
+    /// The pool now; `None` once the pool is gone.
+    #[must_use]
+    pub fn snapshot(&self) -> Option<PoolSnapshot> {
+        self.inner.upgrade().map(|inner| Pool { inner }.snapshot())
+    }
+}
+
 /// The worker pool of one server. Cheap to clone; workers stop when the last clone is dropped.
 #[derive(Clone)]
 pub struct Pool {
@@ -360,6 +443,29 @@ impl Pool {
     /// Live workers (idle, busy or starting).
     pub fn live_workers(&self) -> usize {
         self.inner.lock().live
+    }
+
+    /// The workers and the limits now. One short hold of the pool's lock: no worker is waited for.
+    #[must_use]
+    pub fn snapshot(&self) -> PoolSnapshot {
+        let state = self.inner.lock();
+        PoolSnapshot::of(
+            &self.inner.config,
+            state.live,
+            &state.per_owner,
+            state
+                .idle
+                .iter()
+                .map(|(key, list)| (&key.owner, list.len())),
+        )
+    }
+
+    /// A view of this pool that does not keep its workers running.
+    #[must_use]
+    pub fn monitor(&self) -> PoolMonitor {
+        PoolMonitor {
+            inner: Arc::downgrade(&self.inner),
+        }
     }
 
     /// Stops the idle workers of `owner` at once, and its busy ones when they finish (its session ended).
@@ -1106,6 +1212,51 @@ fn internal(message: String) -> KrishivError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_snapshot_counts_each_owners_idle_workers_over_all_its_keys() {
+        let owner = |session: &str, tenant: Option<&str>| Owner {
+            principal: "ana".to_owned(),
+            session: session.to_owned(),
+            tenant: tenant.map(str::to_owned),
+            capped: true,
+        };
+        let (a, b) = (owner("s1", Some("acme")), owner("s2", None));
+        let per_owner = HashMap::from([(a.clone(), 3), (b.clone(), 1)]);
+        let config = PoolConfig {
+            max_total: 9,
+            max_per_session: 4,
+            max_per_tenant: 6,
+            ..PoolConfig::default()
+        };
+        // `a` has idle workers under two keys (two interpreters or artifact sets), `b` none.
+        let mut snapshot = PoolSnapshot::of(&config, 4, &per_owner, [(&a, 1), (&a, 1)].into_iter());
+        snapshot
+            .owners
+            .sort_by(|x, y| x.owner.session.cmp(&y.owner.session));
+        assert_eq!(
+            snapshot,
+            PoolSnapshot {
+                live: 4,
+                idle: 2,
+                max_total: 9,
+                max_per_session: 4,
+                max_per_tenant: 6,
+                owners: vec![
+                    OwnerWorkers {
+                        owner: a,
+                        live: 3,
+                        idle: 2
+                    },
+                    OwnerWorkers {
+                        owner: b,
+                        live: 1,
+                        idle: 0
+                    },
+                ],
+            }
+        );
+    }
 
     #[test]
     fn a_tenant_memory_limit_not_below_the_general_one_is_flagged() {

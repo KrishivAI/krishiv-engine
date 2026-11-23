@@ -229,6 +229,38 @@ fn scalar_kinds_run_in_a_sandboxed_worker() {
 }
 
 #[test]
+fn a_snapshot_lists_the_sessions_worker_and_a_monitor_outlives_the_pool_without_keeping_it() {
+    let Some(py) = python() else { return };
+    let pool = Pool::new(config(&py)).expect("pool");
+    let monitor = pool.monitor();
+    let empty = pool.snapshot();
+    assert_eq!((empty.live, empty.idle, empty.owners.len()), (0, 0, 0));
+    let udfs = SessionUdfs::new(pool.clone(), owner("s1"));
+    call(
+        &udfs,
+        command(&py, "def f(x):\n    return x", "LongType()"),
+        ARROW_BATCHED,
+        ArrowType::Int64,
+        longs(&[Some(5)]),
+    )
+    .expect("call");
+    // The call is over: its worker waits for the next one.
+    let after = monitor.snapshot().expect("the pool is alive");
+    assert_eq!((after.live, after.idle), (1, 1));
+    assert_eq!(after.max_total, pool.snapshot().max_total);
+    assert_eq!(after.owners.len(), 1);
+    assert_eq!(after.owners[0].owner, owner("s1"));
+    assert_eq!((after.owners[0].live, after.owners[0].idle), (1, 1));
+    drop(udfs);
+    drop(pool);
+    assert_eq!(
+        monitor.snapshot(),
+        None,
+        "the monitor does not keep the pool"
+    );
+}
+
+#[test]
 fn a_python_error_is_python_exception_and_the_worker_stays() {
     let Some(py) = python() else { return };
     let pool = Pool::new(config(&py)).expect("pool");
