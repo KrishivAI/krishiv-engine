@@ -5,7 +5,7 @@ name: Docs site
 # Rust pages need nightly rustdoc and stay in the nightly `docs-reference` job.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - "docs/**"
       - "xtask/src/docs_*.rs"

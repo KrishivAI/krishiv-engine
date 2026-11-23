@@ -9,7 +9,7 @@ on:
   # A pull request runs them only when it carries the label `perf` or its branch starts with
   # `p3/perf` or `fix/perf` (a draft never does); adding the label starts the run (`labeled`).
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled]
     paths:
       - "crates/krishiv-exec/**"
       - "crates/krishiv-kernels/**"
