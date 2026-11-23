@@ -385,6 +385,26 @@ fn run_over(sql: &str, masked: &[&str], all: bool) -> (Arc<LogicalPlan>, Vec<Str
     )
 }
 
+/// `sql` resolved over `ctx`, with the as-of join syntax on when it uses it.
+fn resolve_in(sql: &str, ctx: &AnalysisContext) -> Plan {
+    if !sql.contains("ASOF") {
+        return support::resolve(sql, ctx);
+    }
+    let options = krishiv_sql::ParserOptions {
+        asof_join: true,
+        ..krishiv_sql::ParserOptions::default()
+    };
+    let plan = krishiv_sql::parse_and_lower(sql, &options, krishiv_plan::SourceId(0))
+        .unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+    krishiv_plan::analyzer::testing::block_on(krishiv_plan::analyzer::Analyzer::analyze(
+        &krishiv_plan::analyzer::DefaultAnalyzer,
+        &plan,
+        ctx,
+    ))
+    .unwrap_or_else(|e| panic!("{sql}: {e:?}"))
+    .plan
+}
+
 /// [`run_over`] over the tables of `ctx`, in two arms: `optimize` (no session configuration) and
 /// `optimize_with_udfs` with `stats` and a default session configuration, where the rules that
 /// need one (`ShareCte`, `ShareFilteredScan`, `SubqueryAsWindow`, `DerivedKeysAbove`,
@@ -397,7 +417,7 @@ fn run_in(
     masked: &[&str],
     all: bool,
 ) -> (Arc<LogicalPlan>, Vec<String>) {
-    let plan = support::resolve(sql, ctx);
+    let plan = resolve_in(sql, ctx);
     let guarded = Plan::try_new(guarded_tables(&plan, masked, all, false)).unwrap();
     if all {
         assert_all_guarded(guarded.root(), sql);
@@ -484,6 +504,30 @@ fn leaks_above_a_barrier_stay_above_it() {
             outside.iter().any(|e| e.to_string().contains(" / "))
         };
         assert!(kept, "{sql}: the planted expression is gone\n{root}");
+    }
+}
+
+/// A leak above an as-of join stays above the barrier of its left input (inner and left outer:
+/// the as-of arm of the filter pushdown admits only leakproof conjuncts), while a leakproof
+/// left-only filter still reaches the scan.
+#[test]
+fn a_leak_above_an_as_of_join_stays_above_its_barrier() {
+    for kind in ["", "LEFT "] {
+        let sql = format!(
+            "SELECT t.a FROM t {kind}ASOF JOIN u MATCH_CONDITION (t.a >= u.a) ON t.b = u.d \
+             WHERE abs(t.c) = 1 AND t.a > 0"
+        );
+        let (root, moved) = run(&sql, &["b"]);
+        let mut outside = Vec::new();
+        outside_exprs(&root, &mut outside);
+        assert!(
+            outside.iter().any(|e| calls(e, "leak")),
+            "{sql}: the planted leak is gone or moved in\n{root}"
+        );
+        assert!(
+            moved.iter().any(|m| m.contains("> 0")),
+            "{sql}: the leakproof filter did not reach the scan: {moved:?}\n{root}"
+        );
     }
 }
 

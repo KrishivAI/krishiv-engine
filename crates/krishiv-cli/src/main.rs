@@ -117,21 +117,23 @@ fn main() -> std::process::ExitCode {
     krishiv::register_build_features(&bundle::feature_states());
     #[cfg(feature = "telemetry-logs")]
     install_logs_from_env();
-    // Allocator policy is this binary's (it owns the global allocator):
-    // under memory pressure, threads return freed memory to the OS. With a
-    // configured limit that is not generous, mimalloc also purges promptly
-    // (set before `main`, see `krishiv_alloc`).
     #[cfg(feature = "mimalloc")]
-    {
-        krishiv_memory::set_release_hook(krishiv_alloc::install());
-        // Under that bounded policy the resident set follows the pools, and
-        // the pools keep it within their reservations plus an allowance.
-        if krishiv_alloc::bounded() {
-            krishiv_memory::set_resident_probe(krishiv_memory::process_resident_bytes);
-        }
-    }
+    install_allocator_policy();
     run();
     std::process::ExitCode::SUCCESS
+}
+
+/// Allocator policy is this binary's (it owns the global allocator): under
+/// memory pressure, threads return freed memory to the OS. With a configured
+/// limit that is not generous, mimalloc also purges promptly (set before
+/// `main`, see `krishiv_alloc`). Every limited root pool keeps the resident
+/// set within its reservations plus an allowance, the default limit (80% of
+/// the container) included: without the probe, memory the pools do not
+/// track took a 4 GB container over its cgroup (acceptance SQL-34).
+#[cfg(feature = "mimalloc")]
+fn install_allocator_policy() {
+    krishiv_memory::set_release_hook(krishiv_alloc::install());
+    krishiv_memory::set_resident_probe(krishiv_memory::process_resident_bytes);
 }
 
 #[inline(never)]
@@ -207,5 +209,19 @@ mod tests {
         assert!(in_mimalloc, "global allocations must come from mimalloc");
         // SAFETY: `mi_version` takes no arguments and only returns a constant.
         assert!(unsafe { libmimalloc_sys::mi_version() } > 0);
+    }
+
+    /// The probe and the hook are installed whatever the limit: this test
+    /// process has no limit below `krishiv_alloc`'s generous threshold, the
+    /// case that ran without the guard before (acceptance SQL-34).
+    #[test]
+    fn the_allocator_policy_installs_the_guard_at_a_generous_limit() {
+        assert!(
+            !krishiv_alloc::bounded(),
+            "this test needs a process started without KRISHIV_MEMORY_LIMIT below 4 GiB: unset it"
+        );
+        super::install_allocator_policy();
+        assert!(krishiv_memory::release_hook_installed());
+        assert!(krishiv_memory::resident_probe_installed());
     }
 }

@@ -123,7 +123,8 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::ColumnNames { .. } => 42,
         PlanNode::Tail { .. } => 43,
         PlanNode::MetricViewRead { .. } => 44,
-        PlanNode::SecurityBarrier { .. } => 45,
+        PlanNode::AsOfJoin { .. } => 45,
+        PlanNode::SecurityBarrier { .. } => 46,
     }
 }
 
@@ -916,6 +917,9 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             PlanNode::Join {
                 kind, condition, ..
+            }
+            | PlanNode::AsOfJoin {
+                kind, condition, ..
             } => {
                 let tag: u8 = match kind {
                     JoinKind::Inner => 1,
@@ -945,6 +949,27 @@ impl<'k, 'a> Encoder<'k, 'a> {
                         self.strs(cols);
                     }
                     JoinCondition::Natural => self.u8(3),
+                }
+                if let PlanNode::AsOfJoin { as_of, .. } = &p.node {
+                    self.expr(&as_of.left);
+                    self.expr(&as_of.right);
+                    self.u8(match as_of.direction {
+                        crate::AsOfDirection::Backward => 1,
+                        crate::AsOfDirection::Forward => 2,
+                        crate::AsOfDirection::Nearest => 3,
+                    });
+                    self.bool(as_of.allow_exact);
+                    self.bool(as_of.as_written);
+                    self.bool(as_of.distance_on_every_pair);
+                    for e in [&as_of.tolerance, &as_of.distance] {
+                        match e {
+                            None => self.u8(0),
+                            Some(t) => {
+                                self.u8(1);
+                                self.expr(t);
+                            }
+                        }
+                    }
                 }
             }
             PlanNode::Sort { order, global, .. } => {

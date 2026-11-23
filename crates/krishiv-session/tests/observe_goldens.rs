@@ -1057,6 +1057,28 @@ fn ansi_matches(got: &Value, run: &Value, either: &[i64]) -> Result<(), String> 
     }
 }
 
+/// The fold of each split is its own, so the overflow is at the merge, which drops a buffer, and
+/// the action succeeds as Spark's does, whichever driver reads which split. A driver that read both
+/// used to fail the action (about one run in four), so the case is repeated until that would show.
+#[test]
+fn ansi_sum_overflow_across_splits_fails_only_the_merge() {
+    for _ in 0..100 {
+        let s = session();
+        let df = s
+            .range(0, 2, 1, Some(2))
+            .select_expr([format!("id + {} as v", MAXL - 1)])
+            .unwrap();
+        let got = run(df, vec![e("sum(v)").alias("s")], count_action);
+        assert_eq!(got["action_result"], json!(2), "{got}");
+        assert_eq!(got["get"], json!("ok"), "{got}");
+        let sum = &got["metrics"]["s"];
+        assert!(
+            [MAXL - 1, MAXL].iter().any(|v| *sum == json!(v)),
+            "the merge keeps one partition's buffer: {got}"
+        );
+    }
+}
+
 /// Cases the engine does not match yet (each must still fail).
 const ANSI_GAPS: &[(&str, &str)] = &[];
 

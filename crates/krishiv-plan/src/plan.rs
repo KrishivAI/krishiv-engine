@@ -11,6 +11,10 @@ use crate::dag::{self, Memo};
 use crate::walk::{self, Node};
 use crate::{AttrId, BoundColumn, Expr, Origin, PythonUdfRef, SortOrder};
 
+mod asof;
+mod generator;
+pub use asof::{AsOfDirection, AsOfMatch};
+pub use generator::{GeneratorKind, generator_arg};
 mod source;
 pub(crate) use source::GENERATED_METADATA_KEY;
 pub use source::{ReadSource, Scan, TableVersion, without_generated_marker};
@@ -245,6 +249,22 @@ pub enum PlanNode {
         kind: JoinKind,
         /// Join condition.
         condition: JoinCondition,
+    },
+    /// An as-of join (Spark 4.3's `AsOfJoin`): each left row with the one right row
+    /// nearest to it by `as_of` among those `condition` keeps. `kind` is
+    /// [`JoinKind::Inner`] or [`JoinKind::LeftOuter`]; the output is the left columns,
+    /// then the right ones. The optimizer never reorders it.
+    AsOfJoin {
+        /// Left input.
+        left: Arc<LogicalPlan>,
+        /// Right input.
+        right: Arc<LogicalPlan>,
+        /// Join type.
+        kind: JoinKind,
+        /// The `ON` condition or `USING` columns (resolved: `On` or `None`).
+        condition: JoinCondition,
+        /// The match.
+        as_of: Arc<AsOfMatch>,
     },
     /// `ORDER BY` (global) or `SORT BY` / `sortWithinPartitions`.
     Sort {
@@ -767,73 +787,6 @@ pub struct TableArg {
     pub name: Option<String>,
 }
 
-/// The attribute a resolved generator reads: its argument is always a
-/// column of its input, which the generator does not carry to its output
-/// (so an exploded array is not copied once per element).
-#[must_use]
-pub fn generator_arg(arg: &Expr) -> Option<AttrId> {
-    match &arg.node {
-        crate::ExprNode::Resolved(crate::ResolvedExpr::Column(c)) => Some(c.id),
-        _ => None,
-    }
-}
-
-/// What a [`PlanNode::Generate`] produces for each element of its argument
-/// (Spark's `Explode`, `PosExplode` and `Inline` generators).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum GeneratorKind {
-    /// `explode`: a row per array element (`col`), or per map entry (`key`,
-    /// `value`).
-    Explode,
-    /// `posexplode`: as `explode` with the 0-based position first (`pos`).
-    PosExplode,
-    /// `inline`: a row per struct of an array of structs, one column per
-    /// field.
-    Inline,
-    /// `variant_explode`: a row per field of a variant object or element of
-    /// a variant array (`pos`, `key`, `value`); any other value, a variant
-    /// null and SQL `NULL` give no rows.
-    VariantExplode,
-    /// A Python UDTF under `LATERAL` (Spark's `Generate(PythonUDTF)`): the
-    /// node's `arg` is the call, a [`crate::FunctionId::PythonUdf`] of a
-    /// table kind with the UDTF's arguments, not a column; the generated
-    /// columns are its declared result.
-    PythonUdtf,
-}
-
-impl GeneratorKind {
-    /// The function name Spark shows for the generator (`explode`,
-    /// `posexplode`, `inline`; `_outer` is added by the caller).
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Explode => "explode",
-            Self::PosExplode => "posexplode",
-            Self::Inline => "inline",
-            Self::VariantExplode => "variant_explode",
-            Self::PythonUdtf => "python_udtf",
-        }
-    }
-
-    /// The generator a function name calls (ASCII lower case), and whether
-    /// it is the `_outer` form; `stack` is not one (it lowers to `inline`).
-    #[must_use]
-    pub fn of_name(name: &str) -> Option<(Self, bool)> {
-        let (base, outer) = match name.strip_suffix("_outer") {
-            Some(base) => (base, true),
-            None => (name, false),
-        };
-        let kind = match base {
-            "explode" => Self::Explode,
-            "posexplode" => Self::PosExplode,
-            "inline" => Self::Inline,
-            "variant_explode" => Self::VariantExplode,
-            _ => return None,
-        };
-        Some((kind, outer))
-    }
-}
-
 /// One value of a [`PlanNode::Pivot`]: one expression per pivot column,
 /// with an optional alias.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1101,6 +1054,24 @@ impl LogicalPlan {
         })
     }
 
+    /// `self kind ASOF JOIN right` matching by `as_of` among the rows `condition` keeps.
+    #[must_use]
+    pub fn as_of_join(
+        self,
+        right: Self,
+        kind: JoinKind,
+        condition: JoinCondition,
+        as_of: AsOfMatch,
+    ) -> Self {
+        Self::new(PlanNode::AsOfJoin {
+            left: Arc::new(self),
+            right: Arc::new(right),
+            kind,
+            condition,
+            as_of: Arc::new(as_of),
+        })
+    }
+
     /// `self ORDER BY order` (a global sort).
     #[must_use]
     pub fn sort(self, order: Vec<SortOrder>) -> Self {
@@ -1206,6 +1177,7 @@ impl LogicalPlan {
             | PlanNode::MapPartitions { input, .. }
             | PlanNode::GroupMap { input, .. } => f(input),
             PlanNode::Join { left, right, .. }
+            | PlanNode::AsOfJoin { left, right, .. }
             | PlanNode::SetOp { left, right, .. }
             | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
@@ -1276,6 +1248,7 @@ impl LogicalPlan {
             | PlanNode::MapPartitions { input, .. }
             | PlanNode::GroupMap { input, .. } => f(input),
             PlanNode::Join { left, right, .. }
+            | PlanNode::AsOfJoin { left, right, .. }
             | PlanNode::SetOp { left, right, .. }
             | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
@@ -1372,6 +1345,14 @@ impl LogicalPlan {
                 JoinCondition::On(e) => f(e),
                 JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
             },
+            PlanNode::AsOfJoin {
+                condition, as_of, ..
+            } => {
+                as_of.exprs().for_each(&mut *f);
+                if let JoinCondition::On(e) = condition {
+                    f(e);
+                }
+            }
             PlanNode::Sort { order, .. } => order.iter().for_each(|o| f(&o.expr)),
             PlanNode::Expand { projections, .. } => projections.iter().flatten().for_each(f),
             PlanNode::Generate { arg, .. } => f(arg),
@@ -1493,6 +1474,14 @@ impl LogicalPlan {
                 JoinCondition::On(e) => f(e),
                 JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
             },
+            PlanNode::AsOfJoin {
+                condition, as_of, ..
+            } => {
+                Arc::make_mut(as_of).exprs_mut().for_each(&mut *f);
+                if let JoinCondition::On(e) = condition {
+                    f(e);
+                }
+            }
             PlanNode::Sort { order, .. } => order.iter_mut().for_each(|o| f(&mut o.expr)),
             PlanNode::Generate { arg, .. } => f(arg),
             PlanNode::Expand { projections, .. } => {
@@ -1696,6 +1685,9 @@ impl LogicalPlan {
                     return Some(out);
                 }
                 PlanNode::Join {
+                    left, right, kind, ..
+                }
+                | PlanNode::AsOfJoin {
                     left, right, kind, ..
                 } => {
                     let nullable = |v: Vec<BoundColumn>, yes: bool| {

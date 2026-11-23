@@ -18,6 +18,8 @@ pub mod codec;
 pub mod config;
 pub mod errors;
 pub mod execute;
+#[cfg(feature = "function-catalog")]
+mod function_store;
 pub mod get_status;
 pub mod host;
 pub mod interrupt;
@@ -29,6 +31,8 @@ pub mod server;
 pub mod service;
 pub mod status;
 pub mod udf;
+#[cfg(feature = "function-catalog")]
+pub use function_store::SqliteFunctionStore;
 
 pub use artifacts::{ArtifactLimits, ArtifactStore, SessionArtifacts};
 pub use auth::{
@@ -42,4 +46,4 @@ pub use operation::{ExecuteLimits, Operation, OperationState, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};
 pub use service::ConnectService;
 pub use status::status_of;
-pub use udf::{PythonArchive, RunnerConf, SessionUdfRuntime, UdfHost};
+pub use udf::{FunctionStore, PythonArchive, RunnerConf, SessionUdfRuntime, StoreChange, UdfHost};

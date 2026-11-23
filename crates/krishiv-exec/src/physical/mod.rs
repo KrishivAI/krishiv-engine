@@ -1038,6 +1038,9 @@ pub struct SortMergeJoinPlan {
     pub residual: Option<Residual>,
     /// A left outer join that fails when a left row matches more than once.
     pub single_match: bool,
+    /// An as-of join (Spark 4.3): each left row with the nearest right row of its keys by
+    /// these columns (codec feature `as_of_join`).
+    pub as_of: Option<crate::join::AsOfMergeSpec>,
 }
 
 /// A nested-loop join over every pair of rows.
@@ -1306,7 +1309,7 @@ plan_data!(struct ProbeColumn { index, name });
 plan_data!(struct ProbeRowStage { scan, columns });
 plan_data!(struct ProbeFilterColumn { id, column });
 plan_data!(struct SortMergeJoinPlan {
-    probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match
+    probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match, as_of
 });
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
 plan_data!(struct PhysicalPlan { root, shared, schema, explain, warnings, env, guarded });

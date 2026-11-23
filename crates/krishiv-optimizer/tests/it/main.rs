@@ -8,6 +8,7 @@
     reason = "test helpers sit outside #[test] fns"
 )]
 
+mod as_of;
 mod barrier;
 mod cse;
 mod derived_keys;

@@ -190,3 +190,52 @@ fn register_function_is_a_command_the_server_runs() {
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
     );
 }
+
+#[test]
+fn a_persist_extension_translates_to_its_command_and_other_extensions_do_not() {
+    use prost::Message as _;
+    let command = |type_url: &str, value: Vec<u8>| pb::Command {
+        command_type: Some(CommandType::Extension(Box::new(prost_types::Any {
+            type_url: type_url.to_owned(),
+            value,
+        }))),
+    };
+    let ok = command(
+        "type.googleapis.com/krishiv.v1.PersistPythonFunction",
+        crate::extension::PersistPythonFunction {
+            name: "f".to_owned(),
+            drop: true,
+        }
+        .encode_to_vec(),
+    );
+    assert_eq!(
+        translate_command(&ok).unwrap(),
+        Command::PersistPythonFunction {
+            name: "f".to_owned(),
+            drop: true
+        }
+    );
+    let echo = command("type.googleapis.com/krishiv.v1.Echo", Vec::new());
+    assert!(translate_command(&echo).is_err());
+}
+
+#[test]
+fn from_stored_builds_what_register_function_would_and_refuses_a_bad_row() {
+    let udf =
+        PythonUdf::from_stored("f".into(), true, 101, "bigint", vec![1], "3.12".into()).unwrap();
+    assert_eq!(udf.plan_eval_type, PythonEvalType::ArrowBatched);
+    assert_eq!(udf.return_type, krishiv_types::DataType::Long);
+    let eval =
+        PythonUdf::from_stored("f".into(), true, 999, "bigint", vec![], String::new()).unwrap_err();
+    assert_eq!(
+        eval.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+    );
+    // A return type that does not parse is the DDL parser's error, not the eval type's.
+    let ty = PythonUdf::from_stored("f".into(), true, 101, "not a type (", vec![], String::new())
+        .unwrap_err();
+    assert_ne!(
+        ty.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+    );
+}

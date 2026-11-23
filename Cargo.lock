@@ -3503,11 +3503,13 @@ dependencies = [
  "krishiv-common",
  "krishiv-connect-server",
  "krishiv-exec",
+ "krishiv-memory",
  "krishiv-plan",
  "krishiv-server",
  "krishiv-session",
  "krishiv-sql",
  "krishiv-types",
+ "libmimalloc-sys",
  "mimalloc",
  "pyo3",
 ]

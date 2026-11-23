@@ -923,6 +923,7 @@ fn the_w1_rule_keys_default_on_and_are_user_settable() {
     }
 }
 
+mod asof_join;
 mod catalog_delegation;
 mod connect;
 mod delta;
@@ -1598,6 +1599,39 @@ fn python_worker_entries_parse_and_default() {
     assert!(c.set("krishiv.udf.sandbox", "maybe").is_err());
     assert!(c.set("krishiv.python.worker.maxPerSession", "0").is_err());
     assert!(c.set("krishiv.python.worker.memoryLimit", "lots").is_err());
+}
+
+#[test]
+fn python_worker_tenant_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&PYTHON_WORKER_MAX_PER_TENANT)
+            .and_then(ConfigValue::as_int),
+        Some(32)
+    );
+    assert_eq!(c.get(&PYTHON_WORKER_TENANT_MEMORY_LIMIT), None);
+    c.set("krishiv.python.worker.maxPerTenant", "4").unwrap();
+    c.set("krishiv.python.worker.tenantMemoryLimit", "512m")
+        .unwrap();
+    assert_eq!(
+        c.get(&PYTHON_WORKER_MAX_PER_TENANT)
+            .and_then(ConfigValue::as_int),
+        Some(4)
+    );
+    assert_eq!(
+        c.get(&PYTHON_WORKER_TENANT_MEMORY_LIMIT)
+            .and_then(ConfigValue::as_size),
+        Some(512 << 20)
+    );
+    assert!(c.set("krishiv.python.worker.maxPerTenant", "0").is_err());
+    assert!(
+        c.set("krishiv.python.worker.tenantMemoryLimit", "lots")
+            .is_err()
+    );
+    assert_eq!(
+        PYTHON_WORKER_MAX_PER_TENANT.settable_by,
+        SettableBy::Startup
+    );
 }
 
 #[test]

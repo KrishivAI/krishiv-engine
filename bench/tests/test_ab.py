@@ -137,6 +137,36 @@ def test_conf_argv_exact(tmp_path: Path):
         eng.teardown()
 
 
+def test_dataset_defaults_do_not_carry_over_to_the_next_dataset(tmp_path: Path):
+    runner = make_runner(tmp_path, "runner")
+    a, b = tmp_path / "a", tmp_path / "b"
+    for d, v in ((a, "true"), (b, "false")):
+        d.mkdir()
+        (d / "session.conf").write_text(f"k={v}\nonly.{d.name}=1\n")
+    eng = KrishivEngine(binary=runner, conf=[("given", "x")])
+    try:
+        eng.setup(Dataset("asof", 1, a, ["t"]))
+        assert eng.config()["conf"] == ["given=x", "k=true", "only.a=1"]
+        eng.teardown()
+        eng.setup(Dataset("asof", 1, b, ["t"]))
+        assert eng.config()["conf"] == ["given=x", "k=false", "only.b=1"]
+        argv = json.loads(Path(str(runner) + ".argv").read_text())
+        assert argv[-6:] == ["--conf", "given=x", "--conf", "k=false", "--conf", "only.b=1"]
+    finally:
+        eng.teardown()
+
+
+def test_an_explicit_conf_wins_over_the_dataset_default(tmp_path: Path):
+    runner = make_runner(tmp_path, "runner")
+    (tmp_path / "session.conf").write_text("k=true\n")
+    eng = KrishivEngine(binary=runner, conf=[("k", "false")])
+    try:
+        eng.setup(Dataset("asof", 1, tmp_path, ["t"]))
+        assert eng.config()["conf"] == ["k=false"]
+    finally:
+        eng.teardown()
+
+
 def test_branch_alignment_is_recorded_when_the_runner_reports_it(tmp_path: Path):
     info = {"profile": "dist", "target-cpu": "x86-64-v3", "branch-align": "32B"}
     eng = KrishivEngine(binary=make_runner(tmp_path, "aligned", info))
