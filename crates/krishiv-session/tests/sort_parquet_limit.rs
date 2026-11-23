@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{Int64Array, RecordBatch, StringArray};
+use arrow_array::{Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use futures::executor::block_on;
 use krishiv_session::Session;
@@ -42,10 +42,7 @@ fn session(spill: &std::path::Path) -> Session {
         .map(|c| {
             // 7,919 is prime and does not divide ROWS: `k` visits every value once.
             let k: Vec<i64> = c.iter().map(|i| i * 7_919 % ROWS).collect();
-            let text: Vec<String> = k
-                .iter()
-                .map(|k| format!("row {k:>12} of the SQL-33 sort-to-parquet case"))
-                .collect();
+            let text: Vec<String> = k.iter().map(|k| text_of(*k)).collect();
             RecordBatch::try_new(
                 Arc::clone(&schema),
                 vec![
@@ -60,7 +57,14 @@ fn session(spill: &std::path::Path) -> Session {
     s
 }
 
-/// The `k` column of every Parquet file under `dir`, one list per file.
+/// The `s` value written for key `k`.
+fn text_of(k: i64) -> String {
+    format!("row {k:>12} of the SQL-33 sort-to-parquet case")
+}
+
+/// The `k` column of every Parquet file under `dir`, one list per file. Each
+/// row's `s` is checked against its `k`, so a write that misaligns or drops
+/// the second column fails here.
 fn files(dir: &std::path::Path) -> Vec<Vec<i64>> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap() {
@@ -76,7 +80,21 @@ fn files(dir: &std::path::Path) -> Vec<Vec<i64>> {
         let mut keys = Vec::new();
         for batch in reader {
             let batch = batch.unwrap();
-            keys.extend(batch.column(0).as_primitive::<Int64Type>().values().iter());
+            let k = batch.column_by_name("k").unwrap();
+            let s = batch.column_by_name("s").unwrap();
+            assert_eq!(k.null_count(), 0, "a null key in {}", path.display());
+            assert_eq!(s.null_count(), 0, "a null text in {}", path.display());
+            let k = k.as_primitive::<Int64Type>().values();
+            let texts: Vec<&str> = match s.data_type() {
+                DataType::Utf8View => s.as_string_view().iter().flatten().collect(),
+                DataType::LargeUtf8 => s.as_string::<i64>().iter().flatten().collect(),
+                _ => s.as_string::<i32>().iter().flatten().collect(),
+            };
+            assert_eq!(texts.len(), k.len());
+            for (k, text) in k.iter().zip(texts) {
+                assert_eq!(text, text_of(*k), "row of key {k} in {}", path.display());
+            }
+            keys.extend(k.iter());
         }
         out.push(keys);
     }
