@@ -19,13 +19,16 @@ use serde_json::Value;
 
 /// Cases where the engine differs from Spark today, each with the reason. A listed case must still differ,
 /// so closing one forces the list to shrink.
-const PENDING: [(&str, &str); 2] = [
+/// Each entry: id, text the mismatch report must contain, reason.
+const PENDING: [(&str, &str, &str); 2] = [
     (
         "array_binary_non_utf8.ansi",
+        "array_binary_non_utf8.ansi: failed: [INVALID_UTF8_STRING] Invalid UTF8 byte sequence found in string: \\xFF. SQLSTATE: 22029\n",
         "Spark keeps the bytes of a non-UTF-8 BINARY cast to STRING (hex FF); this engine's strings are UTF-8 and ANSI raises INVALID_UTF8_STRING",
     ),
     (
         "array_binary_non_utf8.legacy",
+        "array_binary_non_utf8.legacy: rows\n  got  [[String(\"EFBFBD\")]]\n  want [[String(\"FF\")]]\n",
         "Spark keeps the bytes (hex FF); this engine's strings are UTF-8 and the cast replaces them with U+FFFD",
     ),
 ];
@@ -162,22 +165,30 @@ fn concat_ws_array_matches_spark() {
     let cases = g["cases"].as_array().unwrap();
     let mut report = String::new();
     let mut failing: Vec<&str> = Vec::new();
+    let mut pinned: Vec<(&str, String)> = Vec::new();
     for case in cases {
         let r = check(&s, case);
         if !r.is_empty() {
             failing.push(case["id"].as_str().unwrap());
+            pinned.push((case["id"].as_str().unwrap(), r.clone()));
         }
         if !PENDING
             .iter()
-            .any(|(id, _)| *id == case["id"].as_str().unwrap())
+            .any(|(id, _, _)| *id == case["id"].as_str().unwrap())
         {
             report.push_str(&r);
         }
     }
-    for (id, reason) in PENDING {
+    for (id, how, reason) in PENDING {
         assert!(
             failing.contains(&id),
             "pending case {id} ({reason}) now passes: remove it"
+        );
+        // Pin the whole mismatch report, so any other wrong answer is noticed too.
+        let got = &pinned.iter().find(|(i, _)| *i == id).unwrap().1;
+        assert_eq!(
+            got, how,
+            "pending case {id} differs differently from its pinned result"
         );
     }
     // Both modes of the cases that pin the behaviour.
