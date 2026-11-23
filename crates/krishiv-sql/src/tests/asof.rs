@@ -250,4 +250,16 @@ fn asof_right_side_parenthesized_relation_clears_the_flag() {
                MATCH_CONDITION (l.x >= rr.x)";
     let j = join(sql);
     assert!(matches!(j.constraint, JoinConstraint::AsOf(_)), "{j:?}");
+    // The nested relation is `r` aliased `MATCH_CONDITION` with the column list `(x)`, as Spark
+    // 4.3.0 reads it (review of #990).
+    let ast::TableFactorKind::Nested(inner) = &j.right.kind else {
+        panic!("the right side is a parenthesized relation: {j:?}")
+    };
+    let alias = inner.primary.alias.as_ref().unwrap();
+    assert_eq!(
+        alias.name.as_ref().map(|n| n.value.as_str()),
+        Some("MATCH_CONDITION")
+    );
+    let columns: Vec<&str> = alias.columns.iter().map(|c| c.value.as_str()).collect();
+    assert_eq!(columns, ["x"]);
 }
