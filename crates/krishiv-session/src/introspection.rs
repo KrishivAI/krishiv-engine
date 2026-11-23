@@ -354,11 +354,9 @@ impl Session {
         Ok(df)
     }
 
-    /// The text of `DESCRIBE EXTENDED` and `SHOW CREATE TABLE` is Spark 4.2's
-    /// (`Created By`, `COLLATE UTF8_BINARY`), which 4.3 prints the same way; older profiles are
-    /// refused rather than shown 4.2 output.
-    /// The `Created By` text: Spark renders `CatalogTable.createVersion`, which is the release the
-    /// profile follows (4.2 and 4.3 here; the other profiles are refused before this is read).
+    /// The `Created By` text: Spark renders `CatalogTable.createVersion`, here the release the
+    /// reading session's profile follows (4.2 and 4.3; the other profiles are refused before this
+    /// is read), not the release that created the table.
     fn created_by(&self) -> &'static str {
         if self.state.profile >= krishiv_plan::analyzer::SparkProfile::V4_3 {
             "Spark 4.3.0"
@@ -367,6 +365,9 @@ impl Session {
         }
     }
 
+    /// The text of `DESCRIBE EXTENDED` and `SHOW CREATE TABLE` is Spark 4.2's and 4.3's
+    /// (`Created By` names the profile's release, `COLLATE UTF8_BINARY`); older profiles are
+    /// refused rather than shown 4.2 output.
     fn require_current_profile(&self, what: &str) -> Result<(), KrishivError> {
         if self.state.profile >= krishiv_plan::analyzer::SparkProfile::V4_2 {
             Ok(())
