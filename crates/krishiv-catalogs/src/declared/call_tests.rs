@@ -3,10 +3,18 @@
 //! the catalog does not have, a catalog nothing declares, a malformed name and a table the
 //! catalog does not know, each refused with its error class.
 
+use std::sync::Arc;
+
 use futures::executor::block_on;
 use krishiv_common::error::{ErrorClass, KrishivError};
-use krishiv_session::Session;
+use krishiv_plan::analyzer::{BoxFuture, PolicyVersion};
+use krishiv_session::catalog_decl::DeclMode;
+use krishiv_session::catalog_registry::CatalogSetup;
+use krishiv_session::{
+    AccessDecision, AccessPolicy, EngineRuntime, Principal, Privilege, Securable, Session,
+};
 
+use super::IcebergRestFactory;
 use super::read_tests::session;
 use super::tests::path;
 use crate::iceberg_rest::test_server::{Reply, Seen, Server, serve};
@@ -66,4 +74,96 @@ fn a_table_the_catalog_does_not_know_is_krishiv_iceberg_procedure_table_not_foun
         e.error_class(),
         ErrorClass::KrishivIcebergProcedureTableNotFound
     );
+}
+
+/// Allows everything but `MODIFY` on a table.
+struct NoTableWrites;
+
+impl AccessPolicy for NoTableWrites {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let decision = if matches!(securable, Securable::Table(_)) && privilege == Privilege::Modify
+        {
+            AccessDecision::Deny {
+                reason: "no table writes".to_owned(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(async move { Ok(decision) })
+    }
+}
+
+/// `MANAGE` on the cluster is not enough to expire a table's snapshots: the write privilege on
+/// the table is asked first, before the catalog is asked for the table (so the refusal comes
+/// before the table's absence would).
+#[test]
+fn a_procedure_on_a_table_needs_the_write_privilege_on_it() {
+    let server = empty();
+    let setup = CatalogSetup::new(DeclMode::Embedded)
+        .factory(Arc::new(IcebergRestFactory))
+        .setting("krishiv.catalog.lake.type", "iceberg-rest")
+        .setting("krishiv.catalog.lake.uri", server.base.as_str())
+        .setting("krishiv.catalog.lake.storage", "allowed-prefixes");
+    let s = Session::builder()
+        .runtime(EngineRuntime::builder().catalogs(setup).build().unwrap())
+        .access_policy(Arc::new(NoTableWrites))
+        .build()
+        .unwrap();
+    for sql in [
+        "CALL lake.system.expire_snapshots(table => 'db.missing')",
+        "CALL lake.system.expire_snapshots(table => 'lake.db.missing')",
+    ] {
+        let e = call(&s, sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivInsufficientPermissions,
+            "{sql}: {e}"
+        );
+    }
+}
+
+/// Arguments are cast in ANSI mode whatever the session says: a bad timestamp fails before the
+/// table is looked up, instead of becoming `NULL` (an absent `older_than`).
+#[test]
+fn a_bad_argument_fails_even_with_ansi_off() {
+    let server = empty();
+    let s = session(&server, None);
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    let e = call(
+        &s,
+        "CALL lake.system.expire_snapshots(table => 'db.missing', older_than => 'not-a-timestamp')",
+    );
+    assert_eq!(e.error_class(), ErrorClass::CastInvalidInput, "{e}");
+    // The session's own setting is untouched.
+    assert_eq!(
+        s.conf().get("spark.sql.ansi.enabled").as_deref(),
+        Some("false")
+    );
+}
+
+/// A `NULL` element of an array argument is refused, never dropped.
+#[test]
+fn a_null_array_element_is_refused() {
+    let server = empty();
+    let s = session(&server, None);
+    let e = call(
+        &s,
+        "CALL lake.system.expire_snapshots(table => 'db.missing', \
+         snapshot_ids => array(7L, CAST(NULL AS BIGINT), 9L))",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergProcedureArgument,
+        "{e}"
+    );
+    assert!(e.to_string().contains("NULL elements"), "{e}");
 }

@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `CALL cat.system.p(args)` (design P3-T027 PR-36e §3): resolves the catalog, loads the
 //! procedure, rearranges the arguments by name as Spark's `NamedParametersSupport` does, casts
-//! each to its parameter's type (ANSI, through the session's own `CAST`), runs the procedure and
-//! returns its rows. Not planned through the optimizer and never cached.
+//! each to its parameter's type (ANSI whatever `spark.sql.ansi.enabled` says, through a clone of
+//! the session, so a bad value fails instead of becoming `NULL`), runs the procedure and returns
+//! its rows. A `NULL` element of an array argument is refused. Not planned through the optimizer
+//! and never cached.
 
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, RecordBatch};
 use krishiv_common::error::{
     DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, FailedToLoadRoutine,
-    KrishivError, MissingCatalogAbilityProcedures, RequiredParameterNotFound,
-    UnexpectedPositionalArgument, UnrecognizedParameterName, WrongNumArgsWithoutSuggestion,
+    KrishivError, KrishivIcebergProcedureArgument, MissingCatalogAbilityProcedures,
+    RequiredParameterNotFound, UnexpectedPositionalArgument, UnrecognizedParameterName,
+    WrongNumArgsWithoutSuggestion,
 };
 use krishiv_plan::procedure::{
     ProcedureContext, ProcedureParameter, ProcedureType, ProcedureValue,
@@ -78,6 +81,16 @@ impl Session {
             .into());
         };
         let slots = rearrange(&shown, loaded.parameters(), call)?;
+        // The casts run in a clone with ANSI on: a non-ANSI cast turns a bad value into `NULL`,
+        // which a procedure reads as an absent argument (an expire would fall back to its
+        // default retention).
+        let caster = if slots.iter().any(Option::is_some) {
+            let c = self.clone_session()?;
+            c.conf().set("spark.sql.ansi.enabled", "true")?;
+            Some(c)
+        } else {
+            None
+        };
         let mut args = Vec::with_capacity(slots.len());
         for (param, slot) in loaded.parameters().iter().zip(slots) {
             args.push(match slot {
@@ -87,25 +100,34 @@ impl Session {
                     let text = query
                         .get(arg.expr.span.start..arg.expr.span.end)
                         .unwrap_or_default();
-                    self.cast_argument(text, param.data_type).await?
+                    let caster = caster.as_ref().unwrap_or(self);
+                    caster.cast_argument(text, param.data_type).await?
                 }
             });
+        }
+        if let Some(c) = caster {
+            c.close();
         }
         let ctx = ProcedureContext {
             catalog: catalog.clone(),
         };
-        let table = loaded.table(&args);
+        let target = loaded
+            .table(&args)
+            .filter(|_| loaded.modifies_table())
+            .map(|t| table_ident(&catalog, &t));
+        // `CALL` itself needs `MANAGE` on the cluster (checked before dispatch); a procedure that
+        // changes a table also needs the write privilege on it, asked before it opens the table.
+        if let Some(id) = &target {
+            self.authorize_privilege(
+                &krishiv_plan::analyzer::Securable::Table(id.clone()),
+                krishiv_plan::analyzer::Privilege::Modify,
+                krishiv_sql::StatementClass::Admin,
+            )
+            .await?;
+        }
         let batch = loaded.call(&ctx, args).await?;
-        if loaded.modifies_table()
-            && let Some(table) = table
-        {
+        if let Some(id) = target {
             // Frames and plans that read the table analyze again (`REFRESH TABLE`).
-            let (namespace, name) = split_table(&table);
-            let id = krishiv_plan::analyzer::TableIdent {
-                catalog,
-                namespace,
-                name,
-            };
             built.refresh(&caller, &id).await?;
         }
         self.script_result(batch.schema(), vec![batch]).await
@@ -132,11 +154,28 @@ impl Session {
     }
 }
 
-/// The table's `ns.t` name as a namespace and a name.
-fn split_table(table: &str) -> (Vec<String>, String) {
+/// A procedure's `table` argument (`ns.t`, or `cat.ns.t` naming the catalog the call runs in,
+/// as the catalog reads it) as the table in `catalog`.
+fn table_ident(catalog: &str, table: &str) -> krishiv_plan::analyzer::TableIdent {
     let mut parts: Vec<String> = table.split('.').map(str::to_owned).collect();
+    if parts.len() > 2 && parts[0].eq_ignore_ascii_case(catalog) {
+        parts.remove(0);
+    }
     let name = parts.pop().unwrap_or_default();
-    (parts, name)
+    krishiv_plan::analyzer::TableIdent {
+        catalog: catalog.to_owned(),
+        namespace: parts,
+        name,
+    }
+}
+
+/// A `NULL` inside an array argument: refused, never dropped (the procedure would act on
+/// another list than the one written).
+fn null_element() -> KrishivError {
+    KrishivIcebergProcedureArgument {
+        message: "An array argument must not contain NULL elements".to_owned(),
+    }
+    .into()
 }
 
 /// Row 0 of column 0 as a procedure value.
@@ -195,13 +234,24 @@ fn value_of(batch: &RecordBatch, ty: ProcedureType) -> Result<ProcedureValue, Kr
             let list = col.as_list_opt::<i32>().ok_or_else(bad)?;
             let items = list.value(0);
             let longs = items.as_primitive_opt::<Int64Type>().ok_or_else(bad)?;
-            ProcedureValue::LongArray(longs.iter().flatten().collect())
+            ProcedureValue::LongArray(
+                longs
+                    .iter()
+                    .collect::<Option<Vec<i64>>>()
+                    .ok_or_else(null_element)?,
+            )
         }
         ProcedureType::StringArray => {
             let list = col.as_list_opt::<i32>().ok_or_else(bad)?;
             let items = list.value(0);
             let strings = items.as_string_opt::<i32>().ok_or_else(bad)?;
-            ProcedureValue::StringArray(strings.iter().flatten().map(str::to_owned).collect())
+            ProcedureValue::StringArray(
+                strings
+                    .iter()
+                    .map(|v| v.map(str::to_owned))
+                    .collect::<Option<Vec<String>>>()
+                    .ok_or_else(null_element)?,
+            )
         }
         _ => return Err(bad()),
     })
