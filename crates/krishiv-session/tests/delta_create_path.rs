@@ -197,18 +197,15 @@ fn delta_create_by_path_matches_spark() {
                     .next()
                     .unwrap_or_default()
                     .replace(&dir.display().to_string(), "<path>");
-                let want = theirs["message"].as_str().unwrap();
-                if FOLDED_NAME.contains(&name) {
-                    // The name is case-folded before Krishiv's name check; Spark shows it as
-                    // written (queue follow-up).
-                    assert_eq!(
-                        message,
-                        want.replace("<path>", &dir.display().to_string().to_lowercase()),
-                        "{name}"
-                    );
+                // The name is case-folded before Krishiv's name check, where Spark shows it as
+                // written (queue follow-up): those cases name the path lower-cased.
+                let message = if FOLDED_NAME.contains(&name) {
+                    message.replace(&dir.display().to_string().to_lowercase(), "<path>")
                 } else {
-                    assert_eq!(message, want, "{name}");
-                }
+                    message
+                };
+                let want = theirs["message"].as_str().unwrap();
+                assert_eq!(message, want, "{name}");
                 assert_eq!(versions(&dir), before, "{name}: an error writes nothing");
             }
             (got, want) => panic!("{name}: Krishiv {got:?}, delta-spark {want}"),

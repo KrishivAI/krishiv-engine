@@ -457,24 +457,33 @@ impl Session {
         {
             return refused("CREATE TABLE by path with another LOCATION");
         }
-        self.authorize_qualified_root(&qualified, &[Privilege::Create], StatementClass::Ddl)
-            .await?;
-        let source = super::delta_source(&qualified);
+        // A local root is acted on as the access check resolved it (links followed, canonical):
+        // the occupancy check, the directory made and the table written all use that path.
+        let checked = match qualified.strip_prefix("file:") {
+            Some(local) => Some(
+                self.authorize_path(Path::new(local), &[Privilege::Create], StatementClass::Ddl)
+                    .await?,
+            ),
+            None => {
+                self.authorize_qualified_root(
+                    &qualified,
+                    &[Privilege::Create],
+                    StatementClass::Ddl,
+                )
+                .await?;
+                None
+            }
+        };
+        let root = match &checked {
+            Some(dir) => format!("file:{}", dir.path.display()),
+            None => qualified.clone(),
+        };
+        let source = super::delta_source(&root);
         let env = self.query_env();
         // delta-spark's `tableExists` for a path: a Delta table there, or anything at all in the
         // directory (a Parquet directory is "already exists" too; an empty directory is not).
-        let occupied = match qualified.strip_prefix("file:") {
-            Some(local) => {
-                let local = std::path::PathBuf::from(local);
-                tokio::task::spawn_blocking(move || {
-                    std::fs::read_dir(&local).is_ok_and(|mut d| d.next().is_some())
-                })
-                .await
-                .map_err(|e| internal(format!("reading a Delta location: {e}")))?
-            }
-            None => false,
-        };
-        if occupied || env.catalog.delta.exists(&source).await? {
+        let occupied = env.catalog.delta.holds_files(&source).await?;
+        if occupied {
             if t.if_not_exists {
                 return Ok(());
             }
@@ -504,7 +513,14 @@ impl Session {
             options_of(&t.tblproperties, original),
             None,
         )?;
-        super::delta_writes::create_local_root(&source).await?;
+        if let Some(dir) = &checked {
+            self.create_checked_dir(
+                &dir.path,
+                &dir.shown,
+                Privilege::Create,
+                StatementClass::Ddl,
+            )?;
+        }
         new.create_empty(&crate::session::job_uuid()).await
     }
 

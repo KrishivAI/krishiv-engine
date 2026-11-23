@@ -2040,6 +2040,11 @@ def create_by_path(spark: SparkSession, out: str) -> None:
     case("no_columns", lambda p: f"CREATE TABLE {t(p)} USING delta", fresh())
     case("using_parquet", lambda p: f"CREATE TABLE {t(p)} (id BIGINT) USING parquet", fresh())
     case("no_using", lambda p: f"CREATE TABLE {t(p)} (id BIGINT)", fresh())
+    # The relative cases resolve against the JVM's working directory: the run owns these names
+    # there, so it stops rather than write into (and later remove) a directory it did not make.
+    for owned in ("krishiv_rel", "krishiv_no_slash"):
+        if os.path.exists(owned):
+            raise SystemExit(f"{owned} already exists in the working directory; move it first")
     case("relative_path", lambda p: "CREATE TABLE delta.`krishiv_rel/dir` (id BIGINT) USING delta", "krishiv_rel/dir")
     case("no_slash", lambda p: "CREATE TABLE delta.`krishiv_no_slash` (id BIGINT) USING delta", "krishiv_no_slash")
     record: dict = {
@@ -2051,7 +2056,8 @@ def create_by_path(spark: SparkSession, out: str) -> None:
         "tables_after": sorted(r.tableName for r in spark.sql("SHOW TABLES IN default").collect()),
     }
     shutil.rmtree(root, ignore_errors=True)
-    shutil.rmtree("krishiv_rel", ignore_errors=True)
+    for owned in ("krishiv_rel", "krishiv_no_slash"):
+        shutil.rmtree(owned, ignore_errors=True)
     with open(os.path.join(out, "CREATE-PATH.json"), "w") as f:
         json.dump(record, f, indent=1, sort_keys=True)
         f.write("\n")
