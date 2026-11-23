@@ -1604,7 +1604,9 @@ fn type_parameters_are_checked_on_decode() {
         m.features = vec!["geo_types".to_owned(), "time_type".to_owned()];
         m
     };
-    corrupt(&time(7, 0), "an invalid time type");
+    // TIME takes a precision up to 9 (Spark 4.3); 7 decodes.
+    assert!(decode(&time(7, 0).encode_to_vec()).is_ok());
+    corrupt(&time(10, 0), "an invalid time type");
     corrupt(&time(3, 1), "a type parameter on a type that has none");
     let srid_on_int = edit(&|t: &mut pb::DataType| {
         t.kind = Kind::Integer as i32;

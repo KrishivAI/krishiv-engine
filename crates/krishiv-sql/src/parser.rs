@@ -1269,8 +1269,20 @@ impl<'s> Parser<'s> {
                 break;
             }
         }
+        // The reserved words that may follow a select item (they have no `CLAUSE_WORD` bit).
+        const FOLLOWERS: &[&str] = &[
+            "FROM",
+            "WHERE",
+            "GROUP",
+            "HAVING",
+            "ORDER",
+            "UNION",
+            "EXCEPT",
+            "INTERSECT",
+        ];
         self.sym_at(k, Sym::RParen)
             && (self.item_end_at(k + 1)
+                || self.any_kw_at(k + 1, FOLLOWERS)
                 || (self.kind(k + 1) == Some(TokenKind::Word)
                     && self.class(k + 1) & CLAUSE_WORD != 0))
     }

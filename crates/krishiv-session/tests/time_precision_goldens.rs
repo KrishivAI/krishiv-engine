@@ -33,6 +33,20 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
     // `min`/`max` have no `Time64` accumulator yet.
     ("4.2.0", "max_distinct", "Max of Time64(ns)"),
     ("4.3.0", "max_distinct", "Max of Time64(ns)"),
+    ("4.2.0", "max_only", "Max of Time64(ns)"),
+    ("4.3.0", "max_only", "Max of Time64(ns)"),
+    // The nanosecond timestamp types are Krishiv 0.3.1 (scope note P3-R3): with
+    // `spark.sql.timestampNanosTypes.enabled` on, Spark 4.3 builds them; Krishiv refuses by name.
+    (
+        "4.3.0",
+        "ts_ntz9_nanos_on",
+        "nanosecond-precision timestamp types",
+    ),
+    (
+        "4.3.0",
+        "ts_ltz7_nanos_on",
+        "nanosecond-precision timestamp types",
+    ),
     // `date_format` refuses a TIME before the implicit cast Spark tries (4.2: the class differs).
     (
         "4.2.0",
@@ -56,6 +70,8 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
     ("4.2.0", "ts3_with_local", "missing ')'"),
     ("4.2.0", "ts9_without", "missing ')'"),
     // SQL-41: a literal given a collation by the implicit cast loses its `collate` in these rewrites' names.
+    // The fix is row SQL-41's, not R3's; the cases stay in the fixture (the generator records every
+    // case of the run), so they are pinned here until SQL-41 lands and removes these six lines.
     ("4.2.0", "instr_collated", "names ["),
     ("4.2.0", "locate_collated", "names ["),
     ("4.2.0", "eq_collated", "names ["),

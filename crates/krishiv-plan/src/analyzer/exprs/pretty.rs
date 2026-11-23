@@ -87,8 +87,13 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             };
             // Spark names a time by its value, not by the text written (the
             // analyzer's shown literal already holds the value at the
-            // profile's digits).
+            // profile's digits). A `TIME(7..=9)` literal keeps the zeros the analyzer padded
+            // to its precision (Spark 4.3 `Literal.sql`: `TIME '12:00:00.123456700'`).
+            let nanos_digits = value
+                .rsplit_once('.')
+                .is_some_and(|(_, f)| f.len() > 6 && f.bytes().all(|b| b.is_ascii_digit()));
             if *kind == TypedLiteralKind::Time
+                && !nanos_digits
                 && let Some(n) = krishiv_kernels::cast::parse_time_nanos(value)
             {
                 return format!("{keyword} '{}'", krishiv_kernels::cast::format_time(n));

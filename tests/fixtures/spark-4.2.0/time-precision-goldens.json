@@ -215,6 +215,76 @@
    ]
   },
   {
+   "id": "lit_name9_on",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT TIME'12:00:00.123456789'",
+   "clock": false,
+   "names": [
+    "TIME '12:00:00.123456'"
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "lit_trailing_zeros_on",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT TIME'12:00:00.123456700', typeof(TIME'12:00:00.123456700')",
+   "clock": false,
+   "names": [
+    "TIME '12:00:00.123456'",
+    "typeof(TIME '12:00:00.123456')"
+   ],
+   "values": [
+    [
+     "12:00:00.123456",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "lit_two_digits_on",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT TIME'12:00:00.10', typeof(TIME'12:00:00.10')",
+   "clock": false,
+   "names": [
+    "TIME '12:00:00.1'",
+    "typeof(TIME '12:00:00.1')"
+   ],
+   "values": [
+    [
+     "12:00:00.1",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "lit_seven_digits_on",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT TIME'12:00:00.1234567', typeof(TIME'12:00:00.1234567')",
+   "clock": false,
+   "names": [
+    "TIME '12:00:00.123456'",
+    "typeof(TIME '12:00:00.123456')"
+   ],
+   "values": [
+    [
+     "12:00:00.123456",
+     "time(6)"
+    ]
+   ]
+  },
+  {
    "id": "lit_second_key_off",
    "conf": {},
    "sql": "SELECT second(TIME'12:00:00.123456789')",
@@ -291,6 +361,26 @@
    "message": "[UNRESOLVED_ROUTINE] Cannot resolve routine `localtime` on search path [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]."
   },
   {
+   "id": "localtime_multi_alias",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT localtime(n) FROM VALUES (6) t(n)",
+   "clock": false,
+   "error": "UNRESOLVED_ROUTINE",
+   "message": "[UNRESOLVED_ROUTINE] Cannot resolve routine `localtime` on search path [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]."
+  },
+  {
+   "id": "current_date_multi_alias",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT current_date(n) FROM VALUES (6) t(n)",
+   "clock": false,
+   "error": "MULTI_ALIAS_WITHOUT_GENERATOR",
+   "message": "[MULTI_ALIAS_WITHOUT_GENERATOR] Multi part aliasing (n) is not supported with \"current_date()\" as it is not a generator function."
+  },
+  {
    "id": "compare",
    "conf": {
     "spark.sql.timeType.enabled": "true"
@@ -334,6 +424,40 @@
     [
      "01:00:00",
      "time(6)",
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "max_only",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(max(c) AS STRING), typeof(max(c)) FROM VALUES (TIME'01:00:00.000000001'), (TIME'01:00:00.000000002') t(c)",
+   "clock": false,
+   "names": [
+    "CAST(max(c) AS STRING)",
+    "typeof(max(c))"
+   ],
+   "values": [
+    [
+     "01:00:00",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "count_distinct_only",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT count(DISTINCT c) FROM VALUES (TIME'01:00:00.000000001'), (TIME'01:00:00.000000002') t(c)",
+   "clock": false,
+   "names": [
+    "count(DISTINCT c)"
+   ],
+   "values": [
+    [
      "1"
     ]
    ]
@@ -819,6 +943,122 @@
    "clock": false,
    "error": "PARSE_SYNTAX_ERROR",
    "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITHOUT'."
+  },
+  {
+   "id": "ts_ntz9_nanos_on",
+   "conf": {
+    "spark.sql.timestampNanosTypes.enabled": "true"
+   },
+   "sql": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ(9))) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_NTZ(9)\"."
+  },
+  {
+   "id": "ts_ltz7_nanos_on",
+   "conf": {
+    "spark.sql.timestampNanosTypes.enabled": "true"
+   },
+   "sql": "SELECT typeof(CAST(NULL AS TIMESTAMP_LTZ(7))) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_LTZ(7)\"."
+  },
+  {
+   "id": "ts_ntz6_nanos_on",
+   "conf": {
+    "spark.sql.timestampNanosTypes.enabled": "true"
+   },
+   "sql": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ(6))) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_NTZ(6)\"."
+  },
+  {
+   "id": "ddl_ts_ntz9",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT from_json('{\"a\":1}', 'a timestamp_ntz(9)')",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'timestamp_ntz'."
+  },
+  {
+   "id": "ddl_ts9",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT from_json('{\"a\":1}', 'a timestamp(9)')",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'timestamp'."
+  },
+  {
+   "id": "ddl_ts_ntz3",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT from_json('{\"a\":1}', 'a timestamp_ntz(3)')",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'timestamp_ntz'."
+  },
+  {
+   "id": "ddl_time10",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT from_json('{\"a\":1}', 'a time(10)')",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'time'."
+  },
+  {
+   "id": "ddl_ts_ltz6",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT typeof(from_json('{\"a\":1}', 'a timestamp_ltz(6)')) AS c",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'timestamp_ltz'."
+  },
+  {
+   "id": "ddl_ts6",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT typeof(from_json('{\"a\":1}', 'a timestamp(6)')) AS c",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'timestamp'."
+  },
+  {
+   "id": "ddl_time3_value",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(from_json('{\"a\":\"12:00:00.123456789\"}', 'a time(3)').a AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "ddl_time9",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT typeof(from_json('{\"a\":\"12:00:00.123456789\"}', 'a time(9)')) AS c",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'time'."
   },
   {
    "id": "current_timestamp6",

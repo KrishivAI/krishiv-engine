@@ -157,6 +157,7 @@ impl Resolver<'_> {
                     krishiv_common::error::NonFoldableArgument {
                         func_name: format!("`{name}`"),
                         param_name: "`precision`".to_owned(),
+                        // Spark's text is fixed: `"INT"` for every precision function.
                         param_type: "\"INT\"".to_owned(),
                     },
                     e.origin,

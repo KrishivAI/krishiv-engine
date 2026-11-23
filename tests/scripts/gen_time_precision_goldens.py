@@ -35,6 +35,7 @@ FORMAT_VERSION = 1
 GENERATOR = "tests/scripts/gen_time_precision_goldens.py"
 ON = {"spark.sql.timeType.enabled": "true"}
 NTZ = {"spark.sql.timestampType": "TIMESTAMP_NTZ"}
+NANOS = {"spark.sql.timestampNanosTypes.enabled": "true"}
 
 # (id, configs, sql, clock): `clock` cases read a clock, so only their names are recorded.
 CASES: list[tuple[str, dict[str, str], str, bool]] = [
@@ -67,6 +68,11 @@ CASES: list[tuple[str, dict[str, str], str, bool]] = [
     ),
     ("lit_to_string", {}, "SELECT CAST(TIME'12:00:00.123456789' AS STRING) AS c", False),
     ("lit_10_digits", ON, "SELECT TIME'12:00:00.1234567890'", False),
+    # Literals with the TIME key on: the padded name of p > 6 digits, unaliased.
+    ("lit_name9_on", ON, "SELECT TIME'12:00:00.123456789'", False),
+    ("lit_trailing_zeros_on", ON, "SELECT TIME'12:00:00.123456700', typeof(TIME'12:00:00.123456700')", False),
+    ("lit_two_digits_on", ON, "SELECT TIME'12:00:00.10', typeof(TIME'12:00:00.10')", False),
+    ("lit_seven_digits_on", ON, "SELECT TIME'12:00:00.1234567', typeof(TIME'12:00:00.1234567')", False),
     ("lit_second_key_off", {}, "SELECT second(TIME'12:00:00.123456789')", False),
     # current_time / LOCALTIME.
     ("current_time9", ON, "SELECT current_time(9), typeof(current_time(9)), typeof(current_time(7))", True),
@@ -76,6 +82,9 @@ CASES: list[tuple[str, dict[str, str], str, bool]] = [
     ("localtime_key_off", {}, "SELECT localtime(9)", True),
     ("localtime_negative", ON, "SELECT localtime(-1)", False),
     ("localtime_10", ON, "SELECT localtime(10)", False),
+    # `currentLike` with a column list ending the item is a multi-name alias (4.3: LOCALTIME too).
+    ("localtime_multi_alias", ON, "SELECT localtime(n) FROM VALUES (6) t(n)", False),
+    ("current_date_multi_alias", ON, "SELECT current_date(n) FROM VALUES (6) t(n)", False),
     # Expressions over TIME(p > 6).
     (
         "compare",
@@ -96,6 +105,20 @@ CASES: list[tuple[str, dict[str, str], str, bool]] = [
         ON,
         "SELECT CAST(max(c) AS STRING), typeof(max(c)), count(DISTINCT c) "
         "FROM VALUES (TIME'01:00:00.000000001'), (TIME'01:00:00.000000002') t(c)",
+        False,
+    ),
+    # The same two values apart: `max` (no TIME accumulator yet) and `count(DISTINCT)`.
+    (
+        "max_only",
+        ON,
+        "SELECT CAST(max(c) AS STRING), typeof(max(c)) "
+        "FROM VALUES (TIME'01:00:00.000000001'), (TIME'01:00:00.000000002') t(c)",
+        False,
+    ),
+    (
+        "count_distinct_only",
+        ON,
+        "SELECT count(DISTINCT c) FROM VALUES (TIME'01:00:00.000000001'), (TIME'01:00:00.000000002') t(c)",
         False,
     ),
     ("hash", ON, "SELECT hash(TIME'12:00:00.123456789'), hash(TIME'12:00:00.123456')", False),
@@ -203,6 +226,24 @@ CASES: list[tuple[str, dict[str, str], str, bool]] = [
     ("ts3_with_local", {}, "SELECT CAST(NULL AS TIMESTAMP(3) WITH LOCAL TIME ZONE)", False),
     ("ts9_without", {}, "SELECT CAST(NULL AS TIMESTAMP(9) WITHOUT TIME ZONE)", False),
     ("ts6_without", {}, "SELECT typeof(CAST(NULL AS TIMESTAMP(6) WITHOUT TIME ZONE)) AS c", False),
+    # The nanosecond types with spark.sql.timestampNanosTypes.enabled on (4.2: the key changes nothing).
+    ("ts_ntz9_nanos_on", NANOS, "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ(9))) AS c", False),
+    ("ts_ltz7_nanos_on", NANOS, "SELECT typeof(CAST(NULL AS TIMESTAMP_LTZ(7))) AS c", False),
+    ("ts_ntz6_nanos_on", NANOS, "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ(6))) AS c", False),
+    # A DDL schema string: a bad precision is the direct parse's PARSE_SYNTAX_ERROR.
+    ("ddl_ts_ntz9", ON, "SELECT from_json('{\"a\":1}', 'a timestamp_ntz(9)')", False),
+    ("ddl_ts9", ON, "SELECT from_json('{\"a\":1}', 'a timestamp(9)')", False),
+    ("ddl_ts_ntz3", ON, "SELECT from_json('{\"a\":1}', 'a timestamp_ntz(3)')", False),
+    ("ddl_time10", ON, "SELECT from_json('{\"a\":1}', 'a time(10)')", False),
+    ("ddl_ts_ltz6", ON, "SELECT typeof(from_json('{\"a\":1}', 'a timestamp_ltz(6)')) AS c", False),
+    ("ddl_ts6", ON, "SELECT typeof(from_json('{\"a\":1}', 'a timestamp(6)')) AS c", False),
+    (
+        "ddl_time3_value",
+        ON,
+        "SELECT CAST(from_json('{\"a\":\"12:00:00.123456789\"}', 'a time(3)').a AS STRING) AS c",
+        False,
+    ),
+    ("ddl_time9", ON, "SELECT typeof(from_json('{\"a\":\"12:00:00.123456789\"}', 'a time(9)')) AS c", False),
     # Precision on the timestamp clocks.
     (
         "current_timestamp6",

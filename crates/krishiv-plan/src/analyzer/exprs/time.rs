@@ -70,12 +70,30 @@ impl Resolver<'_> {
         })
         .with_origin(e.origin);
         let text = Arc::new(Expr::from(Literal::String(text)).with_origin(e.origin));
-        let cast = Expr::new(ExprNode::Cast {
+        // A string cast to `TIME(7|8)` reads six digits (Spark 4.2's string cast): the literal
+        // reads the text as a `TIME(9)` and cuts that to its precision, which keeps every digit
+        // it holds (`TIME '12:00:00.1234567'` is `12:00:00.1234567`).
+        let read_as = if precision > 6 {
+            DataType::Time {
+                precision: DataType::TIME_MAX_PRECISION,
+            }
+        } else {
+            DataType::Time { precision }
+        };
+        let mut cast = Expr::new(ExprNode::Cast {
             expr: text,
-            to: DataType::Time { precision },
+            to: read_as.clone(),
             mode: CastMode::Ansi,
         })
         .with_origin(e.origin);
+        if read_as != (DataType::Time { precision }) {
+            cast = Expr::new(ExprNode::Cast {
+                expr: Arc::new(cast),
+                to: DataType::Time { precision },
+                mode: CastMode::Ansi,
+            })
+            .with_origin(e.origin);
+        }
         Ok((Arc::new(cast), Arc::new(shown), precision))
     }
 

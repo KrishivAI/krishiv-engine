@@ -57,6 +57,10 @@ pub(super) const CURRENT_LIKE: &[&str] = &[
     "CURRENT_PATH",
 ];
 
+/// The `currentLike` keyword Spark 4.3 adds (`SqlBaseParser.g4` v4.3.0 `#currentLike`);
+/// before 4.3 the word is an identifier.
+pub(super) const CURRENT_LIKE_4_3: &str = "LOCALTIME";
+
 const DATETIME_UNITS: &[&str] = &[
     "YEAR",
     "QUARTER",
@@ -1113,6 +1117,12 @@ impl Parser<'_> {
         }
     }
 
+    /// Whether `word` is a `currentLike` keyword of the profile's grammar.
+    pub(super) fn current_like(&self, word: &str) -> bool {
+        CURRENT_LIKE.iter().any(|k| crate::keywords::is_kw(word, k))
+            || (self.opts.spark_4_3 && crate::keywords::is_kw(word, CURRENT_LIKE_4_3))
+    }
+
     /// Primaries that start with a keyword; `None` if the word is not one
     /// of them here.
     #[inline(never)]
@@ -1169,7 +1179,7 @@ impl Parser<'_> {
             };
             self.expect_sym(Sym::RParen)?;
             ExprKind::Struct(items)
-        } else if CURRENT_LIKE.iter().any(|k| is(k)) && !call {
+        } else if self.current_like(word) && !call {
             let id = self.keyword_ident();
             if self.opts.enforce_reserved_keywords || is("CURRENT_PATH") {
                 let name = ObjectName {

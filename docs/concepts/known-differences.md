@@ -687,6 +687,8 @@ nanosecond timestamp type yet (planned for 0.3.1), so:
   every profile; under the Spark 4.2 profile it changes nothing, as in Spark 4.2.
 - A schema in Spark's JSON form naming `timestamp_ntz(p)` or `timestamp_ltz(p)` is
   `KRISHIV_UNSUPPORTED_FEATURE` (Spark's `DataType.fromJson` builds the type with the key off too).
+  `timestamp_ntz(6)` and `timestamp_ltz(6)` there are the microsecond types under every profile;
+  Spark 4.2's `DataType.fromJson` has no such names and refuses them.
 - Spark Connect's `timestamp_ntz_nanos` and `timestamp_ltz_nanos` types and literals are refused
   as every arm Krishiv does not translate (`CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED`).
 
@@ -699,7 +701,8 @@ Also not matched yet under the Spark 4.3 profile:
 - A string cast to `TIME(p)` keeps `p` digits only at the top level of the target: a string inside
   an array, map or struct cast to a `TIME(p)` element keeps every digit it reads (Spark 4.2's rule).
 - The CSV and JSON file readers have no `TIME` columns: a read with one in its schema is
-  `KRISHIV_UNSUPPORTED_FEATURE` (`from_csv`, `from_json` and `from_xml` read them).
+  `KRISHIV_UNSUPPORTED_FEATURE` (`from_csv`, `from_json` and `from_xml` read them). Spark 4.2 reads
+  such a column with six fraction digits; Spark 4.3 keeps every digit of the file, whatever `p`.
 
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 

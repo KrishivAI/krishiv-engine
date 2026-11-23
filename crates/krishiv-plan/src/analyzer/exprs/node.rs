@@ -1730,11 +1730,16 @@ impl Resolver<'_> {
             // Generators take their several names before this point
             // (`extract_generator`, lowering): any other expression with
             // a multi-part alias is an error.
-            ExprNode::MultiAlias { expr, names } => {
+            // Spark shows the resolved expression (`current_date()`, `localtime` as
+            // `current_time(6)`).
+            ExprNode::MultiAlias { names, .. } => {
                 return Err(AnalysisError::new(
                     krishiv_common::error::MultiAliasWithoutGenerator {
                         names: names.join(", "),
-                        expr: format!("\"{}\"", pretty(expr, self.ctx.conf.session_zone)),
+                        expr: format!(
+                            "\"{}\"",
+                            pretty(&kids[0].shown(), self.ctx.conf.session_zone)
+                        ),
                     },
                     e.origin,
                 ));

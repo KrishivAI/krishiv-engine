@@ -52,18 +52,21 @@ fn from_json_reads_nested_times_and_misses() {
     );
 }
 
+/// Spark 4.2.0 reads a JSON time to microseconds whatever the declared `TIME(p)`: the lane's
+/// 4.2.0 run (`time-precision-goldens.json` case `ddl_time3_value`) gives `12:00:00.123456` for
+/// `from_json('{"a":"12:00:00.123456789"}', 'a time(3)')`, so nothing cuts to `p`.
 #[test]
-fn from_json_cuts_times_to_the_declared_precision() {
+fn from_json_keeps_microseconds_whatever_the_declared_precision_under_spark_4_2() {
     assert_eq!(
         text("from_json('{\"t\":\"09:08:01.987654\"}', 't TIME(0)')").as_deref(),
-        Some("{09:08:01}")
+        Some("{09:08:01.987654}")
     );
     assert_eq!(
         text("from_json('{\"t\":[\"09:08:01.987654\"]}', 't array<time(2)>')").as_deref(),
-        Some("{[09:08:01.98]}")
+        Some("{[09:08:01.987654]}")
     );
     assert_eq!(
-        text("from_json('{\"t\":\"09:08:01.987654\"}', 't TIME')").as_deref(),
+        text("from_json('{\"t\":\"09:08:01.987654789\"}', 't TIME')").as_deref(),
         Some("{09:08:01.987654}")
     );
 }
@@ -86,4 +89,41 @@ fn from_json_keeps_nine_digits_under_spark_4_3() {
         b[0].columns()[0].as_string_view().value(0),
         "12:00:00.123456789"
     );
+}
+
+/// Spark 4.3.0 (lane review probe `probe-430.out`): a DDL schema string reports a bad
+/// timestamp or time precision as `PARSE_SYNTAX_ERROR` at the type name, since
+/// `DataType.parseTypeWithFallback` throws the direct parse's error when the field-list
+/// parse fails too. `timestamp(6)` and `timestamp_ltz(6)` are the microsecond type.
+#[test]
+fn a_ddl_schema_precision_error_is_a_syntax_error_under_spark_4_3() {
+    let s = Session::builder()
+        .profile(SparkProfile::V4_3)
+        .build()
+        .unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    let run = |sql: &str| block_on(async { s.sql(sql).await?.collect().await });
+    for (ty, near) in [
+        ("timestamp_ntz(9)", "timestamp_ntz"),
+        ("timestamp(9)", "timestamp"),
+        ("timestamp_ntz(3)", "timestamp_ntz"),
+        ("time(10)", "time"),
+    ] {
+        let e = run(&format!("SELECT from_json('{{\"a\":1}}', 'a {ty}')"))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("PARSE_SYNTAX_ERROR"), "{ty}: {e}");
+        assert!(e.contains(&format!("near '{near}'")), "{ty}: {e}");
+    }
+    for ty in ["timestamp_ltz(6)", "timestamp(6)"] {
+        let b = run(&format!(
+            "SELECT typeof(from_json('{{\"a\":1}}', 'a {ty}'))"
+        ))
+        .unwrap();
+        assert_eq!(
+            b[0].columns()[0].as_string_view().value(0),
+            "struct<a:timestamp>",
+            "{ty}"
+        );
+    }
 }

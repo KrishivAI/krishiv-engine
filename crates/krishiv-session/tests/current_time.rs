@@ -77,3 +77,34 @@ fn time_hashes_as_spark() {
 fn bare_current_time_is_the_function() {
     assert_eq!(text("typeof(current_time)"), "time(6)");
 }
+
+#[test]
+fn localtime_with_a_column_list_is_a_multi_name_alias_under_spark_4_3() {
+    // Spark 4.3.0 (`SqlBaseParser.g4` v4.3.0 `#currentLike` has `LOCALTIME`):
+    // `SELECT localtime(n) FROM VALUES (6) t(n)` is `localtime AS (n)`, so
+    // `MULTI_ALIAS_WITHOUT_GENERATOR` ("... with \"current_time(6)\"").
+    let sql = "SELECT localtime(n) FROM VALUES (6) t(n)";
+    let s = Session::builder().build().unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    let e = block_on(async { s.sql(sql).await?.collect().await })
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("MULTI_ALIAS_WITHOUT_GENERATOR"), "{e}");
+    assert!(e.contains("current_time"), "{e}");
+    // The other `currentLike` words take the same path before `FROM` (probe2-430:
+    // `current_date(n) FROM VALUES (6) t(n)` is `MULTI_ALIAS_WITHOUT_GENERATOR`).
+    for f in ["current_time", "current_date", "current_timestamp"] {
+        let e = block_on(async {
+            s.sql(&format!("SELECT {f}(n) FROM VALUES (6) t(n)"))
+                .await?
+                .collect()
+                .await
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("MULTI_ALIAS_WITHOUT_GENERATOR"), "{f}: {e}");
+    }
+    // A bare `localtime` is `current_time()`, and `localtime(3)` the call.
+    assert_eq!(text("typeof(localtime)"), "time(6)");
+    assert_eq!(text("typeof(localtime(3))"), "time(3)");
+}
