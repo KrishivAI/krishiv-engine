@@ -388,7 +388,10 @@ impl QueryHistory {
         let rand = h.finish();
         let ms = u64::try_from(ms).unwrap_or(0) & 0xFFFF_FFFF_FFFF;
         // 12 bits after the version, then the variant and 62 more bits.
-        let rand_a = (rand >> 52) & 0xFFF;
+        // The counter leads `rand_a` so ids minted in one millisecond sort in mint order (within a window of 4,096 mints: the
+        // 12 bits wrap); the
+        // random tail keeps them unique.
+        let rand_a = n & 0xFFF;
         let rand_b = (rand ^ n.rotate_left(32)) & 0x3FFF_FFFF_FFFF_FFFF;
         format!(
             "{:08x}-{:04x}-7{:03x}-{:04x}-{:012x}",

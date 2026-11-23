@@ -43,6 +43,7 @@
 
 mod access;
 mod action;
+mod admin_groups;
 mod admin_view;
 mod admission;
 mod analyze;
@@ -60,6 +61,7 @@ mod column;
 mod column_stats;
 mod command;
 mod conf;
+mod config_defaults;
 mod dataframe;
 mod delta;
 pub mod egress;
@@ -125,9 +127,11 @@ mod view_session_refs;
 mod window;
 
 pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};
+pub use admin_groups::{ResourceGroupDocument, ResourceGroupInfo};
 pub use admin_view::{QueryInfo, SessionInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
+pub use config_defaults::{ConfigListing, ConfigSource};
 pub use sessions::Transport;
 pub use system::{capabilities, register_build_features, register_surface};
 

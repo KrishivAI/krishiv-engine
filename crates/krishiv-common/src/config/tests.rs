@@ -923,6 +923,7 @@ fn the_w1_rule_keys_default_on_and_are_user_settable() {
     }
 }
 
+mod asof_join;
 mod catalog_delegation;
 mod connect;
 mod delta;
@@ -991,6 +992,41 @@ fn semi_anti_join_order_defaults_on_and_is_user_settable() {
         Some(false)
     );
     assert!(c.set(key, "sometimes").is_err());
+}
+
+#[test]
+fn exec_join_direct_index_defaults_on_and_is_user_settable() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&EXEC_JOIN_DIRECT_INDEX)
+            .and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(EXEC_JOIN_DIRECT_INDEX.settable_by, SettableBy::User);
+    c.set("krishiv.exec.join.directIndex", "false").unwrap();
+    assert_eq!(
+        c.get(&EXEC_JOIN_DIRECT_INDEX)
+            .and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+}
+
+#[test]
+fn preserved_side_semi_join_defaults_on_and_is_user_settable() {
+    let mut c = Config::new();
+    let key = "krishiv.optimizer.preservedSideSemiJoin";
+    assert_eq!(
+        c.get(&PRESERVED_SIDE_SEMI_JOIN)
+            .and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(PRESERVED_SIDE_SEMI_JOIN.settable_by, SettableBy::User);
+    c.set(key, "false").unwrap();
+    assert_eq!(
+        c.get(&PRESERVED_SIDE_SEMI_JOIN)
+            .and_then(ConfigValue::as_bool),
+        Some(false)
+    );
 }
 
 #[test]
@@ -1174,6 +1210,9 @@ fn settable_by_is_set_for_the_limits_a_user_must_not_raise() {
         "krishiv.io.cache.path",
         // One cap for the runtime's one shared store (design P2-E1 R6).
         "krishiv.resultCache.maxBytes",
+        // What bounds a role stays startup-only: `SetConfigDefaults` cannot widen it (P3-T066 §5.5).
+        "krishiv.io.local.allowedRoots",
+        "krishiv.io.objectStore.allowedPrefixes",
     ] {
         assert_eq!(
             lookup(key).map(|e| e.settable_by),
@@ -1563,6 +1602,39 @@ fn python_worker_entries_parse_and_default() {
 }
 
 #[test]
+fn python_worker_tenant_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&PYTHON_WORKER_MAX_PER_TENANT)
+            .and_then(ConfigValue::as_int),
+        Some(32)
+    );
+    assert_eq!(c.get(&PYTHON_WORKER_TENANT_MEMORY_LIMIT), None);
+    c.set("krishiv.python.worker.maxPerTenant", "4").unwrap();
+    c.set("krishiv.python.worker.tenantMemoryLimit", "512m")
+        .unwrap();
+    assert_eq!(
+        c.get(&PYTHON_WORKER_MAX_PER_TENANT)
+            .and_then(ConfigValue::as_int),
+        Some(4)
+    );
+    assert_eq!(
+        c.get(&PYTHON_WORKER_TENANT_MEMORY_LIMIT)
+            .and_then(ConfigValue::as_size),
+        Some(512 << 20)
+    );
+    assert!(c.set("krishiv.python.worker.maxPerTenant", "0").is_err());
+    assert!(
+        c.set("krishiv.python.worker.tenantMemoryLimit", "lots")
+            .is_err()
+    );
+    assert_eq!(
+        PYTHON_WORKER_MAX_PER_TENANT.settable_by,
+        SettableBy::Startup
+    );
+}
+
+#[test]
 fn access_provider_is_unset_and_startup_only() {
     let mut c = Config::new();
     assert_eq!(c.get(&ACCESS_PROVIDER), None);
@@ -1837,5 +1909,33 @@ fn scan_instance_projection_defaults_on_and_parses_booleans() {
     assert!(
         c.set("krishiv.exec.scan.instanceProjection", "sometimes")
             .is_err()
+    );
+}
+
+/// Design P3-T066 §5.5: a key that names a credential holds a secret reference (ADR 0038), never
+/// the secret, so `GetConfig` can show its value. A key whose last segment ends in one of these
+/// words is refused unless it is listed here with the reason it holds no secret.
+#[test]
+fn a_key_named_like_a_credential_is_on_the_allow_list() {
+    const WORDS: [&str; 5] = ["password", "secret", "token", "credential", "key"];
+    const ALLOWED: &[(&str, &str)] = &[(
+        "krishiv.write.idempotencyKey",
+        "a caller-chosen job id that makes a retried write a no-op, not a credential",
+    )];
+    let mut found = Vec::new();
+    for e in REGISTRY {
+        let last = e
+            .key
+            .rsplit('.')
+            .next()
+            .unwrap_or(e.key)
+            .to_ascii_lowercase();
+        if WORDS.iter().any(|w| last.ends_with(w)) && !ALLOWED.iter().any(|(k, _)| *k == e.key) {
+            found.push(e.key);
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "keys named like a credential that are not on the allow list: {found:?}"
     );
 }

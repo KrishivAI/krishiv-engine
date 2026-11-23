@@ -37,6 +37,7 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Aggregate { .. } => "PlanNode::Aggregate",
         PlanNode::PartialAggregate { .. } => "PlanNode::PartialAggregate",
         PlanNode::Join { .. } => "PlanNode::Join",
+        PlanNode::AsOfJoin { .. } => "PlanNode::AsOfJoin",
         PlanNode::Sort { .. } => "PlanNode::Sort",
         PlanNode::Limit { .. } => "PlanNode::Limit",
         PlanNode::Offset { .. } => "PlanNode::Offset",

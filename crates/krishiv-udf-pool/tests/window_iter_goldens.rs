@@ -369,6 +369,8 @@ fn session_on_pool(
         Owner {
             principal: "alice".to_owned(),
             session: "s1".to_owned(),
+            tenant: None,
+            capped: true,
         },
     ));
     for (name, eval_type, return_type, body) in UDFS {

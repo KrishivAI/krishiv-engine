@@ -651,6 +651,10 @@ fn a_delta_dml_by_path_needs_modify_on_the_path() {
     for text in [
         format!("DELETE FROM {t} WHERE id = 1"),
         format!("UPDATE {t} SET id = id + 100"),
+        format!(
+            "MERGE INTO {t} AS t USING (SELECT 1 AS id) AS s ON t.id = s.id \
+             WHEN MATCHED THEN DELETE"
+        ),
     ] {
         let e = sql(&session, &text).unwrap_err();
         assert_eq!(

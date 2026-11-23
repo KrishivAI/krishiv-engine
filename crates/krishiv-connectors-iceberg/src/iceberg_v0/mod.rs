@@ -17,6 +17,7 @@ pub(crate) mod mor_sink;
 pub(crate) mod overwrite;
 pub(crate) mod provider;
 pub(crate) mod puffin_stats;
+pub(crate) mod rest_commit;
 pub(crate) mod rolling;
 pub(crate) mod row_delta;
 pub(crate) mod row_level;
@@ -74,6 +75,8 @@ mod overwrite_tests;
 mod provider_tests;
 #[cfg(test)]
 mod puffin_stats_tests;
+#[cfg(test)]
+mod rest_commit_tests;
 #[cfg(test)]
 mod rolling_tests;
 #[cfg(test)]

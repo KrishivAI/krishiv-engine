@@ -1109,6 +1109,13 @@ impl QueryLog {
             .update(&self.session_id, id, |row| row.state = state);
     }
 
+    /// Names the group the controller queued live row `id` in.
+    pub(crate) fn set_group(&self, id: &str, group: &str) {
+        self.history.update(&self.session_id, id, |row| {
+            row.resource_group = Some(group.to_owned());
+        });
+    }
+
     /// Stamps the start of live row `id`: admission let it run.
     pub(crate) fn mark_started(&self, id: &str, group: Option<&str>, queued_ns: u64) {
         self.history.update(&self.session_id, id, |row| {
