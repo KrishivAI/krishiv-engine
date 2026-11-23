@@ -95,9 +95,21 @@ fn artifact_names_refused() {
 }
 
 #[test]
-fn a_colon_in_a_segment_is_refused_on_windows_only() {
-    // On Windows `C:x` is drive-relative and `a:s` an alternate data stream.
-    for name in ["files/C:x", "files/C:/x", "files/a:s", "pyfiles/C:evil.py"] {
+fn win32_reserved_characters_are_refused_on_windows_only() {
+    // On Windows `C:x` is drive-relative, `a:s` an alternate data stream, and no file can be
+    // named with `< > " | ? *`.
+    for name in [
+        "files/C:x",
+        "files/C:/x",
+        "files/a:s",
+        "pyfiles/C:evil.py",
+        "files/a?b",
+        "files/a*b",
+        "files/a|b",
+        "files/a\"b",
+        "files/a<b",
+        "files/a>b",
+    ] {
         if cfg!(windows) {
             assert_eq!(class(name), ErrorClass::InvalidArtifactPath, "{name}");
         } else {

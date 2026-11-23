@@ -303,7 +303,11 @@ fn is_regular_file(path: &Path) -> io::Result<bool> {
 fn blocked(e: &io::Error) -> bool {
     matches!(
         e.kind(),
-        io::ErrorKind::NotADirectory | io::ErrorKind::AlreadyExists | io::ErrorKind::InvalidInput
+        io::ErrorKind::NotADirectory
+            | io::ErrorKind::AlreadyExists
+            | io::ErrorKind::InvalidInput
+            // A name the file system refuses (ERROR_INVALID_NAME) is not one we may take either.
+            | io::ErrorKind::InvalidFilename
     )
 }
 

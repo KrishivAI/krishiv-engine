@@ -460,11 +460,12 @@ async fn artifact_names() {
 }
 
 /// On Windows a segment with a `:` is a drive-relative path (`C:x` replaces the directory it is
-/// joined to) or an alternate data stream (`a:s`): refused before anything is written, so nothing
-/// lands in the server's current directory.
+/// joined to) or an alternate data stream (`a:s`), and `< > " | ? *` name no file: all refused before
+/// anything is written (`INVALID_ARTIFACT_PATH`, not a storage error), so nothing lands in the
+/// server's current directory.
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn windows_drive_and_stream_segments_are_refused() {
+async fn windows_reserved_segments_are_refused() {
     let run = start().await;
     let cwd = std::env::current_dir().expect("cwd");
     for name in [
@@ -473,6 +474,10 @@ async fn windows_drive_and_stream_segments_are_refused() {
         "files/C:../x",
         "files/a:s",
         "pyfiles/C:evil.py",
+        "files/a?b",
+        "files/a*b",
+        "files/a|b",
+        "files/a\"b",
     ] {
         let status = add(&run, vec![batch(vec![single(name, b"x")])])
             .await
