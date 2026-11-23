@@ -239,7 +239,37 @@ fn asof_join_right_subquery_reads_match_condition_as_an_alias() {
     let sql = "SELECT * FROM t ASOF JOIN (SELECT * FROM r match_condition (a)) q\n  \
                MATCH_CONDITION (t.ts >= q.a) ON t.s = q.s";
     let j = join(sql);
-    assert!(matches!(j.constraint, JoinConstraint::AsOf(_)), "{j:?}");
+    let JoinConstraint::AsOf(c) = &j.constraint else {
+        panic!("{j:?}")
+    };
+    assert_eq!(c.match_condition.span.text(sql), "t.ts >= q.a");
+    let Some(AsOfFilter::On(e)) = &c.filter else {
+        panic!("{c:?}")
+    };
+    assert_eq!(e.span.text(sql), "t.s = q.s");
+    assert_eq!(
+        j.right
+            .alias
+            .as_ref()
+            .and_then(|a| a.name.as_ref())
+            .map(|n| n.value.as_str()),
+        Some("q")
+    );
+    // Inside the subquery, `r` is aliased `match_condition` with the column list `(a)`.
+    let ast::TableFactorKind::Subquery(inner) = &j.right.kind else {
+        panic!("the right side is a subquery: {j:?}")
+    };
+    let ast::SetExprKind::Select(s) = &inner.body.kind else {
+        panic!("{inner:?}")
+    };
+    let r = &s.from.as_ref().unwrap().relations[0].primary;
+    let alias = r.alias.as_ref().unwrap();
+    assert_eq!(
+        alias.name.as_ref().map(|n| n.value.as_str()),
+        Some("match_condition")
+    );
+    let columns: Vec<&str> = alias.columns.iter().map(|c| c.value.as_str()).collect();
+    assert_eq!(columns, ["a"]);
 }
 
 /// Inside parentheses the as-of right side is not that side: `MATCH_CONDITION` there is an
@@ -249,7 +279,11 @@ fn asof_right_side_parenthesized_relation_clears_the_flag() {
     let sql = "SELECT * FROM l AS l ASOF JOIN (r MATCH_CONDITION (x)) AS rr \
                MATCH_CONDITION (l.x >= rr.x)";
     let j = join(sql);
-    assert!(matches!(j.constraint, JoinConstraint::AsOf(_)), "{j:?}");
+    let JoinConstraint::AsOf(c) = &j.constraint else {
+        panic!("{j:?}")
+    };
+    assert_eq!(c.match_condition.span.text(sql), "l.x >= rr.x");
+    assert!(c.filter.is_none(), "{c:?}");
     // The nested relation is `r` aliased `MATCH_CONDITION` with the column list `(x)`, as Spark
     // 4.3.0 reads it (review of #990).
     let ast::TableFactorKind::Nested(inner) = &j.right.kind else {
