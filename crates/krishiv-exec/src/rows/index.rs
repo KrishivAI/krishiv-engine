@@ -60,11 +60,12 @@ const ID_MASK: u64 = u32::MAX as u64;
 /// staying flat (gap ledger, "Note 2026-11-01").
 pub const FLAT_MAX_BYTES: usize = 64 << 10;
 
-/// The largest inline salted directory the adaptive choice builds (32 MiB,
-/// the last-level cache of the bench server). Above it the 16-byte slots
-/// cost more in memory traffic than the skipped row reads save: TPC-H q09's
-/// 3.26M-key `partsupp` build (80 MB inline against 47 MB salted) probed
-/// 1.7x slower; builds up to ~10^6 keys (q14's `item`, 2.5 MB) gain.
+/// The largest inline salted directories one build takes under the adaptive
+/// choice, summed over its partitions ([`IndexChoice::bounded`]; 32 MiB, the
+/// last-level cache of the bench server). Above it the 16-byte slots cost
+/// more in memory traffic than the skipped row reads save: TPC-H q09's
+/// 3.26M-key build (80 MB inline against 47 MB salted) probed 1.7x slower;
+/// builds up to ~10^6 keys (q14's `item`, 2.5 MB) gain.
 pub const INLINE_MAX_BYTES: usize = 32 << 20;
 
 /// Where an index finds its rows.
@@ -183,17 +184,25 @@ impl IndexChoice {
         }
     }
 
-    /// Whether a salted index of up to `rows` keys over a layout whose key is
-    /// one word (`one_word`) keeps the key in its directory. The adaptive
-    /// choice does so only while the inline directory stays within
-    /// [`INLINE_MAX_BYTES`].
-    fn inline(self, rows: usize, one_word: bool) -> bool {
-        one_word
-            && match self {
-                Self::Adaptive => inline_bytes(rows) <= INLINE_MAX_BYTES,
-                Self::Inline => true,
-                Self::Flat | Self::Salted | Self::AdaptiveSalted => false,
-            }
+    /// The choice for one build whose partitions hold `rows` rows each: the
+    /// adaptive choice keeps keys inline only while the inline directories
+    /// of all of them together stay within [`INLINE_MAX_BYTES`], else
+    /// [`AdaptiveSalted`](Self::AdaptiveSalted). Every other choice stays.
+    pub fn bounded(self, rows: impl IntoIterator<Item = usize>) -> Self {
+        let total = rows
+            .into_iter()
+            .filter(|&n| flat_bytes(n) > FLAT_MAX_BYTES)
+            .fold(0usize, |sum, n| sum.saturating_add(inline_bytes(n)));
+        match self {
+            Self::Adaptive if total > INLINE_MAX_BYTES => Self::AdaptiveSalted,
+            other => other,
+        }
+    }
+
+    /// Whether a salted index over a layout whose key is one word
+    /// (`one_word`) keeps the key in its directory.
+    fn inline(self, one_word: bool) -> bool {
+        one_word && matches!(self, Self::Adaptive | Self::Inline)
     }
 
     /// Whether a table of up to `rows` keys takes the flat index.
@@ -211,7 +220,7 @@ impl IndexChoice {
     pub fn bytes(self, rows: usize, one_word: bool) -> usize {
         if self.flat(rows) {
             flat_bytes(rows)
-        } else if self.inline(rows, one_word) {
+        } else if self.inline(one_word) {
             inline_bytes(rows)
         } else {
             salted_bytes(rows)
@@ -300,7 +309,7 @@ impl JoinIndex {
                 }
             }
             Kind::Flat(t)
-        } else if choice.inline(expect, layout.one_word()) {
+        } else if choice.inline(layout.one_word()) {
             let word_of = |id: u32| word(src.row(id).0, KEY_WORD);
             let len = salted_slots(expect);
             let mut slots: Vec<[u64; 2]> = Vec::new();

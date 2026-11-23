@@ -1096,36 +1096,33 @@ fn estimate_sized_indexes_grow_to_the_same_answer() {
 }
 
 #[test]
-fn the_adaptive_choice_keeps_keys_inline_only_up_to_the_directory_bound() {
-    let below = (1..40)
-        .map(|s| 1usize << s)
-        .take_while(|&n| inline_bytes(n) <= INLINE_MAX_BYTES)
-        .last()
-        .unwrap_or(0);
-    let above = (1..40)
-        .map(|s| 1usize << s)
-        .find(|&n| inline_bytes(n) > INLINE_MAX_BYTES)
-        .unwrap_or(usize::MAX);
-    assert!(
-        salted_bytes(below) > FLAT_MAX_BYTES,
-        "{below} keys still take the flat index"
+fn the_adaptive_choice_keeps_keys_inline_only_up_to_the_build_bound() {
+    // Partitions of 2^16 rows: each salted, each well under the bound alone.
+    let part = 1usize << 16;
+    assert!(flat_bytes(part) > FLAT_MAX_BYTES);
+    let fit = INLINE_MAX_BYTES / inline_bytes(part);
+    assert!(fit >= 2);
+    let parts = |n: usize| vec![part; n];
+    assert_eq!(
+        IndexChoice::Adaptive.bounded(parts(fit)),
+        IndexChoice::Adaptive
     );
     assert_eq!(
-        IndexChoice::Adaptive.bytes(below, true),
-        inline_bytes(below)
+        IndexChoice::Adaptive.bounded(parts(fit + 1)),
+        IndexChoice::AdaptiveSalted
     );
+    // Partitions small enough for the flat index take no directory.
     assert_eq!(
-        IndexChoice::Adaptive.bytes(above, true),
-        salted_bytes(above)
+        IndexChoice::Adaptive.bounded(vec![1; 1 << 20]),
+        IndexChoice::Adaptive
     );
+    // Only the adaptive choice is bounded.
     assert_eq!(
-        IndexChoice::Adaptive.bytes(below, false),
-        salted_bytes(below)
+        IndexChoice::Inline.bounded(parts(fit + 1)),
+        IndexChoice::Inline
     );
-    // A forced inline index ignores the bound.
-    assert_eq!(IndexChoice::Inline.bytes(above, true), inline_bytes(above));
-    assert_eq!(
-        IndexChoice::AdaptiveSalted.bytes(below, true),
-        salted_bytes(below)
-    );
+    assert_eq!(IndexChoice::Salted.bounded(parts(1)), IndexChoice::Salted);
+    let after = IndexChoice::Adaptive.bounded(parts(fit + 1));
+    assert_eq!(after.bytes(part, true), salted_bytes(part));
+    assert_eq!(IndexChoice::Adaptive.bytes(part, true), inline_bytes(part));
 }

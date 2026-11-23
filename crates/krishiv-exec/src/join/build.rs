@@ -1354,6 +1354,15 @@ impl Sink for BuildSink {
             let started = std::time::Instant::now();
             let g = state(global)?;
             let s = &self.0;
+            // One index choice for the whole build: inline keys only while
+            // all its partitions' inline directories fit the bound.
+            let hashing = {
+                let c = lock(&g.collect);
+                let rows = c.parts.iter().map(super::grace::Part::mem_rows);
+                g.hashing
+                    .clone()
+                    .with_index(g.hashing.index().bounded(rows))
+            };
             let filter_memory = self.publish_filters(g, ctx);
             // The partials' hashes went with the publish: offer only the
             // tables from here (review L3 of the N2-N4 pass).
@@ -1393,7 +1402,7 @@ impl Sink for BuildSink {
                     }
                     let (indexes, copy) = {
                         let c = lock(&g.collect);
-                        let rows_index = s.rows_index(&g.hashing);
+                        let rows_index = s.rows_index(&hashing);
                         let marks = s.join_type.builds_preserved();
                         let needs = c
                             .parts
@@ -1421,7 +1430,7 @@ impl Sink for BuildSink {
                     .enumerate()
                     .filter_map(|(i, (p, keys))| {
                         let marks = s.join_type.builds_preserved();
-                        Some((i, build_need(p, s.rows_index(&g.hashing), marks)?, p, keys))
+                        Some((i, build_need(p, s.rows_index(&hashing), marks)?, p, keys))
                     })
                     .map(|(i, (lasting, copy, kept), p, keys)| Job {
                         part: i,
@@ -1492,7 +1501,7 @@ impl Sink for BuildSink {
                             .counters
                             .max(Counter::MaxFinalizeCopyBytes, copying as u64);
                         let shared = Arc::clone(&self.0);
-                        let hashing = g.hashing.clone();
+                        let hashing = hashing.clone();
                         running.push(async move {
                             let table = ctx
                                 .run_blocking(move || {
