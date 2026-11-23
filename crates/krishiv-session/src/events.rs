@@ -63,6 +63,14 @@ pub struct QueryRef {
     pub trace_id: Option<String>,
     /// The session's tags and the request's.
     pub tags: Vec<(String, String)>,
+    /// The stage the event is about; `None` for an event of the whole query (every event in-process).
+    pub stage_id: Option<u32>,
+    /// The task (partition) of that stage; `None` as `stage_id`.
+    pub task_id: Option<u32>,
+    /// The task's attempt; `None` as `stage_id`.
+    pub attempt: Option<u32>,
+    /// The worker that emitted the event; `None` in-process.
+    pub worker_id: Option<String>,
 }
 
 /// One event of one query.
@@ -142,13 +150,49 @@ pub enum UsageKind {
     Final,
 }
 
-/// What a query used, cumulative since it started (E7): a consumer keeps the record with the highest `seq`
-/// of its `record_id`, so a lost sample loses nothing.
+/// The exactly-once key of a [`UsageRecord`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct UsageRecordId {
+    /// The session (a caller's operation id is unique only per session).
+    pub session_id: String,
+    /// The query.
+    pub query_id: String,
+    /// The worker whose usage the record counts; `None` in-process, where one record covers the query.
+    pub worker_id: Option<String>,
+    /// The event's `seq`: of the records of one `(session_id, query_id, worker_id)`, the highest is the latest.
+    pub seq: u64,
+}
+
+impl UsageRecordId {
+    /// A key; `worker_id` starts as `None` (in-process).
+    #[must_use]
+    pub fn new(session_id: String, query_id: String, seq: u64) -> Self {
+        Self {
+            session_id,
+            query_id,
+            worker_id: None,
+            seq,
+        }
+    }
+
+    /// The key with `worker_id` set.
+    #[must_use]
+    pub fn with_worker(mut self, worker_id: Option<String>) -> Self {
+        self.worker_id = worker_id;
+        self
+    }
+}
+
+/// What a query used, cumulative since it started (E7). Fold rule: per `(session_id, query_id, worker_id)` of
+/// its `record_id`, keep the record with the highest `seq`, so a lost sample loses nothing; a query's usage is
+/// the sum of those over its workers (one, with `worker_id` `None`, in-process). The end figures are the usage of
+/// a `Finished` event or of a `Cancelled` one, whichever ended the query.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct UsageRecord {
-    /// `(session_id, query_id, seq)`: the exactly-once key (a caller's operation id is unique only per session).
-    pub record_id: (String, String, u64),
+    /// The exactly-once key.
+    pub record_id: UsageRecordId,
     /// Sample or final.
     pub kind: UsageKind,
     /// The principal charged.
@@ -294,7 +338,12 @@ impl UsageRecord {
     #[must_use]
     pub fn to_json(&self) -> Value {
         json!({
-            "record_id": {"session_id": self.record_id.0, "query_id": self.record_id.1, "seq": self.record_id.2},
+            "record_id": {
+                "session_id": self.record_id.session_id,
+                "query_id": self.record_id.query_id,
+                "worker_id": self.record_id.worker_id,
+                "seq": self.record_id.seq,
+            },
             "kind": match self.kind { UsageKind::Progress => "progress", UsageKind::Final => "final" },
             "principal": self.principal,
             "delegated_by": self.delegated_by,
@@ -347,6 +396,10 @@ impl QueryEvent {
                 "compute_id": self.query.compute_id,
                 "trace_id": self.query.trace_id,
                 "tags": tags,
+                "stage_id": self.query.stage_id,
+                "task_id": self.query.task_id,
+                "attempt": self.query.attempt,
+                "worker_id": self.query.worker_id,
             },
         });
         let body = match &self.kind {
@@ -766,6 +819,10 @@ impl EventBus {
             compute_id: self.compute_id.clone(),
             trace_id: row.trace_id.clone(),
             tags: row.tags.clone(),
+            stage_id: None,
+            task_id: None,
+            attempt: None,
+            worker_id: None,
         };
         let kind = match kind {
             Transition::Submitted => QueryEventKind::Submitted {
@@ -806,7 +863,7 @@ impl EventBus {
 
     fn usage(&self, row: &QueryRow, seq: u64) -> UsageRecord {
         UsageRecord {
-            record_id: (row.session_id.clone(), row.id.clone(), seq),
+            record_id: UsageRecordId::new(row.session_id.clone(), row.id.clone(), seq),
             kind: UsageKind::Final,
             principal: row.principal.clone(),
             delegated_by: row.delegated_by.clone(),

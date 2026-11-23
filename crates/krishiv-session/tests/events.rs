@@ -84,8 +84,8 @@ fn a_finished_query_yields_submitted_started_finished() {
         panic!("not finished");
     };
     assert_eq!(f.state, "finished");
-    assert_eq!(f.usage.record_id.1, events[0].query.query_id);
-    assert_eq!(f.usage.record_id.2, events.last().unwrap().seq);
+    assert_eq!(f.usage.record_id.query_id, events[0].query.query_id);
+    assert_eq!(f.usage.record_id.seq, events.last().unwrap().seq);
     assert!(f.usage.wall_ns.is_some());
     assert_eq!(events[0].query.compute_id, rt.compute_id());
 }

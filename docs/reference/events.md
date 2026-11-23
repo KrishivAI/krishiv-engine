@@ -21,12 +21,16 @@ with `EngineRuntimeBuilder::event_sink`. With no sink registered no event is bui
 A write whose commit fails after its result stream ended gets a second `finished` (state `failed`) with a higher
 `seq`: keep the highest. Error messages are never carried, only the error class; no credential is.
 Every event has `schema` (`krishiv.event.v1`), `minor`, `seq` (bus-wide: one counter per runtime, so interleaved queries see gaps and a reused operation id never repeats a `seq`; order the events of a query by `seq`), `emitted_at_ms`, `kind` and
-`query` (`query_id`, `session_id`, `principal`, `delegated_by`, `compute_id`, `trace_id`, `tags`).
+`query` (`query_id`, `session_id`, `principal`, `delegated_by`, `compute_id`, `trace_id`, `tags`, and `stage_id`, `task_id`,
+`attempt`, `worker_id`: always null in 0.3, where every event is about the whole query and comes from one process).
 Consumers ignore unknown members and unknown kinds: minor versions only add.
 
 ## Usage record
 
-`usage` is cumulative since the query started and keyed by `record_id = (session_id, query_id, seq)` (a caller's operation id is unique only per session). The
+`usage` is cumulative since the query started and keyed by `record_id`, an object with `session_id`, `query_id`,
+`worker_id` (null in 0.3) and `seq` (a caller's operation id is unique only per session). To fold records: per
+`session_id`, `query_id` and `worker_id`, keep the one with the highest `seq`; a query's usage is the sum of those over
+its workers (in 0.3 one, with `worker_id` null). The end figures are the usage of the `finished` or `cancelled` event. The
 event schema is experimental until the design note's review findings are settled; do not treat `record_id` as a
 billing-grade key yet. Members: `kind` (`final`), `fidelity` (`exact`), `principal`, `delegated_by`, `session_id`,
 `compute_id`, `workload_class`, `resource_group`, `statement_class`, `window_start_ms`, `window_end_ms`,
