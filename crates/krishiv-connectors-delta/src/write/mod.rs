@@ -56,6 +56,7 @@
 pub mod dml;
 mod files;
 pub mod filter;
+pub mod merge;
 pub(crate) mod sink;
 pub mod stats;
 #[cfg(test)]

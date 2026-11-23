@@ -361,31 +361,40 @@ impl GrantState {
             })
     }
 
-    /// Whether `principal` owns, or holds any grant on, some key strictly under the namespace
-    /// `namespace` (a nested namespace, a relation, a column or a function in it at any depth).
-    /// Every such key is one a listing shows ([`Self::lists`]), so a namespace holding one is
-    /// listed too, however deep it sits (P3-T067 PR-58b: Iceberg REST namespaces nest).
-    pub(crate) fn holds_under(
+    /// Whether a listing shows the namespace `namespace` to `principal`: [`Self::lists`] does, or
+    /// it owns, or holds any grant on, some key strictly under the namespace (a nested namespace,
+    /// a relation, a column or a function in it at any depth). Every such key is one a listing
+    /// shows, so a namespace holding one is listed too, however deep it sits (P3-T067 PR-58b:
+    /// Iceberg REST namespaces nest). The principal's grantees are computed once, since a
+    /// `SHOW NAMESPACES` asks this per namespace.
+    pub(crate) fn lists_namespace(
         &self,
         principal: &Principal,
         namespace: &ObjectKey,
         cs: bool,
     ) -> bool {
-        let under = |k: &ObjectKey| k.covered_by(namespace, cs) && !k.same(namespace, cs);
-        if namespace.kind != KeyKind::Namespace {
-            return false;
+        if self.owns(principal, namespace, cs) {
+            return true;
         }
-        if self
-            .owners
-            .iter()
-            .any(|(k, owner)| *owner == principal.name && under(k))
+        let under = |k: &ObjectKey| k.covered_by(namespace, cs) && !k.same(namespace, cs);
+        let is_namespace = namespace.kind == KeyKind::Namespace;
+        if is_namespace
+            && self
+                .owners
+                .iter()
+                .any(|(k, owner)| *owner == principal.name && under(k))
         {
             return true;
         }
         let grantees = self.effective(principal);
-        self.grants
-            .iter()
-            .any(|g| grantees.contains(&g.grantee) && under(&g.object))
+        self.covering(&grantees, namespace, cs)
+            .any(|g| g.privilege == Privilege::Select)
+            || self.grants.iter().any(|g| {
+                grantees.contains(&g.grantee)
+                    && (g.object.same(namespace, cs)
+                        || g.object.is_column_of(namespace, cs)
+                        || (is_namespace && under(&g.object)))
+            })
     }
 
     /// Whether `principal` may grant `privilege` on `key` to others: it owns the key (or a
@@ -519,5 +528,69 @@ mod tests {
         assert!(state.would_cycle("a", &Grantee::Role("a".to_owned())));
         assert!(!state.would_cycle("b", &Grantee::Role("c".to_owned())));
         assert!(!state.would_cycle("a", &Grantee::User("b".to_owned())));
+    }
+
+    /// `lists_namespace` shows a namespace for each reason a listing has (P3-T067 PR-58b): it owns
+    /// it or something under it, a `Select` covers it, a grant on it, a column grant of a relation
+    /// asked as one, a grant anywhere under it; nothing else.
+    #[test]
+    fn a_namespace_is_listed_for_what_it_holds() {
+        let ns = |parts: &[&str]| {
+            ObjectKey::new(
+                KeyKind::Namespace,
+                parts.iter().map(|p| (*p).to_owned()).collect(),
+            )
+        };
+        let row = |grantee: &str, privilege: Privilege, object: ObjectKey| GrantRow {
+            grantee: Grantee::User(grantee.to_owned()),
+            privilege,
+            object,
+            with_grant_option: false,
+            granted_by: "admin".to_owned(),
+            granted_at: 0,
+        };
+        let who = |name: &str| Principal::new(name, PrincipalKind::User);
+        let mut state = GrantState::default();
+        state.owners.insert(ns(&["c", "own"]), "ana".to_owned());
+        state
+            .owners
+            .insert(table("c", "deep", "t"), "bo".to_owned());
+        state.grants.push(row("cy", Privilege::Select, ns(&["c"])));
+        state
+            .grants
+            .push(row("di", Privilege::Modify, ns(&["c", "s"])));
+        state.grants.push(row(
+            "ed",
+            Privilege::Select,
+            ObjectKey::new(
+                KeyKind::Column,
+                ["c", "s", "t", "x"].map(str::to_owned).to_vec(),
+            ),
+        ));
+        state
+            .grants
+            .push(row("fa", Privilege::Modify, ns(&["c", "s", "inner"])));
+        // Owns the namespace itself, or a relation under it.
+        assert!(state.lists_namespace(&who("ana"), &ns(&["c", "own"]), false));
+        assert!(state.lists_namespace(&who("bo"), &ns(&["c", "deep"]), false));
+        assert!(state.lists_namespace(&who("bo"), &ns(&["c"]), false));
+        // A `Select` on the catalog covers every namespace in it.
+        assert!(state.lists_namespace(&who("cy"), &ns(&["c", "s"]), false));
+        // A grant on the namespace itself, of any privilege.
+        assert!(state.lists_namespace(&who("di"), &ns(&["c", "s"]), false));
+        assert!(state.lists_namespace(&who("di"), &ns(&["C", "S"]), false));
+        assert!(!state.lists_namespace(&who("di"), &ns(&["C", "S"]), true));
+        // A column grant lists its relation asked as one, and the namespaces above it.
+        assert!(state.lists_namespace(&who("ed"), &table("c", "s", "t"), false));
+        assert!(state.lists_namespace(&who("ed"), &ns(&["c", "s"]), false));
+        // A grant on a nested namespace lists its parents, not its siblings.
+        assert!(state.lists_namespace(&who("fa"), &ns(&["c", "s"]), false));
+        assert!(!state.lists_namespace(&who("fa"), &ns(&["c", "other"]), false));
+        // A covering grant of a privilege other than `Select` does not list what it covers.
+        assert!(!state.lists_namespace(&who("di"), &ns(&["c", "s", "x"]), false));
+        // Nothing under it, no grant: not listed; a grant beside a relation does not list it.
+        assert!(!state.lists_namespace(&who("ana"), &ns(&["c", "s"]), false));
+        assert!(!state.lists_namespace(&who("zoe"), &ns(&["c"]), false));
+        assert!(!state.lists_namespace(&who("fa"), &table("c", "s", "t"), false));
     }
 }

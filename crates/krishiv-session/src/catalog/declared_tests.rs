@@ -176,14 +176,18 @@ impl CatalogFactory for Factory {
 }
 
 fn session(lake: &Arc<Lake>) -> Session {
-    let rt = EngineRuntime::builder()
-        .catalogs(
-            CatalogSetup::new(DeclMode::Embedded)
-                .factory(Arc::new(Factory(Arc::clone(lake))))
-                .setting("krishiv.catalog.lake.type", "memory"),
-        )
-        .build()
-        .unwrap();
+    session_with(lake, &[])
+}
+
+/// [`session`] with more `krishiv.catalog.lake.*` settings.
+fn session_with(lake: &Arc<Lake>, settings: &[(&str, &str)]) -> Session {
+    let mut setup = CatalogSetup::new(DeclMode::Embedded)
+        .factory(Arc::new(Factory(Arc::clone(lake))))
+        .setting("krishiv.catalog.lake.type", "memory");
+    for (k, v) in settings {
+        setup = setup.setting(*k, *v);
+    }
+    let rt = EngineRuntime::builder().catalogs(setup).build().unwrap();
     Session::builder().runtime(rt).build().unwrap()
 }
 
@@ -227,30 +231,38 @@ fn a_declared_table_is_read_through_the_provider_it_opened() {
     assert_eq!(xs(&s, "SELECT x FROM lake.db.t"), [1, 2, 3]);
 }
 
+/// Design P3-T067 §6: a distributed stage refuses a declared table, whatever its storage mode, so vended
+/// credentials never reach a worker (`vended_refused_in_distributed_mode`).
 #[test]
 fn declared_read_refused_in_distributed_mode() {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
-    let lake = Arc::new(Lake::default());
-    let s = session(&lake);
-    let df = rt.block_on(s.sql("SELECT x FROM lake.db.t")).unwrap();
-    let analysis = rt.block_on(df.analysis()).unwrap();
-    let (_, physical) = rt
-        .block_on(s.physical(&analysis.analyzed, &analysis.env))
-        .unwrap();
-    let e = analysis
-        .env
-        .catalog
-        .task_specs(&physical, 1, 1)
-        .unwrap_err();
-    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
-    assert!(
-        e.to_string()
-            .contains("declared catalog `lake` in a distributed stage"),
-        "{e}"
-    );
+    for storage in ["allowed-prefixes", "vended"] {
+        let lake = Arc::new(Lake::default());
+        let s = session_with(&lake, &[("krishiv.catalog.lake.storage", storage)]);
+        let df = rt.block_on(s.sql("SELECT x FROM lake.db.t")).unwrap();
+        let analysis = rt.block_on(df.analysis()).unwrap();
+        let (_, physical) = rt
+            .block_on(s.physical(&analysis.analyzed, &analysis.env))
+            .unwrap();
+        let e = analysis
+            .env
+            .catalog
+            .task_specs(&physical, 1, 1)
+            .unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{storage}"
+        );
+        assert!(
+            e.to_string()
+                .contains("declared catalog `lake` in a distributed stage"),
+            "{storage}: {e}"
+        );
+    }
 }
 
 /// #836 N4: a memory-cached relation scanned under a declared current catalog is dealt as a
@@ -512,6 +524,18 @@ fn nested_namespace_grants_show_their_parents_without_table_listings() {
         error_class(&ana, "SHOW NAMESPACES IN lake.db"),
         "SCHEMA_NOT_FOUND"
     );
+    // A namespace the grants hide answers as a missing one, without asking the catalog (whose
+    // answer for `locked` is a 403): review of #902 at 6e8137e80.
+    let listings = lake.table_listings.load(Ordering::SeqCst);
+    assert_eq!(
+        error_class(&ana, "SHOW TABLES IN lake.locked"),
+        "SCHEMA_NOT_FOUND"
+    );
+    assert_eq!(
+        error_class(&ana, "SHOW TABLES IN lake.nope"),
+        "SCHEMA_NOT_FOUND"
+    );
+    assert_eq!(lake.table_listings.load(Ordering::SeqCst), listings);
 }
 
 /// A grant on a namespace alone shows the namespace, and `SHOW TABLES` in it is empty (review of

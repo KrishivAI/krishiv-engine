@@ -298,6 +298,21 @@ async fn the_editor_shares_the_sessions_views_and_the_catalog_lists_them() {
         from_editor.iter().all(|r| r["session_id"] == mine.id()),
         "{from_editor:?}"
     );
+    // Each is listed with its SQL, as History shows it: the editor collects a row-capped frame derived from the
+    // statement's, and that frame runs under the statement's text.
+    let mut editor_texts: Vec<_> = from_editor
+        .iter()
+        .filter_map(|r| r["query_text"].as_str())
+        .collect();
+    editor_texts.sort_unstable();
+    assert_eq!(
+        editor_texts,
+        [
+            "CREATE TEMPORARY VIEW from_editor AS SELECT 8 AS y",
+            "SELECT x FROM from_program"
+        ],
+        "{from_editor:?}"
+    );
 
     // The catalog shows the session's temporary views; listing them is not one of the session's queries.
     let before = source.rows(SystemTable::Queries).await.unwrap().len();
@@ -337,6 +352,7 @@ async fn the_editor_shares_the_sessions_views_and_the_catalog_lists_them() {
         .collect();
     assert_eq!(cancelled.len(), 1, "{queries:?}");
     assert_eq!(cancelled[0]["cancel_reason"], "user", "{cancelled:?}");
+    assert_eq!(cancelled[0]["query_text"], ENDLESS, "{cancelled:?}");
     // (The row's error class is not asserted: `system.queries` leaves it null for every cancelled query.)
     assert_eq!(cancelled[0]["session_id"], mine.id());
 }

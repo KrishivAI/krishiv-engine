@@ -22,13 +22,13 @@
 //! The statement runs in-process: a hidden provider table gets no splits
 //! (`QueryCatalog`'s split planning), so a distributed stage would read it whole in every task.
 //!
-//! A Delta table refuses a condition with a subquery (`DELTA_UNSUPPORTED_SUBQUERY`, as
-//! delta-spark's `PreprocessTableDelete`/`PreprocessTableUpdate` do) and wraps an error raised
-//! while the rewrite writes its rows in `TASK_WRITE_FAILED` (Spark's `FileFormatWriter`); the
-//! conflict check's read set is the table's (the Delta connector reads the condition's partition
-//! conjuncts).
+//! The table raises its own errors through [`RowLevelTable::error`] (a Delta table refuses a
+//! condition with a subquery, `DELTA_UNSUPPORTED_SUBQUERY`, and wraps an error raised while the
+//! rewrite writes its rows in `TASK_WRITE_FAILED`); the planner holds no table format's code.
+//! The conflict check's read set is the table's (the Delta connector reads the condition's
+//! partition conjuncts).
 //!
-//! Not here yet: `MERGE` (PR-37c), merge-on-read (PR-37d), `SET c = DEFAULT`, the
+//! `MERGE` is `merge.rs` (PR-37c), over the same hidden tables. Not here yet: merge-on-read (PR-37d), `SET c = DEFAULT`, the
 //! CHAR/VARCHAR write checks of an `UPDATE`, and a condition that names the table by a
 //! qualified name longer than its own (`db.t.c`: the target is read under its last name part or
 //! the statement's alias).
@@ -40,14 +40,13 @@ use arrow_array::{Array, RecordBatch};
 use arrow_schema::DataType as ArrowType;
 use futures::StreamExt;
 use krishiv_common::error::{
-    DeltaCastOverflowInTableWrite, DeltaUnsupportedSubquery, DuplicateAssignments,
-    IncompatibleDataForTableCannotSafelyCast, KrishivError, KrishivUnsupportedFeature,
-    TaskWriteFailed,
+    DuplicateAssignments, IncompatibleDataForTableCannotSafelyCast, KrishivError,
+    KrishivUnsupportedFeature,
 };
 use krishiv_exec::physical::{PhysNode, TableWriteRequest};
 use krishiv_exec::planner::{
-    RowLevelCounts, RowLevelOperation, RowLevelTable, RowLevelWrite, TableProvider,
-    TableProviderResolver as _,
+    RowLevelCounts, RowLevelOperation, RowLevelProblem, RowLevelTable, RowLevelWrite,
+    TableProvider, TableProviderResolver as _,
 };
 use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown};
 use krishiv_plan::analyzer::TableColumn;
@@ -73,17 +72,22 @@ pub(crate) const ALIAS_OPTION: &str = "__krishiv_row_level_alias";
 
 /// A column of the statement's `SET` list: the column and the value's SQL text (`None`:
 /// `DEFAULT`).
+#[derive(Debug, Clone)]
 pub(crate) struct Assignment {
+    /// The column's name parts joined by `.` (one part for a top-level column, whose name may
+    /// itself hold a `.` when it was quoted).
     pub(crate) column: String,
+    /// The key names a nested field (more than one name part).
+    pub(crate) nested: bool,
     pub(crate) value: Option<String>,
 }
 
 /// The target as a provider: the one row-level table, read whole or restricted to `files`.
 #[derive(Debug)]
-struct Target {
-    table: Arc<dyn RowLevelTable>,
-    op: RowLevelOperation,
-    files: Option<Vec<Vec<u8>>>,
+pub(super) struct Target {
+    pub(super) table: Arc<dyn RowLevelTable>,
+    pub(super) op: RowLevelOperation,
+    pub(super) files: Option<Vec<Vec<u8>>>,
 }
 
 impl TableProvider for Target {
@@ -100,12 +104,12 @@ impl TableProvider for Target {
 }
 
 /// `name` as SQL text: a backquoted identifier.
-fn ident(name: &str) -> String {
+pub(super) fn ident(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }
 
 /// The first scan of `node`, depth first.
-fn first_scan(node: &PhysNode) -> Option<krishiv_plan::Scan> {
+pub(super) fn first_scan(node: &PhysNode) -> Option<krishiv_plan::Scan> {
     match node {
         PhysNode::Scan(s) => Some(s.scan.clone()),
         _ => node.children().into_iter().find_map(first_scan),
@@ -151,8 +155,6 @@ impl Session {
         // and for a catalog table over a Delta location alike (its scan keeps the table's name).
         #[cfg(feature = "delta")]
         let delta_root = probe.env.catalog.delta_root(&scan).transpose()?;
-        #[cfg(not(feature = "delta"))]
-        let delta_root: Option<String> = None;
         let columns: Vec<TableColumn> = probe
             .analyzed
             .output
@@ -223,22 +225,19 @@ impl Session {
             nullable: false,
             char_varchar: None,
         });
-        // delta-spark refuses any subquery in the condition after resolution
-        // (`PreprocessTableDelete.scala:35-45`, `PreprocessTableUpdate.scala:44`;
-        // `delete.allowExistsSubquery` is off by default and not read here).
-        if delta_root.is_some()
-            && let Some(c) = condition
+        // A table may refuse a subquery in the condition (delta-spark does, after resolution:
+        // `PreprocessTableDelete.scala:35-45`, `PreprocessTableUpdate.scala:44`).
+        if let Some(c) = condition
             && has_subquery(&crate::functions::expr(c)?.expr)
+            && let Some(e) = table.error(
+                op,
+                &RowLevelProblem::Subquery {
+                    what: "condition",
+                    condition: c,
+                },
+            )
         {
-            return Err(DeltaUnsupportedSubquery {
-                operation: match op {
-                    RowLevelOperation::Update => "UPDATE",
-                    _ => "DELETE",
-                }
-                .to_owned(),
-                cond: c.to_owned(),
-            }
-            .into());
+            return Err(e);
         }
         let hit =
             condition.map_or_else(|| "true".to_owned(), |c| format!("coalesce(({c}), false)"));
@@ -386,10 +385,7 @@ impl Session {
         }
         .await;
         if let Err(e) = written {
-            return Err(match &delta_root {
-                Some(root) => delta_task_write_failed(e, root, &columns, &value_types),
-                None => e,
-            });
+            return Err(write_failed(&table, op, e, &columns, &value_types));
         }
         self.refresh_files();
 
@@ -555,7 +551,7 @@ impl Session {
 
     /// A frame reading the hidden table `name` (`columns`), which owns `entry`: a resolved
     /// scan, as a script result's frame reads its table, since no SQL text names it.
-    fn hidden_frame(
+    pub(super) fn hidden_frame(
         &self,
         name: &str,
         entry: Arc<crate::catalog::TempTable>,
@@ -583,6 +579,52 @@ impl Session {
         let mut df = DataFrame::new(self.clone(), Arc::new(plan));
         df.keep.push(entry);
         df
+    }
+}
+
+/// `fut`, after which (on completion, failure or drop: a cancelled statement too) the hidden
+/// tables nothing holds any more go from `catalog`: a row-level statement's target scans and
+/// its source copy (a spill file) do not wait for the catalog's next change. The future is
+/// dropped before the sweep, so the entries it held are free by then.
+pub(super) struct Swept<F> {
+    fut: Option<std::pin::Pin<Box<F>>>,
+    catalog: Arc<crate::catalog::SessionCatalog>,
+}
+
+impl<F: Future> Swept<F> {
+    pub(super) fn new(catalog: Arc<crate::catalog::SessionCatalog>, fut: F) -> Self {
+        Self {
+            fut: Some(Box::pin(fut)),
+            catalog,
+        }
+    }
+}
+
+impl<F: Future> Future for Swept<F> {
+    type Output = F::Output;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+        let Some(fut) = this.fut.as_mut() else {
+            return std::task::Poll::Pending;
+        };
+        let out = fut.as_mut().poll(cx);
+        if out.is_ready() {
+            this.fut = None;
+            this.catalog.sweep_hidden();
+        }
+        out
+    }
+}
+
+impl<F> Drop for Swept<F> {
+    fn drop(&mut self) {
+        if self.fut.take().is_some() {
+            self.catalog.sweep_hidden();
+        }
     }
 }
 
@@ -617,49 +659,40 @@ fn has_subquery(e: &krishiv_plan::Expr) -> bool {
     false
 }
 
-/// An error raised while a Delta `DELETE`/`UPDATE` writes its rows, as delta-spark raises it:
-/// Spark's `FileFormatWriter` wraps whatever a write task raises in `TASK_WRITE_FAILED` (the
-/// table's root). An arithmetic error under an `UPDATE`'s store-assignment cast is
-/// delta-spark's `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE` naming the column
-/// ([`store_assignment_overflow`]); any other error is the cause as it came. Errors that
-/// are not the task's (the commit's `DELTA_*` conflicts, Krishiv's own refusals and limits,
-/// internal errors, cancellation) are returned as they came. `value_types` are the assigned
-/// columns and their new values' types.
-fn delta_task_write_failed(
+/// An error raised while a row-level rewrite writes its rows, as the table raises it
+/// ([`RowLevelProblem::WriteFailed`]; delta-spark wraps it in `TASK_WRITE_FAILED`), else as it
+/// came. `value_types` are the assigned columns and their new values' types.
+pub(super) fn write_failed(
+    table: &Arc<dyn RowLevelTable>,
+    op: RowLevelOperation,
     e: KrishivError,
-    root: &str,
     columns: &[TableColumn],
     value_types: &[(String, DataType)],
 ) -> KrishivError {
-    let class = e.error_class().name();
-    if class.starts_with("DELTA_")
-        || class.starts_with("KRISHIV_")
-        || class.starts_with("UNSUPPORTED_FEATURE")
-        || class == "INTERNAL_ERROR"
-        || e.sql_state() == Some("HY008")
-    {
-        return e;
-    }
-    let cause = store_assignment_overflow(&e, columns, value_types).unwrap_or(e);
-    KrishivError::from(TaskWriteFailed {
-        path: root.to_owned(),
-    })
-    .with_cause(cause)
+    let overflow = store_assignment_overflow(&e, columns, value_types);
+    table
+        .error(
+            op,
+            &RowLevelProblem::WriteFailed {
+                error: &e,
+                overflow,
+            },
+        )
+        .unwrap_or(e)
 }
 
-/// `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE` for an arithmetic error `e` (SQLSTATE 22003 or 22012:
-/// Spark's `ArithmeticException`s, such as `CAST_OVERFLOW`, `ARITHMETIC_OVERFLOW` and
-/// `DIVIDE_BY_ZERO`) raised in a new value whose store-assignment cast can overflow:
-/// delta-spark's `CheckOverflowInTableWrite` (`UpdateExpressionsSupport.scala:735-757`) catches
-/// any `ArithmeticException` of the value under such a cast (a column whose type holds an
-/// integral or decimal type, at any depth, and that the value's type does not `Cast.canUpCast`
-/// to, `:719-732`) and names the column and the cast's types.
-/// Krishiv cannot tell which value raised: the first such column in table order is named.
-fn store_assignment_overflow(
+/// The assigned column an arithmetic error `e` (SQLSTATE 22003 or 22012: Spark's
+/// `ArithmeticException`s, such as `CAST_OVERFLOW`, `ARITHMETIC_OVERFLOW` and
+/// `DIVIDE_BY_ZERO`) may come from: one whose store-assignment cast can overflow (a column
+/// whose type holds an integral or decimal type, at any depth, and that the value's type does
+/// not `Cast.canUpCast` to; delta-spark's `CheckOverflowInTableWrite`,
+/// `UpdateExpressionsSupport.scala:719-757`), with the value's and the column's types. Krishiv
+/// cannot tell which value raised: the first such column in table order.
+fn store_assignment_overflow<'a>(
     e: &KrishivError,
-    columns: &[TableColumn],
-    value_types: &[(String, DataType)],
-) -> Option<KrishivError> {
+    columns: &'a [TableColumn],
+    value_types: &'a [(String, DataType)],
+) -> Option<(&'a str, &'a DataType, &'a DataType)> {
     if !matches!(e.sql_state(), Some("22003" | "22012")) {
         return None;
     }
@@ -667,27 +700,14 @@ fn store_assignment_overflow(
     let can_overflow = |from: &DataType, to: &DataType| {
         contains_integral_or_decimal(to) && !krishiv_plan::analyzer::can_up_cast(from, to)
     };
-    let sql = |t: &DataType| format!("\"{}\"", t.catalog_string().to_uppercase());
-    let (column, value) = columns.iter().find_map(|c| {
+    columns.iter().find_map(|c| {
         value_types
             .iter()
             .find(|(name, value)| {
                 name.eq_ignore_ascii_case(&c.name) && can_overflow(value, &c.data_type)
             })
-            .map(|(_, value)| (c, value))
-    })?;
-    Some(
-        DeltaCastOverflowInTableWrite {
-            source_type: sql(value),
-            target_type: sql(&column.data_type),
-            column_name: format!("`{}`", column.name.replace('`', "``")),
-            store_assignment_policy_flag: "spark.sql.storeAssignmentPolicy".to_owned(),
-            update_and_merge_casting_follows_ansi_enabled_flag:
-                "spark.databricks.delta.updateAndMergeCastingFollowsAnsiEnabledFlag".to_owned(),
-            ansi_enabled_flag: "spark.sql.ansi.enabled".to_owned(),
-        }
-        .into(),
-    )
+            .map(|(_, value)| (c.name.as_str(), value, &c.data_type))
+    })
 }
 
 /// delta-spark's `containsIntegralOrDecimalType` (`UpdateExpressionsSupport.scala:719-727`).

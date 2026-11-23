@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::secret::{OptionValue, SecretValue};
+use krishiv_exec::AsOfMergeDirection;
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{
     AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
@@ -681,6 +682,20 @@ impl Encoder {
             null_safe: join.null_safe.clone(),
             residual: self.residual(join.residual.as_ref())?,
             single_match: join.single_match,
+            as_of: match &join.as_of {
+                None => None,
+                Some(a) => Some(pb::AsOfMerge {
+                    left_column: a.left_column as u64,
+                    right_column: a.right_column as u64,
+                    direction: match a.direction {
+                        AsOfMergeDirection::Backward => pb::AsOfMergeDirection::Backward,
+                        AsOfMergeDirection::Forward => pb::AsOfMergeDirection::Forward,
+                    } as i32,
+                    allow_exact: a.allow_exact,
+                    distance: self.residual(a.distance.as_ref())?,
+                    distance_on_every_pair: a.distance_on_every_pair,
+                }),
+            },
         })
     }
 

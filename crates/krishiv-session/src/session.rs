@@ -708,36 +708,7 @@ impl Session {
                 )
                 .await
             }
-            Statement::Merge(m) => {
-                let more: Vec<&krishiv_sql::ast::Expr> = std::iter::once(&m.on)
-                    .chain(m.clauses.iter().flat_map(|c| {
-                        let action: Vec<&krishiv_sql::ast::Expr> = match &c.action {
-                            krishiv_sql::ast::MergeAction::Update(assignments) => {
-                                assignments.iter().map(|a| &a.value).collect()
-                            }
-                            krishiv_sql::ast::MergeAction::Insert(
-                                krishiv_sql::ast::MergeInsert::Values { values, .. },
-                            ) => values.iter().collect(),
-                            _ => Vec::new(),
-                        };
-                        c.condition.iter().chain(action)
-                    }))
-                    .collect();
-                let sources: Vec<&krishiv_sql::ast::Query> = match &m.source {
-                    krishiv_sql::ast::MergeSource::Query { query, .. } => vec![&**query],
-                    _ => Vec::new(),
-                };
-                let changes = crate::table_commands::RowChanges {
-                    targets: &[],
-                    values: &[],
-                    condition: None,
-                    options: &m.options,
-                    more: &more,
-                    sources: &sources,
-                };
-                self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
-                    .await
-            }
+            Statement::Merge(m) => self.exec_merge(&m, query).await,
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }
@@ -1207,6 +1178,7 @@ impl Session {
             self.tagging(),
         );
         let reason = action.reason();
+        let work = ran::in_running_command(work);
         let task = self.state.runtime.executor.spawn(
             WorkloadClass::Interactive,
             Box::pin(async move {
@@ -1319,6 +1291,7 @@ impl Session {
                     declared_paths,
                     Arc::clone(&config),
                     scans.slots,
+                    self.declared_stores(&config),
                 ));
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
