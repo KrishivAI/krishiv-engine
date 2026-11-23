@@ -68,6 +68,19 @@ pub(crate) fn evaluation_failed(slot: &std::sync::Mutex<Option<String>>) {
     }
 }
 
+/// Tells the statement of a script the calling task is running, if any, that the refused row `id` is its
+/// row: the statement gets no second refused row from [`as_listed_script_statement`].
+pub(crate) fn refused_in_script_statement(id: &str) {
+    let _ = COMMAND.try_with(|c| {
+        if c.of_script {
+            c.row
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_or_insert_with(|| id.to_owned());
+        }
+    });
+}
+
 /// The command the calling task is running, for a query begun with no text of its own (`has_text` false),
 /// begun by a statement of a script, or run to evaluate an expression of the command.
 pub(crate) fn command_statement(has_text: bool) -> Option<Listing> {
@@ -311,5 +324,39 @@ fn metric_view_gate(
         // Unreachable fallback, refused all the same: the literal's span, whose text is never shown.
         SparkProfile::V3_5 | SparkProfile::V4_0 | SparkProfile::V4_1 => first.or(Some(v.body_span)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A statement of a script whose work records its own refused row (an action's planning failure
+    /// does) is listed once, not a second time by the script.
+    #[test]
+    fn a_script_statement_that_recorded_its_refusal_is_listed_once() {
+        let s = Session::new().unwrap();
+        let error = || -> KrishivError { crate::session::internal("planning failed".to_owned()) };
+        let rows = |s: &Session| s.state.queries.snapshot(true).len();
+        let before = rows(&s);
+        let own = futures::executor::block_on(as_listed_script_statement(
+            &s,
+            "SELECT 1",
+            "QUERY",
+            async {
+                s.record_refused(Some("SELECT 1"), Some("QUERY"), &error());
+                Err::<(), _>(error())
+            },
+        ));
+        assert!(own.is_err());
+        assert_eq!(rows(&s), before + 1);
+        let none = futures::executor::block_on(as_listed_script_statement(
+            &s,
+            "SELECT 2",
+            "QUERY",
+            async { Err::<(), _>(error()) },
+        ));
+        assert!(none.is_err());
+        assert_eq!(rows(&s), before + 2);
     }
 }

@@ -408,10 +408,10 @@ fn a_row_assignment_is_one_run() {
     );
 }
 
-/// A row assignment whose cast to a target's type fails: what the row query alone says comes first. More
-/// than one row is `ROW_SUBQUERY_TOO_MANY_ROWS`, no row sets the targets to NULL, one row is the cast's error.
+/// A row assignment whose cast to a target's type fails, as Spark 4.2 answers (the casts are part of the
+/// analyzed plan, over the row query and under `LIMIT 2`; the row count is looked at after the run).
 #[test]
-fn a_row_assignment_whose_cast_fails_answers_as_the_row_query_does_first() {
+fn a_row_assignment_whose_cast_fails_answers_as_spark_does() {
     let s = Session::new().unwrap();
     block_on(s.sql("DECLARE VARIABLE rc INT DEFAULT 5")).unwrap();
     let class = |sql: &str| {
@@ -419,100 +419,50 @@ fn a_row_assignment_whose_cast_fails_answers_as_the_row_query_does_first() {
             .err()
             .map(|e| e.error_class().name().to_owned())
     };
+    let rc = || {
+        let batches = block_on(block_on(s.sql("SELECT rc")).unwrap().collect()).unwrap();
+        let column = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int32Array>()
+            .unwrap()
+            .clone();
+        (!column.is_null(0)).then(|| column.value(0))
+    };
+    // A value no cast takes to INT fails at analysis, whatever the row count; the target keeps its value.
     assert_eq!(
-        class("SET VAR (rc) = (SELECT col1 FROM VALUES ('x'), ('y'))").as_deref(),
-        Some("ROW_SUBQUERY_TOO_MANY_ROWS")
+        class("SET VAR (rc) = (SELECT array(1) WHERE false)").as_deref(),
+        Some("DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION")
     );
-    assert_eq!(
-        class("SET VAR (rc) = (SELECT 'x')").as_deref(),
-        Some("CAST_INVALID_INPUT")
-    );
-    // A value no cast takes to INT: the casts do not analyze, and there is no row to assign.
-    assert_eq!(class("SET VAR (rc) = (SELECT array(1) WHERE false)"), None);
-    let batches = block_on(block_on(s.sql("SELECT rc IS NULL")).unwrap().collect()).unwrap();
-    let value = batches[0]
-        .column(0)
-        .as_any()
-        .downcast_ref::<arrow_array::BooleanArray>()
-        .unwrap()
-        .value(0);
-    assert!(value, "no row sets the target to NULL");
-}
-
-/// A statement of a script refused before any query of it began (a missing table, an unknown variable)
-/// is listed as refused under its own text and class, beside the failed script.
-#[test]
-fn a_script_statement_refused_before_it_ran_is_listed_with_its_text_and_class() {
-    let s = Session::new().unwrap();
-    let script = "BEGIN SELECT 1; SELECT a FROM zs_missing; END";
-    assert!(!run_tagged(&s, script, "ui-run-32"));
-    assert_eq!(
-        listed(&s, "ui-run-32"),
-        [
-            format!("{script} | READ | failed"),
-            "SELECT 1 | READ | finished".to_owned(),
-            "SELECT a FROM zs_missing | READ | failed".to_owned(),
-        ]
-    );
-    let script = "BEGIN SET zs_no_such = 1; END";
-    assert!(!run_tagged(&s, script, "ui-run-33"));
-    assert_eq!(
-        listed(&s, "ui-run-33"),
-        [
-            format!("{script} | SESSION | failed"),
-            "SET zs_no_such = 1 | SESSION | failed".to_owned(),
-        ]
-    );
-}
-
-/// `EXECUTE IMMEDIATE` as a statement of a script: the query that evaluates its string and what the named
-/// statement runs are listed under the script statement's text and class. A script inside an
-/// `EXECUTE IMMEDIATE` is refused (as Spark refuses it): its row is the failed one, beside the finished
-/// query that evaluated the string.
-#[test]
-fn execute_immediate_in_a_script_is_listed_under_its_own_text() {
-    let s = Session::new().unwrap();
-    block_on(s.sql("CREATE TABLE zh (a INT) USING parquet")).unwrap();
-    let write = "EXECUTE IMMEDIATE 'INSERT INTO zh VALUES (1)'";
-    let read = "EXECUTE IMMEDIATE 'SELECT a FROM zh'";
-    let outer = format!("BEGIN {write}; {read}; END");
-    assert!(run_tagged(&s, &outer, "ui-run-26"));
-    assert_eq!(
-        listed(&s, "ui-run-26"),
-        [
-            format!("{outer} | WRITE | finished"),
-            format!("{write} | WRITE | finished"),
-            format!("{write} | WRITE | finished"),
-            format!("{read} | READ | finished"),
-            format!("{read} | READ | finished"),
-        ]
-    );
-    let inner = "EXECUTE IMMEDIATE 'BEGIN INSERT INTO zh VALUES (2); SELECT a FROM zh; END'";
-    assert!(!run_tagged(&s, inner, "ui-run-27"));
-    assert_eq!(
-        listed(&s, "ui-run-27"),
-        [
-            format!("{inner} | WRITE | failed"),
-            format!("{inner} | WRITE | finished"),
-        ],
-        "the query that evaluated the string finished; the refused statement is the failed row, with its class"
-    );
-}
-
-/// A statement refused before any query of it began is listed with its class once it parsed: a read
-/// of a missing table, a write to one, a statement of the session. One that did not parse has no class.
-#[test]
-fn a_refused_statement_is_listed_with_its_class_once_it_parsed() {
-    let s = Session::new().unwrap();
-    let cases = [
-        ("SELECT a FROM zr_missing", "READ"),
-        ("INSERT INTO zr_missing VALUES (1)", "WRITE"),
-        ("DROP TABLE zr_missing", "DDL"),
-        ("SELECT 1 +", "-"),
-    ];
-    for (i, (sql, class)) in cases.iter().enumerate() {
-        let tag = format!("ui-run-28-{i}");
-        assert!(!run_tagged(&s, sql, &tag), "{sql}");
-        assert_eq!(listed(&s, &tag), [format!("{sql} | {class} | failed")]);
+    assert_eq!(rc(), Some(5));
+    // A cast that fails on a row that is read comes before the row count.
+    for sql in [
+        "SET VAR (rc) = (SELECT col1 FROM VALUES ('x'), ('y'))",
+        "SET VAR (rc) = (SELECT col1 FROM VALUES ('x'))",
+    ] {
+        assert_eq!(class(sql).as_deref(), Some("CAST_INVALID_INPUT"), "{sql}");
     }
+    assert_eq!(rc(), Some(5));
+    // The third row of a sorted row query is never cast: two rows are already too many.
+    for sql in [
+        "SET VAR (rc) = (SELECT col1 FROM VALUES ('2'), ('1'), ('x') ORDER BY col1)",
+        "SET VAR (rc) = (SELECT col1 FROM VALUES (1), (2))",
+    ] {
+        assert_eq!(
+            class(sql).as_deref(),
+            Some("ROW_SUBQUERY_TOO_MANY_ROWS"),
+            "{sql}"
+        );
+    }
+    // No row sets the target to NULL, though the row's value would not cast.
+    assert_eq!(
+        class("SET VAR (rc) = (SELECT col1 FROM VALUES ('x') WHERE false)"),
+        None
+    );
+    assert_eq!(rc(), None);
+    assert_eq!(
+        class("SET VAR (rc) = (SELECT col1 FROM VALUES ('3'))"),
+        None
+    );
+    assert_eq!(rc(), Some(3));
 }

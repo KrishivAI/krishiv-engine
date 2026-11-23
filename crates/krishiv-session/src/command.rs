@@ -802,9 +802,10 @@ impl Session {
                     }
                     .into());
                 }
-                // The row query runs once, under the casts to the targets' types, so one row is assigned
-                // with Spark's store-assignment semantics and error classes and the assignment is one
-                // listed run.
+                // Spark's shape (`ResolveSetVariable`): the casts to the targets' types are part of the
+                // analyzed plan, over the row query and under `LIMIT 2`. A cast that does not analyze
+                // fails whatever the row count; one that fails on a row that is read fails before the
+                // row count is looked at. The assignment is one listed run.
                 let prefix = format!(
                     "SELECT {} FROM (",
                     stored
@@ -821,31 +822,15 @@ impl Session {
                     .map(|i| format!("_c{i}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let wrapper = format!("{prefix}{inner_sql}) AS q({aliases})");
-                let cast = match self.analyze_variable_query(&wrapper).await {
-                    Ok(analysis) => self.run_analyzed_variable_query(&analysis).await,
-                    Err(e) => Err(e),
-                };
-                let values = match cast {
-                    Ok(values) => values,
-                    // A cast may fail on a row query that has no row to assign, or too many: what
-                    // the row query alone says comes first, as when it ran before the casts.
-                    Err(cast_error) => {
-                        let batches = self
-                            .run_analyzed_variable_query(&inner_analysis)
-                            .await
-                            .map_err(|e| map_variable_error(e, text, v.span, query.span))?;
-                        match batches.iter().map(RecordBatch::num_rows).sum::<usize>() {
-                            0 => Vec::new(),
-                            1 => {
-                                return Err(map_variable_error(
-                                    cast_error, text, v.span, query.span,
-                                ));
-                            }
-                            _ => return Err(RowSubqueryTooManyRows {}.into()),
-                        }
-                    }
-                };
+                let wrapper = format!("{prefix}{inner_sql}) AS q({aliases}) LIMIT 2");
+                let analysis = self
+                    .analyze_variable_query(&wrapper)
+                    .await
+                    .map_err(|e| map_variable_error(e, text, v.span, query.span))?;
+                let values = self
+                    .run_analyzed_variable_query(&analysis)
+                    .await
+                    .map_err(|e| map_variable_error(e, text, v.span, query.span))?;
                 let total: usize = values.iter().map(RecordBatch::num_rows).sum();
                 if total > 1 {
                     return Err(RowSubqueryTooManyRows {}.into());
