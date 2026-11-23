@@ -344,6 +344,24 @@ fn duplicate_values_with_ansi_off_and_several_aggregates_are_refused() {
     assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
 }
 
+/// 4.3 fixed the slot map, but this case has no 4.3.0 golden, so it stays refused.
+#[test]
+fn duplicate_values_with_ansi_off_and_several_aggregates_are_refused_on_4_3_too() {
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_3)
+        .build()
+        .unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    let e = block_on(async {
+        s.sql("SELECT * FROM VALUES (1, 10, 5) AS g(g, p, v) PIVOT (sum(v) AS s, max(v) AS m FOR p IN (10, 20, 10))")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
+}
+
 /// A NULL value for a binary pivot column: Spark 4.2 compares it with the other values in its `TreeMap` (a
 /// `NullPointerException` from source), earlier versions find the NULL rows in their `HashMap` while matching no
 /// other binary value by content. Neither is reproduced: the engine refuses it on every profile.
