@@ -59,8 +59,20 @@ def test_eager_max_rows_defaults_and_bounds(spark: SparkSession) -> None:
         assert _eager_max_rows(spark) == 0
 
 
+def test_html_is_off_until_eager_eval_is_enabled(spark: SparkSession) -> None:
+    """NB-2: as in PySpark, `_repr_html_` is `None` while `spark.sql.repl.eagerEval.enabled` is off."""
+    pytest.importorskip("pyarrow")
+    df = spark.sql("SELECT 1 AS a")
+    assert df._repr_html_() is None
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", "true")
+    assert df._repr_html_() is not None
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", "false")
+    assert df._repr_html_() is None
+
+
 def test_html_shows_names_types_and_values(spark: SparkSession) -> None:
     pytest.importorskip("pyarrow")
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", "true")
     df = spark.sql("SELECT 1 AS a, 'x' AS b")
     html = df._repr_html_()
     assert html is not None
@@ -72,6 +84,7 @@ def test_html_shows_names_types_and_values(spark: SparkSession) -> None:
 
 
 def test_html_is_a_bounded_preview(spark: SparkSession) -> None:
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", "true")
     pa = pytest.importorskip("pyarrow")
     df = spark.createDataFrame(pa.table({"id": list(range(30))})).orderBy("id")
     assert body_rows(df._repr_html_() or "") == 20
@@ -82,6 +95,7 @@ def test_html_is_a_bounded_preview(spark: SparkSession) -> None:
 
 
 def test_html_escapes_names_types_and_values(spark: SparkSession) -> None:
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", "true")
     pa = pytest.importorskip("pyarrow")
     df = spark.createDataFrame(pa.table({"a<b": ['<x>&"y"'], "c": [1]})).select(F.col("a<b").alias("d>e"))
     html = df._repr_html_()
@@ -92,6 +106,7 @@ def test_html_escapes_names_types_and_values(spark: SparkSession) -> None:
 
 
 def test_html_renders_nulls(spark: SparkSession) -> None:
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", "true")
     pa = pytest.importorskip("pyarrow")
     df = spark.createDataFrame(pa.table({"a": ["x", None], "v": [1.5, None]})).orderBy("a")
     html = df._repr_html_()
@@ -100,6 +115,7 @@ def test_html_renders_nulls(spark: SparkSession) -> None:
 
 
 def test_html_keeps_wide_characters(spark: SparkSession) -> None:
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", "true")
     pytest.importorskip("pyarrow")
     df = spark.sql("select '日本語' as cjk, 'abcdefghijklmnopqrstuvwxyz' as long")
     html = df._repr_html_()
@@ -144,6 +160,7 @@ def test_html_string_renders_lists_with_nulls() -> None:
 
 def test_html_matches_show_cells(spark: SparkSession) -> None:
     """The preview uses the same display text as ``show`` (floats, dates, binary)."""
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", "true")
     pytest.importorskip("pyarrow")
     df = spark.sql("select 1.5 as f, DATE'2020-01-02' as d").limit(1)
     html = df._repr_html_()
@@ -154,6 +171,7 @@ def test_html_matches_show_cells(spark: SparkSession) -> None:
 
 def test_html_preview_reruns_the_query(spark: SparkSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """Each preview runs the query again: it fetches the Arrow result every time, not from a cache."""
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", "true")
     pytest.importorskip("pyarrow")
     from krishiv.sql.dataframe import DataFrame as _DataFrame
 

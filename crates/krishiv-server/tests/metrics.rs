@@ -83,6 +83,9 @@ fn full_registry() -> Arc<MetricsRegistry> {
             .add_gauge(name, Vec::new(), move || Some(value))
             .unwrap();
     }
+    for name in ["krishiv.events.dropped", "krishiv.events.queue_depth"] {
+        registry.add_gauge(name, Vec::new(), || Some(0)).unwrap();
+    }
     registry
         .add_gauge("krishiv.memory.reserved", Vec::new(), || Some(8))
         .unwrap();
