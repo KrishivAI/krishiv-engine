@@ -261,12 +261,13 @@ fn files_under(dir: &Path) -> Vec<String> {
             if p.is_dir() {
                 stack.push(p);
             } else {
-                out.push(
-                    p.strip_prefix(dir)
-                        .expect("under")
-                        .to_string_lossy()
-                        .into_owned(),
-                );
+                // Joined with `/` on every platform, so the expected lists hold on Windows.
+                let rel = p.strip_prefix(dir).expect("under");
+                let parts: Vec<_> = rel
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect();
+                out.push(parts.join("/"));
             }
         }
     }
