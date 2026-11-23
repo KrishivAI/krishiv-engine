@@ -8,7 +8,7 @@ description: "this function is used and can only be used to calculate a measure 
 
 this function is used and can only be used to calculate a measure defined in a metric view.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
 ## Syntax
 
@@ -20,9 +20,9 @@ measure(expr)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
-| Kind | unknown (function) |
+| Kind | aggregate (function) |
 | Added in Spark | 4.2.0 |
 | In Spark profiles | 4.2 and later |
 | Arguments | 1 |
@@ -34,12 +34,13 @@ measure(expr)
 > SELECT dimension_col, measure(measure_col)
 > FROM test_metric_view
 > GROUP BY dimension_col;
-Error: KRISHIV_UNSUPPORTED_FEATURE
+Error: TABLE_OR_VIEW_NOT_FOUND
 ```
 
 ## Version history
 
 - Added in Spark 4.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

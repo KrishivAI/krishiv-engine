@@ -421,6 +421,21 @@ impl<'a> Walker<'a> {
                 kind,
                 condition,
             } => self.join(left, right, *kind, condition, offset),
+            // The match decides which right row a left row gets: its values are join filters.
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => {
+                let rule = self.join(left, right, *kind, condition, offset)?;
+                for e in as_of.exprs() {
+                    let info = self.value(e, offset)?;
+                    self.record(FilterKind::Join, &info);
+                }
+                Ok(rule)
+            }
             PlanNode::Sort { input, order, .. } => {
                 let out = self.plan(input, offset)?;
                 for o in order {
@@ -610,6 +625,13 @@ impl<'a> Walker<'a> {
                 output,
                 barrier: _,
             } => {
+                let rows = self.plan(input, offset)?;
+                let value = self.opaque(rows.iter().map(|(_, i)| i));
+                self.opaque_columns(output, &value, offset)
+            }
+            // A metric-view read left in a plan (no aggregate over it) never runs: each output column is
+            // `opaque` over every source column.
+            PlanNode::MetricViewRead { input, output, .. } => {
                 let rows = self.plan(input, offset)?;
                 let value = self.opaque(rows.iter().map(|(_, i)| i));
                 self.opaque_columns(output, &value, offset)

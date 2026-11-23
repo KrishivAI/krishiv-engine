@@ -346,6 +346,29 @@ impl Display for NodeLine<'_> {
                     JoinCondition::Natural => write!(f, ", NATURAL"),
                 }
             }
+            PlanNode::AsOfJoin {
+                kind,
+                condition,
+                as_of,
+                ..
+            } => {
+                write!(f, "AsOfJoin {kind:?}, {} ", Text(&as_of.left))?;
+                match as_of.direction.sql_operator(as_of.allow_exact) {
+                    Some(op) => f.write_str(op)?,
+                    None if as_of.allow_exact => f.write_str("nearest")?,
+                    None => f.write_str("nearest exclusive")?,
+                }
+                write!(f, " {}", Text(&as_of.right))?;
+                if let Some(t) = &as_of.tolerance {
+                    write!(f, ", tolerance {}", Text(t))?;
+                }
+                match condition {
+                    JoinCondition::None => Ok(()),
+                    JoinCondition::On(e) => write!(f, ", {}", Text(e)),
+                    JoinCondition::Using(cols) => write!(f, ", USING ({})", cols.join(", ")),
+                    JoinCondition::Natural => write!(f, ", NATURAL"),
+                }
+            }
             PlanNode::Sort { order, global, .. } => {
                 f.write_str("Sort [")?;
                 for (i, o) in order.iter().enumerate() {
@@ -455,6 +478,23 @@ impl Display for NodeLine<'_> {
                     Name(std::slice::from_ref(name)),
                     List(metrics)
                 )
+            }
+            PlanNode::MetricViewRead {
+                name,
+                dimensions,
+                measures,
+                output,
+                ..
+            } => {
+                write!(f, "MetricViewRead {} [", Name(name))?;
+                for (i, c) in dimensions.iter().chain(measures).enumerate() {
+                    write!(f, "{}{} = {}", sep(i), c.name, Text(&c.expr))?;
+                }
+                f.write_str("], [")?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
             }
             PlanNode::JoinHint { strategy, .. } => {
                 write!(f, "JoinHint (strategy={})", strategy.name())

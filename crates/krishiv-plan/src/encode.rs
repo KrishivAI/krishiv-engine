@@ -121,7 +121,9 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::CollectMetrics { .. } => 41,
         PlanNode::ColumnNames { .. } => 42,
         PlanNode::Tail { .. } => 43,
-        PlanNode::Zip { .. } => 44,
+        PlanNode::MetricViewRead { .. } => 44,
+        PlanNode::AsOfJoin { .. } => 45,
+        PlanNode::Zip { .. } => 46,
     }
 }
 
@@ -917,6 +919,9 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             PlanNode::Join {
                 kind, condition, ..
+            }
+            | PlanNode::AsOfJoin {
+                kind, condition, ..
             } => {
                 let tag: u8 = match kind {
                     JoinKind::Inner => 1,
@@ -946,6 +951,27 @@ impl<'k, 'a> Encoder<'k, 'a> {
                         self.strs(cols);
                     }
                     JoinCondition::Natural => self.u8(3),
+                }
+                if let PlanNode::AsOfJoin { as_of, .. } = &p.node {
+                    self.expr(&as_of.left);
+                    self.expr(&as_of.right);
+                    self.u8(match as_of.direction {
+                        crate::AsOfDirection::Backward => 1,
+                        crate::AsOfDirection::Forward => 2,
+                        crate::AsOfDirection::Nearest => 3,
+                    });
+                    self.bool(as_of.allow_exact);
+                    self.bool(as_of.as_written);
+                    self.bool(as_of.distance_on_every_pair);
+                    for e in [&as_of.tolerance, &as_of.distance] {
+                        match e {
+                            None => self.u8(0),
+                            Some(t) => {
+                                self.u8(1);
+                                self.expr(t);
+                            }
+                        }
+                    }
                 }
             }
             PlanNode::Sort { order, global, .. } => {
@@ -1033,6 +1059,39 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::CollectMetrics { name, metrics, .. } => {
                 self.str(name);
                 self.exprs(metrics);
+            }
+            PlanNode::MetricViewRead {
+                name,
+                dimensions,
+                measures,
+                output,
+                ansi,
+                ..
+            } => {
+                self.strs(name);
+                for cols in [dimensions, measures] {
+                    self.len(cols.len());
+                    for c in cols {
+                        self.str(&c.name);
+                        self.expr(&c.expr);
+                        // Lossless: two reads whose column types differ only in nested
+                        // nullability, comments or fields are different plans.
+                        self.lossless_type(&c.data_type);
+                        self.u8(u8::from(c.nullable));
+                    }
+                }
+                self.len(output.len());
+                for c in output {
+                    self.put(&c.id.0.to_le_bytes());
+                    self.str(&c.name);
+                    self.lossless_type(&c.data_type);
+                    self.bool(c.nullable);
+                }
+                self.u8(match ansi {
+                    None => 0,
+                    Some(false) => 1,
+                    Some(true) => 2,
+                });
             }
             PlanNode::JoinHint { strategy, .. } => {
                 self.str(strategy.name());

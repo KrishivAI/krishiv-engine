@@ -11,6 +11,7 @@
 //! `DESCRIBE` classes, `_LEGACY_ERROR_TEMP_0035`, ...) are raised here or
 //! in validation with Spark's class and SQLSTATE.
 
+use super::metric_view::ViewHead;
 use super::{Close, Fail, PR, Parser};
 use crate::ast::{
     AddResource, AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable,
@@ -591,17 +592,24 @@ impl<'s> Parser<'s> {
     /// The action of an `ALTER VIEW`, after the view name.
     fn alter_view_action(&mut self) -> PR<AlterViewAction> {
         let start = self.start();
-        if self.eat_kw("AS") {
+        // `WITH SCHEMA` followed by a binding mode; otherwise `WITH` starts a query's CTEs, one of
+        // which may be named `SCHEMA` (Spark 4.2.1 run, 2026-11-21).
+        if self.kw_at(0, "WITH")
+            && self.kw_at(1, "SCHEMA")
+            && self.any_kw_at(2, &["BINDING", "EVOLUTION", "COMPENSATION", "TYPE"])
+        {
+            let binding = self.schema_binding()?;
+            return Ok(AlterViewAction::SetSchemaBinding(binding));
+        }
+        // `ALTER VIEW identifierReference AS? query` (Spark's `alterViewQuery`): without `AS`, a
+        // `WITH` starts the query's CTEs, and `TABLE t` is a query too.
+        if self.eat_kw("AS") || self.query_starts() || self.kw_at(0, "TABLE") {
             let query = Box::new(self.query()?);
             return Ok(AlterViewAction::SetQuery {
                 query,
                 schema_binding: None,
                 span: self.span_from(start),
             });
-        }
-        if self.kw_at(0, "WITH") && self.kw_at(1, "SCHEMA") {
-            let binding = self.schema_binding()?;
-            return Ok(AlterViewAction::SetSchemaBinding(binding));
         }
         if self.eat_kw("SET") {
             self.expect_kw("TBLPROPERTIES")?;
@@ -748,15 +756,60 @@ impl<'s> Parser<'s> {
                 if p.eat_kw("OPTIONS") {
                     view.options = p.property_list(true)?;
                 }
+            } else if temporary {
+                p.view_tail(&mut view)?;
             } else {
-                p.view_clauses(&mut view)?;
-                p.expect_kw("AS")?;
-                view.query = Some(Box::new(p.query()?));
+                // `createView` or `createMetricView`: ANTLR reads on until one
+                // alternative is left, so the reading that gets further decides (a
+                // tie keeps the view's error).
+                let head_end = p.pos;
+                let save = p.checkpoint();
+                match p.view_tail(&mut view) {
+                    Err(Fail::Syntax) => {}
+                    other => {
+                        p.commit(save);
+                        other?;
+                        return p.finish_full_view(view, start);
+                    }
+                }
+                let view_far = p.far;
+                p.restore(save);
+                let save = p.checkpoint();
+                let head = ViewHead {
+                    start,
+                    or_replace: view.or_replace,
+                    if_not_exists: view.if_not_exists,
+                    name: view.name.clone(),
+                    columns: view.columns.clone(),
+                };
+                match p.metric_view_tail(head) {
+                    Err(Fail::Syntax) if p.far <= view_far => {
+                        p.restore(save);
+                        p.pos = head_end;
+                        p.view_tail(&mut view)?;
+                    }
+                    other => {
+                        p.commit(save);
+                        return other;
+                    }
+                }
             }
-            view.span = p.span_from(start);
-            p.command_end()?;
-            Ok(Statement::CreatePermanentView(Box::new(view)))
+            p.finish_full_view(view, start)
         })
+    }
+
+    /// `createView`'s clauses and `AS query`.
+    fn view_tail(&mut self, view: &mut CreatePermanentView) -> PR<()> {
+        self.view_clauses(view)?;
+        self.expect_kw("AS")?;
+        view.query = Some(Box::new(self.query()?));
+        Ok(())
+    }
+
+    fn finish_full_view(&mut self, mut view: CreatePermanentView, start: usize) -> PR<Statement> {
+        view.span = self.span_from(start);
+        self.command_end()?;
+        Ok(Statement::CreatePermanentView(Box::new(view)))
     }
 
     /// Whether the column list here (if any) starts with a typed column:
@@ -802,7 +855,13 @@ impl<'s> Parser<'s> {
                 self.pos += 2;
                 view.collation = Some(self.table_name()?);
                 1
-            } else if self.kw_at(0, "WITH") && self.kw_at(1, "SCHEMA") {
+            } else if self.kw_at(0, "WITH") {
+                // ANTLR takes `schemaBinding` on `WITH` alone: anything but `SCHEMA` after it
+                // fails there.
+                if !self.kw_at(1, "SCHEMA") {
+                    self.bump();
+                    return self.fail();
+                }
                 view.schema_binding = Some(self.schema_binding()?);
                 2
             } else if self.kw_at(0, "PARTITIONED") && self.kw_at(1, "ON") {

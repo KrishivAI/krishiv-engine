@@ -1,23 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-//! What a read reads and its resolved form: [`CteRef`], [`ReadSource`], [`Scan`], [`TableVersion`].
+//! What a relation reads: [`ReadSource`] (an unresolved read), [`Scan`] (a resolved one) and
+//! [`TableVersion`]. Split out of `plan.rs` to keep it under 2,000 lines.
 
 use std::collections::BTreeMap;
 
 use krishiv_common::secret::OptionValue;
 
 use crate::BoundColumn;
-
-/// A resolved reference to a `WITH` definition: the definition is planned
-/// once, and each reference reads its rows under attributes of its own.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CteRef {
-    /// The definition's name.
-    pub name: String,
-    /// The definition's output attributes, which identify it.
-    pub source: Vec<crate::AttrId>,
-    /// This reference's attributes, one per source attribute.
-    pub output: Vec<BoundColumn>,
-}
 
 /// What an unresolved read reads.
 ///

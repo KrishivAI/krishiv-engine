@@ -10,6 +10,7 @@
     reason = "test helpers sit outside #[test] fns; the TPC-H runs print their timings"
 )]
 
+mod asof_sites;
 mod broadcast_reuse;
 mod build_projection;
 mod conditionals;
@@ -35,6 +36,7 @@ mod partial_aggregate;
 mod payload_above;
 mod physical;
 mod plan_stats;
+mod pre_expand;
 mod prefix_cache;
 mod python_relations;
 mod rule_differential;

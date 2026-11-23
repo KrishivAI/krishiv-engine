@@ -44,6 +44,7 @@ fuzz_target!(|data: &[u8]| {
         having_without_group_by_as_where: rest.first().is_some_and(|b| b & 16 != 0),
         schema_level_collations: rest.first().is_some_and(|b| b & 32 != 0),
         time_travel_at_syntax: rest.first().is_some_and(|b| b & 64 != 0),
+        asof_join: rest.first().is_some_and(|b| b & 128 != 0),
     };
     match parse_query(&sql, &options) {
         Ok(q) => {
