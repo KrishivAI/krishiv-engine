@@ -1857,6 +1857,29 @@ fn legacy_store_casts_a_map_nested_in_an_array_and_a_struct() {
     assert_eq!(rows(&s, "select cast(st.m[2] as string) from nm"), ["8"]);
 }
 
+/// A source struct whose field names repeat (or differ only in case) is stored by position, as Spark does.
+#[test]
+fn legacy_store_reads_struct_fields_by_position() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table sp(st struct<a:bigint,b:bigint>) using parquet",
+    );
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    run(&s, "insert into sp select named_struct('a', 1, 'a', 2)");
+    run(&s, "insert into sp select named_struct('A', 3, 'a', 4)");
+    assert_eq!(
+        rows(
+            &s,
+            "select concat_ws('|', st.a, st.b) from sp order by st.a"
+        ),
+        ["1|2", "3|4"]
+    );
+}
+
 /// A non-map source into a map column, and a map whose key type no cast reaches, are refused before anything
 /// is written, even under LEGACY (Spark recurses only through a map-to-map pair).
 #[test]

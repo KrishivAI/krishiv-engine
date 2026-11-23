@@ -168,6 +168,14 @@ pub(super) fn legacy_refused(from: &DataType, to: &DataType) -> bool {
     }
 }
 
+/// Whether a struct's field names are all different, ignoring case.
+fn unique_names(st: &krishiv_types::StructType) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    st.fields()
+        .iter()
+        .all(|f| seen.insert(f.name().to_lowercase()))
+}
+
 /// The LEGACY store cast of `value` (of type `from`) to `to`, one leaf at a time as Spark does: a map's keys and
 /// values are cast apart (a non-ANSI cast each, so `'x'` stores `NULL` and an overflow wraps or saturates as
 /// `CAST` does), through array elements and struct fields. `depth` keeps nested lambda names apart.
@@ -205,7 +213,11 @@ pub(super) fn legacy_store_cast(
             let body = legacy_store_cast(col(&name), f.element_type(), t.element_type(), depth + 1);
             call_function("transform", [value, lambda([name], body)])
         }
-        (DataType::Struct(f), DataType::Struct(t)) if f.fields().len() == t.fields().len() => {
+        // A field read by name (`get_field`) needs unique source names; Spark reads by ordinal, so a source
+        // struct whose names repeat (ignoring case) is cast as one value, by position.
+        (DataType::Struct(f), DataType::Struct(t))
+            if f.fields().len() == t.fields().len() && unique_names(f) =>
+        {
             let mut args = Vec::with_capacity(t.fields().len() * 2);
             for (f, t) in f.fields().iter().zip(t.fields().iter()) {
                 args.push(lit(t.name()));
