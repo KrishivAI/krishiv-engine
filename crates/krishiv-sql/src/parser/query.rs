@@ -143,7 +143,9 @@ impl Parser<'_> {
         let ctes = self.comma_sep(|p| {
             let start = p.start();
             let name = p.name_part(true)?;
-            let columns = if p.sym_at(0, Sym::LParen) {
+            // `WITH c (SELECT 1)`: `AS` is optional, so a parenthesis that starts a
+            // query is the body, not a column list (ANTLR's prediction).
+            let columns = if p.sym_at(0, Sym::LParen) && !p.query_follows(1) {
                 p.ident_list()?
             } else {
                 vec![]
