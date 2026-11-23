@@ -34,9 +34,10 @@ compares only within one `worker_id`). Then combine those records (in 0.3 one, w
 sum the counters `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`, `rows_written`, `files_written`,
 `spill_bytes` and `spill_files`; take the maximum of `peak_memory_bytes`, `wall_ns` and `queued_ns` (a peak and two
 times of the whole query, which workers' records overlap); take the minimum of `window_start_ms` and the maximum of
-`window_end_ms`; every other member is the same in all of a query's records. A null member counts as absent. The end figures are the usage of the `finished` or `cancelled` event. The
-event schema is experimental until the design note's review findings are settled; do not treat `record_id` as a
-billing-grade key yet. Members: `kind` (`final`), `fidelity` (`exact`), `principal`, `delegated_by`, `session_id`,
+`window_end_ms`; `record_id` is per record (the query's key is `session_id` and `query_id`), and every other member
+is the same in all of a query's records. A null member counts as absent. The end figures are the usage of the
+`finished` or `cancelled` event. The event schema is experimental until the design note's review findings are
+settled; do not treat `record_id` as a billing-grade key yet. Members: `kind` (`final`), `fidelity` (`exact`), `principal`, `delegated_by`, `session_id`,
 `compute_id`, `workload_class`, `resource_group`, `statement_class`, `window_start_ms`, `window_end_ms`,
 `wall_ns` (queue time excluded for a query that started; a query cancelled before it started reports the time since its submission), `queued_ns`, `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`,
 `rows_written`, `files_written`, `spill_bytes`, `spill_files`, `peak_memory_bytes`, `result_cache_hit`.

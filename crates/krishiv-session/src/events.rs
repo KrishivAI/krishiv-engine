@@ -192,9 +192,9 @@ impl UsageRecordId {
 /// `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`, `rows_written`, `files_written`, `spill_bytes`
 /// and `spill_files` are summed; `peak_memory_bytes`, `wall_ns` and `queued_ns` take the maximum (a peak and
 /// two times of the whole query, which workers' records overlap); `window_start_ms` takes the minimum and
-/// `window_end_ms` the maximum; every other member is the same in all of a query's records. A null member
-/// counts as absent. The end figures are the usage of a `Finished` event or of a `Cancelled` one, whichever
-/// ended the query.
+/// `window_end_ms` the maximum; `record_id` is per record (the query's key is `(session_id, query_id)`), and
+/// every other member is the same in all of a query's records. A null member counts as absent. The end
+/// figures are the usage of a `Finished` event or of a `Cancelled` one, whichever ended the query.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct UsageRecord {
