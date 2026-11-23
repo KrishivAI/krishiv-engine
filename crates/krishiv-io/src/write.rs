@@ -589,7 +589,14 @@ impl FileWriter {
                     // (SQL-33: a sort's final merge held the rest of 6 MB).
                     match self.mem.grow_without_abort(grow).await {
                         Ok(()) => {}
-                        Err(MemoryError::Exhausted { .. }) => self.close_file().await?,
+                        Err(MemoryError::Exhausted { .. }) => {
+                            tracing::debug!(
+                                held,
+                                reserved = self.mem.size(),
+                                "writer short of memory: ending the file, going on in a new one"
+                            );
+                            self.close_file().await?;
+                        }
                         Err(e) => return Err(e.into()),
                     }
                 }
