@@ -1415,7 +1415,10 @@ fn config_keys_drive_the_spill_config() {
     // `.../krishiv/spill` under the user cache dir, or `krishiv-spill-<uid>`.
     let d = defaults.dir.to_string_lossy().into_owned();
     assert!(
-        d.contains("krishiv/spill") || d.contains("krishiv-spill-"),
+        defaults
+            .dir
+            .ends_with(std::path::Path::new("krishiv").join("spill"))
+            || d.contains("krishiv-spill-"),
         "{d}"
     );
 
