@@ -1,0 +1,67 @@
+name: Windows port
+
+# The Windows x86-64 port (owner 2026-11-23, 0.3.0 scope; lane opus-3): sizes and tracks what fails to build and test
+# on windows-latest (x86_64-pc-windows-msvc) while the platform code gets its cfg(windows) halves. Runs only on the
+# port branch; sonnet-8's wheels/binaries matrix and the Windows test job in ci.yml replace it once the port merges.
+on:
+  push:
+    branches: [p3/o3-windows-port]
+
+concurrency:
+  group: windows-port-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Every crate that can be checked is checked (--keep-going), so one run lists every error.
+      - name: cargo check (workspace, all targets)
+        id: check
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo check --workspace --all-targets --locked --keep-going --message-format=short 2>&1 | tee check.log
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          errors=$(grep -c '^[^ ]*: error\|^error' check.log || true)
+          crates=$(grep -o 'could not compile `[^`]*`' check.log | sort -u | tr '\n' ' ' || true)
+          {
+            echo "## Windows port: cargo check"
+            echo "error lines: ${errors}"
+            echo "crates that did not compile: ${crates:-none}"
+            echo '```'
+            grep '^[^ ]*: error\|^error' check.log | sort | uniq -c | sort -rn | head -80 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: windows-check-log
+          path: check.log
+          retention-days: 7
+      - name: Fail when the check failed
+        if: steps.check.outcome == 'failure'
+        shell: bash
+        run: exit 1
