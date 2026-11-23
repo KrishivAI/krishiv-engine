@@ -73,6 +73,10 @@ impl TestDir {
 }
 
 impl SpillConfig {
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "its test plants a symbolic link (Unix only)")
+    )]
     fn with_dir(self, dir: &Path) -> Self {
         Self {
             dir: dir.to_owned(),

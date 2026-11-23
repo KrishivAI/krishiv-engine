@@ -201,12 +201,17 @@ impl DescriptorSet {
         let before = std::fs::metadata(local).map_err(|e| fail(&e))?;
         let file = std::fs::File::open(local).map_err(|e| fail(&e))?;
         let opened = file.metadata().map_err(|e| fail(&e))?;
+        // Unix: the same device and inode. Windows' file identity (volume serial and file index) is not in
+        // stable std, so there the file opened is read without this check (Windows port, 0.3.0).
+        #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
             if opened.dev() != before.dev() || opened.ino() != before.ino() {
                 return Err(CannotParseProtobufDescriptor {}.into());
             }
         }
+        #[cfg(not(unix))]
+        let _ = (&before, &opened);
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_BYTES + 1), &mut bytes)
             .map_err(|e| fail(&e))?;

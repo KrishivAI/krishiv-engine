@@ -501,6 +501,7 @@ fn two_malformed_embedded_pieces_do_not_merge_into_a_valid_message() {
     assert_eq!(err.error_class().name(), "MALFORMED_PROTOBUF_MESSAGE");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_descriptor_file_that_is_a_symbolic_link_is_read_as_spark_reads_it() {
     let dir = std::env::temp_dir().join(format!("krishiv-pb-link-{}", std::process::id()));
