@@ -457,19 +457,41 @@ fn token_fixture(
     super::VendedTable,
     VendedAnswer,
 ) {
+    token_fixture_refreshing(max_entries, &["s3://bucket/wh"])
+}
+
+/// [`token_fixture`] whose `loadCredentials` answers one credential per prefix of `refreshed` (key ids
+/// `AKIANEWKEY0`, `AKIANEWKEY1`, ...; a single prefix gets `AKIANEWKEY`).
+fn token_fixture_refreshing(
+    max_entries: usize,
+    refreshed: &[&str],
+) -> (
+    crate::http_test_server::Server,
+    Arc<VendedCache>,
+    super::VendedTable,
+    VendedAnswer,
+) {
     use crate::declared::tests::{decl, deps, path};
     use crate::iceberg_rest::test_server::{Reply, serve};
     use krishiv_session::catalog_decl::DeclMode;
     use krishiv_store::egress::PrivateAddresses;
 
     let long = ms(SystemTime::now() + Duration::from_secs(3600));
-    let credential = |key_id: &str| {
+    let credential = |prefix: &str, key_id: &str| {
         format!(
-            r#"{{"prefix": "s3://bucket/wh", "config": {{"s3.access-key-id": "{key_id}", "s3.secret-access-key": "s",
+            r#"{{"prefix": "{prefix}", "config": {{"s3.access-key-id": "{key_id}", "s3.secret-access-key": "s",
                 "s3.session-token-expires-at-ms": "{long}"}}}}"#
         )
     };
-    let refreshed = credential("AKIANEWKEY");
+    let refreshed = match refreshed {
+        [one] => credential(one, "AKIANEWKEY"),
+        many => many
+            .iter()
+            .enumerate()
+            .map(|(i, p)| credential(p, &format!("AKIANEWKEY{i}")))
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
     let config = r#"{"defaults": {}, "overrides": {}, "endpoints": ["GET /v1/{prefix}/namespaces/{namespace}/tables/{table}",
         "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"]}"#;
     let server = serve(move |r| match path(r) {
@@ -645,4 +667,37 @@ fn an_expired_loaded_answer_refreshes_with_its_table_token() {
         credential_bearers(&server),
         vec![Some("Bearer table-token".to_owned())]
     );
+}
+
+/// #930 thread (CodeRabbit): a refresh whose answer narrows the prefix below the scope's root (`s3://bucket/wh` to
+/// `s3://bucket/wh/db/t`) still serves the scope, instead of refusing the long-running read.
+#[test]
+fn a_refresh_that_narrows_the_prefix_still_serves_the_scope() {
+    let (server, _cache, table, loaded) = token_fixture_refreshing(10, &["s3://bucket/wh/db/t"]);
+    table.offer(Arc::new(loaded));
+    let source = table.source("s3://bucket/wh", None).unwrap();
+    futures::executor::block_on(source.current()).unwrap();
+    assert!(
+        credential_bearers(&server).is_empty(),
+        "served from the cache"
+    );
+    // The store asks again (it refused the credential): the refreshed answer names only the narrower prefix.
+    let refreshed = futures::executor::block_on(source.current());
+    assert!(refreshed.is_ok(), "{:?}", refreshed.err());
+    assert_eq!(credential_bearers(&server).len(), 1);
+}
+
+/// Two narrower prefixes with different credentials: no one credential serves the scope, so the read is refused as
+/// before (`KRISHIV_CATALOG_LOCATION_REFUSED`), never served one of them at random.
+#[test]
+fn a_refresh_narrowed_to_two_different_credentials_is_refused() {
+    let (_server, _cache, table, loaded) = token_fixture_refreshing(
+        10,
+        &["s3://bucket/wh/db/t/data", "s3://bucket/wh/db/t/metadata"],
+    );
+    table.offer(Arc::new(loaded));
+    let source = table.source("s3://bucket/wh", None).unwrap();
+    futures::executor::block_on(source.current()).unwrap();
+    let e = futures::executor::block_on(source.current()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivCatalogLocationRefused);
 }

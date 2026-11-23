@@ -91,7 +91,7 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   table `token` of a `loadTable` answer is kept with it and is the bearer of that table's `loadCredentials` and reload
   only, a 401 falling back to the caller's token), `VendedSource` (the cached credential while it outlives the refresh
   skew, else `loadCredentials` with the same caller or a table reload (endpoint not advertised, or a 404); a second
-  fetch while the cache still holds the answer it served means the store refused it, so it refreshes), one store scope per vended prefix through `ScanInputs::stores`,
+  fetch while the cache still holds the answer it served means the store refused it, so it refreshes; a refreshed answer that narrows the prefix below the scope's root serves the scope with the one credential of the prefixes inside it, refused when they differ), one store scope per vended prefix through `ScanInputs::stores`,
   `VendedPaths` (a location outside every scope, or no credential, is `KRISHIV_CATALOG_LOCATION_REFUSED` before any
   request: no ambient fallback), the §4.4 block-cache scope; `iceberg_rest/vended.rs` prefix forms (full URL on
   segments, bucket, scheme family), the Iceberg 1.12.0 credential keys and their expiries; `EmbeddedLocations` (embedded use
