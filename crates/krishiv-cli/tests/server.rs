@@ -244,7 +244,20 @@ fn start(spill: &std::path::Path) -> Running {
 
 /// [`start`] with more `--conf KEY=VALUE` settings.
 fn start_with(spill: &std::path::Path, conf: &[String]) -> Running {
-    let mut child = krishiv()
+    spawn_server(spill, conf, false)
+}
+
+/// [`start_with`] with the JSON logs on (`KRISHIV_LOG=json`), so records reach stderr.
+fn start_logging(spill: &std::path::Path, conf: &[String]) -> Running {
+    spawn_server(spill, conf, true)
+}
+
+fn spawn_server(spill: &std::path::Path, conf: &[String], json_logs: bool) -> Running {
+    let mut command = krishiv();
+    if json_logs {
+        command.env("KRISHIV_LOG", "json");
+    }
+    let mut child = command
         // `--allow-root`: CI containers may run as root.
         .args([
             "server",
@@ -379,6 +392,41 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
         .filter(|n| n.to_string_lossy().starts_with("krishiv-spill-"))
         .collect();
     assert!(left.is_empty(), "spill directories left: {left:?}");
+}
+
+/// A drain the operating system asked for leaves the same action record as `admin.v1`'s `Drain`
+/// (design P3-T066 §5.6), so the log shows every drain.
+#[test]
+#[cfg(feature = "telemetry-logs")]
+fn a_sigterm_drain_leaves_an_action_record() {
+    use std::io::Read;
+    let spill = tempfile::tempdir().expect("tempdir");
+    // Records reach stderr only with the JSON logs on (`KRISHIV_LOG=json`).
+    let mut run = start_logging(spill.path(), &[]);
+    let status = Command::new("kill")
+        .args(["-TERM", &run.child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(status.success());
+    let exit = wait_exit(&mut run.child, Duration::from_secs(20));
+    assert_eq!(exit.code(), Some(0), "clean exit");
+    let mut stderr = String::new();
+    run.child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr is utf-8");
+    let record = stderr
+        .lines()
+        .find(|l| l.contains("admin action"))
+        .unwrap_or_else(|| panic!("no action record in:\n{stderr}"));
+    assert!(record.contains("krishiv::admin_action"), "{record}");
+    assert!(record.contains("\"rpc\":\"Drain\""), "{record}");
+    assert!(record.contains("\"transport\":\"signal\""), "{record}");
+    assert!(record.contains("\"result\":\"ok\""), "{record}");
+    assert!(record.contains("\"auth_method\":\"none\""), "{record}");
+    assert!(record.contains("exit_when_drained true"), "{record}");
 }
 
 /// Runs `script` with a PySpark 4.x Connect client against a fresh server,
@@ -748,7 +796,7 @@ fn the_admin_v1_surface_is_served_behind_the_guard() {
         Some(token),
     );
     assert!(version.starts_with("HTTP/1.1 200"), "{version}");
-    assert!(version.contains("\"adminV1Revision\":\"3\""), "{version}");
+    assert!(version.contains("\"adminV1Revision\":\"4\""), "{version}");
     let caps = http_get_host(
         &server.admin,
         "/api/admin/v1/capabilities",

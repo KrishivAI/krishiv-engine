@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-optimizer/tests/it/as_of.rs
+expression: "SELECT * FROM t LEFT ASOF JOIN u MATCH_CONDITION (t.a >= u.a) ON t.b = u.d AND u.d = 'x'"
+---
+AsOfJoin LeftOuter, a#0 >= a#3, (b#1 == d#4)
+:- Scan spark_catalog.default.t [a#0, b#1, c#2]
++- Filter (d#4 == 'x')
+   +- Scan spark_catalog.default.u [a#3, d#4]

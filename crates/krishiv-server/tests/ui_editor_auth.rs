@@ -83,9 +83,21 @@ async fn start() -> SocketAddr {
 }
 
 async fn call(addr: SocketAddr, method: &str, path: &str, token: &str, body: &str) -> (u16, Value) {
+    call_with(addr, method, path, token, body, "").await
+}
+
+/// `call` with extra raw header lines (each ending in `\r\n`).
+async fn call_with(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: &str,
+    extra: &str,
+) -> (u16, Value) {
     let mut s = TcpStream::connect(addr).await.unwrap();
     let req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nX-Krishiv-Csrf: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nX-Krishiv-Csrf: 1\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     s.write_all(req.as_bytes()).await.unwrap();
@@ -103,12 +115,17 @@ async fn call(addr: SocketAddr, method: &str, path: &str, token: &str, body: &st
 }
 
 async fn run(addr: SocketAddr, token: &str, sql: &str) -> Value {
-    let (status, body) = call(
+    run_with(addr, token, sql, "").await
+}
+
+async fn run_with(addr: SocketAddr, token: &str, sql: &str, extra: &str) -> Value {
+    let (status, body) = call_with(
         addr,
         "POST",
         "/api/internal/sql",
         token,
         &json!({"sql": sql}).to_string(),
+        extra,
     )
     .await;
     assert_eq!(status, 202, "{body}");
@@ -250,4 +267,35 @@ async fn an_operators_own_cancel_ends_their_query_as_a_user_cancel() {
     };
     assert_eq!(done["state"], "cancelled", "{done}");
     assert_eq!(done["error_class"], "OPERATION_CANCELED", "{done}");
+}
+
+/// P3-T068: `POST /api/internal/sql` reads the request's `traceparent`; a malformed one is no trace and the run
+/// still finishes.
+#[tokio::test]
+async fn the_sql_route_carries_the_requests_traceparent_into_the_statements_trace() {
+    let addr = start().await;
+    let trace = "4bf92f3577b34da6a3ce929d0e0e4736";
+    let traced = run_with(
+        addr,
+        ANN,
+        "SELECT 41 AS t68_traced",
+        &format!("traceparent: 00-{trace}-00f067aa0ba902b7-01\r\nbaggage: tenant=acme\r\n"),
+    )
+    .await;
+    assert_eq!(traced["state"], "finished", "{traced}");
+    let bad = run_with(
+        addr,
+        ANN,
+        "SELECT 42 AS t68_malformed",
+        "traceparent: not-a-traceparent\r\n",
+    )
+    .await;
+    assert_eq!(bad["state"], "finished", "{bad}");
+    let seen = run(
+        addr,
+        ANN,
+        "SELECT trace_id FROM system.queries WHERE trace_id IS NOT NULL",
+    )
+    .await;
+    assert_eq!(seen["rows"], json!([[trace]]), "{seen}");
 }

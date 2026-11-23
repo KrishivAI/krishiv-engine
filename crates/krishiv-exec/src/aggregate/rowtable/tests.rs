@@ -1266,6 +1266,262 @@ fn clustered_new_keys_turn_append_only() {
     assert!(t.values().all(|&c| c == 4), "{t:?}");
 }
 
+/// Feeds `rows` rows of `key(i)` in batches of 8,190.
+fn feed(t: &mut RowTable, core: &AggCore, rows: usize, key: impl Fn(i64) -> i64) {
+    let step = 8190_usize;
+    let mut start = 0;
+    while start < rows {
+        let s = i64::try_from(start).unwrap();
+        let e = i64::try_from((start + step).min(rows)).unwrap();
+        apply(t, &batch(core, (s..e).map(&key)));
+        start += step;
+    }
+}
+
+/// An input clustered by the key whose runs are all new at the first
+/// decision but whose keys then come back (TPC-DS q22: inventory by item
+/// within a week, the same items every week) turns append-only, then
+/// returns to its fixed index at the next decision: its rows stay about
+/// the runs before that decision, not one per run to the end.
+#[test]
+fn recurring_clustered_keys_return_to_the_index() {
+    let core = core();
+    let seed = HashSeed::new(Some(3));
+    let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    // 50,000 keys in runs of 4: a cycle (200,000 rows) outlasts the first
+    // decision's FIRST_ADAPT_ROWS.
+    let keys = 50_000_i64;
+    // The decision is taken by the first apply past FIRST_ADAPT_ROWS.
+    let first = FIRST_ADAPT_ROWS + 2 * 8190;
+    feed(&mut t, &core, first, |i| (i / 4) % keys);
+    assert_eq!(t.mode, Mode::Append);
+    let rows = 3 * ADAPT_ROWS;
+    let off = i64::try_from(first).unwrap();
+    feed(&mut t, &core, rows - first, |i| ((i + off) / 4) % keys);
+    assert!(matches!(t.mode, Mode::Fixed { .. }), "{:?}", t.mode);
+    // Append-only until the decision at ADAPT_ROWS: at most a row per run
+    // of those rows (plus batch-crossing runs), then the index.
+    assert!(
+        t.groups < ADAPT_ROWS / 4 + 2 * usize::try_from(keys).unwrap(),
+        "{}",
+        t.groups
+    );
+    let mut merged = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS).unwrap();
+    for p in 0..t.parts.len() {
+        let c = t.merge_chunk(p, 0..t.part_len(p)).unwrap();
+        merged.apply_merge(&t, &c).unwrap();
+    }
+    assert_eq!(merged.groups, usize::try_from(keys).unwrap());
+    let total: i64 = totals(&merged).values().sum();
+    assert_eq!(total, i64::try_from(rows).unwrap());
+}
+
+/// Runs of keys that never come back (TPC-H q18's `l_orderkey`) stay
+/// append-only through every later decision.
+#[test]
+fn clustered_new_keys_stay_append_only() {
+    let core = core();
+    let seed = HashSeed::new(Some(3));
+    let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    feed(&mut t, &core, 3 * ADAPT_ROWS, |i| i / 4);
+    assert_eq!(t.mode, Mode::Append);
+}
+
+/// Review 91d3ef56f finding 2: a driver whose first ~260K run starts are
+/// keys that never come back (they fill the set), then 50,000 keys that
+/// recur: the set samples more sparsely and learns them, and the table
+/// returns to its index instead of a row per run to the end.
+#[test]
+fn recurring_keys_after_a_unique_prefix_return_to_the_index() {
+    let core = core();
+    let seed = HashSeed::new(Some(3));
+    let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    let prefix = 1 << 20;
+    feed(&mut t, &core, prefix, |i| i / 4);
+    assert_eq!(t.mode, Mode::Append);
+    let keys = 50_000_i64;
+    let rows = 3 << 20;
+    feed(&mut t, &core, rows, |i| (1 << 40) | ((i / 4) % keys));
+    // The restored index is sized for the recurring keys (131,072 slots at load 2/3, the first
+    // size that holds 50,000), not the starting limit: an index that returned at 1,024 and grew
+    // from there would end at another limit (349,525).
+    assert_eq!(t.mode, Mode::Fixed { limit: 87_381 });
+    let (_, _, _, level, _) = t.adapt.as_ref().unwrap().recur.state();
+    assert!(level > 0, "the full set never sampled more sparsely");
+    // The prefix's runs, then at most two decisions' worth of runs
+    // appended before the index returned: not a row per run to the end.
+    assert!(
+        t.groups < (prefix + 2 * ADAPT_ROWS) / 4 + 2 * usize::try_from(keys).unwrap(),
+        "{}",
+        t.groups
+    );
+}
+
+/// Keys that recur but are more than the largest index holds (TPC-H q13 at
+/// SF100: ~10M keys) stay append-only: an index over them would clear all
+/// the time.
+#[test]
+fn recurring_keys_beyond_the_largest_index_stay_append_only() {
+    let core = core();
+    let seed = HashSeed::new(Some(3));
+    let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    let keys = 600_000_i64;
+    feed(&mut t, &core, 3 * ADAPT_ROWS, |i| i % keys);
+    assert_eq!(t.mode, Mode::Append);
+    let r = &t.adapt.as_ref().unwrap().recur;
+    assert!(r.interval_keys() > RECUR_KEYS, "{}", r.interval_keys());
+}
+
+/// A full set keeps learning: after its first keys stop coming, keys that
+/// repeat are found again (hits) at a sparser rate.
+#[test]
+fn a_full_set_learns_new_keys() {
+    // splitmix64: hash bits as random as the table's.
+    let h = |k: u64| {
+        let mut z = k.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    let mut r = Recur::new();
+    r.start();
+    // About 15,600 sampled keys at level 0: the set fills several times.
+    for k in 0..1_000_000 {
+        r.add(h(k));
+    }
+    let (_, _, _, level, _) = r.state();
+    assert!(level >= 2, "{level}");
+    r.next_interval();
+    // New keys, three times over: misses the first time, hits after.
+    for _ in 0..3 {
+        for k in 2_000_000..2_200_000 {
+            r.add(h(k));
+        }
+    }
+    assert!(r.recurs(), "{:?}", (r.sampled, r.hits));
+}
+
+/// Review 1c5fc2e2c finding 1: a long unique prefix (26M run starts, a
+/// million an interval) leaves the rate where the last two intervals' keys
+/// fit, not where the whole history would, so later recurring keys in 4-row
+/// runs are still sampled often enough to be found.
+#[test]
+fn a_long_unique_prefix_still_learns_recurring_keys() {
+    let h = |k: u64| {
+        let mut z = k.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    let mut r = Recur::new();
+    r.start();
+    for k in 0..26_000_000_u64 {
+        r.add(h(k));
+        if k % 1_000_000 == 999_999 {
+            r.next_interval();
+        }
+    }
+    let (_, _, _, level, _) = r.state();
+    assert!(level <= 5, "{level}");
+    let hashes: Vec<u64> = (0..1_000_000_u64)
+        .map(|i| h((1 << 40) | ((i / 4) % 50_000)))
+        .collect();
+    for _ in 0..2 {
+        r.next_interval();
+        r.add_runs(&hashes, None);
+    }
+    assert!(r.recurs(), "{:?}", (r.sampled, r.hits, r.state().3));
+}
+
+/// Review 91d3ef56f finding 3: a small table allocates no set, and its
+/// projection covers the set's start.
+#[test]
+fn a_small_table_has_no_run_start_set() {
+    let core = core();
+    let seed = HashSeed::new(Some(3));
+    let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    feed(&mut t, &core, 100, |i| i);
+    assert_eq!(t.adapt.as_ref().unwrap().recur.bytes(), 0);
+    let before = t.projected_sketch_bytes(SKETCH_ROWS, true);
+    // A batch without one hash per row (the direct path) never starts the set: none is charged.
+    assert_eq!(
+        before - t.projected_sketch_bytes(SKETCH_ROWS, false),
+        Recur::BYTES
+    );
+    feed(&mut t, &core, SKETCH_ROWS, |i| i);
+    assert_eq!(t.adapt.as_ref().unwrap().recur.bytes(), Recur::BYTES);
+    assert!(
+        before >= t.sketch_bytes(),
+        "{before} < {}",
+        t.sketch_bytes()
+    );
+}
+
+/// Review 91d3ef56f nit: once back on its index, a table whose run starts
+/// recur does not turn append-only again even where the whole input's
+/// distinct keys per run still look unique (a long unique prefix); without
+/// recurring run starts it would.
+#[test]
+fn a_returned_table_stays_fixed_while_keys_recur() {
+    let core = core();
+    let seed = HashSeed::new(Some(3));
+    let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+    let keys = 50_000_i64;
+    feed(&mut t, &core, 3 * ADAPT_ROWS, |i| (i / 4) % keys);
+    assert!(matches!(t.mode, Mode::Fixed { .. }), "{:?}", t.mode);
+    // A decision is due, and the whole input looks unique per run.
+    let a = t.adapt.as_mut().unwrap();
+    a.next = a.rows;
+    a.runs = 1;
+    assert!(a.recur.recurs());
+    assert!(matches!(t.next_mode(), Mode::Fixed { .. }));
+    t.adapt.as_mut().unwrap().recur.next_interval();
+    assert_eq!(t.next_mode(), Mode::Append);
+}
+
+/// The row-at-a-time sampling `Recur::add_runs` replaced: every hash that
+/// starts a run and has its sample bits clear at the set's level.
+fn add_runs_reference(r: &mut Recur, hashes: &[u64], mut last: Option<u64>) {
+    for &h in hashes {
+        if last != Some(h) && (h >> 16) & r.mask() == 0 {
+            r.add(h);
+        }
+        last = Some(h);
+    }
+}
+
+proptest::proptest! {
+    /// The chunked sampling samples the run starts the row-at-a-time loop
+    /// does: runs across chunks of 8 and across batches, sampled or not.
+    #[test]
+    fn chunked_run_sampling_matches_rows(
+        rows in proptest::collection::vec((0_u64..6, proptest::bool::ANY), 0..300),
+        cuts in proptest::collection::vec(0_usize..300, 0..4),
+    ) {
+        // A few keys, so runs and repeats are common; a key is sampled
+        // when its bits 16..22 are clear.
+        let hashes: Vec<u64> = rows
+            .iter()
+            .map(|&(k, sampled)| ((k + 1) << 32) | if sampled { 0 } else { 1 << 16 })
+            .collect();
+        let mut cuts: Vec<usize> = cuts.into_iter().map(|c| c.min(hashes.len())).collect();
+        cuts.push(0);
+        cuts.push(hashes.len());
+        cuts.sort_unstable();
+        let (mut a, mut b) = (Recur::new(), Recur::new());
+        a.start();
+        b.start();
+        let mut last = None;
+        for w in cuts.windows(2) {
+            let batch = &hashes[w[0]..w[1]];
+            a.add_runs(batch, last);
+            add_runs_reference(&mut b, batch, last);
+            last = batch.last().copied().or(last);
+        }
+        proptest::prop_assert_eq!(a.state(), b.state());
+    }
+}
+
 /// A table grouping by `k` with `hll_sketch_agg(v)` at lgK 12, raw or final.
 fn hll_core(output: AggregateOutput) -> Arc<AggCore> {
     let s = Arc::new(Schema::new(vec![
@@ -1356,4 +1612,16 @@ fn full_sketches_project_little_for_a_further_batch() {
     );
     t.apply(&again).unwrap();
     assert!(t.memory_size() <= projected);
+}
+
+/// An append-only table returns to an index that holds the interval's recurring keys at load
+/// 2/3, never a smaller one than it had, and never past the largest index.
+#[test]
+fn a_restored_index_holds_the_recurring_working_set() {
+    assert_eq!(RowTable::restored_limit(21_845, 1_000), 21_845);
+    let limit = RowTable::restored_limit(21_845, 50_000);
+    assert!(limit >= 50_000, "{limit}");
+    assert_eq!(limit, (1 << 17) * 2 / 3);
+    assert_eq!(RowTable::restored_limit(21_845, RECUR_KEYS), RECUR_KEYS);
+    assert_eq!(RowTable::restored_limit(1, usize::MAX / 2), RECUR_KEYS);
 }
