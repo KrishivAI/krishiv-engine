@@ -436,7 +436,7 @@ class SparkSession:
         >>> df.printSchema()
         root
          |-- name: string (nullable = true)
-         |-- age: int (nullable = true)
+         |-- age: integer (nullable = true)
         >>> df.count()
         0
         """
