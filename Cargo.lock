@@ -3473,6 +3473,7 @@ dependencies = [
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
+ "krishiv-kernels",
  "krishiv-optimizer",
  "krishiv-plan",
  "krishiv-sql",

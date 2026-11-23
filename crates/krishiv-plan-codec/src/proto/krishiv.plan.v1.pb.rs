@@ -131,10 +131,11 @@ pub struct ExprEnv {
     /// feature: binary_output_style
     #[prost(string, optional, tag = "11")]
     pub binary_output_style: ::core::option::Option<::prost::alloc::string::String>,
-    /// The Spark release line ("4.0", "4.1", "4.2") whose behaviour the kernels and function
-    /// bindings reproduce, when it is not the default 4.3 (the session's profile); a worker
-    /// without the feature would run the plan as Spark 4.3 (a `TIME(p)` read keeping nine
-    /// digits where 4.2 keeps six, 4.3's error texts).
+    /// The Spark release line ("4.0", "4.1", "4.3") whose behaviour the kernels and function
+    /// bindings reproduce (the session's profile). Absent means Spark 4.2, what every plan
+    /// written before the feature ran, so a 0.2 writer's plan keeps its meaning; a 0.3 session
+    /// on its default 4.3 profile sets "4.3", and a worker without the feature (which would run
+    /// it as Spark 4.2) refuses it.
     /// feature: spark_version
     #[prost(string, optional, tag = "12")]
     pub spark_version: ::core::option::Option<::prost::alloc::string::String>,

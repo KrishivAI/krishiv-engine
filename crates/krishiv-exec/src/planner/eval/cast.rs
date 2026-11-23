@@ -192,6 +192,9 @@ pub(super) struct CastParts {
     /// `Time64` does not carry `p`, so a nested target's precisions travel
     /// here.
     pub(super) precision: Precision,
+    /// Whether a string cast to `time(p)` cuts to `p` digits (Spark 4.3 on); before 4.3 it keeps
+    /// six whatever `p`.
+    pub(super) strings_cut_to_p: bool,
 }
 
 /// Nanoseconds per microsecond: the `TIME(6)` unit a Spark 4.2 string cast
@@ -309,6 +312,7 @@ pub(super) fn parts(
         zone,
         query_start: env.query_start_micros,
         precision: Precision::None,
+        strings_cut_to_p: env.kernels.spark_version() >= krishiv_kernels::SparkVersion::V4_3,
     })
 }
 
@@ -328,6 +332,7 @@ impl CastParts {
             zone: self.zone.clone(),
             query_start: self.query_start,
             precision,
+            strings_cut_to_p: self.strings_cut_to_p,
         }
     }
 }
@@ -381,15 +386,14 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
         time_zone: &zone,
     };
     let out = cast(input.as_ref(), &p.kernel_to, &opts)?;
-    // A `time(q)` cast to `time(p)` keeps `p` digits. A string cast to
-    // `time(p < 9)` reaches here only under Spark 4.2 (under 4.3 the analyzer
-    // reads the string as a `time(9)` first, so the first arm applies), and
-    // 4.2 keeps six digits whatever `p`: `cast('12:00:00.123456789' as
-    // time(1))` is `12:00:00.123456`. The kernel reads nine.
+    // A `time(q)` cast to `time(p)` keeps `p` digits, and so does a string
+    // cast from Spark 4.3 on (explicit, implicit or nested alike). Spark 4.2's
+    // string cast keeps six digits whatever `p`: `cast('12:00:00.123456789'
+    // as time(1))` is `12:00:00.123456`. The kernel reads nine.
     let out = match (input.data_type(), out.data_type()) {
         (from, ArrowType::Time64(_)) if p.precision.unit() > 1 => {
             use arrow_array::types::Time64NanosecondType;
-            let unit = if matches!(from, ArrowType::Time64(_)) {
+            let unit = if p.strings_cut_to_p || matches!(from, ArrowType::Time64(_)) {
                 p.precision.unit()
             } else {
                 MICROS_UNIT

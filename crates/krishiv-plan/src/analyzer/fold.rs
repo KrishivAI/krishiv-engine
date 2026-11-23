@@ -457,9 +457,10 @@ fn has_narrow_time(t: &DataType) -> bool {
 }
 
 /// A cast to `time(p)` (p < 9) folds as the cast to `time(9)`, the carrier's precision, and then
-/// cuts the value as the executor does: a `time(q)` source to `p` digits, any other source (a
-/// string, reaching here only under Spark 4.2, whose cast keeps six digits whatever `p`) to
-/// microseconds. A failed cast stays unfolded: the executor raises it naming the written type.
+/// cuts the value as the executor does: a `time(q)` source, and from Spark 4.3 on a string too, to
+/// `p` digits; a string under Spark 4.2 (whose cast keeps six digits whatever `p`) to
+/// microseconds. A failed cast stays unfolded: the executor raises it naming the written type. A
+/// fold error of the input is raised at the argument.
 fn fold_cast(
     expr: &Arc<Expr>,
     to: &DataType,
@@ -477,13 +478,14 @@ fn fold_cast(
     let full = DataType::Time {
         precision: DataType::TIME_MAX_PRECISION,
     };
-    let from_time = matches!(
-        fold(expr, conf, memo, functions)?.ok()?.data_type(),
-        ArrowType::Time64(_)
-    );
+    let from_time = match fold(expr, conf, memo, functions)? {
+        Ok(a) => matches!(a.data_type(), ArrowType::Time64(_)),
+        Err(e) => return Some(Err(e)),
+    };
+    let cuts_to_p = from_time || conf.kernel.spark_version() >= SparkVersion::V4_3;
     let folded = fold_cast_any(expr, &full, m, conf, memo, functions)?.ok()?;
     let nanos = folded.as_primitive_opt::<Time64NanosecondType>()?;
-    let unit = if from_time {
+    let unit = if cuts_to_p {
         10_i64.pow(u32::from(DataType::TIME_MAX_PRECISION - *precision))
     } else {
         1_000

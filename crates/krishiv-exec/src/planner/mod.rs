@@ -123,7 +123,7 @@ pub struct PlanningContext {
     /// skipped.
     pub inspect: bool,
     /// The Spark release whose behaviour the kernels and function bindings reproduce (the
-    /// session's profile). Plan data: a version other than the default travels in
+    /// session's profile). Plan data: a version other than 4.2 travels in
     /// [`ExprEnv::spark_version`](crate::physical::ExprEnv::spark_version).
     pub spark_version: krishiv_kernels::SparkVersion,
 }

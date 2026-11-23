@@ -1637,22 +1637,12 @@ impl Resolver<'_> {
                             coerce::force_nullable(from, to)
                         }
                     });
-                let input =
-                    self.time_cast_input(&args[0], child.data_type.as_ref(), to, mode, e.origin);
-                let shown = input.as_ref().map(|_| {
-                    rebuilt(ExprNode::Cast {
-                        expr: kids[0].shown(),
-                        to: to.clone(),
-                        mode,
-                    })
-                });
                 Bound {
                     expr: rebuilt(ExprNode::Cast {
-                        expr: input.unwrap_or_else(|| Arc::clone(&args[0])),
+                        expr: Arc::clone(&args[0]),
                         to: to.clone(),
                         mode,
                     }),
-                    shown,
                     ..keep(arg_type(to.clone(), nullable))
                 }
             }
@@ -1852,103 +1842,6 @@ impl Resolver<'_> {
             ));
         }
         Ok(b)
-    }
-}
-
-impl Resolver<'_> {
-    /// `v IN (correlated global aggregate)`: the aggregate has exactly one
-    /// row for each outer row (a count of nothing is 0), so the `IN` is
-    /// `v = (scalar subquery)`, which the scalar path decorrelates with
-    /// its count-bug handling. Any other `IN` is returned as it came.
-    fn in_global_aggregate(&self, e: Arc<Expr>) -> Arc<Expr> {
-        let ExprNode::Subquery {
-            kind: SubqueryKind::In(values),
-            plan,
-        } = &e.node
-        else {
-            return e;
-        };
-        let [value] = &values[..] else { return e };
-        // Spark's legacy rule (`subquery_legacy.rs`) answers it otherwise.
-        if self.ctx.conf.legacy_exists_in_count
-            || !matches!(plan.node, crate::PlanNode::Aggregate { .. })
-            || !crate::analyzer::subquery::one_row_aggregate(plan)
-        {
-            return e;
-        }
-        let scalar = Arc::new(
-            Expr::new(ExprNode::Subquery {
-                kind: SubqueryKind::Scalar,
-                plan: Arc::clone(plan),
-            })
-            .with_origin(e.origin),
-        );
-        let nullable = crate::analyzer::subquery::typed(value).1
-            || crate::analyzer::subquery::typed(&scalar).1;
-        Arc::new(
-            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
-                ResolvedFunction {
-                    id: FunctionId::Builtin(Builtin::Eq),
-                    kind: FunctionKind::Scalar,
-                    args: vec![Arc::clone(value), scalar],
-                    distinct: false,
-                    filter: None,
-                    within_group: Vec::new(),
-                    data_type: DataType::Boolean,
-                    nullable,
-                    deterministic: true,
-                },
-            )))
-            .with_origin(e.origin),
-        )
-    }
-
-    /// `NULL IN (subquery)`: Spark folds it by whether the subquery has
-    /// rows. It is `exists(subquery) AND NULL`: NULL over rows, false over
-    /// none (NULL either way under
-    /// `spark.sql.legacy.nullInEmptyListBehavior`). Any other `IN` is
-    /// returned as it came.
-    fn null_in_subquery(&self, e: Arc<Expr>) -> Arc<Expr> {
-        let ExprNode::Subquery {
-            kind: SubqueryKind::In(values),
-            plan,
-        } = &e.node
-        else {
-            return e;
-        };
-        let [value] = &values[..] else { return e };
-        if !crate::analyzer::subquery::null_literal(value) {
-            return e;
-        }
-        let null = Arc::new(Expr::new(ExprNode::Literal(Literal::Null(Some(
-            DataType::Boolean,
-        )))));
-        if self.ctx.conf.legacy_null_in_empty_list {
-            return null;
-        }
-        let exists = Arc::new(
-            Expr::new(ExprNode::Subquery {
-                kind: SubqueryKind::Exists,
-                plan: Arc::clone(plan),
-            })
-            .with_origin(e.origin),
-        );
-        Arc::new(
-            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
-                ResolvedFunction {
-                    id: FunctionId::Builtin(Builtin::And),
-                    kind: FunctionKind::Scalar,
-                    args: vec![exists, null],
-                    distinct: false,
-                    filter: None,
-                    within_group: Vec::new(),
-                    data_type: DataType::Boolean,
-                    nullable: true,
-                    deterministic: true,
-                },
-            )))
-            .with_origin(e.origin),
-        )
     }
 }
 

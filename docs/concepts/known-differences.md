@@ -698,8 +698,6 @@ microsecond, where Spark 4.3 reads a nanosecond clock.
 
 Also not matched yet under the Spark 4.3 profile:
 
-- A string cast to `TIME(p)` keeps `p` digits only at the top level of the target: a string inside
-  an array, map or struct cast to a `TIME(p)` element keeps every digit it reads (Spark 4.2's rule).
 - The CSV and JSON file readers have no `TIME` columns: a read with one in its schema is
   `KRISHIV_UNSUPPORTED_FEATURE` (`from_csv`, `from_json` and `from_xml` read them). Spark 4.2 reads
   such a column with six fraction digits; Spark 4.3 keeps every digit of the file, whatever `p`.

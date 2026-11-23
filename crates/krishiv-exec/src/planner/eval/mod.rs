@@ -324,7 +324,8 @@ impl EvalEnv {
                 env.spark_version
                     .as_deref()
                     .and_then(krishiv_kernels::SparkVersion::from_line)
-                    .unwrap_or_default(),
+                    // Absent: Spark 4.2, what plans written before the field ran.
+                    .unwrap_or(krishiv_kernels::SparkVersion::V4_2),
             ),
             query_start_micros: env.query_start_micros,
             user: Arc::clone(&env.user),
@@ -361,10 +362,9 @@ impl EvalEnv {
             binary_output_style: (self.binary_style
                 != krishiv_kernels::binary_style::BinaryStyle::default())
             .then(|| Arc::from(self.binary_style.name())),
-            // Likewise only a version other than the default is plan data.
-            spark_version: (self.kernels.spark_version()
-                != krishiv_kernels::SparkVersion::default())
-            .then(|| Arc::from(self.kernels.spark_version().line())),
+            // Likewise only a version other than 4.2 (what an absent field means) is plan data.
+            spark_version: (self.kernels.spark_version() != krishiv_kernels::SparkVersion::V4_2)
+                .then(|| Arc::from(self.kernels.spark_version().line())),
         }
     }
 }

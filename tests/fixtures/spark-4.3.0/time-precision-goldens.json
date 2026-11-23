@@ -153,6 +153,88 @@
    ]
   },
   {
+   "id": "coalesce_time3_str",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT typeof(c), CAST(c AS STRING) FROM (SELECT coalesce(CAST(NULL AS TIME(3)), '12:00:00.123456789') AS c)",
+   "clock": false,
+   "names": [
+    "typeof(c)",
+    "c"
+   ],
+   "values": [
+    [
+     "time(3)",
+     "12:00:00.123"
+    ]
+   ]
+  },
+  {
+   "id": "eq_time3_str",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(TIME'12:00:00.123' AS TIME(3)) = '12:00:00.1234' AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "values": [
+    [
+     "true"
+    ]
+   ]
+  },
+  {
+   "id": "in_time3_str",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(TIME'12:00:00.123' AS TIME(3)) IN ('12:00:00.1234', '01:00:00') AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "values": [
+    [
+     "true"
+    ]
+   ]
+  },
+  {
+   "id": "case_time3_str",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CASE WHEN rand() >= 0 THEN '12:00:00.123456789' ELSE CAST(NULL AS TIME(3)) END AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "values": [
+    [
+     "12:00:00.123"
+    ]
+   ]
+  },
+  {
+   "id": "nested_array_time3_str",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST(array('12:00:00.123456789') AS array<time(3)>)[0] AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "values": [
+    [
+     "12:00:00.123"
+    ]
+   ]
+  },
+  {
    "id": "lit_types",
    "conf": {},
    "sql": "SELECT typeof(TIME'12:00:00'), typeof(TIME'12:00:00.1'), typeof(TIME'12:00:00.1234567'), typeof(TIME'12:00:00.123456789')",

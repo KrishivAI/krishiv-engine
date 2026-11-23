@@ -314,9 +314,11 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
     {
         return Err(corrupt("an unknown binary output style"));
     }
-    // Likewise the version: set only when it is not the default 4.3.
+    // Likewise the version: absent means Spark 4.2 (every plan written before the feature), so
+    // an encoder never sends "4.2". The lines are `krishiv_kernels::SparkVersion::ALL` but 4.2
+    // (`spark_version_lines_match_the_kernels` keeps them equal).
     if let Some(line) = env.spark_version.as_deref()
-        && !matches!(line, "4.0" | "4.1" | "4.2")
+        && !matches!(line, "4.0" | "4.1" | "4.3")
     {
         return Err(corrupt("an unknown Spark version"));
     }

@@ -51,6 +51,28 @@ CASES: list[tuple[str, dict[str, str], str, bool]] = [
     ("cast_str_time", ON, "SELECT CAST(CAST('12:00:00.123456789' AS TIME) AS STRING) AS c", False),
     ("cast_time9_time3", ON, "SELECT CAST(CAST(TIME'12:00:00.123456789' AS TIME(3)) AS STRING) AS c", False),
     ("cast_time9_time6", ON, "SELECT CAST(CAST(TIME'12:00:00.123456789' AS TIME(6)) AS STRING) AS c", False),
+    # Implicit and nested string casts to TIME(3) (lane review round 3, thread on cast.rs).
+    (
+        "coalesce_time3_str",
+        ON,
+        "SELECT typeof(c), CAST(c AS STRING) FROM "
+        "(SELECT coalesce(CAST(NULL AS TIME(3)), '12:00:00.123456789') AS c)",
+        False,
+    ),
+    ("eq_time3_str", ON, "SELECT CAST(TIME'12:00:00.123' AS TIME(3)) = '12:00:00.1234' AS c", False),
+    ("in_time3_str", ON, "SELECT CAST(TIME'12:00:00.123' AS TIME(3)) IN ('12:00:00.1234', '01:00:00') AS c", False),
+    (
+        "case_time3_str",
+        ON,
+        "SELECT CAST(CASE WHEN rand() >= 0 THEN '12:00:00.123456789' ELSE CAST(NULL AS TIME(3)) END AS STRING) AS c",
+        False,
+    ),
+    (
+        "nested_array_time3_str",
+        ON,
+        "SELECT CAST(CAST(array('12:00:00.123456789') AS array<time(3)>)[0] AS STRING) AS c",
+        False,
+    ),
     # Literals: type, name and value.
     (
         "lit_types",

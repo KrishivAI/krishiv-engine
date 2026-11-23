@@ -97,41 +97,6 @@ impl Resolver<'_> {
         Ok((Arc::new(cast), Arc::new(shown), precision))
     }
 
-    /// The input of a cast of `arg` (typed `from`) to `to`. The executor cuts a cast to
-    /// `TIME(p)` to `p` digits only from a `TIME` (a string cast keeps every digit it reads, as
-    /// Spark 4.2 does: `time_to_micros(CAST('09:08:01.987654' AS TIME(1)))` is 32881987654).
-    /// Spark 4.3 cuts a string cast too (32881900000): there the string is read as a `TIME(9)`
-    /// first, which the outer cast then cuts. Only a top-level `TIME` target; a string nested in
-    /// an array, map or struct keeps its digits (known difference, Spark 4.3).
-    pub(super) fn time_cast_input(
-        &self,
-        arg: &Arc<Expr>,
-        from: Option<&DataType>,
-        to: &DataType,
-        mode: CastMode,
-        origin: Origin,
-    ) -> Option<Arc<Expr>> {
-        let DataType::Time { precision } = to else {
-            return None;
-        };
-        if self.ctx.profile < crate::analyzer::SparkProfile::V4_3
-            || *precision >= DataType::TIME_MAX_PRECISION
-            || !from.is_some_and(DataType::is_string_type)
-        {
-            return None;
-        }
-        Some(Arc::new(
-            Expr::new(ExprNode::Cast {
-                expr: Arc::clone(arg),
-                to: DataType::Time {
-                    precision: DataType::TIME_MAX_PRECISION,
-                },
-                mode,
-            })
-            .with_origin(origin),
-        ))
-    }
-
     /// The trailing literals a built-in TIME call gets by profile, after its `n` arguments.
     /// `to_time(s)` keeps nine fraction digits from Spark 4.3 on and six before
     /// (`stringToTime`): the older grammar follows as a trailing `false`. `extract(SECOND FROM t)`

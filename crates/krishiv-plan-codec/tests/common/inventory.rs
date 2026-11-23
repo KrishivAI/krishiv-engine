@@ -2578,7 +2578,7 @@ fn binary_output_style() -> PhysicalPlan {
 /// A plan whose environment reproduces Spark 4.2.
 fn spark_version() -> PhysicalPlan {
     let env = ExprEnv {
-        spark_version: Some(Arc::from("4.2")),
+        spark_version: Some(Arc::from("4.3")),
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
