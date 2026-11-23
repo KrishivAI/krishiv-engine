@@ -29,8 +29,12 @@ Consumers ignore unknown members and unknown kinds: minor versions only add.
 
 `usage` is cumulative since the query started and keyed by `record_id`, an object with `session_id`, `query_id`,
 `worker_id` (null in 0.3) and `seq` (a caller's operation id is unique only per session). To fold records: per
-`session_id`, `query_id` and `worker_id`, keep the one with the highest `seq`; a query's usage is the sum of those over
-its workers (in 0.3 one, with `worker_id` null). The end figures are the usage of the `finished` or `cancelled` event. The
+`session_id`, `query_id` and `worker_id`, keep the one with the highest `seq` (`seq` is per emitting runtime, so it
+compares only within one `worker_id`). Then combine those records (in 0.3 one, with `worker_id` null) member by member:
+sum the counters `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`, `rows_written`, `files_written`,
+`spill_bytes` and `spill_files`; take the maximum of `peak_memory_bytes`, `wall_ns` and `queued_ns` (a peak and two
+times of the whole query, which workers' records overlap); take the minimum of `window_start_ms` and the maximum of
+`window_end_ms`; every other member is the same in all of a query's records. A null member counts as absent. The end figures are the usage of the `finished` or `cancelled` event. The
 event schema is experimental until the design note's review findings are settled; do not treat `record_id` as a
 billing-grade key yet. Members: `kind` (`final`), `fidelity` (`exact`), `principal`, `delegated_by`, `session_id`,
 `compute_id`, `workload_class`, `resource_group`, `statement_class`, `window_start_ms`, `window_end_ms`,

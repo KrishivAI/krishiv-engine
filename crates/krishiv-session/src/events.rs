@@ -160,7 +160,9 @@ pub struct UsageRecordId {
     pub query_id: String,
     /// The worker whose usage the record counts; `None` in-process, where one record covers the query.
     pub worker_id: Option<String>,
-    /// The event's `seq`: of the records of one `(session_id, query_id, worker_id)`, the highest is the latest.
+    /// The `seq` of the event that carries the record: the bus-wide counter of the runtime that emitted it (one per
+    /// worker once workers report), so `seq`s compare only within one `worker_id`; of the records of one
+    /// `(session_id, query_id, worker_id)`, the highest is the latest.
     pub seq: u64,
 }
 
@@ -185,9 +187,14 @@ impl UsageRecordId {
 }
 
 /// What a query used, cumulative since it started (E7). Fold rule: per `(session_id, query_id, worker_id)` of
-/// its `record_id`, keep the record with the highest `seq`, so a lost sample loses nothing; a query's usage is
-/// the sum of those over its workers (one, with `worker_id` `None`, in-process). The end figures are the usage of
-/// a `Finished` event or of a `Cancelled` one, whichever ended the query.
+/// its `record_id`, keep the record with the highest `seq`, so a lost sample loses nothing. A query's usage then
+/// combines those records (one, with `worker_id` `None`, in-process) member by member: the counters `cpu_ns`,
+/// `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`, `rows_written`, `files_written`, `spill_bytes`
+/// and `spill_files` are summed; `peak_memory_bytes`, `wall_ns` and `queued_ns` take the maximum (a peak and
+/// two times of the whole query, which workers' records overlap); `window_start_ms` takes the minimum and
+/// `window_end_ms` the maximum; every other member is the same in all of a query's records. A null member
+/// counts as absent. The end figures are the usage of a `Finished` event or of a `Cancelled` one, whichever
+/// ended the query.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct UsageRecord {
