@@ -552,31 +552,47 @@ fn arguments_spark_cannot_bind_are_refused() {
 fn argument_assignment_refusals() {
     let server = empty();
     let s = session(&server, None);
-    for (sql, class) in [
+    let routine = ("routineName", "`expire_snapshots`");
+    for (sql, class, params) in [
         (
             "CALL lake.system.expire_snapshots(table => 'db.t', 1)",
             ErrorClass::UnexpectedPositionalArgument,
+            vec![routine, ("parameterName", "`table`")],
         ),
         (
             "CALL lake.system.expire_snapshots(table => 'db.t', TABLE => 'db.u')",
             ErrorClass::DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference,
+            vec![routine, ("parameterName", "`TABLE`")],
         ),
         (
             "CALL lake.system.expire_snapshots('db.t', table => 'db.u')",
             ErrorClass::DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
+            vec![routine, ("parameterName", "`table`")],
         ),
         (
             "CALL lake.system.expire_snapshots('db.t', NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
             ErrorClass::WrongNumArgsWithoutSuggestion,
+            vec![
+                ("functionName", "`expire_snapshots`"),
+                ("expectedNum", "[1, 2, 3, 4, 5, 6, 7]"),
+                ("actualNum", "8"),
+                ("docroot", "https://spark.apache.org/docs/latest"),
+            ],
         ),
         (
             "CALL lake.system.expire_snapshots(retain_last => 1)",
             ErrorClass::RequiredParameterNotFound,
+            vec![routine, ("parameterName", "`table`"), ("index", "0")],
         ),
     ] {
         let e = call(&s, sql);
         assert_eq!(e.error_class(), class, "{sql}: {e}");
-        assert!(e.to_string().contains("expire_snapshots"), "{sql}: {e}");
+        let got: Vec<(&str, &str)> = e
+            .message_parameters()
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
+        assert_eq!(got, params, "{sql}");
     }
 }
 
@@ -600,6 +616,11 @@ fn array_arguments_and_the_current_catalog() {
     let e = call(
         &s,
         "CALL lake.system.rewrite_manifests(table => 'db.missing', sort_by => array('a', NULL))",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergProcedureArgument,
+        "{e}"
     );
     assert!(e.to_string().contains("NULL elements"), "{e}");
     block_on(async { s.sql("USE lake").await?.collect().await }).unwrap();
