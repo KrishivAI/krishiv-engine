@@ -286,3 +286,84 @@ fn expire_snapshots_refusals() {
         "{e}"
     );
 }
+
+/// Binding as a Spark 4.1.0 + Iceberg 1.12.0 run binds (review of #983): an unknown name
+/// proposes the three closest parameters, the routine is named by the procedure alone, names
+/// follow `spark.sql.caseSensitive`, a column reference does not resolve, a subquery is
+/// refused and a NULL map value is refused.
+#[test]
+fn binding_follows_spark() {
+    let server = empty();
+    let s = session(&server, None);
+    for (sql, proposal) in [
+        (
+            "CALL lake.system.expire_snapshots(table => 'db.t', retian_last => 1)",
+            "[`retain_last` `table` `older_than`]",
+        ),
+        (
+            "CALL lake.system.expire_snapshots(table => 'db.t', older => 1)",
+            "[`table` `older_than` `retain_last`]",
+        ),
+    ] {
+        let e = call(&s, sql);
+        assert_eq!(e.error_class(), ErrorClass::UnrecognizedParameterName);
+        let text = e.to_string();
+        assert!(text.contains(proposal), "{sql}: {text}");
+        assert!(
+            text.contains("routine `expire_snapshots` because"),
+            "{text}"
+        );
+    }
+    // Case-insensitive by default: `TABLE` binds `table` and the call goes on to the table.
+    let e = call(
+        &s,
+        "CALL lake.system.expire_snapshots(TABLE => 'db.missing', RETAIN_LAST => 1)",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergProcedureTableNotFound
+    );
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    let e = call(
+        &s,
+        "CALL lake.system.expire_snapshots(table => 'db.t', RETAIN_LAST => 1)",
+    );
+    assert_eq!(e.error_class(), ErrorClass::UnrecognizedParameterName);
+    assert!(
+        e.to_string()
+            .contains("[`older_than` `table` `retain_last`]"),
+        "{e}"
+    );
+    s.conf().set("spark.sql.caseSensitive", "false").unwrap();
+    let e = call(
+        &s,
+        "CALL lake.system.expire_snapshots(table => 'db.t', retain_last => id)",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::UnresolvedColumnWithoutSuggestion,
+        "{e}"
+    );
+    for sql in [
+        "CALL lake.system.expire_snapshots(table => (SELECT 'db.t'))",
+        "CALL lake.system.expire_snapshots(table => 'db.t', retain_last => 1 + (SELECT 1))",
+    ] {
+        let e = call(&s, sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{e}"
+        );
+        assert!(e.to_string().contains("subquery in a CALL argument"), "{e}");
+    }
+    let e = call(
+        &s,
+        "CALL lake.system.rewrite_data_files(table => 'db.t', \
+         options => map('min-input-files', CAST(NULL AS STRING)))",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergProcedureArgument,
+        "{e}"
+    );
+}

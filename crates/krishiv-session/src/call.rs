@@ -18,7 +18,7 @@ use krishiv_common::error::{
 use krishiv_plan::procedure::{
     ProcedureContext, ProcedureParameter, ProcedureType, ProcedureValue,
 };
-use krishiv_sql::ast::{Call, DdlName};
+use krishiv_sql::ast::{Call, DdlName, Expr, ExprKind};
 
 use crate::dataframe::DataFrame;
 use crate::session::Session;
@@ -80,7 +80,19 @@ impl Session {
             }
             .into());
         };
-        let slots = rearrange(&shown, loaded.parameters(), call)?;
+        // Spark names the procedure alone in the binding errors (`procedure.name()`), and
+        // compares names under the session resolver.
+        let case_sensitive = self
+            .conf()
+            .get("spark.sql.caseSensitive")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        let slots = rearrange(
+            &quote(loaded.name()),
+            loaded.parameters(),
+            call,
+            case_sensitive,
+        )?;
+        refuse_subqueries(call)?;
         // The casts run in a clone with ANSI on: a non-ANSI cast turns a bad value into `NULL`,
         // which a procedure reads as an absent argument (an expire would fall back to its
         // default retention).
@@ -225,7 +237,11 @@ fn value_of(batch: &RecordBatch, ty: ProcedureType) -> Result<ProcedureValue, Kr
             for i in 0..entries.len() {
                 out.push((
                     text(keys, i).ok_or_else(bad)?,
-                    text(values, i).unwrap_or_default(),
+                    if values.is_null(i) {
+                        return Err(null_element());
+                    } else {
+                        text(values, i).ok_or_else(bad)?
+                    },
                 ));
             }
             ProcedureValue::StringMap(out)
@@ -257,6 +273,62 @@ fn value_of(batch: &RecordBatch, ty: ProcedureType) -> Result<ProcedureValue, Kr
     })
 }
 
+/// A subquery in an argument is refused: Spark's `Call` cannot evaluate one (its binding fails
+/// with an internal `IllegalArgumentException`, Spark 4.1.0 + Iceberg 1.12.0 run), and here it
+/// would read another table to decide what the procedure changes.
+fn refuse_subqueries(call: &Call) -> Result<(), KrishivError> {
+    let mut stack: Vec<&Expr> = call.args.iter().map(|a| &a.expr).collect();
+    while let Some(e) = stack.pop() {
+        if matches!(
+            e.kind,
+            ExprKind::Subquery(_) | ExprKind::Exists(_) | ExprKind::InSubquery { .. }
+        ) {
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: "a subquery in a CALL argument".to_owned(),
+            }
+            .into());
+        }
+        e.for_each_child(&mut |c| stack.push(c));
+    }
+    Ok(())
+}
+
+/// The names `UNRECOGNIZED_PARAMETER_NAME` proposes: Spark's `orderSuggestedIdentifiersBySimilarity`
+/// over the parameters, the three closest by edit distance between the quoted parameter and the
+/// name as written, ties by the quoted name (matches the Spark 4.1.0 + Iceberg 1.12.0 run).
+fn proposal(name: &str, signature: &[ProcedureParameter]) -> String {
+    let mut ranked: Vec<(usize, String)> = signature
+        .iter()
+        .map(|p| {
+            let q = quote(p.name);
+            (levenshtein(&q, name), q)
+        })
+        .collect();
+    ranked.sort();
+    ranked
+        .into_iter()
+        .take(3)
+        .map(|(_, q)| q)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Character edit distance (insertions, deletions, substitutions).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, x) in a.chars().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, y) in b.iter().enumerate() {
+            let cur = row[j + 1];
+            row[j + 1] = (prev + usize::from(x != *y)).min(row[j] + 1).min(cur + 1);
+            prev = cur;
+        }
+    }
+    row[b.len()]
+}
+
 /// For each parameter of `signature`, the index of the argument that gives it (`None`: the
 /// default, `NULL`). Spark's `NamedParametersSupport.defaultRearrange`: positional arguments
 /// first, then named ones; the errors are its.
@@ -264,9 +336,16 @@ fn rearrange(
     routine: &str,
     signature: &[ProcedureParameter],
     call: &Call,
+    case_sensitive: bool,
 ) -> Result<Vec<Option<usize>>, KrishivError> {
     let param = |name: &str| quote(name);
-    let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+    let same = |a: &str, b: &str| {
+        if case_sensitive {
+            a == b
+        } else {
+            a.eq_ignore_ascii_case(b)
+        }
+    };
     let names: Vec<Option<&str>> = call
         .args
         .iter()
@@ -306,7 +385,7 @@ fn rearrange(
             return Err(UnrecognizedParameterName {
                 routine_name: routine.to_owned(),
                 argument_name: param(name),
-                proposal: String::new(),
+                proposal: proposal(name, signature),
             }
             .into());
         }
