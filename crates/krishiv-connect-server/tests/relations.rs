@@ -937,6 +937,24 @@ fn rand_as(name: &str) -> pb::Expression {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_computes_a_shared_unseeded_producer_once() {
+    let server = start().await;
+    // `P = select(rand() AS r)`; `zip(P.select(r + r AS x), P)`: both sides share P's alias, so `x` reads
+    // the one `r` the output carries.
+    let shared = project(source(), vec![rand_as("r")]);
+    let left = project(shared.clone(), vec![add_columns("r", "r", "x")]);
+    let rows = run(&server, zip(left, shared)).await.expect("runs");
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    for r in &rows {
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert!(
+            (cell_number(&r[0]) - 2.0 * cell_number(&r[1])).abs() < 1e-12,
+            "{r:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn zip_keeps_independent_nondeterministic_producers_apart() {
     let server = start().await;
     // Equal bodies, no shared parent: Spark gives each `rand()` its own seed, so `y` is not read from `x`.
@@ -1055,6 +1073,7 @@ async fn zip_merges_one_seeded_producer_and_keeps_different_seeds_apart() {
     )
     .await
     .expect("runs");
+    assert_eq!(rows.len(), 3, "{rows:?}");
     assert!(rows.iter().all(|r| r[0] != r[1]), "{rows:?}");
     // The same seeded producer on both sides is computed once: `x = r + r` reads the merged `r`.
     let left = project(source(), vec![rand_seeded_as("r", 7)]);
@@ -1078,6 +1097,12 @@ async fn zip_merges_one_seeded_producer_and_keeps_different_seeds_apart() {
     let rows = run(&server, zip(chain, project(source(), vec![attr("id")])))
         .await
         .expect("runs");
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    assert!(rows.iter().all(|r| r.len() == 3), "{rows:?}");
+    assert_eq!(
+        rows.iter().map(|r| r[2].as_str()).collect::<Vec<_>>(),
+        ["1", "1", "2"]
+    );
     for r in &rows {
         assert!(
             (cell_number(&r[1]) - 2.0 * cell_number(&r[0])).abs() < 1e-12,

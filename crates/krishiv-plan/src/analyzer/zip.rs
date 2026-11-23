@@ -192,9 +192,15 @@ impl Resolver<'_> {
             // Equal bodies are one producer, as `ResolveZip` dedups by canonicalized child. A seedless
             // `rand()` has a seed of its own, so two independently written ones stay two.
             let apart = has_unseeded_random(&body);
-            match kept.iter().find(|(_, b)| !apart && **b == *body) {
+            // The same output id on both sides (a shared parent) is one producer, seeded or not.
+            match kept
+                .iter()
+                .find(|(k, b)| k.id == output.id || (!apart && **b == *body))
+            {
                 Some((first, _)) => {
-                    survivors.insert(output.id, first.clone());
+                    if first.id != output.id {
+                        survivors.insert(output.id, first.clone());
+                    }
                 }
                 None => kept.push((output.clone(), body)),
             }
