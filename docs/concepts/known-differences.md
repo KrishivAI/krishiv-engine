@@ -736,18 +736,24 @@ both forms, so a sketch written by one engine can be estimated or unioned by the
 
 Spark runs every grouped-aggregate pandas UDF of one `agg` in a single Python worker. Krishiv gives each UDF
 its own Python UDF worker, because each is a task that holds its worker until its partition ends. On the
-default of one worker (`krishiv.python.udf.threads` = 1),
+default (`krishiv.python.udf.threads` = 0, which is one worker on a GIL build, or when the value is set to 1),
 `df.groupBy(k).agg(udf1(x), udf2(y))` with two such UDFs therefore fails with
-`KRISHIV_PYTHON_WORKER_LIMIT` (SQLSTATE 54000), which names the setting. Raise `krishiv.python.udf.threads`
-to the number of grouped-aggregate UDFs in the `agg` plus one (one thread stays free for scalar UDFs that feed
-them) and the query runs. The pool is made when the first Python UDF query starts and is not resized, so set
-the value before that query (in the session's configuration, or start a fresh interpreter with the higher value).
-On the default single thread a scalar `pandas_udf` feeding a `mapInPandas` or `applyInPandas` in the same query
-has no free thread and can stall; raise the setting to 2 or more.
+`KRISHIV_PYTHON_WORKER_LIMIT` (SQLSTATE 54000), which names the setting. On a free-threaded build the default is the
+executor thread count, so with two or more executor threads two grouped-aggregate UDFs can run without that error.
+Raise `krishiv.python.udf.threads` to the number of grouped-aggregate UDFs in the `agg` plus one (one thread stays
+free for scalar UDFs that feed them) and the query runs. The setting is startup-only: an existing session rejects a
+runtime change with `CANNOT_MODIFY_STATIC_CONFIG`. The pool is made when the first Python UDF query starts and is not
+resized, so put the value in the configuration passed when the session is created (or set it at engine startup, or
+start a fresh interpreter with the higher value).
+A single-thread pool starts one spare thread for scalar UDF calls, so a scalar `pandas_udf` feeding a
+`mapInPandas` or `applyInPandas` in the same query does not stall on it.
 
 The embedded `mapInPandas` / `mapInArrow` takes each result batch's columns by position and relabels them with the
-declared schema. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded runtime
-refuses a result of other field names or types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A declared
+declared schema. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded
+`mapInArrow` path compares the UDF's own field names with the declared schema and refuses a mismatch of names or
+types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. Embedded `mapInPandas` relabels its result
+columns by position before the check and does not check field names: a same-typed result with reordered fields is
+accepted and its values are assigned by position. A declared
 `NOT NULL` (and a nested `containsNull=false` or `valueContainsNull=false`) is not kept by the embedded runtime, so a
 nullable result is accepted where Spark 4.1+ refuses it.
 

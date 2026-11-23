@@ -100,7 +100,7 @@ impl Pool {
         &self.slots
     }
 
-    /// Starts `size` pinned threads (at least one). Called attached or not;
+    /// Starts `size` pinned threads (at least one; a pool of one gets a spare for scalar UDF jobs). Called attached or not;
     /// a new thread pins once the GIL (if any) is free.
     ///
     /// # Errors
@@ -109,8 +109,12 @@ impl Pool {
         let (jobs, queue) = channel::<Message>();
         let queue = Arc::new(Mutex::new(queue));
         let abandoned = Arc::new(AtomicBool::new(false));
-        let mut threads = Vec::with_capacity(size.max(1));
-        for i in 0..size.max(1) {
+        // A one-thread pool has no thread to keep for the scalar UDF jobs that feed a relation task (which holds
+        // its thread for its whole life), so it gets one spare thread: the relation task still has its one slot,
+        // and a scalar call queued behind it runs on the spare instead of hanging the query.
+        let spawn = if size <= 1 { 2 } else { size };
+        let mut threads = Vec::with_capacity(spawn);
+        for i in 0..spawn {
             let (queue, abandoned) = (Arc::clone(&queue), Arc::clone(&abandoned));
             let spawned = std::thread::Builder::new()
                 .name(format!("krishiv-python-udf-{i}"))

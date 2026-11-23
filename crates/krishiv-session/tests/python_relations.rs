@@ -5,9 +5,10 @@
 //! `test_python_relation_udfs.py`.
 #![forbid(unsafe_code)]
 
+use futures::executor::block_on;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_plan::PythonEvalType;
-use krishiv_session::{PythonUdfDef, Session};
+use krishiv_session::{DataFrame, ExplainMode, PythonUdfDef, Session};
 use krishiv_types::{DataType, StructField, StructType};
 
 fn is_class<T>(r: Result<T, KrishivError>, class: ErrorClass) -> bool {
@@ -26,6 +27,31 @@ fn udf(eval_type: PythonEvalType, return_type: DataType) -> PythonUdfDef {
     }
 }
 
+/// The declared output of a relation frame: `structure()`'s columns and types, nothing of its input.
+fn assert_declared_output(df: &DataFrame) -> R {
+    let schema = block_on(df.schema())?;
+    let fields: Vec<_> = schema
+        .fields()
+        .iter()
+        .map(|f| (f.name().as_str(), f.data_type().clone()))
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ("id", arrow_schema::DataType::Int64),
+            ("v", arrow_schema::DataType::Utf8View)
+        ]
+    );
+    Ok(())
+}
+
+/// The explained plan names the relation node it was built as.
+fn assert_plan_has(df: &DataFrame, node: &str) -> R {
+    let text = block_on(df.explain(ExplainMode::Extended))?;
+    assert!(text.contains(node), "{node} not in:\n{text}");
+    Ok(())
+}
+
 fn structure() -> DataType {
     DataType::Struct(StructType::new([
         StructField::new("id", DataType::Long, true),
@@ -36,8 +62,18 @@ fn structure() -> DataType {
 #[test]
 fn map_in_python_takes_a_map_kind_with_a_struct_result() -> R {
     let df = Session::new()?.range(0, 3, 1, None);
-    df.map_in_python(&udf(PythonEvalType::MapPandasIter, structure()), 1, false)?;
-    df.map_in_python(&udf(PythonEvalType::MapArrowIter, structure()), 1, true)?;
+    let pandas = df.map_in_python(&udf(PythonEvalType::MapPandasIter, structure()), 1, false)?;
+    assert_declared_output(&pandas)?;
+    assert_plan_has(&pandas, "MapPartitions")?;
+    let arrow = df.map_in_python(&udf(PythonEvalType::MapArrowIter, structure()), 1, false)?;
+    assert_declared_output(&arrow)?;
+    assert_plan_has(&arrow, "MapPartitions")?;
+    // Barrier mode builds, and analysis refuses it by name.
+    let barrier = df.map_in_python(&udf(PythonEvalType::MapArrowIter, structure()), 1, true)?;
+    assert!(is_class(
+        block_on(barrier.explain(ExplainMode::Extended)),
+        ErrorClass::KrishivUnsupportedFeature
+    ));
     Ok(())
 }
 
@@ -69,8 +105,11 @@ fn apply_in_python_takes_grouped_map_kinds_but_not_rollup_or_cube() -> R {
         PythonEvalType::GroupedMapPandasIter,
         PythonEvalType::GroupedMapArrowIter,
     ] {
-        df.group_by([key.clone()])
+        let out = df
+            .group_by([key.clone()])
             .apply_in_python(&udf(kind, structure()), 1)?;
+        assert_declared_output(&out)?;
+        assert_plan_has(&out, "GroupMap")?;
     }
     let wrong = df
         .group_by([key.clone()])
@@ -93,14 +132,19 @@ fn cogroup_needs_matching_key_counts_and_a_cogrouped_kind() -> R {
     let s = Session::new()?;
     let (left, right) = (s.range(0, 3, 1, None), s.range(1, 4, 1, None));
     let def = udf(PythonEvalType::CogroupedMapPandas, structure());
-    left.cogroup_apply_in_python(&right, [left.col("id")], [right.col("id")], &def, 1)?;
-    left.cogroup_apply_in_python(
+    let pandas =
+        left.cogroup_apply_in_python(&right, [left.col("id")], [right.col("id")], &def, 1)?;
+    assert_declared_output(&pandas)?;
+    assert_plan_has(&pandas, "CoGroupMap")?;
+    let arrow = left.cogroup_apply_in_python(
         &right,
         [left.col("id")],
         [right.col("id")],
         &udf(PythonEvalType::CogroupedMapArrow, structure()),
         1,
     )?;
+    assert_declared_output(&arrow)?;
+    assert_plan_has(&arrow, "CoGroupMap")?;
     let uneven = left.cogroup_apply_in_python(
         &right,
         [left.col("id")],

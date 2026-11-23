@@ -390,10 +390,13 @@ fn cache_entries(s: &Session, cache: &str) -> i64 {
 }
 
 /// GraphFrames' Pregel loop (`checkpoint(eager = false)` every second round, `persist` the new
-/// state, `unpersist` the one from the round before last) with no action between the rounds: the
-/// plan stays bounded, the rows are right at the end, and the cache holds only the live frames.
+/// state, `unpersist` the one from the round before last): the plan stays bounded, the rows are right at the
+/// end, and the cache holds only the live frames. The plan-size measurement is `explain(Extended)`, which
+/// analyzes the frame and so takes each pending lazy checkpoint of an even round (its snapshot collects the
+/// source frame) before the next round starts: this test does not cover lineage that stays lazy across rounds,
+/// it covers the plan and cache bounds with that snapshot taken each time.
 #[test]
-fn a_pregel_loop_of_lazy_checkpoints_and_persists_stays_bounded_with_no_action_between_rounds() {
+fn a_pregel_loop_of_checkpoints_and_persists_stays_bounded_when_each_round_is_explained() {
     use krishiv_session::{ExplainMode, JoinType, StorageLevel};
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path(), &[]);
