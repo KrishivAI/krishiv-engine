@@ -753,6 +753,9 @@ impl Merge {
         let columns = gather(&batches, &idx, schema.fields().len())?;
         let copy = super::record(&schema, columns, idx.len())?;
         let bytes = copy.get_array_memory_size();
+        // A refused `grow` returns before `slice.held` or any pick changes: the old batches stay
+        // referenced and the reservation still matches them, so the error leaves no leak or
+        // under-count; `copy` is dropped unreserved.
         if bytes > slice.held {
             self.memory
                 .grow(bytes - slice.held)

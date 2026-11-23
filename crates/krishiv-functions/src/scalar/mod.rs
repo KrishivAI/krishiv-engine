@@ -62,6 +62,7 @@ mod shuffle;
 mod string;
 mod r#struct;
 mod text43;
+mod theta;
 mod time_window;
 mod udf;
 mod url;
@@ -513,6 +514,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (aes::NAMES, aes::bind),
     (bitmap::NAMES, bitmap::bind),
     (hll::NAMES, hll::bind),
+    (theta::NAMES, theta::bind),
     (interval::NAMES, interval::bind),
     (avro::NAMES, avro::bind),
     (protobuf::NAMES, protobuf::bind),

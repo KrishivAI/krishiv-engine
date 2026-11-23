@@ -158,8 +158,8 @@ fn conf_settings_reach_the_session() {
     assert_eq!(r(Vec::new()).conf(key).as_deref(), Some("true"));
     let off = r(vec![(key.to_owned(), "false".to_owned())]);
     assert_eq!(off.conf(key).as_deref(), Some("false"));
-    // The built-in setting is kept next to `--conf` (normalized).
-    assert_eq!(off.conf("krishiv.memory.limit").as_deref(), Some("1GB"));
+    // The built-in setting is kept next to `--conf`, shown as it was set (as Spark's `getConfString`).
+    assert_eq!(off.conf("krishiv.memory.limit").as_deref(), Some("1g"));
 }
 
 #[test]

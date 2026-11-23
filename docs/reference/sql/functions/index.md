@@ -439,13 +439,13 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`sum`](sum.md) | aggregate | yes | Returns the sum calculated from values of a group. |
 | [`tan`](tan.md) | scalar | yes | Returns the tangent of `expr`, as if computed by `java.lang.Math.tan`. |
 | [`tanh`](tanh.md) | scalar | yes | Returns the hyperbolic tangent of `expr`, as if computed by |
-| [`theta_difference`](theta_difference.md) | aggregate | not yet | Subtracts two binary representations of |
-| [`theta_intersection`](theta_intersection.md) | aggregate | not yet | Intersects two binary representations of |
-| [`theta_intersection_agg`](theta_intersection_agg.md) | aggregate | not yet | Returns the ThetaSketch's Compact binary representation |
-| [`theta_sketch_agg`](theta_sketch_agg.md) | aggregate | not yet | Returns the ThetaSketch compact binary representation. |
-| [`theta_sketch_estimate`](theta_sketch_estimate.md) | aggregate | not yet | Returns the estimated number of unique values |
-| [`theta_union`](theta_union.md) | aggregate | not yet | Merges two binary representations of |
-| [`theta_union_agg`](theta_union_agg.md) | aggregate | not yet | Returns the ThetaSketch's Compact binary representation. |
+| [`theta_difference`](theta_difference.md) | aggregate | yes | Subtracts two binary representations of |
+| [`theta_intersection`](theta_intersection.md) | aggregate | yes | Intersects two binary representations of |
+| [`theta_intersection_agg`](theta_intersection_agg.md) | aggregate | yes | Returns the ThetaSketch's Compact binary representation |
+| [`theta_sketch_agg`](theta_sketch_agg.md) | aggregate | yes | Returns the ThetaSketch compact binary representation. |
+| [`theta_sketch_estimate`](theta_sketch_estimate.md) | aggregate | yes | Returns the estimated number of unique values |
+| [`theta_union`](theta_union.md) | aggregate | yes | Merges two binary representations of |
+| [`theta_union_agg`](theta_union_agg.md) | aggregate | yes | Returns the ThetaSketch's Compact binary representation. |
 | [`time`](time.md) | scalar | yes | Casts the value `expr` to the target data type `time`. |
 | [`time_bucket`](time_bucket.md) | scalar | yes | Returns the start of the bucket that `ts` falls into, |
 | [`time_diff`](time_diff.md) | scalar | yes | Gets the difference between the times in the specified units. |
@@ -585,4 +585,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-500 of 574 functions are implemented. The 74 that are not are listed in [functions not implemented yet](not-implemented.md).
+507 of 574 functions are implemented. The 67 that are not are listed in [functions not implemented yet](not-implemented.md).

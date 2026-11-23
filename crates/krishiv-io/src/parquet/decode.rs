@@ -45,7 +45,7 @@ use parquet::arrow::{ProjectionMask, RowNumber};
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaDataBuilder;
 use parquet::file::metadata::page_index::PageIndexBuilder;
-use parquet::file::page_index::offset_index::PageLocation;
+use parquet::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 
 use super::calendar::Guard;
 use super::meta::{ParquetMetadata, spark_read_type};
@@ -92,6 +92,19 @@ struct Unit {
 /// DuckDB all default to 1 MiB pages), capped by the column chunk's own
 /// uncompressed size.
 const PAGE_ESTIMATE: u64 = 1 << 20;
+
+/// Puts one leaf's offset index into `builder`. Row group and leaf come from the file's own footer, so only a
+/// corrupt footer puts one out of bounds, which is a corrupt-format error, never a silently missing page index.
+fn put_offset_index(
+    builder: &mut PageIndexBuilder,
+    index: OffsetIndexMetaData,
+    row_group: usize,
+    leaf: usize,
+) -> FormatResult<()> {
+    builder
+        .try_put_offset_index(index, row_group, leaf)
+        .map_err(|e| FormatError::Corrupt(e.to_string()))
+}
 
 /// [`Unit::decode`] of row group `rg` over the projected `leaves`: a
 /// decompressed page per column and one output batch (`BATCH_ROWS` rows at
@@ -808,7 +821,7 @@ impl ParquetDecoder {
             let mut builder = PageIndexBuilder::new(footer.num_row_groups(), columns);
             for o in offsets.iter().filter(|o| planned.contains(&o.index)) {
                 for (leaf, index) in &o.leaves {
-                    builder.put_offset_index(index.clone(), o.index, *leaf);
+                    put_offset_index(&mut builder, index.clone(), o.index, *leaf)?;
                 }
             }
             let metadata = ParquetMetaDataBuilder::new_from_metadata(footer.as_ref().clone())
@@ -1269,4 +1282,28 @@ fn sparse_bytes(sparse: &[(Range<u64>, Vec<PageLocation>)]) -> usize {
         .map(|(_, pages)| pages.capacity() * std::mem::size_of::<PageLocation>())
         .sum::<usize>()
         .saturating_add(std::mem::size_of_val(sparse))
+}
+
+#[cfg(test)]
+mod offset_index_tests {
+    use parquet::file::metadata::page_index::PageIndexBuilder;
+    use parquet::file::page_index::offset_index::OffsetIndexMetaData;
+
+    use super::put_offset_index;
+    use crate::error::FormatError;
+
+    /// An offset index for a row group or leaf the footer does not have is a corrupt file.
+    #[test]
+    fn an_offset_index_out_of_bounds_is_corrupt() {
+        let index = OffsetIndexMetaData {
+            page_locations: Vec::new(),
+            unencoded_byte_array_data_bytes: None,
+        };
+        let mut builder = PageIndexBuilder::new(1, 1);
+        assert!(put_offset_index(&mut builder, index.clone(), 0, 0).is_ok());
+        let e = put_offset_index(&mut builder, index.clone(), 1, 0).unwrap_err();
+        assert!(matches!(e, FormatError::Corrupt(_)), "{e:?}");
+        let e = put_offset_index(&mut builder, index, 0, 1).unwrap_err();
+        assert!(matches!(e, FormatError::Corrupt(_)), "{e:?}");
+    }
 }
