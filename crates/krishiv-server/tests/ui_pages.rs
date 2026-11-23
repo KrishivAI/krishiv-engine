@@ -1485,6 +1485,24 @@ async fn an_http2_request_is_named_by_its_authority() {
         .await
         .unwrap();
     assert_eq!(res.status(), 403);
+    // An authority without a port (the listener is on 443): the name is the host alone, and so is the cookie's.
+    let res = app(tls.clone())
+        .oneshot(request(
+            "POST",
+            "https://localhost/api/internal/session",
+            Some("https://localhost"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    let cookie = res.headers()[header::SET_COOKIE].to_str().unwrap();
+    assert!(cookie.starts_with("krishiv_ui_token="), "{cookie}");
+    // Neither a `Host` header nor an authority: the request names no server, so the host check refuses it.
+    let res = app(tls.clone())
+        .oneshot(request("GET", "/api/internal/health", None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
     // A `Host` header, when a client sends one, still names the server (HTTP/1.1, or a proxy that adds it).
     let mut with_host = request(
         "POST",
