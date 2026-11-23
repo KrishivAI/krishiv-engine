@@ -504,8 +504,8 @@ fn flight_sql(
 fn standalone_role(config: &Config) -> Result<(), String> {
     let role = config
         .get(&SERVER_ROLE)
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "standalone".to_owned());
+        .and_then(ConfigValue::as_str)
+        .unwrap_or("standalone");
     if role == "standalone" {
         Ok(())
     } else {
