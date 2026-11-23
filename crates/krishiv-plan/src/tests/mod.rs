@@ -22,6 +22,7 @@ mod json_tuple;
 mod lineage;
 mod local;
 mod metadata_mode;
+mod metric_view;
 mod nested_literals;
 mod nodes;
 mod observe;

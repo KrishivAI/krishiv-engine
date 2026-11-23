@@ -141,6 +141,9 @@ pub(crate) struct Settings {
     /// Whether a stack of semi/anti joins over one input runs its most selective join first
     /// ([`crate::semi_order`]).
     pub(crate) semi_anti_order: bool,
+    /// Whether restriction also reduces the preserved side of an outer join
+    /// ([`crate::restrict`], `krishiv.optimizer.preservedSideSemiJoin`).
+    pub(crate) preserved_side: bool,
 }
 
 impl Default for Settings {
@@ -151,6 +154,7 @@ impl Default for Settings {
             dp_limit: DP_LIMIT,
             trace: false,
             semi_anti_order: true,
+            preserved_side: true,
         }
     }
 }

@@ -312,6 +312,13 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     let mut builder = EngineRuntime::builder();
     let host = resolve_host(args.host, &settings.config)?;
     check_host(host, &settings)?;
+    // The `krishiv.auth.*` settings as given (references, never resolved), for the admin `GetConfig`.
+    let startup_auth: Vec<(String, String)> = args
+        .conf
+        .iter()
+        .filter(|(k, _)| is_auth_key(k))
+        .cloned()
+        .collect();
     let Settings {
         config,
         auth: auth_config,
@@ -359,6 +366,7 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
         run_listeners(
             runtime,
             &config,
+            startup_auth,
             auth,
             tls,
             SocketAddr::new(host, connect_port),
@@ -474,6 +482,7 @@ fn duration(
 async fn run_listeners(
     runtime: Arc<EngineRuntime>,
     config: &Config,
+    startup_auth: Vec<(String, String)>,
     auth: ServerAuth,
     tls: Option<ServerTls>,
     connect_addr: SocketAddr,
@@ -588,6 +597,7 @@ async fn run_listeners(
         guard,
         authenticated.then(|| Arc::clone(&auth)),
         &ops,
+        startup_auth,
         admin_bound,
         tls.is_some(),
         Arc::clone(&late_metrics),
@@ -733,6 +743,7 @@ fn admin_router(
     guard: Arc<dyn Guard>,
     auth: Option<Arc<ServerAuth>>,
     ops: &Arc<krishiv_server::admin_v1::DrainOps>,
+    startup_auth: Vec<(String, String)>,
     bound: SocketAddr,
     tls: bool,
     late: LateMetrics,
@@ -782,6 +793,7 @@ fn admin_router(
         Arc::new(
             krishiv_server::admin_v1::SessionAdmin::new(Arc::clone(runtime))
                 .with_denials(admin_denials)
+                .with_startup_auth(startup_auth)
                 .with_ops(Arc::clone(ops)),
         ),
         Arc::clone(&guard),
@@ -967,10 +979,34 @@ async fn reload_on_hangup(tls: ServerTls, hangups: Hangups) {
 async fn watch_signals(mut signals: Signals, drainer: Arc<Drainer>, grace: Duration) {
     signals.next().await;
     eprintln!("krishiv server: draining (a second signal exits at once)");
+    signal_action(&format!(
+        "grace {}s, exit_when_drained true",
+        grace.as_secs()
+    ));
     drainer.start(grace, true);
     signals.next().await;
     eprintln!("krishiv server: second signal, exiting");
+    signal_action("second signal, exit at once");
     std::process::exit(130);
+}
+
+/// The action record (`krishiv::admin_action`) for a drain the operating system asked for, so the
+/// log shows every drain, not only the ones made through `admin.v1` (design P3-T066 §5.6). The
+/// caller is the process's own signal handler: no principal, no secret.
+fn signal_action(target: &str) {
+    krishiv_server::admin_v1::action::record(&krishiv_server::admin_v1::action::Action {
+        principal: "signal",
+        role: "none",
+        auth_method: "none",
+        rpc: "Drain",
+        transport: "signal",
+        target,
+        own: false,
+        request_id: "",
+        result: "ok",
+        error_class: "",
+        replay: false,
+    });
 }
 
 /// What starts, drives and undoes a drain: the signal handler and the admin API's `Drain` /

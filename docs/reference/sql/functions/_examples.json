@@ -1933,8 +1933,8 @@
     "ok": true,
     "rows": [
       "Alice\t0\t2",
-      "NULL\t1\t7",
-      "Bob\t0\t5"
+      "Bob\t0\t5",
+      "NULL\t1\t7"
     ]
   },
   "grouping_id#1": {
@@ -3122,7 +3122,7 @@
     ]
   },
   "measure#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
+    "class": "TABLE_OR_VIEW_NOT_FOUND",
     "ok": false
   },
   "median#1": {

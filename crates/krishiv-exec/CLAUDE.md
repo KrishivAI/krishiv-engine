@@ -37,6 +37,10 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 `join/` hash join (P2-T052a): `mod.rs` API + Spark semantics · `keys.rs` row-format keys, seeded foldhash,
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
+`direct.rs` (perf lever J1, `krishiv.exec.join.directIndex`) the direct index of a tiny build: at most 4,096 rows, one
+non-null-safe `Int32`/`Int64` row-layout key spanning at most four slots a row; each probe driver builds it from the
+level-0 tables it holds (none spilled), and `Cursor::new` then finds each row's partition and newest row by `key - min`
+(no encode, no hash; null-aware anti, grace partitions and detailed metrics keep the hashed probe; `direct_probe_rows`) ·
 `probe.rs` probe operator + match cursor (its first read of the build, `BuildGlobal::built`, ends the build's idle
 window: until then a finished build's tables are an `OutputSpill` written partition by partition, largest first, and
 idle after `krishiv.exec.join.idleSpillAfter`, so the arbitrator asks them before a running consumer self-spills; study
@@ -181,7 +185,7 @@ benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators` �
 
 ## Split modules (T193)
 Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
-- `aggregate/accumulator/` `fold.rs` (the batch fold match), `dense.rs` (dense folds of integer `sum`, integer-like `min`/`max`, `count(col)` and double `sum`/`avg` for unmasked unit-weight rows; `dense_tests.rs` against the per-row loop), `output.rs` (state and result columns), `results.rs` (percentile and struct-extremum results), `helpers.rs` (decimal proofs, column readers, decimal text), `tests.rs`, `proof_tests.rs`; `aggregate/rowtable/` `probe.rs` (lookups), `merge.rs` (merging tables, the salted index), `tests.rs`; `aggregate/hll/tables.rs` (bias tables); `aggregate/sink/held.rs` (the breaker's reservation helpers); `join/build/tests.rs` (the build sink's tests); `planner/build/util.rs` (plan-building helpers); `planner/eval/hof/sort.rs` (the sort-with-comparator function); test modules of `aggregate/tests/`, `window/tests/` in `partN.rs`.
+- `aggregate/accumulator/` `fold.rs` (the batch fold match), `dense.rs` (dense folds of integer `sum`, integer-like `min`/`max`, `count(col)` and double `sum`/`avg` for unmasked unit-weight rows; `dense_tests.rs` against the per-row loop), `output.rs` (state and result columns), `results.rs` (percentile and struct-extremum results), `helpers.rs` (decimal proofs, column readers, decimal text), `tests.rs`, `proof_tests.rs`; `aggregate/rowtable/` `probe.rs` (lookups), `merge.rs` (merging tables, the salted index), `recur.rs` (`Recur`, the sampled run-start set that returns an append-only table to its index), `tests.rs`; `aggregate/hll/tables.rs` (bias tables); `aggregate/sink/held.rs` (the breaker's reservation helpers); `join/build/tests.rs` (the build sink's tests); `planner/build/util.rs` (plan-building helpers); `planner/eval/hof/sort.rs` (the sort-with-comparator function); test modules of `aggregate/tests/`, `window/tests/` in `partN.rs`.
 
 ## Vector carrier (P3-T075)
 `carrier::fixed_to_list` turns a vector carrier into a plain list (shared values, offsets 0,N,2N; null rows get empty slots); `recarried_array` has the FSL to List branch. Expressions never see the carrier: `column()` and `Column::eval` (`planner/eval/mod.rs`) convert on input, while a bare projected column keeps it. Grouping and join keys on lists stay unsupported, vector or not.
