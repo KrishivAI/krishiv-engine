@@ -4,7 +4,7 @@ name: Wheels
 # clean environment and tested. Two flavours per target: abi3 (one wheel for
 # CPython >= 3.11, tested on 3.11 and 3.14) and the free-threaded cp314t.
 # Targets: manylinux_2_28 x86_64 and aarch64, musllinux_1_2 x86_64, macOS
-# arm64. mimalloc is linked into every wheel (P2-T012). Nothing is published
+# arm64, macOS x86_64 and Windows x86_64 (MSVC). mimalloc is linked into every wheel (P2-T012). Nothing is published
 # (P2-T147).
 #
 # CPU level: the x86_64 wheels are built for x86-64-v3 and the Linux aarch64
@@ -283,6 +283,111 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-macos-arm64-${{ matrix.flavour }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # The wheels of these two targets are uploaded as `ext-wheels-*`, outside the `wheels-*` set the size budgets
+  # measure, until the budgets learn their sizes.
+  # macOS x86_64 (Intel), built and tested natively on the Intel runner (macos-13 is retired; macos-15-intel is
+  # GitHub's Intel image). Baseline x86-64 code: no CPU level marker, no RUSTFLAGS.
+  macos-x86_64:
+    runs-on: macos-15-intel
+    # Not a gate until the port passes (owner 2026-11-23): a failure here does not fail `wheels-ok`.
+    continue-on-error: true
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        flavour: [abi3, cp314t]
+    name: wheel (macOS x86_64 ${{ matrix.flavour }})
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-uv
+      - name: Interpreters
+        id: py
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+        run: |
+          if [ "$FLAVOUR" = abi3 ]; then versions="3.11 3.14"; else versions="3.14t"; fi
+          uv python install $versions
+          echo "build=$(uv python find "${versions%% *}")" >> "$GITHUB_OUTPUT"
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+      - name: Build
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          target: x86_64-apple-darwin
+          args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || env.FT_ARGS }} --interpreter ${{ steps.py.outputs.build }} --out ../dist
+      - name: Test
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+          VERSIONS: ${{ steps.py.outputs.versions }}
+        run: |
+          for v in $VERSIONS; do
+            .github/scripts/wheel-test.sh "$(uv python find "$v")" dist "$FLAVOUR"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ext-wheels-macos-x86_64-${{ matrix.flavour }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # Windows x86_64 (MSVC), built and tested natively. Baseline x86-64 code. The platform port is opus-3's; this job
+  # shows what still fails. Bash steps run in Git Bash.
+  windows-x86_64:
+    runs-on: windows-latest
+    # Not a gate until the port passes (owner 2026-11-23): a failure here does not fail `wheels-ok`.
+    continue-on-error: true
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        flavour: [abi3, cp314t]
+    name: wheel (Windows x86_64 ${{ matrix.flavour }})
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-uv
+      - name: Interpreters
+        id: py
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+        run: |
+          if [ "$FLAVOUR" = abi3 ]; then versions="3.11 3.14"; else versions="3.14t"; fi
+          uv python install $versions
+          echo "build=$(uv python find "${versions%% *}")" >> "$GITHUB_OUTPUT"
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+      - name: Build
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          target: x86_64-pc-windows-msvc
+          args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || env.FT_ARGS }} --interpreter ${{ steps.py.outputs.build }} --out ../dist
+      - name: Test
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+          VERSIONS: ${{ steps.py.outputs.versions }}
+        run: |
+          for v in $VERSIONS; do
+            .github/scripts/wheel-test.sh "$(uv python find "$v")" dist "$FLAVOUR"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ext-wheels-windows-x86_64-${{ matrix.flavour }}
           path: dist/*.whl
           if-no-files-found: error
 

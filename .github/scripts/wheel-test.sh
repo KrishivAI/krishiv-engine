@@ -19,7 +19,8 @@ flavour=$3
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 "$python" -m venv "$work/venv"
-py="$work/venv/bin/python"
+# Windows venvs (Git Bash) keep the interpreter in Scripts/, not bin/.
+if [ -x "$work/venv/Scripts/python.exe" ]; then py="$work/venv/Scripts/python.exe"; else py="$work/venv/bin/python"; fi
 "$py" -m pip install --quiet --upgrade pip
 # --no-deps: the wheel requires pyarrow, which has no musllinux wheel and would build from source (an hour);
 # pyarrow comes from the binary-only loop below, and the smoke falls back to count() without it.

@@ -205,3 +205,80 @@ jobs:
           name: krishiv-macos-arm64
           path: out/krishiv-macos-arm64
           if-no-files-found: error
+
+  cli-macos-x86_64:
+    needs: nightly-green
+    if: ${{ !cancelled() && (needs.nightly-green.result == 'success' || needs.nightly-green.result == 'skipped') }}
+    name: cli (krishiv-macos-x86_64)
+    continue-on-error: true # not a gate until the port passes (owner 2026-11-23)
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    env:
+      ARTIFACT: krishiv-macos-x86_64
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: krishiv-macos-x86_64
+      - name: Build
+        run: |
+          cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
+          mkdir -p out
+          cp target/dist/krishiv "out/$ARTIFACT"
+      - name: Smoke test
+        run: |
+          "out/$ARTIFACT" --version
+          "out/$ARTIFACT" sql -e "SELECT 1"
+          .github/scripts/console-smoke.sh "out/$ARTIFACT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: krishiv-macos-x86_64
+          path: out/krishiv-macos-x86_64
+          if-no-files-found: error
+
+  # Windows x86_64 (MSVC). The platform port is opus-3's: until it lands this job shows what fails.
+  cli-windows-x86_64:
+    needs: nightly-green
+    if: ${{ !cancelled() && (needs.nightly-green.result == 'success' || needs.nightly-green.result == 'skipped') }}
+    name: cli (krishiv-windows-x86_64.exe)
+    continue-on-error: true # not a gate until the port passes (owner 2026-11-23)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      ARTIFACT: krishiv-windows-x86_64.exe
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: krishiv-windows-x86_64
+      - name: Build
+        run: |
+          cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
+          mkdir -p out
+          cp target/dist/krishiv.exe "out/$ARTIFACT"
+      - name: Smoke test
+        run: |
+          "out/$ARTIFACT" --version
+          "out/$ARTIFACT" sql -e "SELECT 1"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: krishiv-windows-x86_64.exe
+          path: out/krishiv-windows-x86_64.exe
+          if-no-files-found: error

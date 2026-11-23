@@ -1,0 +1,88 @@
+name: Windows
+
+# The Windows x86_64 (MSVC) port, tested natively: the core crates' tests and the CLI smoke. NOT a required check (the
+# port is in progress, owner 2026-11-23): it shows what still fails. The Windows wheel and CLI binary builds are in
+# wheels.yml and binaries.yml. Runs by hand and on a change to this file; the nightly run calls it too.
+on:
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+    paths:
+      - .github/workflows/windows.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: "false"
+  CARGO_PROFILE_TEST_DEBUG: "false"
+
+jobs:
+  core-crates:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        # One leg per layer group, so a failure in one does not hide the others.
+        group:
+          - { name: base, packages: "-p krishiv-common -p krishiv-types -p krishiv-memory" }
+          - { name: kernels-io, packages: "-p krishiv-kernels -p krishiv-functions -p krishiv-io" }
+          - { name: sql-plan, packages: "-p krishiv-sql -p krishiv-plan -p krishiv-optimizer" }
+          - { name: exec, packages: "-p krishiv-exec -p krishiv-plan-codec" }
+          - { name: session-cli, packages: "-p krishiv-session -p krishiv-cli" }
+    name: tests (${{ matrix.group.name }})
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: windows-${{ matrix.group.name }}
+      - uses: $/.github/actions/install-tool
+        with:
+          tool: cargo-nextest
+      - name: Tests
+        env:
+          PACKAGES: ${{ matrix.group.packages }}
+        run: |
+          # shellcheck disable=SC2086
+          cargo nextest run $PACKAGES --locked --no-tests=pass --no-fail-fast
+
+  cli-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: windows-cli-smoke
+      - name: Build and run the CLI
+        run: |
+          cargo build --locked -p krishiv-cli
+          target/debug/krishiv.exe --version
+          target/debug/krishiv.exe sql -e "SELECT 1 + 1 AS two, upper('win') AS s"
