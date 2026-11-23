@@ -83,6 +83,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.advisor.skew.minRows", &ADVISOR_SKEW_MIN_ROWS),
     ("krishiv.advisor.skew.minTime", &ADVISOR_SKEW_MIN_TIME),
     ("krishiv.connect.maxPlanDepth", &CONNECT_MAX_PLAN_DEPTH),
+    ("krishiv.exec.join.inlineKeys", &EXEC_JOIN_INLINE_KEYS),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
     ("krishiv.resultCache.maxBytes", &RESULT_CACHE_MAX_BYTES),

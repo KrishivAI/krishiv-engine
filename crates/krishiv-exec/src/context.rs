@@ -68,6 +68,9 @@ pub struct ExecConfig {
     /// A tiny build with one integer key is probed through an array indexed
     /// by the key (`krishiv.exec.join.directIndex`; perf lever J1).
     pub join_direct_index: bool,
+    /// A large row-layout join build with a one-word key keeps the key in
+    /// its salted index's slots (`krishiv.exec.join.inlineKeys`).
+    pub join_inline_keys: bool,
     /// Level-0 radix bits of a row-layout join build
     /// (`krishiv.exec.join.radixBits`, 3 to 6).
     pub join_radix_bits: u32,
@@ -120,6 +123,7 @@ impl Default for ExecConfig {
             detailed_metrics: false,
             join_row_layout: true,
             join_direct_index: true,
+            join_inline_keys: true,
             join_radix_bits: 3,
             sort_hash_buckets: true,
             join_merge_buffer_bytes: 0,
@@ -155,6 +159,10 @@ impl ExecConfig {
             .unwrap_or(true);
         let join_direct_index = config
             .get(&krishiv_common::config::EXEC_JOIN_DIRECT_INDEX)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
+        let join_inline_keys = config
+            .get(&krishiv_common::config::EXEC_JOIN_INLINE_KEYS)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
         let join_radix_bits = config
@@ -210,6 +218,7 @@ impl ExecConfig {
             agg_direct_keys,
             join_row_layout,
             join_direct_index,
+            join_inline_keys,
             join_radix_bits,
             join_merge_buffer_bytes,
             shared_broadcast_bytes,

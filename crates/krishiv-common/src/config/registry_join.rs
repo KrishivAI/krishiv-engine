@@ -37,6 +37,22 @@ pub static EXEC_JOIN_DIRECT_INDEX: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Keep a one-word join key in the slots of a large hash join's salted index.
+pub static EXEC_JOIN_INLINE_KEYS: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.inlineKeys",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: a row-layout hash join whose encoded key is one 8-byte word (for example \
+          one `INT` or `DATE` key) and whose build is too large for the flat \
+          index keeps the key next to each row id in its salted index, so a lookup compares \
+          keys there without reading the build row. The index takes 16 bytes a slot instead \
+          of 8. Results are the same either way; `false` keeps the 8-byte salted slots.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 /// Fuse a filter and a scan's row stage into the hash probe above them
 /// (design P2-E3 U2).
 pub static EXEC_JOIN_FUSE_PROBE_SELECT: ConfigEntry = ConfigEntry {

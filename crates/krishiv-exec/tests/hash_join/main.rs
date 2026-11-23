@@ -11,6 +11,7 @@ mod direct;
 mod existence;
 mod fused_probe;
 mod idle;
+mod inline;
 mod merge;
 mod payload_rows;
 mod release;

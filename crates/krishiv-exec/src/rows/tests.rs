@@ -597,7 +597,7 @@ fn join_index(
     probe: &[ArrayRef],
     choice: IndexChoice,
     prefetch: bool,
-) -> (Vec<u32>, Vec<u32>, bool) {
+) -> (Vec<u32>, Vec<u32>, bool, bool) {
     let b = layout.encode(build).unwrap_or_else(|e| panic!("{e}"));
     let src = Gathered {
         rows: b.gather(layout, idx).unwrap_or_else(|e| panic!("{e}")),
@@ -608,13 +608,13 @@ fn join_index(
     let index = JoinIndex::build(layout, &src, idx.len(), 0xABCD, choice, &mut next)
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(index.memory_size() > 0);
-    assert!(index.memory_size() <= choice.bytes(idx.len()));
+    assert!(index.memory_size() <= choice.bytes(idx.len(), layout.one_word()));
     let p = layout.encode(probe).unwrap_or_else(|e| panic!("{e}"));
     let which: Vec<u32> = (0..u32::try_from(p.len()).unwrap_or(0)).collect();
     let mut heads = Vec::new();
     index.find_with(layout, &p, &which, &src, &mut heads, prefetch);
     assert_eq!(heads.len(), p.len());
-    (heads, next, index.is_flat())
+    (heads, next, index.is_flat(), index.is_inline())
 }
 
 /// The chain of `head` through `next`.
@@ -649,16 +649,25 @@ fn check_join_index(build: &[ArrayRef], probe: &[ArrayRef], null_safe: &[bool]) 
             .all(|(c, &safe)| safe || c.is_valid(i))
     };
     let stored: Vec<usize> = (0..nb).filter(|&i| valid(build, i)).collect();
-    let (flat, flat_next, is_flat) =
+    let (flat, flat_next, is_flat, _) =
         join_index(&layout, build, &stored, probe, IndexChoice::Flat, false);
     assert!(is_flat);
     for (choice, prefetch) in [
         (IndexChoice::Salted, false),
         (IndexChoice::Salted, true),
+        (IndexChoice::Inline, false),
+        (IndexChoice::Inline, true),
         (IndexChoice::Adaptive, false),
+        (IndexChoice::AdaptiveSalted, false),
     ] {
-        let (heads, next, flat_kind) = join_index(&layout, build, &stored, probe, choice, prefetch);
-        assert_eq!(flat_kind, choice != IndexChoice::Salted);
+        let (heads, next, flat_kind, inline_kind) =
+            join_index(&layout, build, &stored, probe, choice, prefetch);
+        let forced = matches!(choice, IndexChoice::Salted | IndexChoice::Inline);
+        assert_eq!(flat_kind, !forced);
+        assert_eq!(
+            inline_kind,
+            choice == IndexChoice::Inline && layout.one_word()
+        );
         assert_eq!(heads, flat, "{choice:?} heads");
         assert_eq!(next, flat_next, "{choice:?} chains");
     }
@@ -706,16 +715,23 @@ fn a_large_build_takes_the_salted_directory() {
         RowLayout::for_join(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
     let probe: ArrayRef = Arc::new(Int64Array::from_iter_values([5, -1, 7]));
     let all: Vec<usize> = (0..n).collect();
-    let (heads, _, flat) = join_index(
-        &layout,
-        &[Arc::clone(&a)],
-        &all,
-        &[Arc::clone(&probe)],
-        IndexChoice::Adaptive,
-        false,
-    );
-    assert!(!flat);
-    assert_eq!(heads, [5, NO_MATCH, 7]);
+    // A one-word key takes the inline directory unless the flag is off.
+    for (choice, inline) in [
+        (IndexChoice::Adaptive, true),
+        (IndexChoice::AdaptiveSalted, false),
+    ] {
+        let (heads, _, flat, is_inline) = join_index(
+            &layout,
+            &[Arc::clone(&a)],
+            &all,
+            &[Arc::clone(&probe)],
+            choice,
+            false,
+        );
+        assert!(!flat);
+        assert_eq!(is_inline, inline, "{choice:?}");
+        assert_eq!(heads, [5, NO_MATCH, 7]);
+    }
     // `find` prefetches first: the same answer.
     let b = layout.encode(&[a]).unwrap_or_else(|e| panic!("{e}"));
     let src = Gathered {
@@ -730,6 +746,23 @@ fn a_large_build_takes_the_salted_directory() {
     let mut found = Vec::new();
     index.find(&layout, &p, &[0, 1, 2], &src, &mut found);
     assert_eq!(found, [5, NO_MATCH, 7]);
+}
+
+/// The layouts whose key is one word: one `INT` (`=` or `<=>`) or one
+/// `BIGINT` under `=`; two keys or a string are not.
+#[test]
+fn one_word_layouts() {
+    let one = |t: &[DataType], safe: &[bool]| {
+        RowLayout::for_join(t, safe)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .one_word()
+    };
+    assert!(one(&[DataType::Int32], &[false]));
+    // A null-safe key stores its null flag beside the value: two words.
+    assert!(!one(&[DataType::Int32], &[true]));
+    assert!(one(&[DataType::Int64], &[false]));
+    assert!(!one(&[DataType::Int64, DataType::Int64], &[false, false]));
+    assert!(!one(&[DataType::Utf8], &[false]));
 }
 
 #[test]
@@ -779,6 +812,26 @@ proptest! {
         for (b, p) in cols(&build).into_iter().zip(cols(&probe)) {
             check_join_index(&b, &p, &safe);
         }
+    }
+
+    /// One `INT` or `BIGINT` key, `=` or `<=>`, many duplicates and NULLs:
+    /// a one-word layout, where the inline directory compares keys in its
+    /// slots; every kind agrees with the reference (fast == slow).
+    #[test]
+    fn one_word_keys_match_the_arrow_row_reference(
+        build in proptest::collection::vec(proptest::option::of(-6i32..6), 0..400),
+        probe in proptest::collection::vec(proptest::option::of(-8i32..8), 0..200),
+        safe in any::<bool>(),
+        wide in any::<bool>(),
+    ) {
+        let col = |v: &[Option<i32>]| -> ArrayRef {
+            if wide {
+                Arc::new(Int64Array::from(v.iter().map(|x| x.map(i64::from)).collect::<Vec<_>>()))
+            } else {
+                Arc::new(Int32Array::from(v.to_vec()))
+            }
+        };
+        check_join_index(&[col(&build)], &[col(&probe)], &[safe]);
     }
 }
 
@@ -1020,10 +1073,14 @@ fn estimate_sized_indexes_grow_to_the_same_answer() {
         ix.find(&layout, &probe, &which, &src, &mut heads);
         (heads, next, ix.memory_size())
     };
+    assert!(layout.one_word());
     let exact = run(n, IndexChoice::Salted);
     for (keys, choice) in [
         (1, IndexChoice::Salted),
         (5_000, IndexChoice::Salted),
+        (1, IndexChoice::Inline),
+        (5_000, IndexChoice::Inline),
+        (n, IndexChoice::Inline),
         (1, IndexChoice::Flat),
         (20_000, IndexChoice::Adaptive),
         (10 * n, IndexChoice::Adaptive),
@@ -1034,4 +1091,41 @@ fn estimate_sized_indexes_grow_to_the_same_answer() {
     }
     // Sized by the estimate, the directory is smaller than by rows.
     assert!(run(20_000, IndexChoice::Salted).2 < exact.2);
+    // An inline directory holds twice the bytes of a salted one.
+    assert_eq!(run(n, IndexChoice::Inline).2, 2 * exact.2);
+}
+
+#[test]
+fn the_adaptive_choice_keeps_keys_inline_only_up_to_the_directory_bound() {
+    let below = (1..40)
+        .map(|s| 1usize << s)
+        .take_while(|&n| inline_bytes(n) <= INLINE_MAX_BYTES)
+        .last()
+        .unwrap_or(0);
+    let above = (1..40)
+        .map(|s| 1usize << s)
+        .find(|&n| inline_bytes(n) > INLINE_MAX_BYTES)
+        .unwrap_or(usize::MAX);
+    assert!(
+        salted_bytes(below) > FLAT_MAX_BYTES,
+        "{below} keys still take the flat index"
+    );
+    assert_eq!(
+        IndexChoice::Adaptive.bytes(below, true),
+        inline_bytes(below)
+    );
+    assert_eq!(
+        IndexChoice::Adaptive.bytes(above, true),
+        salted_bytes(above)
+    );
+    assert_eq!(
+        IndexChoice::Adaptive.bytes(below, false),
+        salted_bytes(below)
+    );
+    // A forced inline index ignores the bound.
+    assert_eq!(IndexChoice::Inline.bytes(above, true), inline_bytes(above));
+    assert_eq!(
+        IndexChoice::AdaptiveSalted.bytes(below, true),
+        salted_bytes(below)
+    );
 }

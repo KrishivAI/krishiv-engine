@@ -61,6 +61,18 @@ fn salted(
     h: u64,
     seed: u64,
 ) -> (JoinIndex, Src) {
+    salted_as(IndexChoice::Salted, layout, keys, forged, h, seed)
+}
+
+/// [`salted`] of the salted kind `choice` (plain or inline slots).
+fn salted_as(
+    choice: IndexChoice,
+    layout: &RowLayout,
+    keys: &[i64],
+    forged: &[usize],
+    h: u64,
+    seed: u64,
+) -> (JoinIndex, Src) {
     let enc = encode(layout, keys, forged, h);
     let all: Vec<usize> = (0..keys.len()).collect();
     let src = Src {
@@ -69,15 +81,8 @@ fn salted(
         stride: layout.stride(),
     };
     let mut next = vec![NO_MATCH; keys.len()];
-    let index = JoinIndex::build(
-        layout,
-        &src,
-        keys.len(),
-        seed,
-        IndexChoice::Salted,
-        &mut next,
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
+    let index = JoinIndex::build(layout, &src, keys.len(), seed, choice, &mut next)
+        .unwrap_or_else(|e| panic!("{e}"));
     assert!(!index.is_flat());
     (index, src)
 }
@@ -162,9 +167,16 @@ fn crafted_partial_collisions_scatter() {
 /// plus an ordinary run; a directory near its 4/5 bound takes in more, still
 /// linear in `m`, which this test does not measure); only the ordinary keys
 /// next to the cluster get longer runs, so their total grows by `O(m²)`,
-/// whatever the table size.
+/// whatever the table size. The same holds for the inline directory, which
+/// compares the key word in the slot.
 #[test]
 fn full_collisions_stay_correct_and_bounded() {
+    for choice in [IndexChoice::Salted, IndexChoice::Inline] {
+        full_collisions_bounded(choice);
+    }
+}
+
+fn full_collisions_bounded(choice: IndexChoice) {
     const BASE: usize = 3840;
     const H: u64 = 0x5EED_0000_C0FF_EE00;
     let base: Vec<i64> = (0..i64::try_from(BASE).unwrap_or(0)).collect();
@@ -173,7 +185,7 @@ fn full_collisions_stay_correct_and_bounded() {
     let runs = |index: &JoinIndex| base_h.iter().map(|&h| run(index, h)).collect::<Vec<_>>();
     let total = |r: &[usize]| r.iter().sum::<usize>();
     for seed in [7, 0xFEED_FACE] {
-        let (clean, _) = salted(&layout, &base, &[], 0, seed);
+        let (clean, _) = salted_as(choice, &layout, &base, &[], 0, seed);
         let before = runs(&clean);
         let longest_before = before.iter().copied().max().unwrap_or(0);
         for m in [64, 256] {
@@ -182,7 +194,7 @@ fn full_collisions_stay_correct_and_bounded() {
             let forged: Vec<usize> = (BASE..BASE + m).collect();
             // Same directory size with and without the colliding keys.
             assert_eq!(salted_bytes(BASE), salted_bytes(BASE + m));
-            let (index, src) = salted(&layout, &keys, &forged, H, seed);
+            let (index, src) = salted_as(choice, &layout, &keys, &forged, H, seed);
 
             let collided = run(&index, H);
             assert!(collided >= m, "the forged keys share one run: {collided}");

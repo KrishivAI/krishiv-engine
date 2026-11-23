@@ -1279,7 +1279,7 @@ impl Loading {
         // Blocks that span chunks are copied: reserved, and the part beside
         // chunks that live on (the task's own build chunks) stays reserved.
         let (copy, kept) = RowArena::reblock_bytes(&chunks, self.task.build.chunks.len());
-        let need = JoinTable::index_bytes(rows, key_bytes(&chunks), hashing.rows())
+        let need = JoinTable::index_bytes(rows, key_bytes(&chunks), shared.rows_index(hashing))
             + marks
             + headroom
             + copy;
@@ -1291,7 +1291,7 @@ impl Loading {
         self.chunks.clear();
         self.memory.shrink(copy - kept);
         let layout = shared.keys.layout().filter(|_| hashing.rows());
-        let mut table = JoinTable::build(arena, layout, hashing.g_seed())?;
+        let mut table = JoinTable::build(arena, layout, hashing.g_seed(), hashing.index())?;
         if shared.join_type.builds_preserved() {
             table = table.with_marks()?;
         }

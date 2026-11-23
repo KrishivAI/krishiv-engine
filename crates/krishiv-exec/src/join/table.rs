@@ -725,17 +725,36 @@ pub(crate) struct JoinTable {
     unique: bool,
 }
 
+/// The row-layout index of a table, as its reservation counts it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RowsIndex {
+    /// The index the table takes.
+    pub(crate) choice: IndexChoice,
+    /// Whether the layout's key is one word ([`RowLayout::one_word`]).
+    pub(crate) one_word: bool,
+}
+
+impl RowsIndex {
+    /// Bytes the index over `rows` rows takes once built from an exact
+    /// count ([`IndexChoice::bytes`]).
+    fn bytes(self, rows: usize) -> usize {
+        self.choice.bytes(rows, self.one_word)
+    }
+}
+
 impl JoinTable {
     /// Bytes the index over `rows` rows with `key_bytes` bytes of arrow-row
     /// keys takes (reserved before [`build`](Self::build)). Arrow rows: the
     /// key table at worst one key per row, a chain head per key and a link
     /// per row. Row layout: the [`JoinIndex`] sized for one key per row and
     /// a link per row (it copies no keys and holds the heads itself).
-    pub(crate) fn index_bytes(rows: usize, key_bytes: usize, row_layout: bool) -> usize {
-        if row_layout {
-            IndexChoice::Adaptive
-                .bytes(rows)
-                .saturating_add(rows * size_of::<u32>())
+    pub(crate) fn index_bytes(
+        rows: usize,
+        key_bytes: usize,
+        rows_index: Option<RowsIndex>,
+    ) -> usize {
+        if let Some(r) = rows_index {
+            r.bytes(rows).saturating_add(rows * size_of::<u32>())
         } else {
             KeyTable::new().projected_size(rows, key_bytes) + rows * 2 * size_of::<u32>()
         }
@@ -747,12 +766,15 @@ impl JoinTable {
     /// old table beside the new one, at most half the final size again.
     /// The caller shrinks the reservation to [`index_memory`](Self::index_memory)
     /// once the table is built.
-    pub(crate) fn index_bytes_estimated(rows: usize, key_bytes: usize, row_layout: bool) -> usize {
-        let base = Self::index_bytes(rows, key_bytes, row_layout);
-        if row_layout {
-            base.saturating_add(IndexChoice::Adaptive.bytes(rows) / 2)
-        } else {
-            base
+    pub(crate) fn index_bytes_estimated(
+        rows: usize,
+        key_bytes: usize,
+        rows_index: Option<RowsIndex>,
+    ) -> usize {
+        let base = Self::index_bytes(rows, key_bytes, rows_index);
+        match rows_index {
+            Some(r) => base.saturating_add(r.bytes(rows) / 2),
+            None => base,
         }
     }
 
@@ -766,8 +788,9 @@ impl JoinTable {
         arena: RowArena,
         layout: Option<&Arc<RowLayout>>,
         g_seed: u64,
+        choice: IndexChoice,
     ) -> Result<Self> {
-        Self::build_with(arena, layout, g_seed, IndexChoice::Adaptive, None)
+        Self::build_with(arena, layout, g_seed, choice, None)
     }
 
     /// [`build`](Self::build) of a row-layout arena sized for about `keys`
@@ -777,9 +800,10 @@ impl JoinTable {
         arena: RowArena,
         layout: Option<&Arc<RowLayout>>,
         g_seed: u64,
+        choice: IndexChoice,
         keys: Option<usize>,
     ) -> Result<Self> {
-        Self::build_with(arena, layout, g_seed, IndexChoice::Adaptive, keys)
+        Self::build_with(arena, layout, g_seed, choice, keys)
     }
 
     /// Bytes the index and the chains hold (the arena not included): what a
@@ -1058,7 +1082,12 @@ mod tests {
     #[test]
     fn a_table_of_distinct_keys_is_unique_and_ends_every_chain() {
         // Equal hashes, distinct keys: one-row chains only.
-        let t = JoinTable::build(arena(vec![7, 7, 9], vec![b"a", b"b", b"c"]), None, 0);
+        let t = JoinTable::build(
+            arena(vec![7, 7, 9], vec![b"a", b"b", b"c"]),
+            None,
+            0,
+            IndexChoice::Adaptive,
+        );
         let t = t.unwrap_or_else(|e| panic!("{e}"));
         assert!(t.is_unique());
         assert!((0..3).all(|r| t.next_of(r) == NONE));
@@ -1074,14 +1103,28 @@ mod tests {
     #[test]
     fn duplicates_chain_and_collisions_compare_keys() {
         // Rows 0 and 2 share a key; row 1 collides on the hash only.
-        let t = JoinTable::build(arena(vec![7, 7, 7], vec![b"a", b"b", b"a"]), None, 0);
+        let t = JoinTable::build(
+            arena(vec![7, 7, 7], vec![b"a", b"b", b"a"]),
+            None,
+            0,
+            IndexChoice::Adaptive,
+        );
         let t = t.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(t.next(), &[NONE, NONE, 0]);
         assert!(!t.is_unique());
         assert_eq!((t.next_of(2), t.next_of(0)), (0, NONE));
         assert_eq!(t.arena().len(), 3);
-        assert!(JoinTable::index_bytes(3, 3, false) > 0);
-        assert!(JoinTable::index_bytes(3, 0, true) > 0);
+        assert!(JoinTable::index_bytes(3, 3, None) > 0);
+        let rows = |choice, one_word| Some(RowsIndex { choice, one_word });
+        assert!(JoinTable::index_bytes(3, 0, rows(IndexChoice::Adaptive, true)) > 0);
+        // Past the flat size, a one-word key takes 16-byte inline slots
+        // unless the flag keeps the salted ones; a wider key keeps 8.
+        let n = 1 << 20;
+        let inline = JoinTable::index_bytes(n, 0, rows(IndexChoice::Adaptive, true));
+        let salted = JoinTable::index_bytes(n, 0, rows(IndexChoice::AdaptiveSalted, true));
+        let wide = JoinTable::index_bytes(n, 0, rows(IndexChoice::Adaptive, false));
+        assert_eq!(salted, wide);
+        assert_eq!(inline - salted, crate::rows::salted_bytes(n));
         assert_eq!(t.flat_index(), None);
         assert_eq!(t.arena().weight(0), 1);
         assert!(t.arena().payload(0).is_empty());
@@ -1256,11 +1299,13 @@ mod tests {
             assert_eq!(arena.hash(end), 0);
             assert_eq!(arena.key_bytes(end), None);
             assert!(arena.memory_split().hash > 0);
-            let chained = JoinTable::build(arena, None, 0).unwrap_or_else(|e| panic!("{e}"));
+            let chained = JoinTable::build(arena, None, 0, IndexChoice::Adaptive)
+                .unwrap_or_else(|e| panic!("{e}"));
             let single = JoinTable::build(
                 RowArena::over_chunks(&schema, &[batch(0..n)]).unwrap_or_else(|e| panic!("{e}")),
                 None,
                 0,
+                IndexChoice::Adaptive,
             )
             .unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(chained.index_size().0, single.index_size().0);
@@ -1309,7 +1354,8 @@ mod tests {
             assert!(arena.has_arrow_keys());
             assert_eq!(arena.hash(0), 0);
             assert_eq!(arena.key_bytes(0), None);
-            let table = JoinTable::build(arena, None, 0).unwrap_or_else(|e| panic!("{e}"));
+            let table = JoinTable::build(arena, None, 0, IndexChoice::Adaptive)
+                .unwrap_or_else(|e| panic!("{e}"));
             assert!(table.next().is_empty());
         }
     }
@@ -1332,7 +1378,8 @@ mod tests {
         let rows = arena(vec![1], vec![b"a"]);
         assert_eq!(RowSource::row(&rows, 0), (&[][..], &[][..]));
         assert_eq!(RowSource::hash(&rows, 9), 0);
-        let t = JoinTable::build(rows, None, 0).unwrap_or_else(|e| panic!("{e}"));
+        let t = JoinTable::build(rows, None, 0, IndexChoice::Adaptive)
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(t.flat_index(), None);
     }
 }

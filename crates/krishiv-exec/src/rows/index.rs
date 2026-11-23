@@ -35,7 +35,7 @@ use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
 use krishiv_kernels::prefetch_read;
 
-use super::layout::{EncodedKeys, RowLayout, finalize};
+use super::layout::{EncodedKeys, RowLayout, finalize, word};
 use crate::error::{Result, internal};
 use crate::hash::ProbeCount;
 
@@ -44,6 +44,8 @@ pub const NO_MATCH: u32 = u32::MAX;
 
 /// Rows a salted lookup handles per chunk.
 const CHUNK: usize = 256;
+/// Where a one-word key sits in a row (after the stored hash).
+const KEY_WORD: usize = 8;
 /// Fewest slots in a salted directory.
 const MIN_SLOTS: usize = 1 << 10;
 /// Salt bits: the top 16 bits of `g`, kept in the slot.
@@ -57,6 +59,13 @@ const ID_MASK: u64 = u32::MAX as u64;
 /// q03 0.72 to 0.53 s. At 256 KiB q09 kept 0.5 s of that loss, its 100,000 rows
 /// staying flat (gap ledger, "Note 2026-11-01").
 pub const FLAT_MAX_BYTES: usize = 64 << 10;
+
+/// The largest inline salted directory the adaptive choice builds (32 MiB,
+/// the last-level cache of the bench server). Above it the 16-byte slots
+/// cost more in memory traffic than the skipped row reads save: TPC-H q09's
+/// 3.26M-key `partsupp` build (80 MB inline against 47 MB salted) probed
+/// 1.7x slower; builds up to ~10^6 keys (q14's `item`, 2.5 MB) gain.
+pub const INLINE_MAX_BYTES: usize = 32 << 20;
 
 /// Where an index finds its rows.
 pub trait RowSource {
@@ -80,18 +89,31 @@ pub trait RowSource {
 /// Which index a table uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndexChoice {
-    /// By size: flat up to [`FLAT_MAX_BYTES`], salted above.
+    /// By size: flat up to [`FLAT_MAX_BYTES`], salted above, with the key
+    /// word in the directory when the layout's key is one word
+    /// ([`RowLayout::one_word`]; `krishiv.exec.join.inlineKeys`).
     Adaptive,
+    /// By size as [`Adaptive`](Self::Adaptive), with plain salted slots
+    /// above the flat size whatever the key (`krishiv.exec.join.inlineKeys`
+    /// off).
+    AdaptiveSalted,
     /// Always flat (tests and measurement).
     Flat,
     /// Always salted (tests and measurement).
     Salted,
+    /// Salted, with the key word kept in the directory when the layout's key
+    /// is one word ([`RowLayout::one_word`]); else as [`Salted`](Self::Salted)
+    /// (tests and measurement).
+    Inline,
 }
 
 #[derive(Debug)]
 enum Kind {
     Flat(HashTable<u32>),
     Salted(Vec<u64>),
+    /// A salted directory whose slots hold `[row id + 1, key word]` (0 =
+    /// empty): a one-word key is compared in the directory, no row read.
+    Inline(Vec<[u64; 2]>),
 }
 
 /// The key index of one join partition: see the module docs.
@@ -146,20 +168,51 @@ pub fn salted_bytes(n: usize) -> usize {
     salted_slots(n).saturating_mul(size_of::<u64>())
 }
 
+/// Bytes of an inline salted directory for `n` keys.
+pub fn inline_bytes(n: usize) -> usize {
+    salted_slots(n).saturating_mul(size_of::<[u64; 2]>())
+}
+
 impl IndexChoice {
-    /// Whether a table of up to `rows` keys takes the flat index.
-    fn flat(self, rows: usize) -> bool {
-        match self {
-            Self::Adaptive => flat_bytes(rows) <= FLAT_MAX_BYTES,
-            Self::Flat => true,
-            Self::Salted => false,
+    /// The adaptive choice under `krishiv.exec.join.inlineKeys`.
+    pub fn adaptive(inline_keys: bool) -> Self {
+        if inline_keys {
+            Self::Adaptive
+        } else {
+            Self::AdaptiveSalted
         }
     }
 
-    /// Bytes the index over `rows` rows takes at most (it never grows).
-    pub fn bytes(self, rows: usize) -> usize {
+    /// Whether a salted index of up to `rows` keys over a layout whose key is
+    /// one word (`one_word`) keeps the key in its directory. The adaptive
+    /// choice does so only while the inline directory stays within
+    /// [`INLINE_MAX_BYTES`].
+    fn inline(self, rows: usize, one_word: bool) -> bool {
+        one_word
+            && match self {
+                Self::Adaptive => inline_bytes(rows) <= INLINE_MAX_BYTES,
+                Self::Inline => true,
+                Self::Flat | Self::Salted | Self::AdaptiveSalted => false,
+            }
+    }
+
+    /// Whether a table of up to `rows` keys takes the flat index.
+    fn flat(self, rows: usize) -> bool {
+        match self {
+            Self::Adaptive | Self::AdaptiveSalted => flat_bytes(rows) <= FLAT_MAX_BYTES,
+            Self::Flat => true,
+            Self::Salted | Self::Inline => false,
+        }
+    }
+
+    /// Bytes the index over `rows` rows takes at most once built from an
+    /// exact count (it then never grows), over a layout whose key is one
+    /// word or not (`one_word`, [`RowLayout::one_word`]).
+    pub fn bytes(self, rows: usize, one_word: bool) -> usize {
         if self.flat(rows) {
             flat_bytes(rows)
+        } else if self.inline(rows, one_word) {
+            inline_bytes(rows)
         } else {
             salted_bytes(rows)
         }
@@ -247,6 +300,36 @@ impl JoinIndex {
                 }
             }
             Kind::Flat(t)
+        } else if choice.inline(expect, layout.one_word()) {
+            let word_of = |id: u32| word(src.row(id).0, KEY_WORD);
+            let len = salted_slots(expect);
+            let mut slots: Vec<[u64; 2]> = Vec::new();
+            slots.try_reserve_exact(len).map_err(oom)?;
+            slots.resize(len, [0; 2]);
+            let mut mask = len - 1;
+            for id in (0..n).filter(|&id| src.indexed(id)) {
+                if (keys + 1) * SALTED_LOAD_DEN > slots.len() * SALTED_LOAD_NUM {
+                    slots = grow_inline(&slots, g_of)?;
+                    mask = slots.len() - 1;
+                }
+                let kw = word_of(id);
+                let mut i = low(g_of(id), mask);
+                loop {
+                    let s = slots[i];
+                    if s[0] == 0 {
+                        slots[i] = [u64::from(id) + 1, kw];
+                        keys += 1;
+                        break;
+                    }
+                    if s[1] == kw {
+                        next[id as usize] = slot_id(s[0]);
+                        slots[i][0] = u64::from(id) + 1;
+                        break;
+                    }
+                    i = (i + 1) & mask;
+                }
+            }
+            Kind::Inline(slots)
         } else {
             let len = salted_slots(expect);
             let mut slots: Vec<u64> = Vec::new();
@@ -282,6 +365,12 @@ impl JoinIndex {
         Ok(Self { seed, kind, keys })
     }
 
+    /// Whether this index keeps its keys in the directory (tests).
+    #[cfg(test)]
+    pub(crate) fn is_inline(&self) -> bool {
+        matches!(self.kind, Kind::Inline(_))
+    }
+
     /// Whether this index is the flat one.
     pub fn is_flat(&self) -> bool {
         matches!(self.kind, Kind::Flat(_))
@@ -293,6 +382,7 @@ impl JoinIndex {
         match &self.kind {
             Kind::Flat(t) => t.num_buckets(),
             Kind::Salted(s) => s.len(),
+            Kind::Inline(s) => s.len(),
         }
     }
 
@@ -311,6 +401,7 @@ impl JoinIndex {
         match &self.kind {
             Kind::Flat(t) => flat_bytes(t.capacity()),
             Kind::Salted(s) => s.capacity() * size_of::<u64>(),
+            Kind::Inline(s) => s.capacity() * size_of::<[u64; 2]>(),
         }
     }
 
@@ -404,6 +495,43 @@ impl JoinIndex {
                 }
                 found
             })),
+            Kind::Inline(slots) => {
+                let mask = slots.len() - 1;
+                let mut gs = [0u64; CHUNK];
+                for chunk in which.chunks(CHUNK) {
+                    for (dst, &k) in gs.iter_mut().zip(chunk) {
+                        *dst = g(k);
+                    }
+                    let gs = &gs[..chunk.len()];
+                    if prefetch {
+                        for &g in gs {
+                            prefetch_read(slots, low(g, mask));
+                        }
+                    }
+                    out.extend(chunk.iter().zip(gs).map(|(&k, &g)| {
+                        let kw = keys.word(k as usize, KEY_WORD);
+                        let mut i = low(g, mask);
+                        let mut compares = 0_u64;
+                        let found = loop {
+                            let s = slots[i];
+                            if s[0] == 0 {
+                                break NO_MATCH;
+                            }
+                            if COUNT {
+                                compares += 1;
+                            }
+                            if s[1] == kw {
+                                break slot_id(s[0]);
+                            }
+                            i = (i + 1) & mask;
+                        };
+                        if COUNT {
+                            count.add(compares);
+                        }
+                        found
+                    }));
+                }
+            }
             Kind::Salted(slots) => {
                 let mask = slots.len() - 1;
                 let mut gs = [0u64; CHUNK];
@@ -454,16 +582,12 @@ impl JoinIndex {
     /// the occupied slots from its first slot to the next empty one, which
     /// bounds the slots any lookup of it reads; `None` for the flat index.
     pub(crate) fn probe_run(&self, h: u64) -> Option<usize> {
-        let Kind::Salted(slots) = &self.kind else {
-            return None;
+        let g = finalize(h, self.seed);
+        let run = match &self.kind {
+            Kind::Flat(_) => return None,
+            Kind::Salted(s) => occupied_run(s.len(), g, |i| s[i] != 0),
+            Kind::Inline(s) => occupied_run(s.len(), g, |i| s[i][0] != 0),
         };
-        let mask = slots.len() - 1;
-        let mut i = low(finalize(h, self.seed), mask);
-        let mut run = 0;
-        while slots[i] != 0 && run < slots.len() {
-            run += 1;
-            i = (i + 1) & mask;
-        }
         Some(run)
     }
 }
@@ -481,6 +605,39 @@ fn grow_salted(old: &[u64], g: impl Fn(u32) -> u64) -> Result<Vec<u64>> {
     for &s in old.iter().filter(|&&s| s != 0) {
         let mut i = low(g(slot_id(s)), mask);
         while slots[i] != 0 {
+            i = (i + 1) & mask;
+        }
+        slots[i] = s;
+    }
+    Ok(slots)
+}
+
+/// The occupied slots of a directory of `len` slots from `g`'s first slot
+/// to the next empty one (at most `len`).
+#[cfg(test)]
+fn occupied_run(len: usize, g: u64, occupied: impl Fn(usize) -> bool) -> usize {
+    let mask = len - 1;
+    let mut i = low(g, mask);
+    let mut run = 0;
+    while run < len && occupied(i) {
+        run += 1;
+        i = (i + 1) & mask;
+    }
+    run
+}
+
+/// [`grow_salted`] for an inline directory.
+fn grow_inline(old: &[[u64; 2]], g: impl Fn(u32) -> u64) -> Result<Vec<[u64; 2]>> {
+    let len = old.len().saturating_mul(2).max(MIN_SLOTS);
+    let mut slots: Vec<[u64; 2]> = Vec::new();
+    slots
+        .try_reserve_exact(len)
+        .map_err(|e| internal(e.to_string()))?;
+    slots.resize(len, [0; 2]);
+    let mask = len - 1;
+    for &s in old.iter().filter(|s| s[0] != 0) {
+        let mut i = low(g(slot_id(s[0])), mask);
+        while slots[i][0] != 0 {
             i = (i + 1) & mask;
         }
         slots[i] = s;

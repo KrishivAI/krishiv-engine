@@ -1905,3 +1905,18 @@ fn a_key_named_like_a_credential_is_on_the_allow_list() {
         "keys named like a credential that are not on the allow list: {found:?}"
     );
 }
+
+#[test]
+fn exec_join_inline_keys_defaults_on_and_is_user_settable() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&EXEC_JOIN_INLINE_KEYS).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(EXEC_JOIN_INLINE_KEYS.settable_by, SettableBy::User);
+    c.set("krishiv.exec.join.inlineKeys", "false").unwrap();
+    assert_eq!(
+        c.get(&EXEC_JOIN_INLINE_KEYS).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+}

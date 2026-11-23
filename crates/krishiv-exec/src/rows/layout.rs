@@ -606,6 +606,12 @@ impl RowLayout {
         Ok(())
     }
 
+    /// Whether the key region is one word, at byte 8 of a row after the
+    /// stored hash: two rows have equal keys exactly when that word is.
+    pub fn one_word(&self) -> bool {
+        self.compare == Compare::One
+    }
+
     /// Whether row `a` (with heap `a_heap`) has the same key as row `b`
     /// (with heap `b_heap`). Rows must be of this layout.
     ///
@@ -701,6 +707,12 @@ impl EncodedKeys {
         self.rows
             .get(i * self.stride..(i + 1) * self.stride)
             .unwrap_or_default()
+    }
+
+    /// The word at byte `at` of row `i` (0 past the end).
+    #[inline]
+    pub fn word(&self, i: usize, at: usize) -> u64 {
+        word(&self.rows, i.saturating_mul(self.stride).saturating_add(at))
     }
 
     /// The heap long strings of these rows point into.

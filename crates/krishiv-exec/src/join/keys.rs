@@ -39,7 +39,7 @@ use arrow_schema::DataType;
 
 use crate::error::{Result, internal};
 use crate::hash::{HashSeed, KeyEncoder, MAX_LEVEL, PARTITION_BITS, spill_partition};
-use crate::rows::{EncodedKeys, RowLayout, finalize};
+use crate::rows::{EncodedKeys, IndexChoice, RowLayout, finalize};
 
 pub(crate) use crate::hash::PARTITIONS;
 
@@ -69,6 +69,8 @@ pub(crate) struct Hashing {
     rows: bool,
     /// Level-0 radix bits (row layout).
     radix: u32,
+    /// The row-layout index (`krishiv.exec.join.inlineKeys`).
+    index: IndexChoice,
 }
 
 impl Hashing {
@@ -82,7 +84,19 @@ impl Hashing {
             raw,
             rows,
             radix: PARTITION_BITS,
+            index: IndexChoice::Adaptive,
         }
+    }
+
+    /// The same with row-layout tables indexed by `index`.
+    pub(crate) fn with_index(mut self, index: IndexChoice) -> Self {
+        self.index = index;
+        self
+    }
+
+    /// The index row-layout tables take.
+    pub(crate) fn index(&self) -> IndexChoice {
+        self.index
     }
 
     /// The same with `bits` level-0 radix bits in the row layout (clamped

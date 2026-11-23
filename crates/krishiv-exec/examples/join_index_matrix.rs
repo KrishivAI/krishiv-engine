@@ -305,6 +305,37 @@ fn perf_run(spec: &str) {
         "salted" => probe_rows(&f, &index(&f, IndexChoice::Salted), false, &mut out),
         "prefetch" => probe_rows(&f, &index(&f, IndexChoice::Salted), true, &mut out),
         "keytable" => probe_legacy(&f, &legacy(&f)),
+        // Probe-only timings (build untimed), repeated 5 times; the minimum.
+        "time" => {
+            let salted = index(&f, IndexChoice::Salted);
+            let inline = index(&f, IndexChoice::Inline);
+            let mut best = [f64::MAX; 4];
+            let mut found = 0;
+            for _ in 0..5 {
+                for (v, (ix, pf)) in [
+                    (&salted, false),
+                    (&salted, true),
+                    (&inline, false),
+                    (&inline, true),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let t = Instant::now();
+                    found = probe_rows(&f, ix, pf, &mut out);
+                    best[v] = best[v].min(t.elapsed().as_nanos() as f64 / f.probe_rows as f64);
+                }
+            }
+            let mut o = std::io::stdout().lock();
+            writeln!(
+                o,
+                "n={n} salted {:.2} prefetch {:.2} inline {:.2} inline+pf {:.2} ns/probe; bytes salted {} inline {}",
+                best[0], best[1], best[2], best[3], salted.memory_size(), inline.memory_size()
+            )
+            .expect("stdout");
+            found
+        }
+        "inline" => probe_rows(&f, &index(&f, IndexChoice::Inline), true, &mut out),
         // The baseline: the same fixture and a built index, no probes.
         _ => index(&f, IndexChoice::Salted).len(),
     };

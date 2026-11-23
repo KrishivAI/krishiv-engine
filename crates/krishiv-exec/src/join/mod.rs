@@ -864,7 +864,21 @@ impl Shared {
     /// does every build column the join returns.
     fn hashing(&self, config: &crate::ExecConfig) -> keys::Hashing {
         let rows = config.join_row_layout && self.row_arena.is_some();
-        keys::Hashing::new(config.seed, rows).with_radix(config.join_radix_bits)
+        keys::Hashing::new(config.seed, rows)
+            .with_radix(config.join_radix_bits)
+            .with_index(crate::rows::IndexChoice::adaptive(config.join_inline_keys))
+    }
+
+    /// The row-layout index a table of this join takes under `hashing`;
+    /// `None` with arrow-row keys.
+    fn rows_index(&self, hashing: &keys::Hashing) -> Option<table::RowsIndex> {
+        self.keys
+            .layout()
+            .filter(|_| hashing.rows())
+            .map(|l| table::RowsIndex {
+                choice: hashing.index(),
+                one_word: l.one_word(),
+            })
     }
 
     /// The layout of the payload rows, when the row layout (`rows`) is in

@@ -21,7 +21,7 @@ use super::grace::{
     Grace, Part, SPILL_MIN, SPILL_SCRATCH, choose, reserve_chunks, spill_parts, write_sliced,
 };
 use super::keys::{Encoded, Hashing, any_invalid};
-use super::table::{JoinTable, RowArena, key_bytes};
+use super::table::{JoinTable, RowArena, RowsIndex, key_bytes};
 use super::{Counter, FilterPublisher, JoinType, Shared, record, unsupported};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
@@ -999,13 +999,17 @@ impl BuildSink {
 /// tails' copy, which replaces chunks dropped once the arena is built
 /// ([`RowArena::reblock_bytes`]); kept is the tails' part of lasting.
 /// `None` if no rows are in memory.
-fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize, usize)> {
+fn build_need(
+    part: &Part,
+    rows_index: Option<RowsIndex>,
+    marks: bool,
+) -> Option<(usize, usize, usize)> {
     if part.chunks.is_empty() {
         return None;
     }
     // Finalize sizes row-layout indexes from estimates: reserve their growth.
     let rows = part.mem_rows();
-    let mut index = JoinTable::index_bytes_estimated(rows, key_bytes(&part.chunks), row_layout);
+    let mut index = JoinTable::index_bytes_estimated(rows, key_bytes(&part.chunks), rows_index);
     if marks {
         index = index.saturating_add(JoinTable::marks_bytes(rows));
     }
@@ -1389,9 +1393,12 @@ impl Sink for BuildSink {
                     }
                     let (indexes, copy) = {
                         let c = lock(&g.collect);
-                        let rows = g.hashing.rows();
+                        let rows_index = s.rows_index(&g.hashing);
                         let marks = s.join_type.builds_preserved();
-                        let needs = c.parts.iter().filter_map(|p| build_need(p, rows, marks));
+                        let needs = c
+                            .parts
+                            .iter()
+                            .filter_map(|p| build_need(p, rows_index, marks));
                         needs.fold((0usize, 0usize), |(i, m), (index, copy, _)| {
                             (i.saturating_add(index), usize::max(m, copy))
                         })
@@ -1414,7 +1421,7 @@ impl Sink for BuildSink {
                     .enumerate()
                     .filter_map(|(i, (p, keys))| {
                         let marks = s.join_type.builds_preserved();
-                        Some((i, build_need(p, g.hashing.rows(), marks)?, p, keys))
+                        Some((i, build_need(p, s.rows_index(&g.hashing), marks)?, p, keys))
                     })
                     .map(|(i, (lasting, copy, kept), p, keys)| Job {
                         part: i,
@@ -1499,6 +1506,7 @@ impl Sink for BuildSink {
                                         arena,
                                         layout,
                                         hashing.g_seed(),
+                                        hashing.index(),
                                         keys,
                                     )
                                     .and_then(|t| {

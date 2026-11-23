@@ -63,7 +63,8 @@ mod tests;
 
 pub(crate) use hll::Hll;
 pub use index::{
-    FLAT_MAX_BYTES, IndexChoice, JoinIndex, NO_MATCH, RowSource, flat_bytes, salted_bytes,
+    FLAT_MAX_BYTES, INLINE_MAX_BYTES, IndexChoice, JoinIndex, NO_MATCH, RowSource, flat_bytes,
+    inline_bytes, salted_bytes,
 };
 pub use layout::{EncodedKeys, GatheredRows, RowLayout, finalize};
 #[cfg(any(test, feature = "row-table-prototype"))]
