@@ -1,3 +1,7 @@
+---
+description: "Krishiv does not run the JVM: what to use in place of a Scala, Java or Hive UDF packaged in a JAR."
+---
+
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Migrating JVM UDFs
 
